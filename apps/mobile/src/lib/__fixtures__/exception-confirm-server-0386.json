@@ -1,0 +1,2843 @@
+{
+  "meta": {
+    "what": "The exact answers the R2 server gave on the phone's Bearer routes (GET /api/v1/exceptions, GET /api/v1/exceptions/[id], POST /api/v1/exceptions/[id]/confirm-count), captured on the local stack. Only uuids are replaced (stable placeholders); every key, type, null, number and sentence is as the server sent it.",
+    "server": "branch feat/exc-confirm-r2 at 6d7fb80c, migration 0386 (md5 a2c2eea8ba41f6da344764a1954407b5), next dev with the local env, 2026-09-30",
+    "capture": "stockpilot-work/exceptions-confirm/phone-contract/capture-0386.sh and capture-0386-2.sh",
+    "rows": "counter: counted by staff, confirmable; notCounter: counted by the manager; moved: the stock on record changed after the count; recount: a targeted recount in progress; otherCount: another count in progress recorded a different number; manager: counted by staff, confirmed by the manager; decimal: 2.5 counted and on record. The sync raised every row (manager Check now).",
+    "ids": {
+      "organization": "00000000-0000-4000-8000-000000000001",
+      "cycleCount": "00000000-0000-4000-8000-000000000002",
+      "staff": "00000000-0000-4000-8000-000000000003",
+      "manager": "00000000-0000-4000-8000-000000000004",
+      "occurrences": {
+        "counter": "00000000-0000-4000-8000-000000000005",
+        "notCounter": "00000000-0000-4000-8000-000000000006",
+        "moved": "00000000-0000-4000-8000-000000000007",
+        "recount": "00000000-0000-4000-8000-000000000008",
+        "otherCount": "00000000-0000-4000-8000-000000000009",
+        "manager": "00000000-0000-4000-8000-000000000010",
+        "decimal": "00000000-0000-4000-8000-000000000011"
+      }
+    },
+    "requests": {
+      "confirm.staff.counter.200": {
+        "occurrence": "00000000-0000-4000-8000-000000000005",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 20,
+          "note": "Counted twice on the floor"
+        }
+      },
+      "confirm.staff.counter.replay": {
+        "occurrence": "00000000-0000-4000-8000-000000000005",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 20,
+          "note": "Counted twice on the floor"
+        }
+      },
+      "confirm.staff.counter.409.resolved": {
+        "occurrence": "00000000-0000-4000-8000-000000000005",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 20,
+          "note": "An edited note"
+        }
+      },
+      "confirm.staff.notCounter.403": {
+        "occurrence": "00000000-0000-4000-8000-000000000006",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 10,
+          "note": null
+        }
+      },
+      "confirm.staff.moved.409": {
+        "occurrence": "00000000-0000-4000-8000-000000000007",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 2
+        }
+      },
+      "confirm.staff.recount.409": {
+        "occurrence": "00000000-0000-4000-8000-000000000008",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 8
+        }
+      },
+      "confirm.staff.otherCount.409": {
+        "occurrence": "00000000-0000-4000-8000-000000000009",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 7
+        }
+      },
+      "confirm.manager.manager.409.changed": {
+        "occurrence": "00000000-0000-4000-8000-000000000010",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 31
+        }
+      },
+      "confirm.manager.manager.200": {
+        "occurrence": "00000000-0000-4000-8000-000000000010",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 30,
+          "note": null
+        }
+      },
+      "confirm.staff.decimal.200": {
+        "occurrence": "00000000-0000-4000-8000-000000000011",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 2.5,
+          "note": null
+        }
+      },
+      "confirm.staff.counter.409.busy": {
+        "occurrence": "00000000-0000-4000-8000-000000000005",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 20
+        }
+      },
+      "confirm.staff.counter.409.unavailable": {
+        "occurrence": "00000000-0000-4000-8000-000000000005",
+        "body": {
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countedQuantity": 20
+        }
+      }
+    }
+  },
+  "answers": {
+    "detail.staff.counter": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000012",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000014",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585509+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": true,
+          "unavailableReason": null,
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 20,
+          "onRecordBefore": 22,
+          "onRecordNow": 20,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.staff.notCounter": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000006",
+          "number": 4,
+          "reference": "EX-000004",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000015",
+          "item": {
+            "name": "PC Manager-Counted Item",
+            "sku": "PC-MGRCOUNT"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MGRCOUNT",
+            "counted": 10,
+            "expected": 12,
+            "itemName": "PC Manager-Counted Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000016",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585695+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000006",
+            "number": 4,
+            "reference": "EX-000004",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": false,
+          "unavailableReason": "not_counter",
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 10,
+          "onRecordBefore": 12,
+          "onRecordNow": 10,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": false,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.staff.moved": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000007",
+          "number": 5,
+          "reference": "EX-000005",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000017",
+          "item": {
+            "name": "PC Moved Item",
+            "sku": "PC-MOVED"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MOVED",
+            "counted": 2,
+            "expected": 100,
+            "itemName": "PC Moved Item",
+            "variance": -98,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000018",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585703+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000007",
+            "number": 5,
+            "reference": "EX-000005",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "stock_moved",
+          "canConfirm": false,
+          "unavailableReason": "stock_moved",
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 2,
+          "onRecordBefore": 100,
+          "onRecordNow": 5,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.staff.recount": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000008",
+          "number": 7,
+          "reference": "EX-000007",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000019",
+          "item": {
+            "name": "PC Recount Item",
+            "sku": "PC-RECOUNT"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-RECOUNT",
+            "counted": 8,
+            "expected": 10,
+            "itemName": "PC Recount Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": {
+            "cycleCountId": "00000000-0000-4000-8000-000000000020",
+            "countNumber": 3,
+            "status": "in_progress",
+            "completedAt": null,
+            "outcome": {
+              "kind": "in_progress",
+              "counted": 0,
+              "total": 1
+            }
+          },
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000021",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585719+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000022",
+            "kind": "recount_linked",
+            "at": "2026-09-30T16:52:29.399265+00:00",
+            "actor": {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "label": "QA Manager"
+            },
+            "note": null,
+            "cycleCount": {
+              "id": "00000000-0000-4000-8000-000000000020",
+              "countNumber": 3
+            },
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000008",
+            "number": 7,
+            "reference": "EX-000007",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "recount_in_progress",
+          "canConfirm": false,
+          "unavailableReason": "recount_in_progress",
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 8,
+          "onRecordBefore": 10,
+          "onRecordNow": 8,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.staff.otherCount": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000009",
+          "number": 6,
+          "reference": "EX-000006",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000023",
+          "item": {
+            "name": "PC Other Count Item",
+            "sku": "PC-OTHER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-OTHER",
+            "counted": 7,
+            "expected": 9,
+            "itemName": "PC Other Count Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000024",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.58571+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000009",
+            "number": 6,
+            "reference": "EX-000006",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "count_in_progress",
+          "canConfirm": false,
+          "unavailableReason": "count_in_progress",
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 7,
+          "onRecordBefore": 9,
+          "onRecordNow": 7,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": {
+            "countNumber": 2,
+            "counted": 3
+          }
+        }
+      }
+    },
+    "detail.staff.manager": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "number": 3,
+          "reference": "EX-000003",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000025",
+          "item": {
+            "name": "PC Manager Confirms Item",
+            "sku": "PC-MANAGER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MANAGER",
+            "counted": 30,
+            "expected": 33,
+            "itemName": "PC Manager Confirms Item",
+            "variance": -3,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000026",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585687+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "number": 3,
+            "reference": "EX-000003",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": true,
+          "unavailableReason": null,
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 30,
+          "onRecordBefore": 33,
+          "onRecordNow": 30,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.staff.decimal": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000011",
+          "number": 2,
+          "reference": "EX-000002",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000027",
+          "item": {
+            "name": "PC Decimal Item",
+            "sku": "PC-DECIMAL"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-DECIMAL",
+            "counted": 2.5,
+            "expected": 4,
+            "itemName": "PC Decimal Item",
+            "variance": -1.5,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000028",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585677+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "number": 2,
+            "reference": "EX-000002",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": true,
+          "unavailableReason": null,
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 2.5,
+          "onRecordBefore": 4,
+          "onRecordNow": 2.5,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.manager.counter": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000012",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": true,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000014",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585509+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": true,
+          "unavailableReason": null,
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 20,
+          "onRecordBefore": 22,
+          "onRecordNow": 20,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": false,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.manager.notCounter": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000006",
+          "number": 4,
+          "reference": "EX-000004",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000015",
+          "item": {
+            "name": "PC Manager-Counted Item",
+            "sku": "PC-MGRCOUNT"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MGRCOUNT",
+            "counted": 10,
+            "expected": 12,
+            "itemName": "PC Manager-Counted Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": true,
+          "canRecount": true,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000016",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585695+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000006",
+            "number": 4,
+            "reference": "EX-000004",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": true
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": true,
+          "unavailableReason": null,
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 10,
+          "onRecordBefore": 12,
+          "onRecordNow": 10,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": true,
+          "otherCount": null
+        }
+      }
+    },
+    "detail.viewer.noWarehouse.404": {
+      "status": 404,
+      "retryAfter": null,
+      "body": {
+        "error": "not_found",
+        "message": "Exception not found."
+      }
+    },
+    "list.staff.open": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "status": "open",
+        "occurrences": [
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000012",
+            "item": {
+              "name": "PC Counter Item",
+              "sku": "PC-COUNTER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-COUNTER",
+              "counted": 20,
+              "expected": 22,
+              "itemName": "PC Counter Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "number": 2,
+            "reference": "EX-000002",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000027",
+            "item": {
+              "name": "PC Decimal Item",
+              "sku": "PC-DECIMAL"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-DECIMAL",
+              "counted": 2.5,
+              "expected": 4,
+              "itemName": "PC Decimal Item",
+              "variance": -1.5,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "number": 3,
+            "reference": "EX-000003",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000025",
+            "item": {
+              "name": "PC Manager Confirms Item",
+              "sku": "PC-MANAGER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-MANAGER",
+              "counted": 30,
+              "expected": 33,
+              "itemName": "PC Manager Confirms Item",
+              "variance": -3,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000006",
+            "number": 4,
+            "reference": "EX-000004",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000015",
+            "item": {
+              "name": "PC Manager-Counted Item",
+              "sku": "PC-MGRCOUNT"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-MGRCOUNT",
+              "counted": 10,
+              "expected": 12,
+              "itemName": "PC Manager-Counted Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000007",
+            "number": 5,
+            "reference": "EX-000005",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000017",
+            "item": {
+              "name": "PC Moved Item",
+              "sku": "PC-MOVED"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-MOVED",
+              "counted": 2,
+              "expected": 100,
+              "itemName": "PC Moved Item",
+              "variance": -98,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000009",
+            "number": 6,
+            "reference": "EX-000006",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000023",
+            "item": {
+              "name": "PC Other Count Item",
+              "sku": "PC-OTHER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-OTHER",
+              "counted": 7,
+              "expected": 9,
+              "itemName": "PC Other Count Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000008",
+            "number": 7,
+            "reference": "EX-000007",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000019",
+            "item": {
+              "name": "PC Recount Item",
+              "sku": "PC-RECOUNT"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-RECOUNT",
+              "counted": 8,
+              "expected": 10,
+              "itemName": "PC Recount Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": {
+              "cycleCountId": "00000000-0000-4000-8000-000000000020",
+              "countNumber": 3,
+              "status": "in_progress",
+              "completedAt": null,
+              "outcome": {
+                "kind": "in_progress",
+                "counted": 0,
+                "total": 1
+              }
+            },
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmation": null,
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": true,
+            "canRecount": false,
+            "recountUnavailableReason": "not_permitted",
+            "escalation": null,
+            "canEscalate": true,
+            "escalateUnavailableReason": null
+          }
+        ],
+        "truncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "canCheckNow": false,
+        "canRecount": false,
+        "recountUnavailableReason": "not_permitted",
+        "unrecognized": 0,
+        "timeZone": "UTC"
+      }
+    },
+    "confirm.staff.counter.200": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000012",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:31.706077+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "label": "QA Staff"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 20,
+            "as": "counter"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "replay": false
+      }
+    },
+    "confirm.staff.counter.replay": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000012",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:31.706077+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "label": "QA Staff"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 20,
+            "as": "counter"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "replay": true
+      }
+    },
+    "confirm.staff.counter.409.resolved": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "This exception has already been resolved.",
+        "details": {
+          "reason": "occurrence_resolved"
+        }
+      }
+    },
+    "confirm.staff.notCounter.403": {
+      "status": 403,
+      "retryAfter": null,
+      "body": {
+        "error": "forbidden",
+        "message": "Only the person who counted it, or a manager, can confirm this count.",
+        "details": {
+          "reason": "not_counter"
+        }
+      }
+    },
+    "confirm.staff.moved.409": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "The stock on record changed after this count, so it can no longer be confirmed.",
+        "details": {
+          "reason": "stock_moved"
+        }
+      }
+    },
+    "confirm.staff.recount.409": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "A recount linked to this exception is in progress.",
+        "details": {
+          "reason": "recount_in_progress"
+        }
+      }
+    },
+    "confirm.staff.otherCount.409": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "Another count in progress has recorded a different number for this item.",
+        "details": {
+          "reason": "count_in_progress"
+        }
+      }
+    },
+    "confirm.manager.manager.409.changed": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "A newer count of this item was posted.",
+        "details": {
+          "reason": "count_changed"
+        }
+      }
+    },
+    "confirm.manager.manager.200": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "number": 3,
+          "reference": "EX-000003",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000025",
+          "item": {
+            "name": "PC Manager Confirms Item",
+            "sku": "PC-MANAGER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MANAGER",
+            "counted": 30,
+            "expected": 33,
+            "itemName": "PC Manager Confirms Item",
+            "variance": -3,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:32.187875+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:32.187875+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "label": "QA Manager"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 30,
+            "as": "manager"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "replay": false
+      }
+    },
+    "confirm.staff.decimal.200": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000011",
+          "number": 2,
+          "reference": "EX-000002",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000027",
+          "item": {
+            "name": "PC Decimal Item",
+            "sku": "PC-DECIMAL"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-DECIMAL",
+            "counted": 2.5,
+            "expected": 4,
+            "itemName": "PC Decimal Item",
+            "variance": -1.5,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:32.268996+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:32.268996+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "label": "QA Staff"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 2.5,
+            "as": "counter"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "replay": false
+      }
+    },
+    "confirm.viewer.notCounter.403": {
+      "status": 403,
+      "retryAfter": null,
+      "body": {
+        "error": "forbidden",
+        "message": "Missing permission: stock:adjust"
+      }
+    },
+    "confirm.staff.404": {
+      "status": 404,
+      "retryAfter": null,
+      "body": {
+        "error": "not_found",
+        "message": "Exception not found."
+      }
+    },
+    "confirm.staff.400.id": {
+      "status": 400,
+      "retryAfter": null,
+      "body": {
+        "error": "validation_error",
+        "message": "That exception id is not valid."
+      }
+    },
+    "confirm.staff.400.body": {
+      "status": 400,
+      "retryAfter": null,
+      "body": {
+        "error": "validation_error",
+        "message": "Send the count and the counted number that were shown, with an optional note."
+      }
+    },
+    "confirm.staff.400.json": {
+      "status": 400,
+      "retryAfter": null,
+      "body": {
+        "error": "validation_error",
+        "message": "The request body is not valid JSON."
+      }
+    },
+    "confirm.none.401": {
+      "status": 401,
+      "retryAfter": null,
+      "body": {
+        "error": "unauthenticated"
+      }
+    },
+    "detail.staff.counter.confirmed": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000012",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:31.706077+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "label": "QA Staff"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 20,
+            "as": "counter"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000014",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585509+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000029",
+            "kind": "count_confirmed",
+            "at": "2026-09-30T16:52:31.711007+00:00",
+            "actor": {
+              "id": "00000000-0000-4000-8000-000000000003",
+              "label": "QA Staff"
+            },
+            "note": "Counted twice on the floor",
+            "cycleCount": {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1
+            },
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+            "resolvedReason": "confirmed",
+            "confirmedAs": "counter",
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": false
+        },
+        "countConfirm": null
+      }
+    },
+    "detail.manager.manager.confirmed": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "number": 3,
+          "reference": "EX-000003",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000025",
+          "item": {
+            "name": "PC Manager Confirms Item",
+            "sku": "PC-MANAGER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000013",
+          "facts": {
+            "sku": "PC-MANAGER",
+            "counted": 30,
+            "expected": 33,
+            "itemName": "PC Manager Confirms Item",
+            "variance": -3,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:22:26.462968+00:00",
+            "completedAt": "2026-09-30T15:52:26.461549+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+          "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": "2026-09-30T16:52:32.187875+00:00",
+          "resolvedReason": "confirmed",
+          "confirmation": {
+            "at": "2026-09-30T16:52:32.187875+00:00",
+            "by": {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "label": "QA Manager"
+            },
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "countNumber": 1,
+            "quantity": 30,
+            "as": "manager"
+          },
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": null,
+          "escalation": null,
+          "canEscalate": false,
+          "escalateUnavailableReason": "resolved"
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000026",
+            "kind": "raised",
+            "at": "2026-09-30T16:52:28.585687+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000030",
+            "kind": "count_confirmed",
+            "at": "2026-09-30T16:52:32.192884+00:00",
+            "actor": {
+              "id": "00000000-0000-4000-8000-000000000004",
+              "label": "QA Manager"
+            },
+            "note": null,
+            "cycleCount": {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1
+            },
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "number": 3,
+            "reference": "EX-000003",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "resolvedAt": "2026-09-30T16:52:32.187875+00:00",
+            "resolvedReason": "confirmed",
+            "confirmedAs": "manager",
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": false
+        },
+        "countConfirm": null
+      }
+    },
+    "list.staff.resolved": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "status": "resolved",
+        "occurrences": [
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "number": 2,
+            "reference": "EX-000002",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000027",
+            "item": {
+              "name": "PC Decimal Item",
+              "sku": "PC-DECIMAL"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-DECIMAL",
+              "counted": 2.5,
+              "expected": 4,
+              "itemName": "PC Decimal Item",
+              "variance": -1.5,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:32.268996+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:32.268996+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000003",
+                "label": "QA Staff"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 2.5,
+              "as": "counter"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "number": 3,
+            "reference": "EX-000003",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000025",
+            "item": {
+              "name": "PC Manager Confirms Item",
+              "sku": "PC-MANAGER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-MANAGER",
+              "counted": 30,
+              "expected": 33,
+              "itemName": "PC Manager Confirms Item",
+              "variance": -3,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:32.187875+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:32.187875+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000004",
+                "label": "QA Manager"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 30,
+              "as": "manager"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000012",
+            "item": {
+              "name": "PC Counter Item",
+              "sku": "PC-COUNTER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-COUNTER",
+              "counted": 20,
+              "expected": 22,
+              "itemName": "PC Counter Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:31.706077+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000003",
+                "label": "QA Staff"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 20,
+              "as": "counter"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          }
+        ],
+        "truncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "canCheckNow": false,
+        "canRecount": false,
+        "recountUnavailableReason": "not_permitted",
+        "unrecognized": 0,
+        "timeZone": "UTC"
+      }
+    },
+    "list.staff.resolved.confirmed": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "status": "resolved",
+        "occurrences": [
+          {
+            "id": "00000000-0000-4000-8000-000000000011",
+            "number": 2,
+            "reference": "EX-000002",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000027",
+            "item": {
+              "name": "PC Decimal Item",
+              "sku": "PC-DECIMAL"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-DECIMAL",
+              "counted": 2.5,
+              "expected": 4,
+              "itemName": "PC Decimal Item",
+              "variance": -1.5,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:32.268996+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:32.268996+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000003",
+                "label": "QA Staff"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 2.5,
+              "as": "counter"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "number": 3,
+            "reference": "EX-000003",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000025",
+            "item": {
+              "name": "PC Manager Confirms Item",
+              "sku": "PC-MANAGER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-MANAGER",
+              "counted": 30,
+              "expected": 33,
+              "itemName": "PC Manager Confirms Item",
+              "variance": -3,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:32.187875+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:32.187875+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000004",
+                "label": "QA Manager"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 30,
+              "as": "manager"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "rule": "count_variance",
+            "itemId": "00000000-0000-4000-8000-000000000012",
+            "item": {
+              "name": "PC Counter Item",
+              "sku": "PC-COUNTER"
+            },
+            "locationId": null,
+            "location": null,
+            "warehouseId": "00000000-0000-4000-8000-000000000013",
+            "facts": {
+              "sku": "PC-COUNTER",
+              "counted": 20,
+              "expected": 22,
+              "itemName": "PC Counter Item",
+              "variance": -2,
+              "aiAssisted": false,
+              "observedAt": "2026-09-30T15:22:26.462968+00:00",
+              "completedAt": "2026-09-30T15:52:26.461549+00:00",
+              "countNumber": 1,
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "capturedOfflineAt": null,
+              "countedLocationName": null
+            },
+            "conditionSince": "2026-09-30T15:22:26.462968+00:00",
+            "firstSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "lastSeenAt": "2026-09-30T16:52:28.563+00:00",
+            "presentWhenTrackingBegan": true,
+            "acknowledgedAt": null,
+            "acknowledgedBy": null,
+            "recount": null,
+            "resolvedAt": "2026-09-30T16:52:31.706077+00:00",
+            "resolvedReason": "confirmed",
+            "confirmation": {
+              "at": "2026-09-30T16:52:31.706077+00:00",
+              "by": {
+                "id": "00000000-0000-4000-8000-000000000003",
+                "label": "QA Staff"
+              },
+              "cycleCountId": "00000000-0000-4000-8000-000000000002",
+              "countNumber": 1,
+              "quantity": 20,
+              "as": "counter"
+            },
+            "previousOccurrenceId": null,
+            "recurrenceIndex": 0,
+            "canAct": false,
+            "canRecount": false,
+            "recountUnavailableReason": null,
+            "escalation": null,
+            "canEscalate": false,
+            "escalateUnavailableReason": "resolved"
+          }
+        ],
+        "truncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:52:28.563+00:00",
+          "lastSyncedAt": "2026-09-30T16:52:28.587125+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "canCheckNow": false,
+        "canRecount": false,
+        "recountUnavailableReason": "not_permitted",
+        "unrecognized": 0,
+        "timeZone": "UTC"
+      }
+    },
+    "confirm.owner.429": {
+      "status": 429,
+      "retryAfter": "59",
+      "body": {
+        "error": "rate_limited",
+        "message": "Too many requests. Wait a moment and try again.",
+        "retryAt": 1790787212729
+      }
+    },
+    "detail.viewer.counter": {
+      "status": 200,
+      "retryAfter": null,
+      "body": {
+        "organizationId": "00000000-0000-4000-8000-000000000001",
+        "occurrence": {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "number": 1,
+          "reference": "EX-000001",
+          "rule": "count_variance",
+          "itemId": "00000000-0000-4000-8000-000000000031",
+          "item": {
+            "name": "PC Counter Item",
+            "sku": "PC-COUNTER"
+          },
+          "locationId": null,
+          "location": null,
+          "warehouseId": "00000000-0000-4000-8000-000000000032",
+          "facts": {
+            "sku": "PC-COUNTER",
+            "counted": 20,
+            "expected": 22,
+            "itemName": "PC Counter Item",
+            "variance": -2,
+            "aiAssisted": false,
+            "observedAt": "2026-09-30T15:24:49.571676+00:00",
+            "completedAt": "2026-09-30T15:54:49.570321+00:00",
+            "countNumber": 1,
+            "cycleCountId": "00000000-0000-4000-8000-000000000002",
+            "capturedOfflineAt": null,
+            "countedLocationName": null
+          },
+          "conditionSince": "2026-09-30T15:24:49.571676+00:00",
+          "firstSeenAt": "2026-09-30T16:54:51.596+00:00",
+          "lastSeenAt": "2026-09-30T16:54:51.596+00:00",
+          "presentWhenTrackingBegan": true,
+          "acknowledgedAt": null,
+          "acknowledgedBy": null,
+          "recount": null,
+          "resolvedAt": null,
+          "resolvedReason": null,
+          "confirmation": null,
+          "previousOccurrenceId": null,
+          "recurrenceIndex": 0,
+          "canAct": false,
+          "canRecount": false,
+          "recountUnavailableReason": "not_permitted",
+          "escalation": null,
+          "canEscalate": true,
+          "escalateUnavailableReason": null
+        },
+        "timeline": [
+          {
+            "id": "00000000-0000-4000-8000-000000000033",
+            "kind": "raised",
+            "at": "2026-09-30T16:54:51.613693+00:00",
+            "actor": null,
+            "note": null,
+            "cycleCount": null,
+            "maintenanceRequestId": null,
+            "maintenanceRequestReference": null,
+            "evidenceId": null,
+            "evidence": null
+          }
+        ],
+        "history": [
+          {
+            "id": "00000000-0000-4000-8000-000000000005",
+            "number": 1,
+            "reference": "EX-000001",
+            "firstSeenAt": "2026-09-30T16:54:51.596+00:00",
+            "resolvedAt": null,
+            "resolvedReason": null,
+            "confirmedAs": null,
+            "recurrenceIndex": 0,
+            "isCurrent": true
+          }
+        ],
+        "historyTruncated": false,
+        "syncState": {
+          "trackingStartedAt": "2026-09-30T16:54:51.596+00:00",
+          "lastEvaluatedAt": "2026-09-30T16:54:51.596+00:00",
+          "lastSyncedAt": "2026-09-30T16:54:51.615222+00:00",
+          "completeRules": [
+            "orphaned_stock",
+            "over_reserved",
+            "stale_staging",
+            "long_unplaced",
+            "label_mismatch",
+            "count_variance"
+          ],
+          "failedRules": [],
+          "truncatedRules": [],
+          "unrecognizedUncheckedRules": 0
+        },
+        "timeZone": "UTC",
+        "evidence": {
+          "status": "ok",
+          "photos": [],
+          "liveCount": 0,
+          "maxPhotos": 8,
+          "canAdd": false
+        },
+        "countConfirm": {
+          "state": "confirmable",
+          "canConfirm": false,
+          "unavailableReason": "not_permitted",
+          "cycleCountId": "00000000-0000-4000-8000-000000000002",
+          "countNumber": 1,
+          "counted": 20,
+          "onRecordBefore": 22,
+          "onRecordNow": 20,
+          "countedBy": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "label": "QA Staff"
+          },
+          "postedBy": {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "label": "QA Manager"
+          },
+          "readerIsCounter": false,
+          "otherCount": null
+        }
+      }
+    },
+    "confirm.viewer.counter.403": {
+      "status": 403,
+      "retryAfter": null,
+      "body": {
+        "error": "forbidden",
+        "message": "Missing permission: stock:adjust"
+      }
+    },
+    "confirm.staff.counter.409.busy": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "A check is running. Try again in a moment.",
+        "details": {
+          "reason": "busy",
+          "retryable": true
+        }
+      }
+    },
+    "confirm.staff.counter.409.unavailable": {
+      "status": 409,
+      "retryAfter": null,
+      "body": {
+        "error": "conflict",
+        "message": "Confirming is unavailable right now.",
+        "details": {
+          "reason": "unavailable"
+        }
+      }
+    }
+  }
+}

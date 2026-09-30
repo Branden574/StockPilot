@@ -18,6 +18,7 @@ import {
   recountOutcome,
   recountOutcomeCopy,
   VARIANCE_DESTINATION_PENDING_COPY,
+  VERIFICATION_SESSION_ENDED_COPY,
   type CountConfirmBlock,
   type CountConfirmedAs,
   type ExceptionActionKind,
@@ -651,15 +652,33 @@ export function newClientEventId(): string {
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 /**
- * The sentence for a failed act. Keyed on HTTP status and the route's
- * app-authored `details.reason` (never on message text). The server's own
- * message is already a sentence and is used where it is the most specific.
+ * The sentence for a failed act (and, through describeConfirmCountError, a
+ * failed confirm). Keyed on HTTP status and the route's app-authored
+ * `details.reason` (never on message text). The server's own message is
+ * already a sentence and is used where it is the most specific; a lone code
+ * is not one.
+ *
+ * A 401 says the session ended: the exceptions routes answer it as
+ * `{ error: 'unauthenticated' }` with no sentence, api() carries that code as
+ * the message, and the sheets printed "unauthenticated" (R2 contract capture,
+ * 2026-09-30). No answer at all reads as the phone's one sentence for it
+ * (connection-copy.ts), never the network layer's text, as
+ * describeConfirmCountError and describeExceptionsRequestError already did.
  */
 export function describeActError(e: unknown): string {
   const status = isObj(e) && typeof e.status === 'number' ? e.status : null;
   const details = isObj(e) ? e.details : undefined;
   const reason = isObj(details) && typeof details.reason === 'string' ? details.reason : null;
-  const message = e instanceof Error && e.message ? e.message : null;
+  const raw = e instanceof Error && e.message ? e.message : null;
+  // A lone snake_case token is a code, not a sentence.
+  const message = raw !== null && !/^[a-z0-9_]+$/.test(raw) ? raw : null;
+  if (status === null) {
+    // The app's own status-less sentences stay: api()'s timeout and an
+    // answer the screens cannot read.
+    if (e instanceof ExceptionsResponseError || raw === REQUEST_TIMED_OUT_COPY) return raw ?? CONNECTION_FAILURE_COPY;
+    return CONNECTION_FAILURE_COPY;
+  }
+  if (status === 401) return VERIFICATION_SESSION_ENDED_COPY;
   if (status === 409 && reason === 'occurrence_resolved') {
     return 'This exception has already been resolved. Pull down to refresh.';
   }
@@ -671,7 +690,7 @@ export function describeActError(e: unknown): string {
   if (status === 429) return 'Too many requests. Wait a moment and try again.';
   if (status === 400 && reason === 'note_required') return 'Add a note.';
   if (status === 400 && reason === 'note_too_long') return 'Notes can be at most 1,000 characters.';
-  if (status !== null && status >= 500) return 'The server had a problem. Try again in a moment.';
+  if (status >= 500) return 'The server had a problem. Try again in a moment.';
   return message ?? 'Could not save. Check your connection and try again.';
 }
 
@@ -680,8 +699,10 @@ export function describeActError(e: unknown): string {
  * not_counter, is worded by core describeConfirmError from `details.reason`
  * (a reason this build does not know reads its generic line, so a reason a
  * later server adds still reads sensibly); every other failure reads as the
- * act route's do (describeActError: permission, gone, rate limit, the server,
- * the note, no answer).
+ * act route's do (describeActError: a session that ended, permission, gone,
+ * rate limit, the server, the note, no answer), never as a bare code.
+ * exceptions-confirm-contract.test.ts feeds every answer the R2 server gives
+ * through this.
  */
 export function describeConfirmCountError(
   e: unknown,
@@ -699,12 +720,6 @@ export function describeConfirmCountError(
   // pull-down the block is gone and Confirm with it.
   if (status === 404 && !(isObj(e) && typeof e.code === 'string' && e.code !== '')) {
     return describeConfirmError(null, { surface: 'phone', ...ctx });
-  }
-  if (status === null) {
-    // No answer at all: the phone's one sentence for it, unless it is one of
-    // the app's own (the timeout, an answer it could not read).
-    if (e instanceof ExceptionsResponseError) return e.message;
-    return e instanceof Error && e.message === REQUEST_TIMED_OUT_COPY ? e.message : CONNECTION_FAILURE_COPY;
   }
   return describeActError(e);
 }
