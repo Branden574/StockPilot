@@ -43,21 +43,31 @@
 --    caller, notes "Short on SO-… when drafted" only, no destination, charter
 --    or expected date, each line at the item's cost; the answer's exact
 --    shape; no notification.
--- T. All or nothing: a PO number taken for the SECOND draft (next_po_number
---    counts) aborts the call with 23505 and leaves no draft and no key
---    (mutation: a per-group exception handler); the same key then succeeds.
+-- T. All or nothing: a refusal of the SECOND draft by save_purchase_order_draft
+--    (its item's recorded cost below 0: po_line_invalid) aborts the call and
+--    leaves no draft and no key (mutation: a per-group exception handler);
+--    the same key then succeeds.
+-- N. The PO number: live POs numbered ahead of the count (typed on the
+--    manual form) are stepped past, a cancelled PO's number is reused, and
+--    both drafts of the call get free numbers (mutation: no stepping gives
+--    23505 on every try). An item whose supplier is archived is drafted onto
+--    that supplier, as recorded (the reorder drafts do the same; the screens
+--    name it as archived).
 -- I. Idempotency: a replay (4 and 4.0 are the same request; another manager
 --    too) returns the first answer with replay true and writes nothing; the
 --    key with another request, or for another order: P0001
---    idempotency_conflict; the key row as stored; a refused call leaves no
---    key and the key can be used again.
+--    idempotency_conflict; the key row as stored, each draft named by its
+--    id only (a viewer reads the row but no PO number or supplier in it),
+--    while a replay still answers each draft's number and supplier, read
+--    from the PO; a refused call leaves no key and the key can be used again.
 -- L. The lock: a successful call holds the reorder drafts' advisory lock
 --    until commit; a reorder draft after it leaves the item off (it sees the
 --    shortfall draft's line), and the shortfall sees a reorder draft (D).
 --    The two-session proof is scripts/db-concurrency/0385_shortfall_race.sh.
 -- P. Parity: order_shortfall_draftable equals core's draftable over every
 --    case of packages/core/src/orders/readiness-parity-cases.json and its
---    draftable cases (the generated block below).
+--    draftable cases (the generated block below; D14, other orders' committed
+--    shortfall exactly equal to the supply, added by the review fix).
 -- Z. The frozen objects: md5, SECURITY DEFINER, search_path and owner of the
 --    functions F2-5 promises not to touch, and fingerprints of ledger.*, the
 --    0380/0381/0382 objects, the order, schedule, PO and idempotency policies,
@@ -69,7 +79,7 @@
 
 begin;
 
-select plan(49);
+select plan(54);
 
 \set orgA    '\'03850000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03850000-0000-0000-0000-00000000000b\''
@@ -89,6 +99,7 @@ select plan(49);
 \set whB     '\'03850000-0000-0000-0000-0000000000d3\''
 \set supA1   '\'03850000-0000-0000-0000-0000000000e1\''
 \set supA2   '\'03850000-0000-0000-0000-0000000000e2\''
+\set supArch '\'03850000-0000-0000-0000-0000000000e3\''
 \set iG      '\'03850000-0000-0000-0000-000000000f01\''
 \set iS1     '\'03850000-0000-0000-0000-000000000f11\''
 \set iS1b    '\'03850000-0000-0000-0000-000000000f12\''
@@ -108,6 +119,8 @@ select plan(49);
 \set iI      '\'03850000-0000-0000-0000-000000000f61\''
 \set iLk     '\'03850000-0000-0000-0000-000000000f71\''
 \set iB      '\'03850000-0000-0000-0000-000000000f81\''
+\set iNm1    '\'03850000-0000-0000-0000-000000000f91\''
+\set iNm2    '\'03850000-0000-0000-0000-000000000f92\''
 \set ordGate '\'03850000-0000-0000-0000-000000000101\''
 \set ordGrp  '\'03850000-0000-0000-0000-000000000102\''
 \set ordSel  '\'03850000-0000-0000-0000-000000000103\''
@@ -120,11 +133,14 @@ select plan(49);
 \set ordIdem '\'03850000-0000-0000-0000-00000000010a\''
 \set ordIdm2 '\'03850000-0000-0000-0000-00000000010b\''
 \set ordLk   '\'03850000-0000-0000-0000-00000000010c\''
+\set ordNum  '\'03850000-0000-0000-0000-00000000010d\''
 \set ordB    '\'03850000-0000-0000-0000-000000000141\''
 \set poCanc  '\'03850000-0000-0000-0000-000000000201\''
 \set poRecv  '\'03850000-0000-0000-0000-000000000202\''
 \set poOpen  '\'03850000-0000-0000-0000-000000000203\''
-\set poColl  '\'03850000-0000-0000-0000-000000000204\''
+\set poAh1   '\'03850000-0000-0000-0000-000000000205\''
+\set poAh2   '\'03850000-0000-0000-0000-000000000206\''
+\set poAhX   '\'03850000-0000-0000-0000-000000000207\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -170,9 +186,12 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   -- idempotency_keys_write floor (pattern #4).
   (:orgA, :stfPo, 'purchase_orders:manage', true),
   (:orgA, :mgrNo, 'purchase_orders:manage', false);
-insert into public.suppliers (id, organization_id, name) values
-  (:supA1, :orgA, '0385 Supplier One'),
-  (:supA2, :orgA, '0385 Supplier Two');
+insert into public.suppliers (id, organization_id, name, deleted_at) values
+  (:supA1,   :orgA, '0385 Supplier One',      null),
+  (:supA2,   :orgA, '0385 Supplier Two',      null),
+  -- Archived (SuppliersService.archive sets deleted_at and leaves items'
+  -- supplier_id as it was).
+  (:supArch, :orgA, '0385 Archived Supplier', now());
 
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, supplier_id, unit_cost, is_bundle, deleted_at) values
@@ -196,6 +215,8 @@ insert into public.inventory_items
   (:iAt2, :orgA, :whA,  'X0385-AT2', 'Atomic two',      0, 'active', :supA2, 1,    false, null),
   (:iI,   :orgA, :whA,  'X0385-I',   'Idempotent item', 0, 'active', :supA1, 1,    false, null),
   (:iLk,  :orgA, :whA,  'X0385-LK',  'Lock item',       0, 'active', :supA1, 1,    false, null),
+  (:iNm1, :orgA, :whA,  'X0385-NM1', 'Number one',      0, 'active', :supA1,   1,  false, null),
+  (:iNm2, :orgA, :whA,  'X0385-NM2', 'Number two',      0, 'active', :supArch, 1,  false, null),
   (:iB,   :orgB, :whB,  'X0385-B',   'Org B item',      0, 'active', null,   1,    false, null);
 
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
@@ -212,6 +233,7 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
   (:ordIdem, :orgA, :whA, 'pending_approval', 'internal', :stfPo, 'pickup'),
   (:ordIdm2, :orgA, :whA, 'pending_approval', 'internal', :stfPo, 'pickup'),
   (:ordLk,   :orgA, :whA, 'pending_approval', 'internal', :stfPo, 'pickup'),
+  (:ordNum,  :orgA, :whA, 'pending_approval', 'internal', :stfPo, 'pickup'),
   (:ordB,    :orgB, :whB, 'pending_approval', 'internal', :mgrB,  'pickup');
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested, created_at) values
   (:ordGate, :iG,   100, '2026-09-01 10:00:00+00'),
@@ -236,6 +258,8 @@ insert into public.order_request_lines (order_request_id, item_id, quantity_requ
   (:ordIdem, :iI,   6,   '2026-09-01 10:00:00+00'),
   (:ordIdm2, :iI,   1,   '2026-09-01 10:00:00+00'),
   (:ordLk,   :iLk,  5,   '2026-09-01 10:00:00+00'),
+  (:ordNum,  :iNm1, 2,   '2026-09-01 10:00:00+00'),
+  (:ordNum,  :iNm2, 2,   '2026-09-01 10:00:01+00'),
   (:ordB,    :iB,   1,   '2026-09-01 10:00:00+00');
 
 -- A cancelled and a fully received PO for the draftable item: neither is
@@ -312,7 +336,7 @@ grant all on fx, ans to authenticated;
 -- the wrong reason.
 do $$ begin
   if (select count(*) from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id
-       where o.organization_id in ('03850000-0000-0000-0000-00000000000a', '03850000-0000-0000-0000-00000000000b')) <> 23 then
+       where o.organization_id in ('03850000-0000-0000-0000-00000000000a', '03850000-0000-0000-0000-00000000000b')) <> 25 then
     raise exception 'fixture: lines';
   end if;
   if not public.module_enabled('03850000-0000-0000-0000-00000000000a', 'purchase_orders')
@@ -719,28 +743,29 @@ select is(
   'R4: the answer is exactly {orderId, orderNumber, created: [{purchaseOrderId, poNumber, supplierId, lineCount, units, lines}], replay: false}: ids and numbers, no cost or name');
 
 -- ═══ T. All or nothing ════════════════════════════════════════════════════
--- next_po_number counts the org's POs. Take the number the SECOND draft of
--- ordAtom will be given: the first draft is written, then the second fails.
+-- The SECOND draft of ordAtom (supplier two) is refused by
+-- save_purchase_order_draft: its item's recorded cost is below 0, which the
+-- save refuses (po_line_invalid) and nothing before it checks. The first
+-- draft (supplier one) is written, then the second fails. (Until the review
+-- fix this took the second draft's PO number instead; the number is now
+-- stepped past numbers live POs carry, section N.)
 select pg_temp.pos() as "posT" \gset
-insert into public.purchase_orders (id, organization_id, po_number, status)
-values (:poColl, :orgA,
-        'PO-' || to_char(now(), 'YYYY') || '-' || lpad(((select count(*) from public.purchase_orders where organization_id = :orgA) + 3)::text, 4, '0'),
-        'draft');
+update public.inventory_items set unit_cost = -1 where id = :iAt2;
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
 insert into fx select 'T1', pg_temp.err(pg_temp.draft(:ordAtom,
   format('[{"item_id": "%s", "quantity": 2}, {"item_id": "%s", "quantity": 2}]', :iAt1, :iAt2), 't-1'));
 reset role;
 select is(
-  (select left(r, 6) from fx where who = 'T1'),
-  '23505:',
-  'T1: a PO number taken for the second draft (supplier two) aborts the call with 23505');
+  (select left(r, 24) from fx where who = 'T1'),
+  '22023:po_line_invalid:Ea',
+  'T1: a refusal of the second draft (supplier two) by save_purchase_order_draft aborts the call');
 select is(
   pg_temp.pos() || '/' || (select count(*) from public.purchase_order_items where item_id in (:iAt1, :iAt2))
     || '/' || (select count(*) from public.idempotency_keys where organization_id = :orgA and key = 't-1'),
-  (:posT + 1) || '/0/0',
+  :posT || '/0/0',
   'T2: the first draft (supplier one) was rolled back with it, and so was the key: all or nothing (mutation: a per-group exception handler keeps the first)');
-delete from public.purchase_orders where id = :poColl;
+update public.inventory_items set unit_cost = 1 where id = :iAt2;
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
 insert into ans select 'T3', public.draft_order_shortfall_pos(:ordAtom,
@@ -749,7 +774,47 @@ reset role;
 select is(
   (select jsonb_array_length(r->'created') || '/' || (r->>'replay') from ans where who = 'T3'),
   '2/false',
-  'T3: once the number is free, the same key drafts both (a retry after a failure is safe)');
+  'T3: once the cause is fixed, the same key drafts both (a retry after a failure is safe)');
+delete from fx;
+
+-- ═══ N. The PO number (ordNum: supplier one, and the archived supplier) ═══
+-- Three POs numbered ahead of the count, as the manual form allows: two live
+-- (ordered, draft) and a cancelled one. next_po_number gives count + 1.
+select (select count(*) from public.purchase_orders where organization_id = :orgA) as "cntN" \gset
+insert into public.purchase_orders (id, organization_id, po_number, status) values
+  (:poAh1, :orgA, 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 4)::text, 4, '0'), 'ordered'),
+  (:poAh2, :orgA, 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 5)::text, 4, '0'), 'draft'),
+  (:poAhX, :orgA, 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 6)::text, 4, '0'), 'cancelled');
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :mgr;
+insert into fx select 'N1', pg_temp.err(pg_temp.draft(:ordNum,
+  format('[{"item_id": "%s", "quantity": 2}, {"item_id": "%s", "quantity": 2}]', :iNm1, :iNm2), 'n-1'));
+insert into fx select 'N1 again', pg_temp.err(pg_temp.draft(:ordNum,
+  format('[{"item_id": "%s", "quantity": 2}, {"item_id": "%s", "quantity": 2}]', :iNm1, :iNm2), 'n-2'));
+reset role;
+select is(
+  (select r from fx where who = 'N1'),
+  'no error',
+  'N1: live POs numbered ahead of the count do not block the draft (mutation: no stepping, 23505 on every try)');
+select is(
+  (select string_agg(p.po_number || '=' || coalesce(p.supplier_id::text, 'none'), ', ' order by p.po_number)
+     from public.purchase_orders p
+    where p.organization_id = :orgA
+      and p.notes = 'Short on SO-' || lpad((select order_number::text from public.order_requests where id = :ordNum), 6, '0') || ' when drafted'),
+  'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 6)::text, 4, '0') || '=' || :supA1 || ', '
+    || 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 7)::text, 4, '0') || '=' || :supArch,
+  'N2: the first draft steps past two live numbers to the cancelled PO''s (free), the second past the first; the archived supplier''s item goes on a draft for that supplier, as recorded');
+select is(
+  (select r from fx where who = 'N1 again'),
+  'P0001:shortfall_changed:shortfall_changed',
+  'N3: and nothing is left to draft (the numbers moved, the shortfall did not)');
+select is(
+  (select string_agg(p.po_number || '/' || p.status, ', ' order by p.po_number)
+     from public.purchase_orders p where p.id in (:poAh1, :poAh2, :poAhX)),
+  'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 4)::text, 4, '0') || '/ordered, '
+    || 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 5)::text, 4, '0') || '/draft, '
+    || 'PO-' || to_char(now(), 'YYYY') || '-' || lpad((:cntN + 6)::text, 4, '0') || '/cancelled',
+  'N4: the POs it stepped past are untouched');
 delete from fx;
 
 -- ═══ I. Idempotency (ordIdem: 6 owed of iI) ═══════════════════════════════
@@ -786,11 +851,29 @@ delete from fx;
 select is(
   (select jsonb_build_object('scope', k.scope, 'status', k.status, 'type', k.resource_type, 'resource', k.resource_id,
                              'hash', k.request_hash = md5('order_shortfall_po|' || :ordIdem || '|' || :iI || ':4'),
-                             'response', k.response = (select r - 'replay' from ans where who = 'I1'))
+                             'response', k.response = (select jsonb_set(r - 'replay', '{created}',
+                                                                  (select jsonb_agg(c - 'poNumber' - 'supplierId' order by o)
+                                                                     from jsonb_array_elements(r->'created') with ordinality e(c, o)))
+                                                         from ans where who = 'I1'))
      from public.idempotency_keys k where k.organization_id = :orgA and k.key = 'idem-1'),
   jsonb_build_object('scope', 'order_shortfall_po', 'status', 'completed', 'type', 'order_request', 'resource', :ordIdem,
                      'hash', true, 'response', true),
-  'I3: the key is stored completed (scope order_shortfall_po, the order as its resource), with the request''s hash and the first answer');
+  'I3: the key is stored completed (scope order_shortfall_po, the order as its resource), with the request''s hash and the first answer, each draft named by its id only');
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :vwr;
+insert into fx select 'I5', (
+  select count(*) || '/' || bool_or(k.response::text like '%poNumber%'
+                                    or k.response::text like '%supplierId%'
+                                    or k.response::text like '%' || (select r->'created'->0->>'poNumber' from ans where who = 'I1') || '%'
+                                    or k.response::text like '%' || :supA1 || '%')
+    from public.idempotency_keys k where k.organization_id = :orgA and k.key = 'idem-1');
+reset role;
+select is(
+  (select r from fx where who = 'I5') || '/' || (select (r->'created'->0->>'poNumber' is not null
+                                                       and r->'created'->0->>'supplierId' = :supA1) from ans where who = 'I2')::text,
+  '1/false/true',
+  'I5: a viewer reads the key row (idempotency_keys_select) but no PO number or supplier in it, while the replay still answers both, read from the PO');
+delete from fx;
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
 insert into fx select 'refused', pg_temp.err(pg_temp.draft(:ordIdem, pg_temp.l1(:iI, '3'), 'idem-2'));
@@ -824,7 +907,7 @@ select is(
 
 -- ═══ P. Parity with core over the shared fixture ══════════════════════════
 -- BEGIN GENERATED DRAFTABLE: scripts/gen-readiness-parity-sql.mjs from packages/core/src/orders/readiness-parity-cases.json. Do not edit by hand.
--- 30 cases: C1a, C1b, C2, C3, C4, C4b, C5, C6, C6c, C6b, C7, C8, C9, C10, C11, C12, C13, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11, D12, D13.
+-- 31 cases: C1a, C1b, C2, C3, C4, C4b, C5, C6, C6c, C6b, C7, C8, C9, C10, C11, C12, C13, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10, D11, D12, D13, D14.
 insert into dp_case (case_id, facts, expected) values
   ('C1a', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a011-0000-4000-8000-000000000000","orderNumber":1,"status":"pending_approval","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a014-0000-4000-8000-000000000001","itemId":"0377a013-0000-4000-8000-000000000001","requested":5,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"},{"lineId":"0377a014-0000-4000-8000-000000000002","itemId":"0377a013-0000-4000-8000-000000000002","requested":6,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:02.000Z"}],"items":[{"itemId":"0377a013-0000-4000-8000-000000000001","visible":true,"name":"Parity C1a a","sku":"P-C1a-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":10,"heldOwn":0,"heldOtherOrders":3,"heldRentals":2,"here":{"rack":10,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}},{"itemId":"0377a013-0000-4000-8000-000000000002","visible":true,"name":"Parity C1a b","sku":"P-C1a-b","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":6,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":4,"site":0,"unplaced":0,"staging":2},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[{"locationId":"staging-here","quantity":2}],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a013-0000-4000-8000-000000000001":0,"0377a013-0000-4000-8000-000000000002":0}'::jsonb),
   ('C1b', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a021-0000-4000-8000-000000000000","orderNumber":2,"status":"pending_approval","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a024-0000-4000-8000-000000000001","itemId":"0377a023-0000-4000-8000-000000000001","requested":6,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"}],"items":[{"itemId":"0377a023-0000-4000-8000-000000000001","visible":true,"name":"Parity C1b a","sku":"P-C1b-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":10,"heldOwn":0,"heldOtherOrders":3,"heldRentals":2,"here":{"rack":10,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a023-0000-4000-8000-000000000001":1}'::jsonb),
@@ -855,7 +938,8 @@ insert into dp_case (case_id, facts, expected) values
   ('D10', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a061-0000-4000-8000-000000000000","orderNumber":6,"status":"backordered","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a064-0000-4000-8000-000000000001","itemId":"0377a063-0000-4000-8000-000000000001","requested":6,"fulfilled":2,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"}],"items":[{"itemId":"0377a063-0000-4000-8000-000000000001","visible":true,"name":"Parity C4b a","sku":"P-C4b-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":2,"heldOwn":0,"heldOtherOrders":2,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":null,"drafts":null}]}'::jsonb, '{"0377a063-0000-4000-8000-000000000001":0}'::jsonb),
   ('D11', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a021-0000-4000-8000-000000000000","orderNumber":2,"status":"pending_approval","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a024-0000-4000-8000-000000000001","itemId":"0377a023-0000-4000-8000-000000000001","requested":6,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"}],"items":[{"itemId":"0377a023-0000-4000-8000-000000000001","visible":false}]}'::jsonb, '{"0377a023-0000-4000-8000-000000000001":0}'::jsonb),
   ('D12', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a061-0000-4000-8000-000000000000","orderNumber":6,"status":"backordered","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a064-0000-4000-8000-000000000001","itemId":"0377a063-0000-4000-8000-000000000001","requested":6,"fulfilled":2,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"}],"items":[{"itemId":"0377a063-0000-4000-8000-000000000001","visible":true,"name":"Parity C4b a","sku":"P-C4b-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":true,"archived":false,"isBundle":false,"onHand":2,"heldOwn":0,"heldOtherOrders":2,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a063-0000-4000-8000-000000000001":0}'::jsonb),
-  ('D13', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a031-0000-4000-8000-000000000000","orderNumber":3,"status":"pending_approval","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a034-0000-4000-8000-000000000001","itemId":"0377a033-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"},{"lineId":"0377a034-0000-4000-8000-000000000002","itemId":"0377a033-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:02.000Z"}],"items":[{"itemId":"0377a033-0000-4000-8000-000000000001","visible":true,"name":"Parity C2 a","sku":"P-C2-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[{"poId":"0385d00d-0000-4000-8000-000000000001","poNumber":"PO-D13-1","status":"ordered","expectedAt":null,"remaining":0.25}],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a033-0000-4000-8000-000000000001":0.75}'::jsonb);
+  ('D13', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a031-0000-4000-8000-000000000000","orderNumber":3,"status":"pending_approval","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a034-0000-4000-8000-000000000001","itemId":"0377a033-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"},{"lineId":"0377a034-0000-4000-8000-000000000002","itemId":"0377a033-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null,"createdAt":"2026-01-01T00:00:02.000Z"}],"items":[{"itemId":"0377a033-0000-4000-8000-000000000001","visible":true,"name":"Parity C2 a","sku":"P-C2-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":0,"inbound":{"rows":[{"poId":"0385d00d-0000-4000-8000-000000000001","poNumber":"PO-D13-1","status":"ordered","expectedAt":null,"remaining":0.25}],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a033-0000-4000-8000-000000000001":0.75}'::jsonb),
+  ('D14', '{"v":1,"observedAt":"2026-01-01T12:00:00.000Z","phase":"to_pick","linesCapped":false,"order":{"id":"0377a061-0000-4000-8000-000000000000","orderNumber":6,"status":"backordered","warehouseId":"0377a000-0000-4000-8000-0000000000d1","neededBy":null,"fulfillmentType":"pickup"},"lines":[{"lineId":"0377a064-0000-4000-8000-000000000001","itemId":"0377a063-0000-4000-8000-000000000001","requested":6,"fulfilled":2,"picked":null,"createdAt":"2026-01-01T00:00:01.000Z"}],"items":[{"itemId":"0377a063-0000-4000-8000-000000000001","visible":true,"name":"Parity C4b a","sku":"P-C4b-a","supplierId":null,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","deleted":false,"archived":false,"isBundle":false,"onHand":2,"heldOwn":0,"heldOtherOrders":2,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingSources":[],"stagingHiddenQty":0,"pendingOthers":{"orders":0,"units":0},"committedOtherShortfall":4,"inbound":{"rows":[{"poId":"0385d00e-0000-4000-8000-000000000001","poNumber":"PO-D14-1","status":"ordered","expectedAt":null,"remaining":2}],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[{"poId":"0385d00e-0000-4000-8000-000000000032","poNumber":"PO-D14-50","remaining":2}],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0}}]}'::jsonb, '{"0377a063-0000-4000-8000-000000000001":4}'::jsonb);
 -- END GENERATED DRAFTABLE
 
 select is(
@@ -869,8 +953,8 @@ select is(
   'P1: order_shortfall_draftable equals core''s draftable for every case and draftable case of readiness-parity-cases.json');
 select is(
   (select count(*)::int from dp_case where case_id like 'D%') || '/' || (select count(*)::int from dp_case),
-  '13/30',
-  'P2: the block holds the 17 cases and the 13 draftable cases');
+  '14/31',
+  'P2: the block holds the 17 cases and the 14 draftable cases');
 select is(
   (select string_agg(d.case_id || '=' || (select string_agg(coalesce(c.value->>'refusal', '-'), ',' order by c.key)
                                             from jsonb_each(public.order_shortfall_draftable(d.facts)) c), ', ' order by d.case_id)

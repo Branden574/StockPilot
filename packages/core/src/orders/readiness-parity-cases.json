@@ -310,6 +310,7 @@
     { "id": "D10", "base": "C4b", "title": "the purchase_orders module off (no inbound facts): nothing is draftable", "poModule": false, "draftable": { "a": 0 } },
     { "id": "D11", "base": "C1b", "title": "an item the reader cannot read: nothing is draftable", "hidden": ["a"], "draftable": { "a": 0 } },
     { "id": "D12", "base": "C4b", "title": "a deleted item is never drafted", "deleted": ["a"], "draftable": { "a": 0 } },
-    { "id": "D13", "base": "C2", "title": "duplicate lines are owed once per item (3 + 3 against 5 free: 1 short); 0.25 on order leaves 0.75", "supply": { "a": { "inbound": [0.25] } }, "draftable": { "a": 0.75 } }
+    { "id": "D13", "base": "C2", "title": "duplicate lines are owed once per item (3 + 3 against 5 free: 1 short); 0.25 on order leaves 0.75", "supply": { "a": { "inbound": [0.25] } }, "draftable": { "a": 0.75 } },
+    { "id": "D14", "base": "C4b", "title": "other orders' committed shortfall exactly equal to the supply (2 on order, 2 on a draft, 4 owed elsewhere): the whole shortfall is draftable (review: the row must say who needs that supply)", "supply": { "a": { "inbound": [2], "drafts": [2], "committedOtherShortfall": 4 } }, "draftable": { "a": 4 } }
   ]
 }

@@ -70,9 +70,10 @@
 --      hash = md5 of the order id and the item:quantity pairs in item order.
 --      INSERT ... ON CONFLICT DO NOTHING, so a second call with the same key
 --      waits for the first and then reads its committed row: the same hash
---      and completed returns the stored answer with replay: true; another
---      hash, or a key not completed, is P0001 idempotency_conflict. The key
---      row commits or rolls back with the drafts.
+--      and completed returns the stored answer with replay: true, each
+--      draft's number and supplier read again from the PO itself (below);
+--      another hash, or a key not completed, is P0001 idempotency_conflict.
+--      The key row commits or rolls back with the drafts.
 --   4. THE REORDER LOCK: pg_advisory_xact_lock(hashtextextended(
 --      'save_purchase_order_draft:reorder:' || org, 0)), the very lock the
 --      reorder drafts take (0366: the button, the AI tool and the daily
@@ -95,23 +96,46 @@
 --      unit_cost read under the caller's RLS in one statement; an item that
 --      read does not return is item_not_draftable), in supplier-id order,
 --      the items with no supplier last as one draft. For each group:
---      next_po_number(org) and save_purchase_order_draft(org, null, number,
+--      next_po_number(org), stepped past any number a live PO already
+--      carries (below), and save_purchase_order_draft(org, null, number,
 --      supplier, no destination, no charter, no expected date,
 --      'Short on SO-000123 when drafted', lines {item_id, quantity_ordered,
 --      unit_cost = the item's cost}, no custom items, no actor (auth.uid()
 --      is recorded), p_skip_items_on_open_po false: this function has
 --      already decided under the same lock). Drafts are never sent.
---   7. The key is marked completed with the answer.
+--   7. The key is marked completed with the answer, minus each draft's
+--      number and supplier (below).
 --
 -- Answer: {orderId, orderNumber, created: [{purchaseOrderId, poNumber,
 -- supplierId, lineCount, units, lines: [{itemId, quantity}]}], replay}.
--- The stored answer is the same without `replay`. Ids and numbers only: no
--- cost, no name.
+-- Ids and numbers only: no cost, no name.
+--
+-- THE STORED ANSWER NAMES EACH DRAFT BY ITS ID ONLY. idempotency_keys is
+-- readable by every accepted member (idempotency_keys_select), a viewer
+-- included, while a PO's number and its supplier are not
+-- (purchase_orders_select needs purchase_orders:read; 0377 names a PO only to
+-- a reader who may open it). So the key keeps {orderId, orderNumber,
+-- created: [{purchaseOrderId, lineCount, units, lines}]}, and a replay reads
+-- each draft's po_number and supplier_id again, under the caller's RLS (the
+-- floors make the caller a manager, whom purchase_orders_write lets read
+-- every PO of the org; no user may delete a PO). A stored draft that cannot
+-- be read is an internal error, never a guess.
+--
+-- THE PO NUMBER. next_po_number (frozen) is the count of the org's POs plus
+-- one, so a live PO whose number was typed ahead of that count (the manual PO
+-- form takes any number) would be given to every draft, and the unique index
+-- (purchase_orders_org_ponumber_active_key, cancelled POs excepted) would
+-- refuse every try with 23505, retries included. Under the lock, the number
+-- is stepped forward past every number a live PO of the org already carries
+-- (the same prefix and width, at most 1000 steps; past that the 23505
+-- stands). A PO written meanwhile outside the lock (the manual form) can
+-- still take a number first: that 23505 is a real race, and a retry draws a
+-- new number.
 --
 -- ALL OR NOTHING. No exception is caught here. Any refusal from
 -- save_purchase_order_draft (po_line_bundle, po_line_deleted, po_not_in_org,
--- po_line_invalid), a PO number taken meanwhile (23505:
--- next_po_number counts), a lock wait past 5 s (55P03) or the role's
+-- po_line_invalid), a PO number taken meanwhile outside the lock (23505), a
+-- lock wait past 5 s (55P03) or the role's
 -- statement_timeout (57014) aborts the call: every draft of this call and
 -- the key roll back, so a retry with the same key is safe.
 -- It never raises 40001 or 40P01 (0367; PostgREST retries 40001 forever).
@@ -306,6 +330,13 @@ declare
   v_saved     jsonb;
   v_created   jsonb := '[]'::jsonb;
   v_result    jsonb;
+  v_stored    jsonb;
+  v_found     integer;
+  v_total     integer;
+  v_no_parts  text[];
+  v_no_seq    bigint;
+  v_no_width  integer;
+  v_no_steps  integer;
 begin
   -- ── 1. Floors ────────────────────────────────────────────────────────────
   if v_uid is null then
@@ -402,10 +433,27 @@ begin
     if not found
        or v_prev.request_hash is distinct from v_hash
        or v_prev.status is distinct from 'completed'
-       or jsonb_typeof(v_prev.response) is distinct from 'object' then
+       or jsonb_typeof(v_prev.response) is distinct from 'object'
+       or jsonb_typeof(v_prev.response->'created') is distinct from 'array' then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
-    return v_prev.response || jsonb_build_object('replay', true);
+    -- The key names each draft by id only (see the header): its number and
+    -- supplier are read now, from the PO, as the caller may see them.
+    select coalesce(jsonb_agg(c || jsonb_build_object('poNumber', p.po_number, 'supplierId', p.supplier_id)
+                              order by e.o), '[]'::jsonb),
+           count(p.id),
+           count(*)
+      into v_created, v_found, v_total
+      from jsonb_array_elements(v_prev.response->'created') with ordinality as e(c, o)
+      left join public.purchase_orders p
+        on p.id = (e.c->>'purchaseOrderId')::uuid
+       and p.organization_id = v_org;
+    if v_found <> v_total then
+      raise exception 'draft_order_shortfall_pos_internal: a stored draft could not be read'
+        using errcode = 'P0001', hint = 'shortfall_po_internal';
+    end if;
+    return (v_prev.response - 'created')
+           || jsonb_build_object('created', v_created, 'replay', true);
   end if;
 
   -- ── 4. The reorder drafts' lock (0366), held to commit ───────────────────
@@ -508,6 +556,25 @@ begin
   loop
     -- A new statement per draft: it counts the draft made just before.
     v_no := public.next_po_number(v_org);
+    -- Past every number a live PO already carries (a number typed ahead of
+    -- the count would otherwise be given to every draft: see the header).
+    -- The caller is a manager (the floors), who reads every PO of the org.
+    v_no_parts := regexp_match(v_no, '^(.*[^0-9])([0-9]+)$');
+    if v_no_parts is not null then
+      v_no_seq   := v_no_parts[2]::bigint;
+      v_no_width := char_length(v_no_parts[2]);
+      v_no_steps := 0;
+      while v_no_steps < 1000
+            and exists (select 1
+                          from public.purchase_orders p
+                         where p.organization_id = v_org
+                           and p.po_number = v_no
+                           and p.status <> 'cancelled') loop
+        v_no_steps := v_no_steps + 1;
+        v_no_seq   := v_no_seq + 1;
+        v_no := v_no_parts[1] || lpad(v_no_seq::text, greatest(v_no_width, char_length(v_no_seq::text)), '0');
+      end loop;
+    end if;
     v_saved := public.save_purchase_order_draft(
       v_org, null, v_no, v_group.supplier_id, null, null, null, v_notes,
       v_group.save_lines, '{}'::uuid[], null, false);
@@ -529,10 +596,17 @@ begin
     'orderId',     p_order_id,
     'orderNumber', v_order_no,
     'created',     v_created);
+  -- Stored with each draft named by its id only (see the header).
+  select jsonb_build_object(
+           'orderId',     p_order_id,
+           'orderNumber', v_order_no,
+           'created',     coalesce(jsonb_agg(c - 'poNumber' - 'supplierId' order by o), '[]'::jsonb))
+    into v_stored
+    from jsonb_array_elements(v_created) with ordinality as e(c, o);
 
   update public.idempotency_keys
      set status      = 'completed',
-         response    = v_result,
+         response    = v_stored,
          resource_id = p_order_id,
          updated_at  = now()
    where organization_id = v_org
@@ -559,11 +633,13 @@ comment on function public.draft_order_shortfall_pos(uuid, jsonb, text) is
   'purchase_orders:manage AND write access to the order''s warehouse (42501 forbidden, hints '
   'manager_required, purchase_orders_manage, warehouse_write). Idempotent on p_idempotency_key (scope '
   'order_shortfall_po; replay returns the stored answer with replay true; another request with the key: '
-  'P0001 idempotency_conflict). Takes the reorder drafts'' advisory lock (0366), then recomputes from '
+  'P0001 idempotency_conflict; the key keeps each draft''s id only, and a replay reads its number and supplier '
+  'again). Takes the reorder drafts'' advisory lock (0366), then recomputes from '
   'order_readiness_facts: phase to_pick (P0001 readiness_not_applicable), items on the order (22023 '
   'line_not_on_order), draftable items (P0001 item_not_draftable), and every quantity at most its '
   'draftable (P0001 shortfall_changed, detail = current draftable per item; never clamped). Drafts via '
-  'next_po_number and save_purchase_order_draft (no destination, charter or expected date; the item''s cost; '
+  'next_po_number (stepped past numbers live POs carry) and save_purchase_order_draft (no destination, charter '
+  'or expected date; the item''s cost; '
   'notes "Short on SO-… when drafted"). Returns {orderId, orderNumber, created: [{purchaseOrderId, poNumber, '
   'supplierId, lineCount, units, lines}], replay}. SECURITY INVOKER (RLS and the PO guards apply), '
   'lock_timeout 5s, never 40001/40P01, EXECUTE to authenticated only.';

@@ -264,7 +264,7 @@ describe.each(cases.map((c, i) => [c.id, c, i + 1] as const))('%s', (_id, c, n) 
  */
 describe('draftable (F2-5): core and order_shortfall_draftable agree', () => {
   it('every draftable case names a real base case and every one of its items', () => {
-    expect(draftableCases.length).toBeGreaterThanOrEqual(13);
+    expect(draftableCases.length).toBeGreaterThanOrEqual(14);
     expect(new Set(draftableCases.map((c) => c.id)).size).toBe(draftableCases.length);
     for (const dc of draftableCases) {
       const base = cases.find((c) => c.id === dc.base);
