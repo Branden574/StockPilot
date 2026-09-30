@@ -250,7 +250,7 @@ describe('ReviseNeededByDialog: saving', () => {
     typeReason('Moved');
     save();
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
-    expect(toastMock.warning.mock.calls[0]![0]).toContain('may still show another date');
+    expect(toastMock.warning.mock.calls[0]![0]).toContain('may not match the order');
     expect(toastMock.success).not.toHaveBeenCalled();
     unmount();
 

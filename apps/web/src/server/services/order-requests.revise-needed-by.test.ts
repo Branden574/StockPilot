@@ -555,11 +555,17 @@ describe('the Schedule entry', () => {
       ['denied', 'cancelled'],
       ['completed', 'completed'],
     ] as const) {
+      // The entry as read before the close, then as read after it.
+      let reads = 0;
       const { admin, svc } = build({
         order: { data: orderRow({ needed_by: null }), error: null },
         rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
         admin: missingEvent({
           'order_requests.select': { data: orderNow({ status: closed }), error: null },
+          'schedule_events.select': () => {
+            reads += 1;
+            return { data: eventRow(reads > 1 ? { status: eventOutcome } : {}), error: null };
+          },
           'schedule_events.update': { data: null, error: null },
         }),
       });
@@ -571,6 +577,32 @@ describe('the Schedule entry', () => {
         expect.arrayContaining([['order_request_id', ORDER], ['status', ['scheduled', 'in_progress']]]),
       );
     }
+  });
+
+  it('closing the entry of an order closed meanwhile is confirmed, never assumed (pattern #2): a close that did not land is reported and said', async () => {
+    // syncOrderScheduleEvent swallows its own errors; a close that matched no
+    // row would leave the entry scheduled on a cancelled order, and the
+    // reminder cron would email about it.
+    let reads = 0;
+    const { svc } = build({
+      order: { data: orderRow({ needed_by: null }), error: null },
+      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
+      admin: missingEvent({
+        'order_requests.select': { data: orderNow({ status: 'cancelled' }), error: null },
+        // The first read finds it scheduled; the read after the close still does.
+        'schedule_events.select': () => {
+          reads += 1;
+          return { data: eventRow(), error: null };
+        },
+        'schedule_events.update': { data: null, error: { message: 'boom' } },
+      }),
+    });
+    const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
+    expect(reads).toBe(2);
+    expect(out.schedule).toBe('not_moved');
+    expect(vi.mocked(reportError).mock.calls.map((c) => (c[1] as { tag: string }).tag)).toContain(
+      'orders.needed_by_event_drift',
+    );
   });
 
   it('an entry someone else made meanwhile at the same date counts as created', async () => {

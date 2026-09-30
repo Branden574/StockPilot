@@ -273,9 +273,10 @@ describe('words', () => {
     expect(neededByRevisedCopy(outcome('not_added'), NOW)).toBe(
       "Needed-by changed to Sat, Oct 3, 2:00 PM. Its Schedule entry couldn't be added just now; save the same date again to add it.",
     );
-    // The entry exists at another date and could not be moved (or read).
+    // The entry may not match the order: left at another date, not confirmed
+    // closed with a closed order, or not readable.
     expect(neededByRevisedCopy(outcome('not_moved'), NOW)).toBe(
-      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry may still show another date; check it on the Schedule.',
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry may not match the order; check it on the Schedule.',
     );
     expect(neededByRevisedCopy(outcome('unchanged'), NOW)).toBe(
       'The needed-by date is already Sat, Oct 3, 2:00 PM. Nothing changed.',

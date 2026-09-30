@@ -685,10 +685,11 @@ type OrderEventStep =
 
 /** What autoScheduleFromOrder did: 'created' (in step with the order),
  *  'closed' (created, then closed because the order closed meanwhile),
- *  'exists' (23505: the order already has its entry), 'skipped' (no
- *  needed-by), 'failed' (reported). */
+ *  'unsettled' (created, but it could not be brought in step with the order
+ *  or that could not be confirmed; reported), 'exists' (23505: the order
+ *  already has its entry), 'skipped' (no needed-by), 'failed' (reported). */
 type OrderEventWrite = {
-  made: 'created' | 'closed' | 'exists' | 'skipped' | 'failed';
+  made: 'created' | 'closed' | 'unsettled' | 'exists' | 'skipped' | 'failed';
   eventStatus: string | null;
 };
 
@@ -2703,9 +2704,10 @@ export class OrderRequestsService {
    * nothing.
    *
    * Outcome (OrderEventWrite): 'created'; 'closed' (created, then closed
-   * with its order); 'exists' (23505: the order already has its event, made
-   * by a concurrent approval or revision); 'skipped' (no needed-by); 'failed'
-   * (reported).
+   * with its order); 'unsettled' (created, but not brought in step, or not
+   * confirmed; reported); 'exists' (23505: the order already has its event,
+   * made by a concurrent approval or revision); 'skipped' (no needed-by);
+   * 'failed' (reported).
    */
   private async autoScheduleFromOrder(
     row: OrderRequestRow,
@@ -2756,7 +2758,10 @@ export class OrderRequestsService {
       if (!error) {
         const step = await this.bringOrderEventInStep(row.id, tz);
         if (step.state === 'closed') return { made: 'closed', eventStatus: step.eventStatus };
-        return { made: 'created', eventStatus: step.eventStatus ?? 'scheduled' };
+        if (step.state === 'drift' || step.state === 'unknown') {
+          return { made: 'unsettled', eventStatus: step.eventStatus };
+        }
+        return { made: 'created', eventStatus: step.eventStatus };
       }
       if (error.code === '23505') return { made: 'exists', eventStatus: null };
       void reportSrvError(new Error(error.message), {
@@ -2832,7 +2837,18 @@ export class OrderRequestsService {
       if (closeAs) {
         if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
         await syncOrderScheduleEvent(orderId, closeAs, orgId);
-        return { state: 'closed', eventStatus: closeAs };
+        // Confirmed, never assumed (pattern #2): the sync swallows its own
+        // errors, and an entry left scheduled on a closed order is reminded.
+        const { data: after } = await admin
+          .from('schedule_events')
+          .select('status')
+          .eq('organization_id', orgId)
+          .eq('order_request_id', orderId)
+          .maybeSingle();
+        const closedNow = (after as { status?: string } | null)?.status;
+        if (closedNow && !OPEN_EVENT_STATUSES.includes(closedNow)) return { state: 'closed', eventStatus: closedNow };
+        report('unknown', { orderStatus: order.status, eventStatus: closedNow ?? null, closing: closeAs });
+        return { state: 'unknown', eventStatus: closedNow ?? null };
       }
       if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
       if (!order.needed_by || Date.parse(order.needed_by) === Date.parse(ev.starts_at)) {
@@ -2896,6 +2912,8 @@ export class OrderRequestsService {
         return { schedule: 'created', eventStatus: write.eventStatus };
       case 'closed':
         return { schedule: 'left_closed', eventStatus: write.eventStatus };
+      case 'unsettled':
+        return { schedule: 'not_moved', eventStatus: write.eventStatus };
       case 'exists': {
         const step = await this.bringOrderEventInStep(row.id, timeZone);
         if (step.state === 'in_step') return { schedule: 'created', eventStatus: step.eventStatus };

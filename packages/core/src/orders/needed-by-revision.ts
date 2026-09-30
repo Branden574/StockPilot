@@ -228,8 +228,9 @@ export function parseNeededByRevisionResult(raw: unknown): NeededByRevisionResul
  *     (or the order closed meanwhile, which closed the entry just added);
  *   - `not_added`: the order has no entry and adding one failed (reported);
  *     saving the same date again tries again;
- *   - `not_moved`: the entry is at another date and could not be moved, or
- *     could not be read (reported); the order moved;
+ *   - `not_moved`: the entry may not match the order (left at another date,
+ *     not confirmed closed with a closed order, or not readable; reported);
+ *     the order moved;
  *   - `unchanged`: the date was already this value; nothing was written.
  */
 export type NeededBySchedule =
@@ -371,7 +372,7 @@ export function neededByRevisedCopy(outcome: NeededByRevisionOutcome, now?: numb
     case 'not_added':
       return `${head} Its Schedule entry couldn't be added just now; save the same date again to add it.`;
     case 'not_moved':
-      return `${head} The Schedule entry may still show another date; check it on the Schedule.`;
+      return `${head} The Schedule entry may not match the order; check it on the Schedule.`;
   }
 }
 
