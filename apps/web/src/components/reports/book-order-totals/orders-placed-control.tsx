@@ -62,6 +62,68 @@ function ordersPlacedShownDays(
 
 const SM_QUERY = '(min-width: 640px)';
 
+/** The calendar popover keeps this far (px) from the screen's edges: Radix
+ *  shifts and flips it inside this margin and measures the height left for
+ *  it (--radix-popover-content-available-height) with it. */
+const ORDERS_PLACED_COLLISION_PADDING = 8;
+
+/** Room kept past a revealed control for its focus ring: the app's
+ *  :focus-visible is ring-2 plus ring-offset-2 (globals.css), 4 px. */
+const FOCUS_RING_ROOM = 4;
+
+/**
+ * Shows a VISIBLE focus inside the popover's scrolling body whole: scrolls
+ * the body, never the page, just far enough. Runs on two occasions:
+ *
+ *   - The body resizes (observeCalendarBody). The calendar focuses its day
+ *     as it mounts, before Radix has measured the room and held the popover
+ *     short; on a short screen that day then sits below the fold.
+ *   - Focus moves into the body (its onFocus). The browser's own reveal is
+ *     not enough there: Chrome shows only a date field's focused part (the
+ *     year, on Shift+Tab) and Radix's Tab wrap from Apply focuses Start date
+ *     with preventScroll, which left the field's top edge, its ring and its
+ *     label under the body's top edge.
+ *
+ * A typed date field is shown with its label. Only when the focus ring shows
+ * (the keyboard moved focus, or a typed field has focus): a click or tap on
+ * a day shows no ring and moves nothing, so the popover opens at its top,
+ * the typed dates and the month.
+ */
+function keepVisibleFocusInView(body: HTMLElement): void {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || el === body || !body.contains(el)) return;
+  let ring = false;
+  try {
+    ring = el.matches(':focus-visible');
+  } catch {
+    return;
+  }
+  if (!ring) return;
+  const field = el.closest<HTMLElement>('[data-typed-date]');
+  const target = field && body.contains(field) ? field : el;
+  const box = body.getBoundingClientRect();
+  const at = target.getBoundingClientRect();
+  // While it opens the popover zooms in from 95%: the rectangles are scaled
+  // and scrollTop is not, so the distances are scaled back.
+  const scale = body.offsetHeight > 0 ? box.height / body.offsetHeight : 1;
+  const room = FOCUS_RING_ROOM * scale;
+  if (at.bottom + room > box.bottom) {
+    body.scrollTop += (at.bottom + room - box.bottom) / scale;
+  } else if (at.top - room < box.top) {
+    body.scrollTop -= (box.top - (at.top - room)) / scale;
+  }
+}
+
+/** A ref for the scrolling body: each time its height changes (Radix holding
+ *  the popover to the room it has, a rotation, a month with another row),
+ *  keep a visible focus in view. */
+function observeCalendarBody(body: HTMLDivElement | null): (() => void) | undefined {
+  if (!body || typeof ResizeObserver === 'undefined') return undefined;
+  const observer = new ResizeObserver(() => keepVisibleFocusInView(body));
+  observer.observe(body);
+  return () => observer.disconnect();
+}
+
 /** Two months side by side from `sm`, one below it. */
 function useTwoMonths(): boolean {
   return React.useSyncExternalStore(
@@ -236,7 +298,13 @@ export function OrdersPlacedControl({
       </div>
       <PopoverContent
         aria-label={BOOK_REPORT_UI.dateRange}
-        className="w-auto max-w-[calc(100vw-2rem)] p-3"
+        // Never taller than the room Radix measures on the side it opens on
+        // (less the collision padding), so on a short or narrow screen none
+        // of it lands off screen: the dates and the calendar scroll inside
+        // it, and the zone line, Cancel and Apply stay in view below them.
+        // Where it all fits (desktop) nothing scrolls and it looks as before.
+        collisionPadding={ORDERS_PLACED_COLLISION_PADDING}
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-auto max-w-[calc(100vw-2rem)] flex-col p-0"
         // The calendar puts focus on its day; closing returns it to the
         // field (or the select) that opened the popover.
         onOpenAutoFocus={(e) => e.preventDefault()}
@@ -250,48 +318,65 @@ export function OrdersPlacedControl({
           if (anchorRef.current?.contains(e.target as Node)) e.preventDefault();
         }}
       >
-        <form noValidate onSubmit={apply} className="space-y-3" data-custom-range>
-          <div className="flex gap-2">
-            <TypedDate
-              id={`${id}-from`}
-              label={BOOK_REPORT_UI.startDate}
-              value={draft.start}
-              invalid={error !== null}
-              errorId={errorId}
-              onFocus={() => setDraft((d) => rangeEdit(d, 'start'))}
-              onChange={typed('start')}
+        <form noValidate onSubmit={apply} className="flex min-h-0 flex-col" data-custom-range>
+          {/* The part that scrolls when the popover is held short. Its
+              padding and the footer's margins are the popover's old p-3 and
+              the form's old space-y-3, so the layout is unchanged where
+              nothing scrolls. */}
+          <div
+            ref={observeCalendarBody}
+            data-custom-range-body
+            className="min-h-0 space-y-3 overflow-y-auto overscroll-contain p-3 pb-0"
+            onFocus={(e) => keepVisibleFocusInView(e.currentTarget)}
+          >
+            <div className="flex gap-2">
+              <TypedDate
+                id={`${id}-from`}
+                label={BOOK_REPORT_UI.startDate}
+                value={draft.start}
+                invalid={error !== null}
+                errorId={errorId}
+                onFocus={() => setDraft((d) => rangeEdit(d, 'start'))}
+                onChange={typed('start')}
+              />
+              <TypedDate
+                id={`${id}-to`}
+                label={BOOK_REPORT_UI.endDate}
+                value={draft.end}
+                invalid={error !== null}
+                errorId={errorId}
+                onFocus={() => setDraft((d) => rangeEdit(d, 'end'))}
+                onChange={typed('end')}
+              />
+            </div>
+            <RangeCalendar
+              month={month}
+              onMonthChange={setMonth}
+              count={count}
+              draft={draft}
+              today={today}
+              autoFocus
+              onPick={(ymd) => {
+                setError(null);
+                setDraft((d) => rangePick(d, ymd));
+              }}
             />
-            <TypedDate
-              id={`${id}-to`}
-              label={BOOK_REPORT_UI.endDate}
-              value={draft.end}
-              invalid={error !== null}
-              errorId={errorId}
-              onFocus={() => setDraft((d) => rangeEdit(d, 'end'))}
-              onChange={typed('end')}
-            />
+            <p aria-live="polite" className="text-muted-foreground min-h-4 text-xs">
+              {waitingForEnd ? CALENDAR_COPY.chooseEndDate : ''}
+            </p>
           </div>
-          <RangeCalendar
-            month={month}
-            onMonthChange={setMonth}
-            count={count}
-            draft={draft}
-            today={today}
-            autoFocus
-            onPick={(ymd) => {
-              setError(null);
-              setDraft((d) => rangePick(d, ymd));
-            }}
-          />
-          <p aria-live="polite" className="text-muted-foreground min-h-4 text-xs">
-            {waitingForEnd ? CALENDAR_COPY.chooseEndDate : ''}
-          </p>
+          {/* The error and the footer sit outside the scrolling part, so an
+              Apply that is refused always shows why, and Cancel and Apply
+              are always in view. */}
           {error ? (
-            <p id={errorId} role="alert" className="text-destructive text-xs">
+            <p id={errorId} role="alert" className="text-destructive mx-3 mt-3 shrink-0 text-xs">
               {error}
             </p>
           ) : null}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+          <div
+            data-custom-range-footer
+            className="mx-3 mb-3 mt-3 flex shrink-0 flex-wrap items-center justify-between gap-2 border-t pt-3"
+          >
             {zoneLine ? (
               <p className="text-muted-foreground max-w-[16rem] text-xs">{zoneLine}</p>
             ) : (
@@ -358,7 +443,8 @@ function TypedDate({
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    // data-typed-date: the box a keyboard focus reveals, the label with the field.
+    <div data-typed-date className="flex min-w-0 flex-1 flex-col gap-1">
       <label htmlFor={id} className={FILTER_LABEL}>
         {label}
       </label>
