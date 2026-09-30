@@ -32,7 +32,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
+import { OrderNeededByCard } from '@/components/order-needed-by-card';
 import { OrderReadinessSummary } from '@/components/order-readiness-summary';
+import { ReviseNeededBySheet } from '@/components/revise-needed-by-sheet';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { AddOrderItemsSheet } from '@/components/add-order-items-sheet';
 import {
@@ -113,6 +115,14 @@ import {
   rememberOrderView,
   shouldReadReadiness,
 } from '@/lib/order-readiness';
+import {
+  canOfferNeededByChange,
+  neededByCardValue,
+  neededBySheetOpening,
+  needsNeededByZoneRead,
+  showNeededByCard,
+} from '@/lib/order-needed-by';
+import { readDestinationWarehouseScope } from '@/lib/holdings-elsewhere';
 import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -468,6 +478,17 @@ export default function OrderDetail() {
     preview: PartialPreview;
   } | null>(null);
   const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
+  // F2-4: the needed-by sheet, with what it opened on: the order, the org's
+  // zone (checked when it opened) and the needed-by EXACTLY as read, the
+  // value the save's stale check compares. Frozen at open: a reload behind
+  // the sheet never moves the value it is replacing.
+  const [neededBySheet, setNeededBySheet] = React.useState<{
+    orderId: string;
+    orderLabel: string | null;
+    timeZone: string;
+    startNeededBy: string | null;
+    orderStatus: string;
+  } | null>(null);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
@@ -880,6 +901,45 @@ export default function OrderDetail() {
     router.push(stagingPutAwayRoute(order.id, itemIds));
   }
 
+  /**
+   * F2-4 "Change" beside the needed-by: reads the org's zone (unless this
+   * load already has it) and the viewer's writable warehouses together, then
+   * opens the sheet, or says in core's words why it cannot (the zone could
+   * not be read, or no write access to the order's warehouse). Nothing is
+   * written here, and nothing here opens an email.
+   */
+  async function openNeededBySheet() {
+    if (!order || !orgId || offline || acting !== null) return;
+    setActing('needed-by');
+    try {
+      const [rawZone, scope] = await Promise.all([
+        order.orgTimezone ?? readOrgTimeZone(supabase, orgId),
+        readDestinationWarehouseScope(supabase, { role, organizationId: orgId, userId }),
+      ]);
+      const opening = neededBySheetOpening({ rawZone, scope, warehouseId: order.warehouseId });
+      if (!opening.ok) {
+        Alert.alert(opening.title, opening.message);
+        return;
+      }
+      setNeededBySheet({
+        orderId: order.id,
+        orderLabel: order.orderNumber ? formatOrderNumber(order.orderNumber) : null,
+        timeZone: opening.timeZone,
+        startNeededBy: order.neededBy,
+        orderStatus: order.status,
+      });
+    } finally {
+      setActing(null);
+    }
+  }
+
+  /** F2-4: the server changed (or kept) the date: say what it did, read the order again. */
+  async function handleNeededBySaved(title: string, message: string) {
+    setNeededBySheet(null);
+    Alert.alert(title, message);
+    await load();
+  }
+
   function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
     void afterLineEdit(res.pickSlipStale, 'Item removed', lineRemovedSummary(line, res));
   }
@@ -1038,6 +1098,23 @@ export default function OrderDetail() {
         role,
       })
         ? Promise.all([readOrderReadiness(supabase, id), readOrgTimeZone(supabase, orgId)])
+        : null;
+    // F2-4: the needed-by card prints the date in the org's zone. Read beside
+    // the lines (no serial round trip) when the order has a needed-by and no
+    // other read of this load brings the zone: readiness above, or a live
+    // delivery order's org-row read below (the same predicate as there). An
+    // order with no needed-by reads nothing. Never throws: unread is null.
+    const neededByZoneRead =
+      headerForReadiness &&
+      needsNeededByZoneRead({
+        neededBy: (headerForReadiness.needed_by as string | null) ?? null,
+        readinessReadsZone: readinessRead !== null,
+        deliveryReadsZone: needsDeliveryRequestData({
+          status: (headerForReadiness.status as string | null) ?? null,
+          fulfillmentType: (headerForReadiness.fulfillment_type as string | null) ?? null,
+        }),
+      })
+        ? readOrgTimeZone(supabase, orgId)
         : null;
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
     // being ordered before approving) and the backorder roll-ups. In
@@ -1221,8 +1298,10 @@ export default function OrderDetail() {
       orgTimezone = (orgRow?.timezone as string | null) ?? null;
     }
     // Readiness read the zone too ("Checked at" and PO dates name the org's
-    // clock and day, as the web page does). Either read may supply it.
-    orgTimezone = orgTimezone ?? readinessAnswer?.[1] ?? null;
+    // clock and day, as the web page does), and so does the needed-by read
+    // (F2-4). Any of the reads may supply it.
+    orgTimezone =
+      orgTimezone ?? readinessAnswer?.[1] ?? (neededByZoneRead ? await neededByZoneRead : null);
 
     let shown: OrderHeader | null = null;
     setLoadError(null);
@@ -1583,6 +1662,18 @@ export default function OrderDetail() {
     shouldOfferHoldStock({
       assessment: order?.readiness?.state === 'ok' ? order.readiness.assessment : null,
       canApproveOrders: rpApprove,
+    });
+
+  // F2-4 "Change" beside the needed-by: approvers (orders:approve, or a
+  // manager by role) on an open order where Orders is on. Warehouse write
+  // access is checked when the sheet opens; the server re-checks all of it.
+  const canChangeNeededBy =
+    order !== null &&
+    canOfferNeededByChange({
+      status: order.status,
+      role,
+      canApproveOrders: rpApprove,
+      ordersModuleEnabled: enabledModules.has('orders'),
     });
 
   // F2-2: the fixes the line being edited offers when it is short (core
@@ -2039,6 +2130,20 @@ export default function OrderDetail() {
                 </Body>
               </View>
             </Card>
+          ) : null}
+
+          {/* F2-4: the needed-by in the org's zone (the web page's Dates
+              card), and Change for approvers. The sheet it opens sends no
+              email and opens none. */}
+          {showNeededByCard(order.neededBy, canChangeNeededBy) ? (
+            <OrderNeededByCard
+              value={neededByCardValue(order.neededBy, order.orgTimezone)}
+              canChange={canChangeNeededBy}
+              busy={acting === 'needed-by'}
+              disabled={acting !== null}
+              offline={offline}
+              onChange={() => void openNeededBySheet()}
+            />
           ) : null}
 
           {totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered') ? (
@@ -3488,6 +3593,26 @@ export default function OrderDetail() {
           offline={offline}
           onClose={() => setPartial(null)}
           onConfirm={confirmPartial}
+        />
+      ) : null}
+
+      {/* F2-4: change the needed-by (mounted per open, so every session
+          starts from the order as it was). Save sends a wall clock in the
+          org's zone; the server moves the Schedule entry with it and emails
+          no one. */}
+      {neededBySheet && orgId ? (
+        <ReviseNeededBySheet
+          visible
+          orderId={neededBySheet.orderId}
+          organizationId={orgId}
+          orderLabel={neededBySheet.orderLabel}
+          timeZone={neededBySheet.timeZone}
+          startNeededBy={neededBySheet.startNeededBy}
+          orderStatus={order?.status ?? neededBySheet.orderStatus}
+          offline={offline}
+          onClose={() => setNeededBySheet(null)}
+          onSaved={(_outcome, title, message) => void handleNeededBySaved(title, message)}
+          onRefresh={() => void load()}
         />
       ) : null}
 

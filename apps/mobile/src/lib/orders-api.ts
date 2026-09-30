@@ -1,10 +1,15 @@
 import {
+  NeededByResultShapeError,
   parseHoldOrderStockResult,
+  parseNeededByRevisionResult,
   type HoldOrderStockResult,
+  type NeededByRevisionOutcome,
+  type NeededBySchedule,
   type PartialAction,
 } from '@stockpilot/core';
 
 import { api } from './api';
+import type { ReviseNeededByBody } from './order-needed-by';
 import type { CreateReturnBody } from './order-returns';
 
 /**
@@ -98,6 +103,60 @@ export async function holdOrderStock(orderId: string): Promise<HoldOrderStockRes
     body: { action: 'hold_stock' } satisfies OrderAction,
   });
   return parseHoldOrderStockResult(res.hold);
+}
+
+const NEEDED_BY_SCHEDULES: ReadonlySet<string> = new Set<NeededBySchedule>([
+  'moved',
+  'created',
+  'none_yet',
+  'left_closed',
+  'not_moved',
+  'unchanged',
+]);
+
+/**
+ * Reads POST /api/v1/orders/[id]/needed-by's `revision`: the function's
+ * answer through core's parser (parseNeededByRevisionResult), plus what
+ * happened to the Schedule entry and the zone the wall clock was read in.
+ * Throws NeededByResultShapeError on anything else (never a guessed
+ * outcome); keys it does not know are ignored, so a later additive change on
+ * the server never breaks this build.
+ */
+export function parseNeededByRevisionOutcome(raw: unknown): NeededByRevisionOutcome {
+  const result = parseNeededByRevisionResult(raw);
+  const rec = raw as Record<string, unknown>;
+  const schedule = rec.schedule;
+  const timeZone = rec.timeZone;
+  if (typeof schedule !== 'string' || !NEEDED_BY_SCHEDULES.has(schedule)) {
+    throw new NeededByResultShapeError('schedule is not one of the known outcomes');
+  }
+  if (typeof timeZone !== 'string' || timeZone.trim() === '') {
+    throw new NeededByResultShapeError('timeZone is missing');
+  }
+  return { ...result, schedule: schedule as NeededBySchedule, timeZone };
+}
+
+/**
+ * Change an open order's needed-by date (F2-4): POST
+ * /api/v1/orders/[id]/needed-by, the REST twin of the web's
+ * reviseOrderNeededByAction. The body carries a WALL CLOCK in the org's zone
+ * ("YYYY-MM-DDTHH:mm"), which the server converts (never the device's zone),
+ * the needed-by the sheet started from exactly as read, and the reason. The
+ * server moves the order's Schedule entry with it and emails no one.
+ * Throws an ApiError carrying `details.reason` on a refusal (409
+ * needed_by_changed with `details.current`, 409 order_closed or busy, 400
+ * needed_by_in_past, invalid_time or reason_required, 403 forbidden), and
+ * NeededByResultShapeError on an answer it cannot read.
+ */
+export async function reviseOrderNeededBy(
+  orderId: string,
+  body: ReviseNeededByBody,
+): Promise<NeededByRevisionOutcome> {
+  const res = await api<{ revision?: unknown }>(`/api/v1/orders/${orderId}/needed-by`, {
+    method: 'POST',
+    body,
+  });
+  return parseNeededByRevisionOutcome(res?.revision);
 }
 
 /**

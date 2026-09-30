@@ -153,8 +153,13 @@ describe('order screen: readiness is read alongside the order (F2-1)', () => {
     expect(body()).toMatch(/readiness,\s*receivedAt: new Date\(\)\.toISOString\(\),/);
   });
 
-  it('takes the org zone from either read', () => {
-    expect(body()).toContain('orgTimezone = orgTimezone ?? readinessAnswer?.[1] ?? null;');
+  // F2-4 added a third source: the needed-by card's own zone read, started
+  // beside the lines read only when neither other read runs
+  // (order-f2-4-wiring.test.ts pins when).
+  it('takes the org zone from any of the reads', () => {
+    expect(body()).toMatch(
+      /orgTimezone =\s*orgTimezone \?\? readinessAnswer\?\.\[1\] \?\? \(neededByZoneRead \? await neededByZoneRead : null\);/,
+    );
   });
 
   it('reads again when the audience changes (an override landed after the first read)', () => {
