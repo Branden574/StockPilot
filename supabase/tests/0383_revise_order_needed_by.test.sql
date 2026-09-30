@@ -1,5 +1,5 @@
--- supabase/tests/0382_revise_order_needed_by.test.sql
--- pgTAP proof for migration 0382 (F2-4: revise_order_needed_by).
+-- supabase/tests/0383_revise_order_needed_by.test.sql
+-- pgTAP proof for migration 0383 (F2-4: revise_order_needed_by).
 --
 -- G. Grants and gates: SECURITY DEFINER, VOLATILE, search_path and
 --    lock_timeout pinned, EXECUTE to authenticated only (not anon,
@@ -44,70 +44,70 @@
 --
 -- Roles: fixtures as the test superuser (RLS bypassed, the API-role guards
 -- exempt); the function runs as `authenticated` with request.jwt.claim.sub.
--- begin/rollback: nothing leaks. Namespace 03820000. The two-session race
+-- begin/rollback: nothing leaks. Namespace 03830000. The two-session race
 -- (exactly one of two revisions with the same expected value wins) is
--- scripts/db-concurrency/0382_needed_by_race.sh.
+-- scripts/db-concurrency/0383_needed_by_race.sh.
 
 begin;
 
 select plan(39);
 
-\set orgA    '\'03820000-0000-0000-0000-00000000000a\''
-\set orgB    '\'03820000-0000-0000-0000-00000000000b\''
-\set own     '\'03820000-0000-0000-0000-0000000000a0\''
-\set mgr     '\'03820000-0000-0000-0000-0000000000a1\''
-\set mgrNo   '\'03820000-0000-0000-0000-0000000000a2\''
-\set stf     '\'03820000-0000-0000-0000-0000000000a3\''
-\set stfAp   '\'03820000-0000-0000-0000-0000000000a4\''
-\set stfApX  '\'03820000-0000-0000-0000-0000000000a5\''
-\set vwr     '\'03820000-0000-0000-0000-0000000000a6\''
-\set vwrAp   '\'03820000-0000-0000-0000-0000000000a7\''
-\set dis     '\'03820000-0000-0000-0000-0000000000a8\''
-\set adm     '\'03820000-0000-0000-0000-0000000000a9\''
-\set mgrX    '\'03820000-0000-0000-0000-0000000000aa\''
-\set mgrB    '\'03820000-0000-0000-0000-0000000000b1\''
-\set nobody  '\'03820000-0000-0000-0000-0000000000c1\''
-\set whA     '\'03820000-0000-0000-0000-0000000000d1\''
-\set whA2    '\'03820000-0000-0000-0000-0000000000d2\''
-\set whB     '\'03820000-0000-0000-0000-0000000000d3\''
-\set ordAppr '\'03820000-0000-0000-0000-000000000101\''
-\set ordPend '\'03820000-0000-0000-0000-000000000102\''
-\set ordPip  '\'03820000-0000-0000-0000-000000000103\''
-\set ordDone '\'03820000-0000-0000-0000-000000000104\''
-\set ordCanc '\'03820000-0000-0000-0000-000000000105\''
-\set ordNoEv '\'03820000-0000-0000-0000-000000000106\''
-\set ordNull '\'03820000-0000-0000-0000-000000000107\''
-\set ordGate '\'03820000-0000-0000-0000-000000000108\''
-\set ordEq   '\'03820000-0000-0000-0000-000000000109\''
-\set ordArg  '\'03820000-0000-0000-0000-00000000010a\''
-\set ordB    '\'03820000-0000-0000-0000-000000000141\''
-\set evAppr  '\'03820000-0000-0000-0000-000000000201\''
-\set evPip   '\'03820000-0000-0000-0000-000000000203\''
-\set evDone  '\'03820000-0000-0000-0000-000000000204\''
-\set evCanc  '\'03820000-0000-0000-0000-000000000205\''
-\set evGate  '\'03820000-0000-0000-0000-000000000208\''
-\set evEq    '\'03820000-0000-0000-0000-000000000209\''
+\set orgA    '\'03830000-0000-0000-0000-00000000000a\''
+\set orgB    '\'03830000-0000-0000-0000-00000000000b\''
+\set own     '\'03830000-0000-0000-0000-0000000000a0\''
+\set mgr     '\'03830000-0000-0000-0000-0000000000a1\''
+\set mgrNo   '\'03830000-0000-0000-0000-0000000000a2\''
+\set stf     '\'03830000-0000-0000-0000-0000000000a3\''
+\set stfAp   '\'03830000-0000-0000-0000-0000000000a4\''
+\set stfApX  '\'03830000-0000-0000-0000-0000000000a5\''
+\set vwr     '\'03830000-0000-0000-0000-0000000000a6\''
+\set vwrAp   '\'03830000-0000-0000-0000-0000000000a7\''
+\set dis     '\'03830000-0000-0000-0000-0000000000a8\''
+\set adm     '\'03830000-0000-0000-0000-0000000000a9\''
+\set mgrX    '\'03830000-0000-0000-0000-0000000000aa\''
+\set mgrB    '\'03830000-0000-0000-0000-0000000000b1\''
+\set nobody  '\'03830000-0000-0000-0000-0000000000c1\''
+\set whA     '\'03830000-0000-0000-0000-0000000000d1\''
+\set whA2    '\'03830000-0000-0000-0000-0000000000d2\''
+\set whB     '\'03830000-0000-0000-0000-0000000000d3\''
+\set ordAppr '\'03830000-0000-0000-0000-000000000101\''
+\set ordPend '\'03830000-0000-0000-0000-000000000102\''
+\set ordPip  '\'03830000-0000-0000-0000-000000000103\''
+\set ordDone '\'03830000-0000-0000-0000-000000000104\''
+\set ordCanc '\'03830000-0000-0000-0000-000000000105\''
+\set ordNoEv '\'03830000-0000-0000-0000-000000000106\''
+\set ordNull '\'03830000-0000-0000-0000-000000000107\''
+\set ordGate '\'03830000-0000-0000-0000-000000000108\''
+\set ordEq   '\'03830000-0000-0000-0000-000000000109\''
+\set ordArg  '\'03830000-0000-0000-0000-00000000010a\''
+\set ordB    '\'03830000-0000-0000-0000-000000000141\''
+\set evAppr  '\'03830000-0000-0000-0000-000000000201\''
+\set evPip   '\'03830000-0000-0000-0000-000000000203\''
+\set evDone  '\'03830000-0000-0000-0000-000000000204\''
+\set evCanc  '\'03830000-0000-0000-0000-000000000205\''
+\set evGate  '\'03830000-0000-0000-0000-000000000208\''
+\set evEq    '\'03830000-0000-0000-0000-000000000209\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,    '0382-own@test.local',    '{}'::jsonb),
-  (:adm,    '0382-adm@test.local',    '{}'::jsonb),
-  (:mgr,    '0382-mgr@test.local',    '{}'::jsonb),
-  (:mgrNo,  '0382-mgrno@test.local',  '{}'::jsonb),
-  (:mgrX,   '0382-mgrx@test.local',   '{}'::jsonb),
-  (:stf,    '0382-stf@test.local',    '{}'::jsonb),
-  (:stfAp,  '0382-stfap@test.local',  '{}'::jsonb),
-  (:stfApX, '0382-stfapx@test.local', '{}'::jsonb),
-  (:vwr,    '0382-vwr@test.local',    '{}'::jsonb),
-  (:vwrAp,  '0382-vwrap@test.local',  '{}'::jsonb),
-  (:dis,    '0382-dis@test.local',    '{}'::jsonb),
-  (:mgrB,   '0382-mgrb@test.local',   '{}'::jsonb),
-  (:nobody, '0382-nobody@test.local', '{}'::jsonb)
+  (:own,    '0383-own@test.local',    '{}'::jsonb),
+  (:adm,    '0383-adm@test.local',    '{}'::jsonb),
+  (:mgr,    '0383-mgr@test.local',    '{}'::jsonb),
+  (:mgrNo,  '0383-mgrno@test.local',  '{}'::jsonb),
+  (:mgrX,   '0383-mgrx@test.local',   '{}'::jsonb),
+  (:stf,    '0383-stf@test.local',    '{}'::jsonb),
+  (:stfAp,  '0383-stfap@test.local',  '{}'::jsonb),
+  (:stfApX, '0383-stfapx@test.local', '{}'::jsonb),
+  (:vwr,    '0383-vwr@test.local',    '{}'::jsonb),
+  (:vwrAp,  '0383-vwrap@test.local',  '{}'::jsonb),
+  (:dis,    '0383-dis@test.local',    '{}'::jsonb),
+  (:mgrB,   '0383-mgrb@test.local',   '{}'::jsonb),
+  (:nobody, '0383-nobody@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them).
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0382 Needed-by A', '0382-needed-by-a'),
-  (:orgB, '0382 Needed-by B', '0382-needed-by-b');
+  (:orgA, '0383 Needed-by A', '0383-needed-by-a'),
+  (:orgB, '0383 Needed-by B', '0383-needed-by-b');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,    'owner',   now()),
   (:orgA, :adm,    'admin',   now()),
@@ -122,9 +122,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :dis,    'staff',   now()),
   (:orgB, :mgrB,   'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA,  :orgA, '0382 Main',  'WH-0382A',  'active'),
-  (:whA2, :orgA, '0382 Annex', 'WH-0382A2', 'active'),
-  (:whB,  :orgB, '0382 Other', 'WH-0382B',  'active');
+  (:whA,  :orgA, '0383 Main',  'WH-0383A',  'active'),
+  (:whA2, :orgA, '0383 Annex', 'WH-0383A2', 'active'),
+  (:whB,  :orgB, '0383 Other', 'WH-0383B',  'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,    :whA,  true),
   (:orgA, :stfAp,  :whA,  true),
@@ -160,15 +160,15 @@ insert into public.order_requests
 -- One order per closed status (S1) and per remaining open status (S4).
 create temp table st_order (status text primary key, id uuid not null, closed boolean not null);
 insert into st_order (status, id, closed) values
-  ('pending_confirmation',   '03820000-0000-0000-0000-000000000111', true),
-  ('completed',              '03820000-0000-0000-0000-000000000112', true),
-  ('denied',                 '03820000-0000-0000-0000-000000000113', true),
-  ('cancelled',              '03820000-0000-0000-0000-000000000114', true),
-  ('pick_slip_generated',    '03820000-0000-0000-0000-000000000121', false),
-  ('picking_complete',       '03820000-0000-0000-0000-000000000122', false),
-  ('packing_slip_generated', '03820000-0000-0000-0000-000000000123', false),
-  ('staged_for_delivery',    '03820000-0000-0000-0000-000000000124', false),
-  ('in_transit',             '03820000-0000-0000-0000-000000000125', false);
+  ('pending_confirmation',   '03830000-0000-0000-0000-000000000111', true),
+  ('completed',              '03830000-0000-0000-0000-000000000112', true),
+  ('denied',                 '03830000-0000-0000-0000-000000000113', true),
+  ('cancelled',              '03830000-0000-0000-0000-000000000114', true),
+  ('pick_slip_generated',    '03830000-0000-0000-0000-000000000121', false),
+  ('picking_complete',       '03830000-0000-0000-0000-000000000122', false),
+  ('packing_slip_generated', '03830000-0000-0000-0000-000000000123', false),
+  ('staged_for_delivery',    '03830000-0000-0000-0000-000000000124', false),
+  ('in_transit',             '03830000-0000-0000-0000-000000000125', false);
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, needed_by)
 select s.id, :orgA, :whA, s.status, 'internal', :stf, 'pickup', date_trunc('minute', now()) + interval '3 days'
@@ -237,17 +237,17 @@ $$;
 create function pg_temp.state() returns text language sql as $$
   select coalesce((select string_agg(o.id::text || '/' || coalesce(o.needed_by::text, '-') || '/' || o.status || '/' || o.ctid::text,
                                      ',' order by o.id)
-                     from public.order_requests o where o.organization_id in ('03820000-0000-0000-0000-00000000000a', '03820000-0000-0000-0000-00000000000b')), '')
+                     from public.order_requests o where o.organization_id in ('03830000-0000-0000-0000-00000000000a', '03830000-0000-0000-0000-00000000000b')), '')
       || ' | ' ||
          coalesce((select string_agg(e.id::text || '/' || e.starts_at::text || '/' || coalesce(e.ends_at::text, '-') || '/'
                                      || coalesce(e.details, '-') || '/' || e.status || '/'
                                      || coalesce(e.reminded_24h_at::text, '-') || '/' || coalesce(e.reminded_1h_at::text, '-')
                                      || '/' || e.ctid::text, ',' order by e.id)
-                     from public.schedule_events e where e.organization_id in ('03820000-0000-0000-0000-00000000000a', '03820000-0000-0000-0000-00000000000b')), '')
+                     from public.schedule_events e where e.organization_id in ('03830000-0000-0000-0000-00000000000a', '03830000-0000-0000-0000-00000000000b')), '')
 $$;
 create function pg_temp.notes() returns int language sql as $$
   select count(*)::int from public.notifications
-   where organization_id in ('03820000-0000-0000-0000-00000000000a', '03820000-0000-0000-0000-00000000000b')
+   where organization_id in ('03830000-0000-0000-0000-00000000000a', '03830000-0000-0000-0000-00000000000b')
 $$;
 
 create temp table fx (who text not null, r text);
@@ -258,7 +258,7 @@ grant select on st_order to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.schedule_events where organization_id = '03820000-0000-0000-0000-00000000000a') <> 6 then
+  if (select count(*) from public.schedule_events where organization_id = '03830000-0000-0000-0000-00000000000a') <> 6 then
     raise exception 'fixture: events';
   end if;
   if (select count(*) from st_order s join public.order_requests o on o.id = s.id and o.status = s.status) <> 9 then

@@ -29,8 +29,8 @@ import { audit } from './audit';
 import { ServiceError } from './context';
 import { OrderRequestsService, type ReviseNeededByInput } from './order-requests';
 
-// F2-4 (0382): change an order's needed-by. The function is the authority
-// (its gates, the lock, the stale check, the event move: pgTAP 0382 and the
+// F2-4 (0383): change an order's needed-by. The function is the authority
+// (its gates, the lock, the stale check, the event move: pgTAP 0383 and the
 // two-session race); these pin the service around it: its gates and their
 // words, the ORG-zone conversion, what it sends, every refusal it words, the
 // missing-event path through autoScheduleFromOrder (the one writer of new
@@ -356,7 +356,7 @@ describe('gates, in core\'s words, before anything is sent', () => {
   });
 });
 
-describe('every refusal of the function, in core\'s words (pattern #28: each raise in 0382)', () => {
+describe('every refusal of the function, in core\'s words (pattern #28: each raise in 0383)', () => {
   const cases: Array<[string, QueryResult['error'], Partial<ServiceError>, Record<string, unknown>]> = [
     ['unauthenticated', { message: 'unauthenticated', code: '42501' }, { code: 'unauthenticated', message: NEEDED_BY_SIGN_IN_COPY }, { reason: 'forbidden' }],
     ['not found', { message: 'order_request_not_found', code: 'P0002' }, { code: 'not_found', message: NEEDED_BY_NOT_FOUND_COPY }, { reason: 'not_found' }],

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0382 (F2-4, revise_order_needed_by). pgTAP
+# Two-session proof for migration 0383 (F2-4, revise_order_needed_by). pgTAP
 # runs in ONE session, so it cannot show what happens when two approvers
 # change the same order's needed-by at the same moment.
 #
@@ -24,10 +24,10 @@
 #   No session running the real function ever sees 40001 or 40P01.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot).
-# Fixtures are committed under the 03821111-... namespace and removed at the
+# Fixtures are committed under the 03831111-... namespace and removed at the
 # start and the end. Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0382_needed_by_race.sh
+# Usage: bash scripts/db-concurrency/0383_needed_by_race.sh
 
 set -uo pipefail
 
@@ -49,15 +49,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-ORG='03821111-0000-0000-0000-00000000000a'
-MGR='03821111-0000-0000-0000-0000000000a1'
-MGR2='03821111-0000-0000-0000-0000000000a2'
-WH='03821111-0000-0000-0000-0000000000b1'
-O1='03821111-0000-0000-0000-0000000000d1'
-O2='03821111-0000-0000-0000-0000000000d2'
-O3='03821111-0000-0000-0000-0000000000d3'
-E1='03821111-0000-0000-0000-0000000000e1'
-E2='03821111-0000-0000-0000-0000000000e2'
+ORG='03831111-0000-0000-0000-00000000000a'
+MGR='03831111-0000-0000-0000-0000000000a1'
+MGR2='03831111-0000-0000-0000-0000000000a2'
+WH='03831111-0000-0000-0000-0000000000b1'
+O1='03831111-0000-0000-0000-0000000000d1'
+O2='03831111-0000-0000-0000-0000000000d2'
+O3='03831111-0000-0000-0000-0000000000d3'
+E1='03831111-0000-0000-0000-0000000000e1'
+E2='03831111-0000-0000-0000-0000000000e2'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -94,13 +94,13 @@ cleanup || exit 1
 BASE="$(q "select to_char(date_trunc('day', now() at time zone 'UTC') + interval '10 days', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')")"
 "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR',  '0382-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0382-2s-mgr2@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0382 Two Session Org', '0382-two-session');
+  ('$MGR',  '0383-2s-mgr@test.local',  '{}'::jsonb),
+  ('$MGR2', '0383-2s-mgr2@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0383 Two Session Org', '0383-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR',  'manager', now()),
   ('$ORG', '$MGR2', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0382 2S Main', 'WH-0382-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0383 2S Main', 'WH-0383-2S', 'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, needed_by)
 select v.id, '$ORG', '$WH', 'approved', 'internal', '$MGR', 'pickup', '$BASE'::timestamptz
   from (values ('$O1'::uuid), ('$O2'::uuid), ('$O3'::uuid)) v(id);

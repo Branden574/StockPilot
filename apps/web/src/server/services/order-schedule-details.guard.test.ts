@@ -5,7 +5,7 @@
  * its description ("Auto-created from order SO-000016. Needed by Oct 3, 2026,
  * 2:00 PM."), which the reminder emails print beside the start. The approval
  * (autoScheduleFromOrder) writes the entry, and a needed-by revision
- * (revise_order_needed_by, 0382) moves it. If the two built the text apart, a
+ * (revise_order_needed_by, 0383) moves it. If the two built the text apart, a
  * moved entry would keep a sentence the approval's copy wrote differently, or
  * the old date (plan correction 8). So the sentence is built by core
  * orderScheduleEventDetails alone, and both callers are pinned to it by

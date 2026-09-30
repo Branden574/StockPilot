@@ -378,7 +378,7 @@ PGTAP_TESTS=(
   # category-scoped viewer get only their readable movements, items and
   # warehouse names; no org B row in an org A answer.
   supabase/tests/0380_report_rpcs_caller_scope.test.sql
-  # Change an order's needed-by (F2-4, 0382): revise_order_needed_by writes
+  # Change an order's needed-by (F2-4, 0383): revise_order_needed_by writes
   # the order's needed-by and moves its Schedule event past RLS
   # (schedule_events_update is creator-or-manager, and an approver with an
   # orders:approve override is neither), so it is SECURITY DEFINER with its
@@ -395,8 +395,8 @@ PGTAP_TESTS=(
   # reminder stamps cleared), never creates an event, never notifies, and
   # locks the order row FOR UPDATE; an equal value writes nothing. The race
   # of two approvers (exactly one wins) is
-  # scripts/db-concurrency/0382_needed_by_race.sh.
-  supabase/tests/0382_revise_order_needed_by.test.sql
+  # scripts/db-concurrency/0383_needed_by_race.sh.
+  supabase/tests/0383_revise_order_needed_by.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

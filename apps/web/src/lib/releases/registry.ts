@@ -30,7 +30,7 @@ export const RELEASES: Release[] = [
   {
     id: 'order-needed-by-change-2026-10',
     revision: 1,
-    // F2-4 (migration 0382). Held as a draft until the web order page's
+    // F2-4 (migration 0383). Held as a draft until the web order page's
     // Change dialog, the phone's sheet (OTA) and the Demo Co production walk
     // (SO-15 pending, SO-16 approved then cancelled, a Schedule test event)
     // are done, as F2-1's to F2-3's were. The follow-up that publishes it sets

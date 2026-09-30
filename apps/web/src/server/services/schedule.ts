@@ -469,7 +469,7 @@ export class ScheduleService {
       // may write them: authenticated holds UPDATE on both columns, and
       // schedule_events_update (creator or manager) is the same row gate the
       // start itself passes. The order needed-by revision clears them the
-      // same way, inside revise_order_needed_by (0382).
+      // same way, inside revise_order_needed_by (0383).
       const before = Date.parse(String(beforeRow.starts_at ?? ''));
       const after = Date.parse(patch.startsAt);
       if (!(Number.isFinite(before) && Number.isFinite(after) && before === after)) {

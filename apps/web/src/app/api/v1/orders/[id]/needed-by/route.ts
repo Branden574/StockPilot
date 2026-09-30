@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
  * Change an open order's needed-by date (F2-4), the REST twin of the web's
  * reviseOrderNeededByAction, for the phone (Bearer) and the web (cookie). The
  * same service: the orders module, orders:approve, write access to the
- * order's warehouse, and revise_order_needed_by (0382), which repeats every
+ * order's warehouse, and revise_order_needed_by (0383), which repeats every
  * gate, refuses a closed order, a time not in the future and a stale edit, and
  * moves the order's Schedule entry with it (reminders armed again). Nothing is
  * emailed or notified.

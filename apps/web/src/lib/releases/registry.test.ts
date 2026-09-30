@@ -1503,7 +1503,7 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
 
 /**
  * F2-4 (change an order's needed-by date; the schedule follows, migration
- * 0382) is held as a DRAFT until the web Change dialog, the phone's sheet
+ * 0383) is held as a DRAFT until the web Change dialog, the phone's sheet
  * (OTA) and the Demo Co production walk, as F2-1's to F2-3's were. Pinned by
  * id, never by index. The follow-up that publishes it sets 'published' and the
  * real publishedAt, re-reads its words against what shipped, and flips the

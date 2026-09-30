@@ -58,7 +58,7 @@ const EVENT_LABELS: Record<string, string> = {
   // what started it (eventLabel below); this is the manual "Hold available
   // stock", and the fallback for an entry without a trigger.
   'order.stock_held': 'Stock held',
-  // F2-4 (0382): an approver changed the needed-by date, with a reason (core's
+  // F2-4 (0383): an approver changed the needed-by date, with a reason (core's
   // label; the detail line names both dates in the org's zone, and the reason
   // follows as every entry's does).
   'order_request.needed_by_revised': NEEDED_BY_REVISED_TIMELINE_LABEL,

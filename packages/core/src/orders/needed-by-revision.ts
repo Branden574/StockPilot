@@ -1,5 +1,5 @@
 /**
- * CHANGING AN ORDER'S NEEDED-BY DATE (F2-4, migration 0382).
+ * CHANGING AN ORDER'S NEEDED-BY DATE (F2-4, migration 0383).
  *
  * An approver (a manager, or anyone holding orders:approve) with write access
  * to the order's warehouse can move the needed-by of any open order, with a
@@ -96,7 +96,7 @@ export function orderScheduleEventDetails(
 
 // ── The answer ──────────────────────────────────────────────────────────────
 
-/** revise_order_needed_by's answer (0382). Times are ISO instants. */
+/** revise_order_needed_by's answer (0383). Times are ISO instants. */
 export interface NeededByRevisionResult {
   /** False when the new value equals the current one: nothing was written. */
   changed: boolean;

@@ -167,7 +167,7 @@ export type AuditEvent =
   | 'order_request.cancelled'
   | 'order_request.delivered'
   | 'order_request.public_link_rotated'
-  // F2-4 (0382): an approver changed an open order's needed-by, with a reason
+  // F2-4 (0383): an approver changed an open order's needed-by, with a reason
   // (revise_order_needed_by). metadata: from, to (ISO instants; from is null
   // when the order had none), reason, schedule (what happened to its Schedule
   // entry: moved, created, none_yet, left_closed, not_moved), event_id; plus

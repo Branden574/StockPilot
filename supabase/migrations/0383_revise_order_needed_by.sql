@@ -1,4 +1,4 @@
--- 0382_revise_order_needed_by.sql
+-- 0383_revise_order_needed_by.sql
 --
 -- F2-4 (Order Readiness, lean): "Revise the needed-by date (order and
 -- schedule stay in step)". One function, its grants and its comment. No
@@ -38,7 +38,7 @@
 --      with the current value as the detail (ISO 8601, '' for none), so a
 --      screen can load it and say "Someone changed this date to … while you
 --      were editing." Two approvers editing at once: exactly one wins
---      (scripts/db-concurrency/0382_needed_by_race.sh);
+--      (scripts/db-concurrency/0383_needed_by_race.sh);
 --   5. an EQUAL value writes nothing: {changed: false};
 --   6. otherwise updates order_requests.needed_by (never the status, so the
 --      order notification trigger sends nothing);
@@ -107,7 +107,7 @@
 -- ledger), ledger.*, tg_order_requests_insert_guard,
 -- tg_order_request_lines_guard, caller_can_read_item, the 0380 report
 -- functions, the 0381 photo functions and policies, and every policy and
--- grant on order_requests and schedule_events are untouched (pgTAP 0382 Z1
+-- grant on order_requests and schedule_events are untouched (pgTAP 0383 Z1
 -- pins the md5 of the functions).
 --
 -- ── PROD PUSH NOTE ─────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ grant execute on function public.revise_order_needed_by(uuid, timestamptz, times
   to authenticated;
 
 comment on function public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text) is
-  'F2-4 (0382): changes an open order''s needed-by and moves its Schedule event '
+  'F2-4 (0383): changes an open order''s needed-by and moves its Schedule event '
   'with it, in one transaction. Refuses a closed order (P0001 order_closed), a '
   'needed-by that is null or not in the future (22023 needed_by_required, '
   'needed_by_in_past), a reason that is empty or over 500 characters after '

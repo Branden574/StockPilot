@@ -27,7 +27,7 @@ import { makeServiceContext, makeSupabaseStub, type QueryResult } from '@/test/s
  * POST /api/v1/orders/[id]/needed-by (F2-4): the phone's (Bearer) and the
  * web's (cookie) way to change an order's needed-by. Driven through the REAL
  * service over a stubbed client, so every refusal of revise_order_needed_by
- * (0382) is followed from the Postgres error to the HTTP answer: status, code,
+ * (0383) is followed from the Postgres error to the HTTP answer: status, code,
  * core's sentence and `details` (the reason a screen switches on; the current
  * value for a stale edit).
  */

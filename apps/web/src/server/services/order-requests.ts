@@ -579,9 +579,9 @@ function isoOrNull(value: string | null | undefined): string | null {
 }
 
 /**
- * revise_order_needed_by's refusals (0382) as ServiceErrors in core's words,
+ * revise_order_needed_by's refusals (0383) as ServiceErrors in core's words,
  * with `details.reason` a NeededByFailureReason both platforms switch on.
- * Matched on the function's own messages (every `raise` in 0382, pattern #28)
+ * Matched on the function's own messages (every `raise` in 0383, pattern #28)
  * and, for its 42501s, the code and hint; anything else (a revoked grant, a
  * network fault) is internal_error, whose public message is generic.
  * needed_by_changed carries the order's current value (`details.current`, ISO
@@ -2711,7 +2711,7 @@ export class OrderRequestsService {
   /**
    * Change an open order's needed-by, with a reason (F2-4, plan D21). The
    * order's Schedule entry moves with it in the same transaction
-   * (revise_order_needed_by, 0382): its start, its description and its
+   * (revise_order_needed_by, 0383): its start, its description and its
    * reminders, armed again for the new time. Nothing is emailed or notified:
    * the requester's delivery-request draft is unchanged and opens only on
    * their tap (Outlook rule 1).
