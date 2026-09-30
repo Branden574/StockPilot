@@ -38,11 +38,13 @@ import {
   NEEDED_BY_OTHER_HINT,
   NEEDED_BY_PICK_DAY_FIRST_COPY,
   NEEDED_BY_PICK_TIME_COPY,
+  NEEDED_BY_DAY_ROW_INSET,
   NEEDED_BY_TOO_MANY_COPY,
   canOfferNeededByChange,
   firstOpenDayKey,
   initialNeededByDraft,
   neededByCardValue,
+  neededByDayRowScroll,
   neededByDays,
   neededByDraftView,
   neededBySheetOpening,
@@ -799,5 +801,34 @@ describe('reading the needed-by as stored', () => {
     ]) {
       expect(await readOrderNeededBy(client(answer), 'o', ORDER)).toEqual({ ok: false });
     }
+  });
+});
+
+// iPhone 17 walk, 2026-09-30: the day row holds 21 chips and a phone shows
+// about five, so an order needed a week out opened with its day chip off the
+// right edge while its time chip showed selected below it.
+describe('neededByDayRowScroll: the selected day is brought into the row', () => {
+  const row = { offset: 0, viewport: 366 };
+
+  it('a chip already whole in the row: no scroll', () => {
+    expect(neededByDayRowScroll({ chipX: 0, chipWidth: 68, ...row })).toBeNull();
+    expect(neededByDayRowScroll({ chipX: 298, chipWidth: 68, ...row })).toBeNull();
+    expect(neededByDayRowScroll({ chipX: 400, chipWidth: 61, offset: 100, viewport: 366 })).toBeNull();
+  });
+
+  it('a chip past the right edge (even partly): scrolled to the left edge, less the inset', () => {
+    expect(neededByDayRowScroll({ chipX: 470.5, chipWidth: 61.5, ...row })).toBe(Math.round(470.5 - NEEDED_BY_DAY_ROW_INSET));
+    expect(neededByDayRowScroll({ chipX: 331, chipWidth: 61.3, ...row })).toBe(331 - NEEDED_BY_DAY_ROW_INSET);
+  });
+
+  it('a chip left of the scrolled window: scrolled back to it, never before the start', () => {
+    expect(neededByDayRowScroll({ chipX: 94, chipWidth: 90, offset: 400, viewport: 366 })).toBe(94 - NEEDED_BY_DAY_ROW_INSET);
+    expect(neededByDayRowScroll({ chipX: 4, chipWidth: 68, offset: 300, viewport: 366 })).toBe(0);
+  });
+
+  it('nothing measured yet (a zero or missing size): no scroll, never NaN', () => {
+    expect(neededByDayRowScroll({ chipX: 470, chipWidth: 61, offset: 0, viewport: 0 })).toBeNull();
+    expect(neededByDayRowScroll({ chipX: 470, chipWidth: 0, offset: 0, viewport: 366 })).toBeNull();
+    expect(neededByDayRowScroll({ chipX: Number.NaN, chipWidth: 61, offset: 0, viewport: 366 })).toBeNull();
   });
 });

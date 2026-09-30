@@ -631,6 +631,32 @@ export function neededBySpokenUpdate(view: Pick<NeededByDraftView, 'preview' | '
   return view.preview ?? view.timeProblem;
 }
 
+/** Space kept to the left of a day chip scrolled into the row (the row's gap). */
+export const NEEDED_BY_DAY_ROW_INSET = 8;
+
+/**
+ * Where the sheet's day row must scroll so the selected day shows whole, or
+ * null when it already does (or nothing is measured yet). The row holds 21
+ * chips and a phone shows about five, so an order needed a week out opened
+ * with its day chip off the right edge while its time chip showed selected
+ * below it (iPhone 17 walk, 2026-09-30). The chip is brought to the row's
+ * left edge, less a small inset, never before the start.
+ */
+export function neededByDayRowScroll(input: {
+  /** The chip's x in the row's content, and its width (its onLayout). */
+  chipX: number;
+  chipWidth: number;
+  /** The row's scroll offset and its visible width. */
+  offset: number;
+  viewport: number;
+}): number | null {
+  const { chipX, chipWidth, offset, viewport } = input;
+  if (![chipX, chipWidth, offset, viewport].every(Number.isFinite)) return null;
+  if (viewport <= 0 || chipWidth <= 0) return null;
+  if (chipX >= offset && chipX + chipWidth <= offset + viewport) return null;
+  return Math.max(0, Math.round(chipX - NEEDED_BY_DAY_ROW_INSET));
+}
+
 // ── Saving ──────────────────────────────────────────────────────────────────
 
 /** POST /api/v1/orders/[id]/needed-by's body. */

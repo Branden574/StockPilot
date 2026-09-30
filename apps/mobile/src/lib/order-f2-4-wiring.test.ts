@@ -203,15 +203,18 @@ describe('the revise sheet', () => {
       [
         '@/components/item-verification-card',
         '@/components/ui/text',
+        '@/lib/exception-sheet-layout',
         '@/lib/order-needed-by',
         '@/lib/orders-api',
         '@/lib/supabase',
         '@/lib/theme',
+        '@/lib/use-sheet-keyboard',
         '@/lib/use-theme',
         '@stockpilot/core',
         'lucide-react-native',
         'react',
         'react-native',
+        'react-native-safe-area-context',
       ].sort(),
     );
     for (const src of [sheetCode, cardCode]) {
@@ -290,7 +293,7 @@ describe('the revise sheet', () => {
 
   it('the chips are the tested days and slots, each a named 44 pt button with its selected state', () => {
     expect(sheetCode).toMatch(
-      /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => pickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],?\s*\),?\s*\)\}/,
+      /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => pickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
     );
     expect(sheetCode).toMatch(
       /\{view\.slots\.map\(\(s\) =>\s*chip\(\s*s\.time,\s*!draft\.other && draft\.slot === s\.time,\s*\(\) => update\(\{ slot: s\.time, other: false \}\),\s*s\.label,\s*\[s\.label\],?\s*\),?\s*\)\}/,
@@ -336,9 +339,13 @@ describe('the revise sheet', () => {
       expect(attrText(scrim!, 'accessibilityLabel', sf)).toBe('Close');
       expect(attrText(scrim!, 'style', sf)).toContain('StyleSheet.absoluteFill');
       expect(tagOf(card!, sf)).toBe('View');
-      for (const prop of ['onPress', 'accessible', 'onStartShouldSetResponder']) {
+      for (const prop of ['onPress', 'accessible']) {
         expect(attrText(card!, prop, sf)).toBeUndefined();
       }
+      // It claims a touch only while the keyboard is up, to put it away (the
+      // exception sheets' rule, lib/use-sheet-keyboard.ts).
+      expect(attrText(card!, 'onStartShouldSetResponder', sf)).toBe('kb.claimTapOutside');
+      expect(attrText(card!, 'onResponderRelease', sf)).toBe('kb.onTapOutside');
     });
 
     it('every button in the card (and the chip) is its own named button of at least 44 pt, its label capped', () => {
@@ -375,11 +382,86 @@ describe('the revise sheet', () => {
       expect(sheetCode).toContain('autoFocus={focusOther}');
     });
 
-    it('the body scrolls with the keyboard up, and taps reach a chip or Save the first time', () => {
+    // iPhone 17 walk, 2026-09-30: at the default text size with the keyboard
+    // up, and at AX5 with it down, the sheet ran off the TOP of the screen
+    // (the title, Close, the current date and the day row under the status
+    // bar): a fixed 50% body with the title and two buttons outside it. Now it
+    // sizes itself like the exception sheets (lib/exception-sheet-layout.ts,
+    // lib/use-sheet-keyboard.ts). Mutations caught: a fixed body height, the
+    // body not giving way, the sheet not capped by the measured space, the
+    // title uncapped, the reason not revealed above the keyboard.
+    const body = all.find((n) => tagOf(n.el, sf) === 'ScrollView' && attrText(n.el, 'horizontal', sf) === undefined)!;
+    const dayRow = all.find((n) => tagOf(n.el, sf) === 'ScrollView' && attrText(n.el, 'horizontal', sf) !== undefined)!;
+    const a = (el: JsxNode, name: string) => attrText(el, name, sf);
+
+    it('the sheet is never taller than the space the keyboard leaves, below the status bar', () => {
+      expect(sheetCode).toContain('const { height } = useWindowDimensions();');
+      expect(sheetCode).toContain('const insets = useSafeAreaInsets();');
       expect(sheetCode).toMatch(
-        /<ScrollView\s+style=\{\{ maxHeight: bodyMaxHeight \}\}\s+keyboardShouldPersistTaps="handled"/,
+        /const layout = exceptionSheetLayout\(\{\s+windowHeight: height,\s+availableHeight,\s+topInset: insets\.top,?\s+\}\);/,
       );
-      expect(sheetCode).toMatch(/<ScrollView\s+horizontal\s+showsHorizontalScrollIndicator=\{false\}\s+keyboardShouldPersistTaps="handled"/);
+      expect(a(container.el, 'onLayout')).toBe('(e) => setAvailableHeight(e.nativeEvent.layout.height)');
+      const card = kids(container.el)[1]!;
+      expect(a(card, 'style')).toContain('maxHeight: layout.sheetMaxHeight');
+      expect(sheetCode).not.toMatch(/height \* 0\.5|bodyMaxHeight = /);
+    });
+
+    it('the body is the part that gives way: capped by the measured space, shrinking first, scrolling through the keyboard hook', () => {
+      expect(sheetCode).toContain('const [attachBody, kb] = useSheetKeyboard();');
+      const style = a(body.el, 'style') ?? '';
+      expect(style).toContain('maxHeight: layout.bodyMaxHeight');
+      expect(style).toContain('flexShrink: 1');
+      expect(a(body.el, 'ref')).toBe('attachBody');
+      expect(a(body.el, 'onScroll')).toBe('kb.onBodyScroll');
+      expect(a(body.el, 'scrollEventThrottle')).toBe('16');
+      expect(a(body.el, 'onLayout')).toBe('kb.onBodyLayout');
+      expect(a(body.el, 'onContentSizeChange')).toBe('kb.onBodyContentSizeChange');
+      // A drag on the body puts the keyboard away; a tap on a chip or Save
+      // still lands the first time.
+      expect(a(body.el, 'keyboardDismissMode')).toBe('on-drag');
+      expect(a(body.el, 'keyboardShouldPersistTaps')).toBe('handled');
+      expect(a(dayRow.el, 'keyboardShouldPersistTaps')).toBe('handled');
+    });
+
+    it('the reason (the low field) is revealed above the keyboard: it reports focus, blur and where it sits, its block directly in the body', () => {
+      const reason = all.find((n) => tagOf(n.el, sf) === 'TextInput' && a(n.el, 'accessibilityLabel') === 'NEEDED_BY_REASON_LABEL')!;
+      expect(reason).toBeDefined();
+      expect(a(reason.el, 'onFocus')).toBe('kb.onNoteFocus');
+      expect(a(reason.el, 'onBlur')).toBe('kb.onNoteBlur');
+      expect(a(reason.el, 'onLayout')).toBe('kb.onNoteLayout');
+      const block = reason.ancestors.at(-1)!;
+      expect(tagOf(block, sf)).toBe('View');
+      expect(a(block, 'onLayout')).toBe('kb.onNoteBlockLayout');
+      expect(reason.ancestors.at(-2)).toBe(body.el);
+    });
+
+    it('the title stops growing at the display ceiling', () => {
+      const title = all.find((n) => a(n.el, 'accessibilityRole') === '"header"' || a(n.el, 'accessibilityRole') === 'header');
+      expect(title && a(title.el, 'maxFontSizeMultiplier')).toBe('TITLE_CAP');
+      expect(sheetCode).toContain('const TITLE_CAP = capTo(16, TYPE_CEILING.display);');
+    });
+
+    // Mutation caught: the selected day left off the edge of the row on open.
+    it('the selected day chip is scrolled into the row: on open (its layout, the row\'s) and when the selection moves', () => {
+      expect(a(dayRow.el, 'ref')).toBe('attachDayRow');
+      expect(a(dayRow.el, 'onLayout')).toBe('dayRow.rowLaid');
+      expect(a(dayRow.el, 'onScroll')).toBe('dayRow.scrolled');
+      expect(a(dayRow.el, 'scrollEventThrottle')).toBe('16');
+      expect(sheetCode).toContain('const [attachDayRow, dayRow] = useDayRowReveal(view.selectedDayKey);');
+      expect(sheetCode).toMatch(
+        /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => pickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
+      );
+      expect(sheetCode).toMatch(/style=\{\[\s*styles\.chip,[\s\S]*?\]\}\s+onLayout=\{onLayout\}/);
+      expect(bodyOf(sheetSrc, SHEET_FILE, 'revealDay')).toBe(
+        '{ if (!row || !key) return; const chip = geometry.chips.get(key); if (!chip) return; const x = neededByDayRowScroll({ chipX: chip.x, chipWidth: chip.w, offset: geometry.offset, viewport: geometry.width }); if (x === null) return; geometry.offset = x; row.scrollTo({ x, animated: false }); }',
+      );
+      const hook = bodyOf(sheetSrc, SHEET_FILE, 'useDayRowReveal');
+      // Revealed when the selected chip lays out, when the row does, and when the selection moves.
+      expect(hook).toContain('chipLaid: (key: string, e: LayoutChangeEvent) => { geometry.chips.set(key, { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width }); if (key === selected) revealDay(row, geometry, key); }');
+      expect(hook).toContain('rowLaid: (e: LayoutChangeEvent) => { geometry.width = e.nativeEvent.layout.width; revealDay(row, geometry, selected); }');
+      expect(hook).toContain('scrolled: (e: NativeSyntheticEvent<NativeScrollEvent>) => { geometry.offset = e.nativeEvent.contentOffset.x; }');
+      expect(hook).toContain('select: (key: string | null) => { selected = key; revealDay(row, geometry, key); }');
+      expect(hook).toContain('React.useEffect(() => { reveal.select(selectedDayKey); }, [reveal, selectedDayKey]);');
     });
   });
 });
