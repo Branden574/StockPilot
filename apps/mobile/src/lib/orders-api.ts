@@ -110,6 +110,7 @@ const NEEDED_BY_SCHEDULES: ReadonlySet<string> = new Set<NeededBySchedule>([
   'created',
   'none_yet',
   'left_closed',
+  'not_added',
   'not_moved',
   'unchanged',
 ]);

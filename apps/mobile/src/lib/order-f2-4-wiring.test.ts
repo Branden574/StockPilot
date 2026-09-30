@@ -127,7 +127,7 @@ function bodyOf(src: string, file: string, name: string): string {
 
 describe('the order screen: the needed-by card and Change', () => {
   // Mutation caught: Change for a non-approver, a closed order, or Orders off.
-  it('Change is offered by the tested gate: approvers (or a manager by role) on an open order where Orders is on', () => {
+  it('Change is offered by the tested gate: orders:approve in the effective set, on an open order where Orders is on', () => {
     expect(screen).toMatch(
       /const canChangeNeededBy =\s*order !== null &&\s*canOfferNeededByChange\(\{\s*status: order\.status,\s*role,\s*canApproveOrders: rpApprove,\s*ordersModuleEnabled: enabledModules\.has\('orders'\),?\s*\}\);/,
     );
@@ -233,6 +233,16 @@ describe('the revise sheet', () => {
       "{ if (saving.current) return; const atTap = neededByDraftView(draft, { ...viewContext, now: readClock() }); if (!atTap.canSave || atTap.wall === null || atTap.reason === null) { setNow(readClock()); return; } saving.current = true; setBusy(true); setError(null); const result = await submitNeededByRevision({ revise: reviseOrderNeededBy, readCurrent: () => readOrderNeededBy(supabase, organizationId, orderId) }, { orderId, wall: atTap.wall, expected, reason: atTap.reason, zone: timeZone }); saving.current = false; setBusy(false); if (result.kind === 'saved') { onSaved(result.outcome, result.title, result.message); return; } setError(result.message); AccessibilityInfo.announceForAccessibility(result.message); if (result.current !== undefined) setExpected(result.current.neededBy); if (result.closed) setClosed(true); if (result.current !== undefined || result.closed) onRefresh(); }",
     );
     expect(sheetCode).toMatch(/<Body size=\{13\} color=\{ACCENT\.crit\} accessibilityRole="alert">\s*\{error\}/);
+  });
+
+  // Mutation caught: the preview (or its problem) changes and VoiceOver is
+  // never told (the web's is a live region).
+  it('a change of the chosen time is announced: the tested spoken update, debounced, never the opening state', () => {
+    expect(sheetCode).toContain('const spoken = neededBySpokenUpdate(view);');
+    expect(sheetCode).toContain('const lastSpoken = React.useRef(spoken);');
+    expect(sheetCode).toMatch(
+      /React\.useEffect\(\(\) => \{\s*if \(spoken === null \|\| spoken === lastSpoken\.current\) return;\s*const timer = setTimeout\(\(\) => \{\s*lastSpoken\.current = spoken;\s*AccessibilityInfo\.announceForAccessibility\(spoken\);\s*\}, SPOKEN_DEBOUNCE_MS\);\s*return \(\) => clearTimeout\(timer\);\s*\}, \[spoken\]\);/,
+    );
   });
 
   it('what it shows is the tested view: core’s zone note, preview and current value; offline Save is off and says why', () => {

@@ -38,14 +38,15 @@ import {
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   NeededByResultShapeError,
   READINESS_NEEDS_CONNECTION_COPY,
-  isManagerOrAbove,
   isNeededByRevisable,
+  isNeededByWithinReach,
   neededByChangedCopy,
   neededByCurrentCopy,
   neededByEffectCopy,
@@ -61,7 +62,6 @@ import {
   zonedParts,
   type NeededByFailureReason,
   type NeededByRevisionOutcome,
-  type Role,
   type WallClock,
 } from '@stockpilot/core';
 
@@ -99,25 +99,22 @@ export function neededByZoneUnknownCopy(zone: string): string {
 /**
  * Whether the order screen offers "Change" beside the needed-by: the orders
  * module is on, the order is open (core isNeededByRevisable), and the viewer
- * approves orders (orders:approve, effective set) or is a manager by role,
- * which the function's gate accepts even with orders:approve revoked (0348).
+ * holds orders:approve in the EFFECTIVE set (a manager by role default, with
+ * overrides applied): the one test the web page offers Change on and the
+ * service refuses without (OrderRequestsService.reviseNeededByIn). A manager
+ * whose orders:approve was revoked is not offered it, although the
+ * database's 0348 gate would accept them: the service in front of it does
+ * not. `role` is kept for the screen's call; it no longer decides.
  * Warehouse write access is checked when the sheet opens
  * (neededBySheetOpening); the server re-checks everything.
  */
 export function canOfferNeededByChange(input: {
   status: string | null | undefined;
-  role: Role | string | null | undefined;
+  role: string | null | undefined;
   canApproveOrders: boolean;
   ordersModuleEnabled: boolean;
 }): boolean {
-  if (!input.ordersModuleEnabled || !isNeededByRevisable(input.status)) return false;
-  if (input.canApproveOrders) return true;
-  if (typeof input.role !== 'string' || input.role === '') return false;
-  try {
-    return isManagerOrAbove(input.role as Role);
-  } catch {
-    return false;
-  }
+  return input.ordersModuleEnabled && isNeededByRevisable(input.status) && input.canApproveOrders;
 }
 
 /** Whether the "Needed by" card shows: the order has one, or the viewer may set one. */
@@ -581,6 +578,9 @@ export function neededByDraftView(
       timeProblem = neededByInvalidTimeCopy(zone);
     } else if (instant <= now) {
       timeProblem = NEEDED_BY_IN_PAST_COPY;
+    } else if (!isNeededByWithinReach(instant, now)) {
+      // The function refuses it (needed_by_out_of_range); said here first.
+      timeProblem = NEEDED_BY_OUT_OF_RANGE_COPY;
     } else {
       wall = wallClockString(wallClock);
       at = instant;
@@ -619,6 +619,16 @@ export function neededByDraftView(
     canSave: saveBlockedBy === null && !ctx.busy,
     saveBlockedBy,
   };
+}
+
+/**
+ * What VoiceOver is told when the chosen time changes (a chip, Other time, or
+ * a slot passing on the clock): the preview in the org's zone, or why there is
+ * none. The web dialog's preview is a live region; on iOS the sheet announces
+ * it (debounced while typing).
+ */
+export function neededBySpokenUpdate(view: Pick<NeededByDraftView, 'preview' | 'timeProblem'>): string | null {
+  return view.preview ?? view.timeProblem;
 }
 
 // ── Saving ──────────────────────────────────────────────────────────────────
@@ -660,6 +670,7 @@ export type NeededBySubmitResult =
 const REASONS: ReadonlySet<string> = new Set<NeededByFailureReason>([
   'needed_by_changed',
   'needed_by_in_past',
+  'needed_by_out_of_range',
   'reason_required',
   'order_closed',
   'invalid_time',
@@ -689,6 +700,8 @@ function fallbackCopy(reason: NeededByFailureReason, zone: string): string {
   switch (reason) {
     case 'needed_by_in_past':
       return NEEDED_BY_IN_PAST_COPY;
+    case 'needed_by_out_of_range':
+      return NEEDED_BY_OUT_OF_RANGE_COPY;
     case 'reason_required':
       return NEEDED_BY_REASON_REQUIRED_COPY;
     case 'order_closed':

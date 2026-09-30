@@ -8,6 +8,7 @@ import {
   NEEDED_BY_NO_ANSWER_COPY,
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
@@ -45,6 +46,7 @@ import {
   neededByDays,
   neededByDraftView,
   neededBySheetOpening,
+  neededBySpokenUpdate,
   neededBySlots,
   neededByZoneUnknownCopy,
   needsNeededByZoneRead,
@@ -112,9 +114,17 @@ describe('who is offered Change', () => {
     expect(canOfferNeededByChange(base)).toBe(true);
   });
 
-  it('a manager by role, even with orders:approve revoked (0348)', () => {
-    expect(canOfferNeededByChange({ ...base, role: 'manager', canApproveOrders: false })).toBe(true);
-    expect(canOfferNeededByChange({ ...base, role: 'owner', canApproveOrders: false })).toBe(true);
+  it('a manager holds orders:approve by role (the effective set), so a manager is offered it', () => {
+    expect(canOfferNeededByChange({ ...base, role: 'manager', canApproveOrders: true })).toBe(true);
+  });
+
+  it('a manager or owner whose orders:approve was revoked is NOT offered it: the web page hides it and the service refuses them', () => {
+    // OrderRequestsService.reviseNeededByIn refuses unless can(ctx,
+    // 'orders:approve') (the effective set, overrides applied), and the web
+    // page offers Change on that same test; the database's 0348 gate would
+    // let the manager through, but the service in front of it does not.
+    expect(canOfferNeededByChange({ ...base, role: 'manager', canApproveOrders: false })).toBe(false);
+    expect(canOfferNeededByChange({ ...base, role: 'owner', canApproveOrders: false })).toBe(false);
   });
 
   it('nobody else, a closed order, or Orders off', () => {
@@ -492,6 +502,32 @@ describe('what the sheet shows', () => {
     expect(beyond.days.some((d) => d.key === beyond.selectedDayKey)).toBe(false);
   });
 
+  it('a date later than five years from now is said before saving, and Save stays off (the function refuses it)', () => {
+    const far = neededByDraftView(
+      draft({ dayKey: '2026-10-03', other: true, otherText: '11/20/2032 9:00 AM', reason: 'x' }),
+      ctx(),
+    );
+    expect(far.timeProblem).toBe(NEEDED_BY_OUT_OF_RANGE_COPY);
+    expect(far.wall).toBeNull();
+    expect(far.canSave).toBe(false);
+    expect(far.saveBlockedBy).toBe(NEEDED_BY_OUT_OF_RANGE_COPY);
+    const near = neededByDraftView(
+      draft({ dayKey: '2026-10-03', other: true, otherText: '9/30/2031 9:00 AM', reason: 'x' }),
+      ctx(),
+    );
+    expect(near.wall).toBe('2031-09-30T09:00');
+  });
+
+  it('what VoiceOver hears when the time changes: the preview, or why there is none', () => {
+    const picked = neededByDraftView(draft({ dayKey: '2026-10-03', slot: '14:00', reason: 'x' }), ctx());
+    expect(neededBySpokenUpdate(picked)).toBe(picked.preview);
+    expect(picked.preview).toBe('New needed-by: Sat, Oct 3, 2:00 PM');
+    const gap = neededByDraftView(draft({ dayKey: '2027-03-14', other: true, otherText: '2:30 AM', reason: 'x' }), ctx());
+    expect(neededBySpokenUpdate(gap)).toBe(neededByInvalidTimeCopy(LA));
+    const nothing = neededByDraftView(draft({ dayKey: '2026-10-03' }), ctx());
+    expect(neededBySpokenUpdate(nothing)).toBe(NEEDED_BY_PICK_TIME_COPY);
+  });
+
   it('Other time with nothing typed says what to type', () => {
     const view = neededByDraftView(draft({ dayKey: '2026-10-03', other: true, reason: 'x' }), ctx());
     expect(view.timeProblem).toBe(NEEDED_BY_OTHER_HINT);
@@ -519,6 +555,7 @@ const OUTCOME: NeededByRevisionOutcome = {
   neededBy: '2026-10-03T21:00:00.000Z',
   eventId: 'ev-1',
   eventUpdated: true,
+  eventStatus: 'scheduled',
   status: 'approved',
   schedule: 'moved',
   timeZone: LA,
@@ -659,6 +696,8 @@ describe('saving', () => {
     [409, { reason: 'order_closed', status: 'completed' }, 'x', 'order_closed', NEEDED_BY_CLOSED_COPY, true],
     [409, { reason: 'busy', retryable: true }, NEEDED_BY_BUSY_COPY, 'busy', NEEDED_BY_BUSY_COPY, false],
     [400, { reason: 'needed_by_in_past' }, NEEDED_BY_IN_PAST_COPY, 'needed_by_in_past', NEEDED_BY_IN_PAST_COPY, false],
+    [400, { reason: 'needed_by_out_of_range' }, NEEDED_BY_OUT_OF_RANGE_COPY, 'needed_by_out_of_range', NEEDED_BY_OUT_OF_RANGE_COPY, false],
+    [400, { reason: 'needed_by_out_of_range' }, 'validation_error', 'needed_by_out_of_range', NEEDED_BY_OUT_OF_RANGE_COPY, false],
     [400, { reason: 'reason_required' }, 'reason_required', 'reason_required', NEEDED_BY_REASON_REQUIRED_COPY, false],
     [400, { reason: 'invalid_time' }, 'validation_error', 'invalid_time', neededByInvalidTimeCopy(LA), false],
     [403, { reason: 'forbidden' }, NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY, 'forbidden', NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY, true],

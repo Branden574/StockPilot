@@ -38,6 +38,7 @@ import {
   NEEDED_BY_TIME_EYEBROW,
   initialNeededByDraft,
   neededByDraftView,
+  neededBySpokenUpdate,
   readOrderNeededBy,
   selectNeededByDay,
   submitNeededByRevision,
@@ -148,6 +149,22 @@ export function ReviseNeededBySheet({
     closed,
   };
   const view = neededByDraftView(draft, { ...viewContext, now });
+
+  // VoiceOver hears the preview in the org's zone, or why there is none, when
+  // the chosen time changes: a chip, Other time as it is typed (debounced), or
+  // a slot passing on the clock. The web dialog's preview is a live region;
+  // iOS gives a Text no live region, so it is announced. The sheet's opening
+  // state is not (VoiceOver reads the sheet as it opens).
+  const spoken = neededBySpokenUpdate(view);
+  const lastSpoken = React.useRef(spoken);
+  React.useEffect(() => {
+    if (spoken === null || spoken === lastSpoken.current) return;
+    const timer = setTimeout(() => {
+      lastSpoken.current = spoken;
+      AccessibilityInfo.announceForAccessibility(spoken);
+    }, SPOKEN_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [spoken]);
 
   function update(patch: Partial<NeededByDraft>) {
     setDraft((d) => ({ ...d, ...patch }));
@@ -507,6 +524,10 @@ export function ReviseNeededBySheet({
 function readClock(): number {
   return Date.now();
 }
+
+/** How long the time must stay put before VoiceOver is told it (typing in
+ *  Other time changes it on every key). */
+const SPOKEN_DEBOUNCE_MS = 600;
 
 /** Button and chip labels are chrome: they stop growing at the control
  *  ceiling, and the control grows with them (minHeight). */

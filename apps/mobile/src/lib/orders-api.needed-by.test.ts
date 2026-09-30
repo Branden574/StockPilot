@@ -19,6 +19,7 @@ const REVISION = {
   neededBy: '2026-10-03T21:00:00+00:00',
   eventId: '22222222-2222-2222-2222-222222222222',
   eventUpdated: true,
+  eventStatus: 'scheduled',
   status: 'approved',
   schedule: 'moved',
   timeZone: 'America/Los_Angeles',
@@ -46,6 +47,7 @@ describe('reviseOrderNeededBy (F2-4, phone)', () => {
       neededBy: '2026-10-03T21:00:00.000Z',
       eventId: REVISION.eventId,
       eventUpdated: true,
+      eventStatus: 'scheduled',
       status: 'approved',
       schedule: 'moved',
       timeZone: 'America/Los_Angeles',
@@ -66,6 +68,15 @@ describe('reviseOrderNeededBy (F2-4, phone)', () => {
         NeededByResultShapeError,
       );
     }
+  });
+
+  it('every outcome the server says, a missing entry that could not be added included', () => {
+    for (const schedule of ['moved', 'created', 'none_yet', 'left_closed', 'not_added', 'not_moved', 'unchanged']) {
+      expect(parseNeededByRevisionOutcome({ ...REVISION, schedule }).schedule).toBe(schedule);
+    }
+    // The entry's status says whether its reminders were set (only a scheduled one).
+    expect(parseNeededByRevisionOutcome({ ...REVISION, eventStatus: 'in_progress' }).eventStatus).toBe('in_progress');
+    expect(parseNeededByRevisionOutcome({ ...REVISION, eventId: null, eventStatus: null }).eventStatus).toBeNull();
   });
 
   it('keys it does not know are ignored (a later additive change never breaks this build)', () => {
