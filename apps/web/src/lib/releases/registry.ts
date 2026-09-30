@@ -28,6 +28,50 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-shortfall-po-2026-10',
+    revision: 1,
+    // F2-5 (migration 0385). Held as a draft until the web dialog, the phone's
+    // sheet (OTA) and the Demo Co production walk (SO-9: draft its shortfall,
+    // open the draft on the web and the phone, draft again and see it covered,
+    // cancel the draft) are done, as F2-1's to F2-4's were. The follow-up that
+    // publishes it sets the real publishedAt and re-reads these words against
+    // what shipped. Dated after F2-4's draft: drafts newest first.
+    //
+    // Addressed as the page it links to is reached, then as drafting is
+    // allowed. The release: the orders module and orders:approve (the Orders
+    // list shows every order to approvers; anyone else sees only their own
+    // requests, where a short order to buy for would not be found). The entry:
+    // a manager holding purchase_orders:manage where Purchase orders is on,
+    // the database's own floors (draft_order_shortfall_pos, 0385).
+    status: 'draft',
+    title: 'Draft a PO for just what an order is short',
+    summary:
+      "On the web and in the mobile app, a manager who manages purchase orders can now draft purchase orders from an order for just what it is short: the part that the stock on record, open POs and other drafts don't already cover. One draft is made per supplier, and drafts are not sent.",
+    publishedAt: '2026-10-09T17:00:00Z',
+    audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-draft-po-for-shortfall',
+        category: 'new',
+        area: 'Orders',
+        title: 'Draft a PO for just what an order is short',
+        whatChanged:
+          "When an order is short, Draft PO for what is short on its readiness lists each short item: how much is short, how much is already on an open PO or a draft, and how much can still be drafted. Choose the items and quantities, and one draft purchase order is made per supplier, plus one for items with no supplier, each naming the order in its notes. The mobile app's order screen offers the same; there a new draft opens read-only, to review and order on the web.",
+        whyItMatters:
+          'Buying for a short order meant working out by hand what was already on order or on a draft, then building the purchase order item by item.',
+        howItAffectsYou:
+          "Drafting needs a manager role with permission to manage purchase orders. Drafts are not sent to anyone: check each draft's supplier, set its destination and order it on Purchase orders. An item an open PO or a draft already covers shows what covers it and is not drafted again. If stock or POs changed after the order was checked, nothing is drafted, your choices are kept and the most that can be drafted now is shown. Pressing Draft twice drafts once. Kits are not drafted; order their components.",
+        whatToDo: 'No action needed. On a short order, choose Draft PO for what is short.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['purchase_orders:manage'],
+          modules: ['purchase_orders'],
+        },
+      },
+    ],
+  },
+  {
     id: 'order-needed-by-change-2026-10',
     revision: 1,
     // F2-4 (migration 0383). Held as a draft until the web order page's
