@@ -100,6 +100,8 @@ const STOCK_RPCS: Record<string, string> = {
   compensate_opening_stock: 'item_stock_levels + inventory_items.quantity_on_hand (failed-create rollback, 0359)',
   save_purchase_order_draft:
     'inventory_items.created_from_purchase_order_id (tags PO-born custom items, bumping updated_at; 0366)',
+  draft_order_shortfall_pos:
+    'save_purchase_order_draft per draft (0385); it passes no custom items, so the tag never runs, but the call reaches the write',
 };
 
 /**
