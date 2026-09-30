@@ -440,6 +440,29 @@ PGTAP_TESTS=(
   # of two buyers (exactly one wins) and a reorder draft racing a shortfall
   # draft are scripts/db-concurrency/0385_shortfall_race.sh.
   supabase/tests/0385_order_shortfall_po.test.sql
+  # Confirm the counted number of a count difference (count differences R2,
+  # 0386): exception_confirm_count is SECURITY DEFINER (search_path and
+  # lock_timeout pinned), EXECUTE to authenticated only (not anon, not
+  # service_role). It answers "not found" for a row the caller cannot see (another
+  # warehouse, another org), then the act gate against the ITEM's live
+  # warehouse (a manager without stock:adjust and a viewer: 42501
+  # not_permitted), then the state (a recount or another count about to
+  # settle it, a newer count, an item that cannot be counted, stock on record
+  # that moved, a count line already confirmed: never 23505), then the
+  # counter or a manager (42501 not_counter), in core countConfirmGate's
+  # order (the fixture's reader x state matrix, cell by cell). It takes the
+  # org's sync lock before the row, writes no stock, one count_confirmed
+  # event (no client event id, no resolved event), and replays from stored
+  # state. The six confirmed_* columns are readable and writable by no API
+  # role but service_role; the reason and kind CHECKs admit only the new
+  # values. exceptions_sync minus its lines tagged 0386 is the 0372 body, and
+  # its step 2b holds a confirmed line (never across orgs, never on a
+  # malformed id). exception_occurrence_act, the count functions and the
+  # visibility and act-gate helpers are frozen (md5). The races (confirm vs
+  # sync, both orders; a lock-less confirm and a sync without 2b reproduce the
+  # second raise; confirm vs recount; 55P03 at 5 s) are
+  # scripts/db-concurrency/0386_confirm_vs_sync.sh.
+  supabase/tests/0386_exception_confirm_count.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
