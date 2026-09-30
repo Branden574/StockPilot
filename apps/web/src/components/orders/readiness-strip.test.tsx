@@ -14,6 +14,7 @@ import {
 import { putAwayTargets, type OrderReadinessAssessment } from '@stockpilot/core';
 
 import { ReadinessStrip } from './readiness-strip';
+import { ReviseNeededByDialog } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   readinessLinePutAwayHref,
@@ -525,9 +526,15 @@ describe('ReadinessStrip — Change the needed-by date (F2-4)', () => {
     expect(screen.queryByRole('button', { name: 'Change needed-by date' })).toBeNull();
   });
 
-  it('the date as core words it and Change, under the needed-by signal; Change opens the dialog and saves nothing by itself', async () => {
+  it('the date as core words it and Change, under the needed-by signal; Change opens the page\'s dialog and saves nothing by itself', async () => {
     const user = userEvent.setup();
-    render(<ReadinessStrip view={view} neededByChange={change} />);
+    // The page mounts the dialog once, outside the strip.
+    render(
+      <>
+        <ReviseNeededByDialog change={change} trigger={false} />
+        <ReadinessStrip view={view} neededByChange={change} />
+      </>,
+    );
     const row = screen.getByTestId('readiness-needed-by-change');
     expect(row).toHaveTextContent('Needed by Thu, Oct 1, 2:00 PM');
     // Below the signal it answers.

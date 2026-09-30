@@ -13,7 +13,7 @@ import type { NeededByChangeView } from '@/lib/orders/needed-by-change';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
-import { ReviseNeededByDialog } from './revise-needed-by-dialog';
+import { NeededByChangeButton } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   ReadinessIcon,
@@ -49,7 +49,9 @@ import {
  * page decides, lib/orders/needed-by-change.ts: an approver with write access
  * to the order's warehouse, an open order, the org's zone read), the date as
  * core words it ("Needed by Fri, Oct 3, 2:00 PM", or "No needed-by date") and
- * Change, which opens the revise dialog. Under the needed-by signal when there
+ * Change, which opens the revise dialog the page mounted once (so a refresh
+ * that moves Change to the Dates card keeps an open dialog). Under the
+ * needed-by signal when there
  * is one ("May miss its needed-by date"), so the date and the way to move it
  * sit with the warning about it.
  */
@@ -184,7 +186,7 @@ export function ReadinessStrip({
             <CalendarClock className="size-3.5 shrink-0" aria-hidden />
             {neededByChange.rowLabel}
           </span>
-          <ReviseNeededByDialog change={neededByChange} />
+          <NeededByChangeButton orderId={neededByChange.orderId} />
         </div>
       )}
       {view.checkedAt && (

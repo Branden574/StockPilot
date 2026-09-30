@@ -1,7 +1,10 @@
 import {
   formatWallClock,
   isNeededByRevisable,
+  isNeededByWithinReach,
   NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_MAX_YEARS_AHEAD,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   neededByInvalidTimeCopy,
   neededByPreviewCopy,
   neededByRowCopy,
@@ -113,8 +116,9 @@ export type NeededByDraft =
  * Reads the datetime-local value ("YYYY-MM-DDTHH:mm") as a wall clock in the
  * ORG's zone, strictly, exactly as the server will (core wallClockToInstant):
  * a time that does not exist there (the spring-forward hour) is refused, and
- * so is one already past. `preview` is core's "New needed-by: Fri, Oct 3,
- * 2:00 PM", in the same zone. Never the browser's zone.
+ * so is one already past, or one later than five years from now (the
+ * function's needed_by_out_of_range). `preview` is core's "New needed-by: Fri,
+ * Oct 3, 2:00 PM", in the same zone. Never the browser's zone.
  */
 export function readNeededByDraft(value: string, timeZone: string, now: number): NeededByDraft {
   if (value.trim() === '') return { kind: 'empty' };
@@ -127,6 +131,7 @@ export function readNeededByDraft(value: string, timeZone: string, now: number):
   }
   if (at === null) return { kind: 'invalid', message: neededByInvalidTimeCopy(timeZone) };
   if (at <= now) return { kind: 'past', message: NEEDED_BY_IN_PAST_COPY };
+  if (!isNeededByWithinReach(at, now)) return { kind: 'invalid', message: NEEDED_BY_OUT_OF_RANGE_COPY };
   return { kind: 'ok', instant: at, preview: neededByPreviewCopy(at, timeZone, now) };
 }
 
@@ -152,6 +157,18 @@ export function initialNeededByWallClock(neededBy: string | null, timeZone: stri
 export function minNeededByWallClock(timeZone: string, now: number): string {
   try {
     return formatWallClock(now, timeZone);
+  } catch {
+    return '';
+  }
+}
+
+/** The latest wall clock the field offers (five years from now, in the org's
+ *  zone: the function refuses later). Empty when the zone cannot be read here. */
+export function maxNeededByWallClock(timeZone: string, now: number): string {
+  const limit = new Date(now);
+  limit.setUTCFullYear(limit.getUTCFullYear() + NEEDED_BY_MAX_YEARS_AHEAD);
+  try {
+    return formatWallClock(limit, timeZone);
   } catch {
     return '';
   }

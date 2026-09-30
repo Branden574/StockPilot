@@ -18,7 +18,7 @@ import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
-import { ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
+import { NeededByChangeButton, ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
 import { bookReportReturnPath } from '@/components/reports/book-order-totals/return-path';
 import {
   readinessLinePutAwayHref,
@@ -731,7 +731,9 @@ export default async function OrderDetailPage({
   // save converts in; lib/orders/needed-by-change.ts says why a guessed zone
   // offers no Change). On the readiness strip where the full strip is shown
   // (to pick); in the Dates card otherwise (past picking, or no lines), so
-  // every open order has one way to it, never two.
+  // every open order has one way to it, never two. The button sits there; the
+  // dialog is mounted once at the top of the page (a refresh that moves or
+  // removes the button keeps an open dialog and what was typed in it).
   const neededByChange = neededByChangeGate
     ? neededByChangeView({
         orderId: request.id,
@@ -1041,6 +1043,7 @@ export default async function OrderDetailPage({
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <OrderRealtimeRefresh orderId={id} />
+      <ReviseNeededByDialog change={neededByChange} trigger={false} />
       <div className="mb-6">
         <Link
           href={backToReport ?? '/dashboard/orders'}
@@ -1671,7 +1674,7 @@ export default async function OrderDetailPage({
                   <dd className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-right font-medium">
                     <span>{neededBy ? formatNeededBy(neededBy, orgTimeZone) : '—'}</span>
                     {neededByChangeInDates && neededByChange && (
-                      <ReviseNeededByDialog change={neededByChange} triggerClassName="h-6 font-normal" />
+                      <NeededByChangeButton orderId={neededByChange.orderId} className="h-6 font-normal" />
                     )}
                   </dd>
                 </div>

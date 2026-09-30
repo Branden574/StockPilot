@@ -3,13 +3,19 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { NEEDED_BY_IN_PAST_COPY, wallClockToInstant, type OrderReadinessResult } from '@stockpilot/core';
+import {
+  NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
+  wallClockToInstant,
+  type OrderReadinessResult,
+} from '@stockpilot/core';
 
 import { assertWarehouseAccess, roleSeesEveryWarehouse, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { orderReadinessFacts, READINESS_FAILED, readinessOk, visibleItemFacts } from '@/test/order-readiness-facts';
 
 import {
   initialNeededByWallClock,
+  maxNeededByWallClock,
   minNeededByWallClock,
   neededByChangeView,
   neededByExpectedToSend,
@@ -207,6 +213,20 @@ describe("readNeededByDraft: the field, read in the org's zone exactly as the se
     expect(readNeededByDraft('2026-10-03', LA, NOW)).toMatchObject({ kind: 'invalid' });
     expect(readNeededByDraft('2026-10-03T14:00Z', LA, NOW)).toMatchObject({ kind: 'invalid' });
     expect(readNeededByDraft('', LA, NOW)).toEqual({ kind: 'empty' });
+  });
+
+  it('later than five years from now is refused before saving (the function: needed_by_out_of_range); the field offers no later one', () => {
+    expect(readNeededByDraft('2031-09-29T10:00', LA, NOW)).toMatchObject({ kind: 'ok' });
+    expect(readNeededByDraft('2031-09-29T10:01', LA, NOW)).toEqual({
+      kind: 'invalid',
+      message: NEEDED_BY_OUT_OF_RANGE_COPY,
+    });
+    expect(readNeededByDraft('9999-12-31T23:59', LA, NOW)).toEqual({
+      kind: 'invalid',
+      message: NEEDED_BY_OUT_OF_RANGE_COPY,
+    });
+    expect(maxNeededByWallClock(LA, NOW)).toBe('2031-09-29T10:00');
+    expect(maxNeededByWallClock('Not/AZone', NOW)).toBe('');
   });
 });
 

@@ -54,6 +54,9 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
+  // The page mounts the needed-by dialog once (F2-4; it renders nothing
+  // without a view), and it holds the router.
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
 }));
 
 vi.mock('next/link', async () => {

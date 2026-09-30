@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_NO_ANSWER_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   neededByRevisedCopy,
   type NeededByRevisionOutcome,
@@ -31,7 +32,7 @@ vi.mock('@/server/actions/order-requests', () => ({
   reviseOrderNeededByAction: (input: unknown) => reviseAction(input),
 }));
 
-import { ReviseNeededByDialog } from './revise-needed-by-dialog';
+import { NeededByChangeButton, ReviseNeededByDialog } from './revise-needed-by-dialog';
 
 const ORDER = '11111111-1111-1111-1111-111111111111';
 // 10:00 AM on Tue Sep 29 in Los Angeles; 1:00 PM in New York.
@@ -145,7 +146,7 @@ describe('ReviseNeededByDialog: what it shows, in the org zone', () => {
   it("says what saving does to the Schedule entry, by the order's status", () => {
     const { unmount } = openDialog(view({ status: 'approved' }));
     expect(screen.getByTestId('revise-needed-by-effect')).toHaveTextContent(
-      "The order's Schedule entry follows the new date, and its reminders are set for the new time.",
+      "The order's Schedule entry moves to the new date unless it's completed or cancelled. If it hasn't started, its reminders are set for the new time.",
     );
     unmount();
     openDialog(view({ status: 'pending_approval' }));
@@ -179,6 +180,19 @@ describe('ReviseNeededByDialog: what it shows, in the org zone', () => {
     typeDate('');
     save();
     expect(screen.getByRole('alert')).toHaveTextContent(NEEDED_BY_IN_PAST_COPY);
+    expect(reviseAction).not.toHaveBeenCalled();
+  });
+
+  it('a date later than five years from now is said before saving, and never sent; the field offers no later one', async () => {
+    openDialog();
+    // Five years from Tue Sep 29, 1:00 PM in New York.
+    expect(field()).toHaveAttribute('max', '2031-09-29T13:00');
+    typeDate('2031-10-01T09:00');
+    expect(screen.getByTestId('revise-needed-by-preview')).toHaveTextContent(NEEDED_BY_OUT_OF_RANGE_COPY);
+    expect(field()).toHaveAttribute('aria-invalid', 'true');
+    typeReason('Far off');
+    save();
+    expect(await screen.findByRole('alert')).toHaveTextContent(NEEDED_BY_OUT_OF_RANGE_COPY);
     expect(reviseAction).not.toHaveBeenCalled();
   });
 
@@ -229,14 +243,27 @@ describe('ReviseNeededByDialog: saving', () => {
     expect(reviseAction.mock.calls[0]![0]).toMatchObject({ expectedNeededBy: null });
   });
 
-  it('a Schedule entry that could not be updated is a warning; an unchanged date is said as such', async () => {
+  it('a Schedule entry left at another date, or not added, is a warning; an unchanged date is said as such', async () => {
     reviseAction.mockResolvedValueOnce({ ok: true, data: outcome({ schedule: 'not_moved', eventUpdated: false }) });
-    const { unmount } = openDialog();
+    let { unmount } = openDialog();
     typeDate('2026-10-03T14:00');
     typeReason('Moved');
     save();
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
-    expect(toastMock.warning.mock.calls[0]![0]).toContain("The Schedule entry couldn't be updated");
+    expect(toastMock.warning.mock.calls[0]![0]).toContain('may still show another date');
+    expect(toastMock.success).not.toHaveBeenCalled();
+    unmount();
+
+    reviseAction.mockResolvedValueOnce({
+      ok: true,
+      data: outcome({ schedule: 'not_added', eventId: null, eventUpdated: false, eventStatus: null }),
+    });
+    ({ unmount } = openDialog());
+    typeDate('2026-10-03T14:00');
+    typeReason('Moved');
+    save();
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(2));
+    expect(toastMock.warning.mock.calls[1]![0]).toContain('save the same date again to add it');
     expect(toastMock.success).not.toHaveBeenCalled();
     unmount();
 
@@ -356,6 +383,51 @@ describe('ReviseNeededByDialog: saving', () => {
     expect(reasonBox().value).toBe('Pushed back');
   });
 
+  it('no answer, and the page read again shows the save landed: the dialog starts from that date, so saving again is not refused as someone else\'s change', async () => {
+    // Its own save, as PostgREST prints it after the refresh.
+    const landed = '2026-10-03T18:00:00.000042+00:00';
+    reviseAction.mockRejectedValueOnce(new Error('network'));
+    const { rerender } = openDialog();
+    typeDate('2026-10-03T14:00');
+    typeReason('Pushed back');
+    save();
+    await screen.findByRole('alert');
+    rerender(<ReviseNeededByDialog change={view({ neededBy: landed, rowLabel: 'Needed by Sat, Oct 3, 2:00 PM' })} />);
+    expect(screen.getByTestId('revise-needed-by-current')).toHaveTextContent('Current needed-by: Sat, Oct 3, 2:00 PM');
+    reviseAction.mockResolvedValueOnce({ ok: true, data: outcome({ changed: false, schedule: 'unchanged' }) });
+    save();
+    await waitFor(() => expect(reviseAction).toHaveBeenCalledTimes(2));
+    expect(reviseAction.mock.calls[1]![0]).toMatchObject({ expectedNeededBy: landed });
+  });
+
+  it('no answer, and the page read again shows the date unchanged: the dialog keeps the date it started from', async () => {
+    reviseAction.mockRejectedValueOnce(new Error('network'));
+    const { rerender } = openDialog();
+    typeDate('2026-10-03T14:00');
+    typeReason('Pushed back');
+    save();
+    await screen.findByRole('alert');
+    rerender(<ReviseNeededByDialog change={view()} />);
+    reviseAction.mockResolvedValueOnce({ ok: true, data: outcome() });
+    save();
+    await waitFor(() => expect(reviseAction).toHaveBeenCalledTimes(2));
+    expect(reviseAction.mock.calls[1]![0]).toMatchObject({ expectedNeededBy: ON_PAGE });
+  });
+
+  it('an order that is gone: its words stay in the dialog AND as a toast, since the page it sits on is replaced', async () => {
+    reviseAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'not_found', message: 'Order not found.', details: { reason: 'not_found' } },
+    });
+    openDialog();
+    typeDate('2026-10-03T14:00');
+    typeReason('Pushed back');
+    save();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Order not found.');
+    expect(toastMock.error).toHaveBeenCalledWith('Order not found.');
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it('the order closed meanwhile: its words, and the page is read again', async () => {
     reviseAction.mockResolvedValue({
       ok: false,
@@ -388,5 +460,82 @@ describe('ReviseNeededByDialog: saving', () => {
     answer({ ok: true, data: outcome() });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(reviseAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ReviseNeededByDialog mounted once by the page, opened from Change on the strip or the Dates card', () => {
+  // The page mounts the dialog at one stable spot and puts only the Change
+  // button on the strip (to pick) or in the Dates card (otherwise). A refresh
+  // that moves the button (picking completes while an approver is editing), or
+  // takes it away (the readiness read failed, the order closed), must not take
+  // the open dialog and what was typed with it.
+  function page(v: NeededByChangeView | null, where: 'strip' | 'dates') {
+    return (
+      <div>
+        <ReviseNeededByDialog change={v} trigger={false} />
+        <section data-testid="strip">{v && where === 'strip' && <NeededByChangeButton orderId={v.orderId} />}</section>
+        <section data-testid="dates">{v && where === 'dates' && <NeededByChangeButton orderId={v.orderId} />}</section>
+      </div>
+    );
+  }
+
+  it('Change opens it (a button named for what it changes, announcing a dialog)', () => {
+    render(page(view(), 'strip'));
+    const button = within(screen.getByTestId('strip')).getByRole('button', { name: 'Change needed-by date' });
+    expect(button).toHaveTextContent('Change');
+    expect(button).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(button);
+    expect(screen.getByRole('dialog', { name: 'Change needed-by date' })).toBeInTheDocument();
+    expect(field().value).toBe('2026-10-01T14:00');
+  });
+
+  it('the button moving from the strip to the Dates card keeps the open dialog and what was typed', () => {
+    const { rerender } = render(page(view(), 'strip'));
+    fireEvent.click(within(screen.getByTestId('strip')).getByRole('button', { name: 'Change needed-by date' }));
+    typeDate('2026-10-03T14:00');
+    typeReason('Pushed back');
+    rerender(page(view({ status: 'picking_complete' }), 'dates'));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(field().value).toBe('2026-10-03T14:00');
+    expect(reasonBox().value).toBe('Pushed back');
+  });
+
+  it('the page no longer offering Change keeps an open dialog with its last view; closed, it is gone', async () => {
+    reviseAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          "This order is closed (completed, denied, cancelled or not yet confirmed), so its needed-by date can't change.",
+        details: { reason: 'order_closed', status: 'cancelled' },
+      },
+    });
+    const { rerender } = render(page(view(), 'dates'));
+    fireEvent.click(within(screen.getByTestId('dates')).getByRole('button', { name: 'Change needed-by date' }));
+    typeDate('2026-10-03T14:00');
+    typeReason('Pushed back');
+    save();
+    await screen.findByRole('alert');
+    // The refresh after the refusal: the order is closed, so no Change.
+    rerender(page(null, 'dates'));
+    expect(screen.getByRole('alert')).toHaveTextContent('This order is closed');
+    expect(screen.getByTestId('revise-needed-by-zone')).toHaveTextContent('Times are in America/New_York.');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Change needed-by date' })).toBeNull();
+  });
+
+  it('closing returns focus to the Change button that is on the page now', async () => {
+    const { rerender } = render(page(view(), 'strip'));
+    fireEvent.click(within(screen.getByTestId('strip')).getByRole('button', { name: 'Change needed-by date' }));
+    rerender(page(view({ status: 'picking_complete' }), 'dates'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(screen.getByTestId('dates')).getByRole('button', { name: 'Change needed-by date' }),
+      ),
+    );
   });
 });

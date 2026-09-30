@@ -104,19 +104,29 @@ vi.mock('@/components/orders/order-timeline', () => ({
     return null;
   },
 }));
-// F2-4: "Change" beside the needed-by opens this dialog. A recording stub: the
-// dialog's own behaviour is pinned in revise-needed-by-dialog.test.tsx; this
-// file pins WHO gets it, WHERE on the page, and WHAT it is handed.
+// F2-4: "Change" beside the needed-by opens this dialog. Recording stubs: the
+// dialog's own behaviour (and the button opening the page's one dialog) is
+// pinned in revise-needed-by-dialog.test.tsx; this file pins WHO gets it,
+// WHERE on the page the button sits, and WHAT the dialog is handed.
 const reviseDialogProps = vi.fn();
 vi.mock('@/components/orders/revise-needed-by-dialog', async () => {
   const React = await import('react');
   return {
     ReviseNeededByDialog: (props: Record<string, unknown>) => {
       reviseDialogProps(props);
-      return React.createElement('button', { type: 'button', 'data-testid': 'needed-by-change' }, 'Change');
+      return null;
     },
+    NeededByChangeButton: (props: { orderId: string }) =>
+      React.createElement(
+        'button',
+        { type: 'button', 'data-testid': 'needed-by-change', 'data-order': props.orderId },
+        'Change',
+      ),
   };
 });
+/** The views the page handed its dialog (null: no Change offered). */
+const handedViews = () =>
+  reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
 vi.mock('@/components/orders/shipping-panel', () => ({ ShippingPanel: () => null }));
 vi.mock('@/components/orders/status-badge', () => ({ OrderStatusBadge: () => null }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
@@ -2058,6 +2068,19 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
   const inStrip = () => within(screen.getByTestId('readiness-strip')).queryByTestId('needed-by-change');
   const inDates = () => within(screen.getByTestId('dates-needed-by')).queryByTestId('needed-by-change');
 
+  it('the dialog is mounted ONCE, at the top of the page, so a refresh that moves or removes Change never takes an open dialog with it', () => {
+    // Change moves from the strip to the Dates card when picking completes,
+    // and goes when the readiness read fails or the order closes; the dialog
+    // sits beside OrderRealtimeRefresh, which no status or read moves.
+    const src = readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8');
+    expect(src.split('<ReviseNeededByDialog').length - 1).toBe(1);
+    expect(src).toMatch(
+      /<OrderRealtimeRefresh orderId=\{id\} \/>\s*<ReviseNeededByDialog change=\{neededByChange\} trigger=\{false\} \/>/,
+    );
+    const strip = readFileSync(path.resolve(__dirname, '../../../../../components/orders/readiness-strip.tsx'), 'utf8');
+    expect(strip).not.toContain('<ReviseNeededByDialog');
+  });
+
   it('a manager on an order still to pick: Change on the strip, beside the date in the org zone; handed the date exactly as read; no access read', async () => {
     as('manager', ['orders:approve']);
     orderAt('approved');
@@ -2070,7 +2093,10 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     expect(within(row).getByTestId('needed-by-change')).toBeInTheDocument();
     // One way to it: not in the Dates card too.
     expect(inDates()).toBeNull();
+    // Mounted once, by the page, opened by the button (never its own trigger).
     expect(reviseDialogProps).toHaveBeenCalledTimes(1);
+    expect(reviseDialogProps.mock.calls[0]![0]).toMatchObject({ trigger: false });
+    expect(within(row).getByTestId('needed-by-change')).toHaveAttribute('data-order', ORDER_ID);
     expect(lastChange()).toEqual({
       orderId: ORDER_ID,
       neededBy: NEEDED_BY,
@@ -2206,7 +2232,7 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     r = await renderPage();
     expect(screen.queryByTestId('needed-by-change')).toBeNull();
     r.unmount();
-    expect(reviseDialogProps).not.toHaveBeenCalled();
+    expect(handedViews()).toEqual([]);
     // And no access read for them.
     expect(getWarehouseAccessMock).not.toHaveBeenCalled();
   });
@@ -2220,7 +2246,7 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
       expect(screen.queryByTestId('needed-by-change')).toBeNull();
       r.unmount();
     }
-    expect(reviseDialogProps).not.toHaveBeenCalled();
+    expect(handedViews()).toEqual([]);
   });
 
   it("a failed readiness read: no Change (the org's zone is not known, and a preview in a guessed zone would be wrong)", async () => {
@@ -2239,7 +2265,7 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     expect(screen.queryByTestId('needed-by-change')).toBeNull();
     // The date still prints (in the fallback zone), without Change.
     expect(screen.getByTestId('dates-needed-by')).toBeInTheDocument();
-    expect(reviseDialogProps).not.toHaveBeenCalled();
+    expect(handedViews()).toEqual([]);
   });
 
   it("an org with no zone set: core's default, as the server resolves it", async () => {
