@@ -35,7 +35,8 @@ export const RELEASES: Release[] = [
     // open the draft on the web and the phone, draft again and see it covered,
     // cancel the draft) are done, as F2-1's to F2-4's were. The follow-up that
     // publishes it sets the real publishedAt and re-reads these words against
-    // what shipped. Dated after F2-4's draft: drafts newest first.
+    // what shipped. Dated after every published release, F2-4's included, and
+    // it is now the only draft, at the top.
     //
     // Addressed as the page it links to is reached, then as drafting is
     // allowed. The release: the orders module and orders:approve (the Orders
@@ -76,10 +77,14 @@ export const RELEASES: Release[] = [
     id: 'order-needed-by-change-2026-10',
     revision: 1,
     // F2-4 (migration 0383). Held as a draft until the web order page's
-    // Change dialog, the phone's sheet (OTA) and the Demo Co production walk
-    // (SO-15 pending, SO-16 approved then cancelled, a Schedule test event)
-    // are done, as F2-1's to F2-3's were. The follow-up that publishes it sets
-    // the real publishedAt and re-reads these words against what shipped.
+    // Change dialog (web build a5666549db6b), the phone's sheet (OTA group
+    // e301d35b) and the Demo Co production walk (SO-15 pending, SO-16 approved
+    // then cancelled, a Schedule test event) were done, as F2-1's to F2-3's
+    // were. Published once all three were live and the walk passed; its words
+    // were re-read against what shipped: only the date sentence StockPilot
+    // wrote in an entry's description changes (one rewritten by hand is kept),
+    // only an entry that has not started is reminded again, and before this an
+    // event moved after its day-ahead reminder still got its one-hour one.
     //
     // Addressed per entry. Changing the date is for orders:approve, the
     // permission the service asserts (a manager holds it by role), where
@@ -87,11 +92,11 @@ export const RELEASES: Release[] = [
     // schedule:manage, the permission the Schedule edit page checks, where the
     // Schedule module is on; it links to the Schedule, which that permission
     // opens.
-    status: 'draft',
+    status: 'published',
     title: "Change an order's needed-by date; the schedule follows",
     summary:
-      "On the web and in the mobile app, an approver can now change an open order's needed-by date, with a reason, and the order's Schedule entry moves with it: the date in its description changes too, and its reminders are set again for the new time. On the web, moving an event on the Schedule page now sends its reminders again for the new time.",
-    publishedAt: '2026-10-08T17:00:00Z',
+      "On the web and in the mobile app, an approver can now change an open order's needed-by date, with a reason, and the order's Schedule entry moves with it: the date StockPilot wrote in its description changes too, and if the entry hasn't started, its reminders are set again for the new time. On the web, moving an event on the Schedule page now sends its reminders again for the new time.",
+    publishedAt: '2026-09-30T16:08:00Z',
     entries: [
       {
         id: 'order-needed-by-change',
@@ -99,7 +104,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "Change an order's needed-by date, and its Schedule entry follows",
         whatChanged:
-          "On an open order, Change beside its needed-by date lets you pick a new date and time and say why. The order's Schedule entry moves to the new time in the same step: the date in its description changes, anything your team added to the description stays, and if the entry hasn't started, its reminders are set again for the new time. Times are entered and shown in your organization's time zone, which the Change window names. The mobile app's order screen offers the same change.",
+          "On an open order, Change beside its needed-by date lets you pick a new date and time and say why. The order's Schedule entry moves to the new time in the same step: the date StockPilot wrote in its description changes, anything your team added to the description stays, and if the entry hasn't started, its reminders are set again for the new time. Times are entered and shown in your organization's time zone, which the Change window names. The mobile app's order screen offers the same change.",
         whyItMatters:
           "A needed-by date could be set only before approval. After approval, changing the date meant moving the Schedule entry by hand, which left the order's date and the entry's description behind.",
         howItAffectsYou:
@@ -116,7 +121,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           "On the web, when you change an event's start on the Schedule page, its day-ahead and one-hour reminders are set again for the new time.",
         whyItMatters:
-          'An event that had already been reminded for its old time was never reminded for its new one, so moving an event could leave the people on it with no reminder at all.',
+          'An event already reminded a day ahead of its old time got no day-ahead reminder for its new one, and an event moved after its one-hour reminder was not reminded again at all.',
         howItAffectsYou:
           'Editing an event without changing its start leaves its reminders as they were. Reminders go to the same people as before: the person assigned and your managers.',
         whatToDo: 'No action needed.',
@@ -129,20 +134,23 @@ export const RELEASES: Release[] = [
     id: 'book-order-totals-charters-dates-2026-10',
     revision: 1,
     // Book Order Totals by charter and exact dates (0382). Held as a draft
-    // until 0382, the web deploy, the phone update (OTA) and the Demo Co
-    // production walk are done, and until the phone update has reached phones
-    // (plan R8b): an older phone ignores a charter in a link and shows every
-    // charter. The follow-up that publishes it sets the real publishedAt and
-    // re-reads these words against what shipped.
+    // until 0382, the web deploy (and the calendar fix, #300, web
+    // 73d4f0cb1eaa), the phone update (OTA group 37e7ada7) and the Demo Co
+    // production checks on the web and the phone were done, and until the
+    // phone update had reached phones (plan R8b): an older phone ignores a
+    // charter in a link and shows every charter. Published after them; its
+    // words were re-read against what shipped: the calendar opens from Custom
+    // range or a date field, the phone's filter and calendar arrive with the
+    // update, and the web address and Back to Book Order Totals are the web's.
     //
     // Addressed as the report is reached: Orders on (the release), then Books
     // on with reports:read, the permission the linked page checks (both
     // entries).
-    status: 'draft',
+    status: 'published',
     title: 'Book Order Totals by charter and by exact dates',
     summary:
       'Book Order Totals on the web and in the mobile app can now show the books ordered for one charter, and orders placed between two dates you pick on a calendar. Today and This week are new date choices. The totals, the orders behind each book and the CSV and PDF files all follow the charter and dates you choose.',
-    publishedAt: '2026-10-06T17:00:00Z',
+    publishedAt: '2026-09-30T16:07:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
@@ -155,7 +163,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Answering how many copies of each book a charter asked for meant reading orders one by one.',
         howItAffectsYou:
-          'The filter uses the charter each order was placed for, its delivery site, not the charter that owns the stock. Pickup orders have no charter and are listed under No charter. You can choose only charters you have access to. In the mobile app, close the app completely and open it again to load the latest update, which opens links that choose a charter.',
+          'The filter uses the charter each order was placed for, its delivery site, not the charter that owns the stock. Pickup orders have no charter and are listed under No charter. You can choose only charters you have access to. In the mobile app, close the app completely and open it again to load the latest update, which brings the Charter filter and the calendar, and opens links that choose a charter.',
         whatToDo: 'No action needed. Open Reports, then Book Order Totals, and choose a charter.',
         link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
         audience: { anyPermission: ['reports:read'], modules: ['books'] },
@@ -166,11 +174,11 @@ export const RELEASES: Release[] = [
         area: 'Reports',
         title: 'Pick exact dates on a calendar, and see what you are looking at',
         whatChanged:
-          'Orders placed now opens a calendar for the first and last day, and adds Today and This week (starting Sunday) to the date choices. A Showing line above the totals names the charter and dates in view, and the warehouse when the report covers only one. Each filter you set appears as a chip you can remove (in the mobile app, the search keeps its own box), and Clear filters resets them all.',
+          'Custom range under Orders placed now opens a calendar for the first and last day, and Today and This week (starting Sunday) are new date choices. Showing, above the totals, names the charter and dates in view, and the warehouse when the report covers only one. Each filter you set appears as a chip you can remove (in the mobile app, the search keeps its own box), and Clear filters resets them all.',
         whyItMatters:
           'Exact ranges such as September 1 through September 30 are quicker to set, and the figures always say which charter and dates they cover.',
         howItAffectsYou:
-          "Dates are the day an order was placed, in your organization's time zone, and a range includes all of its last day. The page's web address keeps the charter, dates, search and page. When you open an order from View orders, Back to Book Order Totals on the order, or your browser's Back button, returns you to the same view.",
+          "Dates are the day an order was placed, in your organization's time zone, and a range includes all of its last day. On the web, the page's address keeps the charter, dates, search and page, and when you open an order from View orders, Back to Book Order Totals on the order, or your browser's Back button, returns you to the same view.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
         audience: { anyPermission: ['reports:read'], modules: ['books'] },
@@ -182,11 +190,13 @@ export const RELEASES: Release[] = [
     revision: 1,
     // Count differences, release 1 of 2 (no migration; owner decision
     // 2026-09-29 after EX-000059 was acknowledged in the belief that it would
-    // close). Held as a DRAFT until the web deploy, the phone update (OTA) and
-    // the walk are done; the follow-up that publishes it sets 'published' and
-    // the real publishedAt (this date only keeps it after every published
-    // release; the Book Order Totals draft above is dated a day later), and
-    // re-reads its words against what shipped.
+    // close). Held as a DRAFT until the web deploy, the phone update (OTA group
+    // 749c0489, shared with the Sports fields) and the Demo Co walk were done.
+    // Published after them; its words were re-read against what shipped: the
+    // old sheets ran off the top with the keyboard open (the note field itself
+    // was still partly in view), the sheets changed with the keyboard down too,
+    // Acknowledge is no longer the filled button on a count difference, and a
+    // phone update loads when the app is opened again, with no prompt.
     //
     // Words only, and where they sit: the row sentence, "What clears this" at
     // the top of the page, and the Acknowledge step's help. Nothing about
@@ -195,11 +205,11 @@ export const RELEASES: Release[] = [
     // differences come only from posted counts. Most of them cannot start a
     // recount (viewers, staff without cycle_counts:assign), so the entry says
     // a manager starts it, as the page itself does.
-    status: 'draft',
+    status: 'published',
     title: 'Count differences say what clears them',
     summary:
       'When a posted count changes the stock on record, its exception now says plainly what clears it, and the Acknowledge step says that acknowledging does not. In the mobile app, the note you type on an exception stays in view above the keyboard.',
-    publishedAt: '2026-10-05T17:00:00Z',
+    publishedAt: '2026-09-30T16:06:00Z',
     entries: [
       {
         id: 'count-difference-what-clears-it',
@@ -211,7 +221,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'The old wording read "on record 100" after the count had already changed the stock on record, and acknowledging looked like the way to close the exception.',
         howItAffectsYou:
-          'Nothing changes in when these exceptions are raised or cleared. Only the words, and where they sit on the page, are new.',
+          'Nothing changes in when these exceptions are raised or cleared. Only the words, where they sit on the page, and which button stands out are new: on a count difference, Acknowledge is no longer the filled button.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['items:read'], modules: ['cycle_counts'] },
@@ -225,12 +235,12 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: 'The note you type on an exception stays in view in the mobile app',
         whatChanged:
-          "In the mobile app, when you type a note to acknowledge an exception, add a note to it, or add or remove a photo, the note field now stays in view above the keyboard, at the largest text sizes too. Dragging the sheet's text, or tapping its title or its text, puts the keyboard away without sending anything. At the largest text sizes the photo sheets now fit above the keyboard, with their title and Close on screen.",
+          "In the mobile app, when you type a note to acknowledge an exception, add a note to it, or add or remove a photo, the note field (the reason, when you remove a photo) now stays in view above the keyboard, at the largest text sizes too. Dragging the sheet's text, or tapping its title or its text, puts the keyboard away without sending anything. At the largest text sizes the photo sheets now fit above the keyboard, with their title and Close on screen.",
         whyItMatters:
-          "At the largest text sizes the note field could scroll out of sight as the keyboard opened, so you typed into a field you could not see, the photo sheets could run off the top of the screen, and only the sheet's own buttons put the keyboard away.",
+          "At the largest text sizes, with the keyboard open, the note and photo sheets ran off the top of the screen, taking their title and Close with them, and only the sheet's own buttons put the keyboard away.",
         howItAffectsYou:
-          "Nothing changes until the keyboard opens. At the largest text sizes the note's text stops growing at the size of the app's other fields. What you type and save is unchanged.",
-        whatToDo: 'Update the app when it offers the new version.',
+          "At the largest text sizes the note's text stops growing at the size of the app's other fields. What you type and save is unchanged.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['stock:adjust'] },
       },
@@ -240,20 +250,24 @@ export const RELEASES: Release[] = [
     id: 'sports-required-fields-2026-10',
     revision: 1,
     // fix/sports-required-attributes (no migration). Held as a draft until the
-    // web deploy, the phone update (OTA) and the Demo Co production walk are
-    // done. The follow-up that publishes it sets the real publishedAt and
-    // re-reads these words against what shipped.
+    // web deploy, the phone update (OTA group 749c0489, shared with the count
+    // difference words) and the Demo Co production walk were done. Published
+    // after them; its words were re-read against what shipped: the phone names
+    // a missing detail in a message, not under the field, and a Sports
+    // category with a size scale (Jerseys and Shoes in both organizations) takes
+    // the per-size rows there; Create items on a PO import and New rental item
+    // are web screens; a phone update loads when the app is opened again.
     //
     // No release-wide audience: the New item and PO import entries are for
     // Sports organizations (sports module) and the people who can create items
     // or manage purchase orders, the permissions those pages and actions
     // check. The rental entry is for every organization with Rentals on: its
     // size buttons were offered for any category with sizes, Sports or not.
-    status: 'draft',
+    status: 'published',
     title: 'New item says which Sports details it needs, and New rental item always adds a rental item',
     summary:
-      "On the web and in the mobile app, New item now marks the details a Sports category needs, such as a size for Jerseys, and says what is missing under the field before anything is saved, instead of refusing the save afterwards. On a PO import, a size typed on a line now answers Missing attribute. New rental item adds one rental item at a time, without size buttons.",
-    publishedAt: '2026-10-01T17:00:00Z',
+      "On the web, New item now marks the details a Sports category needs, such as a size for Jerseys, and says what is missing under the field before anything is saved, instead of refusing the save afterwards. The mobile app checks the same details before it saves and names the missing one. On the web, a size typed on a PO import line now answers Missing attribute, and New rental item adds one rental item at a time, without size buttons.",
+    publishedAt: '2026-09-30T16:05:00Z',
     entries: [
       {
         id: 'sports-new-item-required-fields',
@@ -261,12 +275,13 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'New item says which Sports details are required',
         whatChanged:
-          'On the web, when you pick a Sports category such as Jerseys or Shoes, the fields it needs no longer say (optional), and the Size box shows an example that fits it, such as M for Jerseys and 10.5 for Shoes. Leaving a required field empty shows what to enter under it, for example Enter a size, or pick sizes above to add one item per size, and nothing is saved. In the mobile app, New item asks for the same details and names the missing one before it saves, for example Size required.',
+          'On the web, when you pick a Sports category such as Jerseys or Shoes, the fields it needs no longer say (optional), and the Size box shows an example that fits it, such as M for Jerseys and 10.5 for Shoes. Leaving a required field empty shows what to enter under it, for example Enter a size, or pick sizes above to add one item per size, and nothing is saved. In the mobile app, New item checks the same details before it saves and names the missing one in a message, for example Size required on a category with no sizes to pick from.',
         whyItMatters:
           'Every Sports field was labelled optional, so the first sign that a Jersey needs a size was a refused save that said only A size is required for this product.',
         howItAffectsYou:
-          "If a value is still refused, such as a size that is not on the category's size scale, the reason also shows under that field. Picking sizes with the size buttons still adds one item per size, with no single size needed. On Shoes whose size scale sets a size system, such as US Men's, a single item can now be saved without picking one: the scale's system is used. Other Sports categories, such as Balls, still need nothing. In the mobile app, saving before a category's sizes have loaded says Sizes are still loading.",
-        whatToDo: 'Update the app when it offers the new version.',
+          "On the web, if a value is still refused, such as a size that is not on the category's size scale, the reason also shows under that field. Picking sizes with the size buttons still adds one item per size, with no single size needed. On Shoes whose size scale sets a size system, such as US Men's, a single item can now be saved without picking one: the scale's system is used. Other Sports categories, such as Balls, still need nothing. In the mobile app, a category with sizes still asks for a quantity on at least one size, and saving before its sizes have loaded says Sizes are still loading.",
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['items:create'], modules: ['sports'] },
       },
       {
@@ -275,7 +290,7 @@ export const RELEASES: Release[] = [
         area: 'Purchase orders',
         title: 'A size typed on a PO import line answers Missing attribute',
         whatChanged:
-          'In Create items on a PO import, a line with no size shows Missing attribute when you choose a Sports category that needs one. Typing the size on the line, and for Shoes picking the size system, now clears it and lets Confirm create the item. The Size, Size system and Number boxes say (required) when the chosen category needs them, and the Size box shows an example that fits the category.',
+          'On the web, in Create items on a PO import, a line with no size shows Missing attribute when you choose a Sports category that needs one. Typing the size on the line, and for Shoes picking the size system, now clears it and lets Confirm go ahead. The Size, Size system and Number boxes say (required) when the chosen category needs them, and the Size box shows an example that fits the category.',
         whyItMatters:
           'The line stayed marked Missing attribute however its Size box was filled, so the item could not be created from the import.',
         howItAffectsYou:
@@ -289,7 +304,7 @@ export const RELEASES: Release[] = [
         area: 'Rentals',
         title: 'New rental item always adds a rental item',
         whatChanged:
-          "New rental item no longer shows size buttons for a category with sizes. Each rental item is added on its own, and a Sports category's size is typed in the Size box, which says when it is required. A Sports rental item is not joined to a product group.",
+          "On the web, New rental item no longer shows size buttons for a category with sizes. Each rental item is added on its own, and a Sports category's size is typed in the Size box, which says when it is required. A Sports rental item is not joined to a product group.",
         whyItMatters:
           'Picking sizes on New rental item added ordinary inventory items, not rental items, and then opened the inventory list.',
         howItAffectsYou:
