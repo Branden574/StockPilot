@@ -95,7 +95,38 @@ vi.mock('@/components/orders/delivery-location-share', () => ({ DeliveryLocation
 vi.mock('@/components/returns/create-return-dialog', () => ({ CreateReturnDialog: () => null }));
 vi.mock('@/components/orders/order-attachments-panel', () => ({ OrderAttachmentsPanel: () => null }));
 vi.mock('@/components/orders/order-realtime-refresh', () => ({ OrderRealtimeRefresh: () => null }));
-vi.mock('@/components/orders/order-timeline', () => ({ OrderTimeline: () => null }));
+// F2-4: the timeline prints a needed-by change's dates in the org's zone, so
+// the zone it is handed is recorded.
+const orderTimelineProps = vi.fn();
+vi.mock('@/components/orders/order-timeline', () => ({
+  OrderTimeline: (props: Record<string, unknown>) => {
+    orderTimelineProps(props);
+    return null;
+  },
+}));
+// F2-4: "Change" beside the needed-by opens this dialog. Recording stubs: the
+// dialog's own behaviour (and the button opening the page's one dialog) is
+// pinned in revise-needed-by-dialog.test.tsx; this file pins WHO gets it,
+// WHERE on the page the button sits, and WHAT the dialog is handed.
+const reviseDialogProps = vi.fn();
+vi.mock('@/components/orders/revise-needed-by-dialog', async () => {
+  const React = await import('react');
+  return {
+    ReviseNeededByDialog: (props: Record<string, unknown>) => {
+      reviseDialogProps(props);
+      return null;
+    },
+    NeededByChangeButton: (props: { orderId: string }) =>
+      React.createElement(
+        'button',
+        { type: 'button', 'data-testid': 'needed-by-change', 'data-order': props.orderId },
+        'Change',
+      ),
+  };
+});
+/** The views the page handed its dialog (null: no Change offered). */
+const handedViews = () =>
+  reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
 vi.mock('@/components/orders/shipping-panel', () => ({ ShippingPanel: () => null }));
 vi.mock('@/components/orders/status-badge', () => ({ OrderStatusBadge: () => null }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
@@ -165,7 +196,10 @@ vi.mock('@/server/services/context', async (importOriginal) => ({
   withContext: withContextMock,
 }));
 
-vi.mock('@/lib/auth/warehouse', () => ({
+// F2-4: the page asks the real rule whether the role alone gives every
+// warehouse (roleSeesEveryWarehouse); only the access read is recorded.
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  roleSeesEveryWarehouse: (await importOriginal<typeof import('@/lib/auth/warehouse')>()).roleSeesEveryWarehouse,
   getWarehouseAccess: (ctx: unknown) => getWarehouseAccessMock(ctx),
 }));
 
@@ -1981,6 +2015,274 @@ describe('orders/[id]: the way back to Book Order Totals (plan D17)', () => {
     expect(screen.getByRole('link', { name: '← Back to orders' })).toHaveAttribute(
       'href',
       '/dashboard/orders',
+    );
+  });
+});
+
+// ── F2-4: change the needed-by date ─────────────────────────────────────────
+//
+// WHO is offered "Change" (an approver with write access to the order's
+// warehouse, on an open order, once the org's zone is read), WHERE (on the
+// readiness strip where the full strip is shown; in the Dates card
+// otherwise, never both), WHAT the dialog is handed (the needed-by EXACTLY
+// as read, the org's zone as the facts carry it), and that it costs the page
+// no round trip of its own. Each assertion fails if the page stops passing
+// the entry (the call-site pins).
+
+describe("orders/[id]: change the needed-by date (F2-4)", () => {
+  // Exactly as PostgREST prints it, microseconds included: 2:00 PM on Thu Oct
+  // 1 in New York.
+  const NEEDED_BY = '2026-10-01T18:00:00.123456+00:00';
+  const LINE = {
+    id: 'LA',
+    order_request_id: ORDER_ID,
+    item_id: 'iA',
+    quantity_requested: 5,
+    quantity_fulfilled: 0,
+    quantity_picked: null,
+    returned_quantity: 0,
+    unit_cost_at_request: 0,
+    notes: null,
+    item: { id: 'iA', name: 'Item iA', sku: 'SKU-iA', quantity_on_hand: 10, charter_name: null, charter_code: null },
+  };
+  function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
+    ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
+  }
+  function orderAt(status: string, request: Record<string, unknown> = {}, lines: unknown[] = [LINE]) {
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status, needed_by: NEEDED_BY, ...request }), lines }),
+    );
+  }
+  function factsAt(status: string, timeZone: string | null = 'America/New_York') {
+    return readinessOk(
+      orderReadinessFacts(
+        ORDER_ID,
+        status,
+        [{ lineId: 'LA', itemId: 'iA', requested: 5 }],
+        [visibleItemFacts('iA', { here: { rack: 10 } })],
+        { timeZone, neededBy: NEEDED_BY },
+      ),
+    );
+  }
+  const lastChange = () => (reviseDialogProps.mock.calls.at(-1)![0] as { change: Record<string, unknown> }).change;
+  const inStrip = () => within(screen.getByTestId('readiness-strip')).queryByTestId('needed-by-change');
+  const inDates = () => within(screen.getByTestId('dates-needed-by')).queryByTestId('needed-by-change');
+
+  it('the dialog is mounted ONCE, at the top of the page, so a refresh that moves or removes Change never takes an open dialog with it', () => {
+    // Change moves from the strip to the Dates card when picking completes,
+    // and goes when the readiness read fails or the order closes; the dialog
+    // sits beside OrderRealtimeRefresh, which no status or read moves.
+    const src = readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8');
+    expect(src.split('<ReviseNeededByDialog').length - 1).toBe(1);
+    expect(src).toMatch(
+      /<OrderRealtimeRefresh orderId=\{id\} \/>\s*<ReviseNeededByDialog change=\{neededByChange\} trigger=\{false\} \/>/,
+    );
+    const strip = readFileSync(path.resolve(__dirname, '../../../../../components/orders/readiness-strip.tsx'), 'utf8');
+    expect(strip).not.toContain('<ReviseNeededByDialog');
+  });
+
+  it('a manager on an order still to pick: Change on the strip, beside the date in the org zone; handed the date exactly as read; no access read', async () => {
+    as('manager', ['orders:approve']);
+    orderAt('approved');
+    readinessResult.mockResolvedValue(factsAt('approved'));
+
+    await renderPage();
+
+    const row = within(screen.getByTestId('readiness-strip')).getByTestId('readiness-needed-by-change');
+    expect(row).toHaveTextContent('Needed by Thu, Oct 1, 2:00 PM');
+    expect(within(row).getByTestId('needed-by-change')).toBeInTheDocument();
+    // One way to it: not in the Dates card too.
+    expect(inDates()).toBeNull();
+    // Mounted once, by the page, opened by the button (never its own trigger).
+    expect(reviseDialogProps).toHaveBeenCalledTimes(1);
+    expect(reviseDialogProps.mock.calls[0]![0]).toMatchObject({ trigger: false });
+    expect(within(row).getByTestId('needed-by-change')).toHaveAttribute('data-order', ORDER_ID);
+    expect(lastChange()).toEqual({
+      orderId: ORDER_ID,
+      neededBy: NEEDED_BY,
+      status: 'approved',
+      timeZone: 'America/New_York',
+      rowLabel: 'Needed by Thu, Oct 1, 2:00 PM',
+    });
+    // The role decides a manager's warehouse access: nothing is read for it.
+    expect(getWarehouseAccessMock).not.toHaveBeenCalled();
+    expect(readinessResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pending order: the same, with its status (saving then waits for approval to reach the Schedule)', async () => {
+    as('admin', ['orders:approve']);
+    orderAt('pending_approval');
+    readinessResult.mockResolvedValue(factsAt('pending_approval'));
+    await renderPage();
+    expect(inStrip()).not.toBeNull();
+    expect(lastChange()).toMatchObject({ status: 'pending_approval', neededBy: NEEDED_BY });
+  });
+
+  it('an order with no needed-by: "No needed-by date" and Change, so an approver can set one', async () => {
+    as('manager', ['orders:approve']);
+    orderAt('approved', { needed_by: null });
+    readinessResult.mockResolvedValue(factsAt('approved'));
+    await renderPage();
+    expect(within(screen.getByTestId('readiness-strip')).getByTestId('readiness-needed-by-change')).toHaveTextContent(
+      'No needed-by date',
+    );
+    expect(lastChange()).toMatchObject({ neededBy: null, rowLabel: 'No needed-by date' });
+  });
+
+  it('past picking (no strip): Change in the Dates card, in the zone the readiness read in flight carries', async () => {
+    as('manager', ['orders:approve']);
+    orderAt('staged_for_delivery', { fulfillment_type: 'delivery' });
+    readinessResult.mockResolvedValue(factsAt('staged_for_delivery', 'America/Chicago'));
+
+    await renderPage();
+
+    expect(screen.queryByTestId('readiness-strip')).toBeNull();
+    expect(inDates()).not.toBeNull();
+    // 18:00Z is 1:00 PM in Chicago.
+    expect(screen.getByTestId('dates-needed-by')).toHaveTextContent('Thu, Oct 1, 1:00 PM');
+    expect(lastChange()).toMatchObject({ status: 'staged_for_delivery', timeZone: 'America/Chicago' });
+    expect(readinessResult).toHaveBeenCalledTimes(1);
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+  });
+
+  it('past picking with no needed-by: the Dates card row appears for the approver, with Change', async () => {
+    as('manager', ['orders:approve']);
+    orderAt('in_transit', { needed_by: null });
+    readinessResult.mockResolvedValue(factsAt('in_transit'));
+    await renderPage();
+    expect(screen.getByTestId('dates-needed-by')).toHaveTextContent('—');
+    expect(inDates()).not.toBeNull();
+    expect(lastChange()).toMatchObject({ neededBy: null, status: 'in_transit' });
+  });
+
+  it('an order with no lines (no strip): Change in the Dates card', async () => {
+    as('manager', ['orders:approve']);
+    orderAt('pending_approval', {}, []);
+    readinessResult.mockResolvedValue(factsAt('pending_approval'));
+    await renderPage();
+    expect(screen.queryByTestId('readiness-strip')).toBeNull();
+    expect(inDates()).not.toBeNull();
+  });
+
+  it("a staff approver: Change only with write access to the order's warehouse, their access read beside the order read", async () => {
+    as('staff', ['orders:approve', 'items:update']);
+    let releaseOrder!: () => void;
+    orderGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOrder = () =>
+            resolve(detailFixture({ request: requestFixture({ status: 'approved', needed_by: NEEDED_BY }), lines: [LINE] }));
+        }),
+    );
+    readinessResult.mockResolvedValue(factsAt('approved'));
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+
+    const page = OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) });
+    await vi.waitFor(() => expect(orderGet).toHaveBeenCalledWith(ORDER_ID));
+    // Asked for before the order read answered: never a level of its own.
+    await vi.waitFor(() => expect(getWarehouseAccessMock).toHaveBeenCalledTimes(1));
+    releaseOrder();
+    render(await page);
+
+    expect(inStrip()).not.toBeNull();
+    expect(getWarehouseAccessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a staff approver assigned to another warehouse, a read-only viewer with the grant, or a failed access read: no Change', async () => {
+    readinessResult.mockResolvedValue(factsAt('approved'));
+
+    as('staff', ['orders:approve']);
+    orderAt('approved');
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-2'] });
+    let r = await renderPage();
+    expect(screen.getByTestId('readiness-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    r.unmount();
+
+    // The all-warehouses flag is write access everywhere.
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: true, writableIds: [] });
+    r = await renderPage();
+    expect(inStrip()).not.toBeNull();
+    r.unmount();
+
+    as('viewer', ['orders:approve']);
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: true, writableIds: ['wh-1'] });
+    r = await renderPage();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    r.unmount();
+
+    as('staff', ['orders:approve']);
+    getWarehouseAccessMock.mockRejectedValue(new Error('gateway'));
+    await renderPage();
+    expect(screen.getByTestId('readiness-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+  });
+
+  it('never for anyone who may not approve: a picker, or the requester', async () => {
+    readinessResult.mockResolvedValue(factsAt('approved'));
+    as('staff', ['items:update']);
+    orderAt('approved');
+    let r = await renderPage();
+    expect(screen.getByTestId('readiness-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    r.unmount();
+
+    as('staff', ['orders:request']);
+    orderAt('approved', { requester_user_id: 'u1' });
+    r = await renderPage();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    r.unmount();
+    expect(handedViews()).toEqual([]);
+    // And no access read for them.
+    expect(getWarehouseAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('never on a closed order, where the save would refuse', async () => {
+    as('manager', ['orders:approve']);
+    for (const status of ['completed', 'cancelled', 'denied', 'pending_confirmation']) {
+      orderAt(status);
+      readinessResult.mockResolvedValue(factsAt(status));
+      const r = await renderPage();
+      expect(screen.queryByTestId('needed-by-change')).toBeNull();
+      r.unmount();
+    }
+    expect(handedViews()).toEqual([]);
+  });
+
+  it("a failed readiness read: no Change (the org's zone is not known, and a preview in a guessed zone would be wrong)", async () => {
+    as('manager', ['orders:approve']);
+    readinessResult.mockResolvedValue(READINESS_FAILED);
+
+    orderAt('approved');
+    let r = await renderPage();
+    // The strip says it could not check; Check again reads it again.
+    expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-failed', 'true');
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    r.unmount();
+
+    orderAt('staged_for_pickup');
+    r = await renderPage();
+    expect(screen.queryByTestId('needed-by-change')).toBeNull();
+    // The date still prints (in the fallback zone), without Change.
+    expect(screen.getByTestId('dates-needed-by')).toBeInTheDocument();
+    expect(handedViews()).toEqual([]);
+  });
+
+  it("an org with no zone set: core's default, as the server resolves it", async () => {
+    as('manager', ['orders:approve']);
+    orderAt('approved');
+    readinessResult.mockResolvedValue(factsAt('approved', null));
+    await renderPage();
+    expect(lastChange()).toMatchObject({ timeZone: 'America/Los_Angeles', rowLabel: 'Needed by Thu, Oct 1, 11:00 AM' });
+  });
+
+  it("the timeline is handed the org's zone, so a change's dates print in it", async () => {
+    as('manager', ['orders:approve']);
+    orderAt('approved');
+    readinessResult.mockResolvedValue(factsAt('approved'));
+    await renderPage();
+    expect(orderTimelineProps).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: ORDER_ID, timeZone: 'America/New_York' }),
     );
   });
 });

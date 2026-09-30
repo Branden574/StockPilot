@@ -14,6 +14,7 @@ import {
 import { putAwayTargets, type OrderReadinessAssessment } from '@stockpilot/core';
 
 import { ReadinessStrip } from './readiness-strip';
+import { ReviseNeededByDialog } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   readinessLinePutAwayHref,
@@ -49,8 +50,12 @@ vi.mock('next/link', () => ({
 
 // "Hold available stock" (F2-2) calls this server action.
 const holdOrderStock = vi.hoisted(() => vi.fn());
+// "Change" beside the needed-by (F2-4) opens the revise dialog, which saves
+// through this action.
+const reviseNeededBy = vi.hoisted(() => vi.fn());
 vi.mock('@/server/actions/order-requests', () => ({
   holdOrderStockAction: (input: unknown) => holdOrderStock(input),
+  reviseOrderNeededByAction: (input: unknown) => reviseNeededBy(input),
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -492,5 +497,54 @@ describe('ReadinessStrip — Put away (F2-3)', () => {
     render(<ReadinessStrip view={view()} />);
     expect(screen.queryByTestId('readiness-put-away')).toBeNull();
     expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+  });
+});
+
+describe('ReadinessStrip — Change the needed-by date (F2-4)', () => {
+  const view: ReadinessStripView = {
+    mode: 'full',
+    headline: '1 line short',
+    tone: 'danger',
+    icon: 'alert',
+    details: [],
+    neededBy: 'May miss its needed-by date',
+    checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+    detail: null,
+    failed: false,
+  };
+  const change = {
+    orderId: ORDER,
+    neededBy: '2026-10-01T21:00:00+00:00',
+    status: 'approved',
+    timeZone: TZ,
+    rowLabel: 'Needed by Thu, Oct 1, 2:00 PM',
+  };
+
+  it('nothing when the page passes nothing (not an approver with write access, or the zone unread)', () => {
+    render(<ReadinessStrip view={view} />);
+    expect(screen.queryByTestId('readiness-needed-by-change')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Change needed-by date' })).toBeNull();
+  });
+
+  it('the date as core words it and Change, under the needed-by signal; Change opens the page\'s dialog and saves nothing by itself', async () => {
+    const user = userEvent.setup();
+    // The page mounts the dialog once, outside the strip.
+    render(
+      <>
+        <ReviseNeededByDialog change={change} trigger={false} />
+        <ReadinessStrip view={view} neededByChange={change} />
+      </>,
+    );
+    const row = screen.getByTestId('readiness-needed-by-change');
+    expect(row).toHaveTextContent('Needed by Thu, Oct 1, 2:00 PM');
+    // Below the signal it answers.
+    expect(
+      screen.getByTestId('readiness-needed-by').compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change needed-by date' }));
+    expect(screen.getByRole('dialog', { name: 'Change needed-by date' })).toBeInTheDocument();
+    expect(screen.getByText('Times are in America/Los_Angeles.')).toBeInTheDocument();
+    expect(reviseNeededBy).not.toHaveBeenCalled();
+    expect(routerRefresh).not.toHaveBeenCalled();
   });
 });

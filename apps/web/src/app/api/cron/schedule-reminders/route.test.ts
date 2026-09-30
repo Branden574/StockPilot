@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
 
 /**
  * Schedule-reminders cron wiring — the es-template swap must NOT change
@@ -77,7 +77,10 @@ function eventIn(hoursFromNow: number, overrides: Record<string, unknown> = {}) 
   };
 }
 
-function stubFor(events: unknown[], extra: Record<string, { data: unknown; error: null }> = {}) {
+function stubFor(
+  events: unknown[],
+  extra: Record<string, QueryResult | ((call: MockCall) => QueryResult)> = {},
+) {
   return makeSupabaseStub({
     'schedule_events.select': { data: events, error: null },
     // The stamp-guard update: returning a row means we won the write.
@@ -292,6 +295,70 @@ describe('GET /api/cron/schedule-reminders', () => {
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     expect(await res.json()).toMatchObject({ ok: true, remindersSent: 0 });
     expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  // The run reads its events first and stamps each one later, after the
+  // emails for the events before it. A needed-by change (revise_order_needed_by)
+  // or a Schedule edit can move an event, or close it, in between; both clear
+  // the stamps so the NEW time is reminded. A stamp written from the stale
+  // read would send one reminder naming the old time and then suppress the
+  // day-ahead reminder for the new one (isDayAhead needs both stamps null).
+  describe('an event moved or closed after the run read it', () => {
+    const readStart = () => eventIn(3).starts_at;
+    function database(row: { starts_at: string; status: string }) {
+      // The update matches a row only when every filter still holds for it.
+      return (call: MockCall): QueryResult => {
+        const eqs = call.methods
+          .map((m, i) => [m, call.args[i]] as const)
+          .filter(([m]) => m === 'eq')
+          .map(([, a]) => a as [string, unknown]);
+        const holds = eqs.every(([col, v]) =>
+          col === 'starts_at' ? v === row.starts_at : col === 'status' ? v === row.status : true,
+        );
+        return holds ? { data: { id: 'ev-1' }, error: null } : { data: null, error: null };
+      };
+    }
+
+    it('is neither stamped nor reminded this run when it moved (the next run reads it fresh)', async () => {
+      const moved = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+      const stub = stubFor([eventIn(3)], {
+        'schedule_events.update': database({ starts_at: moved, status: 'scheduled' }),
+      });
+      adminHolder.client = stub.client;
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(await res.json()).toMatchObject({ ok: true, remindersSent: 0 });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(createNotificationMock).not.toHaveBeenCalled();
+      // The stamp is guarded on the start and the status it was read with.
+      expect(stub.chainArgs.get('schedule_events.update')).toEqual(
+        expect.arrayContaining([
+          ['starts_at', readStart()],
+          ['status', 'scheduled'],
+        ]),
+      );
+    });
+
+    it('is neither stamped nor reminded when it was cancelled or completed', async () => {
+      for (const status of ['cancelled', 'completed']) {
+        vi.clearAllMocks();
+        const stub = stubFor([eventIn(3)], {
+          'schedule_events.update': database({ starts_at: readStart(), status }),
+        });
+        adminHolder.client = stub.client;
+        const res = await GET(buildRequest('Bearer test-cron-secret'));
+        expect(await res.json(), status).toMatchObject({ ok: true, remindersSent: 0 });
+        expect(sendEmailMock, status).not.toHaveBeenCalled();
+      }
+    });
+
+    it('an event still as it was read is stamped and reminded as before', async () => {
+      const stub = stubFor([eventIn(3)], {
+        'schedule_events.update': database({ starts_at: readStart(), status: 'scheduled' }),
+      });
+      adminHolder.client = stub.client;
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+    });
   });
 
   it('sends neither push nor email to a disabled recipient, but still reaches an active one on the same event', async () => {

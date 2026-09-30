@@ -379,7 +379,7 @@ export class ScheduleService {
     const { data: beforeRow, error: beforeErr } = await this.ctx.supabase
       .from('schedule_events')
       .select(
-        'status, bundle_id, bundle_quantity, bundle_warehouse_id, warehouse_id',
+        'status, starts_at, bundle_id, bundle_quantity, bundle_warehouse_id, warehouse_id',
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
@@ -456,7 +456,27 @@ export class ScheduleService {
       updated_by: this.ctx.userId,
     };
     if (patch.title !== undefined) updates.title = patch.title;
-    if (patch.startsAt !== undefined) updates.starts_at = patch.startsAt;
+    if (patch.startsAt !== undefined) {
+      updates.starts_at = patch.startsAt;
+      // A MOVED start re-arms its reminders (F2 D23). The reminder cron sends
+      // one day-ahead and one one-hour reminder per event and remembers each
+      // in reminded_24h_at / reminded_1h_at; it sends a day-ahead reminder
+      // only while both are null. Moving the start and keeping the stamps
+      // meant an event reminded for its old time was never reminded for its
+      // new one. So the stamps are cleared in this same update, only when the
+      // instant actually changes (the form resends the start on every save,
+      // sometimes in another spelling of the same instant). The user client
+      // may write them: authenticated holds UPDATE on both columns, and
+      // schedule_events_update (creator or manager) is the same row gate the
+      // start itself passes. The order needed-by revision clears them the
+      // same way, inside revise_order_needed_by (0383).
+      const before = Date.parse(String(beforeRow.starts_at ?? ''));
+      const after = Date.parse(patch.startsAt);
+      if (!(Number.isFinite(before) && Number.isFinite(after) && before === after)) {
+        updates.reminded_24h_at = null;
+        updates.reminded_1h_at = null;
+      }
+    }
     if (patch.endsAt !== undefined) updates.ends_at = patch.endsAt ?? null;
     if (patch.allDay !== undefined) updates.all_day = patch.allDay;
     if (patch.locationText !== undefined)

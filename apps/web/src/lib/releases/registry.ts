@@ -28,6 +28,59 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-needed-by-change-2026-10',
+    revision: 1,
+    // F2-4 (migration 0383). Held as a draft until the web order page's
+    // Change dialog, the phone's sheet (OTA) and the Demo Co production walk
+    // (SO-15 pending, SO-16 approved then cancelled, a Schedule test event)
+    // are done, as F2-1's to F2-3's were. The follow-up that publishes it sets
+    // the real publishedAt and re-reads these words against what shipped.
+    //
+    // Addressed per entry. Changing the date is for orders:approve, the
+    // permission the service asserts (a manager holds it by role), where
+    // Orders is on; it links to the orders list. The Schedule fix is for
+    // schedule:manage, the permission the Schedule edit page checks, where the
+    // Schedule module is on; it links to the Schedule, which that permission
+    // opens.
+    status: 'draft',
+    title: "Change an order's needed-by date; the schedule follows",
+    summary:
+      "On the web and in the mobile app, an approver can now change an open order's needed-by date, with a reason, and the order's Schedule entry moves with it: the date in its description changes too, and its reminders are set again for the new time. On the web, moving an event on the Schedule page now sends its reminders again for the new time.",
+    publishedAt: '2026-10-08T17:00:00Z',
+    entries: [
+      {
+        id: 'order-needed-by-change',
+        category: 'new',
+        area: 'Orders',
+        title: "Change an order's needed-by date, and its Schedule entry follows",
+        whatChanged:
+          "On an open order, Change beside its needed-by date lets you pick a new date and time and say why. The order's Schedule entry moves to the new time in the same step: the date in its description changes, anything your team added to the description stays, and if the entry hasn't started, its reminders are set again for the new time. Times are entered and shown in your organization's time zone, which the Change window names. The mobile app's order screen offers the same change.",
+        whyItMatters:
+          "A needed-by date could be set only before approval. After approval, changing the date meant moving the Schedule entry by hand, which left the order's date and the entry's description behind.",
+        howItAffectsYou:
+          "Changing the date needs permission to approve orders and access to the order's warehouse, and a reason, which the order's history records. If someone saved a different date while you were editing, nothing is changed and the order shows the date they saved. A completed or cancelled Schedule entry stays as it is. An approved order that had no needed-by date gets its Schedule entry when you set one. The change itself sends no email: the requester's delivery request email still opens only when they choose it, with the new date in it. Schedule reminders for the new time go out as usual.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'schedule-move-rearms-reminders',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'Moving an event on the Schedule sends its reminders again for the new time',
+        whatChanged:
+          "On the web, when you change an event's start on the Schedule page, its day-ahead and one-hour reminders are set again for the new time.",
+        whyItMatters:
+          'An event that had already been reminded for its old time was never reminded for its new one, so moving an event could leave the people on it with no reminder at all.',
+        howItAffectsYou:
+          'Editing an event without changing its start leaves its reminders as they were. Reminders go to the same people as before: the person assigned and your managers.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open Schedule' },
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+    ],
+  },
+  {
     id: 'book-order-totals-charters-dates-2026-10',
     revision: 1,
     // Book Order Totals by charter and exact dates (0382). Held as a draft

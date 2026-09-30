@@ -3,7 +3,7 @@ import 'server-only';
 import {
   can,
   formatOrderNumber,
-  formatOrgDateTime,
+  formatWallClock,
   HOLD_BUSY_COPY,
   HOLD_FAILED_COPY,
   HOLD_MODULE_OFF_COPY,
@@ -14,18 +14,46 @@ import {
   holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isManagerOrAbove,
+  isNeededByWithinReach,
   lineOwedUnits,
+  NEEDED_BY_BUSY_COPY,
+  NEEDED_BY_CLOSED_COPY,
+  NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_MODULE_OFF_COPY,
+  NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
+  NEEDED_BY_NOT_APPROVER_COPY,
+  NEEDED_BY_NOT_FOUND_COPY,
+  NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
+  NEEDED_BY_REASON_REQUIRED_COPY,
+  NEEDED_BY_RELOAD_COPY,
+  NEEDED_BY_SIGN_IN_COPY,
+  NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
+  neededByChangedCopy,
+  neededByInvalidTimeCopy,
+  normalizeNeededByReason,
+  orderBelongsOnSchedule,
+  orderScheduleEventDetails,
   parseHoldOrderStockResult,
+  parseNeededByRevisionResult,
+  parseWallClock,
   partialActionMovedOnCopy,
   resolveOrgTimezone,
   resolveRequesterIdentity,
   shouldTopUpHolds,
+  wallClockString,
+  wallClockToInstant,
+  withOrderScheduleSentence,
   type HoldFailureReason,
   type HoldOrderStockResult,
   type HoldOutcome,
+  type NeededByFailureReason,
+  type NeededByRevisionOutcome,
+  type NeededByRevisionResult,
+  type NeededBySchedule,
 } from '@stockpilot/core';
 
-import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
@@ -514,6 +542,156 @@ function holdFailureOutcome(e: unknown): Extract<HoldOutcome, { ok: false }> {
   }
   return { ok: false, reason: 'failed', message: HOLD_FAILED_COPY };
 }
+
+/** What reviseNeededBy takes (F2-4). Exactly one of neededByLocal and neededByAt. */
+export interface ReviseNeededByInput {
+  id: string;
+  /** The new needed-by as a WALL CLOCK in the ORGANIZATION's zone,
+   *  "YYYY-MM-DDTHH:mm" (the web datetime-local, the phone sheet). Converted
+   *  here, never in the device's or the server's zone. */
+  neededByLocal?: string;
+  /** Or an absolute instant (ISO 8601 with an offset): only the AI
+   *  suggestion's Apply, which already read the note in the org zone. */
+  neededByAt?: string;
+  /** The needed-by the caller saw (an ISO instant), or null when the order had
+   *  none. A different current value is refused (needed_by_changed). */
+  expectedNeededBy: string | null;
+  /** Why the date changes: 1 to 500 characters after trimming. */
+  reason: string;
+  /** The AI suggestion's Apply (setOrderNeededByAction): refuse unless the
+   *  order is still pending approval, as that action always has. */
+  onlyWhenPending?: boolean;
+}
+
+/** The order columns a revision reads: the gates, the Schedule text, and a
+ *  missing event (autoScheduleFromOrder). */
+const NEEDED_BY_ORDER_COLUMNS =
+  'id, organization_id, warehouse_id, status, needed_by, order_number, fulfillment_type, requester_name, assigned_delivery_user_id';
+
+function neededByRefusal(
+  code: ServiceError['code'],
+  message: string,
+  reason: NeededByFailureReason,
+  extra: Record<string, unknown> = {},
+): ServiceError {
+  return new ServiceError(code, message, { reason, ...extra });
+}
+
+/** Whether a stored instant reads, in the org's zone, as exactly the minute
+ *  wall clock a screen sent ("YYYY-MM-DDTHH:mm"). */
+function sameWallClock(stored: string, local: string, timeZone: string): boolean {
+  const at = Date.parse(stored);
+  const wall = parseWallClock(local);
+  if (!Number.isFinite(at) || !wall) return false;
+  try {
+    return formatWallClock(at, timeZone) === wallClockString(wall);
+  } catch {
+    return false;
+  }
+}
+
+/** An instant as ISO 8601 in UTC, or null when it is empty or unreadable. */
+function isoOrNull(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+/**
+ * revise_order_needed_by's refusals (0383) as ServiceErrors in core's words,
+ * with `details.reason` a NeededByFailureReason both platforms switch on.
+ * Matched on the function's own messages (every `raise` in 0383, pattern #28)
+ * and, for its 42501s, the code and hint; anything else (a revoked grant, a
+ * network fault) is internal_error, whose public message is generic.
+ * needed_by_changed carries the order's current value (`details.current`, the
+ * function's own ISO text, microseconds included, or null) so a screen can
+ * load it, say so, and send it back as the next expected value exactly. lock_timeout (55P03, 5 s on
+ * the order or its event) and the role's statement_timeout (57014) are "busy,
+ * try again" (`retryable: true`); the function never raises 40001/40P01.
+ */
+function neededByRevisionError(
+  error: { message?: string | null; code?: string | null; hint?: string | null; details?: string | null },
+  timeZone: string,
+): ServiceError {
+  const msg = error.message ?? '';
+  if (msg === 'order_request_not_found') {
+    return neededByRefusal('not_found', NEEDED_BY_NOT_FOUND_COPY, 'not_found');
+  }
+  if (msg === 'module_disabled') {
+    return neededByRefusal('module_disabled', NEEDED_BY_MODULE_OFF_COPY, 'module_disabled');
+  }
+  if (error.code === '42501' && msg === 'forbidden') {
+    return neededByRefusal(
+      'forbidden',
+      error.hint === 'warehouse_write' ? NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY : NEEDED_BY_NOT_APPROVER_COPY,
+      'forbidden',
+    );
+  }
+  if (error.code === '42501' && msg === 'unauthenticated') {
+    return neededByRefusal('unauthenticated', NEEDED_BY_SIGN_IN_COPY, 'forbidden');
+  }
+  if (msg === 'order_closed') {
+    return neededByRefusal('conflict', NEEDED_BY_CLOSED_COPY, 'order_closed', {
+      status: error.details || null,
+    });
+  }
+  if (msg === 'needed_by_in_past') {
+    return neededByRefusal('validation_error', NEEDED_BY_IN_PAST_COPY, 'needed_by_in_past');
+  }
+  if (msg === 'needed_by_out_of_range') {
+    return neededByRefusal('validation_error', NEEDED_BY_OUT_OF_RANGE_COPY, 'needed_by_out_of_range');
+  }
+  if (msg === 'needed_by_required') {
+    return neededByRefusal('validation_error', neededByInvalidTimeCopy(timeZone), 'invalid_time');
+  }
+  if (msg === 'reason_required') {
+    return neededByRefusal('validation_error', NEEDED_BY_REASON_REQUIRED_COPY, 'reason_required');
+  }
+  if (msg === 'needed_by_changed') {
+    // The function's text as it is (to_jsonb of the stored timestamptz): a JS
+    // Date would drop the microseconds some rows carry, and the stale check
+    // compares the next expected value exactly.
+    const detail = (error.details ?? '').trim();
+    const current = isoOrNull(detail) === null ? null : detail;
+    return neededByRefusal('conflict', neededByChangedCopy(current, timeZone), 'needed_by_changed', {
+      current,
+    });
+  }
+  if (error.code === '55P03' || error.code === '57014') {
+    return neededByRefusal('conflict', NEEDED_BY_BUSY_COPY, 'busy', { retryable: true });
+  }
+  return neededByRefusal(
+    'internal_error',
+    `revise_order_needed_by failed: ${error.code ?? 'no code'}: ${msg || 'no message'}`,
+    'failed',
+  );
+}
+
+/** A Schedule entry that is still open (the ones that move with the order). */
+const OPEN_EVENT_STATUSES = ['scheduled', 'in_progress'];
+
+/** What a closed order's entry becomes (syncOrderScheduleEvent). */
+const CLOSED_ORDER_EVENT_OUTCOME: Readonly<Record<string, 'completed' | 'cancelled'>> = {
+  completed: 'completed',
+  cancelled: 'cancelled',
+  denied: 'cancelled',
+};
+
+/** Where an order's Schedule entry stands against the order as it is now
+ *  (bringOrderEventInStep). `eventStatus` is the entry's status after it. */
+type OrderEventStep =
+  | { state: 'in_step' | 'moved' | 'closed'; eventStatus: string }
+  | { state: 'drift' | 'unknown'; eventStatus: string | null };
+
+/** What autoScheduleFromOrder did: 'created' (in step with the order),
+ *  'closed' (created, then closed because the order closed meanwhile),
+ *  'unsettled' (created, but it could not be brought in step with the order
+ *  or that could not be confirmed; reported), 'exists' (23505: the order
+ *  already has its entry), 'skipped' (no needed-by), 'failed' (reported). */
+type OrderEventWrite = {
+  made: 'created' | 'closed' | 'unsettled' | 'exists' | 'skipped' | 'failed';
+  eventStatus: string | null;
+};
 
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -2505,11 +2683,38 @@ export class OrderRequestsService {
    * artifact of approval, not a user calendar write. created_by = the
    * approving user (column is NOT NULL and RLS update rights key off it).
    * The partial unique index makes re-approval after resume idempotent
-   * (23505 → ignore). Fire-and-forget: never blocks or fails an approval.
+   * (23505 → ignore). Fire-and-forget from approval: never blocks or fails
+   * an approval.
+   *
+   * THE ONE WRITER OF NEW ORDER EVENTS. A needed-by revision (reviseNeededBy)
+   * of an order that is past approval but has no event (it had no needed-by
+   * when it was approved) creates it here too, awaiting the outcome, and
+   * passes the org zone it already read (`knownTimeZone`) so no second read
+   * is made. The description comes from core orderScheduleEventDetails, the
+   * text the revision writes when it moves an event, so the date in the text
+   * always matches the event's start.
+   *
+   * The insert runs after the approval's (or the revision's) transaction,
+   * outside the order's lock, with the needed-by read then. So once it lands,
+   * the entry is brought in step with the order as it is NOW
+   * (bringOrderEventInStep): an order cancelled, denied or completed meanwhile
+   * has its new entry closed (its own close found none, and the reminder cron
+   * reminds any scheduled entry, whatever its order), and a needed-by changed
+   * meanwhile moves it. Deferred after an approval, so it costs the approver
+   * nothing.
+   *
+   * Outcome (OrderEventWrite): 'created'; 'closed' (created, then closed
+   * with its order); 'unsettled' (created, but not brought in step, or not
+   * confirmed; reported); 'exists' (23505: the order already has its event,
+   * made by a concurrent approval or revision); 'skipped' (no needed-by);
+   * 'failed' (reported).
    */
-  private async autoScheduleFromOrder(row: OrderRequestRow): Promise<void> {
+  private async autoScheduleFromOrder(
+    row: OrderRequestRow,
+    knownTimeZone?: string,
+  ): Promise<OrderEventWrite> {
     try {
-      if (!row.needed_by) return;
+      if (!row.needed_by) return { made: 'skipped', eventStatus: null };
       const admin = createAdminClient();
       const so = formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase();
       const requester = (row.requester_name as string | null) ?? null;
@@ -2524,24 +2729,25 @@ export class OrderRequestsService {
       // may not be able to read the organizations row; a missing/failed read
       // degrades through resolveOrgTimezone's default rather than throwing out
       // of this best-effort tail.
-      const { data: orgRow } = await admin
-        .from('organizations')
-        .select('timezone')
-        .eq('id', row.organization_id)
-        .maybeSingle();
-      const tz = resolveOrgTimezone((orgRow as { timezone?: string | null } | null)?.timezone);
-      const neededByDisplay = formatOrgDateTime(
-        row.needed_by,
-        { dateStyle: 'medium', timeStyle: 'short' },
-        tz,
-      );
+      let tz = knownTimeZone;
+      if (!tz) {
+        const { data: orgRow } = await admin
+          .from('organizations')
+          .select('timezone')
+          .eq('id', row.organization_id)
+          .maybeSingle();
+        tz = resolveOrgTimezone((orgRow as { timezone?: string | null } | null)?.timezone);
+      }
       const { error } = await admin.from('schedule_events').insert({
         organization_id: row.organization_id,
         title: `${so} ${row.fulfillment_type === 'delivery' ? 'delivery' : 'pickup'}${requester ? ` — ${requester}` : ''}`,
         starts_at: row.needed_by,
         warehouse_id: row.warehouse_id,
         requester_name: requester,
-        details: `Auto-created from order ${so}. Needed by ${neededByDisplay}.`,
+        details: orderScheduleEventDetails(
+          { id: row.id, orderNumber: row.order_number, neededBy: row.needed_by },
+          tz,
+        ),
         status: 'scheduled',
         order_request_id: row.id,
         assigned_user_id:
@@ -2549,19 +2755,389 @@ export class OrderRequestsService {
             .assigned_delivery_user_id ?? null,
         created_by: this.ctx.userId,
       });
-      if (error && error.code !== '23505') {
-        void reportSrvError(new Error(error.message), {
-          tag: 'orders.auto-schedule',
-          organizationId: this.ctx.organizationId,
-          extra: { orderId: row.id },
-        });
+      if (!error) {
+        const step = await this.bringOrderEventInStep(row.id, tz);
+        if (step.state === 'closed') return { made: 'closed', eventStatus: step.eventStatus };
+        if (step.state === 'drift' || step.state === 'unknown') {
+          return { made: 'unsettled', eventStatus: step.eventStatus };
+        }
+        return { made: 'created', eventStatus: step.eventStatus };
       }
+      if (error.code === '23505') return { made: 'exists', eventStatus: null };
+      void reportSrvError(new Error(error.message), {
+        tag: 'orders.auto-schedule',
+        organizationId: this.ctx.organizationId,
+        extra: { orderId: row.id },
+      });
+      return { made: 'failed', eventStatus: null };
     } catch (e) {
       void reportSrvError(e, {
         tag: 'orders.auto-schedule',
         organizationId: this.ctx.organizationId,
       });
+      return { made: 'failed', eventStatus: null };
     }
+  }
+
+  /**
+   * Brings an order's Schedule entry in step with the order as it is NOW,
+   * after the entry was written outside the order's lock (autoScheduleFromOrder's
+   * insert, or a concurrent one a revision met as 23505). The order row is the
+   * source of truth:
+   *   - the order closed (completed, cancelled, denied): the entry is closed
+   *     the way syncOrderScheduleEvent closes it ('closed');
+   *   - the entry is completed or cancelled already: left as it is ('closed');
+   *   - the entry starts at the order's needed-by: nothing to do ('in_step');
+   *   - otherwise it moves to the order's needed-by, as revise_order_needed_by
+   *     moves one (its end shifted, its date sentence replaced and what a
+   *     person wrote around it kept: core withOrderScheduleSentence, 0383's
+   *     rule; both reminder stamps cleared), guarded on the start and status
+   *     it was read at, so a newer write wins ('moved'); when the guard finds
+   *     it changed, it is read again ('in_step' when it now matches, else
+   *     'drift', reported).
+   * Admin client: the entry is a system artifact of the order (the approval's
+   * and the revision's callers were gated). Never throws; a failed read is
+   * 'unknown', reported.
+   */
+  private async bringOrderEventInStep(orderId: string, timeZone: string): Promise<OrderEventStep> {
+    const orgId = this.ctx.organizationId;
+    const report = (state: string, extra: Record<string, unknown>) =>
+      void reportSrvError(new Error(`order event not in step with its order (${state})`), {
+        tag: 'orders.needed_by_event_drift',
+        organizationId: orgId,
+        extra: { orderId, state, ...extra },
+      });
+    try {
+      const admin = createAdminClient();
+      const [orderRes, eventRes] = await Promise.all([
+        admin
+          .from('order_requests')
+          .select('id, status, needed_by, order_number')
+          .eq('organization_id', orgId)
+          .eq('id', orderId)
+          .maybeSingle(),
+        admin
+          .from('schedule_events')
+          .select('id, status, starts_at, ends_at, details')
+          .eq('organization_id', orgId)
+          .eq('order_request_id', orderId)
+          .maybeSingle(),
+      ]);
+      const order = orderRes.data as
+        | { id: string; status: string; needed_by: string | null; order_number: number | null }
+        | null;
+      const ev = eventRes.data as
+        | { id: string; status: string; starts_at: string; ends_at: string | null; details: string | null }
+        | null;
+      if (orderRes.error || eventRes.error || !order || !ev) {
+        report('unknown', { orderError: orderRes.error?.message ?? null, eventError: eventRes.error?.message ?? null });
+        return { state: 'unknown', eventStatus: ev?.status ?? null };
+      }
+      const closeAs = CLOSED_ORDER_EVENT_OUTCOME[order.status];
+      if (closeAs) {
+        if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
+        await syncOrderScheduleEvent(orderId, closeAs, orgId);
+        // Confirmed, never assumed (pattern #2): the sync swallows its own
+        // errors, and an entry left scheduled on a closed order is reminded.
+        const { data: after } = await admin
+          .from('schedule_events')
+          .select('status')
+          .eq('organization_id', orgId)
+          .eq('order_request_id', orderId)
+          .maybeSingle();
+        const closedNow = (after as { status?: string } | null)?.status;
+        if (closedNow && !OPEN_EVENT_STATUSES.includes(closedNow)) return { state: 'closed', eventStatus: closedNow };
+        report('unknown', { orderStatus: order.status, eventStatus: closedNow ?? null, closing: closeAs });
+        return { state: 'unknown', eventStatus: closedNow ?? null };
+      }
+      if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
+      if (!order.needed_by || Date.parse(order.needed_by) === Date.parse(ev.starts_at)) {
+        return { state: 'in_step', eventStatus: ev.status };
+      }
+      const endsAt =
+        ev.ends_at === null
+          ? null
+          : new Date(Date.parse(order.needed_by) + (Date.parse(ev.ends_at) - Date.parse(ev.starts_at))).toISOString();
+      const { data: moved, error: moveErr } = await admin
+        .from('schedule_events')
+        .update({
+          starts_at: order.needed_by,
+          ends_at: endsAt,
+          details: withOrderScheduleSentence(
+            ev.details,
+            orderScheduleEventDetails({ id: order.id, orderNumber: order.order_number, neededBy: order.needed_by }, timeZone),
+          ),
+          reminded_24h_at: null,
+          reminded_1h_at: null,
+          updated_by: this.ctx.userId,
+        })
+        .eq('id', ev.id)
+        .eq('starts_at', ev.starts_at)
+        .in('status', OPEN_EVENT_STATUSES)
+        .select('id')
+        .maybeSingle();
+      if (!moveErr && moved) return { state: 'moved', eventStatus: ev.status };
+      const { data: again } = await admin
+        .from('schedule_events')
+        .select('status, starts_at')
+        .eq('id', ev.id)
+        .maybeSingle();
+      const now = again as { status: string; starts_at: string } | null;
+      if (now && Date.parse(now.starts_at) === Date.parse(order.needed_by)) {
+        return { state: 'in_step', eventStatus: now.status };
+      }
+      report('drift', { neededBy: order.needed_by, eventStartsAt: now?.starts_at ?? ev.starts_at, moveError: moveErr?.message ?? null });
+      return { state: 'drift', eventStatus: now?.status ?? ev.status };
+    } catch (e) {
+      report('unknown', { error: e instanceof Error ? e.message : String(e) });
+      return { state: 'unknown', eventStatus: null };
+    }
+  }
+
+  /**
+   * A revision's order is past approval and has no Schedule entry (it had no
+   * needed-by when it was approved, or an earlier insert failed): the one
+   * writer of new order events adds it at the order's needed-by, and what
+   * happened is said as the screens say it. Met as 23505 (an approval's
+   * deferred insert or another revision won), the entry found is brought in
+   * step with the order.
+   */
+  private async addMissingOrderEvent(
+    row: OrderRequestRow,
+    timeZone: string,
+  ): Promise<{ schedule: NeededBySchedule; eventStatus: string | null }> {
+    const write = await this.autoScheduleFromOrder(row, timeZone);
+    switch (write.made) {
+      case 'created':
+        return { schedule: 'created', eventStatus: write.eventStatus };
+      case 'closed':
+        return { schedule: 'left_closed', eventStatus: write.eventStatus };
+      case 'unsettled':
+        return { schedule: 'not_moved', eventStatus: write.eventStatus };
+      case 'exists': {
+        const step = await this.bringOrderEventInStep(row.id, timeZone);
+        if (step.state === 'in_step') return { schedule: 'created', eventStatus: step.eventStatus };
+        if (step.state === 'moved') return { schedule: 'moved', eventStatus: step.eventStatus };
+        if (step.state === 'closed') return { schedule: 'left_closed', eventStatus: step.eventStatus };
+        return { schedule: 'not_moved', eventStatus: step.eventStatus };
+      }
+      default:
+        return { schedule: 'not_added', eventStatus: null };
+    }
+  }
+
+  /**
+   * Change an open order's needed-by, with a reason (F2-4, plan D21). The
+   * order's Schedule entry moves with it in the same transaction
+   * (revise_order_needed_by, 0383): its start, its description and its
+   * reminders, armed again for the new time. Nothing is emailed or notified:
+   * the requester's delivery-request draft is unchanged and opens only on
+   * their tap (Outlook rule 1).
+   *
+   * Gates, as the function's own: the orders module, orders:approve (the
+   * approve gate, MFA step-up included; a manager passes by role), write
+   * access to the order's warehouse. The function repeats every one in its
+   * body, and adds the closed statuses, the arguments and the stale-version
+   * check under the order's lock.
+   *
+   * The wall clock is converted in the ORGANIZATION's zone (strictly: a time
+   * that does not exist there, the spring-forward hour or Feb 30, is refused,
+   * never shifted). The zone is read here, and a failed read refuses rather
+   * than guess one: a wrong zone writes a wrong instant.
+   *
+   * One serial chain: the order, the org's zone and the caller's warehouse
+   * access are read in parallel, then the function. An order past approval
+   * that has no Schedule entry (it had no needed-by when approved) gets one
+   * from autoScheduleFromOrder, the one writer of new order events, awaited.
+   * Audited (order_request.needed_by_revised: from, to, reason) and broadcast
+   * only when the date changed; an equal value changed nothing.
+   */
+  async reviseNeededBy(input: ReviseNeededByInput): Promise<NeededByRevisionOutcome> {
+    try {
+      return await this.reviseNeededByIn(input);
+    } catch (e) {
+      // A refusal is the caller's answer. A fault is reported with its cause
+      // (the action and the route show only core's generic sentence).
+      if (e instanceof ServiceError && e.code === 'internal_error') {
+        void reportSrvError(e.internalDetail ? new Error(e.internalDetail) : e, {
+          tag: 'orders.needed_by_failed',
+          organizationId: this.ctx.organizationId,
+          extra: { orderId: input.id, detail: e.internalDetail ?? null },
+        });
+      }
+      throw e;
+    }
+  }
+
+  private async reviseNeededByIn(input: ReviseNeededByInput): Promise<NeededByRevisionOutcome> {
+    if (!isModuleEnabled(this.ctx, 'orders')) {
+      throw neededByRefusal('module_disabled', NEEDED_BY_MODULE_OFF_COPY, 'module_disabled');
+    }
+    // Refused in core's words, not the generic "Missing permission". The MFA
+    // step-up is left to assertPermission, which words it for the step-up
+    // prompt; it still runs below, so this only re-words a refusal.
+    if (!(this.ctx.mfaRequired && !this.ctx.mfaSatisfied) && !can(this.ctx, 'orders:approve')) {
+      throw neededByRefusal('forbidden', NEEDED_BY_NOT_APPROVER_COPY, 'forbidden');
+    }
+    assertPermission(this.ctx, 'orders:approve');
+
+    const reason = normalizeNeededByReason(input.reason);
+    if (!reason) {
+      throw neededByRefusal('validation_error', NEEDED_BY_REASON_REQUIRED_COPY, 'reason_required');
+    }
+    // The value the caller saw goes to the function as it was read (a
+    // PostgREST timestamp can carry microseconds a JS Date would drop, and
+    // the stale check compares it exactly); it only has to be an instant.
+    const expected = input.expectedNeededBy;
+    if (expected !== null && isoOrNull(expected) === null) {
+      throw neededByRefusal('validation_error', NEEDED_BY_RELOAD_COPY, 'failed');
+    }
+    const hasLocal = typeof input.neededByLocal === 'string';
+    const hasAt = typeof input.neededByAt === 'string';
+    if (hasLocal === hasAt) {
+      // Both entry points validate this first; reaching it is a caller's bug.
+      throw new ServiceError('internal_error', 'reviseNeededBy takes exactly one of neededByLocal and neededByAt');
+    }
+
+    const orgId = this.ctx.organizationId;
+    // The caller's warehouse access starts with the reads (it may read the
+    // caller's assignments); abandoned unawaited when the order is missing,
+    // so its rejection is marked observed.
+    const accessRead = getWarehouseAccess(this.ctx);
+    accessRead.catch(() => {});
+    const [orderRes, orgRes] = await Promise.all([
+      this.ctx.supabase
+        .from('order_requests')
+        .select(NEEDED_BY_ORDER_COLUMNS)
+        .eq('organization_id', orgId)
+        .eq('id', input.id)
+        .maybeSingle(),
+      this.ctx.supabase.from('organizations').select('timezone').eq('id', orgId).maybeSingle(),
+    ]);
+    if (orderRes.error) throw new ServiceError('internal_error', orderRes.error.message);
+    const order = orderRes.data as
+      | (Pick<
+          OrderRequestRow,
+          | 'id'
+          | 'organization_id'
+          | 'warehouse_id'
+          | 'status'
+          | 'needed_by'
+          | 'order_number'
+          | 'fulfillment_type'
+          | 'requester_name'
+          | 'assigned_delivery_user_id'
+        >)
+      | null;
+    if (!order) throw neededByRefusal('not_found', NEEDED_BY_NOT_FOUND_COPY, 'not_found');
+    try {
+      await assertWarehouseAccess(order.warehouse_id, 'write', this.ctx, accessRead);
+    } catch (e) {
+      if (isWarehouseForbidden(e)) {
+        throw neededByRefusal('forbidden', NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY, 'forbidden');
+      }
+      throw e;
+    }
+    // A member can always read their own org's row; a failed or empty read is
+    // a fault, and converting in a guessed zone would write a wrong instant.
+    if (orgRes.error || !orgRes.data) {
+      if (orgRes.error) {
+        void reportSrvError(new Error(orgRes.error.message), {
+          tag: 'orders.needed_by_timezone',
+          organizationId: orgId,
+          extra: { orderId: input.id },
+        });
+      }
+      throw neededByRefusal('conflict', NEEDED_BY_TIMEZONE_UNREADABLE_COPY, 'timezone_unreadable', {
+        retryable: true,
+      });
+    }
+    const timeZone = resolveOrgTimezone((orgRes.data as { timezone: string | null }).timezone);
+
+    if (input.onlyWhenPending && order.status !== 'pending_approval') {
+      throw neededByRefusal('conflict', NEEDED_BY_NOT_PENDING_COPY, 'not_pending');
+    }
+
+    const neededByMs = hasLocal
+      ? wallClockToInstant(input.neededByLocal as string, timeZone)
+      : (() => {
+          const t = Date.parse(input.neededByAt as string);
+          return Number.isFinite(t) ? t : null;
+        })();
+    if (neededByMs === null) {
+      throw neededByRefusal('validation_error', neededByInvalidTimeCopy(timeZone), 'invalid_time');
+    }
+    // The function refuses the same (needed_by_out_of_range); said here before
+    // anything is sent.
+    if (!isNeededByWithinReach(neededByMs, Date.now())) {
+      throw neededByRefusal('validation_error', NEEDED_BY_OUT_OF_RANGE_COPY, 'needed_by_out_of_range');
+    }
+    // A wall clock equal to the stored needed-by's (the dialog and the sheet
+    // start from it) names the STORED instant: converting it back could land
+    // on the other occurrence of a repeated fall-back hour, or drop the
+    // seconds a stored value carries, and turn a save of only a reason into a
+    // move of the Schedule entry that clears its reminder stamps.
+    const neededBy =
+      hasLocal && order.needed_by && sameWallClock(order.needed_by, input.neededByLocal as string, timeZone)
+        ? order.needed_by
+        : new Date(neededByMs).toISOString();
+
+    const { data, error } = await this.ctx.supabase.rpc('revise_order_needed_by', {
+      p_id: input.id,
+      p_needed_by: neededBy,
+      p_expected_needed_by: expected,
+      p_reason: reason,
+      p_event_details: orderScheduleEventDetails(
+        { id: order.id, orderNumber: order.order_number, neededBy },
+        timeZone,
+      ),
+    });
+    if (error) throw neededByRevisionError(error, timeZone);
+    let result: NeededByRevisionResult;
+    try {
+      result = parseNeededByRevisionResult(data);
+    } catch (e) {
+      throw new ServiceError(
+        'internal_error',
+        `revise_order_needed_by answered a shape it should not: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    let schedule: NeededBySchedule;
+    let eventStatus = result.eventStatus;
+    const missingEvent = result.eventId === null && orderBelongsOnSchedule(result.status);
+    if (missingEvent) {
+      // Past approval with no Schedule entry: the approval found no needed-by
+      // and so made none, or an earlier insert failed. The one writer of new
+      // order events makes it now at the order's needed-by, with the same
+      // description. On an unchanged save too: that is how a person adds an
+      // entry the screens said "couldn't be added just now".
+      ({ schedule, eventStatus } = await this.addMissingOrderEvent(
+        { ...order, status: result.status, needed_by: result.neededBy } as unknown as OrderRequestRow,
+        timeZone,
+      ));
+    } else if (!result.changed) schedule = 'unchanged';
+    else if (result.eventUpdated) schedule = 'moved';
+    else if (result.eventId !== null) schedule = 'left_closed';
+    else schedule = 'none_yet';
+
+    if (result.changed) {
+      await audit(
+        {
+          event: 'order_request.needed_by_revised',
+          entityType: 'order_request',
+          entityId: input.id,
+          warehouseId: order.warehouse_id,
+          before: { needed_by: result.previous },
+          after: { needed_by: result.neededBy },
+          reason,
+          extra: { from: result.previous, to: result.neededBy, schedule, event_id: result.eventId },
+        },
+        this.ctx,
+      );
+      void broadcastOrderChanged(orgId, input.id);
+    }
+    return { ...result, eventStatus, schedule, timeZone };
   }
 
   /**

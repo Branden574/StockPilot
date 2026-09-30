@@ -37,6 +37,8 @@
  * `jsc-intl`/full-ICU or polyfilled; that is a build concern for the consuming
  * app, not a reason to keep the formatter in web.
  */
+import { zonedParts, zoneOffsetMs } from './zoned-wall-clock';
+
 export const ORG_TIMEZONE_DEFAULT = 'America/Los_Angeles';
 
 /**
@@ -252,7 +254,9 @@ export function formatOrgDateTime(
  * Found by asking Intl what wall-clock time `now` is in `tz`, taking that
  * day's midnight as if it were UTC, then correcting by the zone's offset at
  * that instant. The offset is measured twice so a day whose midnight sits next
- * to a daylight-saving change still lands on the right instant.
+ * to a daylight-saving change still lands on the right instant. The zone
+ * arithmetic is ./zoned-wall-clock.ts, the one copy every org-zone caller uses
+ * (it lived here privately until F2-4 moved it there).
  */
 export function startOfOrgDay(now: Date, tz: string = ORG_TIMEZONE_DEFAULT): Date {
   const zone = resolveOrgTimezone(tz);
@@ -269,32 +273,4 @@ export function startOfOrgDay(now: Date, tz: string = ORG_TIMEZONE_DEFAULT): Dat
     return new Date(first);
   }
   return new Date(second);
-}
-
-function zonedParts(
-  d: Date,
-  zone: string,
-): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: zone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  const out = { year: 0, month: 0, day: 0, hour: 0, minute: 0, second: 0 };
-  for (const p of fmt.formatToParts(d)) {
-    if (p.type in out) out[p.type as keyof typeof out] = Number(p.value);
-  }
-  return out;
-}
-
-/** Milliseconds `zone` is ahead of UTC at instant `d` (negative west of UTC). */
-function zoneOffsetMs(d: Date, zone: string): number {
-  const p = zonedParts(d, zone);
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return asUtc - Math.floor(d.getTime() / 1000) * 1000;
 }

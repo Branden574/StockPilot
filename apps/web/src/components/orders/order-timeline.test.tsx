@@ -94,3 +94,57 @@ describe('OrderTimeline — stock held (F2-2)', () => {
     expect(screen.getByText('Stock was held for this order.')).toBeInTheDocument();
   });
 });
+
+// F2-4: a needed-by change reads as core's label, both dates in the ORG's zone
+// (the page's, never the server's UTC), and the reason the approver gave, as
+// OrderRequestsService.reviseNeededBy writes it (metadata from, to, reason).
+describe('OrderTimeline — needed-by date changed (F2-4)', () => {
+  function revised(id: string, md: Record<string, unknown>) {
+    return {
+      id,
+      event: 'order_request.needed_by_revised',
+      created_at: '2026-09-29T17:00:00Z',
+      user_id: 'u1',
+      metadata: { entity_type: 'order_request', entity_id: 'order-1', ...md },
+    };
+  }
+
+  async function renderIn(rows: unknown[], timeZone?: string) {
+    auditRows.current = rows;
+    render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', timeZone }));
+  }
+
+  it("says what changed, from and to, in the org's zone, with the reason", async () => {
+    await renderIn(
+      [
+        revised('a', {
+          from: '2026-10-01T21:00:00.000Z',
+          to: '2026-10-03T21:00:00.000Z',
+          reason: 'The school pushed the event back',
+          schedule: 'moved',
+          event_id: 'ev-1',
+        }),
+      ],
+      'America/New_York',
+    );
+
+    expect(screen.getByText('Needed-by date changed')).toBeInTheDocument();
+    // 21:00Z is 5:00 PM in New York (the zone passed), not 9:00 PM UTC.
+    expect(screen.getByText('Thu, Oct 1, 5:00 PM → Sat, Oct 3, 5:00 PM')).toBeInTheDocument();
+    expect(screen.getByText('Reason: The school pushed the event back')).toBeInTheDocument();
+    // Internal ids and the Schedule outcome's code are not shown.
+    expect(document.body.textContent).not.toMatch(/ev-1|moved\b|\{/);
+  });
+
+  it('an order that had no date: "Set to"; with no zone, core\'s default', async () => {
+    await renderIn([revised('a', { from: null, to: '2026-10-03T21:00:00.000Z', reason: 'First date' })]);
+    expect(screen.getByText('Set to Sat, Oct 3, 2:00 PM')).toBeInTheDocument();
+  });
+
+  it('an entry it cannot read says only the label and the reason, never a guessed date', async () => {
+    await renderIn([revised('a', { from: 'soon', to: 42, reason: 'Moved' })], 'America/Los_Angeles');
+    expect(screen.getByText('Needed-by date changed')).toBeInTheDocument();
+    expect(screen.getByText('Reason: Moved')).toBeInTheDocument();
+    expect(screen.queryByText(/→|Set to/)).toBeNull();
+  });
+});

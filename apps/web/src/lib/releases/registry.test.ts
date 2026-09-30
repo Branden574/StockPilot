@@ -1502,6 +1502,94 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
 });
 
 /**
+ * F2-4 (change an order's needed-by date; the schedule follows, migration
+ * 0383) is held as a DRAFT until the web Change dialog, the phone's sheet
+ * (OTA) and the Demo Co production walk, as F2-1's to F2-3's were. Pinned by
+ * id, never by index. The follow-up that publishes it sets 'published' and the
+ * real publishedAt, re-reads its words against what shipped, and flips the
+ * first pin here.
+ */
+describe("F2-4 (change an order's needed-by date) is held as a draft", () => {
+  const ID = 'order-needed-by-change-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top (pinned by id), dated after every other release, drafts included, so publishing it makes it the newest', () => {
+    expect(RELEASES.findIndex((r) => r.id === ID)).toBe(0);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is addressed as the pages it links to are reached: the change to approvers, the Schedule fix to Schedule editors', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual(['order-needed-by-change', 'schedule-move-rearms-reminders']);
+    const [change, schedule] = release().entries;
+    expect(change!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(change!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    expect(change!.area).toBe('Orders');
+    expect(schedule!.audience).toEqual({ anyPermission: ['schedule:manage'], modules: ['schedule'] });
+    expect(schedule!.link).toEqual({ href: '/dashboard/schedule', label: 'Open Schedule' });
+    expect(schedule!.area).toBe('Schedule');
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders', 'schedule']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['orders:approve', 'schedule:manage'])).toEqual([
+      'order-needed-by-change',
+      'schedule-move-rearms-reminders',
+    ]);
+    expect(reader(['orders:approve'])).toEqual(['order-needed-by-change']);
+    expect(reader(['schedule:manage'])).toEqual(['schedule-move-rearms-reminders']);
+    // A requester, a picker and a Schedule reader change nothing here.
+    expect(reader(['orders:request', 'items:update', 'schedule:read'])).toEqual([]);
+    expect(reader(['orders:approve', 'schedule:manage'], [])).toEqual([]);
+  });
+
+  it('names both platforms, keeps to what happens, and never claims an email', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    const text = readerText(r).join(' ');
+    expect(text).toContain("your organization's time zone");
+    // The order page and the phone card print the date without a zone; only
+    // the Change dialog and sheet name it ("Times are in …").
+    expect(text).toContain("your organization's time zone, which the Change window names");
+    expect(text).not.toContain('which the order names');
+    expect(text).toContain('If someone saved a different date while you were editing, nothing is changed');
+    // The revision itself emails no one; the reminders it re-arms still go
+    // out (the cron emails managers and the assignee near the new time).
+    expect(text).toContain('The change itself sends no email');
+    expect(text).toContain('Schedule reminders for the new time go out as usual.');
+    // 0383 swaps only the date sentence in the entry's description.
+    expect(text).toContain('anything your team added to the description stays');
+    // Only an entry that has not started is reminded (the cron reminds
+    // scheduled entries only).
+    expect(text).toContain("if the entry hasn't started, its reminders are set again for the new time");
+    expect(text).toContain('A completed or cancelled Schedule entry stays as it is.');
+    // The Schedule page's edit is web-only (the phone does not edit events).
+    expect(release().entries[1]!.whatChanged).toMatch(/^On the web, /);
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|was sent|we (?:emailed|notified)/i);
+  });
+});
+
+/**
  * The small fixes from the 2026-09-28/29 walks (fix/small-walk-fixes): the web
  * top bar, breadcrumbs and page titles, and on the phone the greeting, the
  * VoiceOver names and 44pt targets, the digital pick's quantity at the largest
@@ -1738,11 +1826,19 @@ describe('Book Order Totals by charter and dates is held as a draft', () => {
     expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
   });
 
-  it('sits at the top (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+  // F2-4's draft (the needed-by change, dated two days later) sits above this
+  // one, drafts newest first.
+  it('sits among the drafts at the top (pinned by id), dated after every published release, so publishing it makes it the newest published', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status !== 'draft')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Once published it is what the notice offers.
@@ -1855,8 +1951,8 @@ describe('count differences say what clears them (release 1) is held as a draft'
     expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
   });
 
-  // Two drafts wait at the top: Book Order Totals (0382, dated a day later)
-  // sits above this one, drafts newest first.
+  // Drafts wait at the top, newest first: F2-4's needed-by change and Book
+  // Order Totals (0382, dated a day later) sit above this one.
   it('sits among the drafts at the top (pinned by id), dated after every published release, so publishing it makes it the newest published', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
