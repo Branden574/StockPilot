@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@stockpilot/config": "workspace:*",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
