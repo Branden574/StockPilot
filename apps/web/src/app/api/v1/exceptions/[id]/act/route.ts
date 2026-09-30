@@ -23,8 +23,9 @@ const bodySchema = z.object({
 
 /**
  * POST /api/v1/exceptions/[id]/act — acknowledge an occurrence, or add a
- * note. Cookie or Bearer. Nobody can resolve an occurrence; the system does
- * that when the condition is gone.
+ * note. Cookie or Bearer. Acknowledging never resolves an occurrence: only
+ * the system check (when the condition is gone) and, for a count difference,
+ * a count confirmation (POST .../confirm-count, 0386) resolve one.
  *
  * Who: stock:adjust and write access to the occurrence's warehouse (a manager
  * when it has none); viewers read only. exception_occurrence_act re-checks

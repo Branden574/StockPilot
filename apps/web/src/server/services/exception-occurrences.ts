@@ -1,17 +1,23 @@
 import 'server-only';
 
 import {
+  blockingOpenCount,
   can,
+  countConfirmGate,
+  countConfirmState,
+  countVarianceNumbers,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULE_IDS,
   formatCycleCountNumber,
   formatMaintenanceRequestNumber,
   formatOccurrenceNumber,
+  isCountConfirmedAs,
   isExceptionRule,
   isManagerOrAbove,
   isOccurrenceEventKind,
   isOccurrenceResolvedReason,
   isRecountableRule,
+  occurrenceState,
   presentWhenTrackingBegan,
   recountOutcome,
   resolveOrgTimezone,
@@ -19,9 +25,11 @@ import {
   varianceReviewLine,
   type CountConfirmBlock,
   type CountConfirmedAs,
+  type CountConfirmOpenLine,
   type EscalateUnavailableReason,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
+  type ItemVerificationSummary,
   type MaintenanceStatus,
   type OccurrenceConfirmation,
   type OccurrenceEventKind,
@@ -38,6 +46,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { escalateBlock } from './exception-escalation';
 import { ExceptionsService } from './exceptions';
@@ -56,6 +65,7 @@ import {
   type ExceptionEvidenceBlock,
 } from './lib/exception-evidence-read';
 import { buildSystemContext } from './lib/system-context';
+import { nameCountPeople, VerificationService } from './verification';
 
 /**
  * STORED EXCEPTION OCCURRENCES (F1-1, migration 0370).
@@ -69,7 +79,11 @@ import { buildSystemContext } from './lib/system-context';
  *     here. Each row carries its recount (F1-2) and what that count came to
  *     for its item (core recountOutcome), and whether Recount is offered.
  *   - act: acknowledge or add a note, through exception_occurrence_act (the
- *     RPC re-checks everything below). Nobody resolves a row.
+ *     RPC re-checks everything below). Acknowledging never resolves a row.
+ *   - confirmCount: the counter, or a manager, confirms the counted number of
+ *     an open count_variance row, through exception_confirm_count (0386),
+ *     which resolves it as `confirmed` without a second count. Only the
+ *     system check (syncOrg) and a count confirmation resolve a row.
  *   - syncOrg: the SYSTEM applying one org-wide evaluation through
  *     exceptions_sync. Service role, never on a person's request path: it runs
  *     from the cron, or after the response once a count is posted or
@@ -85,6 +99,19 @@ import { buildSystemContext } from './lib/system-context';
 
 /** An unforced sync within this long of the last one does nothing. */
 export const EXCEPTION_SYNC_THROTTLE_MS = 60_000;
+
+/**
+ * D6: the server switch for "Confirm this count" (owner decision 2026-09-29;
+ * migration 0386). On: an open count_variance detail carries a countConfirm
+ * block, and confirmCount calls exception_confirm_count. Off: no block is sent
+ * (the web page and every phone then show the recount-only words and no
+ * Confirm: the phone parses a missing block as "feature off"), and
+ * confirmCount refuses with `unavailable` before the RPC. Turning Confirm off
+ * after an incident is a forward commit setting this to false (the revert kit,
+ * stockpilot-work/exceptions-confirm/revert/), never a rollback of the web
+ * past the release that taught every client the confirmed words.
+ */
+export const EXCEPTION_COUNT_CONFIRM_ENABLED: boolean = true;
 
 /** "Check now" starts at most one check per org in this window, whoever asks
  *  and through whichever surface (the web action and the phone's route). */
@@ -105,13 +132,19 @@ const TIMELINE_CAP = 2_000;
 const COUNT_LINKS_CAP = 5_000;
 /** Counts whose outcome one read works out at once. */
 const OUTCOME_CONCURRENCY = 4;
+/** Lines of in-progress counts read for one item (countConfirm): one per
+ *  open count that holds the item, so a backstop far above real use. */
+const OPEN_COUNT_LINES_CAP = 1_000;
 
 // Every embed names its foreign key: exception_occurrence_events links
-// exception_occurrences to user_profiles and cycle_counts as well, and
-// PostgREST refuses an embed that more than one relationship could satisfy.
+// exception_occurrences to user_profiles and cycle_counts as well, the table
+// itself has three foreign keys to user_profiles and two to cycle_counts
+// (0386 added confirmed_by and confirmed_cycle_count_id), and PostgREST
+// refuses an embed that more than one relationship could satisfy.
+// confirmed_on_record is never read: it is stored for the record only.
 // Single string literals, so supabase-js can type the rows.
 const OCCURRENCE_SELECT =
-  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, maintenance_request_id, escalation_number, escalation_request_created_at, escalated_at, escalated_by, escalation_request_cancelled, item:inventory_items!exception_occurrences_item_id_fkey(name, sku), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email), escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email)';
+  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, maintenance_request_id, escalation_number, escalation_request_created_at, escalated_at, escalated_by, escalation_request_cancelled, confirmed_at, confirmed_by, confirmed_cycle_count_id, confirmed_quantity, confirmed_as, item:inventory_items!exception_occurrences_item_id_fkey(name, sku, warehouse_id), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email), escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email), confirmer:user_profiles!exception_occurrences_confirmed_by_fkey(full_name, email), confirmed_count:cycle_counts!exception_occurrences_confirmed_cycle_count_id_fkey(count_number)';
 
 /** The linked maintenance requests a detail read looks up, under the
  *  reader's own RLS (requester, read_all or manage see a request). */
@@ -158,9 +191,9 @@ export interface ExceptionOccurrence {
   /** Null when not resolved, or for a reason this build cannot word (a
    *  newer build's): surfaces then say only "Resolved", never "Cleared". */
   resolvedReason: OccurrenceResolvedReason | null;
-  /** How a count confirmation resolved this row (who, when, which count);
-   *  null otherwise. Always null until the confirmation columns exist (the
-   *  second release): this build reads none of them. */
+  /** How a count confirmation resolved this row (who, when, which count,
+   *  the number, counter or manager); null otherwise. The stock on record at
+   *  the confirm is never sent (confirmed_on_record). */
   confirmation: OccurrenceConfirmation | null;
   previousOccurrenceId: string | null;
   recurrenceIndex: number;
@@ -297,7 +330,7 @@ export interface OccurrenceHistoryEntry {
   resolvedAt: string | null;
   resolvedReason: OccurrenceResolvedReason | null;
   /** For a row resolved by a count confirmation: the counter or a manager
-   *  (null otherwise, and until the confirmation columns exist). */
+   *  (null otherwise). */
   confirmedAs: CountConfirmedAs | null;
   recurrenceIndex: number;
   isCurrent: boolean;
@@ -318,9 +351,10 @@ export interface OccurrenceDetail {
    *  error. */
   evidence: ExceptionEvidenceBlock;
   /** Confirm this count (core CountConfirmBlock), for an OPEN count_variance
-   *  row while the server offers confirming. Absent in this build: the
-   *  feature is off, so every surface shows the recount-only words and no
-   *  Confirm (the phone's Confirm screens stay dormant until it is sent). */
+   *  row while the server offers confirming (EXCEPTION_COUNT_CONFIRM_ENABLED);
+   *  null otherwise, and then every surface shows the recount-only words and
+   *  no Confirm. A read it needs that failed gives state `unavailable` (never
+   *  a failed page). */
   countConfirm?: CountConfirmBlock | null;
 }
 
@@ -379,6 +413,21 @@ export interface CountLinkedExceptions {
 
 export type OccurrenceAction = 'acknowledge' | 'note';
 
+/** Confirm this count: the count and the counted number the person was
+ *  shown (the countConfirm block), and an optional note. */
+export interface ConfirmCountInput {
+  cycleCountId: string;
+  countedQuantity: number;
+  note?: string | null;
+}
+
+export interface ConfirmCountResult {
+  occurrence: ExceptionOccurrence;
+  /** True when this confirm had already been recorded (the same person,
+   *  count, number and note: a resend after a lost answer). */
+  replay: boolean;
+}
+
 export interface OccurrenceActInput {
   action: OccurrenceAction;
   note?: string | null;
@@ -408,6 +457,9 @@ export type ExceptionSyncOutcome =
       dropped: number;
       /** Rows applied with empty facts because theirs were too large. */
       factsOmitted: number;
+      /** count_variance entries held because their count line was
+       *  confirmed (exceptions_sync step 2b, 0386). */
+      settled: number;
     }
   /** A newer evaluation was already applied. */
   | { status: 'stale' }
@@ -450,7 +502,17 @@ type OccurrenceRow = {
   escalated_by?: string | null;
   /** The escalation_request_cancelled computed field (0376). */
   escalation_request_cancelled?: boolean | null;
-  item?: { name: string; sku: string | null } | null;
+  /** The count confirmation (0386); null on every other row. */
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  confirmed_cycle_count_id?: string | null;
+  confirmed_quantity?: number | string | null;
+  confirmed_as?: string | null;
+  confirmer?: ProfileEmbed;
+  confirmed_count?: { count_number: number | string | null } | null;
+  /** The item's LIVE warehouse is the act gate's for a confirm (the row's
+   *  warehouse_id is a stamp the sync refreshes up to 15 minutes late). */
+  item?: { name: string; sku: string | null; warehouse_id?: string | null } | null;
   location?: { name: string; kind: string | null; deleted_at: string | null } | null;
   recount?: {
     id: string;
@@ -525,10 +587,43 @@ function mapSyncState(row: SyncStateRow | null): ExceptionSyncState | null {
 
 type ActGate = (row: OccurrenceRow) => boolean;
 
+/** A line of an in-progress count holding the item (countConfirm). */
+type OpenCountLineRow = {
+  id: string;
+  cycle_count_id: string;
+  counted_quantity: number | string | null;
+  expected_quantity: number | string | null;
+  rechecks: boolean | null;
+  count: { count_number: number | string | null; status: string; organization_id: string } | null;
+};
+
+/** What countConfirm reads besides the row (readCountConfirmInputs). */
+type CountConfirmReads = {
+  /** The item's summary with its people named; null when unread. */
+  summary: ItemVerificationSummary | null;
+  /** Lines of in-progress counts holding the item; null when unread. */
+  lines: OpenCountLineRow[] | null;
+  /** The act gate against the item's live warehouse. */
+  canAct: boolean;
+};
+
 /** The outcome a recount's status alone implies, before its line is read:
  *  in progress (progress unknown), cancelled, or unavailable until enriched. */
 function outcomeFromStatus(status: string): RecountOutcome {
   return recountOutcome({ status }, null);
+}
+
+/** The count confirmation as the occurrence carries it (0386), or null. */
+function mapConfirmation(row: OccurrenceRow): OccurrenceConfirmation | null {
+  if (!row.confirmed_at) return null;
+  return {
+    at: row.confirmed_at,
+    by: row.confirmed_by ? personFor(row.confirmed_by, row.confirmer) : { id: null, label: 'Former member' },
+    cycleCountId: row.confirmed_cycle_count_id ?? null,
+    countNumber: toNumber(row.confirmed_count?.count_number ?? null),
+    quantity: toQuantity(row.confirmed_quantity ?? null),
+    as: isCountConfirmedAs(row.confirmed_as) ? row.confirmed_as : null,
+  };
 }
 
 /** The escalation columns as the occurrence carries them, or null when it was
@@ -620,9 +715,7 @@ function mapOccurrence(
         : null,
     resolvedAt: row.resolved_at,
     resolvedReason: resolvedReasonOf(row.resolved_reason),
-    // The confirmation columns arrive with the second release; this build
-    // selects none of them.
-    confirmation: null,
+    confirmation: mapConfirmation(row),
     previousOccurrenceId: row.previous_occurrence_id,
     recurrenceIndex: row.recurrence_index ?? 0,
     canAct: row.resolved_at === null && canActOn(row),
@@ -661,7 +754,16 @@ function toQuantity(value: number | string | null | undefined): number | null {
 // ── Service ────────────────────────────────────────────────────────────────
 
 export class ExceptionOccurrencesService {
-  constructor(private readonly ctx: ServiceContext) {}
+  /** D6, per instance: EXCEPTION_COUNT_CONFIRM_ENABLED unless a test says
+   *  otherwise (every route and action constructs with the default). */
+  private readonly countConfirmEnabled: boolean;
+
+  constructor(
+    private readonly ctx: ServiceContext,
+    opts: { countConfirmEnabled?: boolean } = {},
+  ) {
+    this.countConfirmEnabled = opts.countConfirmEnabled ?? EXCEPTION_COUNT_CONFIRM_ENABLED;
+  }
 
   static async forCurrentUser(): Promise<ExceptionOccurrencesService> {
     return new ExceptionOccurrencesService(await withContext());
@@ -679,6 +781,9 @@ export class ExceptionOccurrencesService {
       /** Only this item's occurrences (the item page's open issues, and the
        *  exceptions "Count this item" links to its recount). */
       itemId?: string | null;
+      /** Resolved list only: just the rows a count confirmation closed
+       *  (the Resolved tab's "Closed without a second count"). */
+      confirmedOnly?: boolean;
     } = {},
   ): Promise<OccurrenceListResult> {
     assertPermission(this.ctx, 'items:read');
@@ -688,6 +793,7 @@ export class ExceptionOccurrencesService {
     if (itemId !== null && !UUID.test(itemId)) {
       throw new ServiceError('validation_error', 'That item id is not valid.', { reason: 'invalid_item_id' });
     }
+    const confirmedOnly = status === 'resolved' && opts.confirmedOnly === true;
     const cap = status === 'open' ? OPEN_LIST_CAP : RESOLVED_LIST_CAP;
     const since = new Date(Date.now() - RESOLVED_WINDOW_DAYS * 86_400_000).toISOString();
 
@@ -698,7 +804,8 @@ export class ExceptionOccurrencesService {
             .from('exception_occurrences')
             .select(OCCURRENCE_SELECT)
             .eq('organization_id', orgId);
-          const q = itemId === null ? base : base.eq('item_id', itemId);
+          const byItem = itemId === null ? base : base.eq('item_id', itemId);
+          const q = confirmedOnly ? byItem.not('confirmed_at', 'is', null) : byItem;
           return status === 'open'
             ? q.is('resolved_at', null).order('occurrence_number', { ascending: true }).range(from, to)
             : q
@@ -788,6 +895,10 @@ export class ExceptionOccurrencesService {
       this.reportUnknownRules(1);
       throw new ServiceError('not_found', 'Exception not found.');
     }
+    // Confirm this count (D6 on, an open count_variance row): its reads start
+    // now and run beside everything below, so the page waits for no extra
+    // round trip. They never throw (a failed read is state `unavailable`).
+    const confirmReads = this.offersCountConfirm(occurrence) ? this.readCountConfirmInputs(row, gate) : null;
     // What each recount came to for this item: the active one, and every
     // closed one the timeline names ("Recount CC-000031 closed: Matched the
     // stock on record"). One set of reads for both.
@@ -810,7 +921,7 @@ export class ExceptionOccurrencesService {
     // identity returns the whole chain in one query.
     let hq = this.ctx.supabase
       .from('exception_occurrences')
-      .select('id, occurrence_number, first_seen_at, resolved_at, resolved_reason, recurrence_index')
+      .select('id, occurrence_number, first_seen_at, resolved_at, resolved_reason, recurrence_index, confirmed_as, confirmed_cycle_count_id')
       .eq('organization_id', orgId)
       .eq('rule', row.rule)
       .eq('item_id', row.item_id);
@@ -828,6 +939,8 @@ export class ExceptionOccurrencesService {
       resolved_at: string | null;
       resolved_reason: string | null;
       recurrence_index: number;
+      confirmed_as?: string | null;
+      confirmed_cycle_count_id?: string | null;
     }>;
 
     // The photo links are signed while the timeline's photo times are read:
@@ -842,7 +955,7 @@ export class ExceptionOccurrencesService {
         ...events.flatMap((e) => (e.kind === 'escalated' && e.maintenance_request_id ? [e.maintenance_request_id] : [])),
       ]),
     ];
-    const [evidence, evidenceInfo, requests] = await Promise.all([
+    const [evidence, evidenceInfo, requests, countConfirm] = await Promise.all([
       this.evidenceBlock(occurrence, liveEvidence),
       readEvidenceEventInfo(this.ctx, id, namedEvidence).then(
         (info): Map<string, EvidenceEventInfo> | null => info,
@@ -854,6 +967,12 @@ export class ExceptionOccurrencesService {
         },
       ),
       this.readVisibleRequests(namedRequests),
+      confirmReads
+        ? this.countConfirmBlock(occurrence, syncState, confirmReads, {
+            rows: chain,
+            truncated: chain.length > HISTORY_LIMIT,
+          })
+        : Promise.resolve(null),
     ]);
     if (occurrence.escalation) {
       const escalation = withRequestView(occurrence.escalation, requests);
@@ -896,7 +1015,7 @@ export class ExceptionOccurrencesService {
           firstSeenAt: h.first_seen_at,
           resolvedAt: h.resolved_at,
           resolvedReason: resolvedReasonOf(h.resolved_reason),
-          confirmedAs: null,
+          confirmedAs: isCountConfirmedAs(h.confirmed_as) ? h.confirmed_as : null,
           recurrenceIndex: h.recurrence_index ?? 0,
           isCurrent: h.id === id,
         };
@@ -905,6 +1024,7 @@ export class ExceptionOccurrencesService {
       syncState,
       timeZone,
       evidence,
+      countConfirm,
     };
   }
 
@@ -935,13 +1055,20 @@ export class ExceptionOccurrencesService {
    * or the manager role when it has none. Returns the row; resolved rows are
    * returned too, and each write decides what a resolved row means for it.
    */
-  async requireActable(id: string): Promise<ActableOccurrence> {
+  async requireActable(id: string, opts: { liveWarehouse?: boolean } = {}): Promise<ActableOccurrence> {
     assertPermission(this.ctx, 'items:read');
     assertPermission(this.ctx, 'stock:adjust');
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const row = await this.readOccurrenceRow(id);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
-    await this.assertCanAct(row);
+    // A confirm is judged against the item's LIVE warehouse, as
+    // exception_confirm_count and the countConfirm block judge it: the row's
+    // stamp can lag an item move by up to 15 minutes, and a page must never
+    // offer a Confirm this gate then refuses (pattern #26). The item is
+    // readable whenever the row is (the visibility rule includes it).
+    await this.assertCanAct(
+      opts.liveWarehouse ? { ...row, warehouse_id: row.item ? (row.item.warehouse_id ?? null) : row.warehouse_id } : row,
+    );
     return { id: row.id, itemId: row.item_id, warehouseId: row.warehouse_id, resolvedAt: row.resolved_at };
   }
 
@@ -997,6 +1124,87 @@ export class ExceptionOccurrencesService {
     if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
     await this.withRecountOutcomes([mapped]);
     return mapped;
+  }
+
+  /**
+   * Confirm this count (0386): the counter, or a manager, confirms the counted
+   * number of an open count_variance row, and it resolves at once as
+   * `confirmed`, without a second count. The owner accepted that a mistyped
+   * count can then close; Confirm is offered only while the stock on record
+   * still equals the counted number, nothing else is about to settle the row,
+   * and the count shown is still the item's latest (exception_confirm_count
+   * re-checks all of it, under the org's sync lock, and writes no stock).
+   *
+   * The app gate mirrors the database's (pattern #4): items:read and
+   * stock:adjust, then the act gate against the item's live warehouse
+   * (requireActable). The RPC decides everything else and answers by SQLSTATE
+   * and hint (mapConfirmError). One audit row per confirm that is not a
+   * replay; the record itself is the row's confirmed_* columns and its
+   * count_confirmed event, both written inside the RPC.
+   */
+  async confirmCount(id: string, input: ConfirmCountInput): Promise<ConfirmCountResult> {
+    assertPermission(this.ctx, 'items:read');
+    assertPermission(this.ctx, 'stock:adjust');
+    if (!this.countConfirmEnabled) {
+      throw new ServiceError('conflict', CONFIRM_ERROR_MESSAGES.unavailable, { reason: 'unavailable' });
+    }
+    if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
+    const cycleCountId = typeof input.cycleCountId === 'string' ? input.cycleCountId : '';
+    if (!UUID.test(cycleCountId)) {
+      throw new ServiceError('validation_error', 'That count id is not valid.', { reason: 'invalid_argument' });
+    }
+    const countedQuantity = input.countedQuantity;
+    if (typeof countedQuantity !== 'number' || !Number.isFinite(countedQuantity)) {
+      throw new ServiceError('validation_error', 'The counted number is not valid.', { reason: 'invalid_argument' });
+    }
+    const note = (input.note ?? '').trim() || null;
+    if (note !== null && Array.from(note).length > 1000) {
+      throw new ServiceError('validation_error', 'Notes can be at most 1,000 characters.', {
+        reason: 'note_too_long',
+      });
+    }
+
+    await this.requireActable(id, { liveWarehouse: true });
+
+    const { data, error } = await this.ctx.supabase.rpc('exception_confirm_count', {
+      p_id: id,
+      p_cycle_count_id: cycleCountId,
+      p_counted_quantity: countedQuantity,
+      p_note: note,
+    });
+    if (error) throw mapConfirmError(error);
+    const answer = (data ?? {}) as { occurrenceId?: unknown; replay?: unknown; confirmedAs?: unknown };
+    const replay = answer.replay === true;
+    if (!replay) {
+      await audit(
+        {
+          event: 'exception.count_confirmed',
+          entityType: 'exception_occurrence',
+          entityId: id,
+          after: {
+            cycleCountId,
+            countedQuantity,
+            confirmedAs: isCountConfirmedAs(answer.confirmedAs) ? answer.confirmedAs : null,
+            note,
+          },
+        },
+        this.ctx,
+      );
+    }
+
+    // Re-read with the embeds so the caller gets the same shape the list and
+    // detail return (the RPC answers ids only).
+    const [fresh, syncState, gate] = await Promise.all([
+      this.readOccurrenceRow(id),
+      this.readSyncState(),
+      this.actGate(),
+    ]);
+    const mapped = fresh
+      ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
+      : null;
+    if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
+    await this.withRecountOutcomes([mapped]);
+    return { occurrence: mapped, replay };
   }
 
   /**
@@ -1268,6 +1476,7 @@ export class ExceptionOccurrencesService {
         recountsClosed?: number;
         dropped?: number;
         factsOmitted?: number;
+        settled?: number;
       };
       if (res.skipped) return { status: 'stale' };
       const factsOmitted = res.factsOmitted ?? 0;
@@ -1289,6 +1498,7 @@ export class ExceptionOccurrencesService {
         recountsClosed: res.recountsClosed ?? 0,
         dropped: res.dropped ?? 0,
         factsOmitted,
+        settled: res.settled ?? 0,
       };
     } catch (err) {
       void reportError(err, {
@@ -1344,6 +1554,200 @@ export class ExceptionOccurrencesService {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  /** Whether a detail carries a countConfirm block: the switch is on and
+   *  the row is an open count difference. */
+  private offersCountConfirm(o: ExceptionOccurrence): boolean {
+    return this.countConfirmEnabled && o.rule === 'count_variance' && o.resolvedAt === null;
+  }
+
+  /**
+   * What countConfirm needs besides the row, all read through the reader's
+   * own client: the item's summary (item_verification_summaries, the read
+   * the Physical count card makes: the latest count as of now, its counter
+   * and poster, whether the item can be counted, the stock on record now),
+   * with the two people named; and the item's lines in counts that are in
+   * progress (every member reads every count). The act gate is judged
+   * against the item's live warehouse. NEVER THROWS: a failed read is
+   * reported and answers null, which the state reads as `unavailable`.
+   */
+  private async readCountConfirmInputs(row: OccurrenceRow, gate: ActGate): Promise<CountConfirmReads> {
+    const itemId = row.item_id;
+    const [summary, lines] = await Promise.all([
+      (async (): Promise<ItemVerificationSummary | null> => {
+        try {
+          const found = (await new VerificationService(this.ctx).summaries([itemId])).get(itemId) ?? null;
+          return found ? await nameCountPeople(this.ctx, found) : null;
+        } catch (err) {
+          reportDegradedRead('exceptions.count_confirm_summary', err, {});
+          return null;
+        }
+      })(),
+      this.readOpenCountLines(itemId).catch((err: unknown): null => {
+        reportDegradedRead('exceptions.count_confirm_open_lines', err, {});
+        return null;
+      }),
+    ]);
+    const liveWarehouse = row.item ? (row.item.warehouse_id ?? null) : undefined;
+    const canAct = liveWarehouse !== undefined && gate({ ...row, warehouse_id: liveWarehouse });
+    return { summary, lines, canAct };
+  }
+
+  /** The item's lines in counts that are in progress (counted or not), with
+   *  whether each can re-check it (0372's computed field). Throws on a
+   *  failed read. */
+  private async readOpenCountLines(itemId: string): Promise<OpenCountLineRow[]> {
+    const orgId = this.ctx.organizationId;
+    return (await fetchAllRows<Record<string, unknown>>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('cycle_count_lines')
+          .select(
+            'id, cycle_count_id, counted_quantity, expected_quantity, rechecks:cycle_count_line_rechecks, count:cycle_counts!inner(count_number, status, organization_id)',
+          )
+          .eq('item_id', itemId)
+          .eq('count.status', 'in_progress')
+          .eq('count.organization_id', orgId)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: OPEN_COUNT_LINES_CAP },
+    )) as unknown as OpenCountLineRow[];
+  }
+
+  /**
+   * The countConfirm block for an open count_variance row (core
+   * countConfirmState, then countConfirmGate: the one predicate the web page,
+   * the phone and exception_confirm_count share; pattern #26). Null when the
+   * row's facts do not name a count and a counted number: nothing could be
+   * sent back to confirm, so the surfaces keep the recount-only words.
+   */
+  private async countConfirmBlock(
+    o: ExceptionOccurrence,
+    syncState: ExceptionSyncState | null,
+    readsPromise: Promise<CountConfirmReads>,
+    history: {
+      rows: ReadonlyArray<{ id: string; confirmed_cycle_count_id?: string | null }>;
+      truncated: boolean;
+    },
+  ): Promise<CountConfirmBlock | null> {
+    const n = countVarianceNumbers(o.facts);
+    if (n.cycleCountId === null || n.counted === null) return null;
+    const reads = await readsPromise;
+
+    // Another occurrence of the item already confirms this count. The
+    // identity chain holds every such row (a confirmation is always
+    // count_variance, on the same item); past its read limit, ask directly.
+    let alreadyConfirmed: boolean | null = history.rows.some(
+      (h) => h.id !== o.id && h.confirmed_cycle_count_id === n.cycleCountId,
+    );
+    if (!alreadyConfirmed && history.truncated) {
+      alreadyConfirmed = await this.readAlreadyConfirmed(o.itemId, n.cycleCountId);
+    }
+
+    const displayed = occurrenceState(
+      {
+        resolvedAt: o.resolvedAt,
+        resolvedReason: o.resolvedReason,
+        confirmedAs: o.confirmation?.as ?? null,
+        acknowledgedAt: o.acknowledgedAt,
+        acknowledgedBy: o.acknowledgedBy?.id ?? null,
+        recount: o.recount,
+      },
+      syncState?.lastEvaluatedAt ?? null,
+    );
+    const lines = reads.lines;
+    const recountLine =
+      o.recount && lines ? (lines.find((l) => l.cycle_count_id === o.recount!.cycleCountId) ?? null) : null;
+    const linkedRecount = o.recount
+      ? {
+          cycleCountId: o.recount.cycleCountId,
+          status: o.recount.status,
+          // A recount in progress that no longer holds the item cannot settle
+          // it (exception_confirm_count agrees); unknown when unread.
+          lineRechecks:
+            lines === null
+              ? null
+              : recountLine
+                ? typeof recountLine.rechecks === 'boolean'
+                  ? recountLine.rechecks
+                  : null
+                : o.recount.status === 'in_progress'
+                  ? false
+                  : null,
+        }
+      : null;
+    const openLines: CountConfirmOpenLine[] | null =
+      lines === null
+        ? null
+        : lines
+            .filter((l) => toQuantity(l.counted_quantity) !== null)
+            .map((l) => ({
+              cycleCountId: l.cycle_count_id,
+              countNumber: toNumber(l.count?.count_number ?? null),
+              counted: toQuantity(l.counted_quantity),
+              expected: toQuantity(l.expected_quantity),
+              rechecks: typeof l.rechecks === 'boolean' ? l.rechecks : null,
+            }));
+    const summary = reads.summary;
+    const last = summary?.lastCount ?? null;
+    const state = countConfirmState({
+      facts: o.facts,
+      displayed,
+      linkedRecount,
+      openLines,
+      latest:
+        summary && last
+          ? { cycleCountId: last.cycleCountId, counted: last.countedQuantity, countable: summary.item.countable }
+          : null,
+      onRecordNow: summary?.item.quantityOnHand ?? null,
+      alreadyConfirmed,
+    });
+    // The people of the count being confirmed (not of a newer one).
+    const sameCount = last !== null && last.cycleCountId === n.cycleCountId;
+    const countedBy = sameCount ? (last.countedBy ?? null) : null;
+    const postedBy = sameCount ? (last.postedBy ?? null) : null;
+    const gate = countConfirmGate({
+      state,
+      canAct: reads.canAct,
+      isManager: isManagerOrAbove(this.ctx.role),
+      readerId: this.ctx.userId,
+      countedBy: countedBy?.id ?? null,
+    });
+    const other = state === 'count_in_progress' ? blockingOpenCount({ openLines, linkedRecount }) : null;
+    return {
+      state: gate.state,
+      canConfirm: gate.canConfirm,
+      unavailableReason: gate.reason,
+      cycleCountId: n.cycleCountId,
+      countNumber: n.countNumber,
+      counted: n.counted,
+      onRecordBefore: n.expected,
+      onRecordNow: summary?.item.quantityOnHand ?? null,
+      countedBy,
+      postedBy,
+      readerIsCounter: countedBy?.id != null && countedBy.id === this.ctx.userId,
+      otherCount: other && other.counted !== null ? { countNumber: other.countNumber, counted: other.counted } : null,
+    };
+  }
+
+  /** Whether any occurrence of the item confirms this count; null when the
+   *  read failed (reported). */
+  private async readAlreadyConfirmed(itemId: string, cycleCountId: string): Promise<boolean | null> {
+    try {
+      const { data, error } = await this.ctx.supabase
+        .from('exception_occurrences')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('item_id', itemId)
+        .eq('confirmed_cycle_count_id', cycleCountId)
+        .limit(1);
+      if (error) throw new Error(postgrestErrorText(error));
+      return (data ?? []).length > 0;
+    } catch (err) {
+      reportDegradedRead('exceptions.count_confirm_already_confirmed', err, {});
+      return null;
+    }
+  }
 
   /**
    * The maintenance requests `ids` names that THIS reader can open, read
@@ -1664,6 +2068,91 @@ function mapActError(error: { code?: string; message: string; hint?: string | nu
       const reason = error.hint ?? 'invalid_argument';
       return new ServiceError('validation_error', copy[reason] ?? 'Invalid request.', { reason });
     }
+  }
+  return new ServiceError('internal_error', postgrestErrorText(error));
+}
+
+/** The service's sentence per confirm refusal (the web dialog and the phone
+ *  word them from core describeConfirmError by details.reason). */
+const CONFIRM_ERROR_MESSAGES = {
+  occurrence_resolved: 'This exception has already been resolved.',
+  count_changed: 'A newer count of this item was posted.',
+  recount_in_progress: 'A recount linked to this exception is in progress.',
+  count_in_progress: 'Another count in progress has recorded a different number for this item.',
+  not_countable: 'This item can no longer be counted.',
+  stock_moved: 'The stock on record changed after this count, so it can no longer be confirmed.',
+  already_confirmed: 'This count was already confirmed on an earlier exception.',
+  not_confirmable: 'Only a count difference can be confirmed.',
+  busy: 'A check is running. Try again in a moment.',
+  unavailable: 'Confirming is unavailable right now.',
+  unknown: 'This count could not be confirmed.',
+} as const satisfies Record<string, string>;
+
+function confirmErrorMessage(reason: string): string {
+  return (CONFIRM_ERROR_MESSAGES as Record<string, string | undefined>)[reason] ?? CONFIRM_ERROR_MESSAGES.unknown;
+}
+
+/** The P0001 hints exception_confirm_count raises, each answered as a 409
+ *  with that reason. Any other P0001 is `unknown` (a 409, never a 500). */
+const CONFIRM_CONFLICT_HINTS: ReadonlySet<string> = new Set([
+  'occurrence_resolved',
+  'count_changed',
+  'recount_in_progress',
+  'count_in_progress',
+  'not_countable',
+  'stock_moved',
+  'already_confirmed',
+  'not_confirmable',
+]);
+
+/**
+ * exception_confirm_count's refusals, by SQLSTATE and hint, never by message
+ * text (pattern #28).
+ *   42501 not_counter / not_permitted: forbidden with that reason;
+ *         not_authenticated: unauthenticated; any other 42501 (no hint: only
+ *         PostgREST answers that way, once EXECUTE was revoked by the revert
+ *         kit): conflict `unavailable`.
+ *   P0002: not_found.  P0001: conflict with the hint as the reason, or
+ *   `unknown`.  22023: validation_error.  23505 (the RPC maps its own; this is
+ *   the backstop): conflict `already_confirmed`.  55P03 (the org's lock held
+ *   past 5 s): conflict `busy`, retryable.  Anything else: internal_error.
+ */
+export function mapConfirmError(error: { code?: string; message: string; hint?: string | null }): ServiceError {
+  const hint = error.hint ?? null;
+  switch (error.code) {
+    case '42501':
+      if (hint === 'not_counter') {
+        return new ServiceError('forbidden', 'Only the person who counted it, or a manager, can confirm this count.', {
+          reason: 'not_counter',
+        });
+      }
+      if (hint === 'not_permitted') {
+        return new ServiceError('forbidden', 'You do not have permission to confirm this count.', {
+          reason: 'not_permitted',
+        });
+      }
+      if (hint === 'not_authenticated') {
+        return new ServiceError('unauthenticated', 'Sign in to confirm this count.');
+      }
+      return new ServiceError('conflict', CONFIRM_ERROR_MESSAGES.unavailable, { reason: 'unavailable' });
+    case 'P0002':
+      return new ServiceError('not_found', 'Exception not found.');
+    case 'P0001': {
+      const reason = hint !== null && CONFIRM_CONFLICT_HINTS.has(hint) ? hint : 'unknown';
+      return new ServiceError('conflict', confirmErrorMessage(reason), { reason });
+    }
+    case '22023': {
+      const reason = hint === 'note_too_long' ? 'note_too_long' : 'invalid_argument';
+      return new ServiceError(
+        'validation_error',
+        reason === 'note_too_long' ? 'Notes can be at most 1,000 characters.' : 'Invalid request.',
+        { reason },
+      );
+    }
+    case '23505':
+      return new ServiceError('conflict', CONFIRM_ERROR_MESSAGES.already_confirmed, { reason: 'already_confirmed' });
+    case '55P03':
+      return new ServiceError('conflict', CONFIRM_ERROR_MESSAGES.busy, { reason: 'busy', retryable: true });
   }
   return new ServiceError('internal_error', postgrestErrorText(error));
 }

@@ -33,9 +33,15 @@ import type {
  * ExceptionOccurrencesService, the same methods the /api/v1/exceptions routes
  * call for the phone, so the web and the phone apply one set of rules.
  *
- *   - actOnExceptionAction: acknowledge an occurrence, or add a note. Nobody
- *     can resolve one; the system does that when a check no longer finds the
- *     condition. exception_occurrence_act re-checks the caller either way.
+ *   - actOnExceptionAction: acknowledge an occurrence, or add a note.
+ *     Acknowledging never resolves one; the system does that when a check no
+ *     longer finds the condition. exception_occurrence_act re-checks the
+ *     caller either way.
+ *   - confirmExceptionCountAction: confirm the counted number of a count
+ *     difference (0386), the same ExceptionOccurrencesService.confirmCount
+ *     the phone reaches through POST /api/v1/exceptions/[id]/confirm-count.
+ *     It closes the exception at once, without a second count. Limited like
+ *     the route, under the same key (the act bucket).
  *   - requestExceptionCheckAction: a manager's "Check now". It SCHEDULES a
  *     sync to run after the response and returns at once (owner decision F1
  *     Q9: nothing a person does waits for a sync).
@@ -117,6 +123,39 @@ export async function actOnExceptionAction(
     return { ok: true };
   } catch (e) {
     return fail(e, 'actions.exceptions.act');
+  }
+}
+
+/** The act bucket's sentence when the limiter refused (the route answers
+ *  the same limit with a 429). */
+const CONFIRM_TOO_MANY_COPY = 'Too many requests. Wait a moment and try again.';
+
+export async function confirmExceptionCountAction(
+  id: string,
+  input: { cycleCountId: string; countedQuantity: number; note?: string | null },
+): Promise<{ ok: true; replay: boolean; reference: string | null } | Failure> {
+  try {
+    if (!uuidSchema.safeParse(id).success) {
+      throw new ServiceError('validation_error', 'That exception id is not valid.');
+    }
+    const ctx = await withContext();
+    // The phone's route limits acts and confirms to 60 a minute per person
+    // (api/v1/exceptions/[id]/confirm-count); the web path is limited the
+    // same, under the same key, so neither path is a way around it.
+    const rl = await checkRateLimit(`exceptions-act:${ctx.userId}`, 60, 60_000);
+    if (!rl.allowed) {
+      return { error: { message: CONFIRM_TOO_MANY_COPY, reason: 'rate_limited', retryable: true } };
+    }
+    const result = await new ExceptionOccurrencesService(ctx).confirmCount(id, {
+      cycleCountId: typeof input?.cycleCountId === 'string' ? input.cycleCountId : '',
+      countedQuantity: typeof input?.countedQuantity === 'number' ? input.countedQuantity : Number.NaN,
+      note: typeof input?.note === 'string' ? input.note : null,
+    });
+    revalidatePath('/dashboard/exceptions');
+    revalidatePath(`/dashboard/exceptions/${id}`);
+    return { ok: true, replay: result.replay, reference: result.occurrence.reference };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.confirm_count');
   }
 }
 

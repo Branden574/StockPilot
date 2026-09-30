@@ -547,6 +547,17 @@ WEB_TESTS=(
   # action limited as the phone's route is.
   src/server/services/exception-escalation.test.ts
   src/server/actions/exceptions.escalate.test.ts
+  # Confirm this count (0386): the app gate before the RPC (items:read,
+  # stock:adjust, write access to the item's LIVE warehouse, not the row's
+  # stamp), the RPC's refusals mapped by SQLSTATE and hint (EXECUTE revoked
+  # answers unavailable, never a 500; an unknown hint is unknown), one audit
+  # row per confirm and none on a replay, the D6 switch refusing before the
+  # RPC, the stock on record at the confirm never sent, the route and the web
+  # action under one rate limit (the act bucket), and internal errors never
+  # carrying database text.
+  src/server/services/exception-occurrences.confirm.test.ts
+  src/app/api/v1/exceptions/confirm-count-route.test.ts
+  src/server/actions/exceptions.confirm.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,

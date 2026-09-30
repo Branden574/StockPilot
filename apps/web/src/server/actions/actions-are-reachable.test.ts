@@ -55,6 +55,12 @@ const MOBILE_SRC = path.resolve(WEB_SRC, '../../mobile/src');
  */
 const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: string }> = [
   {
+    name: 'confirmExceptionCountAction',
+    file: 'exceptions.ts',
+    reason:
+      'Count differences R2 (0386): the server lands first on feat/exc-confirm-r2 and the confirm dialog (components/exceptions/confirm-count-dialog.tsx, plan 7.3) is its caller in the next step of the same branch. Remove this entry with that commit (the guard fails once the dialog calls it).',
+  },
+  {
     name: 'createProcedureCategoryAction',
     file: 'procedures.ts',
     reason: 'SP-120 orphan; procedures.ts is outside this change — delete or wire it.',

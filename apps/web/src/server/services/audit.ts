@@ -146,6 +146,15 @@ export type AuditEvent =
    */
   | 'exception.evidence_added'
   | 'exception.evidence_removed'
+  /**
+   * A person confirmed the counted number of a count difference and it closed
+   * without a second count (0386). ONE row per confirm that is not a replay;
+   * entityId is the occurrence; `after` carries { cycleCountId,
+   * countedQuantity, confirmedAs, note }. A second record: the row's
+   * confirmed_* columns and its count_confirmed event are the record (written
+   * inside exception_confirm_count, so they also hold for a direct call).
+   */
+  | 'exception.count_confirmed'
   | 'size_count.started'
   | 'size_count.completed'
   | 'bundle.created'

@@ -141,6 +141,9 @@ export async function GET(req: NextRequest) {
     ).map((id) => ({ id }));
 
     let processed = 0;
+    // count_variance entries held because their count line was confirmed
+    // (0386), summed over the orgs applied: for the log, not the tally.
+    let settled = 0;
     for (const org of ordered) {
       if (Date.now() - startedAt >= SWEEP_DEADLINE_MS) break;
       // Unforced: an org synced within the last minute (a count was just
@@ -159,6 +162,7 @@ export async function GET(req: NextRequest) {
         outcome = { status: 'failed' };
       }
       tally[outcome.status] += 1;
+      if (outcome.status === 'applied') settled += outcome.settled;
       processed += 1;
     }
     const deferred = ordered.length - processed;
@@ -175,6 +179,7 @@ export async function GET(req: NextRequest) {
       processed,
       deferredForTime: deferred,
       ...tally,
+      settled,
     });
   } catch (err) {
     void reportError(err, { tag: 'cron.exception-occurrences' });
