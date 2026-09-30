@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 
-import { CountVarianceClearCard } from '@/components/exceptions/count-variance-clear-card';
+import { ConfirmCountProvider, ConfirmCountStatus } from '@/components/exceptions/confirm-count-dialog';
+import { CountVarianceClearCard, countVarianceClearCopyFor } from '@/components/exceptions/count-variance-clear-card';
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
 import { OccurrencePhotos } from '@/components/exceptions/occurrence-photos';
 import { RecountButton } from '@/components/exceptions/recount-selection';
@@ -53,6 +54,7 @@ import {
   isRecountableRule,
   RECOUNT_COUNTS_TOTAL_COPY,
   RECOUNT_NONE_LINKED_COPY,
+  recountAbilityOf,
   recountUnavailableCopy,
   resolvedReasonCopy,
   resolveOrgTimezone,
@@ -72,8 +74,9 @@ export const metadata = { title: 'Exception' };
  * Acknowledge and Add note are rendered only for a reader the server says may
  * act (canAct: stock:adjust and write access to the warehouse, or a manager
  * when it has none); exception_occurrence_act re-checks on every call.
- * Everyone else sees why the actions are not offered. Nothing here resolves
- * an occurrence: the system does, once a check no longer finds it.
+ * Everyone else sees why the actions are not offered. Acknowledging and notes
+ * never resolve an occurrence: the system does, once a check no longer finds
+ * it, and a count difference also closes when its count is confirmed.
  *
  * Recount (F1-2) is offered on a count_variance or over_reserved exception to
  * a reader the server says can start one (canRecount: a manager with the
@@ -86,10 +89,19 @@ export const metadata = { title: 'Exception' };
  * always-true lead, what clears it for this reader, and Recount with its
  * linked recount. That card replaces the Recount card and the bottom "What
  * clears this" for the rule, and Acknowledge there says it does not clear
- * it. Confirming the counted number comes with the server's countConfirm
- * block, which this release never sends: no Confirm is offered yet. A row
- * resolved by a confirmation reads with who confirmed it (core), and a reason
- * this build cannot word reads "Resolved", never "Cleared".
+ * it. A row resolved by a confirmation reads with who confirmed it (core),
+ * and a reason this build cannot word reads "Resolved", never "Cleared".
+ *
+ * Confirm this count (count differences R2, migration 0386) comes with the
+ * server's countConfirm block: the person who counted it, or a manager, can
+ * confirm the counted number, which closes the exception at once without a
+ * second count. It is offered where core's offerConfirm says so (the card's
+ * filled button, and Confirm this count instead in the Acknowledge step,
+ * which carries the typed note); both open one dialog (ConfirmCountProvider),
+ * which shows the numbers the server sent and sends them back, and
+ * exception_confirm_count re-checks everything. After a confirm the page
+ * says "Count confirmed. EX-... is closed." and refreshes into the resolved
+ * row. With the switch off (no block) nothing here names Confirm.
  *
  * The item's last physical count (F1-3) is the shared verification card,
  * streamed under its own Suspense boundary so this page never waits for it,
@@ -234,6 +246,10 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
   // and its own Acknowledge help (owner decision 2026-09-29).
   const countVariance = o.rule === 'count_variance';
   const countConfirm = detail.countConfirm ?? null;
+  // The card's own words decide whether Confirm is offered (core
+  // offerConfirm); the Acknowledge step's "instead" follows the same value.
+  const offerConfirm =
+    countVariance && !resolved ? countVarianceClearCopyFor(o, displayed, countConfirm).offerConfirm : false;
   const resolvedCopy = resolvedReasonCopy(o.resolvedReason, o.confirmation?.as ?? null);
   const confirmedRow = o.confirmation
     ? confirmationFactsRow(o.confirmation, exceptionTime(o.confirmation.at, timeZone))
@@ -248,6 +264,14 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
       : null;
 
   return (
+    <ConfirmCountProvider
+      occurrenceId={o.id}
+      reference={o.reference}
+      confirm={countVariance && !resolved ? countConfirm : null}
+      offered={offerConfirm}
+      recountAbility={recountAbilityOf(o.canRecount, o.recountUnavailableReason)}
+      recountNumber={o.recount?.countNumber ?? null}
+    >
     <div className="space-y-6">
       <header className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -263,6 +287,9 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
           <EscalationChip escalation={escalation} href={requestHref} />
         </div>
       </header>
+
+      {/* "Count confirmed. EX-... is closed.", once a confirm succeeds. */}
+      {countVariance ? <ConfirmCountStatus /> : null}
 
       {detail.syncState === null ? (
         <FirstCheckPending />
@@ -535,6 +562,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         </Card>
       ) : null}
     </div>
+    </ConfirmCountProvider>
   );
 }
 

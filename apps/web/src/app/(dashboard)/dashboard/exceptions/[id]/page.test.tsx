@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,17 +35,26 @@ import {
  *     so, hidden otherwise; an escalated exception shows "Escalated: MR-..."
  *     to every reader, linked and with what StockPilot records about the
  *     request only for a reader who can open it; the action then opens that
- *     request instead of making another; never "sent" or "ticket".
+ *     request instead of making another; never "sent" or "ticket";
+ *   - confirm this count (count differences R2, 0386): Confirm is offered
+ *     only where the server's countConfirm block says this reader can
+ *     confirm a confirmable row, as the filled button on the top card and as
+ *     "Confirm this count instead" in the Acknowledge step; both open one
+ *     dialog that sends back the count and the number it showed; the reason
+ *     under a withheld Confirm shows only where the words do not already say
+ *     it.
  */
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
 const scheduleExceptionSync = vi.hoisted(() => vi.fn());
+const confirmExceptionCountAction = vi.hoisted(() => vi.fn());
+const refresh = vi.hoisted(() => vi.fn());
 
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
   }),
-  useRouter: () => ({ refresh: vi.fn() }),
+  useRouter: () => ({ refresh }),
 }));
 vi.mock('next/link', async () => {
   const React = await import('react');
@@ -62,6 +71,7 @@ vi.mock('@/server/services/exception-occurrences', () => ({
 vi.mock('@/server/actions/exceptions', () => ({
   requestExceptionCheckAction: vi.fn(),
   actOnExceptionAction: vi.fn(),
+  confirmExceptionCountAction: (...args: unknown[]) => confirmExceptionCountAction(...args),
   startExceptionEvidenceUploadAction: vi.fn(),
   finalizeExceptionEvidenceAction: vi.fn(),
   removeExceptionEvidenceAction: vi.fn(),
@@ -465,8 +475,9 @@ describe('Exception detail page', () => {
     expect(card).toHaveTextContent(
       'It clears when a later count of this item matches the stock on record. To close it, count it once more with Recount. Acknowledging does not clear this.',
     );
-    // No Confirm in this release: the server sends no countConfirm block.
+    // With no countConfirm block (the switch off) nothing names Confirm.
     expect(card).not.toHaveTextContent(/confirm/i);
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
     expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
     // Above the facts card.
     const facts = screen.getByText('First seen');
@@ -521,6 +532,200 @@ describe('Exception detail page', () => {
     );
     await renderPage();
     expect(screen.queryByTestId('count-variance-clears')).not.toBeInTheDocument();
+  });
+
+  // ── Count differences R2: Confirm this count (0386) ─────────────────────
+
+  function block(o: Record<string, unknown> = {}) {
+    return {
+      state: 'confirmable',
+      canConfirm: true,
+      unavailableReason: null,
+      cycleCountId: 'cc-1',
+      countNumber: 1,
+      counted: 21,
+      onRecordBefore: 20,
+      onRecordNow: 21,
+      countedBy: { id: 'u-dana', label: 'Dana Lee' },
+      postedBy: { id: 'u-sam', label: 'Sam Ortiz' },
+      readerIsCounter: true,
+      otherCount: null,
+      ...o,
+    };
+  }
+
+  it('a reader who can confirm: Confirm this count is the filled button, beside an outline Recount, with who counted it', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }, { countConfirm: block() }));
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent(
+      'If 21 is right, confirm it with Confirm this count. If you are not sure, count it once more with Recount. Acknowledging does not clear this.',
+    );
+    expect(card).toHaveTextContent('Counted by Dana Lee, posted by Sam Ortiz.');
+    const confirm = within(card).getByRole('button', { name: 'Confirm this count' });
+    expect(confirm).toHaveClass('bg-primary');
+    expect(within(card).getByTestId('recount-button')).toHaveAttribute('data-variant', 'outline');
+    // Confirm comes first in the card's buttons.
+    expect(confirm.compareDocumentPosition(within(card).getByTestId('recount-button')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
+  });
+
+  // The call site: the page's card opens the dialog, which sends the count
+  // and the number the server's block carried, and the page then says so.
+  it('Confirm opens the dialog with the numbers, and sends back the count and the number it showed', async () => {
+    confirmExceptionCountAction.mockResolvedValue({ ok: true, replay: false, reference: 'EX-000042' });
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }, { countConfirm: block() }));
+    await renderPage();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm this count' }));
+    });
+    const dialog = screen.getByRole('dialog', { name: 'Confirm this count?' });
+    expect(within(dialog).getByTestId('confirm-count-numbers')).toHaveTextContent(
+      'Counted in CC-000001: 21On record before the count: 20On record now: 21Counted by Dana Lee, posted by Sam Ortiz.',
+    );
+    expect(dialog).toHaveTextContent(
+      'Confirming records that 21 is right. It closes EX-000042 now, without a second count. If a later count does not match the stock on record, a new exception opens.',
+    );
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm and close' }));
+    });
+    expect(confirmExceptionCountAction).toHaveBeenCalledWith(ID, { cycleCountId: 'cc-1', countedQuantity: 21, note: null });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Count confirmed. EX-000042 is closed.');
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it('the Acknowledge step tells a reader who can confirm to confirm instead, and carries the typed note', async () => {
+    confirmExceptionCountAction.mockResolvedValue({ ok: true, replay: false, reference: 'EX-000042' });
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }, { countConfirm: block() }));
+    await renderPage();
+    const help = countVarianceAcknowledgeHelp({
+      facts: VARIANCE.facts,
+      displayed: { kind: 'open' },
+      recount: null,
+      canRecount: true,
+      confirm: block() as never,
+    });
+    expect(help).toBe(
+      'CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. If you have checked that 21 is right, confirm the count instead.',
+    );
+    expect(screen.getByText(help)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'outline');
+    fireEvent.change(screen.getByLabelText(/Note \(optional when acknowledging\)/), {
+      target: { value: 'Items recounted' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm this count instead' }));
+    });
+    expect(within(screen.getByRole('dialog')).getByLabelText('Note (optional)')).toHaveValue('Items recounted');
+  });
+
+  it('staff who did not count it: no Confirm, and the reason under it names the counter', async () => {
+    get.mockResolvedValue(
+      detail(
+        { ...VARIANCE, canRecount: false },
+        { countConfirm: block({ canConfirm: false, unavailableReason: 'not_counter', readerIsCounter: false }) },
+      ),
+    );
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent(
+      'It clears when Dana Lee, who counted it, or a manager confirms that 21 is right, or when a recount matches the stock on record. Acknowledging does not clear this.',
+    );
+    expect(screen.getByTestId('confirm-unavailable')).toHaveTextContent(
+      'Only Dana Lee, who counted it, or a manager can confirm this count.',
+    );
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+  });
+
+  it('the stock on record moved: no Confirm and no reason line (the words say why), and Recount is the way', async () => {
+    get.mockResolvedValue(
+      detail(
+        { ...VARIANCE, canRecount: true },
+        { countConfirm: block({ state: 'stock_moved', canConfirm: false, unavailableReason: 'stock_moved', onRecordNow: 25 }) },
+      ),
+    );
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent(
+      'The stock on record changed after this count (counted 21, on record now 25), so confirming it is not offered. Count it once more with Recount. Acknowledging does not clear this.',
+    );
+    expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+    expect(within(card).getByTestId('recount-button')).toHaveAttribute('data-variant', 'default');
+  });
+
+  it('a linked recount in progress: the reason under a withheld Confirm names it', async () => {
+    get.mockResolvedValue(
+      detail(
+        {
+          ...VARIANCE,
+          canRecount: true,
+          recount: {
+            cycleCountId: 'cc-2',
+            countNumber: 2,
+            status: 'in_progress',
+            completedAt: null,
+            outcome: { kind: 'in_progress', counted: 0, total: 1 },
+          },
+        },
+        { countConfirm: block({ state: 'recount_in_progress', canConfirm: false, unavailableReason: 'recount_in_progress' }) },
+      ),
+    );
+    await renderPage();
+    expect(screen.getByTestId('confirm-unavailable')).toHaveTextContent(
+      'Confirm this count is not offered while recount CC-000002 is in progress. Its result will settle this, or a manager can cancel it.',
+    );
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      'count_in_progress',
+      { otherCount: { countNumber: 41, counted: 3 } },
+      'Confirm this count is not offered while CC-000041 is in progress with a different number for this item.',
+    ],
+    ['unavailable', {}, 'Confirming is unavailable right now. Reload to try again.'],
+  ])('%s: the reason under a withheld Confirm says why', async (state, extra, reason) => {
+    get.mockResolvedValue(
+      detail(
+        { ...VARIANCE, canRecount: true },
+        { countConfirm: block({ state, canConfirm: false, unavailableReason: state, ...extra }) },
+      ),
+    );
+    await renderPage();
+    expect(screen.getByTestId('confirm-unavailable')).toHaveTextContent(reason);
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+  });
+
+  it('a viewer reads who can confirm it, and is offered nothing', async () => {
+    get.mockResolvedValue(
+      detail(
+        { ...VARIANCE, canRecount: false, canAct: false },
+        { countConfirm: block({ canConfirm: false, unavailableReason: 'not_permitted', readerIsCounter: false }) },
+      ),
+    );
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent(
+      'It clears when Dana Lee, who counted it, or a manager confirms that 21 is right, or when a recount matches the stock on record.',
+    );
+    expect(card).not.toHaveTextContent('Acknowledging');
+    expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('act-unavailable')).toBeInTheDocument();
+  });
+
+  it('a resolved count difference offers no Confirm, whatever the server sent', async () => {
+    get.mockResolvedValue(
+      detail(
+        { ...VARIANCE, resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: false },
+        { countConfirm: block() },
+      ),
+    );
+    await renderPage();
+    expect(screen.queryByRole('button', { name: /Confirm this count/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   // Before: an unknown reason read "Resolved: Cleared" on the chip and

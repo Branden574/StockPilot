@@ -9,6 +9,7 @@ import {
 } from './exception-recount';
 import {
   countVarianceNumbers,
+  EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_SYNC_INTERVAL_MINUTES,
   roundQuantity,
   signedQuantity,
@@ -305,6 +306,12 @@ export const CONFIRM_COUNT_NOTE_PLACEHOLDER = 'How you checked, for example coun
 /** The one button of a confirm sheet whose confirm the server stopped
  *  offering while it was open: nothing is left to confirm. */
 export const CONFIRM_COUNT_CLOSE_LABEL = 'Close';
+/** The web Resolved tab's filter that lists only the exceptions a count
+ *  confirmation closed: an oversight view of the risk the owner accepted
+ *  (a confirmed count closes without anyone counting it again). */
+export const CONFIRMED_ONLY_FILTER_LABEL = 'Closed without a second count';
+/** That filter, with nothing in the Resolved window. */
+export const EXCEPTION_NONE_CONFIRMED_COPY = `Nothing was closed without a second count in the last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days.`;
 const ACK = 'Acknowledging does not clear this.';
 const MODULE_OFF =
   'Cycle Counts is turned off for this organization, so it cannot be recounted until it is turned on again.';

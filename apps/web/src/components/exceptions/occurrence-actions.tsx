@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { ConfirmCountInsteadButton } from '@/components/exceptions/confirm-count-dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { actOnExceptionAction } from '@/server/actions/exceptions';
@@ -20,8 +21,8 @@ function newClientEventId(): string {
 /**
  * Acknowledge and Add note for one occurrence (F1-1). Rendered ONLY for a
  * reader the server said may act (the page decides; exception_occurrence_act
- * re-checks on every call). Nothing here resolves an exception: that happens
- * by itself once a check no longer finds the condition.
+ * re-checks on every call). Nothing here resolves an exception: acknowledging
+ * and notes never do.
  *
  * THE REQUEST ID BELONGS TO THE PAYLOAD. A failed submission keeps its
  * clientEventId only for a resend of the SAME action and note, which the
@@ -40,7 +41,11 @@ function newClientEventId(): string {
  * countVarianceAcknowledgeHelp, which the page words: the counted numbers,
  * that acknowledging does not clear it, and what does. There Acknowledge is an
  * outline button, so it does not read as the way to close the exception
- * (EX-000059 was acknowledged in the belief that it would close).
+ * (EX-000059 was acknowledged in the belief that it would close). Where the
+ * reader can confirm the count (count differences R2), the help ends "confirm
+ * the count instead" and Confirm this count instead opens the page's confirm
+ * dialog with the note typed here (ConfirmCountInsteadButton, which shows
+ * only where the page's ConfirmCountProvider offers Confirm).
  */
 export function OccurrenceActions({
   occurrenceId,
@@ -101,7 +106,12 @@ export function OccurrenceActions({
   return (
     <section aria-label="Acknowledge or add a note" className="space-y-3">
       {!acknowledged ? (
-        <p className="text-muted-foreground text-sm">{ackHelp ?? EXCEPTION_ACKNOWLEDGE_HELP}</p>
+        <div className="space-y-1">
+          <p className="text-muted-foreground text-sm">{ackHelp ?? EXCEPTION_ACKNOWLEDGE_HELP}</p>
+          {rule === 'count_variance' ? (
+            <ConfirmCountInsteadButton note={note} disabled={pending !== null} />
+          ) : null}
+        </div>
       ) : null}
       <div className="space-y-1">
         <label htmlFor="exception-note" className="text-sm font-medium">

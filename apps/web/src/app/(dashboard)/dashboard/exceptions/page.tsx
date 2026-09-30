@@ -30,9 +30,11 @@ import {
 } from '@/server/services/exception-occurrences';
 
 import {
+  CONFIRMED_ONLY_FILTER_LABEL,
   describeOccurrence,
   EXCEPTION_ALL_CLEAR_BODY,
   EXCEPTION_ALL_CLEAR_TITLE,
+  EXCEPTION_NONE_CONFIRMED_COPY,
   EXCEPTION_NONE_RESOLVED_COPY,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULES,
@@ -74,8 +76,14 @@ export const metadata = { title: 'Exceptions' };
  *   - an open row of a rule this build cannot word (a newer build's rule,
  *     seen after a rollback) is counted, and the all-clear state is withheld
  *     while any exists: an open exception never reads as all clear.
+ *
+ * The Resolved tab can list only the exceptions a count confirmation closed
+ * (`?tab=resolved&confirmed=1`, "Closed without a second count"; count
+ * differences R2, 0386): the oversight view of the risk the owner accepted,
+ * for the people who review exceptions. Web only; the phone's Resolved list
+ * shows the role in each row's chip.
  */
-type SearchParams = { tab?: string | string[] };
+type SearchParams = { tab?: string | string[]; confirmed?: string | string[] };
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
@@ -104,10 +112,15 @@ export default async function ExceptionsPage({
   }
   const sp = (await searchParams) ?? {};
   const tab: OccurrenceListStatus = firstParam(sp.tab) === 'resolved' ? 'resolved' : 'open';
+  // Only the Resolved tab has the filter; anywhere else the parameter is
+  // ignored.
+  const confirmedOnly = tab === 'resolved' && firstParam(sp.confirmed) === '1';
 
   let result: OccurrenceListResult | null = null;
   try {
-    result = await new ExceptionOccurrencesService(ctx).list({ status: tab });
+    result = await new ExceptionOccurrencesService(ctx).list(
+      confirmedOnly ? { status: tab, confirmedOnly: true } : { status: tab },
+    );
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'forbidden') notFound();
     // Any other failure renders "unavailable" below. An empty list here
@@ -150,7 +163,12 @@ export default async function ExceptionsPage({
       ) : tab === 'open' ? (
         <OpenList result={result} syncState={result.syncState} timeZone={timeZone} />
       ) : (
-        <ResolvedList result={result} syncState={result.syncState} timeZone={timeZone} />
+        <ResolvedList
+          result={result}
+          syncState={result.syncState}
+          timeZone={timeZone}
+          confirmedOnly={confirmedOnly}
+        />
       )}
     </div>
   );
@@ -166,6 +184,26 @@ function TabLink({ href, active, children }: { href: string; active: boolean; ch
         active
           ? 'bg-foreground text-background rounded-md px-2.5 py-1.5 text-xs font-medium'
           : 'text-muted-foreground hover:text-foreground hover:bg-muted rounded-md px-2.5 py-1.5 text-xs font-medium'
+      }
+    >
+      {children}
+    </Link>
+  );
+}
+
+/** One choice of the Resolved tab's filter: a link, marked as the current
+ *  choice when active ("true", not "page": the tab above is the page), a
+ *  chip with a 44 pt target on touch screens. */
+function FilterLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      prefetch={false}
+      aria-current={active ? 'true' : undefined}
+      className={
+        active
+          ? 'border-foreground bg-muted text-foreground inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium pointer-coarse:min-h-11'
+          : 'text-muted-foreground hover:text-foreground hover:bg-muted border-border inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium pointer-coarse:min-h-11'
       }
     >
       {children}
@@ -256,14 +294,27 @@ function ResolvedList({
   result,
   syncState,
   timeZone,
+  confirmedOnly,
 }: {
   result: OccurrenceListResult;
   syncState: ExceptionSyncState;
   timeZone: string;
+  /** Only the rows a count confirmation closed. */
+  confirmedOnly: boolean;
 }) {
   return (
     <div className="space-y-4">
       <CheckedAt syncState={syncState} timeZone={timeZone} />
+      {/* Which resolved rows: all of them, or only those a count
+          confirmation closed without a second count. */}
+      <nav aria-label="Filter resolved exceptions" className="flex flex-wrap gap-1" data-testid="resolved-filter">
+        <FilterLink href="/dashboard/exceptions?tab=resolved" active={!confirmedOnly}>
+          All
+        </FilterLink>
+        <FilterLink href="/dashboard/exceptions?tab=resolved&confirmed=1" active={confirmedOnly}>
+          {CONFIRMED_ONLY_FILTER_LABEL}
+        </FilterLink>
+      </nav>
       {result.truncated && (
         <p className="text-warning text-xs">
           Showing the {result.occurrences.length} most recently resolved. There are more.
@@ -272,7 +323,9 @@ function ResolvedList({
       {result.occurrences.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center">
-            <p className="text-muted-foreground text-sm">{EXCEPTION_NONE_RESOLVED_COPY}</p>
+            <p className="text-muted-foreground text-sm">
+              {confirmedOnly ? EXCEPTION_NONE_CONFIRMED_COPY : EXCEPTION_NONE_RESOLVED_COPY}
+            </p>
           </CardContent>
         </Card>
       ) : (

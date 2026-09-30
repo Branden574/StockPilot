@@ -14,7 +14,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   - it never syncs: one list read per view.
  * Plus the stage-3 rendering: Open and Resolved tabs, state chips, the
  * recurrence badge, "Already present when tracking began", "Checked at" and
- * a manager-only Check now.
+ * a manager-only Check now. And the Resolved tab's filter for the rows a
+ * count confirmation closed ("Closed without a second count", count
+ * differences R2): asked of the service, never filtered on the page, and only
+ * on the Resolved tab.
  */
 
 const { list, ctor, syncOrg } = vi.hoisted(() => {
@@ -118,8 +121,8 @@ function listResult(o: Record<string, unknown> = {}) {
   };
 }
 
-async function renderPage(tab?: string) {
-  return render(await ExceptionsPage({ searchParams: Promise.resolve(tab ? { tab } : {}) }));
+async function renderPage(tab?: string, extra: Record<string, string> = {}) {
+  return render(await ExceptionsPage({ searchParams: Promise.resolve({ ...(tab ? { tab } : {}), ...extra }) }));
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -296,6 +299,68 @@ describe('Exceptions list page', () => {
     await renderPage('resolved');
     expect(screen.getByText('Nothing was resolved in the last 30 days.')).toBeInTheDocument();
     expect(screen.queryByText('Nothing needs attention')).not.toBeInTheDocument();
+  });
+
+  // ── The Resolved tab's filter (count differences R2, 0386) ─────────────
+
+  it('the Resolved tab offers the rows a count confirmation closed as a filter, with All as the current choice', async () => {
+    list.mockResolvedValue(listResult({ status: 'resolved' }));
+    await renderPage('resolved');
+    const filter = screen.getByRole('navigation', { name: 'Filter resolved exceptions' });
+    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute('href', '/dashboard/exceptions?tab=resolved');
+    expect(within(filter).getByRole('link', { name: 'All' })).toHaveAttribute('aria-current', 'true');
+    const confirmed = within(filter).getByRole('link', { name: 'Closed without a second count' });
+    expect(confirmed).toHaveAttribute('href', '/dashboard/exceptions?tab=resolved&confirmed=1');
+    expect(confirmed).not.toHaveAttribute('aria-current');
+  });
+
+  // Mutation caught: the page filtering the resolved rows itself (it would
+  // then show only the confirmed rows among the first 1,000 resolved).
+  it('confirmed=1 asks the service for the confirmed rows only, and lists them with their role', async () => {
+    list.mockResolvedValue(
+      listResult({
+        status: 'resolved',
+        occurrences: [
+          occurrence({
+            rule: 'count_variance',
+            facts: { itemName: 'Atlas', cycleCountId: 'cc-35', countNumber: 35, expected: 100, counted: 2, variance: -98 },
+            resolvedAt: '2026-09-24T19:00:00Z',
+            resolvedReason: 'confirmed',
+            presentWhenTrackingBegan: false,
+            confirmation: {
+              at: '2026-09-24T19:00:00Z',
+              by: { id: 'u-dana', label: 'Dana Lee' },
+              cycleCountId: 'cc-35',
+              countNumber: 35,
+              quantity: 2,
+              as: 'counter',
+            },
+          }),
+        ],
+      }),
+    );
+    await renderPage('resolved', { confirmed: '1' });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith({ status: 'resolved', confirmedOnly: true });
+    const filter = screen.getByRole('navigation', { name: 'Filter resolved exceptions' });
+    expect(within(filter).getByRole('link', { name: 'Closed without a second count' })).toHaveAttribute('aria-current', 'true');
+    expect(within(filter).getByRole('link', { name: 'All' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Resolved: Confirmed by the counter');
+    expect(screen.getByText(/CC-000035 found 2 where 100 was on record \(-98\)/)).toBeInTheDocument();
+  });
+
+  it('with the filter on and nothing to list, it says nothing was closed that way, not that nothing was resolved', async () => {
+    list.mockResolvedValue(listResult({ status: 'resolved' }));
+    await renderPage('resolved', { confirmed: '1' });
+    expect(screen.getByText('Nothing was closed without a second count in the last 30 days.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was resolved in the last 30 days.')).not.toBeInTheDocument();
+  });
+
+  it('the Open tab ignores the filter and does not offer it', async () => {
+    list.mockResolvedValue(listResult());
+    await renderPage(undefined, { confirmed: '1' });
+    expect(list).toHaveBeenCalledWith({ status: 'open' });
+    expect(screen.queryByRole('navigation', { name: 'Filter resolved exceptions' })).not.toBeInTheDocument();
   });
 
   it('offers Check now only when the server says the reader may ask for one', async () => {

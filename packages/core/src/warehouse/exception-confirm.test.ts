@@ -5,6 +5,7 @@ import {
   CONFIRM_COUNT_INSTEAD_LABEL,
   CONFIRM_COUNT_LABEL,
   CONFIRM_COUNT_NOTE_PLACEHOLDER,
+  CONFIRMED_ONLY_FILTER_LABEL,
   confirmationFactsRow,
   confirmUnavailableCopy,
   confirmCountButtonHint,
@@ -18,6 +19,7 @@ import {
   countVarianceLead,
   describeConfirmError,
   EXCEPTION_CONFIRM_OFFLINE_COPY,
+  EXCEPTION_NONE_CONFIRMED_COPY,
   isCountConfirmReason,
   isCountConfirmState,
   recountAbilityOf,
@@ -862,6 +864,15 @@ describe('confirmCountDialogCopy', () => {
     expect(CONFIRM_COUNT_CLOSE_LABEL).toBe('Close');
     expect(confirmUnavailableCopy('phone')).toBe('Confirming is unavailable right now. Pull down to try again.');
     expect(confirmUnavailableCopy('web')).toBe('Confirming is unavailable right now. Reload to try again.');
+  });
+});
+
+// The web Resolved tab's filter (plan 7.3, 9.7): the oversight view of the
+// risk the owner accepted, named as every confirmed row is worded.
+describe('the Resolved filter for confirmed rows', () => {
+  it('names the rows it lists as the timeline does, and says when there are none', () => {
+    expect(CONFIRMED_ONLY_FILTER_LABEL).toBe('Closed without a second count');
+    expect(EXCEPTION_NONE_CONFIRMED_COPY).toBe('Nothing was closed without a second count in the last 30 days.');
   });
 });
 
