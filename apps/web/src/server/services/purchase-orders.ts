@@ -59,6 +59,14 @@ type SavedDraft = {
   skippedItemIds: string[];
 };
 
+/** The unique index on a live PO's number (cancelled POs excepted). */
+const PO_NUMBER_INDEX = 'purchase_orders_org_ponumber_active_key';
+const PO_NUMBER_TAKEN = 'po_number_taken';
+
+function isPoNumberTaken(e: unknown): boolean {
+  return e instanceof ServiceError && e.code === 'conflict' && e.details?.reason === PO_NUMBER_TAKEN;
+}
+
 /**
  * Map a save_purchase_order_draft error onto a ServiceError. The function
  * marks its own refusals with a hint (0366 header); a PO number taken by
@@ -74,7 +82,13 @@ type SavedDraft = {
 function saveDraftRpcError(err: { message?: string; code?: string; hint?: string | null }): ServiceError {
   const message = err.message ?? '';
   if (err.code === '23505') {
-    return new ServiceError('conflict', 'That PO number is already in use.');
+    // details.reason marks the PO-number index, so an auto-drawn number can
+    // be drawn again (createDraftPo); any other unique violation is not.
+    return new ServiceError(
+      'conflict',
+      'That PO number is already in use.',
+      message.includes(PO_NUMBER_INDEX) ? { reason: PO_NUMBER_TAKEN } : undefined,
+    );
   }
   switch (err.hint) {
     case 'po_not_draft':
@@ -736,26 +750,7 @@ export class PurchaseOrdersService {
       }
       poNumber = suppliedPoNumber;
     } else {
-      // ═══ THE FALLBACK MUST BE LOUD ═══
-      //
-      // This discarded the RPC error and fell back to `PO-${Date.now()}`. The
-      // function was MISSING from production from 2026-05-20 until 0350, so
-      // every auto-numbered PO silently got an epoch timestamp
-      // (27 of them, e.g. PO-1788277456195) and nobody could see why. The
-      // fallback still exists — a PO must never fail to get a number — but a
-      // failure is now reported, so the next time an RPC goes missing it is a
-      // Sentry event and not three months of ugly supplier-facing documents.
-      const { data: numberRpc, error: numberErr } = await this.ctx.supabase.rpc(
-        'next_po_number',
-        { p_org_id: this.ctx.organizationId },
-      );
-      if (numberErr) {
-        void reportError(new Error(`next_po_number failed: ${numberErr.message}`), {
-          tag: 'purchase-orders.next_po_number',
-          organizationId: this.ctx.organizationId,
-        });
-      }
-      poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
+      poNumber = await this.drawPoNumber();
     }
 
     // Pure reads, before any custom item exists: a foreign supplier must not
@@ -773,19 +768,34 @@ export class PurchaseOrdersService {
     let resolvedLines: SaveDraftLine[];
     try {
       resolvedLines = await this.resolveLines(input.lines, customItemWarehouseId, customItemIds);
-      saved = await this.saveDraft({
-        poId: null,
-        poNumber,
-        supplierId: input.supplierId ?? null,
-        destinationLocationId: input.destinationLocationId ?? null,
-        charterId: billToCharterId,
-        expectedAt: input.expectedAt ?? null,
-        notes: input.notes ?? null,
-        lines: resolvedLines,
-        customItemIds,
-        op: 'po.create',
-        skipItemsOnOpenPo: opts.skipItemsOnOpenPo,
-      });
+      const lines = resolvedLines;
+      const save = (number: string) =>
+        this.saveDraft({
+          poId: null,
+          poNumber: number,
+          supplierId: input.supplierId ?? null,
+          destinationLocationId: input.destinationLocationId ?? null,
+          charterId: billToCharterId,
+          expectedAt: input.expectedAt ?? null,
+          notes: input.notes ?? null,
+          lines,
+          customItemIds,
+          op: 'po.create',
+          skipItemsOnOpenPo: opts.skipItemsOnOpenPo,
+        });
+      try {
+        saved = await save(poNumber);
+      } catch (e) {
+        // An AUTO-DRAWN number another PO took between the draw and the
+        // save (next_po_number is a count, read before the reorder drafts'
+        // lock is taken; a shortfall draft (0385) or another create holding
+        // or skipping that lock can write the same number first): drawn
+        // again, once. The failed save rolled back whole, so nothing is
+        // written twice. A number the person typed is never replaced.
+        if (suppliedPoNumber || !isPoNumberTaken(e)) throw e;
+        poNumber = await this.drawPoNumber();
+        saved = await save(poNumber);
+      }
     } catch (e) {
       await this.discardCreatedCustomItems(customItemIds, 'po.create.rollback_custom_items');
       throw e;
@@ -820,6 +830,32 @@ export class PurchaseOrdersService {
     });
 
     return { id: poId, poNumber, skippedItemIds: saved.skippedItemIds };
+  }
+
+  /**
+   * The next PO number (next_po_number: the org's PO count plus one).
+   *
+   * ═══ THE FALLBACK MUST BE LOUD ═══
+   *
+   * This discarded the RPC error and fell back to `PO-${Date.now()}`. The
+   * function was MISSING from production from 2026-05-20 until 0350, so every
+   * auto-numbered PO silently got an epoch timestamp (27 of them, e.g.
+   * PO-1788277456195) and nobody could see why. The fallback still exists — a
+   * PO must never fail to get a number — but a failure is now reported, so the
+   * next time an RPC goes missing it is a Sentry event and not three months of
+   * ugly supplier-facing documents.
+   */
+  private async drawPoNumber(): Promise<string> {
+    const { data: numberRpc, error: numberErr } = await this.ctx.supabase.rpc('next_po_number', {
+      p_org_id: this.ctx.organizationId,
+    });
+    if (numberErr) {
+      void reportError(new Error(`next_po_number failed: ${numberErr.message}`), {
+        tag: 'purchase-orders.next_po_number',
+        organizationId: this.ctx.organizationId,
+      });
+    }
+    return (numberRpc as string | null) ?? `PO-${Date.now()}`;
   }
 
   /**
