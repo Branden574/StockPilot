@@ -397,6 +397,21 @@ PGTAP_TESTS=(
   # of two approvers (exactly one wins) is
   # scripts/db-concurrency/0383_needed_by_race.sh.
   supabase/tests/0383_revise_order_needed_by.test.sql
+  # A Schedule event's order link and assignee are the server's (0384):
+  # authenticated holds INSERT and UPDATE on every schedule_events column
+  # except order_request_id and assigned_user_id, so a viewer, staff, a
+  # manager or the owner linking an event to an order (which took the order's
+  # one slot in schedule_events_order_request_uniq, so its real event got
+  # 23505, and let an approver's revise_order_needed_by move the linker's
+  # event), another org's manager linking to this org's order, a creator
+  # re-linking, and anyone naming an assignee (the reminder cron emails any
+  # assignee) are each 42501 and write nothing; anon writes nothing. The insert
+  # and update WITH CHECK also require the linked order to be in the event's
+  # org (0362's order_request_in_org), so a two-org member cannot move a
+  # linked event to the other org. The phone's and the Schedule page's writes,
+  # edits of an order's event by its creator or a manager, the order flows'
+  # admin writes and the needed-by revision keep working.
+  supabase/tests/0384_schedule_event_order_link.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
