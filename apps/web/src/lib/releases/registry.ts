@@ -45,7 +45,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: "Change an order's needed-by date; the schedule follows",
     summary:
-      "On the web and in the mobile app, an approver can now change an open order's needed-by date, with a reason, and the order's Schedule entry moves with it: its description names the new date and its reminders are set again. On the web, moving an event on the Schedule page now sends its reminders again for the new time.",
+      "On the web and in the mobile app, an approver can now change an open order's needed-by date, with a reason, and the order's Schedule entry moves with it: the date in its description changes too, and its reminders are set again for the new time. On the web, moving an event on the Schedule page now sends its reminders again for the new time.",
     publishedAt: '2026-10-08T17:00:00Z',
     entries: [
       {
@@ -54,11 +54,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "Change an order's needed-by date, and its Schedule entry follows",
         whatChanged:
-          "On an open order, Change beside its needed-by date lets you pick a new date and time and say why. The order's Schedule entry moves to the new time in the same step, its description names the new date, and its reminders are set again for the new time. Times are entered and shown in your organization's time zone, which the order names. The mobile app's order screen offers the same change.",
+          "On an open order, Change beside its needed-by date lets you pick a new date and time and say why. The order's Schedule entry moves to the new time in the same step: the date in its description changes, anything your team added to the description stays, and if the entry hasn't started, its reminders are set again for the new time. Times are entered and shown in your organization's time zone, which the Change window names. The mobile app's order screen offers the same change.",
         whyItMatters:
-          "A needed-by date could be set only before approval. After that, the order and its Schedule entry could not be changed together, and an entry moved by hand kept the old date in its description.",
+          "A needed-by date could be set only before approval. After approval, changing the date meant moving the Schedule entry by hand, which left the order's date and the entry's description behind.",
         howItAffectsYou:
-          "Changing the date needs permission to approve orders and access to the order's warehouse, and a reason, which the order's history records. If someone saved a different date while you were editing, nothing is changed and the order shows the date they saved. A completed or cancelled Schedule entry stays as it is. An approved order that had no needed-by date gets its Schedule entry when you set one. The change sends no email: the requester's delivery request email still opens only when they choose it, with the new date in it.",
+          "Changing the date needs permission to approve orders and access to the order's warehouse, and a reason, which the order's history records. If someone saved a different date while you were editing, nothing is changed and the order shows the date they saved. A completed or cancelled Schedule entry stays as it is. An approved order that had no needed-by date gets its Schedule entry when you set one. The change itself sends no email: the requester's delivery request email still opens only when they choose it, with the new date in it. Schedule reminders for the new time go out as usual.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:approve'], modules: ['orders'] },

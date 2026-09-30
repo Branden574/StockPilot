@@ -1568,8 +1568,20 @@ describe("F2-4 (change an order's needed-by date) is held as a draft", () => {
     expect(r.summary).toMatch(/^On the web and in the mobile app, /);
     const text = readerText(r).join(' ');
     expect(text).toContain("your organization's time zone");
+    // The order page and the phone card print the date without a zone; only
+    // the Change dialog and sheet name it ("Times are in …").
+    expect(text).toContain("your organization's time zone, which the Change window names");
+    expect(text).not.toContain('which the order names');
     expect(text).toContain('If someone saved a different date while you were editing, nothing is changed');
-    expect(text).toContain('The change sends no email');
+    // The revision itself emails no one; the reminders it re-arms still go
+    // out (the cron emails managers and the assignee near the new time).
+    expect(text).toContain('The change itself sends no email');
+    expect(text).toContain('Schedule reminders for the new time go out as usual.');
+    // 0383 swaps only the date sentence in the entry's description.
+    expect(text).toContain('anything your team added to the description stays');
+    // Only an entry that has not started is reminded (the cron reminds
+    // scheduled entries only).
+    expect(text).toContain("if the entry hasn't started, its reminders are set again for the new time");
     expect(text).toContain('A completed or cancelled Schedule entry stays as it is.');
     // The Schedule page's edit is web-only (the phone does not edit events).
     expect(release().entries[1]!.whatChanged).toMatch(/^On the web, /);
