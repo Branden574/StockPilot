@@ -10,6 +10,7 @@ import {
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   NEEDED_BY_SIGN_IN_COPY,
   neededByChangedCopy,
@@ -96,6 +97,7 @@ function setup(
         neededBy: '2026-10-03T21:00:00+00:00',
         eventId: 'ev-1',
         eventUpdated: true,
+        eventStatus: 'scheduled',
         status: 'approved',
       },
       error: null,
@@ -139,6 +141,7 @@ describe('POST /api/v1/orders/[id]/needed-by', () => {
         neededBy: '2026-10-03T21:00:00.000Z',
         eventId: 'ev-1',
         eventUpdated: true,
+        eventStatus: 'scheduled',
         status: 'approved',
         schedule: 'moved',
         timeZone: LA,
@@ -184,6 +187,7 @@ describe('POST /api/v1/orders/[id]/needed-by', () => {
     ['no warehouse write', { message: 'forbidden', code: '42501', hint: 'warehouse_write' }, 403, 'forbidden', NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY, { reason: 'forbidden' }],
     ['closed', { message: 'order_closed', code: 'P0001', hint: 'order_closed', details: 'completed' }, 409, 'conflict', NEEDED_BY_CLOSED_COPY, { reason: 'order_closed', status: 'completed' }],
     ['in the past', { message: 'needed_by_in_past', code: '22023', hint: 'needed_by_in_past' }, 400, 'validation_error', NEEDED_BY_IN_PAST_COPY, { reason: 'needed_by_in_past' }],
+    ['out of range', { message: 'needed_by_out_of_range', code: '22023', hint: 'needed_by_out_of_range' }, 400, 'validation_error', NEEDED_BY_OUT_OF_RANGE_COPY, { reason: 'needed_by_out_of_range' }],
     ['null', { message: 'needed_by_required', code: '22023', hint: 'needed_by_required' }, 400, 'validation_error', neededByInvalidTimeCopy(LA), { reason: 'invalid_time' }],
     ['reason', { message: 'reason_required', code: '22023', hint: 'reason_required' }, 400, 'validation_error', NEEDED_BY_REASON_REQUIRED_COPY, { reason: 'reason_required' }],
     [
@@ -192,7 +196,9 @@ describe('POST /api/v1/orders/[id]/needed-by', () => {
       409,
       'conflict',
       neededByChangedCopy('2026-10-05T21:00:00.000Z', LA),
-      { reason: 'needed_by_changed', current: '2026-10-05T21:00:00.000Z' },
+      // The function's own text, untouched: the phone sends it back as the
+      // next expected value.
+      { reason: 'needed_by_changed', current: '2026-10-05T21:00:00+00:00' },
     ],
     ['lock timeout', { message: 'canceling statement due to lock timeout', code: '55P03' }, 409, 'conflict', NEEDED_BY_BUSY_COPY, { reason: 'busy', retryable: true }],
     ['statement timeout', { message: 'canceling statement due to statement timeout', code: '57014' }, 409, 'conflict', NEEDED_BY_BUSY_COPY, { reason: 'busy', retryable: true }],

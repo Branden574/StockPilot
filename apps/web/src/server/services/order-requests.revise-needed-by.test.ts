@@ -9,6 +9,7 @@ import {
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
   NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
@@ -85,7 +86,34 @@ function answer(over: Record<string, unknown> = {}) {
     neededBy: '2026-10-03T21:00:00+00:00',
     eventId: 'ev-1',
     eventUpdated: true,
+    eventStatus: 'scheduled',
     status: 'approved',
+    ...over,
+  };
+}
+
+const NEW = '2026-10-03T21:00:00.000Z';
+/** The order's event as the admin client reads it after an insert. */
+function eventRow(over: Record<string, unknown> = {}) {
+  return {
+    id: 'ev-9',
+    status: 'scheduled',
+    starts_at: '2026-10-03T21:00:00+00:00',
+    ends_at: null,
+    details: orderScheduleEventDetails({ id: ORDER, orderNumber: 16, neededBy: NEW }, LA),
+    ...over,
+  };
+}
+/** The order as the admin client reads it after an insert (bringing the
+ *  event in step with it). */
+function orderNow(over: Record<string, unknown> = {}) {
+  return { id: ORDER, status: 'approved', needed_by: '2026-10-03T21:00:00+00:00', order_number: 16, ...over };
+}
+/** The admin client's answers for an order past approval with no event. */
+function missingEvent(over: Record<string, Result> = {}): Record<string, Result> {
+  return {
+    'order_requests.select': { data: orderNow(), error: null },
+    'schedule_events.select': { data: eventRow(), error: null },
     ...over,
   };
 }
@@ -174,6 +202,31 @@ describe('what it sends', () => {
     const { stub, svc } = build({ order: { data: orderRow({ needed_by: '2026-10-01T21:00:00.123456+00:00' }), error: null } });
     await svc.reviseNeededBy(input({ expectedNeededBy: '2026-10-01T21:00:00.123456+00:00' }));
     expect(rpcArgs(stub)?.p_expected_needed_by).toBe('2026-10-01T21:00:00.123456+00:00');
+  });
+
+  it('a wall clock equal to the stored one sends the STORED instant, so an unedited date changes nothing', async () => {
+    // Seconds (2 production orders carry sub-minute digits) and the other
+    // occurrence of a repeated fall-back hour (Auckland resolves 02:30 to
+    // its second occurrence; this one is stored at the first) both read back
+    // as the same minute wall clock but convert to another instant.
+    const cases: Array<[string, string, string]> = [
+      [LA, '2026-10-01T21:00:30.123456+00:00', '2026-10-01T14:00'],
+      ['Pacific/Auckland', '2027-04-03T13:30:00+00:00', '2027-04-04T02:30'],
+    ];
+    for (const [zone, stored, local] of cases) {
+      const { stub, svc } = build({
+        order: { data: orderRow({ needed_by: stored }), error: null },
+        org: { data: { timezone: zone }, error: null },
+      });
+      await svc.reviseNeededBy(input({ neededByLocal: local, expectedNeededBy: stored }));
+      expect(rpcArgs(stub)?.p_needed_by, zone).toBe(stored);
+    }
+  });
+
+  it('a different wall clock is converted as usual, even on an order with seconds stored', async () => {
+    const { stub, svc } = build({ order: { data: orderRow({ needed_by: '2026-10-01T21:00:30+00:00' }), error: null } });
+    await svc.reviseNeededBy(input({ neededByLocal: '2026-10-01T14:30', expectedNeededBy: '2026-10-01T21:00:30+00:00' }));
+    expect(rpcArgs(stub)?.p_needed_by).toBe('2026-10-01T21:30:00.000Z');
   });
 
   it('a first date on an order that had none sends expected null', async () => {
@@ -338,6 +391,19 @@ describe('gates, in core\'s words, before anything is sent', () => {
     }
   });
 
+  it('a date later than five years from now (or one no screen can hold), before anything is sent', async () => {
+    for (const over of [
+      { neededByLocal: '2099-01-15T10:00' },
+      { neededByLocal: undefined, neededByAt: '9999-12-31T00:00:00Z' },
+    ] as Array<Partial<ReviseNeededByInput>>) {
+      const { stub, svc } = build();
+      const e = await refusal(svc.reviseNeededBy(input(over)));
+      expect(e).toMatchObject({ code: 'validation_error', message: NEEDED_BY_OUT_OF_RANGE_COPY });
+      expect(e.details).toEqual({ reason: 'needed_by_out_of_range' });
+      expect(stub.rpcCalls).toHaveLength(0);
+    }
+  });
+
   it('an unreadable starting value', async () => {
     const { stub, svc } = build();
     const e = await refusal(svc.reviseNeededBy(input({ expectedNeededBy: 'yesterday' })));
@@ -365,13 +431,28 @@ describe('every refusal of the function, in core\'s words (pattern #28: each rai
     ['no warehouse write', { message: 'forbidden', code: '42501', hint: 'warehouse_write' }, { code: 'forbidden', message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY }, { reason: 'forbidden' }],
     ['closed', { message: 'order_closed', code: 'P0001', hint: 'order_closed', details: 'cancelled' }, { code: 'conflict', message: NEEDED_BY_CLOSED_COPY }, { reason: 'order_closed', status: 'cancelled' }],
     ['in the past', { message: 'needed_by_in_past', code: '22023', hint: 'needed_by_in_past' }, { code: 'validation_error', message: NEEDED_BY_IN_PAST_COPY }, { reason: 'needed_by_in_past' }],
+    ['out of range', { message: 'needed_by_out_of_range', code: '22023', hint: 'needed_by_out_of_range' }, { code: 'validation_error', message: NEEDED_BY_OUT_OF_RANGE_COPY }, { reason: 'needed_by_out_of_range' }],
     ['null', { message: 'needed_by_required', code: '22023', hint: 'needed_by_required' }, { code: 'validation_error', message: neededByInvalidTimeCopy(LA) }, { reason: 'invalid_time' }],
     ['reason', { message: 'reason_required', code: '22023', hint: 'reason_required' }, { code: 'validation_error', message: NEEDED_BY_REASON_REQUIRED_COPY }, { reason: 'reason_required' }],
     [
       'stale',
       { message: 'needed_by_changed', code: 'P0001', hint: 'needed_by_changed', details: '2026-10-05T21:00:00+00:00' },
       { code: 'conflict', message: neededByChangedCopy('2026-10-05T21:00:00.000Z', LA) },
-      { reason: 'needed_by_changed', current: '2026-10-05T21:00:00.000Z' },
+      { reason: 'needed_by_changed', current: '2026-10-05T21:00:00+00:00' },
+    ],
+    [
+      // The function's text passes through untouched (a JS Date would drop the
+      // microseconds, and the screen sends it back as the next expected value).
+      'stale, microseconds kept',
+      { message: 'needed_by_changed', code: 'P0001', hint: 'needed_by_changed', details: '2026-10-05T21:00:00.123456+00:00' },
+      { code: 'conflict', message: neededByChangedCopy('2026-10-05T21:00:00.123Z', LA) },
+      { reason: 'needed_by_changed', current: '2026-10-05T21:00:00.123456+00:00' },
+    ],
+    [
+      'stale, an unreadable detail',
+      { message: 'needed_by_changed', code: 'P0001', hint: 'needed_by_changed', details: 'soon' },
+      { code: 'conflict', message: neededByChangedCopy(null, LA) },
+      { reason: 'needed_by_changed', current: null },
     ],
     [
       'stale, the date cleared elsewhere',
@@ -412,11 +493,12 @@ describe('every refusal of the function, in core\'s words (pattern #28: each rai
 });
 
 describe('the Schedule entry', () => {
-  it('moved with the order: no new event is written here', async () => {
+  it('moved with the order: no new event is written here, and the answer names its status', async () => {
     const { admin, svc } = build();
     const out = await svc.reviseNeededBy(input());
-    expect(out).toMatchObject({ schedule: 'moved', eventUpdated: true, changed: true, timeZone: LA });
+    expect(out).toMatchObject({ schedule: 'moved', eventUpdated: true, eventStatus: 'scheduled', changed: true, timeZone: LA });
     expect(admin.chains.get('schedule_events.insert')).toBeUndefined();
+    expect(admin.fromCalls).toEqual([]);
   });
 
   it('completed or cancelled: left as it was, none created', async () => {
@@ -440,7 +522,8 @@ describe('the Schedule entry', () => {
     for (const status of ['approved', 'picking_in_progress', 'staged_for_delivery', 'backordered']) {
       const { admin, svc } = build({
         order: { data: orderRow({ status, needed_by: null }), error: null },
-        rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, status }), error: null },
+        rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null, status }), error: null },
+        admin: missingEvent({ 'order_requests.select': { data: orderNow({ status }), error: null } }),
       });
       const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
       expect(out.schedule, status).toBe('created');
@@ -457,45 +540,150 @@ describe('the Schedule entry', () => {
       });
       // The zone was read once, by the revision; the admin client read none.
       expect(admin.fromCalls).not.toContain('organizations');
+      expect(out.eventStatus, status).toBe('scheduled');
+      // In step with the order already: nothing moved or closed.
+      expect(admin.chains.get('schedule_events.update'), status).toBeUndefined();
     }
   });
 
-  it('an entry someone else made meanwhile at the same date counts as created; at another date it is reported and said', async () => {
+  it('the order closed while its entry was being added: the entry is closed too, and the screens say it stays', async () => {
+    // cancel_order_request committed between the function and the insert: its
+    // own close found no entry, so the new one would sit scheduled on a
+    // cancelled order and the reminder cron would email about it.
+    for (const [closed, eventOutcome] of [
+      ['cancelled', 'cancelled'],
+      ['denied', 'cancelled'],
+      ['completed', 'completed'],
+    ] as const) {
+      const { admin, svc } = build({
+        order: { data: orderRow({ needed_by: null }), error: null },
+        rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
+        admin: missingEvent({
+          'order_requests.select': { data: orderNow({ status: closed }), error: null },
+          'schedule_events.update': { data: null, error: null },
+        }),
+      });
+      const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
+      expect(out.schedule, closed).toBe('left_closed');
+      expect(out.eventStatus, closed).toBe(eventOutcome);
+      expect(admin.chainArgs.get('schedule_events.update')?.[0]?.[0], closed).toEqual({ status: eventOutcome });
+      expect(admin.chainArgs.get('schedule_events.update'), closed).toEqual(
+        expect.arrayContaining([['order_request_id', ORDER], ['status', ['scheduled', 'in_progress']]]),
+      );
+    }
+  });
+
+  it('an entry someone else made meanwhile at the same date counts as created', async () => {
     const same = build({
       order: { data: orderRow({ needed_by: null }), error: null },
-      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false }), error: null },
-      admin: {
-        'schedule_events.insert': { data: null, error: { message: 'duplicate key', code: '23505' } },
-        'schedule_events.select': { data: { starts_at: '2026-10-03T21:00:00+00:00' }, error: null },
-      },
+      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
+      admin: missingEvent({ 'schedule_events.insert': { data: null, error: { message: 'duplicate key', code: '23505' } } }),
     });
-    expect((await same.svc.reviseNeededBy(input({ expectedNeededBy: null }))).schedule).toBe('created');
+    const out = await same.svc.reviseNeededBy(input({ expectedNeededBy: null }));
+    expect(out.schedule).toBe('created');
+    expect(same.admin.chains.get('schedule_events.update')).toBeUndefined();
     expect(reportError).not.toHaveBeenCalled();
+  });
 
-    const other = build({
+  it('an entry an approval made meanwhile at the OLD date is moved to the order\'s date, keeping what a person wrote', async () => {
+    // approve() defers its insert with the needed-by it read; this revision
+    // committed first, found no entry, and its own insert met 23505. The
+    // entry is brought in step with the order row (the source of truth),
+    // guarded on the start it was read at, both reminder stamps cleared.
+    const old = orderScheduleEventDetails({ id: ORDER, orderNumber: 16, neededBy: '2026-10-01T21:00:00Z' }, LA);
+    const { admin, svc } = build({
       order: { data: orderRow({ needed_by: null }), error: null },
-      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false }), error: null },
-      admin: {
+      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
+      admin: missingEvent({
         'schedule_events.insert': { data: null, error: { message: 'duplicate key', code: '23505' } },
-        'schedule_events.select': { data: { starts_at: '2026-10-01T21:00:00+00:00' }, error: null },
-      },
+        'schedule_events.select': {
+          data: eventRow({
+            starts_at: '2026-10-01T21:00:00+00:00',
+            ends_at: '2026-10-01T22:30:00+00:00',
+            details: `${old}\nGate code 4411.`,
+          }),
+          error: null,
+        },
+        'schedule_events.update': { data: { id: 'ev-9' }, error: null },
+      }),
     });
-    expect((await other.svc.reviseNeededBy(input({ expectedNeededBy: null }))).schedule).toBe('not_moved');
+    const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
+    expect(out).toMatchObject({ schedule: 'moved', eventStatus: 'scheduled' });
+    expect(admin.chainArgs.get('schedule_events.update')?.[0]?.[0]).toEqual({
+      starts_at: '2026-10-03T21:00:00+00:00',
+      ends_at: '2026-10-03T22:30:00.000Z',
+      details: `${orderScheduleEventDetails({ id: ORDER, orderNumber: 16, neededBy: NEW }, LA)}\nGate code 4411.`,
+      reminded_24h_at: null,
+      reminded_1h_at: null,
+      updated_by: 'approver-1',
+    });
+    expect(admin.chainArgs.get('schedule_events.update')).toEqual(
+      expect.arrayContaining([
+        ['id', 'ev-9'],
+        ['starts_at', '2026-10-01T21:00:00+00:00'],
+        ['status', ['scheduled', 'in_progress']],
+      ]),
+    );
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('an entry at another date that cannot be moved (someone moved it again) is reported and said', async () => {
+    const { svc } = build({
+      order: { data: orderRow({ needed_by: null }), error: null },
+      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
+      admin: missingEvent({
+        'schedule_events.insert': { data: null, error: { message: 'duplicate key', code: '23505' } },
+        'schedule_events.select': { data: eventRow({ starts_at: '2026-10-01T21:00:00+00:00' }), error: null },
+        'schedule_events.update': { data: null, error: null },
+      }),
+    });
+    const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
+    expect(out.schedule).toBe('not_moved');
     expect(vi.mocked(reportError).mock.calls.map((c) => (c[1] as { tag: string }).tag)).toEqual([
       'orders.needed_by_event_drift',
     ]);
   });
 
-  it('an insert that fails: the order moved, the screens say the entry was not, and it is reported', async () => {
+  it('an insert that fails: the order moved, the screens say the entry was not added, and it is reported', async () => {
     const { svc } = build({
       order: { data: orderRow({ needed_by: null }), error: null },
-      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false }), error: null },
+      rpc: { data: answer({ previous: null, eventId: null, eventUpdated: false, eventStatus: null }), error: null },
       admin: { 'schedule_events.insert': { data: null, error: { message: 'boom', code: 'XX000' } } },
     });
     const out = await svc.reviseNeededBy(input({ expectedNeededBy: null }));
-    expect(out.schedule).toBe('not_moved');
+    expect(out.schedule).toBe('not_added');
     expect(out.changed).toBe(true);
     expect(reportError).toHaveBeenCalled();
+  });
+
+  it('saving the same date again adds a missing entry (the words after a failed insert say so)', async () => {
+    const { admin, svc } = build({
+      rpc: {
+        data: answer({ changed: false, previous: NEW, neededBy: NEW, eventId: null, eventUpdated: false, eventStatus: null }),
+        error: null,
+      },
+      admin: missingEvent(),
+    });
+    const out = await svc.reviseNeededBy(input({ expectedNeededBy: NEW }));
+    expect(out).toMatchObject({ changed: false, schedule: 'created', eventStatus: 'scheduled' });
+    expect(admin.chainArgs.get('schedule_events.insert')?.[0]?.[0]).toMatchObject({ starts_at: NEW, order_request_id: ORDER });
+    // Nothing changed on the order: no audit, no broadcast.
+    expect(audit).not.toHaveBeenCalled();
+    expect(broadcastOrderChanged).not.toHaveBeenCalled();
+  });
+
+  it('an unchanged save leaves an existing entry and a pending order alone', async () => {
+    for (const over of [
+      { eventId: 'ev-1', eventStatus: 'scheduled' },
+      { eventId: null, eventStatus: null, status: 'pending_approval' },
+    ]) {
+      const { admin, svc } = build({
+        rpc: { data: answer({ changed: false, previous: NEW, neededBy: NEW, eventUpdated: false, ...over }), error: null },
+      });
+      const out = await svc.reviseNeededBy(input({ expectedNeededBy: NEW }));
+      expect(out.schedule).toBe('unchanged');
+      expect(admin.fromCalls).toEqual([]);
+    }
   });
 });
 

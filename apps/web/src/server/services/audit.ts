@@ -170,7 +170,7 @@ export type AuditEvent =
   // F2-4 (0383): an approver changed an open order's needed-by, with a reason
   // (revise_order_needed_by). metadata: from, to (ISO instants; from is null
   // when the order had none), reason, schedule (what happened to its Schedule
-  // entry: moved, created, none_yet, left_closed, not_moved), event_id; plus
+  // entry: moved, created, none_yet, left_closed, not_added, not_moved), event_id; plus
   // before/after { needed_by }. Nothing is emailed or notified.
   | 'order_request.needed_by_revised'
   // Public request links + per-link catalog curation (mig 0261). Every

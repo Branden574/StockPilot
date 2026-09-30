@@ -44,6 +44,7 @@ function outcome(over: Partial<NeededByRevisionOutcome> = {}): NeededByRevisionO
     neededBy: '2026-10-03T21:00:00.000Z',
     eventId: 'ev-1',
     eventUpdated: true,
+    eventStatus: 'scheduled',
     status: 'approved',
     schedule: 'moved',
     timeZone: 'America/Los_Angeles',

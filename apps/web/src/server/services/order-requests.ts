@@ -3,6 +3,7 @@ import 'server-only';
 import {
   can,
   formatOrderNumber,
+  formatWallClock,
   HOLD_BUSY_COPY,
   HOLD_FAILED_COPY,
   HOLD_MODULE_OFF_COPY,
@@ -13,6 +14,7 @@ import {
   holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isManagerOrAbove,
+  isNeededByWithinReach,
   lineOwedUnits,
   NEEDED_BY_BUSY_COPY,
   NEEDED_BY_CLOSED_COPY,
@@ -22,6 +24,7 @@ import {
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
   NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_REQUIRED_COPY,
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
@@ -33,11 +36,14 @@ import {
   orderScheduleEventDetails,
   parseHoldOrderStockResult,
   parseNeededByRevisionResult,
+  parseWallClock,
   partialActionMovedOnCopy,
   resolveOrgTimezone,
   resolveRequesterIdentity,
   shouldTopUpHolds,
+  wallClockString,
   wallClockToInstant,
+  withOrderScheduleSentence,
   type HoldFailureReason,
   type HoldOrderStockResult,
   type HoldOutcome,
@@ -571,6 +577,19 @@ function neededByRefusal(
   return new ServiceError(code, message, { reason, ...extra });
 }
 
+/** Whether a stored instant reads, in the org's zone, as exactly the minute
+ *  wall clock a screen sent ("YYYY-MM-DDTHH:mm"). */
+function sameWallClock(stored: string, local: string, timeZone: string): boolean {
+  const at = Date.parse(stored);
+  const wall = parseWallClock(local);
+  if (!Number.isFinite(at) || !wall) return false;
+  try {
+    return formatWallClock(at, timeZone) === wallClockString(wall);
+  } catch {
+    return false;
+  }
+}
+
 /** An instant as ISO 8601 in UTC, or null when it is empty or unreadable. */
 function isoOrNull(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -584,8 +603,9 @@ function isoOrNull(value: string | null | undefined): string | null {
  * Matched on the function's own messages (every `raise` in 0383, pattern #28)
  * and, for its 42501s, the code and hint; anything else (a revoked grant, a
  * network fault) is internal_error, whose public message is generic.
- * needed_by_changed carries the order's current value (`details.current`, ISO
- * or null) so a screen can load it and say so. lock_timeout (55P03, 5 s on
+ * needed_by_changed carries the order's current value (`details.current`, the
+ * function's own ISO text, microseconds included, or null) so a screen can
+ * load it, say so, and send it back as the next expected value exactly. lock_timeout (55P03, 5 s on
  * the order or its event) and the role's statement_timeout (57014) are "busy,
  * try again" (`retryable: true`); the function never raises 40001/40P01.
  */
@@ -618,6 +638,9 @@ function neededByRevisionError(
   if (msg === 'needed_by_in_past') {
     return neededByRefusal('validation_error', NEEDED_BY_IN_PAST_COPY, 'needed_by_in_past');
   }
+  if (msg === 'needed_by_out_of_range') {
+    return neededByRefusal('validation_error', NEEDED_BY_OUT_OF_RANGE_COPY, 'needed_by_out_of_range');
+  }
   if (msg === 'needed_by_required') {
     return neededByRefusal('validation_error', neededByInvalidTimeCopy(timeZone), 'invalid_time');
   }
@@ -625,7 +648,11 @@ function neededByRevisionError(
     return neededByRefusal('validation_error', NEEDED_BY_REASON_REQUIRED_COPY, 'reason_required');
   }
   if (msg === 'needed_by_changed') {
-    const current = isoOrNull(error.details);
+    // The function's text as it is (to_jsonb of the stored timestamptz): a JS
+    // Date would drop the microseconds some rows carry, and the stale check
+    // compares the next expected value exactly.
+    const detail = (error.details ?? '').trim();
+    const current = isoOrNull(detail) === null ? null : detail;
     return neededByRefusal('conflict', neededByChangedCopy(current, timeZone), 'needed_by_changed', {
       current,
     });
@@ -639,6 +666,31 @@ function neededByRevisionError(
     'failed',
   );
 }
+
+/** A Schedule entry that is still open (the ones that move with the order). */
+const OPEN_EVENT_STATUSES = ['scheduled', 'in_progress'];
+
+/** What a closed order's entry becomes (syncOrderScheduleEvent). */
+const CLOSED_ORDER_EVENT_OUTCOME: Readonly<Record<string, 'completed' | 'cancelled'>> = {
+  completed: 'completed',
+  cancelled: 'cancelled',
+  denied: 'cancelled',
+};
+
+/** Where an order's Schedule entry stands against the order as it is now
+ *  (bringOrderEventInStep). `eventStatus` is the entry's status after it. */
+type OrderEventStep =
+  | { state: 'in_step' | 'moved' | 'closed'; eventStatus: string }
+  | { state: 'drift' | 'unknown'; eventStatus: string | null };
+
+/** What autoScheduleFromOrder did: 'created' (in step with the order),
+ *  'closed' (created, then closed because the order closed meanwhile),
+ *  'exists' (23505: the order already has its entry), 'skipped' (no
+ *  needed-by), 'failed' (reported). */
+type OrderEventWrite = {
+  made: 'created' | 'closed' | 'exists' | 'skipped' | 'failed';
+  eventStatus: string | null;
+};
 
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -2641,16 +2693,26 @@ export class OrderRequestsService {
    * text the revision writes when it moves an event, so the date in the text
    * always matches the event's start.
    *
-   * Outcome: 'created'; 'exists' (23505: the order already has its event,
-   * made by a concurrent approval or revision); 'skipped' (no needed-by);
-   * 'failed' (reported).
+   * The insert runs after the approval's (or the revision's) transaction,
+   * outside the order's lock, with the needed-by read then. So once it lands,
+   * the entry is brought in step with the order as it is NOW
+   * (bringOrderEventInStep): an order cancelled, denied or completed meanwhile
+   * has its new entry closed (its own close found none, and the reminder cron
+   * reminds any scheduled entry, whatever its order), and a needed-by changed
+   * meanwhile moves it. Deferred after an approval, so it costs the approver
+   * nothing.
+   *
+   * Outcome (OrderEventWrite): 'created'; 'closed' (created, then closed
+   * with its order); 'exists' (23505: the order already has its event, made
+   * by a concurrent approval or revision); 'skipped' (no needed-by); 'failed'
+   * (reported).
    */
   private async autoScheduleFromOrder(
     row: OrderRequestRow,
     knownTimeZone?: string,
-  ): Promise<'created' | 'exists' | 'skipped' | 'failed'> {
+  ): Promise<OrderEventWrite> {
     try {
-      if (!row.needed_by) return 'skipped';
+      if (!row.needed_by) return { made: 'skipped', eventStatus: null };
       const admin = createAdminClient();
       const so = formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase();
       const requester = (row.requester_name as string | null) ?? null;
@@ -2691,20 +2753,158 @@ export class OrderRequestsService {
             .assigned_delivery_user_id ?? null,
         created_by: this.ctx.userId,
       });
-      if (!error) return 'created';
-      if (error.code === '23505') return 'exists';
+      if (!error) {
+        const step = await this.bringOrderEventInStep(row.id, tz);
+        if (step.state === 'closed') return { made: 'closed', eventStatus: step.eventStatus };
+        return { made: 'created', eventStatus: step.eventStatus ?? 'scheduled' };
+      }
+      if (error.code === '23505') return { made: 'exists', eventStatus: null };
       void reportSrvError(new Error(error.message), {
         tag: 'orders.auto-schedule',
         organizationId: this.ctx.organizationId,
         extra: { orderId: row.id },
       });
-      return 'failed';
+      return { made: 'failed', eventStatus: null };
     } catch (e) {
       void reportSrvError(e, {
         tag: 'orders.auto-schedule',
         organizationId: this.ctx.organizationId,
       });
-      return 'failed';
+      return { made: 'failed', eventStatus: null };
+    }
+  }
+
+  /**
+   * Brings an order's Schedule entry in step with the order as it is NOW,
+   * after the entry was written outside the order's lock (autoScheduleFromOrder's
+   * insert, or a concurrent one a revision met as 23505). The order row is the
+   * source of truth:
+   *   - the order closed (completed, cancelled, denied): the entry is closed
+   *     the way syncOrderScheduleEvent closes it ('closed');
+   *   - the entry is completed or cancelled already: left as it is ('closed');
+   *   - the entry starts at the order's needed-by: nothing to do ('in_step');
+   *   - otherwise it moves to the order's needed-by, as revise_order_needed_by
+   *     moves one (its end shifted, its date sentence replaced and what a
+   *     person wrote around it kept: core withOrderScheduleSentence, 0383's
+   *     rule; both reminder stamps cleared), guarded on the start and status
+   *     it was read at, so a newer write wins ('moved'); when the guard finds
+   *     it changed, it is read again ('in_step' when it now matches, else
+   *     'drift', reported).
+   * Admin client: the entry is a system artifact of the order (the approval's
+   * and the revision's callers were gated). Never throws; a failed read is
+   * 'unknown', reported.
+   */
+  private async bringOrderEventInStep(orderId: string, timeZone: string): Promise<OrderEventStep> {
+    const orgId = this.ctx.organizationId;
+    const report = (state: string, extra: Record<string, unknown>) =>
+      void reportSrvError(new Error(`order event not in step with its order (${state})`), {
+        tag: 'orders.needed_by_event_drift',
+        organizationId: orgId,
+        extra: { orderId, state, ...extra },
+      });
+    try {
+      const admin = createAdminClient();
+      const [orderRes, eventRes] = await Promise.all([
+        admin
+          .from('order_requests')
+          .select('id, status, needed_by, order_number')
+          .eq('organization_id', orgId)
+          .eq('id', orderId)
+          .maybeSingle(),
+        admin
+          .from('schedule_events')
+          .select('id, status, starts_at, ends_at, details')
+          .eq('organization_id', orgId)
+          .eq('order_request_id', orderId)
+          .maybeSingle(),
+      ]);
+      const order = orderRes.data as
+        | { id: string; status: string; needed_by: string | null; order_number: number | null }
+        | null;
+      const ev = eventRes.data as
+        | { id: string; status: string; starts_at: string; ends_at: string | null; details: string | null }
+        | null;
+      if (orderRes.error || eventRes.error || !order || !ev) {
+        report('unknown', { orderError: orderRes.error?.message ?? null, eventError: eventRes.error?.message ?? null });
+        return { state: 'unknown', eventStatus: ev?.status ?? null };
+      }
+      const closeAs = CLOSED_ORDER_EVENT_OUTCOME[order.status];
+      if (closeAs) {
+        if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
+        await syncOrderScheduleEvent(orderId, closeAs, orgId);
+        return { state: 'closed', eventStatus: closeAs };
+      }
+      if (!OPEN_EVENT_STATUSES.includes(ev.status)) return { state: 'closed', eventStatus: ev.status };
+      if (!order.needed_by || Date.parse(order.needed_by) === Date.parse(ev.starts_at)) {
+        return { state: 'in_step', eventStatus: ev.status };
+      }
+      const endsAt =
+        ev.ends_at === null
+          ? null
+          : new Date(Date.parse(order.needed_by) + (Date.parse(ev.ends_at) - Date.parse(ev.starts_at))).toISOString();
+      const { data: moved, error: moveErr } = await admin
+        .from('schedule_events')
+        .update({
+          starts_at: order.needed_by,
+          ends_at: endsAt,
+          details: withOrderScheduleSentence(
+            ev.details,
+            orderScheduleEventDetails({ id: order.id, orderNumber: order.order_number, neededBy: order.needed_by }, timeZone),
+          ),
+          reminded_24h_at: null,
+          reminded_1h_at: null,
+          updated_by: this.ctx.userId,
+        })
+        .eq('id', ev.id)
+        .eq('starts_at', ev.starts_at)
+        .in('status', OPEN_EVENT_STATUSES)
+        .select('id')
+        .maybeSingle();
+      if (!moveErr && moved) return { state: 'moved', eventStatus: ev.status };
+      const { data: again } = await admin
+        .from('schedule_events')
+        .select('status, starts_at')
+        .eq('id', ev.id)
+        .maybeSingle();
+      const now = again as { status: string; starts_at: string } | null;
+      if (now && Date.parse(now.starts_at) === Date.parse(order.needed_by)) {
+        return { state: 'in_step', eventStatus: now.status };
+      }
+      report('drift', { neededBy: order.needed_by, eventStartsAt: now?.starts_at ?? ev.starts_at, moveError: moveErr?.message ?? null });
+      return { state: 'drift', eventStatus: now?.status ?? ev.status };
+    } catch (e) {
+      report('unknown', { error: e instanceof Error ? e.message : String(e) });
+      return { state: 'unknown', eventStatus: null };
+    }
+  }
+
+  /**
+   * A revision's order is past approval and has no Schedule entry (it had no
+   * needed-by when it was approved, or an earlier insert failed): the one
+   * writer of new order events adds it at the order's needed-by, and what
+   * happened is said as the screens say it. Met as 23505 (an approval's
+   * deferred insert or another revision won), the entry found is brought in
+   * step with the order.
+   */
+  private async addMissingOrderEvent(
+    row: OrderRequestRow,
+    timeZone: string,
+  ): Promise<{ schedule: NeededBySchedule; eventStatus: string | null }> {
+    const write = await this.autoScheduleFromOrder(row, timeZone);
+    switch (write.made) {
+      case 'created':
+        return { schedule: 'created', eventStatus: write.eventStatus };
+      case 'closed':
+        return { schedule: 'left_closed', eventStatus: write.eventStatus };
+      case 'exists': {
+        const step = await this.bringOrderEventInStep(row.id, timeZone);
+        if (step.state === 'in_step') return { schedule: 'created', eventStatus: step.eventStatus };
+        if (step.state === 'moved') return { schedule: 'moved', eventStatus: step.eventStatus };
+        if (step.state === 'closed') return { schedule: 'left_closed', eventStatus: step.eventStatus };
+        return { schedule: 'not_moved', eventStatus: step.eventStatus };
+      }
+      default:
+        return { schedule: 'not_added', eventStatus: null };
     }
   }
 
@@ -2849,7 +3049,20 @@ export class OrderRequestsService {
     if (neededByMs === null) {
       throw neededByRefusal('validation_error', neededByInvalidTimeCopy(timeZone), 'invalid_time');
     }
-    const neededBy = new Date(neededByMs).toISOString();
+    // The function refuses the same (needed_by_out_of_range); said here before
+    // anything is sent.
+    if (!isNeededByWithinReach(neededByMs, Date.now())) {
+      throw neededByRefusal('validation_error', NEEDED_BY_OUT_OF_RANGE_COPY, 'needed_by_out_of_range');
+    }
+    // A wall clock equal to the stored needed-by's (the dialog and the sheet
+    // start from it) names the STORED instant: converting it back could land
+    // on the other occurrence of a repeated fall-back hour, or drop the
+    // seconds a stored value carries, and turn a save of only a reason into a
+    // move of the Schedule entry that clears its reminder stamps.
+    const neededBy =
+      hasLocal && order.needed_by && sameWallClock(order.needed_by, input.neededByLocal as string, timeZone)
+        ? order.needed_by
+        : new Date(neededByMs).toISOString();
 
     const { data, error } = await this.ctx.supabase.rpc('revise_order_needed_by', {
       p_id: input.id,
@@ -2873,42 +3086,22 @@ export class OrderRequestsService {
     }
 
     let schedule: NeededBySchedule;
-    if (!result.changed) schedule = 'unchanged';
-    else if (result.eventUpdated) schedule = 'moved';
-    else if (result.eventId !== null) schedule = 'left_closed';
-    else if (!orderBelongsOnSchedule(result.status)) schedule = 'none_yet';
-    else {
+    let eventStatus = result.eventStatus;
+    const missingEvent = result.eventId === null && orderBelongsOnSchedule(result.status);
+    if (missingEvent) {
       // Past approval with no Schedule entry: the approval found no needed-by
-      // and so made none. The one writer of new order events makes it now,
-      // at the new date, with the same description.
-      const made = await this.autoScheduleFromOrder(
+      // and so made none, or an earlier insert failed. The one writer of new
+      // order events makes it now at the order's needed-by, with the same
+      // description. On an unchanged save too: that is how a person adds an
+      // entry the screens said "couldn't be added just now".
+      ({ schedule, eventStatus } = await this.addMissingOrderEvent(
         { ...order, status: result.status, needed_by: result.neededBy } as unknown as OrderRequestRow,
         timeZone,
-      );
-      schedule = made === 'created' ? 'created' : 'not_moved';
-      if (made === 'exists') {
-        // Someone else's write made the entry between the function and this
-        // insert (an approval's deferred event, another revision). It is the
-        // right entry only if it starts at the date just saved; otherwise the
-        // screens say it was not updated, and it is reported, never hidden.
-        const { data: ev, error: evErr } = await createAdminClient()
-          .from('schedule_events')
-          .select('starts_at')
-          .eq('organization_id', orgId)
-          .eq('order_request_id', input.id)
-          .maybeSingle();
-        const startsAt = (ev as { starts_at?: string } | null)?.starts_at;
-        if (!evErr && startsAt && Date.parse(startsAt) === Date.parse(result.neededBy)) {
-          schedule = 'created';
-        } else {
-          void reportSrvError(new Error('order event exists at another date after a needed-by revision'), {
-            tag: 'orders.needed_by_event_drift',
-            organizationId: orgId,
-            extra: { orderId: input.id, neededBy: result.neededBy, eventStartsAt: startsAt ?? null },
-          });
-        }
-      }
-    }
+      ));
+    } else if (!result.changed) schedule = 'unchanged';
+    else if (result.eventUpdated) schedule = 'moved';
+    else if (result.eventId !== null) schedule = 'left_closed';
+    else schedule = 'none_yet';
 
     if (result.changed) {
       await audit(
@@ -2926,7 +3119,7 @@ export class OrderRequestsService {
       );
       void broadcastOrderChanged(orgId, input.id);
     }
-    return { ...result, schedule, timeZone };
+    return { ...result, eventStatus, schedule, timeZone };
   }
 
   /**

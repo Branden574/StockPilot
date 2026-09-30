@@ -38,7 +38,7 @@ const APPROVED_ROW = {
   needed_by: '2026-09-11T02:00:00.000Z',
 };
 
-function build(results: Record<string, any> = {}) {
+function build(results: Record<string, any> = {}, adminResults: Record<string, any> = {}) {
   const stub = makeSupabaseStub({
     // requireWarehouseAccess reads the order's warehouse.
     'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
@@ -48,6 +48,7 @@ function build(results: Record<string, any> = {}) {
   const admin = makeSupabaseStub({
     'organizations.select.maybeSingle': { data: { timezone: 'America/Los_Angeles' }, error: null },
     'schedule_events.insert': { data: null, error: null },
+    ...adminResults,
   });
   adminHandle.client = admin.client;
   const svc = new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
@@ -166,6 +167,45 @@ describe('OrderRequestsService.approve — auto-created schedule event', () => {
       ),
     );
     expect(payload.details).toBe('Auto-created from order SO-000021. Needed by Sep 10, 2026, 7:00 PM.');
+  });
+
+  // The deferred insert runs after the approval committed, outside the
+  // order's lock. An order cancelled in that window had its own close run
+  // with no entry to close, so the new entry is closed here; otherwise the
+  // reminder cron (status 'scheduled' only, never the order) would email
+  // about a cancelled order.
+  it('closes its new entry when the order was cancelled before the insert landed', async () => {
+    const { admin, svc } = build(
+      {},
+      {
+        'order_requests.select': { data: { ...APPROVED_ROW, status: 'cancelled' }, error: null },
+        'schedule_events.select': {
+          data: { id: 'ev-1', status: 'scheduled', starts_at: APPROVED_ROW.needed_by, ends_at: null, details: 'x' },
+          error: null,
+        },
+        'schedule_events.update': { data: null, error: null },
+      },
+    );
+    await svc.approve('ord-1');
+    await flushAfter();
+    expect(admin.chains.get('schedule_events.insert')).toBeDefined();
+    expect(admin.chainArgs.get('schedule_events.update')?.[0]?.[0]).toEqual({ status: 'cancelled' });
+  });
+
+  it('leaves a new entry that is in step with its order alone', async () => {
+    const { admin, svc } = build(
+      {},
+      {
+        'order_requests.select': { data: APPROVED_ROW, error: null },
+        'schedule_events.select': {
+          data: { id: 'ev-1', status: 'scheduled', starts_at: '2026-09-11T02:00:00+00:00', ends_at: null, details: 'x' },
+          error: null,
+        },
+      },
+    );
+    await svc.approve('ord-1');
+    await flushAfter();
+    expect(admin.chains.get('schedule_events.update')).toBeUndefined();
   });
 });
 

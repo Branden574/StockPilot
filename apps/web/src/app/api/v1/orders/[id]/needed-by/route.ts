@@ -29,13 +29,15 @@ export const dynamic = 'force-dynamic';
  *   reason: 1 to 500 characters after trimming.
  * }
  *
- * 200 { revision: { changed, previous, neededBy, eventId, eventUpdated, status,
- *                   schedule, timeZone } }
+ * 200 { revision: { changed, previous, neededBy, eventId, eventUpdated,
+ *                   eventStatus, status, schedule, timeZone } }
  * Refusals: { error, message, details: { reason, ... } } with core's words:
- *   400 validation_error (reason_required, needed_by_in_past, invalid_time);
+ *   400 validation_error (reason_required, needed_by_in_past,
+ *       needed_by_out_of_range: later than five years from now, invalid_time);
  *   401 unauthenticated; 403 forbidden or module_disabled; 404 not_found;
- *   409 conflict: needed_by_changed (details.current, ISO or null: someone
- *       saved another date first; load it and say so), order_closed
+ *   409 conflict: needed_by_changed (details.current, the stored value's
+ *       exact ISO text or null: someone saved another date first; load it,
+ *       say so, and send it back as the next expected value), order_closed
  *       (details.status), busy (details.retryable: the order was locked by
  *       another change for 5 s; try again), timezone_unreadable (retryable);
  *   429 rate_limited; 500 internal_error (core's "couldn't be changed").
