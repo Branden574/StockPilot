@@ -67,17 +67,27 @@ const SM_QUERY = '(min-width: 640px)';
  *  it (--radix-popover-content-available-height) with it. */
 const ORDERS_PLACED_COLLISION_PADDING = 8;
 
-/** Room kept past a revealed control for its 2 px focus ring. */
+/** Room kept past a revealed control for its focus ring: the app's
+ *  :focus-visible is ring-2 plus ring-offset-2 (globals.css), 4 px. */
 const FOCUS_RING_ROOM = 4;
 
 /**
- * Keeps a VISIBLE focus inside the popover's scrolling body in view. The
- * calendar focuses its day as it mounts, before Radix has measured the room
- * and held the popover short; on a short screen that day then sits below
- * the fold. When the focus ring shows (the keyboard opened the calendar, or
- * a typed date field has focus), scroll the body, never the page, just far
- * enough to show it. A click or tap shows no ring, and the popover opens at
- * its top: the typed dates and the month.
+ * Shows a VISIBLE focus inside the popover's scrolling body whole: scrolls
+ * the body, never the page, just far enough. Runs on two occasions:
+ *
+ *   - The body resizes (observeCalendarBody). The calendar focuses its day
+ *     as it mounts, before Radix has measured the room and held the popover
+ *     short; on a short screen that day then sits below the fold.
+ *   - Focus moves into the body (its onFocus). The browser's own reveal is
+ *     not enough there: Chrome shows only a date field's focused part (the
+ *     year, on Shift+Tab) and Radix's Tab wrap from Apply focuses Start date
+ *     with preventScroll, which left the field's top edge, its ring and its
+ *     label under the body's top edge.
+ *
+ * A typed date field is shown with its label. Only when the focus ring shows
+ * (the keyboard moved focus, or a typed field has focus): a click or tap on
+ * a day shows no ring and moves nothing, so the popover opens at its top,
+ * the typed dates and the month.
  */
 function keepVisibleFocusInView(body: HTMLElement): void {
   const el = document.activeElement;
@@ -89,8 +99,10 @@ function keepVisibleFocusInView(body: HTMLElement): void {
     return;
   }
   if (!ring) return;
+  const field = el.closest<HTMLElement>('[data-typed-date]');
+  const target = field && body.contains(field) ? field : el;
   const box = body.getBoundingClientRect();
-  const at = el.getBoundingClientRect();
+  const at = target.getBoundingClientRect();
   // While it opens the popover zooms in from 95%: the rectangles are scaled
   // and scrollTop is not, so the distances are scaled back.
   const scale = body.offsetHeight > 0 ? box.height / body.offsetHeight : 1;
@@ -315,6 +327,7 @@ export function OrdersPlacedControl({
             ref={observeCalendarBody}
             data-custom-range-body
             className="min-h-0 space-y-3 overflow-y-auto overscroll-contain p-3 pb-0"
+            onFocus={(e) => keepVisibleFocusInView(e.currentTarget)}
           >
             <div className="flex gap-2">
               <TypedDate
@@ -430,7 +443,8 @@ function TypedDate({
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    // data-typed-date: the box a keyboard focus reveals, the label with the field.
+    <div data-typed-date className="flex min-w-0 flex-1 flex-col gap-1">
       <label htmlFor={id} className={FILTER_LABEL}>
         {label}
       </label>

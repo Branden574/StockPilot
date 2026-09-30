@@ -52,7 +52,12 @@ const ALL_TIME: BookReportRangeEcho = {
 
 async function openCalendar() {
   render(
-    <OrdersPlacedControl query={QUERY} rangeEcho={ALL_TIME} today="2026-09-29" onChange={vi.fn()} />,
+    <OrdersPlacedControl
+      query={QUERY}
+      rangeEcho={ALL_TIME}
+      today="2026-09-29"
+      onChange={vi.fn()}
+    />,
   );
   await userEvent.click(screen.getByRole('button', { name: 'Start date' }));
   const dialog = await screen.findByRole('dialog', { name: 'Orders placed' });
@@ -113,7 +118,9 @@ describe('Orders placed calendar popover: always on screen', () => {
     expect(within(body).getByLabelText('End date')).toBeInTheDocument();
     expect(within(body).getByRole('grid', { name: 'September 2026' })).toBeInTheDocument();
     expect(within(body).getByRole('button', { name: 'Previous month' })).toBeInTheDocument();
-    expect(within(body).getByRole('button', { name: 'Tuesday, September 29, 2026' })).toBeInTheDocument();
+    expect(
+      within(body).getByRole('button', { name: 'Tuesday, September 29, 2026' }),
+    ).toBeInTheDocument();
 
     // What never scrolls away: the zone, Cancel and Apply.
     const cancel = within(footer).getByRole('button', { name: 'Cancel' });
@@ -199,7 +206,7 @@ describe('Orders placed calendar popover: a visible focus stays in view when the
     expect(document.documentElement.scrollTop).toBe(0);
   });
 
-  it('while the popover zooms in (scaled 95%), the distance is scaled back to the body\'s own pixels', async () => {
+  it("while the popover zooms in (scaled 95%), the distance is scaled back to the body's own pixels", async () => {
     const resized = captureResizeObservers();
     const { body } = await openCalendar();
     hideFocusedDayBelow(body, true, 0.95);
@@ -213,5 +220,91 @@ describe('Orders placed calendar popover: a visible focus stays in view when the
     hideFocusedDayBelow(body, false);
     resized(body);
     expect(body.scrollTop).toBe(0);
+  });
+});
+
+describe('Orders placed calendar popover: keyboard focus that moves into the body is shown whole', () => {
+  // Chrome brings a date field into view by its focused part (the year, on
+  // Shift+Tab), not the whole field, and Radix's Tab wrap focuses with
+  // preventScroll. Measured in the calendar-fix harness (2026-09-29): 2 to 9
+  // px of the field, its ring and its label were left under the top edge of
+  // the scrolling body. The body is held here to 171..312 and scrolled 41 px.
+  const BODY_TOP = 171;
+  const BODY_BOTTOM = 312;
+  const SCROLLED = 41;
+
+  /** A typed date field (label 142..162, input 162..198) 9 px above the top edge. */
+  function placeFieldAboveTop(body: HTMLDivElement, input: HTMLElement, focusVisible = true) {
+    // The field: its label above the input.
+    const field = input.parentElement!;
+    expect(field.querySelector(`label[for="${input.id}"]`)).not.toBeNull();
+    const matches = Element.prototype.matches;
+    vi.spyOn(input, 'matches').mockImplementation((selector: string) =>
+      selector === ':focus-visible' ? focusVisible : matches.call(input, selector),
+    );
+    vi.spyOn(body, 'getBoundingClientRect').mockReturnValue(rect(BODY_TOP, BODY_BOTTOM));
+    Object.defineProperty(body, 'offsetHeight', {
+      configurable: true,
+      value: BODY_BOTTOM - BODY_TOP,
+    });
+    vi.spyOn(field, 'getBoundingClientRect').mockReturnValue(rect(142, 198));
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(162, 198));
+    body.scrollTop = SCROLLED;
+  }
+
+  it('Shift+Tab back into End date: the body scrolls up just far enough to show the whole field, its ring and its label', async () => {
+    const { body } = await openCalendar();
+    within(body).getByRole('button', { name: 'Previous month' }).focus();
+    const end = within(body).getByLabelText('End date');
+    placeFieldAboveTop(body, end);
+    await userEvent.tab({ shift: true });
+    expect(end).toHaveFocus();
+    // The label's top (142) less 4 px for the ring, at the body's top (171):
+    // 41 - (171 - 138).
+    expect(body.scrollTop).toBeCloseTo(8, 0);
+    expect(document.documentElement.scrollTop).toBe(0);
+  });
+
+  it('Tab past Apply wraps to Start date (Radix focuses it without scrolling): the body scrolls up to show the whole field and its label', async () => {
+    const { body, footer } = await openCalendar();
+    const start = within(body).getByLabelText('Start date');
+    await userEvent.type(start, '2026-09-01');
+    await userEvent.type(within(body).getByLabelText('End date'), '2026-09-28');
+    const apply = within(footer).getByRole('button', { name: 'Apply' });
+    expect(apply).toBeEnabled();
+    apply.focus();
+    placeFieldAboveTop(body, start);
+    await userEvent.tab();
+    expect(start).toHaveFocus();
+    expect(body.scrollTop).toBeCloseTo(8, 0);
+  });
+
+  it('an arrow key moves focus to a day below the bottom edge: the body scrolls to show the day and its ring', async () => {
+    // Chrome scrolls such a day flush with the edge, which hides its ring.
+    const { body } = await openCalendar();
+    within(body).getByRole('button', { name: 'Tuesday, September 22, 2026' }).focus();
+    const day = within(body).getByRole('button', { name: 'Tuesday, September 29, 2026' });
+    const matches = Element.prototype.matches;
+    vi.spyOn(day, 'matches').mockImplementation((selector: string) =>
+      selector === ':focus-visible' ? true : matches.call(day, selector),
+    );
+    vi.spyOn(body, 'getBoundingClientRect').mockReturnValue(rect(0, 200));
+    Object.defineProperty(body, 'offsetHeight', { configurable: true, value: 200 });
+    vi.spyOn(day, 'getBoundingClientRect').mockReturnValue(rect(210, 246));
+    body.scrollTop = 0;
+    await userEvent.keyboard('{ArrowDown}');
+    expect(day).toHaveFocus();
+    // 246 + 4 px for the ring - 200.
+    expect(body.scrollTop).toBeCloseTo(50, 0);
+  });
+
+  it('a click or tap that focuses without a ring leaves the body where it is', async () => {
+    const { body } = await openCalendar();
+    within(body).getByRole('button', { name: 'Previous month' }).focus();
+    const end = within(body).getByLabelText('End date');
+    placeFieldAboveTop(body, end, false);
+    end.focus();
+    expect(end).toHaveFocus();
+    expect(body.scrollTop).toBe(SCROLLED);
   });
 });
