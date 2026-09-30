@@ -191,7 +191,13 @@ function svcFor(
     role: who.role ?? 'staff',
     userId: who.userId ?? STAFF,
   });
-  return { svc: new ExceptionOccurrencesService(ctx as never, opts), stub };
+  // Confirm ON unless a test says otherwise, whatever the constant is, so
+  // this suite passes both with Confirm on and after the revert kit's
+  // forward commit turns it off (only the constant's own test flips).
+  return {
+    svc: new ExceptionOccurrencesService(ctx as never, { countConfirmEnabled: opts.countConfirmEnabled ?? true }),
+    stub,
+  };
 }
 
 beforeEach(() => {
@@ -206,6 +212,13 @@ beforeEach(() => {
 describe('D6: EXCEPTION_COUNT_CONFIRM_ENABLED', () => {
   it('is on in this release (the revert turns it off by a forward commit)', () => {
     expect(EXCEPTION_COUNT_CONFIRM_ENABLED).toBe(true);
+  });
+
+  it('a service built without the option follows the constant', async () => {
+    const stub = makeSupabaseStub(detailResults());
+    const ctx = makeServiceContext(stub.client, { organizationId: ORG, role: 'staff', userId: STAFF });
+    const d = await new ExceptionOccurrencesService(ctx as never).get(OCC);
+    expect(d.countConfirm !== null).toBe(EXCEPTION_COUNT_CONFIRM_ENABLED);
   });
 
   it('off: no countConfirm block and none of its reads', async () => {

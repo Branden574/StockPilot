@@ -35,6 +35,7 @@ vi.mock('@/lib/auth/warehouse', () => {
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { audit } from '@/server/services/audit';
+import { EXCEPTION_COUNT_CONFIRM_ENABLED } from '@/server/services/exception-occurrences';
 
 import { POST as CONFIRM } from './[id]/confirm-count/route';
 
@@ -126,7 +127,20 @@ beforeEach(() => {
   limiter.calls = [];
 });
 
-describe('POST /api/v1/exceptions/[id]/confirm-count', () => {
+// The route builds the service with the D6 constant. These cases hold while
+// Confirm is on; the revert kit's forward commit turns it off, and then the
+// case below holds instead (so the suite stays green either way).
+describe.runIf(!EXCEPTION_COUNT_CONFIRM_ENABLED)('POST /api/v1/exceptions/[id]/confirm-count, Confirm switched off', () => {
+  it('409 with reason unavailable, before the RPC', async () => {
+    const stub = ctxWith();
+    const res = await CONFIRM(post(bearer, BODY), params(OCC));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'conflict', details: { reason: 'unavailable' } });
+    expect(stub.rpcCalls).toEqual([]);
+  });
+});
+
+describe.runIf(EXCEPTION_COUNT_CONFIRM_ENABLED)('POST /api/v1/exceptions/[id]/confirm-count', () => {
   it('confirms (cookie or Bearer): 200 with the occurrence and replay, the request handed to withApiContext', async () => {
     for (const make of [bearer, cookie]) {
       const stub = ctxWith();
