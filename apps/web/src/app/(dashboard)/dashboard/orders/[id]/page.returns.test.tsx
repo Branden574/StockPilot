@@ -101,7 +101,8 @@ vi.mock('@/lib/auth/session', () => ({
     permissions: ctxHolder.current.permissions,
   })),
 }));
-vi.mock('@/lib/auth/warehouse', () => ({
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  roleSeesEveryWarehouse: (await importOriginal<typeof import('@/lib/auth/warehouse')>()).roleSeesEveryWarehouse,
   getWarehouseAccess: (ctx: unknown) => getWarehouseAccessMock(ctx),
 }));
 vi.mock('@/lib/modules/module-gate', () => ({

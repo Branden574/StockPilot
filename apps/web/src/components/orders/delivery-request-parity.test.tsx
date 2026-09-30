@@ -148,7 +148,10 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
-vi.mock('@/lib/auth/warehouse', () => ({ getWarehouseAccess: () => getWarehouseAccessMock() }));
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  roleSeesEveryWarehouse: (await importOriginal<typeof import('@/lib/auth/warehouse')>()).roleSeesEveryWarehouse,
+  getWarehouseAccess: () => getWarehouseAccessMock(),
+}));
 vi.mock('@/lib/modules/module-gate', () => ({ checkModuleAccess: () => checkModuleAccessMock() }));
 
 vi.mock('@/lib/supabase/server', () => ({

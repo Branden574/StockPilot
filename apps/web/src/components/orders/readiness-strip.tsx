@@ -9,9 +9,11 @@ import { describeHoldResult, holdLeftShort, HOLD_AVAILABLE_STOCK_LABEL } from '@
 
 import { Button } from '@/components/ui/button';
 import { IntentLink } from '@/components/ui/intent-link';
+import type { NeededByChangeView } from '@/lib/orders/needed-by-change';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
+import { ReviseNeededByDialog } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   ReadinessIcon,
@@ -42,15 +44,25 @@ import {
  * params as they came. An IntentLink, like the lines' own: most order views
  * never go to Staging, so the route is warmed when the person reaches for the
  * link, not prefetched on sight.
+ *
+ * "Change" beside the needed-by (F2-4): when `neededByChange` is set (the
+ * page decides, lib/orders/needed-by-change.ts: an approver with write access
+ * to the order's warehouse, an open order, the org's zone read), the date as
+ * core words it ("Needed by Fri, Oct 3, 2:00 PM", or "No needed-by date") and
+ * Change, which opens the revise dialog. Under the needed-by signal when there
+ * is one ("May miss its needed-by date"), so the date and the way to move it
+ * sit with the warning about it.
  */
 export function ReadinessStrip({
   view,
   holdOrderId = null,
   putAway = null,
+  neededByChange = null,
 }: {
   view: ReadinessStripView;
   holdOrderId?: string | null;
   putAway?: ReadinessStripPutAway | null;
+  neededByChange?: NeededByChangeView | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
@@ -162,6 +174,18 @@ export function ReadinessStrip({
           <CalendarClock className="size-3.5 shrink-0" aria-hidden />
           {view.neededBy}
         </p>
+      )}
+      {neededByChange && (
+        <div
+          className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
+          data-testid="readiness-needed-by-change"
+        >
+          <span className="flex items-center gap-1.5" data-testid="readiness-needed-by-date">
+            <CalendarClock className="size-3.5 shrink-0" aria-hidden />
+            {neededByChange.rowLabel}
+          </span>
+          <ReviseNeededByDialog change={neededByChange} />
+        </div>
       )}
       {view.checkedAt && (
         <p className="text-muted-foreground mt-1 text-[10.5px]" data-testid="readiness-checked-at">

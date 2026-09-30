@@ -1,6 +1,9 @@
 import {
   describeHoldResult,
+  NEEDED_BY_REVISED_TIMELINE_LABEL,
+  neededByLabel,
   parseHoldOrderStockResult,
+  resolveOrgTimezone,
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
@@ -11,6 +14,9 @@ import { createClient } from '@/lib/supabase/server';
 interface Props {
   orderId: string;
   organizationId: string;
+  /** The org's zone (the order page's), for the dates a needed-by change
+   *  names. Core's default when absent. */
+  timeZone?: string;
 }
 
 interface AuditRow {
@@ -52,6 +58,10 @@ const EVENT_LABELS: Record<string, string> = {
   // what started it (eventLabel below); this is the manual "Hold available
   // stock", and the fallback for an entry without a trigger.
   'order.stock_held': 'Stock held',
+  // F2-4 (0382): an approver changed the needed-by date, with a reason (core's
+  // label; the detail line names both dates in the org's zone, and the reason
+  // follows as every entry's does).
+  'order_request.needed_by_revised': NEEDED_BY_REVISED_TIMELINE_LABEL,
 };
 
 /**
@@ -94,6 +104,7 @@ function humanDetails(
   event: string,
   metadata: Record<string, unknown> | null,
   actor: string,
+  timeZone: string,
 ): string[] {
   const md = metadata ?? {};
   const after = (md.after ?? {}) as Record<string, unknown>;
@@ -182,6 +193,18 @@ function humanDetails(
       lines.push(held ? describeHoldResult(held) : 'Stock was held for this order.');
       break;
     }
+    case 'order_request.needed_by_revised': {
+      // metadata.from / .to: ISO instants (from is null when the order had
+      // none), written by OrderRequestsService.reviseNeededBy. Printed in the
+      // org's zone as the order page prints the date; an entry this page
+      // cannot read says nothing rather than guess.
+      const when = (v: unknown): string | null =>
+        typeof v === 'string' && Number.isFinite(Date.parse(v)) ? neededByLabel(v, timeZone) : null;
+      const to = when(md.to);
+      const from = when(md.from);
+      if (to) lines.push(from ? `${from} → ${to}` : `Set to ${to}`);
+      break;
+    }
     default:
       break;
   }
@@ -211,7 +234,8 @@ function humanDetails(
  * same gate as the /platform console) — internal ids and event plumbing
  * are not for org members, super-admin or otherwise.
  */
-export async function OrderTimeline({ orderId, organizationId }: Props) {
+export async function OrderTimeline({ orderId, organizationId, timeZone }: Props) {
+  const zone = resolveOrgTimezone(timeZone);
   const supabase = await createClient();
   const [{ data }, { data: auth }] = await Promise.all([
     supabase
@@ -255,7 +279,7 @@ export async function OrderTimeline({ orderId, organizationId }: Props) {
         const profile = row.user_id ? usersById.get(row.user_id) ?? null : null;
         const actor =
           profile?.full_name ?? profile?.email ?? (row.user_id ? 'Unknown user' : 'Public');
-        const details = humanDetails(row.event, row.metadata, actor);
+        const details = humanDetails(row.event, row.metadata, actor, zone);
         return (
           <li key={row.id} className="relative">
             <span className="bg-primary absolute -left-[1.4rem] top-1.5 h-2 w-2 rounded-full" />

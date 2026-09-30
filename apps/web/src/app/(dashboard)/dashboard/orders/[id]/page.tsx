@@ -18,6 +18,7 @@ import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
+import { ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
 import { bookReportReturnPath } from '@/components/reports/book-order-totals/return-path';
 import {
   readinessLinePutAwayHref,
@@ -54,6 +55,7 @@ import {
   formatOrderNumber,
   formatOrderReturnSummary,
   isManagerOrAbove,
+  isNeededByRevisable,
   isPickingSettled,
   lineOwedUnits,
   ORDER_LINE_HIDDEN_ITEM_NAME,
@@ -88,7 +90,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { ServiceError, withContext } from '@/server/services/context';
 import { canStartCount } from '@/server/services/lib/count-start-preflight';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehouseAccess, roleSeesEveryWarehouse } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
@@ -109,6 +111,7 @@ import {
   type ReturnStatus,
 } from '@/server/services/returns';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
+import { neededByChangeView } from '@/lib/orders/needed-by-change';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -174,6 +177,19 @@ export default async function OrderDetailPage({
   // handled there.
   const readinessRead = OrderReadinessService.forCurrentUser().then((svc) => svc.result(id));
   readinessRead.catch(() => {});
+
+  // CHANGE THE NEEDED-BY (F2-4) is offered to an approver with write access
+  // to the order's warehouse, the gate the save asserts. For a manager or
+  // above the role decides (roleSeesEveryWarehouse) and nothing is read. For
+  // anyone else who approves (staff with an orders:approve grant) their
+  // warehouse access is read HERE, beside the order read, for the same reason
+  // readiness is: started after it, it would be a level of its own on the
+  // page's longest chain. It is the request-cached read the picking statuses
+  // already pay (getWarehouseAccess is React.cache'd), so a picking order
+  // reads it once. Observed at once: an order the viewer cannot see drops it.
+  const approverWarehouseAccess =
+    canApprove && !roleSeesEveryWarehouse(ctx.role) ? getWarehouseAccess(ctx) : null;
+  approverWarehouseAccess?.catch(() => {});
 
   // The order fetch and the attachments fetch are independent (both need only
   // the route id) — run them together instead of serially. This page re-renders
@@ -369,6 +385,10 @@ export default async function OrderDetailPage({
   // needed-by, and the approval panel's needed-by chip or its AI-suggested
   // deadline (pending, for an approver, from the requester's note).
   const neededBy = (request as { needed_by?: string | null }).needed_by ?? null;
+  // F2-4: whether "Change" beside the needed-by may be offered (an approver,
+  // an open order). Write access and the org's zone are decided after the
+  // batch below, from reads already in flight.
+  const neededByChangeGate = canApprove && isNeededByRevisable(request.status);
   const printsOrgTime =
     Boolean(neededBy) ||
     (showActionsPanel &&
@@ -401,6 +421,7 @@ export default async function OrderDetailPage({
     deliveryRequestRouting,
     orderReturns,
     zoneFacts,
+    neededByWarehouseAccess,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -625,10 +646,20 @@ export default async function OrderDetailPage({
     // of the order's org, in every phase, so no organizations read is added.
     // Only the zone is used: the answer discloses nothing the member could
     // not read directly. Formatting only, so a failure is silent here and
-    // degrades to the documented default zone below.
-    !readinessGate && printsOrgTime
+    // degrades to the documented default zone below. F2-4's Change needs the
+    // zone too (an approver on an open order past picking, or with no lines,
+    // where no strip is shown): the same read, never a guessed zone (a failed
+    // read offers no Change, below).
+    !readinessGate && (printsOrgTime || neededByChangeGate)
       ? readinessRead.catch((): OrderReadinessResult | null => null)
       : Promise.resolve<OrderReadinessResult | null>(null),
+
+    // F2-4: the warehouse access of an approver whose role does not decide it,
+    // started beside the order read (above); joined here, never awaited on
+    // its own. A failed read is no access (no Change), never a guess.
+    neededByChangeGate && approverWarehouseAccess
+      ? approverWarehouseAccess.catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   let viewerCanPick = true;
@@ -694,6 +725,28 @@ export default async function OrderDetailPage({
   const readinessStrip = readinessNow
     ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone })
     : null;
+  // ── F2-4: change the needed-by. "Change" beside the date, for an approver
+  // with write access to the order's warehouse, on an open order, once the
+  // org's zone is READ (the facts' organizations.timezone, the column the
+  // save converts in; lib/orders/needed-by-change.ts says why a guessed zone
+  // offers no Change). On the readiness strip where the full strip is shown
+  // (to pick); in the Dates card otherwise (past picking, or no lines), so
+  // every open order has one way to it, never two.
+  const neededByChange = neededByChangeGate
+    ? neededByChangeView({
+        orderId: request.id,
+        status: request.status,
+        neededBy,
+        warehouseId: request.warehouse_id,
+        canApprove,
+        role: ctx.role,
+        roleSeesEveryWarehouse: roleSeesEveryWarehouse(ctx.role),
+        access: neededByWarehouseAccess,
+        zoneFacts: readinessGate ? readiness : zoneFacts,
+      })
+    : null;
+  const neededByChangeOnStrip = neededByChange !== null && readinessStrip?.mode === 'full';
+  const neededByChangeInDates = neededByChange !== null && !neededByChangeOnStrip;
   const readinessAssessment =
     readinessNow?.state === 'ok' &&
     readinessNow.assessment.phase === 'to_pick' &&
@@ -1232,7 +1285,12 @@ export default async function OrderDetailPage({
                 (F2-3; the permission sentence instead without Transfer
                 stock). */}
             {readinessStrip && (
-              <ReadinessStrip view={readinessStrip} holdOrderId={holdOrderId} putAway={readinessPutAway} />
+              <ReadinessStrip
+                view={readinessStrip}
+                holdOrderId={holdOrderId}
+                putAway={readinessPutAway}
+                neededByChange={neededByChangeOnStrip ? neededByChange : null}
+              />
             )}
             <Table>
               <TableHeader>
@@ -1588,7 +1646,11 @@ export default async function OrderDetailPage({
                 </div>
               }
             >
-              <OrderTimeline orderId={request.id} organizationId={ctx.organizationId} />
+              <OrderTimeline
+                orderId={request.id}
+                organizationId={ctx.organizationId}
+                timeZone={orgTimeZone}
+              />
             </React.Suspense>
           </section>
         </div>
@@ -1599,13 +1661,19 @@ export default async function OrderDetailPage({
               Dates
             </h2>
             <dl className="space-y-1.5 text-[11.5px]">
-              {neededBy && (
-                <div className="flex justify-between gap-3">
+              {(neededBy || neededByChangeInDates) && (
+                <div className="flex justify-between gap-3" data-testid="dates-needed-by">
                   <dt className="text-muted-foreground">Needed by</dt>
                   {/* In the org's zone, not the server's (UTC on Vercel). The
                       rows below are relative ("2 hours ago"): a difference
-                      from now, the same in every zone. */}
-                  <dd className="text-right font-medium">{formatNeededBy(neededBy, orgTimeZone)}</dd>
+                      from now, the same in every zone. F2-4: Change beside it
+                      where the readiness strip does not carry it. */}
+                  <dd className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-right font-medium">
+                    <span>{neededBy ? formatNeededBy(neededBy, orgTimeZone) : '—'}</span>
+                    {neededByChangeInDates && neededByChange && (
+                      <ReviseNeededByDialog change={neededByChange} triggerClassName="h-6 font-normal" />
+                    )}
+                  </dd>
                 </div>
               )}
               {TIMELINE_FIELDS.map(({ key, label }) => {
