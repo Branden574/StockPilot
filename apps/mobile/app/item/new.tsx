@@ -54,6 +54,7 @@ import {
   type ItemFormState,
 } from '@/lib/item-create';
 import { checkCreateRack, rackDestinationHint, type CreateRackCheck } from '@/lib/create-rack-check';
+import { sectionLabelText } from '@/lib/section-label';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -1512,7 +1513,7 @@ export default function NewItem() {
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <View style={{ marginTop: 22, marginBottom: 4 }}>
-      <Eyebrow>{String(children)}</Eyebrow>
+      <Eyebrow>{sectionLabelText(children)}</Eyebrow>
     </View>
   );
 }
