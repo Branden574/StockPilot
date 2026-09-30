@@ -150,6 +150,13 @@ export function ReviseNeededBySheet({
     topInset: insets.top,
   });
   const [attachBody, kb] = useSheetKeyboard();
+  // The body itself, to bring a refusal into view (it is the body's first
+  // line: at AX5 core's longest refusal is taller than the screen can spare
+  // outside the body, and pushed Save and Cancel off it).
+  const bodyNode = React.useRef<ScrollView | null>(null);
+  React.useEffect(() => {
+    if (error !== null) bodyNode.current?.scrollTo({ y: 0, animated: true });
+  }, [error]);
 
   // The clock the chips and the preview are read against: set when the sheet
   // opens, on every change the person makes, and every 30 seconds while it is
@@ -365,7 +372,10 @@ export function ReviseNeededBySheet({
                 gives way (flexShrink) before the title, Close or the buttons
                 leave the screen. */}
             <ScrollView
-              ref={attachBody}
+              ref={(node) => {
+                attachBody(node);
+                bodyNode.current = node;
+              }}
               style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"
@@ -375,6 +385,13 @@ export function ReviseNeededBySheet({
               onContentSizeChange={kb.onBodyContentSizeChange}
               contentContainerStyle={{ gap: 12 }}
             >
+              {/* A refusal first, where the body is scrolled to when it
+                  appears (announced too: iOS gives the alert role no trait). */}
+              {error ? (
+                <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
+                  {error}
+                </Body>
+              ) : null}
               <Body size={14} color={c.ink}>
                 {view.current}
               </Body>
@@ -519,11 +536,6 @@ export function ReviseNeededBySheet({
               </Body>
             </ScrollView>
 
-            {error ? (
-              <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
-                {error}
-              </Body>
-            ) : null}
             {offline && !closed ? (
               <Body size={12.5} muted>
                 {READINESS_NEEDS_CONNECTION_COPY}

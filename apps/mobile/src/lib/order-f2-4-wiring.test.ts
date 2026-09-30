@@ -411,7 +411,7 @@ describe('the revise sheet', () => {
       const style = a(body.el, 'style') ?? '';
       expect(style).toContain('maxHeight: layout.bodyMaxHeight');
       expect(style).toContain('flexShrink: 1');
-      expect(a(body.el, 'ref')).toBe('attachBody');
+      expect((a(body.el, 'ref') ?? '').replace(/\s+/g, ' ')).toBe('(node) => { attachBody(node); bodyNode.current = node; }');
       expect(a(body.el, 'onScroll')).toBe('kb.onBodyScroll');
       expect(a(body.el, 'scrollEventThrottle')).toBe('16');
       expect(a(body.el, 'onLayout')).toBe('kb.onBodyLayout');
@@ -433,6 +433,34 @@ describe('the revise sheet', () => {
       expect(tagOf(block, sf)).toBe('View');
       expect(a(block, 'onLayout')).toBe('kb.onNoteBlockLayout');
       expect(reason.ancestors.at(-2)).toBe(body.el);
+    });
+
+    // iPhone 17 walk at AX5, 2026-09-30: core's longest refusal (the
+    // no-answer sentence, 557 pt tall) outside the body pushed the offline
+    // note, Save and Cancel off the bottom of the screen. The refusal is now
+    // the first thing in the body (it scrolls with it) and the body is
+    // scrolled to it when it appears; the short offline note stays beside
+    // Save. Mutations caught: the refusal back outside the body, or not
+    // scrolled into view.
+    it('a refusal is the first thing in the body, which is scrolled to it; the offline note stays beside Save', () => {
+      const alert = all.find((n) => tagOf(n.el, sf) === 'Body' && /^"?alert"?$/.test(a(n.el, 'accessibilityRole') ?? ''))!;
+      expect(alert).toBeDefined();
+      expect(alert.ancestors).toContain(body.el);
+      // Before everything else in the body (the current date comes next).
+      const opening = ts.isJsxElement(body.el) ? body.el.openingElement.getEnd() : body.el.getEnd();
+      const bodyText = codeOnly(sheetSrc.slice(opening, body.el.getEnd()));
+      // (A JSX comment leaves an empty {} once its comment is stripped.)
+      const firstChild = bodyText.replace(/\{\s*\}/g, '').trim();
+      expect(firstChild.startsWith('{error ? (')).toBe(true);
+      expect(bodyText.indexOf('{error}')).toBeLessThan(bodyText.indexOf('{view.current}'));
+      expect(count(sheetCode, '{error}')).toBe(1);
+      expect(sheetCode).toContain('const bodyNode = React.useRef<ScrollView | null>(null);');
+      expect(sheetCode).toMatch(
+        /React\.useEffect\(\(\) => \{\s*if \(error !== null\) bodyNode\.current\?\.scrollTo\(\{ y: 0, animated: true \}\);\s*\}, \[error\]\);/,
+      );
+      const offlineAt = sheetCode.indexOf('{READINESS_NEEDS_CONNECTION_COPY}');
+      const bodyEnd = sheetCode.indexOf('</ScrollView>', sheetCode.indexOf('{view.effect}'));
+      expect(offlineAt).toBeGreaterThan(bodyEnd);
     });
 
     it('the title stops growing at the display ceiling', () => {
