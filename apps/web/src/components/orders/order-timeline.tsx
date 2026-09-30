@@ -1,9 +1,11 @@
 import {
   describeHoldResult,
+  formatReadinessQty,
   NEEDED_BY_REVISED_TIMELINE_LABEL,
   neededByLabel,
   parseHoldOrderStockResult,
   resolveOrgTimezone,
+  SHORTFALL_PO_TIMELINE_LABEL,
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
@@ -62,6 +64,9 @@ const EVENT_LABELS: Record<string, string> = {
   // label; the detail line names both dates in the org's zone, and the reason
   // follows as every entry's does).
   'order_request.needed_by_revised': NEEDED_BY_REVISED_TIMELINE_LABEL,
+  // F2-5 (0385): draft POs were created for what the order was short (core's
+  // label; the detail line says which drafts, for how many items and units).
+  'order_request.shortfall_po_drafted': SHORTFALL_PO_TIMELINE_LABEL,
 };
 
 /**
@@ -203,6 +208,38 @@ function humanDetails(
       const to = when(md.to);
       const from = when(md.from);
       if (to) lines.push(from ? `${from} → ${to}` : `Set to ${to}`);
+      break;
+    }
+    case 'order_request.shortfall_po_drafted': {
+      // metadata.po_numbers (the drafts, in the order they were made) and
+      // .lines [{item_id, quantity, purchase_order_id}], written by
+      // OrderReadinessService.draftShortfallPos: never a cost. An entry this
+      // page cannot read says nothing rather than guess.
+      const numbers = Array.isArray(md.po_numbers)
+        ? md.po_numbers.filter((n): n is string => typeof n === 'string' && n.trim() !== '')
+        : [];
+      const drafted = Array.isArray(md.lines)
+        ? md.lines.filter(
+            (l): l is { item_id: string; quantity: number } =>
+              typeof l === 'object' &&
+              l !== null &&
+              typeof (l as { item_id?: unknown }).item_id === 'string' &&
+              typeof (l as { quantity?: unknown }).quantity === 'number' &&
+              Number.isFinite((l as { quantity: number }).quantity) &&
+              (l as { quantity: number }).quantity > 0,
+          )
+        : [];
+      if (numbers.length === 0 || drafted.length === 0) break;
+      const items = new Set(drafted.map((l) => l.item_id.toLowerCase())).size;
+      const units = drafted.reduce((sum, l) => sum + l.quantity, 0);
+      const what = `${items} ${items === 1 ? 'item' : 'items'}, ${formatReadinessQty(units)} ${
+        Math.abs(units - 1) < 0.00005 ? 'unit' : 'units'
+      }`;
+      lines.push(
+        numbers.length === 1
+          ? `Draft ${numbers[0]} for ${what}. Drafts are not sent.`
+          : `${numbers.length} draft POs for ${what}: ${numbers.join(', ')}. Drafts are not sent.`,
+      );
       break;
     }
     default:

@@ -5,7 +5,9 @@ import { z } from 'zod';
 
 import {
   can,
+  canDraftShortfallPo,
   err,
+  isManagerOrAbove,
   ok,
   READINESS_FORBIDDEN_COPY,
   READINESS_ORDER_NOT_FOUND_COPY,
@@ -13,14 +15,17 @@ import {
   SHORTFALL_PO_INVALID_COPY,
   SHORTFALL_PO_KEY_MAX,
   SHORTFALL_PO_MAX_LINES,
+  shortfallPoView,
   type ActionResult,
   type OrderReadinessResult,
   type ShortfallPoResult,
 } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
-import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
+import type { ShortfallPoLoad } from '@/lib/orders/shortfall-po';
+import { isModuleEnabled, ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { OrderReadinessService } from '@/server/services/order-readiness';
+import { SuppliersService } from '@/server/services/suppliers';
 
 const readSchema = z.object({ id: z.string().uuid() });
 
@@ -109,4 +114,71 @@ export async function draftShortfallPosAction(
     if (!(e instanceof ServiceError)) void reportError(e, { tag: 'actions.orders.shortfall_po' });
     return err('internal_error', SHORTFALL_PO_FAILED_COPY, { reason: 'failed' });
   }
+}
+
+const loadShortfallSchema = z.object({ orderId: z.string().uuid() });
+
+/** Nothing read: the dialog keeps what it has. */
+const NOTHING_LOADED: ShortfallPoLoad = { view: null, supplierNames: null };
+
+/**
+ * What the order page's "Draft PO for what is short" dialog reads when it
+ * opens, and again after a draft is refused because the numbers moved
+ * (shortfall_changed): the order's readiness read again, as core's shortfall
+ * view (shortfallPoView, the same the page built the dialog from), and the
+ * organization's supplier names for its rows (SuppliersService.listForLookups,
+ * the lookup every PO page uses: [] with the Suppliers module off). Both in
+ * parallel. The page itself reads neither for this, so opening an order costs
+ * nothing more.
+ *
+ * READ ONLY, and it never throws: each half that could not be read is null
+ * (the service reports its own faults; a failed supplier read is reported
+ * here), and the dialog keeps the view it has and says a supplier's name
+ * could not be loaded. The draft re-checks everything in its own transaction,
+ * so nothing here is trusted by a write.
+ *
+ * WHO. The same floors as the draft (core canDraftShortfallPo, the database's
+ * own: a manager holding purchase_orders:manage, the orders and
+ * purchase_orders modules on); anyone else reads nothing. Readiness answers
+ * for this reader (order_readiness_facts gates every field in its body), and
+ * supplier names are readable by any member where Suppliers is on.
+ */
+export async function loadShortfallPoAction(input: z.input<typeof loadShortfallSchema>): Promise<ShortfallPoLoad> {
+  const parsed = loadShortfallSchema.safeParse(input);
+  if (!parsed.success) return NOTHING_LOADED;
+  let ctx: ServiceContext;
+  try {
+    ctx = await withContext();
+  } catch {
+    return NOTHING_LOADED;
+  }
+  const allowed = canDraftShortfallPo({
+    isManager: isManagerOrAbove(ctx.role),
+    canManagePurchaseOrders: can(ctx, 'purchase_orders:manage'),
+    ordersModule: isModuleEnabled(ctx, 'orders'),
+    purchaseOrdersModule: isModuleEnabled(ctx, 'purchase_orders'),
+  });
+  if (!allowed) return NOTHING_LOADED;
+  const [readiness, suppliers] = await Promise.allSettled([
+    new OrderReadinessService(ctx).result(parsed.data.orderId),
+    new SuppliersService(ctx).listForLookups(),
+  ]);
+  const view =
+    readiness.status === 'fulfilled' && readiness.value.state === 'ok'
+      ? shortfallPoView(readiness.value.assessment)
+      : null;
+  let supplierNames: Record<string, string> | null = null;
+  if (suppliers.status === 'fulfilled') {
+    supplierNames = {};
+    for (const s of suppliers.value as Array<{ id: string; name: string | null }>) {
+      if (typeof s.id === 'string' && typeof s.name === 'string') supplierNames[s.id] = s.name;
+    }
+  } else {
+    void reportError(suppliers.reason, {
+      tag: 'actions.orders.shortfall_po_suppliers',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+    });
+  }
+  return { view, supplierNames };
 }

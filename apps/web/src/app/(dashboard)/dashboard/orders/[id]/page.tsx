@@ -6,6 +6,7 @@ import * as React from 'react';
 import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
+import { DraftShortfallPoDialog } from '@/components/orders/draft-shortfall-po-dialog';
 import { orderLineAnchorId } from '@/components/orders/focus-order-line';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderLineActions, ShortLineFixes } from '@/components/orders/order-line-actions';
@@ -23,6 +24,7 @@ import { bookReportReturnPath } from '@/components/reports/book-order-totals/ret
 import {
   readinessLinePutAwayHref,
   readinessStripPutAway,
+  readinessStripShortfallPo,
   readinessStripView,
 } from '@/components/orders/readiness-view';
 import {
@@ -47,6 +49,7 @@ import {
   assessPickedLine,
   BOOK_REPORT_BACK_TO_REPORT,
   can,
+  canDraftShortfallPo,
   deliveryRecipientsForRouting,
   describeCompletionConfirm,
   describeLineReturnRefs,
@@ -74,6 +77,7 @@ import {
   returnedFragment,
   returnHandle,
   returnRefsByLine,
+  shortfallPoView,
   shortLineActions,
   shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
@@ -88,7 +92,7 @@ import {
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
-import { ServiceError, withContext } from '@/server/services/context';
+import { isModuleEnabled, ServiceError, withContext } from '@/server/services/context';
 import { canStartCount } from '@/server/services/lib/count-start-preflight';
 import { getWarehouseAccess, roleSeesEveryWarehouse } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
@@ -112,6 +116,7 @@ import {
 } from '@/server/services/returns';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { neededByChangeView } from '@/lib/orders/needed-by-change';
+import type { ShortfallPoOffer } from '@/lib/orders/shortfall-po';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -794,6 +799,41 @@ export default async function OrderDetailPage({
       putAwayHref: readinessLinePutAwayHref(line, putAwayLinkOpts),
     };
   };
+  // ── F2-5: draft a PO for what is short. From the readiness result above
+  // (core shortfallPoView: per short item, what may be drafted and what
+  // already covers it), no read of its own. Offered on the strip when
+  // something may be drafted: the button to a viewer who may draft (core
+  // canDraftShortfallPo, the database's floors: a manager holding
+  // purchase_orders:manage, the orders and purchase_orders modules on, the
+  // modules read from the service context every read above already used, so
+  // no round trip), core's sentence to anyone on the full strip who is not a
+  // manager holding purchase_orders:manage. The dialog is mounted once at the
+  // top of the page with the page's view, so it opens at once; supplier names
+  // are read only when it opens.
+  const shortfallView = readinessAssessment ? shortfallPoView(readinessAssessment) : null;
+  const shortfallDrafterRole = isManagerOrAbove(ctx.role) && can(ctx, 'purchase_orders:manage');
+  const viewerCanDraftShortfall =
+    shortfallView !== null && shortfallView.draftableCount > 0 && shortfallDrafterRole
+      ? await contextStarted
+          .then((svcCtx) =>
+            canDraftShortfallPo({
+              isManager: true,
+              canManagePurchaseOrders: true,
+              ordersModule: isModuleEnabled(svcCtx, 'orders'),
+              purchaseOrdersModule: isModuleEnabled(svcCtx, 'purchase_orders'),
+            }),
+          )
+          .catch(() => false)
+      : false;
+  const readinessShortfallPo = readinessStripShortfallPo(shortfallView, {
+    orderId: request.id,
+    canDraft: viewerCanDraftShortfall,
+    drafterRole: shortfallDrafterRole,
+  });
+  const shortfallPoOffer: ShortfallPoOffer | null =
+    viewerCanDraftShortfall && shortfallView
+      ? { orderId: request.id, view: shortfallView, timeZone: orgTimeZone }
+      : null;
   const stockCheck: OrderStockCheck = readinessNow
     ? readinessStockFlags(readinessNow)
     : { state: 'not_needed' };
@@ -1044,6 +1084,7 @@ export default async function OrderDetailPage({
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <OrderRealtimeRefresh orderId={id} />
       <ReviseNeededByDialog change={neededByChange} trigger={false} />
+      <DraftShortfallPoDialog offer={shortfallPoOffer} />
       <div className="mb-6">
         <Link
           href={backToReport ?? '/dashboard/orders'}
@@ -1284,15 +1325,18 @@ export default async function OrderDetailPage({
             )}
             {/* Readiness (F2-1), directly above the lines it describes; with
                 "Hold available stock" for an approver when a line is not
-                held (F2-2), and "Put away N items" when items are in Staging
+                held (F2-2), "Put away N items" when items are in Staging
                 (F2-3; the permission sentence instead without Transfer
-                stock). */}
+                stock), and "Draft PO for what is short" when something may be
+                drafted (F2-5; the permission sentence instead for anyone who
+                may not draft). */}
             {readinessStrip && (
               <ReadinessStrip
                 view={readinessStrip}
                 holdOrderId={holdOrderId}
                 putAway={readinessPutAway}
                 neededByChange={neededByChangeOnStrip ? neededByChange : null}
+                shortfallPo={readinessShortfallPo}
               />
             )}
             <Table>
