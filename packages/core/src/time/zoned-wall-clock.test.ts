@@ -49,6 +49,17 @@ describe('wallClockToInstant across the 2026-11-01 fall-back in Los Angeles', ()
     expect(iso(wallClockToInstant('2026-11-01T01:30', LA))).toBe('2026-11-01T08:30:00.000Z');
   });
 
+  it('east of UTC (and at UTC+0 in London) the repeated hour resolves to its SECOND occurrence', () => {
+    // The two-pass guess lands on the earlier occurrence west of UTC and the
+    // later one east of it. Either is a real instant for that wall clock; the
+    // service keeps the stored instant when the wall clock sent equals the
+    // stored one's, so re-saving an unedited date never shifts it.
+    expect(iso(wallClockToInstant('2027-04-04T02:30', 'Pacific/Auckland'))).toBe('2027-04-03T14:30:00.000Z'); // NZST
+    expect(iso(wallClockToInstant('2027-04-04T02:30', 'Australia/Sydney'))).toBe('2027-04-03T16:30:00.000Z'); // AEST
+    expect(iso(wallClockToInstant('2026-10-25T01:30', 'Europe/London'))).toBe('2026-10-25T01:30:00.000Z'); // GMT
+    expect(iso(wallClockToInstant('2026-11-01T00:30', 'America/St_Johns'))).toBe('2026-11-01T03:00:00.000Z'); // NDT, first
+  });
+
   it('after the change the same morning is PST', () => {
     expect(iso(wallClockToInstant('2026-11-01T03:00', LA))).toBe('2026-11-01T11:00:00.000Z');
   });

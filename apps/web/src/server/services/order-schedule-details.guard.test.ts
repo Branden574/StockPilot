@@ -13,13 +13,27 @@
  * by.test.ts). This file keeps a second copy from appearing anywhere the web,
  * the phone or core keep source (pattern #26).
  *
- * IF THIS FAILS: something builds the sentence itself. Call
- * orderScheduleEventDetails instead.
+ * The migration finds that sentence in an event's description, and takes a
+ * given description only when it IS that sentence; the server's own move of
+ * an event written outside the order's lock (bringing it in step after an
+ * insert) applies the same rule through core withOrderScheduleSentence. So
+ * core's two patterns must appear in 0383 character for character, and the
+ * sentence core writes must be one the migration takes.
+ *
+ * IF THIS FAILS: something builds the sentence itself (call
+ * orderScheduleEventDetails instead), or the migration's patterns and core's
+ * drifted apart (change both together).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import {
+  ORDER_SCHEDULE_SENTENCE_PATTERN,
+  ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN,
+  orderScheduleEventDetails,
+} from '@stockpilot/core';
 
 const REPO = path.resolve(__dirname, '../../../../..');
 const ROOTS = ['apps/web/src', 'apps/mobile/src', 'apps/mobile/app', 'packages/core/src'];
@@ -41,5 +55,28 @@ describe("an order's Schedule description has one source", () => {
       .filter((file) => readFileSync(file, 'utf8').includes(PHRASE))
       .map((file) => path.relative(REPO, file));
     expect(hits).toEqual(['packages/core/src/orders/needed-by-revision.ts']);
+  });
+});
+
+describe("0383 and core apply one description rule", () => {
+  const sql = readFileSync(path.join(REPO, 'supabase/migrations/0383_revise_order_needed_by.sql'), 'utf8');
+
+  it('the migration finds and takes the sentence with core\'s patterns, verbatim', () => {
+    expect(sql).toContain(`'${ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN}'`);
+    // Twice: once to find where the sentence sits, once to read it.
+    expect(sql.split(`'${ORDER_SCHEDULE_SENTENCE_PATTERN}'`).length - 1).toBe(2);
+  });
+
+  it('the sentence core writes is one the migration takes, for any order and zone', () => {
+    const taken = new RegExp(ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN);
+    for (const zone of ['America/Los_Angeles', 'Pacific/Chatham', 'Asia/Kathmandu', 'UTC']) {
+      for (const orderNumber of [1, 16, 999_999, 12_345_678, null]) {
+        const sentence = orderScheduleEventDetails(
+          { id: '3f2a9c10-0000-4000-8000-000000000000', orderNumber, neededBy: '2027-02-28T23:30:00Z' },
+          zone,
+        );
+        expect(sentence, `${zone} ${orderNumber}`).toMatch(taken);
+      }
+    }
   });
 });

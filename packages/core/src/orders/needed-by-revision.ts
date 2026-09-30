@@ -33,8 +33,23 @@ import { formatOrderNumber } from './order-number';
 
 /** A reason is required: 1 to 500 characters after trimming. */
 export const NEEDED_BY_REASON_MAX = 500;
-/** The Schedule entry's description, at most 1000 characters. */
-export const NEEDED_BY_EVENT_DETAILS_MAX = 1000;
+/** A needed-by later than this many years from now is refused
+ *  (needed_by_out_of_range): no screen needs one, and the far end of a
+ *  timestamp (infinity, year 290000) is past what JavaScript's Date holds. */
+export const NEEDED_BY_MAX_YEARS_AHEAD = 5;
+
+/**
+ * Whether a needed-by is within reach: at most NEEDED_BY_MAX_YEARS_AHEAD years
+ * after `now` (the function's `now() + interval '5 years'`), and a real
+ * instant. The screens say NEEDED_BY_OUT_OF_RANGE_COPY before saving; the
+ * server refuses it either way.
+ */
+export function isNeededByWithinReach(at: number, now: number): boolean {
+  if (!Number.isFinite(at)) return false;
+  const limit = new Date(now);
+  limit.setUTCFullYear(limit.getUTCFullYear() + NEEDED_BY_MAX_YEARS_AHEAD);
+  return at <= limit.getTime();
+}
 /** The reason recorded when a manager applies the AI suggestion. */
 export const NEEDED_BY_SUGGESTION_REASON = "Set from the requester's note";
 
@@ -94,6 +109,43 @@ export function orderScheduleEventDetails(
   return `Auto-created from order ${so}. Needed by ${neededByDisplay}.`;
 }
 
+/**
+ * The sentence above, as found in an event's description (0383 replaces the
+ * first one, wherever it sits): any order handle, any date text with no period,
+ * on one line. It also finds the older numeric format ("Needed by 9/11/2026,
+ * 2:00:00 AM.", before SP-043). A regular-expression SOURCE that means the
+ * same in JavaScript and in Postgres, and appears verbatim in 0383 (the web
+ * guard test order-schedule-details.guard.test.ts checks it).
+ */
+export const ORDER_SCHEDULE_SENTENCE_PATTERN = 'Auto-created from order [^.\\n]*\\. Needed by [^.\\n]*\\.';
+
+/**
+ * What revise_order_needed_by accepts as p_event_details: exactly the sentence
+ * orderScheduleEventDetails writes (an SO- number or the 8-character id
+ * prefix, a date of at most 64 characters). Any other text is ignored, so no
+ * caller can put free text in an event's description or its reminder emails.
+ * Verbatim in 0383 too.
+ */
+export const ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN =
+  '^Auto-created from order (SO-[0-9]{6,}|[0-9A-F]{8})\\. Needed by [^.]{1,64}\\.$';
+
+const ORDER_SCHEDULE_SENTENCE = new RegExp(ORDER_SCHEDULE_SENTENCE_PATTERN);
+
+/**
+ * An event's description with its date sentence replaced by `sentence`, the
+ * rule 0383 applies when it moves an event, for the server's own move of an
+ * event written outside the order's lock: the first sentence of that shape is
+ * replaced where it sits and whatever a person wrote around it stays; a
+ * description with no such sentence (rewritten by hand) is kept whole; an
+ * empty one gets the sentence.
+ */
+export function withOrderScheduleSentence(details: string | null | undefined, sentence: string): string {
+  if (!details || details.trim() === '') return sentence;
+  const m = ORDER_SCHEDULE_SENTENCE.exec(details);
+  if (!m) return details;
+  return details.slice(0, m.index) + sentence + details.slice(m.index + m[0].length);
+}
+
 // ── The answer ──────────────────────────────────────────────────────────────
 
 /** revise_order_needed_by's answer (0383). Times are ISO instants. */
@@ -108,6 +160,9 @@ export interface NeededByRevisionResult {
   eventId: string | null;
   /** Whether this call moved that entry (only a scheduled or in-progress one moves). */
   eventUpdated: boolean;
+  /** That entry's status (scheduled, in_progress, completed, cancelled), or
+   *  null when the order has none. Only a scheduled entry gets reminders. */
+  eventStatus: string | null;
   /** The order's status, read under the order's lock. */
   status: string;
 }
@@ -141,9 +196,12 @@ function flag(v: unknown, where: string): boolean {
  */
 export function parseNeededByRevisionResult(raw: unknown): NeededByRevisionResult {
   if (!isRecord(raw)) throw new NeededByResultShapeError('the answer is not an object');
-  const { changed, previous, neededBy, eventId, eventUpdated, status } = raw;
+  const { changed, previous, neededBy, eventId, eventUpdated, eventStatus, status } = raw;
   if (eventId !== null && (typeof eventId !== 'string' || eventId.trim() === '')) {
     throw new NeededByResultShapeError('eventId is not an id');
+  }
+  if (eventStatus !== undefined && eventStatus !== null && typeof eventStatus !== 'string') {
+    throw new NeededByResultShapeError('eventStatus is not a status');
   }
   if (typeof status !== 'string' || status.trim() === '') {
     throw new NeededByResultShapeError('status is missing');
@@ -154,17 +212,24 @@ export function parseNeededByRevisionResult(raw: unknown): NeededByRevisionResul
     neededBy: instant(neededBy, 'neededBy'),
     eventId: eventId as string | null,
     eventUpdated: flag(eventUpdated, 'eventUpdated'),
+    eventStatus: typeof eventStatus === 'string' && eventStatus !== '' ? eventStatus : null,
     status,
   };
 }
 
 /**
  * What happened to the order's Schedule entry, as the screens say it:
- *   - `moved`: the entry moved with the order, reminders armed again;
- *   - `created`: the order was past approval with no entry, so one was added;
+ *   - `moved`: the entry moved with the order (reminders armed again when it
+ *     is scheduled: `eventStatus`);
+ *   - `created`: the order was past approval with no entry, so one was added
+ *     (also on an unchanged save, which adds a missing entry);
  *   - `none_yet`: a pending order; approving it adds the entry;
- *   - `left_closed`: the entry is completed or cancelled and stays as it is;
- *   - `not_moved`: the entry could not be written (reported); the order moved;
+ *   - `left_closed`: the entry is completed or cancelled and stays as it is
+ *     (or the order closed meanwhile, which closed the entry just added);
+ *   - `not_added`: the order has no entry and adding one failed (reported);
+ *     saving the same date again tries again;
+ *   - `not_moved`: the entry is at another date and could not be moved, or
+ *     could not be read (reported); the order moved;
  *   - `unchanged`: the date was already this value; nothing was written.
  */
 export type NeededBySchedule =
@@ -172,6 +237,7 @@ export type NeededBySchedule =
   | 'created'
   | 'none_yet'
   | 'left_closed'
+  | 'not_added'
   | 'not_moved'
   | 'unchanged';
 
@@ -187,6 +253,7 @@ export interface NeededByRevisionOutcome extends NeededByRevisionResult {
 export type NeededByFailureReason =
   | 'needed_by_changed'
   | 'needed_by_in_past'
+  | 'needed_by_out_of_range'
   | 'reason_required'
   | 'order_closed'
   | 'invalid_time'
@@ -243,6 +310,7 @@ export const NEEDED_BY_REVISED_TIMELINE_LABEL = 'Needed-by date changed';
 
 export const NEEDED_BY_REASON_REQUIRED_COPY = `Say why the date is changing (up to ${NEEDED_BY_REASON_MAX} characters).`;
 export const NEEDED_BY_IN_PAST_COPY = 'Pick a needed-by date and time that is still to come.';
+export const NEEDED_BY_OUT_OF_RANGE_COPY = `Pick a needed-by date within the next ${NEEDED_BY_MAX_YEARS_AHEAD} years.`;
 export const NEEDED_BY_CLOSED_COPY =
   "This order is closed (completed, denied, cancelled or not yet confirmed), so its needed-by date can't change.";
 export const NEEDED_BY_NOT_APPROVER_COPY = 'Changing the needed-by date needs permission to approve orders.';
@@ -282,22 +350,28 @@ export function neededByChangedCopy(
 }
 
 /** The confirmation after a revision, from what the server did (never from
- *  what the screen expected). */
+ *  what the screen expected). The reminders are claimed only for an entry the
+ *  reminder cron reminds (a scheduled one). */
 export function neededByRevisedCopy(outcome: NeededByRevisionOutcome, now?: number | Date): string {
   const when = neededByLabel(outcome.neededBy, outcome.timeZone, now);
+  const head = outcome.changed ? `Needed-by changed to ${when}.` : `The needed-by date is already ${when}.`;
   switch (outcome.schedule) {
     case 'unchanged':
-      return `The needed-by date is already ${when}. Nothing changed.`;
+      return `${head} Nothing changed.`;
     case 'moved':
-      return `Needed-by changed to ${when}. The Schedule entry moved too, and its reminders are set for the new time.`;
+      return outcome.eventStatus === 'scheduled'
+        ? `${head} The Schedule entry moved too, and its reminders are set for the new time.`
+        : `${head} The Schedule entry moved too.`;
     case 'created':
-      return `Needed-by changed to ${when}. It's on the Schedule now.`;
+      return `${head} It's on the Schedule now.`;
     case 'none_yet':
-      return `Needed-by changed to ${when}. Approving the order puts it on the Schedule.`;
+      return `${head} Approving the order puts it on the Schedule.`;
     case 'left_closed':
-      return `Needed-by changed to ${when}. The Schedule entry is already completed or cancelled, so it was left as it was.`;
+      return `${head} The Schedule entry is completed or cancelled, so it stays as it is.`;
+    case 'not_added':
+      return `${head} Its Schedule entry couldn't be added just now; save the same date again to add it.`;
     case 'not_moved':
-      return `Needed-by changed to ${when}. The Schedule entry couldn't be updated; check it on the Schedule.`;
+      return `${head} The Schedule entry may still show another date; check it on the Schedule.`;
   }
 }
 
@@ -352,14 +426,17 @@ export function neededByCurrentCopy(
 }
 
 /**
- * What saving does to the order's Schedule entry, said before saving. Past
- * approval the entry follows the new date (or is added, when the order had no
- * date when it was approved); a pending order has none until it is approved.
- * The confirmation after saving says what actually happened.
+ * What saving does to the order's Schedule entry, said before saving (the
+ * screens do not know the entry's status yet, so it says both cases). Past
+ * approval an open entry follows the new date (or one is added, when the
+ * order had no date when it was approved); a completed or cancelled entry
+ * stays; only an entry that has not started is reminded. A pending order has
+ * none until it is approved. The confirmation after saving says what
+ * actually happened.
  */
 export function neededByEffectCopy(status: string | null | undefined): string {
   return orderBelongsOnSchedule(status)
-    ? "The order's Schedule entry follows the new date, and its reminders are set for the new time."
+    ? "The order's Schedule entry moves to the new date unless it's completed or cancelled. If it hasn't started, its reminders are set for the new time."
     : 'Approving the order puts it on the Schedule at this date.';
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isNeededByRevisable,
+  isNeededByWithinReach,
   NEEDED_BY_BUSY_COPY,
   NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL,
   NEEDED_BY_CHANGE_LABEL,
@@ -9,12 +10,14 @@ import {
   NEEDED_BY_FAILED_COPY,
   NEEDED_BY_FIELD_LABEL,
   NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_MAX_YEARS_AHEAD,
   NEEDED_BY_MODULE_OFF_COPY,
   NEEDED_BY_NO_ANSWER_COPY,
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
   NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_HINT,
   NEEDED_BY_REASON_LABEL,
   NEEDED_BY_REASON_MAX,
@@ -38,8 +41,11 @@ import {
   NeededByResultShapeError,
   normalizeNeededByReason,
   orderBelongsOnSchedule,
+  ORDER_SCHEDULE_SENTENCE_PATTERN,
+  ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN,
   orderScheduleEventDetails,
   parseNeededByRevisionResult,
+  withOrderScheduleSentence,
   type NeededByRevisionOutcome,
   type NeededBySchedule,
 } from './needed-by-revision';
@@ -88,10 +94,67 @@ describe('orderScheduleEventDetails (the one Schedule description)', () => {
     ).toBe('Auto-created from order DEADBEEF. Needed by Oct 3, 2026, 2:00 PM.');
   });
 
-  it('stays within the function limit for any order number', () => {
+  it('is always the sentence the function takes (0383 ignores any other description)', () => {
+    const taken = new RegExp(ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN);
+    const sentences = [
+      orderScheduleEventDetails({ id: 'x', orderNumber: 999_999_999, neededBy: NOW }, LA),
+      orderScheduleEventDetails({ id: 'x', orderNumber: 1, neededBy: NOW }, LA),
+      orderScheduleEventDetails({ id: 'deadbeef-0000', orderNumber: null, neededBy: NOW }, LA),
+      orderScheduleEventDetails({ id: 'deadbeef-0000', orderNumber: 0, neededBy: NOW }, 'Not/AZone'),
+      ...['Pacific/Auckland', 'Asia/Kolkata', 'America/St_Johns', 'UTC'].map((z) =>
+        orderScheduleEventDetails({ id: 'x', orderNumber: 16, neededBy: '2027-12-31T23:59:00Z' }, z),
+      ),
+    ];
+    for (const sentence of sentences) expect(sentence).toMatch(taken);
+    // And the sentence it replaces in an event's description finds it too.
+    for (const sentence of sentences) expect(sentence).toMatch(new RegExp(ORDER_SCHEDULE_SENTENCE_PATTERN));
+  });
+});
+
+describe("withOrderScheduleSentence (0383's description rule, for the service's own move)", () => {
+  const NEW = 'Auto-created from order SO-000016. Needed by Oct 9, 2026, 2:00 PM.';
+  it('replaces only the sentence, where it sits, and keeps what a person wrote around it', () => {
     expect(
-      orderScheduleEventDetails({ id: 'x', orderNumber: 999_999_999, neededBy: NOW }, LA).length,
-    ).toBeLessThan(200);
+      withOrderScheduleSentence(
+        'Auto-created from order SO-000016. Needed by Oct 3, 2026, 2:00 PM.\nGate code 4411; call Maria.',
+        NEW,
+      ),
+    ).toBe(`${NEW}\nGate code 4411; call Maria.`);
+    expect(
+      withOrderScheduleSentence(
+        'Deliver to the gym. Auto-created from order SO-000016. Needed by 9/11/2026, 2:00:00 AM. Bring the cart.',
+        NEW,
+      ),
+    ).toBe(`Deliver to the gym. ${NEW} Bring the cart.`);
+  });
+
+  it('keeps a description rewritten by hand whole, and gives an empty one the sentence', () => {
+    expect(withOrderScheduleSentence('Call Maria first; the side door is locked.', NEW)).toBe(
+      'Call Maria first; the side door is locked.',
+    );
+    expect(withOrderScheduleSentence(null, NEW)).toBe(NEW);
+    expect(withOrderScheduleSentence('   ', NEW)).toBe(NEW);
+  });
+
+  it('is the same rule, character for character, as the migration (pattern #26)', () => {
+    // Read by the guard test in apps/web (order-schedule-details.guard.test.ts),
+    // which checks both patterns appear verbatim in 0383.
+    expect(ORDER_SCHEDULE_SENTENCE_PATTERN).toBe('Auto-created from order [^.\\n]*\\. Needed by [^.\\n]*\\.');
+    expect(ORDER_SCHEDULE_SENTENCE_TAKEN_PATTERN).toBe(
+      '^Auto-created from order (SO-[0-9]{6,}|[0-9A-F]{8})\\. Needed by [^.]{1,64}\\.$',
+    );
+  });
+});
+
+describe('isNeededByWithinReach (the function refuses later than five years: needed_by_out_of_range)', () => {
+  it('takes a date up to five years ahead, and refuses one past it or one no screen can hold', () => {
+    expect(NEEDED_BY_MAX_YEARS_AHEAD).toBe(5);
+    expect(isNeededByWithinReach(Date.parse('2031-09-29T16:59:00Z'), NOW)).toBe(true);
+    expect(isNeededByWithinReach(Date.parse('2031-09-29T17:00:00Z'), NOW)).toBe(true);
+    expect(isNeededByWithinReach(Date.parse('2031-09-29T17:01:00Z'), NOW)).toBe(false);
+    expect(isNeededByWithinReach(Date.parse('9999-12-31T00:00:00Z'), NOW)).toBe(false);
+    expect(isNeededByWithinReach(Number.NaN, NOW)).toBe(false);
+    expect(NEEDED_BY_OUT_OF_RANGE_COPY).toBe('Pick a needed-by date within the next 5 years.');
   });
 });
 
@@ -102,6 +165,7 @@ describe('parseNeededByRevisionResult', () => {
     neededBy: '2026-10-03T21:00:00+00:00',
     eventId: 'e1',
     eventUpdated: true,
+    eventStatus: 'scheduled',
     status: 'approved',
   };
 
@@ -112,8 +176,14 @@ describe('parseNeededByRevisionResult', () => {
       neededBy: '2026-10-03T21:00:00.000Z',
       eventId: 'e1',
       eventUpdated: true,
+      eventStatus: 'scheduled',
       status: 'approved',
     });
+  });
+
+  it("takes the event's status as null when the order has no event, or when an answer leaves it out", () => {
+    expect(parseNeededByRevisionResult({ ...answer, eventId: null, eventStatus: null }).eventStatus).toBeNull();
+    expect(parseNeededByRevisionResult({ ...answer, eventStatus: undefined }).eventStatus).toBeNull();
   });
 
   it('takes a null previous and a null event, and ignores keys it does not know', () => {
@@ -133,21 +203,27 @@ describe('parseNeededByRevisionResult', () => {
     ['eventId empty', { ...answer, eventId: '' }],
     ['eventUpdated missing', { ...answer, eventUpdated: undefined }],
     ['status missing', { ...answer, status: undefined }],
+    ['eventStatus a number', { ...answer, eventStatus: 3 }],
   ])('refuses %s, never guessing', (_label, raw) => {
     expect(() => parseNeededByRevisionResult(raw)).toThrow(NeededByResultShapeError);
   });
 });
 
 describe('words', () => {
-  const outcome = (schedule: NeededBySchedule): NeededByRevisionOutcome => ({
+  const outcome = (
+    schedule: NeededBySchedule,
+    extra: Partial<NeededByRevisionOutcome> = {},
+  ): NeededByRevisionOutcome => ({
     changed: schedule !== 'unchanged',
     previous: '2026-10-01T21:00:00.000Z',
     neededBy: '2026-10-03T21:00:00.000Z',
     eventId: null,
     eventUpdated: schedule === 'moved',
+    eventStatus: schedule === 'moved' ? 'scheduled' : null,
     status: 'approved',
     schedule,
     timeZone: LA,
+    ...extra,
   });
 
   it('prints a needed-by in the org zone, with the year only when it is not this year', () => {
@@ -175,12 +251,43 @@ describe('words', () => {
     expect(neededByRevisedCopy(outcome('moved'), NOW)).toBe(
       'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry moved too, and its reminders are set for the new time.',
     );
-    expect(neededByRevisedCopy(outcome('created'), NOW)).toContain("It's on the Schedule now.");
-    expect(neededByRevisedCopy(outcome('none_yet'), NOW)).toContain('Approving the order puts it on the Schedule.');
-    expect(neededByRevisedCopy(outcome('left_closed'), NOW)).toContain('left as it was');
-    expect(neededByRevisedCopy(outcome('not_moved'), NOW)).toContain("couldn't be updated");
+    // An entry already under way moves, but the cron reminds only a
+    // scheduled one: no reminder claim for it.
+    expect(neededByRevisedCopy(outcome('moved', { eventStatus: 'in_progress' }), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry moved too.',
+    );
+    expect(neededByRevisedCopy(outcome('moved', { eventStatus: null }), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry moved too.',
+    );
+    expect(neededByRevisedCopy(outcome('created'), NOW)).toBe(
+      "Needed-by changed to Sat, Oct 3, 2:00 PM. It's on the Schedule now.",
+    );
+    expect(neededByRevisedCopy(outcome('none_yet'), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. Approving the order puts it on the Schedule.',
+    );
+    expect(neededByRevisedCopy(outcome('left_closed'), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry is completed or cancelled, so it stays as it is.',
+    );
+    // The insert failed: saving the same date again adds it (the service
+    // retries a missing entry on an unchanged save).
+    expect(neededByRevisedCopy(outcome('not_added'), NOW)).toBe(
+      "Needed-by changed to Sat, Oct 3, 2:00 PM. Its Schedule entry couldn't be added just now; save the same date again to add it.",
+    );
+    // The entry exists at another date and could not be moved (or read).
+    expect(neededByRevisedCopy(outcome('not_moved'), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry may still show another date; check it on the Schedule.',
+    );
     expect(neededByRevisedCopy(outcome('unchanged'), NOW)).toBe(
       'The needed-by date is already Sat, Oct 3, 2:00 PM. Nothing changed.',
+    );
+  });
+
+  it('an unchanged save that added a missing entry says the date was already set', () => {
+    expect(neededByRevisedCopy(outcome('created', { changed: false }), NOW)).toBe(
+      "The needed-by date is already Sat, Oct 3, 2:00 PM. It's on the Schedule now.",
+    );
+    expect(neededByRevisedCopy(outcome('not_added', { changed: false }), NOW)).toBe(
+      "The needed-by date is already Sat, Oct 3, 2:00 PM. Its Schedule entry couldn't be added just now; save the same date again to add it.",
     );
   });
 
@@ -197,6 +304,7 @@ describe('words', () => {
       NEEDED_BY_FAILED_COPY,
       NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
       NEEDED_BY_NOT_PENDING_COPY,
+      NEEDED_BY_OUT_OF_RANGE_COPY,
       NEEDED_BY_SIGN_IN_COPY,
       NEEDED_BY_RELOAD_COPY,
       NEEDED_BY_REVISED_TIMELINE_LABEL,
@@ -219,7 +327,7 @@ describe('words', () => {
       neededByChangedCopy(null, LA),
       neededByChangedCopy('2026-10-03T21:00:00Z', LA, NOW),
       neededByInvalidTimeCopy(LA),
-      ...(['moved', 'created', 'none_yet', 'left_closed', 'not_moved', 'unchanged'] as const).map((s) =>
+      ...(['moved', 'created', 'none_yet', 'left_closed', 'not_added', 'not_moved', 'unchanged'] as const).map((s) =>
         neededByRevisedCopy(outcome(s), NOW),
       ),
     ];
@@ -251,9 +359,11 @@ describe('the change: its entry, its dialog and its sheet (one set of words for 
     expect(neededByCurrentCopy(null, LA)).toBe('This order has no needed-by date yet.');
   });
 
-  it('what saving does, before saving: past approval the entry follows; a pending order gets one when approved', () => {
+  it('what saving does, before saving: past approval an open entry follows; a pending order gets one when approved', () => {
+    // Said before the screen knows the entry's status: a completed or
+    // cancelled entry stays, and one already under way gets no reminders.
     expect(neededByEffectCopy('approved')).toBe(
-      "The order's Schedule entry follows the new date, and its reminders are set for the new time.",
+      "The order's Schedule entry moves to the new date unless it's completed or cancelled. If it hasn't started, its reminders are set for the new time.",
     );
     expect(neededByEffectCopy('in_transit')).toBe(neededByEffectCopy('approved'));
     expect(neededByEffectCopy('pending_approval')).toBe('Approving the order puts it on the Schedule at this date.');

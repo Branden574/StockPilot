@@ -27,7 +27,14 @@
  * DAYLIGHT-SAVING EDGES.
  *   - A wall clock that happens twice (the fall-back hour, 01:30 on
  *     2026-11-01 in Los Angeles) resolves to one of its two occurrences: the
- *     first (01:30 PDT) in zones west of UTC, Los Angeles included.
+ *     FIRST in zones west of UTC (01:30 PDT in Los Angeles; St Johns and
+ *     Santiago too), the SECOND in zones east of it and at UTC+0 (Auckland,
+ *     Sydney, Lord Howe, Chatham, London, Dublin, Casablanca, Troll). Both
+ *     are real instants for that wall clock. A stored instant at the other
+ *     occurrence (or one with seconds) therefore reads back as a wall clock
+ *     that converts to a different instant, so the needed-by service keeps
+ *     the stored instant when the wall clock sent equals the stored one's
+ *     (re-saving an unedited date answers "Nothing changed").
  *   - A wall clock that never happens (the spring-forward hour, 02:30 on
  *     2027-03-14 in Los Angeles) is refused by the strict conversion (null);
  *     the lenient one keeps SP-047's behaviour and answers an hour early.
