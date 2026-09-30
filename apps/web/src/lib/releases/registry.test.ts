@@ -5,11 +5,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMPLETION_CONFIRM_LABEL,
+  CONFIRM_COUNT_LABEL,
+  confirmCountDialogCopy,
+  CONFIRMED_ONLY_FILTER_LABEL,
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   describeShortPickLines,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
+  EXCEPTION_RULES,
   HOLD_AVAILABLE_STOCK_LABEL,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
@@ -19,6 +23,7 @@ import {
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   releaseRegistrySchema,
+  type CountConfirmBlock,
   type ModuleId,
   type Release,
   type ReleaseViewer,
@@ -62,6 +67,22 @@ function readerText(r: Release): string[] {
     ]),
   ];
 }
+
+/** A confirmable block, for core's dialog words the R2 release quotes. */
+const WORDS_BLOCK: CountConfirmBlock = {
+  state: 'confirmable',
+  canConfirm: true,
+  unavailableReason: null,
+  cycleCountId: 'cc-35',
+  countNumber: 35,
+  counted: 2,
+  onRecordBefore: 100,
+  onRecordNow: 2,
+  countedBy: null,
+  postedBy: null,
+  readerIsCounter: true,
+  otherCount: null,
+};
 
 /**
  * Claims the product cannot confirm (maintenance brief §20: StockPilot prepares
@@ -1510,6 +1531,112 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     expect(text).toContain('never copied from the preview');
     expect(text).toContain('shown once, with its lines combined');
     expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|will arrive/i);
+  });
+});
+
+/**
+ * Count differences, release 2 (confirm this count, migration 0386) is held
+ * as a DRAFT until 0386 is pushed and verified, the web deploy and the Demo Co
+ * production walk are done; the phone needs no update (its Confirm sheet
+ * shipped dormant in release 1). Pinned by id, never by index. The follow-up
+ * that publishes it sets 'published' and the real publishedAt, re-reads its
+ * words against what shipped, and flips the first pin here.
+ */
+describe('count differences release 2 (confirm this count) is held as a draft', () => {
+  const ID = 'count-confirm-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top (pinned by id), dated after every other release, the drafts included, so publishing it makes it the newest', () => {
+    expect(RELEASES.findIndex((r) => r.id === ID)).toBe(0);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    // After release 1, which it builds on.
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(
+      Date.parse(RELEASES.find((r) => r.id === 'count-difference-words-2026-10')!.publishedAt),
+    );
+    const list = buildReleaseList([published(), ...RELEASES.filter((r) => r.id !== ID)], everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+  });
+
+  it('is addressed as the page it links to is reached (Exceptions: items:read), then as confirming is offered (stock:adjust, Cycle Counts on)', () => {
+    expect(release().audience).toEqual({ anyPermission: ['items:read'] });
+    expect(release().entries.map((e) => e.id)).toEqual(['confirm-this-count']);
+    const [entry] = release().entries;
+    expect(entry!.category).toBe('new');
+    expect(entry!.area).toBe('Cycle counts');
+    expect(entry!.link).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    expect(entry!.audience).toEqual({ anyPermission: ['stock:adjust'], modules: ['cycle_counts'] });
+    const reader = (
+      role: ReleaseViewer['role'],
+      permissions: ReleaseViewer['permissions'],
+      enabledModules: ModuleId[] = ['cycle_counts'],
+    ) => visibleReleases([published()], { role, permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    // A counter (staff with stock:adjust) and a manager are told.
+    expect(reader('staff', ['items:read', 'stock:adjust'])).toEqual(['confirm-this-count']);
+    expect(reader('manager', ['items:read', 'stock:adjust', 'cycle_counts:assign'])).toEqual(['confirm-this-count']);
+    // A viewer (items:read only) is never offered Confirm.
+    expect(reader('viewer', ['items:read'])).toEqual([]);
+    // Nobody where Cycle Counts is off, and nobody who cannot open Exceptions.
+    expect(reader('manager', ['items:read', 'stock:adjust'], [])).toEqual([]);
+    expect(reader('staff', ['stock:adjust'])).toEqual([]);
+  });
+
+  it("names both platforms, says it in the screens' own words, and states the risk plainly", () => {
+    const r = release();
+    const [entry] = r.entries;
+    // Old phones show only the title and the summary: it stands alone.
+    expect(r.summary).toBe(
+      'If the counted number is right, the person who counted it or a manager can now confirm it and close the exception, on the web and in the mobile app, without a second count. Acknowledging still leaves it open.',
+    );
+    const text = readerText(r).join(' ');
+    // The screens' words, from core.
+    expect(text).toContain(EXCEPTION_RULES.count_variance.label);
+    expect(text).toContain(CONFIRM_COUNT_LABEL);
+    expect(text).toContain(confirmCountDialogCopy({ reference: null, confirm: WORDS_BLOCK }).confirmLabel);
+    expect(text).toContain(CONFIRMED_ONLY_FILTER_LABEL);
+    // The consequence the dialog states, word for word.
+    const consequenceTail = 'If a later count does not match the stock on record, a new exception opens.';
+    expect(confirmCountDialogCopy({ reference: null, confirm: WORDS_BLOCK }).consequence).toContain(consequenceTail);
+    expect(entry!.howItAffectsYou).toContain(consequenceTail);
+    // The risk the owner accepted, said plainly (D3): no second count.
+    expect(entry!.howItAffectsYou).toContain(
+      'Confirming closes the exception without a second count, so confirm only a number you are sure of.',
+    );
+    // Each rule that withholds Confirm, as the page words it (review of the
+    // plan's critique: "linked", and the other count in progress).
+    expect(entry!.howItAffectsYou).toContain(
+      'Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it.',
+    );
+    // Not every reader can start a recount: never "use Recount then".
+    expect(text).not.toMatch(/use Recount/);
+    expect(entry!.howItAffectsYou).toContain('Confirming needs a connection.');
+    // The filter is web only; the phone's list shows the role in each chip.
+    expect(entry!.whatChanged).toContain('On the web, Closed without a second count on the Resolved tab');
+    // Acknowledging still does not close it.
+    expect(r.summary).toContain('Acknowledging still leaves it open.');
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate|undo/i);
   });
 });
 

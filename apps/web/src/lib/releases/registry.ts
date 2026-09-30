@@ -28,6 +28,48 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'count-confirm-2026-10',
+    revision: 1,
+    // Count differences, release 2 of 2 (migration 0386; owner decision
+    // 2026-09-29, "1 and 2"). Held as a DRAFT until 0386 is pushed and
+    // verified, the web deploy (the confirm dialog and the Resolved filter)
+    // and the Demo Co production walk are done. The phone needs no update:
+    // its Confirm sheet shipped in release 1, dormant until the server sends
+    // the countConfirm block. The follow-up that publishes it sets the real
+    // publishedAt and re-reads these words against what shipped. Dated after
+    // every other release, the drafts included: drafts newest first.
+    //
+    // Addressed as the page it links to is reached (Exceptions: items:read),
+    // then as confirming is offered: stock:adjust, the floor the server
+    // asserts before exception_confirm_count, where Cycle Counts is on
+    // (count differences come only from posted counts; plan section 10 keeps
+    // the module on purpose, though a manager can confirm with it off).
+    status: 'draft',
+    title: 'Confirm a counted number to close a count difference',
+    summary:
+      'If the counted number is right, the person who counted it or a manager can now confirm it and close the exception, on the web and in the mobile app, without a second count. Acknowledging still leaves it open.',
+    publishedAt: '2026-10-12T17:00:00Z',
+    audience: { anyPermission: ['items:read'] },
+    entries: [
+      {
+        id: 'confirm-this-count',
+        category: 'new',
+        area: 'Cycle counts',
+        title: 'Confirm this count closes a count difference',
+        whatChanged:
+          'A Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, on the web and in the mobile app. It shows the counted number and the stock on record before the count and now, and closes the exception when you choose Confirm and close. The timeline records who confirmed it, whether they counted it, and that it closed without a second count. On the web, Closed without a second count on the Resolved tab lists only the exceptions closed this way.',
+        whyItMatters:
+          'Until now only a second count could close one of these, so a number already checked on the floor stayed open, and acknowledging it did not close it.',
+        howItAffectsYou:
+          'Confirming closes the exception without a second count, so confirm only a number you are sure of. Recount is still there when you are not. Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it. Confirming needs a connection. If a later count does not match the stock on record, a new exception opens.',
+        whatToDo:
+          'Open an exception under Count did not match the stock on record. If the counted number is right, choose Confirm this count.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
+      },
+    ],
+  },
+  {
     id: 'order-shortfall-po-2026-10',
     revision: 1,
     // F2-5 (migration 0385, pushed 2026-09-30 15:33Z). Held as a draft until
