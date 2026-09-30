@@ -13,6 +13,7 @@ import {
   describeReadinessRollup,
   putAwayLineOffer,
   putAwayStripOffer,
+  SHORTFALL_PO_FORBIDDEN_COPY,
   stagingPutAwayHref,
   type OrderReadinessResult,
   type PutAwayAccess,
@@ -20,6 +21,7 @@ import {
   type ReadinessAudience,
   type ReadinessLineAssessment,
   type ReadinessTone,
+  type ShortfallPoView,
 } from '@stockpilot/core';
 
 /**
@@ -182,4 +184,31 @@ export function readinessLinePutAwayHref(
   if (!line) return null;
   const offer = putAwayLineOffer(line, opts.access);
   return offer.kind === 'link' ? stagingPutAwayHref({ orderId: opts.orderId, itemIds: offer.itemIds }) : null;
+}
+
+/**
+ * The strip's "Draft PO for what is short" (F2-5), as plain data for the
+ * client strip: the button that opens the page's dialog (mounted once, at the
+ * top of the page) for a viewer who may draft (`canDraft`, core
+ * canDraftShortfallPo: a manager holding purchase_orders:manage, the orders
+ * and purchase_orders modules on; the page decides), or core's sentence for a
+ * viewer on the full strip who is not a manager holding
+ * purchase_orders:manage (`drafterRole` false). A manager holding it who still
+ * may not draft (a module off) is told nothing: the sentence would name the
+ * wrong reason. Null when nothing may be drafted: nothing is short, what is
+ * short is already on a PO or a draft, readiness was not checked, or the
+ * purchase-orders module is off (then readiness reads no POs at all, and the
+ * view says so).
+ */
+export type ReadinessStripShortfallPo =
+  | { kind: 'button'; orderId: string }
+  | { kind: 'needs_permission'; message: string };
+
+export function readinessStripShortfallPo(
+  view: ShortfallPoView | null,
+  opts: { orderId: string; canDraft: boolean; drafterRole: boolean },
+): ReadinessStripShortfallPo | null {
+  if (!view || view.draftableCount === 0) return null;
+  if (opts.canDraft) return { kind: 'button', orderId: opts.orderId };
+  return opts.drafterRole ? null : { kind: 'needs_permission', message: SHORTFALL_PO_FORBIDDEN_COPY };
 }

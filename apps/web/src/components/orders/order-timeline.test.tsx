@@ -148,3 +148,52 @@ describe('OrderTimeline — needed-by date changed (F2-4)', () => {
     expect(screen.queryByText(/→|Set to/)).toBeNull();
   });
 });
+
+// F2-5: draft POs made for what the order was short read as core's label and
+// say which drafts, for how many items and units, as
+// OrderReadinessService.draftShortfallPos writes the entry (purchase_order_ids,
+// po_numbers, lines {item_id, quantity, purchase_order_id}; never a cost).
+describe('OrderTimeline — draft PO created for the shortfall (F2-5)', () => {
+  function drafted(id: string, md: Record<string, unknown>) {
+    return {
+      id,
+      event: 'order_request.shortfall_po_drafted',
+      created_at: '2026-09-30T17:00:00Z',
+      user_id: 'u1',
+      metadata: { entity_type: 'order_request', entity_id: 'order-1', ...md },
+    };
+  }
+
+  it("names the drafts, how many items and units, and that drafts are not sent", async () => {
+    await renderTimeline([
+      drafted('a', {
+        purchase_order_ids: ['po-1', 'po-2'],
+        po_numbers: ['PO-2026-0050', 'PO-2026-0051'],
+        lines: [
+          { item_id: 'i1', quantity: 8, purchase_order_id: 'po-1' },
+          { item_id: 'i2', quantity: 2.5, purchase_order_id: 'po-1' },
+          { item_id: 'i3', quantity: 5, purchase_order_id: 'po-2' },
+        ],
+      }),
+      drafted('b', {
+        purchase_order_ids: ['po-3'],
+        po_numbers: ['PO-2026-0052'],
+        lines: [{ item_id: 'i4', quantity: 1, purchase_order_id: 'po-3' }],
+      }),
+    ]);
+
+    expect(screen.getAllByText('Draft PO created for the shortfall')).toHaveLength(2);
+    expect(
+      screen.getByText('2 draft POs for 3 items, 15.5 units: PO-2026-0050, PO-2026-0051. Drafts are not sent.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Draft PO-2026-0052 for 1 item, 1 unit. Drafts are not sent.')).toBeInTheDocument();
+    // No ids, costs or raw metadata.
+    expect(document.body.textContent).not.toMatch(/po-1|i1\b|cost|\{/i);
+  });
+
+  it('an entry it cannot read says only the label, never a guessed number', async () => {
+    await renderTimeline([drafted('a', { po_numbers: 'PO-1', lines: [{ item_id: 'i1', quantity: 'many' }] })]);
+    expect(screen.getByText('Draft PO created for the shortfall')).toBeInTheDocument();
+    expect(screen.queryByText(/Drafts are not sent/)).toBeNull();
+  });
+});

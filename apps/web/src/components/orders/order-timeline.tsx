@@ -4,6 +4,8 @@ import {
   neededByLabel,
   parseHoldOrderStockResult,
   resolveOrgTimezone,
+  SHORTFALL_PO_TIMELINE_LABEL,
+  shortfallPoTimelineDetail,
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
@@ -62,6 +64,9 @@ const EVENT_LABELS: Record<string, string> = {
   // label; the detail line names both dates in the org's zone, and the reason
   // follows as every entry's does).
   'order_request.needed_by_revised': NEEDED_BY_REVISED_TIMELINE_LABEL,
+  // F2-5 (0385): draft POs were created for what the order was short (core's
+  // label; the detail line says which drafts, for how many items and units).
+  'order_request.shortfall_po_drafted': SHORTFALL_PO_TIMELINE_LABEL,
 };
 
 /**
@@ -203,6 +208,14 @@ function humanDetails(
       const to = when(md.to);
       const from = when(md.from);
       if (to) lines.push(from ? `${from} → ${to}` : `Set to ${to}`);
+      break;
+    }
+    case 'order_request.shortfall_po_drafted': {
+      // The drafts, how many items and units, and that drafts are not sent:
+      // core's sentence (shortfallPoTimelineDetail, from metadata.po_numbers
+      // and .lines, never a cost). An entry it cannot read says nothing.
+      const detail = shortfallPoTimelineDetail(md);
+      if (detail) lines.push(detail);
       break;
     }
     default:

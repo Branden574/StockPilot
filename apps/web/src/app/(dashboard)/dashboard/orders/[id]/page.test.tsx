@@ -124,6 +124,17 @@ vi.mock('@/components/orders/revise-needed-by-dialog', async () => {
       ),
   };
 });
+// F2-5: "Draft PO for what is short" opens this dialog, mounted once at the
+// top of the page. A recording stub: the dialog's own behaviour is pinned in
+// draft-shortfall-po-dialog.test.tsx; this file pins WHO is offered it, WHAT
+// the page hands it, and that the page reads nothing more for it.
+const shortfallDialogProps = vi.fn();
+vi.mock('@/components/orders/draft-shortfall-po-dialog', () => ({
+  DraftShortfallPoDialog: (props: Record<string, unknown>) => {
+    shortfallDialogProps(props);
+    return null;
+  },
+}));
 /** The views the page handed its dialog (null: no Change offered). */
 const handedViews = () =>
   reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
@@ -2284,5 +2295,172 @@ describe("orders/[id]: change the needed-by date (F2-4)", () => {
     expect(orderTimelineProps).toHaveBeenCalledWith(
       expect.objectContaining({ orderId: ORDER_ID, timeZone: 'America/New_York' }),
     );
+  });
+});
+
+describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
+  const ITEM_A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+  const ITEM_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+  function orderLine(id: string, itemId: string, requested: number) {
+    return {
+      id,
+      order_request_id: ORDER_ID,
+      item_id: itemId,
+      quantity_requested: requested,
+      quantity_fulfilled: 0,
+      quantity_picked: null,
+      returned_quantity: 0,
+      unit_cost_at_request: 0,
+      notes: null,
+      item: { id: itemId, name: `Item ${itemId}`, sku: null, quantity_on_hand: 2, charter_name: null, charter_code: null },
+    };
+  }
+  const LINES = [orderLine('LA', ITEM_A, 10), orderLine('LB', ITEM_B, 5)];
+  function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
+    ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
+  }
+  /** The service context the page already started (its modules). */
+  function modules(ids: string[]) {
+    withContextMock.mockResolvedValue({ organizationId: 'org-1', enabledModules: new Set(ids) } as never);
+  }
+  /** A: 10 owed, 2 on the shelf (8 to draft). B: 5 owed, 5 on the shelf. */
+  function factsWith(aOver: Record<string, unknown> = {}, bOver: Record<string, unknown> = {}) {
+    return readinessOk(
+      orderReadinessFacts(
+        ORDER_ID,
+        'approved',
+        [
+          { lineId: 'LA', itemId: ITEM_A, requested: 10 },
+          { lineId: 'LB', itemId: ITEM_B, requested: 5 },
+        ],
+        [
+          visibleItemFacts(ITEM_A, { here: { rack: 2 }, supplierId: 'sup-1', ...aOver }),
+          visibleItemFacts(ITEM_B, { here: { rack: 5 }, ...bOver }),
+        ],
+      ),
+    );
+  }
+  const handedOffers = () => shortfallDialogProps.mock.calls.map(([p]) => (p as { offer: unknown }).offer);
+  const strip = () => screen.getByTestId('readiness-strip');
+
+  beforeEach(() => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }), lines: LINES }));
+    modules(['orders', 'purchase_orders']);
+  });
+  afterEach(() => {
+    withContextMock.mockResolvedValue({ organizationId: 'org-1' });
+  });
+
+  it("a manager with purchase-order access: the button on the strip, and the page's dialog gets this order's view, from the page's own read", async () => {
+    as('manager', ['orders:approve', 'purchase_orders:manage', 'purchase_orders:read']);
+    readinessResult.mockResolvedValue(factsWith());
+
+    await renderPage();
+
+    expect(within(strip()).getByRole('button', { name: 'Draft PO for what is short' })).toHaveAttribute(
+      'data-shortfall-po',
+      ORDER_ID,
+    );
+    expect(within(strip()).queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+    // Mounted once, and handed the order, the view core made of the page's
+    // own readiness read, and the org's zone the strip prints in.
+    expect(shortfallDialogProps).toHaveBeenCalledTimes(1);
+    const offer = handedOffers()[0] as {
+      orderId: string;
+      timeZone: string;
+      view: { orderId: string; draftableCount: number; rows: Array<{ itemId: string; draftable: number; supplierId: string | null }> };
+    };
+    expect(offer.orderId).toBe(ORDER_ID);
+    expect(offer.timeZone).toBe('America/Los_Angeles');
+    expect(offer.view.orderId).toBe(ORDER_ID);
+    expect(offer.view.draftableCount).toBe(1);
+    expect(offer.view.rows.map((r) => [r.itemId, r.draftable, r.supplierId])).toEqual([[ITEM_A, 8, 'sup-1']]);
+    // No read of its own: one readiness read, and no supplier names on the page.
+    expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("anyone else on the full strip gets core's sentence and no dialog: a manager without purchase_orders:manage, staff with it", async () => {
+    for (const [role, perms] of [
+      ['manager', ['orders:approve', 'purchase_orders:read']],
+      ['staff', ['items:update', 'purchase_orders:manage']],
+    ] as const) {
+      shortfallDialogProps.mockClear();
+      as(role, [...perms]);
+      readinessResult.mockResolvedValue(factsWith());
+      const { unmount } = await renderPage();
+      expect(within(strip()).queryByRole('button', { name: 'Draft PO for what is short' })).toBeNull();
+      expect(within(strip()).getByTestId('readiness-shortfall-po-permission')).toHaveTextContent(
+        'Drafting a PO needs a manager with purchase-order access.',
+      );
+      expect(handedOffers()).toEqual([null]);
+      unmount();
+    }
+  });
+
+  it('nothing when nothing may be drafted: all covered by a PO, the PO module off, a failed read', async () => {
+    as('manager', ['orders:approve', 'purchase_orders:manage', 'purchase_orders:read']);
+    const cases = [
+      // A's 8 already on an ordered PO.
+      factsWith({
+        inbound: {
+          rows: [{ poId: 'po-1', poNumber: 'PO-2026-0021', status: 'ordered', expectedAt: null, remaining: 8 }],
+          hiddenRemaining: 0,
+          truncated: false,
+          truncatedRemaining: 0,
+        },
+      }),
+      // The purchase-orders module off: readiness reads no POs.
+      factsWith({ inbound: null, drafts: null }, { inbound: null, drafts: null }),
+      READINESS_FAILED,
+    ];
+    for (const [i, r] of cases.entries()) {
+      shortfallDialogProps.mockClear();
+      if (i === 1) modules(['orders']);
+      readinessResult.mockResolvedValue(r);
+      const { unmount } = await renderPage();
+      expect(screen.queryByTestId('readiness-draft-shortfall-po')).toBeNull();
+      expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+      expect(handedOffers()).toEqual([null]);
+      unmount();
+    }
+  });
+
+  it("the modules come from the page's own service context: with purchase_orders off there, no button even if a read said otherwise", async () => {
+    as('manager', ['orders:approve', 'purchase_orders:manage', 'purchase_orders:read']);
+    modules(['orders']);
+    readinessResult.mockResolvedValue(factsWith());
+    await renderPage();
+    expect(screen.queryByTestId('readiness-draft-shortfall-po')).toBeNull();
+    // Never the permission sentence to a manager who holds the permission.
+    expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+    expect(handedOffers()).toEqual([null]);
+    // The context the page had already started: nothing new asked for.
+    expect(withContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the requester gets no numbers, so no offer and no sentence', async () => {
+    as('viewer', []);
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }), lines: LINES }),
+    );
+    readinessResult.mockResolvedValue(factsWith());
+    await renderPage();
+    expect(strip()).toHaveAttribute('data-mode', 'requester');
+    expect(screen.queryByTestId('readiness-draft-shortfall-po')).toBeNull();
+    expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+    expect(handedOffers()).toEqual([null]);
+  });
+
+  it('the page mounts the dialog once, beside the needed-by dialog, never inside the strip, and reads no supplier names', () => {
+    const src = readFileSync(path.join(__dirname, 'page.tsx'), 'utf8');
+    expect(src.match(/<DraftShortfallPoDialog\b/g)).toHaveLength(1);
+    expect(src).toMatch(
+      /<ReviseNeededByDialog change=\{neededByChange\} trigger=\{false\} \/>\s*<DraftShortfallPoDialog offer=\{shortfallPoOffer\} \/>/,
+    );
+    expect(src).toMatch(/shortfallPo=\{readinessShortfallPo\}/);
+    // Supplier names are read when the dialog opens, never by the page.
+    expect(src).not.toMatch(/SuppliersService|listForLookups|from\('suppliers'\)/);
+    // The view comes from the page's own readiness result.
+    expect(src).toMatch(/shortfallPoView\(readinessAssessment\)/);
   });
 });

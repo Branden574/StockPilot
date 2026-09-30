@@ -1502,6 +1502,105 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
 });
 
 /**
+ * F2-5 (draft a PO for what an order is short, migration 0385) is held as a
+ * DRAFT until the web dialog, the phone's sheet (OTA) and the Demo Co
+ * production walk, as F2-1's to F2-4's were. Pinned by id, never by index. The
+ * follow-up that publishes it sets 'published' and the real publishedAt,
+ * re-reads its words against what shipped, and flips the first pin here.
+ */
+describe('F2-5 (draft a PO for what an order is short) is held as a draft', () => {
+  const ID = 'order-shortfall-po-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top of the drafts (pinned by id), newest first by date, after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    // Dated after every other release, F2-4's draft included (F2-5 ships after it).
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    expect(at).toBeLessThan(RELEASES.findIndex((r) => r.id === 'order-needed-by-change-2026-10'));
+    const list = buildReleaseList([published(), ...RELEASES.filter((r) => r.id !== ID)], everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+  });
+
+  it('is addressed as the page it links to is reached (Orders, for approvers), then as drafting is allowed (a manager with purchase-order access, Purchase orders on)', () => {
+    expect(release().audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual(['order-draft-po-for-shortfall']);
+    const [entry] = release().entries;
+    expect(entry!.area).toBe('Orders');
+    expect(entry!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    expect(entry!.audience).toEqual({
+      roles: ['owner', 'admin', 'manager'],
+      anyPermission: ['purchase_orders:manage'],
+      modules: ['purchase_orders'],
+    });
+    const reader = (
+      role: ReleaseViewer['role'],
+      permissions: ReleaseViewer['permissions'],
+      enabledModules: ModuleId[] = ['orders', 'purchase_orders'],
+    ) => visibleReleases([published()], { role, permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader('manager', ['orders:approve', 'purchase_orders:manage'])).toEqual(['order-draft-po-for-shortfall']);
+    expect(reader('admin', ['orders:approve', 'purchase_orders:manage'])).toEqual(['order-draft-po-for-shortfall']);
+    // Staff with a purchase_orders:manage override: the database refuses them.
+    expect(reader('staff', ['orders:approve', 'purchase_orders:manage'])).toEqual([]);
+    // A manager without purchase_orders:manage, or without orders:approve.
+    expect(reader('manager', ['orders:approve', 'purchase_orders:read'])).toEqual([]);
+    expect(reader('manager', ['purchase_orders:manage'])).toEqual([]);
+    // Either module off.
+    expect(reader('manager', ['orders:approve', 'purchase_orders:manage'], ['orders'])).toEqual([]);
+    expect(reader('manager', ['orders:approve', 'purchase_orders:manage'], ['purchase_orders'])).toEqual([]);
+  });
+
+  it('names both platforms, keeps to what happens, and never claims anything was sent', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    const text = readerText(r).join(' ');
+    // The words the screens say, from core.
+    expect(text).toContain('Draft PO for what is short');
+    expect(text).toContain('drafts are not sent');
+    expect(text).toContain('Drafts are not sent to anyone');
+    expect(text).toContain('one draft purchase order is made per supplier, plus one for items with no supplier');
+    expect(text).toContain('is not drafted again');
+    expect(text).toContain('your choices are kept and the most that can be drafted now is shown');
+    // Review: the function refuses only when LESS can be drafted than was
+    // chosen; a change that leaves the choice possible drafts normally.
+    expect(text).toContain('If stock or POs change so that less can be drafted than you chose, nothing is drafted');
+    expect(text).not.toContain('If stock or POs changed after the order was checked, nothing is drafted');
+    // Review: "not drafted again" holds only while no other approved order
+    // needs what is on order; the row says so when one does.
+    expect(text).toContain('if other approved orders already need that supply, it says that too');
+    expect(text).toContain('Pressing Draft twice drafts once.');
+    // The phone opens a draft read-only; it is ordered on the web.
+    expect(text).toContain('there a new draft opens read-only, to review and order on the web');
+    expect(text).toContain('stock on record');
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|was sent|we (?:emailed|notified)|supplier (?:is|was) (?:told|notified)/i);
+  });
+});
+
+/**
  * F2-4 (change an order's needed-by date; the schedule follows, migration
  * 0383) is held as a DRAFT until the web Change dialog, the phone's sheet
  * (OTA) and the Demo Co production walk, as F2-1's to F2-3's were. Pinned by
@@ -1533,11 +1632,23 @@ describe("F2-4 (change an order's needed-by date) is held as a draft", () => {
     expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
   });
 
-  it('sits at the top (pinned by id), dated after every other release, drafts included, so publishing it makes it the newest', () => {
-    expect(RELEASES.findIndex((r) => r.id === ID)).toBe(0);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+  // F2-5's draft (draft a PO for the shortfall, dated a day later) sits above
+  // this one, drafts newest first.
+  it('sits among the drafts at the top (pinned by id), dated after every published release, so publishing it makes it the newest published', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status !== 'draft')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const list = buildReleaseList([published(), ...RELEASES.filter((r) => r.id !== ID)], everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
   });
 
   it('is addressed as the pages it links to are reached: the change to approvers, the Schedule fix to Schedule editors', () => {

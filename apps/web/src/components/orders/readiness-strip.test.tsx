@@ -11,14 +11,22 @@ import {
   visibleItemFacts,
 } from '@/test/order-readiness-facts';
 
-import { putAwayTargets, type OrderReadinessAssessment } from '@stockpilot/core';
+import {
+  putAwayTargets,
+  SHORTFALL_PO_FORBIDDEN_COPY,
+  shortfallPoView,
+  shortfallSupplierIds,
+  type OrderReadinessAssessment,
+} from '@stockpilot/core';
 
+import { DraftShortfallPoDialog } from './draft-shortfall-po-dialog';
 import { ReadinessStrip } from './readiness-strip';
 import { ReviseNeededByDialog } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   readinessLinePutAwayHref,
   readinessStripPutAway,
+  readinessStripShortfallPo,
   readinessStripView,
   type ReadinessStripView,
 } from './readiness-view';
@@ -56,6 +64,14 @@ const reviseNeededBy = vi.hoisted(() => vi.fn());
 vi.mock('@/server/actions/order-requests', () => ({
   holdOrderStockAction: (input: unknown) => holdOrderStock(input),
   reviseOrderNeededByAction: (input: unknown) => reviseNeededBy(input),
+}));
+// "Draft PO for what is short" (F2-5) opens the page's dialog, which reads
+// and drafts through these server actions.
+const loadShortfallPo = vi.hoisted(() => vi.fn());
+const draftShortfallPos = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/order-readiness', () => ({
+  loadShortfallPoAction: (input: unknown) => loadShortfallPo(input),
+  draftShortfallPosAction: (input: unknown) => draftShortfallPos(input),
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -546,5 +562,129 @@ describe('ReadinessStrip — Change the needed-by date (F2-4)', () => {
     expect(screen.getByText('Times are in America/Los_Angeles.')).toBeInTheDocument();
     expect(reviseNeededBy).not.toHaveBeenCalled();
     expect(routerRefresh).not.toHaveBeenCalled();
+  });
+});
+
+// ── F2-5: draft a PO for what is short ──────────────────────────────────────
+
+describe('readinessStripShortfallPo: whether the strip offers drafting, and to whom', () => {
+  /** a: 10 owed, 2 on the shelf (8 to draft); b: 10 owed, an ordered PO for 10 (covered). */
+  const view = (itemsOver: Record<string, unknown> = {}) => {
+    const r = readinessOk(
+      orderReadinessFacts(
+        ORDER,
+        'approved',
+        [
+          { lineId: 'LA', itemId: 'a', requested: 10 },
+          { lineId: 'LB', itemId: 'b', requested: 10 },
+        ],
+        [
+          visibleItemFacts('a', { here: { rack: 2 }, ...itemsOver }),
+          visibleItemFacts('b', {
+            inbound: {
+              rows: [{ poId: 'po-1', poNumber: 'PO-2026-0021', status: 'ordered', expectedAt: null, remaining: 10 }],
+              hiddenRemaining: 0,
+              truncated: false,
+              truncatedRemaining: 0,
+            },
+          }),
+        ],
+      ),
+    );
+    if (r.state !== 'ok') throw new Error('ok expected');
+    return shortfallPoView(r.assessment);
+  };
+
+  it('the button for a viewer who may draft, when something may be drafted', () => {
+    expect(readinessStripShortfallPo(view(), { orderId: ORDER, canDraft: true, drafterRole: true })).toEqual({
+      kind: 'button',
+      orderId: ORDER,
+    });
+  });
+
+  it("core's sentence for anyone on the full strip who is not a manager with purchase-order access", () => {
+    expect(readinessStripShortfallPo(view(), { orderId: ORDER, canDraft: false, drafterRole: false })).toEqual({
+      kind: 'needs_permission',
+      message: 'Drafting a PO needs a manager with purchase-order access.',
+    });
+    expect(SHORTFALL_PO_FORBIDDEN_COPY).toBe('Drafting a PO needs a manager with purchase-order access.');
+  });
+
+  it('a manager with purchase-order access who still may not draft (a module off) is told nothing, never the wrong reason', () => {
+    expect(readinessStripShortfallPo(view(), { orderId: ORDER, canDraft: false, drafterRole: true })).toBeNull();
+  });
+
+  it('nothing when nothing may be drafted: all short items covered, the PO module off, or readiness not read', () => {
+    // a covered too: a draft for its 8.
+    const covered = view({
+      drafts: {
+        rows: [{ poId: 'd-1', poNumber: 'PO-2026-0043', remaining: 8 }],
+        hiddenRemaining: 0,
+        truncated: false,
+        truncatedRemaining: 0,
+      },
+    });
+    expect(covered.rows.length).toBe(2);
+    expect(covered.draftableCount).toBe(0);
+    for (const canDraft of [true, false]) {
+      const opts = { orderId: ORDER, canDraft, drafterRole: canDraft };
+      expect(readinessStripShortfallPo(covered, opts)).toBeNull();
+      // The purchase-orders module off: readiness reads no POs (inbound null).
+      expect(readinessStripShortfallPo(view({ inbound: null, drafts: null }), opts)).toBeNull();
+      expect(readinessStripShortfallPo(null, opts)).toBeNull();
+    }
+  });
+});
+
+describe('ReadinessStrip — Draft PO for what is short (F2-5)', () => {
+  const stripView = (): ReadinessStripView =>
+    readinessStripView(readinessOk(facts('approved', [visibleItemFacts('a', { here: { rack: 2 } })])), 'full', {
+      timeZone: TZ,
+    })!;
+  const offerView = () => {
+    const r = readinessOk(facts('approved', [visibleItemFacts('a', { here: { rack: 2 } })]));
+    if (r.state !== 'ok') throw new Error('ok expected');
+    return shortfallPoView(r.assessment);
+  };
+
+  beforeEach(() => {
+    loadShortfallPo.mockReset();
+    draftShortfallPos.mockReset();
+    loadShortfallPo.mockResolvedValue({ view: null, supplierNames: {} });
+  });
+
+  it("nothing when the page passes nothing", () => {
+    render(<ReadinessStrip view={stripView()} />);
+    expect(screen.queryByTestId('readiness-draft-shortfall-po')).toBeNull();
+    expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+  });
+
+  it("the button opens the page's dialog (mounted once, outside the strip) and drafts nothing by itself", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <DraftShortfallPoDialog offer={{ orderId: ORDER, view: offerView(), timeZone: TZ }} />
+        <ReadinessStrip view={stripView()} shortfallPo={{ kind: 'button', orderId: ORDER }} />
+      </>,
+    );
+    const button = screen.getByRole('button', { name: 'Draft PO for what is short' });
+    expect(button.querySelector('svg')).not.toBeNull();
+    await user.click(button);
+    expect(screen.getByRole('dialog', { name: 'Draft a PO for what is short' })).toBeInTheDocument();
+    // The names of the suppliers its rows name, by id (F2-5 review).
+    expect(loadShortfallPo).toHaveBeenCalledWith({ orderId: ORDER, supplierIds: shortfallSupplierIds(offerView()) });
+    expect(draftShortfallPos).not.toHaveBeenCalled();
+    expect(routerRefresh).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
+  });
+
+  it("the sentence instead, and no button, for a viewer who may not draft", () => {
+    render(
+      <ReadinessStrip view={stripView()} shortfallPo={{ kind: 'needs_permission', message: SHORTFALL_PO_FORBIDDEN_COPY }} />,
+    );
+    expect(screen.queryByRole('button', { name: 'Draft PO for what is short' })).toBeNull();
+    expect(screen.getByTestId('readiness-shortfall-po-permission')).toHaveTextContent(
+      'Drafting a PO needs a manager with purchase-order access.',
+    );
   });
 });

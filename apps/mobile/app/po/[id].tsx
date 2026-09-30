@@ -1,5 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { ArrowLeft } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -15,8 +16,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PoAttachments } from '@/components/po-attachments';
+import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
-import { useAuth } from '@/lib/auth-context';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
 import { readPoRunGroups, readReceiptTotals } from '@/lib/id-reads';
@@ -31,6 +32,7 @@ import {
 } from '@/lib/po-size-run';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from '@/lib/po-draft-review';
 import { radius, space, theme } from '@/lib/theme';
 
 interface PoLine {
@@ -77,7 +79,15 @@ interface ReceiptHistoryItem {
 export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
+  // The root stack shows no header, so this screen carries its own Back (the
+  // other card screens' chip). A draft opened from the order's "Draft PO for
+  // what is short" result is read-only here, and was left only by the edge
+  // swipe before (local walk 2026-09-30). Opened with nothing behind it (a
+  // link), it goes home, as the order screen does.
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   const { orgId } = useOrg();
   const [header, setHeader] = React.useState<PoHeader | null>(null);
@@ -367,7 +377,13 @@ export default function PoReceiveScreen() {
   // Runs + loose rows, through the SAME core rule the web dialog uses. With no
   // groups (every non-sports PO) every block is loose and the flat cards below
   // render exactly as they always have.
-  const blocks = React.useMemo(() => buildPoBlocks(lines, groups), [lines, groups]);
+  // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
+  // no Post receipt, and its lines one by one (no receiving runs).
+  const reviewOnly = poIsReviewOnly(header?.status);
+  const blocks = React.useMemo(
+    () => buildPoBlocks(lines, reviewOnly ? {} : groups),
+    [lines, groups, reviewOnly],
+  );
 
   function setField(lineId: string, field: keyof DraftLine, value: string) {
     setDraft((m) => ({
@@ -571,6 +587,10 @@ export default function PoReceiveScreen() {
           headerTintColor: theme.text,
         }}
       />
+      {/* Above every state (loading, "Could not load this PO", the PO). */}
+      <View style={styles.topbar}>
+        <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+      </View>
 
       {loading ? (
         <View style={styles.center}>
@@ -601,17 +621,24 @@ export default function PoReceiveScreen() {
                 {labelForStatus(header?.status ?? '')}
               </Text>
             </View>
-            <Pressable
-              onPress={openScanner}
-              style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
-            >
-              <Text style={styles.scanBtnText}>📷 Scan</Text>
-            </Pressable>
+            {reviewOnly ? null : (
+              <Pressable
+                onPress={openScanner}
+                style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
+              >
+                <Text style={styles.scanBtnText}>📷 Scan</Text>
+              </Pressable>
+            )}
           </View>
 
           <ScrollView
             contentContainerStyle={{ padding: space.md, paddingBottom: 140 }}
           >
+            {reviewOnly ? (
+              <View style={styles.partNotice}>
+                <Text style={styles.partNoticeText}>{PO_DRAFT_REVIEW_COPY}</Text>
+              </View>
+            ) : null}
             {groupsDegraded ? (
               <View style={styles.partNotice}>
                 <Text style={styles.partNoticeText}>
@@ -691,10 +718,14 @@ export default function PoReceiveScreen() {
                     </Text>
                     <View style={styles.lineMetricsRow}>
                       <Metric label="Ordered" value={l.quantity_ordered} />
-                      <Metric label="Already" value={l.quantity_received} />
-                      <Metric label="Variance" value={variance} tone="primary" />
+                      {reviewOnly ? null : (
+                        <>
+                          <Metric label="Already" value={l.quantity_received} />
+                          <Metric label="Variance" value={variance} tone="primary" />
+                        </>
+                      )}
                     </View>
-                    {remaining === 0 ? (
+                    {reviewOnly ? null : remaining === 0 ? (
                       <Text style={styles.fullyReceived}>
                         ✓ Fully received — nothing left to receive on this line.
                       </Text>
@@ -783,32 +814,34 @@ export default function PoReceiveScreen() {
             <PoAttachments poId={id} />
           </ScrollView>
 
-          <View style={styles.footer}>
-            {(() => {
-              const anyReceivable = lines.some(
-                (l) => l.quantity_ordered - l.quantity_received > 0,
-              );
-              return (
-                <Pressable
-                  onPress={postReceipt}
-                  disabled={posting || !anyReceivable}
-                  style={({ pressed }) => [
-                    styles.postBtn,
-                    pressed && { opacity: 0.85 },
-                    (posting || !anyReceivable) && { opacity: 0.5 },
-                  ]}
-                >
-                  <Text style={styles.postBtnText}>
-                    {posting
-                      ? 'Posting…'
-                      : anyReceivable
-                        ? 'Post receipt'
-                        : 'Fully received'}
-                  </Text>
-                </Pressable>
-              );
-            })()}
-          </View>
+          {reviewOnly ? null : (
+            <View style={styles.footer}>
+              {(() => {
+                const anyReceivable = lines.some(
+                  (l) => l.quantity_ordered - l.quantity_received > 0,
+                );
+                return (
+                  <Pressable
+                    onPress={postReceipt}
+                    disabled={posting || !anyReceivable}
+                    style={({ pressed }) => [
+                      styles.postBtn,
+                      pressed && { opacity: 0.85 },
+                      (posting || !anyReceivable) && { opacity: 0.5 },
+                    ]}
+                  >
+                    <Text style={styles.postBtnText}>
+                      {posting
+                        ? 'Posting…'
+                        : anyReceivable
+                          ? 'Post receipt'
+                          : 'Fully received'}
+                    </Text>
+                  </Pressable>
+                );
+              })()}
+            </View>
+          )}
         </>
       )}
 
@@ -961,6 +994,7 @@ function Metric({
 }
 
 function labelForStatus(s: string): string {
+  if (s === 'draft') return 'Draft';
   if (s === 'expected_inbound') return 'Expected';
   if (s === 'ordered') return 'Ordered';
   if (s === 'partially_received') return 'Partial';
@@ -983,6 +1017,8 @@ function formatReceiptDate(iso: string | null): string {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // The order screen's top bar: the 44 pt chip frame, 3 pt outside the 38 pt chip.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   headerBar: {
     flexDirection: 'row',
     alignItems: 'center',

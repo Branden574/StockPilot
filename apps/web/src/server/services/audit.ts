@@ -173,6 +173,11 @@ export type AuditEvent =
   // entry: moved, created, none_yet, left_closed, not_added, not_moved), event_id; plus
   // before/after { needed_by }. Nothing is emailed or notified.
   | 'order_request.needed_by_revised'
+  // F2-5 (0385): a buyer drafted purchase orders for part or all of an
+  // order's shortfall (draft_order_shortfall_pos). metadata: purchase_order_ids,
+  // po_numbers, lines [{item_id, quantity, purchase_order_id}] (never a cost),
+  // plus one purchase_order.created entry per draft. Drafts are not sent.
+  | 'order_request.shortfall_po_drafted'
   // Public request links + per-link catalog curation (mig 0261). Every
   // visibility-affecting change is audited with link_id / item_id / before /
   // after in metadata so "who exposed what, when" is always answerable.

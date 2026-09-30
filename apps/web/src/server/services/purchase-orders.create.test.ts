@@ -154,6 +154,68 @@ describe('PurchaseOrdersService.create — PO number handling', () => {
     expect(saveArgs(stub)?.p_po_number).toBe('PO-007');
   });
 
+  // F2-5 review: a reorder draft draws its number BEFORE it waits for the
+  // reorder lock, so a shortfall draft holding that lock can take the same
+  // number first; the save then fails 23505 on the PO-number index. An
+  // auto-drawn number is drawn again, once.
+  it('an auto-drawn number taken meanwhile (23505 on the PO-number index) is drawn again, once, and saved', async () => {
+    const numbers = ['PO-2026-0007', 'PO-2026-0008'];
+    let saves = 0;
+    const stub = makeSupabaseStub({
+      'rpc:next_po_number': () => ({ data: numbers.shift() ?? 'PO-2026-0099', error: null }),
+      'rpc:save_purchase_order_draft': () =>
+        saves++ === 0
+          ? {
+              data: null,
+              error: {
+                code: '23505',
+                message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"',
+              },
+            }
+          : SAVED('po-new'),
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const result = await svc.create({ lines: MINIMAL_LINE });
+
+    expect(result).toEqual({ id: 'po-new', poNumber: 'PO-2026-0008' });
+    const saveCalls = stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft');
+    expect(saveCalls.map((c) => (c.args as SaveArgs).p_po_number)).toEqual(['PO-2026-0007', 'PO-2026-0008']);
+    expect(stub.rpcCalls.filter((c) => c.name === 'next_po_number')).toHaveLength(2);
+  });
+
+  it('only once: a second 23505 is the conflict; a supplied number and any other unique violation are never retried', async () => {
+    const taken = {
+      data: null,
+      error: { code: '23505', message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"' },
+    };
+    let stub = makeSupabaseStub({
+      'rpc:next_po_number': { data: 'PO-2026-0007', error: null },
+      'rpc:save_purchase_order_draft': taken,
+    });
+    let svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    let thrown = await svc.create({ lines: MINIMAL_LINE }).catch((e: unknown) => e);
+    expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
+    expect(stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft')).toHaveLength(2);
+
+    stub = makeSupabaseStub({ 'rpc:save_purchase_order_draft': taken });
+    svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    thrown = await svc.create({ lines: MINIMAL_LINE, poNumber: 'TYPED-1' }).catch((e: unknown) => e);
+    expect((thrown as ServiceError).code).toBe('conflict');
+    expect(stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft')).toHaveLength(1);
+
+    stub = makeSupabaseStub({
+      'rpc:next_po_number': { data: 'PO-2026-0007', error: null },
+      'rpc:save_purchase_order_draft': {
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint "some_other_key"' },
+      },
+    });
+    svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    await svc.create({ lines: MINIMAL_LINE }).catch(() => null);
+    expect(stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft')).toHaveLength(1);
+  });
+
   it('duplicate poNumber (23505 constraint violation) throws conflict ServiceError', async () => {
     const stub = makeSupabaseStub({
       // The save's header insert hits the unique index (a concurrent create

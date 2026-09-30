@@ -13,11 +13,13 @@ import type { NeededByChangeView } from '@/lib/orders/needed-by-change';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
+import { DraftShortfallPoButton } from './draft-shortfall-po-button';
 import { NeededByChangeButton } from './revise-needed-by-dialog';
 import {
   READINESS_TONE_STYLES,
   ReadinessIcon,
   type ReadinessStripPutAway,
+  type ReadinessStripShortfallPo,
   type ReadinessStripView,
 } from './readiness-view';
 
@@ -54,17 +56,25 @@ import {
  * needed-by signal when there
  * is one ("May miss its needed-by date"), so the date and the way to move it
  * sit with the warning about it.
+ *
+ * "Draft PO for what is short" (F2-5): when something on the order may be
+ * drafted (the page decides, readinessStripShortfallPo), the button that
+ * opens the dialog the page mounted once, for a viewer who may draft; core's
+ * sentence ("Drafting a PO needs a manager with purchase-order access.") for
+ * anyone else on the full strip. The button writes nothing by itself.
  */
 export function ReadinessStrip({
   view,
   holdOrderId = null,
   putAway = null,
   neededByChange = null,
+  shortfallPo = null,
 }: {
   view: ReadinessStripView;
   holdOrderId?: string | null;
   putAway?: ReadinessStripPutAway | null;
   neededByChange?: NeededByChangeView | null;
+  shortfallPo?: ReadinessStripShortfallPo | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
@@ -114,6 +124,7 @@ export function ReadinessStrip({
               </IntentLink>
             </Button>
           )}
+          {shortfallPo?.kind === 'button' && <DraftShortfallPoButton orderId={shortfallPo.orderId} />}
           {holdOrderId && (
             <Button
               type="button"
@@ -163,6 +174,11 @@ export function ReadinessStrip({
       {putAway?.kind === 'needs_permission' && (
         <p className="text-muted-foreground mt-1" data-testid="readiness-put-away-permission">
           {putAway.message}
+        </p>
+      )}
+      {shortfallPo?.kind === 'needs_permission' && (
+        <p className="text-muted-foreground mt-1" data-testid="readiness-shortfall-po-permission">
+          {shortfallPo.message}
         </p>
       )}
       {view.mode === 'full' && view.neededBy && (

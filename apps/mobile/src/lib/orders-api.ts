@@ -2,14 +2,18 @@ import {
   NeededByResultShapeError,
   parseHoldOrderStockResult,
   parseNeededByRevisionResult,
+  parseShortfallPoResult,
+  ShortfallPoResultShapeError,
   type HoldOrderStockResult,
   type NeededByRevisionOutcome,
   type NeededBySchedule,
   type PartialAction,
+  type ShortfallPoResult,
 } from '@stockpilot/core';
 
 import { api } from './api';
 import type { ReviseNeededByBody } from './order-needed-by';
+import type { DraftShortfallPoBody } from './order-shortfall-po';
 import type { CreateReturnBody } from './order-returns';
 
 /**
@@ -158,6 +162,40 @@ export async function reviseOrderNeededBy(
     body,
   });
   return parseNeededByRevisionOutcome(res?.revision);
+}
+
+/**
+ * Draft purchase orders for what an order is short (F2-5): POST
+ * /api/v1/orders/[id]/shortfall-po, the REST twin of the web's
+ * draftShortfallPosAction. The body is the chosen lines (1 to 200, one per
+ * item, each above 0) and the request's idempotency key (core
+ * shortfallIdempotencyKey: the same request keeps its key, so a retry after a
+ * lost answer gets the first answer and never a second draft). The server
+ * drafts one PO per supplier plus one for the items with no supplier, all or
+ * nothing, emails no one and writes no notification (the organization's
+ * configured integrations receive po.created per new draft, as for every
+ * draft PO).
+ * Answers core's ShortfallPoResult (parseShortfallPoResult; `replay` true for
+ * a repeated key). Throws an ApiError carrying `details.reason` on a refusal
+ * (409 shortfall_changed with `details.current`, idempotency_conflict,
+ * not_applicable or busy; 400 invalid, item_not_draftable or
+ * line_not_on_order; 403 forbidden or module_disabled; 404 not_found), and
+ * ShortfallPoResultShapeError on an answer it cannot read, or one about
+ * another order (never a guessed result).
+ */
+export async function draftOrderShortfallPos(
+  orderId: string,
+  body: DraftShortfallPoBody,
+): Promise<ShortfallPoResult> {
+  const res = await api<{ result?: unknown }>(`/api/v1/orders/${orderId}/shortfall-po`, {
+    method: 'POST',
+    body,
+  });
+  const result = parseShortfallPoResult(res?.result);
+  if (result.orderId.toLowerCase() !== orderId.toLowerCase()) {
+    throw new ShortfallPoResultShapeError('the answer is about another order');
+  }
+  return result;
 }
 
 /**

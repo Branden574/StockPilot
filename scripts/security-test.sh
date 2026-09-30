@@ -417,6 +417,29 @@ PGTAP_TESTS=(
   # packing slip, staging, assignDelivery, in transit), the order flows' admin
   # writes and the needed-by revision keep working.
   supabase/tests/0384_schedule_event_order_link.test.sql
+  # Draft a PO for an order's shortfall (F2-5, 0385): draft_order_shortfall_pos
+  # is SECURITY INVOKER, so purchase_orders_write, purchase_order_items_write,
+  # idempotency_keys_write and the 0359/0360/0364 PO guards decide exactly as
+  # for a hand-made draft, with the floors also in its body: signed in
+  # (42501); not a member, a disabled manager, a missing or foreign order: the
+  # SAME P0002; the orders and purchase_orders modules (P0001
+  # module_disabled); a manager (staff WITH a purchase_orders:manage override
+  # and viewers: 42501 manager_required, since idempotency keys are
+  # manager-only), holding purchase_orders:manage (42501), with write access
+  # to the order's warehouse. EXECUTE to authenticated only; the three
+  # helpers are IMMUTABLE and never anon. No function of 0385 names the
+  # holdings table (INV-33): stock comes from order_readiness_facts. It takes
+  # the reorder drafts' advisory lock (the 0366 key), recomputes what may be
+  # drafted after it and REFUSES anything above it (P0001 shortfall_changed
+  # with the current numbers; never clamped), refuses kits, deleted, moved
+  # and unreadable items, writes one draft per supplier plus one with none,
+  # all or nothing (a PO number taken for the second draft leaves no draft
+  # and no key), replays an idempotency key's first answer and refuses the
+  # key with another request, never raises 40001/40P01 and notifies nobody.
+  # Parity with core's draftable over the shared readiness fixture. The race
+  # of two buyers (exactly one wins) and a reorder draft racing a shortfall
+  # draft are scripts/db-concurrency/0385_shortfall_race.sh.
+  supabase/tests/0385_order_shortfall_po.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
