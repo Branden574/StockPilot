@@ -301,6 +301,73 @@ export function neededByRevisedCopy(outcome: NeededByRevisionOutcome, now?: numb
   }
 }
 
+// ── The change itself: its entry, its dialog (web) and its sheet (phone) ────
+//
+// Added with the web dialog (F2-4 UI step), so the phone sheet says the same
+// words: the entry beside the date, the title, the two fields and what saving
+// does, said before saving. What happened AFTER saving is neededByRevisedCopy
+// (from the server's answer, never from what the screen expected).
+
+/** The entry beside the needed-by date that opens the change. */
+export const NEEDED_BY_CHANGE_LABEL = 'Change';
+/** Its accessible name (screen readers, VoiceOver). It starts with the
+ *  visible word, so speech input ("click Change") still finds it. */
+export const NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL = 'Change needed-by date';
+/** The web dialog's and the phone sheet's title. */
+export const NEEDED_BY_REVISE_TITLE = 'Change needed-by date';
+/** The date and time field (entered in the org's zone: neededByZoneNote). */
+export const NEEDED_BY_FIELD_LABEL = 'New needed-by date and time';
+/** The reason field, and the hint under it. */
+export const NEEDED_BY_REASON_LABEL = 'Reason';
+export const NEEDED_BY_REASON_HINT = `Kept in the order's history. Up to ${NEEDED_BY_REASON_MAX} characters.`;
+/** The button that saves the change. */
+export const NEEDED_BY_SAVE_LABEL = 'Save date';
+
+/**
+ * The row the entry sits on: "Needed by Fri, Oct 3, 2:00 PM" in the org's
+ * zone, or "No needed-by date" for an order that has none (an approver can
+ * set one).
+ */
+export function neededByRowCopy(
+  neededBy: string | null | undefined,
+  timeZone: string,
+  now?: number | Date,
+): string {
+  if (!neededBy || !Number.isFinite(Date.parse(neededBy))) return 'No needed-by date';
+  return `Needed by ${neededByLabel(neededBy, timeZone, now)}`;
+}
+
+/**
+ * In the dialog and the sheet, the date being replaced: "Current needed-by:
+ * Fri, Oct 3, 2:00 PM". After a stale refusal it is the date someone else
+ * saved, which is what the next save replaces.
+ */
+export function neededByCurrentCopy(
+  current: string | null | undefined,
+  timeZone: string,
+  now?: number | Date,
+): string {
+  if (!current || !Number.isFinite(Date.parse(current))) return 'This order has no needed-by date yet.';
+  return `Current needed-by: ${neededByLabel(current, timeZone, now)}`;
+}
+
+/**
+ * What saving does to the order's Schedule entry, said before saving. Past
+ * approval the entry follows the new date (or is added, when the order had no
+ * date when it was approved); a pending order has none until it is approved.
+ * The confirmation after saving says what actually happened.
+ */
+export function neededByEffectCopy(status: string | null | undefined): string {
+  return orderBelongsOnSchedule(status)
+    ? "The order's Schedule entry follows the new date, and its reminders are set for the new time."
+    : 'Approving the order puts it on the Schedule at this date.';
+}
+
+/** The save never answered (the connection dropped, the page was replaced):
+ *  it may have been saved or not, so the person looks before trying again. */
+export const NEEDED_BY_NO_ANSWER_COPY =
+  "No answer came back, so the date may or may not have changed. Check the order's needed-by date before trying again.";
+
 /** A reason as the function takes it: trimmed, 1 to 500 characters; null
  *  when empty or too long (the screens then show NEEDED_BY_REASON_REQUIRED_COPY). */
 export function normalizeNeededByReason(raw: string | null | undefined): string | null {

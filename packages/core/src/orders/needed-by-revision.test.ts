@@ -3,26 +3,37 @@ import { describe, expect, it } from 'vitest';
 import {
   isNeededByRevisable,
   NEEDED_BY_BUSY_COPY,
+  NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL,
+  NEEDED_BY_CHANGE_LABEL,
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_FAILED_COPY,
+  NEEDED_BY_FIELD_LABEL,
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_MODULE_OFF_COPY,
+  NEEDED_BY_NO_ANSWER_COPY,
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
   NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_REASON_HINT,
+  NEEDED_BY_REASON_LABEL,
   NEEDED_BY_REASON_MAX,
   NEEDED_BY_REASON_REQUIRED_COPY,
+  NEEDED_BY_REVISE_TITLE,
   NEEDED_BY_REVISABLE_STATUSES,
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_REVISED_TIMELINE_LABEL,
+  NEEDED_BY_SAVE_LABEL,
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   neededByChangedCopy,
+  neededByCurrentCopy,
+  neededByEffectCopy,
   neededByInvalidTimeCopy,
   neededByLabel,
   neededByPreviewCopy,
   neededByRevisedCopy,
+  neededByRowCopy,
   neededByZoneNote,
   NeededByResultShapeError,
   normalizeNeededByReason,
@@ -189,6 +200,20 @@ describe('words', () => {
       NEEDED_BY_SIGN_IN_COPY,
       NEEDED_BY_RELOAD_COPY,
       NEEDED_BY_REVISED_TIMELINE_LABEL,
+      NEEDED_BY_NO_ANSWER_COPY,
+      NEEDED_BY_CHANGE_LABEL,
+      NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL,
+      NEEDED_BY_REVISE_TITLE,
+      NEEDED_BY_FIELD_LABEL,
+      NEEDED_BY_REASON_LABEL,
+      NEEDED_BY_REASON_HINT,
+      NEEDED_BY_SAVE_LABEL,
+      neededByRowCopy('2026-10-03T21:00:00Z', LA, NOW),
+      neededByRowCopy(null, LA),
+      neededByCurrentCopy('2026-10-03T21:00:00Z', LA, NOW),
+      neededByCurrentCopy(null, LA),
+      neededByEffectCopy('pending_approval'),
+      neededByEffectCopy('approved'),
       neededByZoneNote(LA),
       neededByPreviewCopy(NOW, LA, NOW),
       neededByChangedCopy(null, LA),
@@ -199,6 +224,44 @@ describe('words', () => {
       ),
     ];
     expect(all.filter((l) => /email|notif|sent|verif|guarantee|\bbooks?\b|%/i.test(l))).toEqual([]);
+  });
+});
+
+describe('the change: its entry, its dialog and its sheet (one set of words for web and phone)', () => {
+  it('the entry beside the date: a visible word, and an accessible name that starts with it', () => {
+    expect(NEEDED_BY_CHANGE_LABEL).toBe('Change');
+    expect(NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL).toBe('Change needed-by date');
+    // Speech input finds the button by what it shows (WCAG 2.5.3).
+    expect(NEEDED_BY_CHANGE_ACCESSIBILITY_LABEL.startsWith(NEEDED_BY_CHANGE_LABEL)).toBe(true);
+    expect(NEEDED_BY_REVISE_TITLE).toBe('Change needed-by date');
+  });
+
+  it('the row the entry sits on, in the org zone; an order with no date says so', () => {
+    expect(neededByRowCopy('2026-10-03T21:00:00Z', LA, NOW)).toBe('Needed by Sat, Oct 3, 2:00 PM');
+    expect(neededByRowCopy('2026-10-03T21:00:00Z', 'America/New_York', NOW)).toBe('Needed by Sat, Oct 3, 5:00 PM');
+    // A value exactly as PostgREST prints it, microseconds included.
+    expect(neededByRowCopy('2026-10-03T21:00:00.123456+00:00', LA, NOW)).toBe('Needed by Sat, Oct 3, 2:00 PM');
+    expect(neededByRowCopy(null, LA)).toBe('No needed-by date');
+    expect(neededByRowCopy('', LA)).toBe('No needed-by date');
+    expect(neededByRowCopy('soon', LA)).toBe('No needed-by date');
+  });
+
+  it('the date being replaced', () => {
+    expect(neededByCurrentCopy('2026-10-03T21:00:00Z', LA, NOW)).toBe('Current needed-by: Sat, Oct 3, 2:00 PM');
+    expect(neededByCurrentCopy(null, LA)).toBe('This order has no needed-by date yet.');
+  });
+
+  it('what saving does, before saving: past approval the entry follows; a pending order gets one when approved', () => {
+    expect(neededByEffectCopy('approved')).toBe(
+      "The order's Schedule entry follows the new date, and its reminders are set for the new time.",
+    );
+    expect(neededByEffectCopy('in_transit')).toBe(neededByEffectCopy('approved'));
+    expect(neededByEffectCopy('pending_approval')).toBe('Approving the order puts it on the Schedule at this date.');
+  });
+
+  it('the reason hint names the limit the function enforces', () => {
+    expect(NEEDED_BY_REASON_HINT).toContain(String(NEEDED_BY_REASON_MAX));
+    expect(NEEDED_BY_FIELD_LABEL).toBe('New needed-by date and time');
   });
 });
 
