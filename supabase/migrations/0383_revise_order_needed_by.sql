@@ -29,10 +29,12 @@
 --      the status);
 --   3. refuses a needed-by that is not in the future (22023
 --      needed_by_in_past; a null one: 22023 needed_by_required, clearing a
---      needed-by is not supported) and a reason that is empty or longer than
---      500 characters after trimming (22023 reason_required). The event
---      description has its control characters stripped and is cut to 1000
---      characters;
+--      needed-by is not supported), one that is infinity or later than five
+--      years from now (22023 needed_by_out_of_range: no screen can show it,
+--      JavaScript's Date cannot hold the far end of timestamptz, and the
+--      reminder cron's arithmetic would carry it onto the event), and a
+--      reason that is empty or longer than 500 characters after trimming
+--      (22023 reason_required);
 --   4. STALE VERSION: when the order's needed-by is not the value the caller
 --      saw (IS DISTINCT FROM p_expected_needed_by), P0001 needed_by_changed
 --      with the current value as the detail (ISO 8601, '' for none), so a
@@ -47,16 +49,37 @@
 --      or in progress, moves with the order: starts_at = the new needed-by,
 --      ends_at shifted by the same amount when it has one (the
 --      schedule_events_end_after_start CHECK would refuse a start past the
---      end), details = the description given (when not null),
+--      end), its description's date sentence replaced (DESCRIPTION, below),
 --      reminded_24h_at = null and reminded_1h_at = null (its reminders are
 --      armed again for the new time), updated_by = the caller. A completed or
 --      cancelled event is left as it is. An order with no event is left
 --      without one: the ONE writer of new events is autoScheduleFromOrder
 --      (approval, and the service after a revision of an approved order that
 --      has none);
---   8. returns {changed, previous, neededBy, eventId, eventUpdated, status}
---      (status is the order's, read under its lock: the service decides from
---      it whether an approved order still needs its event created).
+--   8. returns {changed, previous, neededBy, eventId, eventUpdated,
+--      eventStatus, status}: eventStatus is the order's event's status (null
+--      when it has none), so a screen says "its reminders are set" only for
+--      an entry the reminder cron reminds (status scheduled); status is the
+--      order's, read under its lock (the service decides from it whether an
+--      approved order still needs its event created).
+--
+-- ── DESCRIPTION ────────────────────────────────────────────────────────────
+-- The Schedule page lets anyone who may edit an event rewrite its
+-- description, and the reminder emails print it. So only the date sentence
+-- core writes (orderScheduleEventDetails: "Auto-created from order
+-- SO-000016. Needed by Oct 3, 2026, 2:00 PM.") is ever replaced:
+--   - p_event_details is taken only when, with its control characters
+--     stripped, it IS that sentence (an order number SO- plus six or more
+--     digits, or the 8-character id prefix; a date of at most 64 characters
+--     with no period). Any other text is ignored: this function never writes
+--     a caller's free text into an event's description or its reminders.
+--   - In the event's description, the first sentence of that shape (the
+--     older numeric format "Needed by 9/11/2026, 2:00:00 AM." included) is
+--     replaced where it sits; whatever a person wrote around it stays.
+--   - A description with no such sentence (rewritten by hand) is kept whole;
+--     an empty one gets the sentence.
+-- Production, 2026-09-30 (read-only): 21 of the 22 order events carry exactly
+-- the sentence; one was rewritten by hand.
 -- Nothing is emailed or notified: the requester's delivery-request draft is
 -- unchanged and opens only on their tap (Outlook rule 1). The service writes
 -- the audit entry (order_request.needed_by_revised {from, to, reason}).
@@ -75,12 +98,18 @@
 --      the 0348 approve gate word for word: else 42501 forbidden, hint
 --      orders_approve.
 --   5. user_can_access_inventory(caller, order warehouse, null, 'write'):
---      else 42501 forbidden, hint warehouse_write (a scoped manager outside
---      the order's warehouse, staff assigned elsewhere, a viewer).
+--      else 42501 forbidden, hint warehouse_write (staff assigned to another
+--      warehouse, a viewer). There is no warehouse-scoped manager to refuse:
+--      user_can_access_inventory answers true for every owner, admin and
+--      manager of the org, whatever their assignment rows, as the app's
+--      roleSeesEveryWarehouse does (pgTAP G12 pins a manager assigned only to
+--      another warehouse succeeding).
 -- Gates 2 to 4 are answered from an UNLOCKED read, before any lock is taken
--- (0378's order): a caller who may not revise never waits on, or holds, the
+-- (0378's order): a caller refused by them never waits on, or holds, the
 -- order row. The order row is then locked FOR UPDATE, and gate 5, the status,
--- the stale-version check and the write all read it under that lock.
+-- the stale-version check and the write all read it under that lock, so an
+-- approver refused by gate 5 (no write access to the warehouse) does take
+-- the row lock briefly before the refusal, as in hold_order_stock.
 -- Refusals are 42501, P0001, P0002 and 22023 only, each with a stable hint.
 -- It never raises 40001 or 40P01 (0367): PostgREST retries 40001 forever.
 --
@@ -88,15 +117,18 @@
 -- The order row, then its event row. No function locks an event and then its
 -- order; the other event writers (ScheduleService.update, the order-close
 -- sync, the reminder cron's stamp) touch the event row alone. lock_timeout
--- 5s: a caller waits at most 5 s, then gets 55P03 (the service says "try
--- again").
+-- 5s applies to each lock: the order, then its event, so a caller can wait up
+-- to 5 s on each, within the authenticated role's 8 s statement_timeout
+-- (57014 past it). Either way the service says "try again" (55P03 and 57014
+-- are both "busy").
 --
 -- ── WHO CALLS IT ───────────────────────────────────────────────────────────
 -- OrderRequestsService.reviseNeededBy (web reviseOrderNeededByAction, the
 -- AI-suggestion apply setOrderNeededByAction, and POST
 -- /api/v1/orders/[id]/needed-by for the phone). The service converts the wall
 -- clock the screens send in the ORGANIZATION's time zone and builds the event
--- description with core orderScheduleEventDetails, the text approval writes.
+-- description's sentence with core orderScheduleEventDetails, the text
+-- approval writes.
 --
 -- ── FROZEN ─────────────────────────────────────────────────────────────────
 -- approve_order_request, approve_partial, resume_fulfillment, close_partial,
@@ -143,7 +175,10 @@ declare
   v_details       text;
   v_event_id      uuid;
   v_event_status  text;
+  v_event_details text;
   v_event_updated boolean := false;
+  v_at            integer;
+  v_old_sentence  text;
 begin
   -- Gate 1: a signed-in caller.
   if v_uid is null then
@@ -199,11 +234,18 @@ begin
   if p_needed_by <= now() then
     raise exception 'needed_by_in_past' using errcode = '22023', hint = 'needed_by_in_past';
   end if;
+  if not isfinite(p_needed_by) or p_needed_by > now() + interval '5 years' then
+    raise exception 'needed_by_out_of_range' using errcode = '22023', hint = 'needed_by_out_of_range';
+  end if;
   v_reason := regexp_replace(coalesce(p_reason, ''), '^\s+|\s+$', '', 'g');
   if char_length(v_reason) < 1 or char_length(v_reason) > 500 then
     raise exception 'reason_required' using errcode = '22023', hint = 'reason_required';
   end if;
-  v_details := nullif(left(btrim(regexp_replace(p_event_details, '[[:cntrl:]]', '', 'g')), 1000), '');
+  -- Only core's own date sentence is taken (DESCRIPTION, in the header).
+  v_details := btrim(regexp_replace(coalesce(p_event_details, ''), '[[:cntrl:]]', '', 'g'));
+  if v_details !~ '^Auto-created from order (SO-[0-9]{6,}|[0-9A-F]{8})\. Needed by [^.]{1,64}\.$' then
+    v_details := null;
+  end if;
 
   -- Stale version: the caller must have seen the value it is replacing.
   if v_current is distinct from p_expected_needed_by then
@@ -213,8 +255,8 @@ begin
   end if;
 
   -- LOCK 2 of 2: the order's event (at most one), when it has one.
-  select e.id, e.status
-    into v_event_id, v_event_status
+  select e.id, e.status, e.details
+    into v_event_id, v_event_status, v_event_details
     from public.schedule_events e
    where e.order_request_id = p_id
      and e.organization_id = v_org
@@ -223,7 +265,8 @@ begin
   -- An equal value writes nothing.
   if p_needed_by = v_current then
     return jsonb_build_object('changed', false, 'previous', v_current, 'neededBy', v_current,
-                              'eventId', v_event_id, 'eventUpdated', false, 'status', v_status);
+                              'eventId', v_event_id, 'eventUpdated', false,
+                              'eventStatus', v_event_status, 'status', v_status);
   end if;
 
   update public.order_requests
@@ -231,11 +274,26 @@ begin
    where id = p_id;
 
   if v_event_id is not null and v_event_status in ('scheduled', 'in_progress') then
+    -- The description: the date sentence is replaced where it sits, and
+    -- everything a person wrote around it stays; one rewritten by hand (no
+    -- such sentence) is kept whole; an empty one gets the sentence.
+    if v_details is not null then
+      if v_event_details is null or btrim(v_event_details) = '' then
+        v_event_details := v_details;
+      else
+        v_at := regexp_instr(v_event_details, 'Auto-created from order [^.\n]*\. Needed by [^.\n]*\.');
+        if v_at > 0 then
+          v_old_sentence := regexp_substr(v_event_details, 'Auto-created from order [^.\n]*\. Needed by [^.\n]*\.');
+          v_event_details := left(v_event_details, v_at - 1) || v_details
+                             || substr(v_event_details, v_at + char_length(v_old_sentence));
+        end if;
+      end if;
+    end if;
     update public.schedule_events e
        set starts_at       = p_needed_by,
            ends_at         = case when e.ends_at is null then null
                                   else p_needed_by + (e.ends_at - e.starts_at) end,
-           details         = coalesce(v_details, e.details),
+           details         = v_event_details,
            reminded_24h_at = null,
            reminded_1h_at  = null,
            updated_by      = v_uid
@@ -245,7 +303,7 @@ begin
 
   return jsonb_build_object('changed', true, 'previous', v_current, 'neededBy', p_needed_by,
                             'eventId', v_event_id, 'eventUpdated', v_event_updated,
-                            'status', v_status);
+                            'eventStatus', v_event_status, 'status', v_status);
 end;
 $$;
 
@@ -257,18 +315,20 @@ grant execute on function public.revise_order_needed_by(uuid, timestamptz, times
 comment on function public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text) is
   'F2-4 (0383): changes an open order''s needed-by and moves its Schedule event '
   'with it, in one transaction. Refuses a closed order (P0001 order_closed), a '
-  'needed-by that is null or not in the future (22023 needed_by_required, '
-  'needed_by_in_past), a reason that is empty or over 500 characters after '
+  'needed-by that is null, not in the future, infinity or later than five years '
+  'from now (22023 needed_by_required, needed_by_in_past, needed_by_out_of_range), '
+  'a reason that is empty or over 500 characters after '
   'trimming (22023 reason_required), and a stale edit: the order''s needed-by '
   'must be p_expected_needed_by (P0001 needed_by_changed, detail = the current '
   'value). An equal value writes nothing. The order''s scheduled or in-progress '
   'event gets starts_at = the new needed-by, ends_at shifted by the same amount, '
-  'details = p_event_details (control characters stripped, 1000 characters at '
-  'most; unchanged when null) and both reminder stamps cleared, so its reminders '
+  'the date sentence in its description replaced by p_event_details (taken only '
+  'when it is core''s sentence "Auto-created from order SO-…. Needed by …."; any '
+  'text a person wrote around it is kept) and both reminder stamps cleared, so its reminders '
   'go out again for the new time; a completed or cancelled event is untouched and '
   'a missing one is not created here (autoScheduleFromOrder is the one writer of '
   'new events). Returns {changed, previous, neededBy, eventId, eventUpdated, '
-  'status}. Gates in its body: signed in (42501), member of the order''s org '
+  'eventStatus, status}. Gates in its body: signed in (42501), member of the order''s org '
   '(P0002 order_request_not_found, the same for a missing order), the orders '
   'module (P0001 module_disabled), manager or orders:approve (42501, hint '
   'orders_approve), write access to the order''s warehouse (42501, hint '

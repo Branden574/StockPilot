@@ -21,7 +21,9 @@
 --    order_closed with the status as its detail, and write nothing; every
 --    open status is answered.
 -- A. Arguments: a needed-by now or in the past (22023 needed_by_in_past), a
---    null one (22023 needed_by_required), a reason empty, blank or over 500
+--    null one (22023 needed_by_required), infinity or later than five years
+--    from now (22023 needed_by_out_of_range; just inside five years is
+--    accepted), a reason empty, blank or over 500
 --    characters (22023 reason_required; 500 is accepted); the stale version
 --    (P0001 needed_by_changed, detail = the current value as ISO 8601, '' for
 --    none), in both directions (expected null when set, expected a value
@@ -32,10 +34,17 @@
 --    in-progress event moves too; a completed or cancelled event is untouched;
 --    an order without an event changes only the order (no event is created
 --    here); an equal value writes nothing (no new row version of the order or
---    the event); a null description keeps the event's; control characters
---    are stripped and the description is cut to 1000; the answer is exactly
---    {changed, previous, neededBy, eventId, eventUpdated, status}; the
---    order's status never changes and no notification row is written.
+--    the event); the answer is exactly {changed, previous, neededBy, eventId,
+--    eventUpdated, eventStatus, status}; the order's status never changes and
+--    no notification row is written. THE DESCRIPTION: only core's own
+--    sentence is taken ("Auto-created from order SO-…. Needed by …."; control
+--    characters stripped first), and only that sentence in the event's
+--    description is replaced: a line someone added on the Schedule page is
+--    kept (mutation: overwrite the whole description), the sentence is
+--    swapped where it sits (the old numeric format included), a description
+--    rewritten by hand with no such sentence is kept whole, an empty one gets
+--    the sentence, and a description that is not core's sentence (any other
+--    text) is ignored; a null one keeps the event's.
 -- Z. The frozen objects: md5, SECURITY DEFINER, search_path and owner of the
 --    functions F2-4 promises not to touch, fingerprints of ledger.*, the 0380
 --    report functions, the 0381 photo functions and policies, the 0382 book
@@ -51,7 +60,7 @@
 
 begin;
 
-select plan(39);
+select plan(46);
 
 \set orgA    '\'03830000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03830000-0000-0000-0000-00000000000b\''
@@ -81,6 +90,7 @@ select plan(39);
 \set ordGate '\'03830000-0000-0000-0000-000000000108\''
 \set ordEq   '\'03830000-0000-0000-0000-000000000109\''
 \set ordArg  '\'03830000-0000-0000-0000-00000000010a\''
+\set ordTxt  '\'03830000-0000-0000-0000-00000000010b\''
 \set ordB    '\'03830000-0000-0000-0000-000000000141\''
 \set evAppr  '\'03830000-0000-0000-0000-000000000201\''
 \set evPip   '\'03830000-0000-0000-0000-000000000203\''
@@ -88,6 +98,8 @@ select plan(39);
 \set evCanc  '\'03830000-0000-0000-0000-000000000205\''
 \set evGate  '\'03830000-0000-0000-0000-000000000208\''
 \set evEq    '\'03830000-0000-0000-0000-000000000209\''
+\set evTxt   '\'03830000-0000-0000-0000-00000000020b\''
+\set sent    '\'Auto-created from order SO-000383. Needed by Oct 9, 2026, 2:00 PM.\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -157,6 +169,7 @@ insert into public.order_requests
   (:ordGate, :orgA, :whA, 'approved',            'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days'),
   (:ordEq,   :orgA, :whA, 'staged_for_pickup',   'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days'),
   (:ordArg,  :orgA, :whA, 'approved',            'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days'),
+  (:ordTxt,  :orgA, :whA, 'approved',            'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days'),
   (:ordB,    :orgB, :whB, 'approved',            'internal', :mgrB, 'pickup',   date_trunc('minute', now()) + interval '3 days');
 -- One order per closed status (S1) and per remaining open status (S4).
 create temp table st_order (status text primary key, id uuid not null, closed boolean not null);
@@ -193,7 +206,9 @@ insert into public.schedule_events
   (:evGate, :orgA, 'SO gate pickup', date_trunc('minute', now()) + interval '3 days', null, :whA,
    'old gate', 'scheduled', :ordGate, :mgr, :mgr, now() - interval '2 hours', null),
   (:evEq,   :orgA, 'SO eq pickup',   date_trunc('minute', now()) + interval '3 days', null, :whA,
-   'old eq', 'scheduled', :ordEq, :mgr, :mgr, now() - interval '2 hours', now() - interval '1 hour');
+   'old eq', 'scheduled', :ordEq, :mgr, :mgr, now() - interval '2 hours', now() - interval '1 hour'),
+  (:evTxt,  :orgA, 'SO txt pickup',  date_trunc('minute', now()) + interval '3 days', null, :whA,
+   'Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM.', 'scheduled', :ordTxt, :mgr, :mgr, null, null);
 
 -- The disabled member, disabled the way the service does it.
 set local role to 'service_role';
@@ -221,7 +236,7 @@ end $$;
 -- A revision call as SQL text: the order, the new value, the expected value
 -- (each an SQL expression), the reason and the description.
 create function pg_temp.rev(p_order uuid, p_new text, p_expected text, p_reason text default 'Moved by the school',
-                            p_details text default 'Auto-created from order SO-TEST. Needed by the new date.')
+                            p_details text default 'Auto-created from order SO-000383. Needed by the new date.')
 returns text language sql as $$
   select format('select public.revise_order_needed_by(%L, %s, %s, %L, %L)',
                 p_order, p_new, p_expected, p_reason, p_details)
@@ -259,7 +274,7 @@ grant select on st_order to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.schedule_events where organization_id = '03830000-0000-0000-0000-00000000000a') <> 6 then
+  if (select count(*) from public.schedule_events where organization_id = '03830000-0000-0000-0000-00000000000a') <> 7 then
     raise exception 'fixture: events';
   end if;
   if (select count(*) from st_order s join public.order_requests o on o.id = s.id and o.status = s.status) <> 9 then
@@ -501,6 +516,33 @@ select is((select r from fx where who = '500'), 'no error',
   'A6: a reason of exactly 500 characters after trimming is accepted');
 delete from fx;
 
+-- A needed-by no screen can show: infinity, or years away. JavaScript's Date
+-- cannot hold year 290000, and the reminder cron's date arithmetic would
+-- carry either onto the event.
+select pg_temp.state() as "state4" \gset
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :mgr;
+insert into fx select 'infinity', pg_temp.err(pg_temp.rev(:ordArg, $$'infinity'::timestamptz$$, pg_temp.cur(:ordArg)));
+insert into fx select 'year 290000', pg_temp.err(pg_temp.rev(:ordArg, $$'290000-01-01 00:00+00'::timestamptz$$, pg_temp.cur(:ordArg)));
+insert into fx select 'five years and a minute', pg_temp.err(pg_temp.rev(:ordArg, $$now() + interval '5 years 1 minute'$$, pg_temp.cur(:ordArg)));
+reset role;
+select is(
+  (select string_agg(who || '=' || r, ', ' order by who) from fx),
+  'five years and a minute=22023:needed_by_out_of_range:needed_by_out_of_range, '
+  'infinity=22023:needed_by_out_of_range:needed_by_out_of_range, '
+  'year 290000=22023:needed_by_out_of_range:needed_by_out_of_range',
+  'A7: infinity, a year no screen can show and anything later than five years from now are refused: 22023 needed_by_out_of_range');
+select is(pg_temp.state(), :'state4',
+  'A8: and nothing was written (the order and its event keep their dates)');
+delete from fx;
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :mgr;
+insert into fx select 'just inside', pg_temp.err(pg_temp.rev(:ordArg, $$now() + interval '5 years' - interval '1 minute'$$, pg_temp.cur(:ordArg)));
+reset role;
+select is((select r from fx where who = 'just inside'), 'no error',
+  'A9: a needed-by a minute inside five years from now is accepted');
+delete from fx;
+
 -- ═══ E. The event ═════════════════════════════════════════════════════════
 create temp table before_appr as
   select e.starts_at, e.ends_at, e.status, e.title, e.created_by, e.order_request_id, e.warehouse_id
@@ -510,15 +552,16 @@ set local "request.jwt.claim.sub" to :mgr;
 insert into ans select 'appr', public.revise_order_needed_by(
   :ordAppr, date_trunc('minute', now()) + interval '5 days',
   (select needed_by from public.order_requests where id = :ordAppr), '  The school moved the day  ',
-  E'Auto-created from order SO-APPR.\nNeeded by the new date.\u0007');
+  E'  Auto-created from order SO-000383. Needed by Oct 9, 2026,\t 2:00 PM.\u0007\n');
 reset role;
 select is(
   (select r from ans where who = 'appr'),
   jsonb_build_object('changed', true,
                      'previous', to_jsonb(date_trunc('minute', now()) + interval '3 days'),
                      'neededBy', to_jsonb(date_trunc('minute', now()) + interval '5 days'),
-                     'eventId', :evAppr::text, 'eventUpdated', true, 'status', 'approved'),
-  'E1: the answer is exactly {changed, previous, neededBy, eventId, eventUpdated, status}');
+                     'eventId', :evAppr::text, 'eventUpdated', true, 'eventStatus', 'scheduled',
+                     'status', 'approved'),
+  'E1: the answer is exactly {changed, previous, neededBy, eventId, eventUpdated, eventStatus, status}');
 select is(
   (select jsonb_build_object(
      'order', (select o.needed_by = date_trunc('minute', now()) + interval '5 days' and o.status = 'approved'
@@ -532,9 +575,9 @@ select is(
                   = (select b.title, b.created_by, b.order_request_id, b.warehouse_id from before_appr b))
      from public.schedule_events e where e.id = :evAppr),
   jsonb_build_object('order', true, 'starts', true, 'ends', true,
-                     'details', 'Auto-created from order SO-APPR.Needed by the new date.',
+                     'details', :sent::text,
                      'status', 'scheduled', 'updatedBy', true, 'unchanged', true),
-  'E2: the order and its scheduled event move together: starts_at = the new needed-by, ends_at keeps its hour, details = the description given (control characters stripped), still scheduled, updated_by = the caller; title, creator, link and warehouse unchanged; the order''s status unchanged');
+  'E2: the order and its scheduled event move together: starts_at = the new needed-by, ends_at keeps its hour, the description''s sentence is the one given (control characters stripped), still scheduled, updated_by = the caller; title, creator, link and warehouse unchanged; the order''s status unchanged');
 select is(
   (select e.reminded_24h_at from public.schedule_events e where e.id = :evAppr),
   null::timestamptz,
@@ -552,12 +595,14 @@ insert into ans select 'pip', public.revise_order_needed_by(
 reset role;
 select is(
   (select jsonb_build_object('updated', (select r->'eventUpdated' from ans where who = 'pip'),
+                             'eventStatus', (select r->'eventStatus' from ans where who = 'pip'),
                              'starts', e.starts_at = date_trunc('minute', now()) + interval '5 days',
                              'details', e.details, 'status', e.status,
                              'stamps', coalesce(e.reminded_24h_at::text, '-') || coalesce(e.reminded_1h_at::text, '-'))
      from public.schedule_events e where e.id = :evPip),
-  jsonb_build_object('updated', true, 'starts', true, 'details', 'old pip', 'status', 'in_progress', 'stamps', '--'),
-  'E5: an in-progress event moves too, stamps cleared; a null description keeps the event''s own');
+  jsonb_build_object('updated', true, 'eventStatus', 'in_progress', 'starts', true, 'details', 'old pip',
+                     'status', 'in_progress', 'stamps', '--'),
+  'E5: an in-progress event moves too, stamps cleared, and the answer names its status; a null description keeps the event''s own');
 
 create temp table before_closed as
   select e.id, e.starts_at, e.details, e.reminded_24h_at, e.ctid as row_ctid from public.schedule_events e where e.id in (:evDone, :evCanc);
@@ -572,7 +617,8 @@ insert into ans select 'canc', public.revise_order_needed_by(
 reset role;
 select is(
   (select jsonb_build_object(
-     'answers', (select jsonb_agg(jsonb_build_object('changed', r->'changed', 'eventId', r->'eventId', 'eventUpdated', r->'eventUpdated') order by who)
+     'answers', (select jsonb_agg(jsonb_build_object('changed', r->'changed', 'eventId', r->'eventId', 'eventUpdated', r->'eventUpdated',
+                                                     'eventStatus', r->'eventStatus') order by who)
                    from ans where who in ('canc', 'done')),
      'orders', (select bool_and(o.needed_by = date_trunc('minute', now()) + interval '5 days')
                   from public.order_requests o where o.id in (:ordDone, :ordCanc)),
@@ -580,8 +626,8 @@ select is(
                   from public.schedule_events e join before_closed b on b.id = e.id))),
   jsonb_build_object(
     'answers', jsonb_build_array(
-      jsonb_build_object('changed', true, 'eventId', :evCanc::text, 'eventUpdated', false),
-      jsonb_build_object('changed', true, 'eventId', :evDone::text, 'eventUpdated', false)),
+      jsonb_build_object('changed', true, 'eventId', :evCanc::text, 'eventUpdated', false, 'eventStatus', 'cancelled'),
+      jsonb_build_object('changed', true, 'eventId', :evDone::text, 'eventUpdated', false, 'eventStatus', 'completed')),
     'orders', true, 'events', true),
   'E6: a completed or cancelled event is untouched (not even a new row version), and the order still moves');
 
@@ -600,7 +646,8 @@ reset role;
 select is(
   (select jsonb_build_object(
      'answers', (select jsonb_agg(jsonb_build_object('changed', r->'changed', 'previous', r->'previous', 'eventId', r->'eventId',
-                                                     'eventUpdated', r->'eventUpdated', 'status', r->'status') order by who)
+                                                     'eventUpdated', r->'eventUpdated', 'eventStatus', r->'eventStatus',
+                                                     'status', r->'status') order by who)
                    from ans where who in ('noev', 'null', 'pend')),
      'orders', (select bool_and(o.needed_by = date_trunc('minute', now()) + interval '5 days')
                   from public.order_requests o where o.id in (:ordPend, :ordNoEv, :ordNull)),
@@ -608,10 +655,11 @@ select is(
   jsonb_build_object(
     'answers', jsonb_build_array(
       jsonb_build_object('changed', true, 'previous', to_jsonb(date_trunc('minute', now()) + interval '3 days'),
-                         'eventId', null, 'eventUpdated', false, 'status', 'approved'),
-      jsonb_build_object('changed', true, 'previous', null, 'eventId', null, 'eventUpdated', false, 'status', 'pending_approval'),
+                         'eventId', null, 'eventUpdated', false, 'eventStatus', null, 'status', 'approved'),
+      jsonb_build_object('changed', true, 'previous', null, 'eventId', null, 'eventUpdated', false, 'eventStatus', null,
+                         'status', 'pending_approval'),
       jsonb_build_object('changed', true, 'previous', to_jsonb(date_trunc('minute', now()) + interval '3 days'),
-                         'eventId', null, 'eventUpdated', false, 'status', 'pending_approval')),
+                         'eventId', null, 'eventUpdated', false, 'eventStatus', null, 'status', 'pending_approval')),
     'orders', true, 'events', :events_before),
   'E7: an order without an event (pending, an approved one whose event is missing, and a first date on an order that had none) changes only the order: no event is created here (the service creates a missing one through autoScheduleFromOrder), and the status tells it whether to');
 
@@ -627,22 +675,62 @@ select is(
   jsonb_build_object('changed', false,
                      'previous', to_jsonb(date_trunc('minute', now()) + interval '3 days'),
                      'neededBy', to_jsonb(date_trunc('minute', now()) + interval '3 days'),
-                     'eventId', :evEq::text, 'eventUpdated', false, 'status', 'staged_for_pickup'),
+                     'eventId', :evEq::text, 'eventUpdated', false, 'eventStatus', 'scheduled',
+                     'status', 'staged_for_pickup'),
   'E8: an equal value answers {changed: false}');
 select is(pg_temp.state(), :'state3',
   'E9: and writes nothing: no new row version of the order or the event, its stamps and description kept');
 
--- The description is cut to 1000 characters.
-set local role to 'authenticated';
-set local "request.jwt.claim.sub" to :mgr;
-insert into ans select 'long', public.revise_order_needed_by(
-  :ordEq, date_trunc('minute', now()) + interval '6 days',
-  (select needed_by from public.order_requests where id = :ordEq), 'r', repeat('d', 1500));
-reset role;
+-- THE DESCRIPTION. Only core's sentence in it is replaced; everything else
+-- a person wrote on the Schedule page stays. Each case sets evTxt's
+-- description as the test superuser, then revises ordTxt a day further.
+create function pg_temp.txt(p_details text, p_days int, p_given text default :sent) returns text language plpgsql as $$
+declare v text;
+begin
+  update public.schedule_events set details = p_details where id = '03830000-0000-0000-0000-00000000020b';
+  set local role to 'authenticated';
+  perform set_config('request.jwt.claim.sub', '03830000-0000-0000-0000-0000000000a1', true);
+  perform public.revise_order_needed_by(
+    '03830000-0000-0000-0000-00000000010b', date_trunc('minute', now()) + make_interval(days => p_days),
+    (select needed_by from public.order_requests where id = '03830000-0000-0000-0000-00000000010b'),
+    'Description case', p_given);
+  reset role;
+  select coalesce(e.details, '<null>') || ' @' || (e.starts_at = date_trunc('minute', now()) + make_interval(days => p_days))::text
+    into v from public.schedule_events e where e.id = '03830000-0000-0000-0000-00000000020b';
+  return v;
+end $$;
 select is(
-  (select char_length(e.details) from public.schedule_events e where e.id = :evEq),
-  1000,
-  'E10: a description longer than 1000 characters is cut to 1000');
+  pg_temp.txt(E'Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM.\nGate code 4411; call Maria on arrival.', 4),
+  :sent || E'\nGate code 4411; call Maria on arrival. @true',
+  'E10: a line someone added on the Schedule page is kept: only the sentence changes (mutation: overwrite the whole description)');
+select is(
+  pg_temp.txt('Deliver to the gym. Auto-created from order SO-000383. Needed by 9/11/2026, 2:00:00 AM. Bring the cart.', 5),
+  'Deliver to the gym. ' || :sent || ' Bring the cart. @true',
+  'E14: the sentence is swapped where it sits, the old numeric format (before SP-043) included');
+select is(
+  pg_temp.txt('Call Maria first; the side door is locked.', 6),
+  'Call Maria first; the side door is locked. @true',
+  'E15: a description rewritten by hand, with no sentence of core''s in it, is kept whole (the event still moves)');
+select is(
+  (select string_agg(r, ' | ' order by k) from (
+     select 1 as k, pg_temp.txt('Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM.', 7,
+                                'Refunds: call 555-0100 today. Auto-created from order SO-000383. Needed by x.') as r
+     union all
+     select 2, pg_temp.txt('Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM.', 8, repeat('d', 1500))
+     union all
+     select 3, pg_temp.txt('Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM.', 9,
+                           'Auto-created from order SO-TEST. Needed by Oct 9, 2026, 2:00 PM.')) t),
+  'Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM. @true | '
+  'Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM. @true | '
+  'Auto-created from order SO-000383. Needed by Oct 3, 2026, 2:00 PM. @true',
+  'E16: a description that is not core''s sentence (other text, 1500 characters, a malformed order number) is ignored: the event keeps its own and still moves');
+select is(
+  (select string_agg(r, ' | ' order by k) from (
+     select 1 as k, pg_temp.txt(null, 10) as r
+     union all
+     select 2, pg_temp.txt('   ', 11)) t),
+  :sent || ' @true | ' || :sent || ' @true',
+  'E17: an empty description gets the sentence');
 
 -- An event with an end: the move keeps its duration (the end-after-start
 -- CHECK would refuse a start past the old end).

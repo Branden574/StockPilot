@@ -106,7 +106,8 @@ select v.id, '$ORG', '$WH', 'approved', 'internal', '$MGR', 'pickup', '$BASE'::t
   from (values ('$O1'::uuid), ('$O2'::uuid), ('$O3'::uuid)) v(id);
 insert into public.schedule_events (id, organization_id, title, starts_at, warehouse_id, details, status, order_request_id,
                                     created_by, updated_by, reminded_24h_at, reminded_1h_at)
-select v.ev, '$ORG', '2S pickup', '$BASE'::timestamptz, '$WH', 'old', 'scheduled', v.o, '$MGR', '$MGR', now(), now()
+select v.ev, '$ORG', '2S pickup', '$BASE'::timestamptz, '$WH', 'Auto-created from order SO-000383. Needed by day zero.',
+       'scheduled', v.o, '$MGR', '$MGR', now(), now()
   from (values ('$E1'::uuid, '$O1'::uuid), ('$E2'::uuid, '$O2'::uuid)) v(ev, o);
 SQL
 if [ $? -ne 0 ]; then echo "fixture setup failed"; cleanup; exit 1; fi
@@ -122,7 +123,7 @@ set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
 set local "request.jwt.claim.sub" to '$MGR';
 select 'A=' || public.$fn('$o', '$BASE'::timestamptz + interval '$da days',
-                         '$BASE'::timestamptz, 'Session A', 'A details')::text;
+                         '$BASE'::timestamptz, 'Session A', 'Auto-created from order SO-000383. Needed by day A.')::text;
 select pg_sleep(3);
 commit;
 SQL
@@ -136,7 +137,7 @@ set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
 set local "request.jwt.claim.sub" to '$MGR2';
 select 'B=' || public.$fn('$o', '$BASE'::timestamptz + interval '$db days',
-                         '$BASE'::timestamptz, 'Session B', 'B details')::text;
+                         '$BASE'::timestamptz, 'Session B', 'Auto-created from order SO-000383. Needed by day B.')::text;
 commit;
 SQL
   local t1; t1=$(now_ms)
@@ -157,7 +158,8 @@ check "1d: B's refusal names the value A saved (so B's screen can load it)" \
   "$(q "select to_jsonb('$BASE'::timestamptz + interval '5 days') #>> '{}'")"
 check "1e: exactly one won: the order holds A's day (+5)" "$(day_of "$O1")" "5"
 check "1f: and its event moved to A's day with A's description" \
-  "$(event_day "$E1"),$(q "select details from public.schedule_events where id = '$E1'")" "5,A details"
+  "$(event_day "$E1"),$(q "select details from public.schedule_events where id = '$E1'")" \
+  "5,Auto-created from order SO-000383. Needed by day A."
 check "1g: the event's reminder stamps are cleared" \
   "$(q "select (reminded_24h_at is null and reminded_1h_at is null)::text from public.schedule_events where id = '$E1'")" "true"
 check "1h: no 40001 or 40P01 in either session" \
