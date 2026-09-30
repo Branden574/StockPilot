@@ -547,6 +547,98 @@ describe('get', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Count confirmations, release 1 (no database change): what an older or newer
+// row reads as. A reason or an event kind this build cannot word must never
+// read as something it is not.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('get: kinds and reasons this build cannot word (R1)', () => {
+  const EVENT = { actor_user_id: null, cycle_count_id: null, evidence_id: null, maintenance_request_id: null, note: null, actor: null, cycle_count: null };
+
+  it('an event kind it does not know is left out of the timeline, never passed on with no words', async () => {
+    const { svc } = userSvc({
+      'exception_occurrences.select.maybeSingle': { data: occRow(), error: null },
+      'exception_occurrence_events.select': {
+        data: [
+          { ...EVENT, id: 'e1', kind: 'raised', created_at: '2026-09-24T15:00:00Z' },
+          { ...EVENT, id: 'e2', kind: 'a_newer_kind', created_at: '2026-09-24T16:00:00Z', actor_user_id: 'u-1', actor: { full_name: 'Dana Ruiz', email: 'd@x' } },
+          { ...EVENT, id: 'e3', kind: 'count_confirmed', created_at: '2026-09-24T17:00:00Z', actor_user_id: 'u-1', cycle_count_id: 'cc-1', note: 'counted twice', actor: { full_name: 'Dana Ruiz', email: 'd@x' }, cycle_count: { count_number: 35 } },
+        ],
+        error: null,
+      },
+      'exception_occurrences.select': { data: [], error: null },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const d = await svc.get(OCC);
+    // count_confirmed is known from this build on; the unknown kind is dropped.
+    expect(d.timeline.map((e) => e.kind)).toEqual(['raised', 'count_confirmed']);
+    expect(d.timeline[1]).toMatchObject({
+      actor: { id: 'u-1', label: 'Dana Ruiz' },
+      note: 'counted twice',
+      cycleCount: { id: 'cc-1', countNumber: 35 },
+    });
+  });
+
+  it('a count_confirmed event whose account was deleted reads as a former member, never the system', async () => {
+    const { svc } = userSvc({
+      'exception_occurrences.select.maybeSingle': { data: occRow(), error: null },
+      'exception_occurrence_events.select': {
+        data: [{ ...EVENT, id: 'e1', kind: 'count_confirmed', created_at: '2026-09-24T17:00:00Z' }],
+        error: null,
+      },
+      'exception_occurrences.select': { data: [], error: null },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const d = await svc.get(OCC);
+    expect(d.timeline[0]!.actor).toEqual({ id: null, label: 'Former member' });
+  });
+
+  it('a resolved reason it does not know reaches the client as null (worded "Resolved"), on the row and in the history', async () => {
+    const { svc } = userSvc({
+      'exception_occurrences.select.maybeSingle': {
+        data: occRow({ resolved_at: '2026-09-24T19:00:00Z', resolved_reason: 'a_newer_reason' }),
+        error: null,
+      },
+      'exception_occurrence_events.select': { data: [], error: null },
+      'exception_occurrences.select': {
+        data: [
+          { id: OCC, occurrence_number: 42, first_seen_at: '2026-09-24T15:00:00Z', resolved_at: '2026-09-24T19:00:00Z', resolved_reason: 'a_newer_reason', recurrence_index: 1 },
+          { id: 'prev-1', occurrence_number: 7, first_seen_at: '2026-09-01T15:00:00Z', resolved_at: '2026-09-10T15:00:00Z', resolved_reason: 'confirmed', recurrence_index: 0 },
+        ],
+        error: null,
+      },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const d = await svc.get(OCC);
+    expect(d.occurrence.resolvedReason).toBeNull();
+    expect(d.history.map((h) => h.resolvedReason)).toEqual([null, 'confirmed']);
+    // No confirmation columns exist yet: never a made-up confirmation.
+    expect(d.occurrence.confirmation).toBeNull();
+    expect(d.history.map((h) => h.confirmedAs)).toEqual([null, null]);
+    // Confirm stays off: no countConfirm block is sent.
+    expect(d.countConfirm ?? null).toBeNull();
+  });
+
+  it('the list maps reasons the same way', async () => {
+    const { svc } = userSvc({
+      'exception_occurrences.select': {
+        data: [
+          occRow({ resolved_at: '2026-09-24T19:00:00Z', resolved_reason: 'confirmed' }),
+          occRow({ id: 'other', resolved_at: '2026-09-24T19:00:00Z', resolved_reason: 'a_newer_reason' }),
+        ],
+        error: null,
+      },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const res = await svc.list({ status: 'resolved' });
+    expect(res.occurrences.map((o) => [o.resolvedReason, o.confirmation])).toEqual([
+      ['confirmed', null],
+      [null, null],
+    ]);
+  });
+});
+
 describe('act', () => {
   function actSvc(
     opts: {

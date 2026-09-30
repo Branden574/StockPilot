@@ -80,6 +80,65 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'count-difference-words-2026-10',
+    revision: 1,
+    // Count differences, release 1 of 2 (no migration; owner decision
+    // 2026-09-29 after EX-000059 was acknowledged in the belief that it would
+    // close). Held as a DRAFT until the web deploy, the phone update (OTA) and
+    // the walk are done; the follow-up that publishes it sets 'published' and
+    // the real publishedAt (this date only keeps it after every published
+    // release; the Book Order Totals draft above is dated a day later), and
+    // re-reads its words against what shipped.
+    //
+    // Words only, and where they sit: the row sentence, "What clears this" at
+    // the top of the page, and the Acknowledge step's help. Nothing about
+    // confirming a count: that is release 2's note (count-confirm-2026-10).
+    // Addressed to readers of exceptions where Cycle Counts is on: count
+    // differences come only from posted counts. Most of them cannot start a
+    // recount (viewers, staff without cycle_counts:assign), so the entry says
+    // a manager starts it, as the page itself does.
+    status: 'draft',
+    title: 'Count differences say what clears them',
+    summary:
+      'When a posted count changes the stock on record, its exception now says plainly what clears it, and the Acknowledge step says that acknowledging does not. In the mobile app, the note you type on an exception stays in view above the keyboard.',
+    publishedAt: '2026-10-05T17:00:00Z',
+    entries: [
+      {
+        id: 'count-difference-what-clears-it',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'A count difference says what clears it',
+        whatChanged:
+          'Each count difference now reads, for example, CC-000035 found 2 where 100 was on record (-98), and its page says at the top what clears it: a later count that matches the stock on record, which a manager can start with Recount. The Acknowledge step says that acknowledging does not clear it.',
+        whyItMatters:
+          'The old wording read "on record 100" after the count had already changed the stock on record, and acknowledging looked like the way to close the exception.',
+        howItAffectsYou:
+          'Nothing changes in when these exceptions are raised or cleared. Only the words, and where they sit on the page, are new.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'], modules: ['cycle_counts'] },
+      },
+      // The R1 walk (iPhone 17, largest text size): the phone's note sheets
+      // on every exception, and the photo sheets. For the people who can
+      // acknowledge and add photos (the act gate, as exception-photos-add-remove).
+      {
+        id: 'phone-exception-note-keyboard',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'The note you type on an exception stays in view in the mobile app',
+        whatChanged:
+          "In the mobile app, when you type a note to acknowledge an exception, add a note to it, or add or remove a photo, the note field now stays in view above the keyboard, at the largest text sizes too. Dragging the sheet's text, or tapping its title or its text, puts the keyboard away without sending anything. At the largest text sizes the photo sheets now fit above the keyboard, with their title and Close on screen.",
+        whyItMatters:
+          "At the largest text sizes the note field could scroll out of sight as the keyboard opened, so you typed into a field you could not see, the photo sheets could run off the top of the screen, and only the sheet's own buttons put the keyboard away.",
+        howItAffectsYou:
+          "Nothing changes until the keyboard opens. At the largest text sizes the note's text stops growing at the size of the app's other fields. What you type and save is unchanged.",
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+    ],
+  },
+  {
     id: 'order-fix-holding-up-2026-10',
     revision: 1,
     // F2-3 (no migration). Held as a draft until the web order page's

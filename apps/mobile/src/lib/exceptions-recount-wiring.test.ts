@@ -103,10 +103,18 @@ describe('exceptions list: Recount selected', () => {
 });
 
 describe('exception detail: Recount', () => {
+  // 11.8 (count differences, 2026-09-29): a count difference's Recount lives
+  // in its WHAT CLEARS THIS section at the top, so the separate RECOUNT
+  // section is for over_reserved only.
   it('Recount only when the server says so; otherwise who can', () => {
     expect(detail).toContain('{o.canRecount ? (');
     expect(detail).toContain('recountUnavailableCopy(o.recountUnavailableReason)');
-    expect(detail).toContain('const showRecount = isRecountableRule(o.rule) && !resolved;');
+    expect(detail).toContain('const showRecount = isRecountableRule(o.rule) && !countVariance && !resolved;');
+    // In the top section: Recount on core's offerRecount (the server's
+    // canRecount, except once the item can no longer be counted), and why
+    // not from core (view.clear.recountLine).
+    expect(detail).toContain('{view.clear.offerRecount ? (');
+    expect(detail).toContain('{view.clear.recountLine}');
   });
 
   it('offline it is disabled with the reason', () => {
@@ -115,7 +123,10 @@ describe('exception detail: Recount', () => {
   });
 
   it('shows the linked recount and a closed recount\'s outcome in the timeline', () => {
+    // The RECOUNT section (over_reserved) and the count difference's top
+    // section each show the linked recount.
     expect(detail).toContain('activeRecountCopy(o.recount)');
+    expect(detail).toContain('activeRecountCopy(occurrence.recount)');
     expect(detail).toContain('recountOutcome: e.cycleCount?.outcome ?? null');
     expect(detail).toContain('describeTimelineEvent({');
   });

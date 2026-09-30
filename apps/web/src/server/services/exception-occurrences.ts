@@ -9,16 +9,21 @@ import {
   formatOccurrenceNumber,
   isExceptionRule,
   isManagerOrAbove,
+  isOccurrenceEventKind,
+  isOccurrenceResolvedReason,
   isRecountableRule,
   presentWhenTrackingBegan,
   recountOutcome,
   resolveOrgTimezone,
   varianceDestination,
   varianceReviewLine,
+  type CountConfirmBlock,
+  type CountConfirmedAs,
   type EscalateUnavailableReason,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
   type MaintenanceStatus,
+  type OccurrenceConfirmation,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
@@ -150,7 +155,13 @@ export interface ExceptionOccurrence {
    *  what the posted count found); worded by recountOutcomeCopy. */
   recount: ExceptionOccurrenceRecount | null;
   resolvedAt: string | null;
+  /** Null when not resolved, or for a reason this build cannot word (a
+   *  newer build's): surfaces then say only "Resolved", never "Cleared". */
   resolvedReason: OccurrenceResolvedReason | null;
+  /** How a count confirmation resolved this row (who, when, which count);
+   *  null otherwise. Always null until the confirmation columns exist (the
+   *  second release): this build reads none of them. */
+  confirmation: OccurrenceConfirmation | null;
   previousOccurrenceId: string | null;
   recurrenceIndex: number;
   /** Whether this reader may acknowledge / add a note, mirroring the RPC's
@@ -285,6 +296,9 @@ export interface OccurrenceHistoryEntry {
   firstSeenAt: string;
   resolvedAt: string | null;
   resolvedReason: OccurrenceResolvedReason | null;
+  /** For a row resolved by a count confirmation: the counter or a manager
+   *  (null otherwise, and until the confirmation columns exist). */
+  confirmedAs: CountConfirmedAs | null;
   recurrenceIndex: number;
   isCurrent: boolean;
 }
@@ -303,6 +317,11 @@ export interface OccurrenceDetail {
    *  `unavailable` when they could not be read; never an empty list for an
    *  error. */
   evidence: ExceptionEvidenceBlock;
+  /** Confirm this count (core CountConfirmBlock), for an OPEN count_variance
+   *  row while the server offers confirming. Absent in this build: the
+   *  feature is off, so every surface shows the recount-only words and no
+   *  Confirm (the phone's Confirm screens stay dormant until it is sent). */
+  countConfirm?: CountConfirmBlock | null;
 }
 
 /** The occurrence a write is about to act on (acknowledge, note, add or
@@ -419,7 +438,9 @@ type OccurrenceRow = {
   acknowledged_by: string | null;
   recount_cycle_count_id: string | null;
   resolved_at: string | null;
-  resolved_reason: OccurrenceResolvedReason | null;
+  /** As stored: a newer build's reason is possible (mapped through
+   *  resolvedReasonOf). */
+  resolved_reason: string | null;
   previous_occurrence_id: string | null;
   recurrence_index: number;
   maintenance_request_id?: string | null;
@@ -443,7 +464,9 @@ type OccurrenceRow = {
 
 type EventRow = {
   id: string;
-  kind: OccurrenceEventKind;
+  /** As stored: a newer build's kind is possible, and is left out of the
+   *  timeline (isOccurrenceEventKind). */
+  kind: string;
   actor_user_id: string | null;
   cycle_count_id: string | null;
   evidence_id: string | null;
@@ -467,6 +490,12 @@ function toNumber(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   const n = Number(value);
   return Number.isSafeInteger(n) ? n : null;
+}
+
+/** A stored reason this build can word, else null: a newer build's reason
+ *  reads "Resolved", never a reason it is not (core resolvedReasonCopy). */
+function resolvedReasonOf(value: unknown): OccurrenceResolvedReason | null {
+  return isOccurrenceResolvedReason(value) ? value : null;
 }
 
 function rulesOf(values: string[] | null): ExceptionRule[] {
@@ -590,7 +619,10 @@ function mapOccurrence(
           }
         : null,
     resolvedAt: row.resolved_at,
-    resolvedReason: row.resolved_reason,
+    resolvedReason: resolvedReasonOf(row.resolved_reason),
+    // The confirmation columns arrive with the second release; this build
+    // selects none of them.
+    confirmation: null,
     previousOccurrenceId: row.previous_occurrence_id,
     recurrenceIndex: row.recurrence_index ?? 0,
     canAct: row.resolved_at === null && canActOn(row),
@@ -717,7 +749,7 @@ export class ExceptionOccurrencesService {
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const orgId = this.ctx.organizationId;
 
-    const [row, events, syncState, gate, timeZone, liveEvidence] = await Promise.all([
+    const [row, storedEvents, syncState, gate, timeZone, liveEvidence] = await Promise.all([
       this.readOccurrenceRow(id),
       fetchAllRows<Record<string, unknown>>(
         (from, to) =>
@@ -745,6 +777,11 @@ export class ExceptionOccurrencesService {
       ),
     ]);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
+    // A kind a newer build stored has no words here: it is left out, as the
+    // phone does, rather than passed on for a surface to render as nothing.
+    const events = storedEvents.filter(
+      (e): e is EventRow & { kind: OccurrenceEventKind } => isOccurrenceEventKind(e.kind),
+    );
     const escBlock = escalateBlock(this.ctx);
     const occurrence = mapOccurrence(row, syncState, gate, countStartBlock(this.ctx), escBlock);
     if (!occurrence) {
@@ -789,7 +826,7 @@ export class ExceptionOccurrencesService {
       occurrence_number: number | string;
       first_seen_at: string;
       resolved_at: string | null;
-      resolved_reason: OccurrenceResolvedReason | null;
+      resolved_reason: string | null;
       recurrence_index: number;
     }>;
 
@@ -858,7 +895,8 @@ export class ExceptionOccurrencesService {
           reference: formatOccurrenceNumber(number),
           firstSeenAt: h.first_seen_at,
           resolvedAt: h.resolved_at,
-          resolvedReason: h.resolved_reason,
+          resolvedReason: resolvedReasonOf(h.resolved_reason),
+          confirmedAs: null,
           recurrenceIndex: h.recurrence_index ?? 0,
           isCurrent: h.id === id,
         };
@@ -1589,7 +1627,7 @@ const SYSTEM_EVENT_KINDS: ReadonlySet<OccurrenceEventKind> = new Set([
 /** An event with no actor id: the system's own for a system kind; for a kind
  *  a person writes, the account was deleted (actor_user_id is ON DELETE SET
  *  NULL), which reads as a former member, never as "the system". */
-function systemOrFormer(e: EventRow): OccurrencePerson | null {
+function systemOrFormer(e: EventRow & { kind: OccurrenceEventKind }): OccurrencePerson | null {
   return SYSTEM_EVENT_KINDS.has(e.kind) ? null : { id: null, label: 'Former member' };
 }
 

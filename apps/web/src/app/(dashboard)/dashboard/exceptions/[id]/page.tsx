@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 
+import { CountVarianceClearCard } from '@/components/exceptions/count-variance-clear-card';
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
 import { OccurrencePhotos } from '@/components/exceptions/occurrence-photos';
 import { RecountButton } from '@/components/exceptions/recount-selection';
@@ -33,6 +34,9 @@ import {
 
 import {
   activeRecountCopy,
+  confirmationFactsRow,
+  countConfirmationFor,
+  countVarianceAcknowledgeHelp,
   describeEvidenceEvent,
   describeOccurrence,
   describeTimelineEvent,
@@ -47,9 +51,10 @@ import {
   exceptionActDisabledReason,
   formatCycleCountNumber,
   isRecountableRule,
-  OCCURRENCE_RESOLVED_REASON_COPY,
   RECOUNT_COUNTS_TOTAL_COPY,
+  RECOUNT_NONE_LINKED_COPY,
   recountUnavailableCopy,
+  resolvedReasonCopy,
   resolveOrgTimezone,
   uuidSchema,
   type ExceptionActionKind,
@@ -75,6 +80,16 @@ export const metadata = { title: 'Exception' };
  * cycle_counts module, cycle_counts:assign and stock:adjust). Its linked
  * recount and what it has come to so far are shown, and a closed recount's
  * timeline entry says what it found (core describeTimelineEvent).
+ *
+ * A count difference (count_variance; owner decision 2026-09-29, EX-000059)
+ * opens with "What clears this" at the top (CountVarianceClearCard): the
+ * always-true lead, what clears it for this reader, and Recount with its
+ * linked recount. That card replaces the Recount card and the bottom "What
+ * clears this" for the rule, and Acknowledge there says it does not clear
+ * it. Confirming the counted number comes with the server's countConfirm
+ * block, which this release never sends: no Confirm is offered yet. A row
+ * resolved by a confirmation reads with who confirmed it (core), and a reason
+ * this build cannot word reads "Resolved", never "Cleared".
  *
  * The item's last physical count (F1-3) is the shared verification card,
  * streamed under its own Suspense boundary so this page never waits for it,
@@ -129,7 +144,7 @@ function actionHref(kind: ExceptionActionKind, itemId: string): string {
  */
 function timelineLine(
   e: OccurrenceEvent,
-  resolvedReason: OccurrenceDetail['occurrence']['resolvedReason'],
+  o: OccurrenceDetail['occurrence'],
   timeZone: string,
 ): { headline: string; detail: string | null; note: string | null } {
   if (e.kind === 'evidence_added' || e.kind === 'evidence_removed') {
@@ -148,13 +163,25 @@ function timelineLine(
       kind: e.kind,
       actorLabel: e.actor?.label ?? null,
       cycleCountNumber: e.cycleCount?.countNumber ?? null,
-      resolvedReason,
+      resolvedReason: o.resolvedReason,
       recountOutcome: e.cycleCount?.outcome ?? null,
       maintenanceRequestReference: e.maintenanceRequestReference ?? null,
+      confirmation:
+        e.kind === 'count_confirmed'
+          ? countConfirmationFor(o.facts, o.confirmation?.as ?? null, e.cycleCount?.countNumber ?? null)
+          : null,
     }),
     detail: null,
     note: e.note,
   };
+}
+
+/** "Sep 21, 3:00 PM: Confirmed by the counter", or the time alone for a
+ *  reason this build cannot word (never "Cleared", never "undefined"). */
+function historyResolved(h: OccurrenceDetail['history'][number], timeZone: string): string {
+  const copy = resolvedReasonCopy(h.resolvedReason, h.confirmedAs ?? null);
+  const at = exceptionTime(h.resolvedAt, timeZone);
+  return copy ? `${at}: ${copy}` : at;
 }
 
 export default async function ExceptionDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -202,6 +229,15 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
   });
   const resolved = o.resolvedAt !== null;
   const disabledReason = exceptionActDisabledReason({ resolved, canAct: o.canAct, online: true });
+  const displayed = stateOf(o, detail.syncState);
+  // A count difference: "What clears this" at the top, Recount inside it,
+  // and its own Acknowledge help (owner decision 2026-09-29).
+  const countVariance = o.rule === 'count_variance';
+  const countConfirm = detail.countConfirm ?? null;
+  const resolvedCopy = resolvedReasonCopy(o.resolvedReason, o.confirmation?.as ?? null);
+  const confirmedRow = o.confirmation
+    ? confirmationFactsRow(o.confirmation, exceptionTime(o.confirmation.at, timeZone))
+    : null;
   const escalation = o.escalation;
   // The linked request opens only for a reader the server confirmed can see
   // it (visibleToReader true: read through their own RLS), and only while
@@ -222,7 +258,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         <h1 className="text-2xl font-semibold tracking-tight break-words">{d.title}</h1>
         <p className="text-base">{d.detail}</p>
         <div className="flex flex-wrap items-center gap-1.5">
-          <StateChip state={stateOf(o, detail.syncState)} />
+          <StateChip state={displayed} />
           <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
           <EscalationChip escalation={escalation} href={requestHref} />
         </div>
@@ -233,6 +269,15 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
       ) : (
         <CheckedAt syncState={detail.syncState} timeZone={timeZone} />
       )}
+
+      {countVariance && !resolved ? (
+        <CountVarianceClearCard
+          occurrence={o}
+          displayed={displayed}
+          countConfirm={countConfirm}
+          timeZone={timeZone}
+        />
+      ) : null}
 
       <Card>
         <CardContent className="pt-6">
@@ -287,9 +332,15 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
               <>
                 <dt className="text-muted-foreground">Resolved</dt>
                 <dd>
-                  {exceptionTime(o.resolvedAt, timeZone)}:{' '}
-                  {OCCURRENCE_RESOLVED_REASON_COPY[o.resolvedReason ?? 'cleared']}
+                  {exceptionTime(o.resolvedAt, timeZone)}
+                  {resolvedCopy ? `: ${resolvedCopy}` : null}
                 </dd>
+              </>
+            ) : null}
+            {confirmedRow ? (
+              <>
+                <dt className="text-muted-foreground">{confirmedRow.label}</dt>
+                <dd>{confirmedRow.value}</dd>
               </>
             ) : null}
           </dl>
@@ -313,10 +364,12 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
             <Link href={actionHref(kind, o.itemId)}>{EXCEPTION_ACTION_LABELS[kind]}</Link>
           </Button>
         ))}
-        {o.canRecount ? <RecountButton occurrenceId={o.id} reference={o.reference} timeZone={timeZone} /> : null}
+        {o.canRecount && !countVariance ? (
+          <RecountButton occurrenceId={o.id} reference={o.reference} timeZone={timeZone} />
+        ) : null}
       </div>
 
-      {isRecountableRule(o.rule) && !resolved ? (
+      {isRecountableRule(o.rule) && !countVariance && !resolved ? (
         <Card data-testid="recount-card">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Recount</CardTitle>
@@ -329,7 +382,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
                 </Link>
               </p>
             ) : (
-              <p className="text-muted-foreground">No recount is linked to this exception.</p>
+              <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
             )}
             <p className="text-muted-foreground">
               {o.canRecount ? RECOUNT_COUNTS_TOTAL_COPY : recountUnavailableCopy(o.recountUnavailableReason)}
@@ -344,7 +397,22 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         </CardHeader>
         <CardContent>
           {disabledReason === null ? (
-            <OccurrenceActions occurrenceId={o.id} acknowledged={o.acknowledgedAt !== null} />
+            <OccurrenceActions
+              occurrenceId={o.id}
+              acknowledged={o.acknowledgedAt !== null}
+              rule={o.rule}
+              ackHelp={
+                countVariance
+                  ? countVarianceAcknowledgeHelp({
+                      facts: o.facts,
+                      displayed,
+                      recount: o.recount,
+                      canRecount: o.canRecount,
+                      confirm: countConfirm,
+                    })
+                  : null
+              }
+            />
           ) : (
             <p className="text-muted-foreground text-sm" data-testid="act-unavailable">
               {disabledReason}
@@ -372,7 +440,9 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         timeZone={timeZone}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      {/* A count difference says what clears it at the top; "What can cause
+          this" then spans the row. */}
+      <div className={countVariance ? 'grid gap-4' : 'grid gap-4 sm:grid-cols-2'}>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">What can cause this</CardTitle>
@@ -385,14 +455,16 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
             </ul>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">What clears this</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm">{meta.clearedBy}</p>
-          </CardContent>
-        </Card>
+        {countVariance ? null : (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">What clears this</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm">{meta.clearedBy}</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Card>
@@ -406,7 +478,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
             <ol className="space-y-3">
               {detail.timeline.map((e) => {
                 const cc = e.cycleCount ? formatCycleCountNumber(e.cycleCount.countNumber) : null;
-                const line = timelineLine(e, o.resolvedReason, timeZone);
+                const line = timelineLine(e, o, timeZone);
                 return (
                   <li key={e.id} className="text-sm">
                     <p className="font-medium">{line.headline}</p>
@@ -451,9 +523,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
                   )}
                   <span className="text-muted-foreground text-xs">
                     First seen {exceptionTime(h.firstSeenAt, timeZone)}
-                    {h.resolvedAt
-                      ? `, resolved ${exceptionTime(h.resolvedAt, timeZone)}: ${OCCURRENCE_RESOLVED_REASON_COPY[h.resolvedReason ?? 'cleared']}`
-                      : ', still open'}
+                    {h.resolvedAt ? `, resolved ${historyResolved(h, timeZone)}` : ', still open'}
                   </span>
                 </li>
               ))}

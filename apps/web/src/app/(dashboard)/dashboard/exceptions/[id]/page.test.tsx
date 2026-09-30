@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  countVarianceAcknowledgeHelp,
   ESCALATE_TO_MAINTENANCE_HELP,
+  EXCEPTION_ACKNOWLEDGE_HELP,
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
   EXCEPTION_EVIDENCE_CAP_COPY,
@@ -14,6 +16,7 @@ import {
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
   EXCEPTION_EVIDENCE_UNAVAILABLE_COPY,
   EXCEPTION_RULES,
+  RECOUNT_NONE_LINKED_COPY,
 } from '@stockpilot/core';
 
 /**
@@ -303,29 +306,64 @@ describe('Exception detail page', () => {
     item: { name: 'QA Chromebook', sku: 'QA-1' },
   };
 
+  // A count difference's Recount lives in the "What clears this" card at the
+  // top (owner decision 2026-09-29, EX-000059); over_reserved keeps its own
+  // Recount card where it was.
   it('offers Recount to a reader the server says can start one', async () => {
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
     await renderPage();
-    expect(screen.getByTestId('recount-button')).toBeInTheDocument();
-    expect(screen.getByTestId('recount-card')).toHaveTextContent(
-      'Counts record each item’s total, wherever it is stored.',
-    );
+    const card = screen.getByTestId('count-variance-clears');
+    expect(within(card).getByTestId('recount-button')).toBeInTheDocument();
+    expect(card).toHaveTextContent('Counts record each item’s total, wherever it is stored.');
+    expect(card).toHaveTextContent(RECOUNT_NONE_LINKED_COPY);
+    // Only one Recount on the page: it left the actions row for this rule.
+    expect(screen.getAllByTestId('recount-button')).toHaveLength(1);
+    expect(screen.queryByTestId('recount-card')).not.toBeInTheDocument();
   });
 
   // Mutation caught: Recount offered on stock:adjust alone (staff).
   it('a reader who cannot start one sees why, and no button', async () => {
+    // Staff who may act: the card's sentence says who to ask.
     get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false }));
     await renderPage();
     expect(screen.queryByTestId('recount-button')).not.toBeInTheDocument();
-    expect(screen.getByTestId('recount-card')).toHaveTextContent(
+    expect(screen.getByTestId('count-variance-clears')).toHaveTextContent(
+      'It clears when a later count of this item matches the stock on record. To close it, ask a manager who can assign counts for a recount. Acknowledging does not clear this.',
+    );
+  });
+
+  it('a viewer reads what clears it and why they cannot recount, with no Acknowledging sentence', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false, canAct: false }));
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent('It clears when a later count of this item matches the stock on record.');
+    expect(card).toHaveTextContent(
       'Only a manager with permission to assign counts and adjust stock can start a recount.',
     );
+    expect(card).not.toHaveTextContent('Acknowledging');
+    expect(screen.queryByTestId('recount-button')).not.toBeInTheDocument();
+  });
+
+  it('over_reserved keeps its own Recount card and its Recount in the actions row', async () => {
+    get.mockResolvedValue(
+      detail({
+        rule: 'over_reserved',
+        facts: { itemName: 'Atlas', promised: 5, onHand: 3 },
+        canRecount: true,
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('recount-card')).toHaveTextContent(RECOUNT_NONE_LINKED_COPY);
+    expect(screen.getAllByTestId('recount-button')).toHaveLength(1);
+    expect(screen.queryByTestId('count-variance-clears')).not.toBeInTheDocument();
+    expect(screen.getByText(EXCEPTION_RULES.over_reserved.clearedBy)).toBeInTheDocument();
   });
 
   it('a rule a recount cannot settle has no Recount section', async () => {
     get.mockResolvedValue(detail({ canRecount: false }));
     await renderPage();
     expect(screen.queryByTestId('recount-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('count-variance-clears')).not.toBeInTheDocument();
     expect(screen.queryByTestId('recount-button')).not.toBeInTheDocument();
   });
 
@@ -344,8 +382,203 @@ describe('Exception detail page', () => {
       }),
     );
     await renderPage();
-    const link = screen.getByRole('link', { name: 'Recount CC-000002: In progress: 1 of 3 counted' });
+    const card = screen.getByTestId('count-variance-clears');
+    const link = within(card).getByRole('link', { name: 'Recount CC-000002: In progress: 1 of 3 counted' });
     expect(link).toHaveAttribute('href', '/dashboard/cycle-counts/cc-2');
+    expect(within(card).getByTestId('active-recount')).toBeInTheDocument();
+    expect(card).toHaveTextContent(
+      'Recount CC-000002 is in progress (1 of 3 counted). When it is posted, this clears if it matches the stock on record, or shows the new numbers if it does not.',
+    );
+  });
+
+  // Review 2026-09-29: Recount was the filled button while the card said to
+  // wait for the linked recount; pressing it then only links that count.
+  it('Recount is filled on an open count difference, and outline while a linked recount is in progress', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
+    const { unmount } = await renderPage();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'default',
+    );
+    unmount();
+    get.mockResolvedValue(
+      detail({
+        ...VARIANCE,
+        canRecount: true,
+        recount: {
+          cycleCountId: 'cc-2',
+          countNumber: 2,
+          status: 'in_progress',
+          completedAt: null,
+          outcome: { kind: 'in_progress', counted: 1, total: 3 },
+        },
+      }),
+    );
+    await renderPage();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
+  });
+
+  // Review 2026-09-29: the Acknowledge help told a manager to recount while
+  // the card, for the same row, said the next check would update it.
+  it('a posted recount being checked: the card and the Acknowledge step both say the next check', async () => {
+    get.mockResolvedValue(
+      detail({
+        ...VARIANCE,
+        canRecount: true,
+        recount: {
+          cycleCountId: 'cc-2',
+          countNumber: 2,
+          status: 'completed',
+          completedAt: '2026-09-24T18:30:00Z',
+          outcome: { kind: 'matched', quantity: 21 },
+        },
+      }),
+    );
+    await renderPage();
+    const next = 'A newer count of this item was posted and is being checked. This updates at the next check, within 15 minutes.';
+    expect(screen.getByTestId('count-variance-clears')).toHaveTextContent(next);
+    expect(
+      screen.getByText(
+        `CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. ${next}`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/To close it, count it once more with Recount\./)).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
+  });
+
+  // ── Count differences: what clears them (owner decision 2026-09-29) ──────
+
+  it('a count difference says what clears it at the top, above the facts, and not again at the bottom', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(within(card).getByRole('heading', { name: 'What clears this' })).toBeInTheDocument();
+    expect(card).toHaveTextContent(
+      'CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1.',
+    );
+    expect(card).toHaveTextContent(
+      'It clears when a later count of this item matches the stock on record. To close it, count it once more with Recount. Acknowledging does not clear this.',
+    );
+    // No Confirm in this release: the server sends no countConfirm block.
+    expect(card).not.toHaveTextContent(/confirm/i);
+    expect(screen.queryByTestId('confirm-unavailable')).not.toBeInTheDocument();
+    // Above the facts card.
+    const facts = screen.getByText('First seen');
+    expect(card.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The bottom card is not repeated for this rule.
+    expect(screen.getAllByText('What clears this')).toHaveLength(1);
+    expect(screen.queryByText(EXCEPTION_RULES.count_variance.clearedBy)).not.toBeInTheDocument();
+    expect(screen.getByText('What can cause this')).toBeInTheDocument();
+    // The row sentence is the always-true one.
+    expect(screen.getByText('CC-000001 found 21 where 20 was on record (+1)')).toBeInTheDocument();
+  });
+
+  it('with Cycle Counts off, it says so instead of offering a recount', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false, recountUnavailableReason: 'module_disabled' }));
+    await renderPage();
+    const card = screen.getByTestId('count-variance-clears');
+    expect(card).toHaveTextContent(
+      'It clears when a later count of this item matches the stock on record. Cycle Counts is turned off for this organization, so it cannot be recounted until it is turned on again. Acknowledging does not clear this.',
+    );
+    // Said once: the options already say why.
+    expect(card).not.toHaveTextContent('so a recount cannot be started');
+  });
+
+  it('the Acknowledge step on a count difference says what acknowledging does not do, and is not the filled button', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
+    await renderPage();
+    const help = countVarianceAcknowledgeHelp({
+      facts: VARIANCE.facts,
+      displayed: { kind: 'open' },
+      recount: null,
+      canRecount: true,
+      confirm: null,
+    });
+    expect(help).toBe(
+      'CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. To close it, count it once more with Recount.',
+    );
+    expect(screen.getByText(help)).toBeInTheDocument();
+    expect(screen.queryByText(EXCEPTION_ACKNOWLEDGE_HELP)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'outline');
+  });
+
+  it('other rules keep the Acknowledge help and the filled Acknowledge', async () => {
+    get.mockResolvedValue(detail());
+    await renderPage();
+    expect(screen.getByText(EXCEPTION_ACKNOWLEDGE_HELP)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toHaveAttribute('data-variant', 'default');
+  });
+
+  it('a resolved count difference has no top card', async () => {
+    get.mockResolvedValue(
+      detail({ ...VARIANCE, resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: false }),
+    );
+    await renderPage();
+    expect(screen.queryByTestId('count-variance-clears')).not.toBeInTheDocument();
+  });
+
+  // Before: an unknown reason read "Resolved: Cleared" on the chip and
+  // "Resolved: undefined" in the facts and the history.
+  it('a reason this build cannot word reads "Resolved", never "Cleared" or "undefined"', async () => {
+    get.mockResolvedValue(
+      detail(
+        { resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: null, canAct: false },
+        {
+          history: [
+            { id: ID, number: 42, reference: 'EX-000042', firstSeenAt: '2026-09-24T15:00:00Z', resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: null, recurrenceIndex: 1, isCurrent: true },
+            { id: EARLIER, number: 7, reference: 'EX-000007', firstSeenAt: '2026-09-20T15:00:00Z', resolvedAt: '2026-09-21T15:00:00Z', resolvedReason: 'confirmed', confirmedAs: 'counter', recurrenceIndex: 0, isCurrent: false },
+          ],
+        },
+      ),
+    );
+    await renderPage();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent(/^Resolved$/);
+    expect(document.body.textContent).not.toMatch(/Cleared|undefined/);
+    expect(screen.getByText(/^First seen Sep 20, .*, resolved Sep 21, .*: Confirmed by the counter$/)).toBeInTheDocument();
+    expect(screen.getByText(/^First seen Sep 24, .*, resolved Sep 24, [^:]*:\d\d [AP]M$/)).toBeInTheDocument();
+  });
+
+  it('a count confirmation reads with who confirmed it, on the chip, the facts and the timeline', async () => {
+    get.mockResolvedValue(
+      detail(
+        {
+          ...VARIANCE,
+          resolvedAt: '2026-09-24T19:00:00Z',
+          resolvedReason: 'confirmed',
+          canAct: false,
+          confirmation: {
+            at: '2026-09-24T19:00:00Z',
+            by: { id: 'u1', label: 'Dana Lee' },
+            cycleCountId: 'cc-1',
+            countNumber: 1,
+            quantity: 21,
+            as: 'counter',
+          },
+        },
+        {
+          timeline: [
+            { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null },
+            { id: 'e2', kind: 'count_confirmed', at: '2026-09-24T19:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: 'counted twice on the floor', cycleCount: { id: 'cc-1', countNumber: 1 }, maintenanceRequestId: null, evidenceId: null },
+          ],
+        },
+      ),
+    );
+    await renderPage();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Resolved: Confirmed by the counter');
+    expect(screen.getByText('Count confirmed')).toBeInTheDocument();
+    expect(screen.getByText(/^Dana Lee, who counted it, Sep 24, .*, without a second count$/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Count confirmed by Dana Lee, who counted it, without a second count: CC-000001 found 21 where 20 was on record (+1)',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('counted twice on the floor')).toBeInTheDocument();
   });
 
   it('a closed recount in the timeline says what it found', async () => {

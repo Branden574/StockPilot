@@ -255,13 +255,22 @@ export function verificationScopeCopy(count: VerificationLastCount): string {
 
 /** "Counted by A, posted by B." A person not named in the answer is left out. */
 export function verificationWhoCopy(count: VerificationLastCount): string | null {
-  const counter = count.countedBy?.label?.trim() || null;
-  const poster = count.postedBy?.label?.trim() || null;
-  const same =
-    counter !== null &&
-    poster !== null &&
-    count.countedBy?.id != null &&
-    count.countedBy.id === count.postedBy?.id;
+  return countedAndPostedByCopy(count.countedBy, count.postedBy);
+}
+
+/**
+ * "Counted by A, posted by B.", or "Counted and posted by A." when one person
+ * did both. A person not named is left out; null when neither is. Shared by
+ * the Physical count card and a count difference's "What clears this" and
+ * confirmation step, so a count's people read the same everywhere.
+ */
+export function countedAndPostedByCopy(
+  countedBy: VerificationPerson | null | undefined,
+  postedBy: VerificationPerson | null | undefined,
+): string | null {
+  const counter = countedBy?.label?.trim() || null;
+  const poster = postedBy?.label?.trim() || null;
+  const same = counter !== null && poster !== null && countedBy?.id != null && countedBy.id === postedBy?.id;
   if (same) return `Counted and posted by ${counter}.`;
   if (counter && poster) return `Counted by ${counter}, posted by ${poster}.`;
   if (counter) return `Counted by ${counter}.`;

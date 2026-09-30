@@ -740,7 +740,9 @@ describe('evaluateForSync — count_variance (F1-2)', () => {
       aiAssisted: true,
       capturedOfflineAt: null,
     });
-    expect(describeOccurrence('count_variance', p!.facts).detail).toBe('found +1: counted 11, on record 10 (CC-000024)');
+    // The row sentence from these facts (core; always true: what the count
+    // found and what was on record then).
+    expect(describeOccurrence('count_variance', p!.facts).detail).toBe('CC-000024 found 11 where 10 was on record (+1)');
     expect(e.completeRules).toContain('count_variance');
   });
 
