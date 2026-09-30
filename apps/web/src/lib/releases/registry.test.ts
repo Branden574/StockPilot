@@ -1878,7 +1878,7 @@ describe('count differences say what clears them (release 1) is held as a draft'
 
   it('is for readers of exceptions where Cycle Counts is on, linking to Exceptions', () => {
     expect(release().audience).toBeUndefined();
-    expect(release().entries.map((e) => e.id)).toEqual(['count-difference-what-clears-it']);
+    expect(release().entries.map((e) => e.id)).toEqual(['count-difference-what-clears-it', 'phone-exception-note-keyboard']);
     const [entry] = release().entries;
     expect(entry!.category).toBe('improved');
     expect(entry!.area).toBe('Inventory');
@@ -1889,6 +1889,28 @@ describe('count differences say what clears them (release 1) is held as a draft'
     expect(reader(['items:read'])).toEqual(['count-difference-what-clears-it']);
     expect(reader(['items:read'], [])).toEqual([]);
     expect(reader([])).toEqual([]);
+  });
+
+  // The R1 walk's keyboard finding (iPhone 17 at the largest text size): the
+  // note sheets on every exception and the photo sheets, so it is for the
+  // people who can acknowledge and add photos, with or without Cycle Counts.
+  it('tells the people who can act on exceptions that the note stays in view on the phone', () => {
+    const entry = release().entries.find((e) => e.id === 'phone-exception-note-keyboard')!;
+    expect(entry.category).toBe('fixed');
+    expect(entry.area).toBe('Mobile app');
+    expect(entry.link).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    expect(entry.audience).toEqual({ anyPermission: ['stock:adjust'] });
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = []) =>
+      visibleReleases([published()], { role: 'staff', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['items:read', 'stock:adjust'])).toEqual(['phone-exception-note-keyboard']);
+    expect(reader(['items:read'])).toEqual([]);
+    const text = `${entry.title} ${entry.whatChanged} ${entry.whyItMatters} ${entry.howItAffectsYou}`;
+    expect(text).toContain('stays in view above the keyboard');
+    expect(text).toContain('puts the keyboard away without sending anything');
+    expect(text).toContain('the photo sheets now fit above the keyboard');
+    // Older phones show only the title and the summary.
+    expect(release().summary).toContain('In the mobile app, the note you type on an exception stays in view above the keyboard.');
+    expect(text).not.toMatch(/always|every text size|guarantee|never hidden/i);
   });
 
   it('says what clears it in the product\'s own words, and nothing about confirming a count yet', () => {

@@ -100,7 +100,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'Count differences say what clears them',
     summary:
-      'When a posted count changes the stock on record, its exception now says plainly what clears it, and the Acknowledge step says that acknowledging does not.',
+      'When a posted count changes the stock on record, its exception now says plainly what clears it, and the Acknowledge step says that acknowledging does not. In the mobile app, the note you type on an exception stays in view above the keyboard.',
     publishedAt: '2026-10-05T17:00:00Z',
     entries: [
       {
@@ -117,6 +117,24 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['items:read'], modules: ['cycle_counts'] },
+      },
+      // The R1 walk (iPhone 17, largest text size): the phone's note sheets
+      // on every exception, and the photo sheets. For the people who can
+      // acknowledge and add photos (the act gate, as exception-photos-add-remove).
+      {
+        id: 'phone-exception-note-keyboard',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'The note you type on an exception stays in view in the mobile app',
+        whatChanged:
+          "In the mobile app, when you type a note to acknowledge an exception, add a note to it, or add or remove a photo, the note field now stays in view above the keyboard, at the largest text sizes too. Dragging the sheet's text, or tapping its title or its text, puts the keyboard away without sending anything. At the largest text sizes the photo sheets now fit above the keyboard, with their title and Close on screen.",
+        whyItMatters:
+          "At the largest text sizes the note field could scroll out of sight as the keyboard opened, so you typed into a field you could not see, the photo sheets could run off the top of the screen, and only the sheet's own buttons put the keyboard away.",
+        howItAffectsYou:
+          "Nothing changes until the keyboard opens. At the largest text sizes the note's text stops growing at the size of the app's other fields. What you type and save is unchanged.",
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['stock:adjust'] },
       },
     ],
   },
