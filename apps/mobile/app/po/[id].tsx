@@ -16,7 +16,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { api, ApiError } from '@/lib/api';
-import { useAuth } from '@/lib/auth-context';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
 import { readPoRunGroups, readReceiptTotals } from '@/lib/id-reads';
@@ -78,7 +77,6 @@ interface ReceiptHistoryItem {
 export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
 
   const { orgId } = useOrg();
   const [header, setHeader] = React.useState<PoHeader | null>(null);
