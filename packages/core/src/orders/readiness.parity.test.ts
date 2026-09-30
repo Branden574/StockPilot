@@ -77,12 +77,39 @@ interface ParityCase {
   };
 }
 
+/** F2-5 (0385): a case's facts with only what drafting reads changed. */
+interface DraftableCase {
+  id: string;
+  base: string;
+  title: string;
+  supply?: Record<
+    string,
+    {
+      inbound?: number[];
+      drafts?: number[];
+      hiddenInbound?: number;
+      truncatedInbound?: number;
+      hiddenDrafts?: number;
+      committedOtherShortfall?: number;
+    }
+  >;
+  hidden?: string[];
+  deleted?: string[];
+  poModule?: boolean;
+  draftable: Record<string, number>;
+}
+
 interface Generator {
   caseFacts(c: ParityCase, n: number): unknown;
   caseKeyIds(c: ParityCase, n: number): { items: Record<string, string>; lines: Record<string, string> };
   renderParitySql(fx: unknown): string;
-  checkedInBlock(sql: string): string | null;
+  checkedInBlock(sql: string, begin?: string, end?: string): string | null;
+  draftableCaseFacts(fx: unknown, dc: DraftableCase, k: number): unknown;
+  renderDraftableSql(fx: unknown): string;
   TEST_SQL_PATH: string;
+  DRAFTABLE_SQL_PATH: string;
+  DRAFTABLE_BEGIN_MARKER: string;
+  DRAFTABLE_END_MARKER: string;
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -95,6 +122,7 @@ beforeAll(async () => {
 });
 
 const cases = (fixture as unknown as { cases: ParityCase[] }).cases;
+const draftableCases = (fixture as unknown as { draftableCases: DraftableCase[] }).draftableCases;
 const NOW = '2026-01-01T12:00:00.000Z';
 
 function assess(c: ParityCase, n: number) {
@@ -223,11 +251,60 @@ describe.each(cases.map((c, i) => [c.id, c, i + 1] as const))('%s', (_id, c, n) 
   });
 });
 
-describe('the pgTAP block', () => {
+/**
+ * F2-5 (migration 0385): what may be drafted for an order's shortfall. The
+ * database recomputes it (order_shortfall_draftable) inside
+ * draft_order_shortfall_pos after the reorder lock and refuses anything above
+ * it, so the dialog's numbers and the refusal must be the same arithmetic.
+ * These cases change only what drafting reads (open-PO and draft remaining,
+ * units on POs the reader can't open or past the row cap, other orders'
+ * committed shortfall, hidden and deleted items, the purchase_orders module);
+ * pgTAP 0385 section P runs order_shortfall_draftable over the same facts,
+ * and over every case above (its expect.draftable).
+ */
+describe('draftable (F2-5): core and order_shortfall_draftable agree', () => {
+  it('every draftable case names a real base case and every one of its items', () => {
+    expect(draftableCases.length).toBeGreaterThanOrEqual(13);
+    expect(new Set(draftableCases.map((c) => c.id)).size).toBe(draftableCases.length);
+    for (const dc of draftableCases) {
+      const base = cases.find((c) => c.id === dc.base);
+      expect(base, dc.id).toBeDefined();
+      expect(Object.keys(dc.draftable).sort(), dc.id).toEqual(Object.keys(base!.items).sort());
+    }
+  });
+
+  it.each(draftableCases.map((dc, j) => [dc.id, dc, j + 1] as const))(
+    '%s',
+    { timeout: TIMEOUT },
+    (_id, dc, k) => {
+      const n = cases.findIndex((c) => c.id === dc.base) + 1;
+      const ids = gen.caseKeyIds(cases[n - 1]!, n);
+      const facts = parseOrderReadinessFacts(JSON.parse(JSON.stringify(gen.draftableCaseFacts(fixture, dc, k))));
+      const a = assessOrderReadiness(facts, { now: NOW });
+      if (a.phase !== 'to_pick') throw new Error(`${dc.id}: expected the to_pick phase`);
+      for (const [key, want] of Object.entries(dc.draftable)) {
+        const item = a.items.find((i) => i.itemId === ids.items[key]);
+        expect(item, `${dc.id} ${key}`).toBeDefined();
+        // A hidden item has no numbers at all: nothing is draftable.
+        expect(item!.quantities?.draftable ?? 0, `${dc.id} ${key} draftable (${dc.title})`).toBe(want);
+        if ((dc.hidden ?? []).includes(key)) expect(item!.quantities, `${dc.id} ${key}`).toBeNull();
+      }
+    },
+  );
+});
+
+describe('the pgTAP blocks', () => {
   it('matches the fixture (run node scripts/gen-readiness-parity-sql.mjs after editing it)', { timeout: TIMEOUT }, () => {
     const sql = readFileSync(gen.TEST_SQL_PATH, 'utf8');
     const block = gen.checkedInBlock(sql);
     expect(block).not.toBeNull();
     expect(block).toBe(gen.renderParitySql(fixture));
+  });
+
+  it('the 0385 draftable block matches the fixture too', { timeout: TIMEOUT }, () => {
+    const sql = readFileSync(gen.DRAFTABLE_SQL_PATH, 'utf8');
+    const block = gen.checkedInBlock(sql, gen.DRAFTABLE_BEGIN_MARKER, gen.DRAFTABLE_END_MARKER);
+    expect(block).not.toBeNull();
+    expect(block).toBe(gen.renderDraftableSql(fixture));
   });
 });

@@ -13,13 +13,23 @@
  *   renderParitySql(fx)  the data block of supabase/tests/0377_order_readiness_facts.test.sql:
  *                        the rows to build, the facts to expect, and what the
  *                        FROZEN RPCs must do (each call rolled back).
+ *   draftableCaseFacts(fx, dc)
+ *                        F2-5: a draftable case's facts, its base case's facts
+ *                        with only what drafting reads changed (supply,
+ *                        hidden, deleted, the purchase_orders module).
+ *   renderDraftableSql(fx)
+ *                        F2-5: the data block of
+ *                        supabase/tests/0385_order_shortfall_po.test.sql: every
+ *                        case's and draftable case's facts, with the draftable
+ *                        each item must get (order_shortfall_draftable, pure,
+ *                        so no rows are built).
  *
  * Usage:
- *   node scripts/gen-readiness-parity-sql.mjs          rewrite the block
- *   node scripts/gen-readiness-parity-sql.mjs --check  exit 1 if it is stale
+ *   node scripts/gen-readiness-parity-sql.mjs          rewrite both blocks
+ *   node scripts/gen-readiness-parity-sql.mjs --check  exit 1 if either is stale
  *
  * A vitest guard (packages/core/src/orders/readiness.parity.test.ts) fails
- * while the checked-in block differs from what this renders.
+ * while a checked-in block differs from what this renders.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -33,6 +43,12 @@ export const TEST_SQL_PATH = path.join(ROOT, 'supabase/tests/0377_order_readines
 export const BEGIN_MARKER =
   '-- BEGIN GENERATED: scripts/gen-readiness-parity-sql.mjs from packages/core/src/orders/readiness-parity-cases.json. Do not edit by hand.';
 export const END_MARKER = '-- END GENERATED';
+
+/** F2-5: the draftable block of the 0385 test (its own markers). */
+export const DRAFTABLE_SQL_PATH = path.join(ROOT, 'supabase/tests/0385_order_shortfall_po.test.sql');
+export const DRAFTABLE_BEGIN_MARKER =
+  '-- BEGIN GENERATED DRAFTABLE: scripts/gen-readiness-parity-sql.mjs from packages/core/src/orders/readiness-parity-cases.json. Do not edit by hand.';
+export const DRAFTABLE_END_MARKER = '-- END GENERATED DRAFTABLE';
 
 /** Fixed ids of the parity org (namespace 0377a). */
 export const PARITY = {
@@ -284,32 +300,172 @@ export function loadFixture() {
 }
 
 /** The block as checked in (markers included), or null when absent. */
-export function checkedInBlock(sql) {
-  const start = sql.indexOf(BEGIN_MARKER);
-  const end = sql.indexOf(END_MARKER, start);
-  if (start < 0 || end < 0) return null;
-  return sql.slice(start, end + END_MARKER.length);
+export function checkedInBlock(sql, begin = BEGIN_MARKER, end = END_MARKER) {
+  const start = sql.indexOf(begin);
+  const stop = start < 0 ? -1 : sql.indexOf(end, start);
+  if (start < 0 || stop < 0) return null;
+  return sql.slice(start, stop + end.length);
+}
+
+// ── F2-5: draftable (0385) ──────────────────────────────────────────────────
+
+const HEX3 = (n) => n.toString(16).padStart(3, '0');
+
+/** A made-up PO id for draftable case k (1-based), PO j. Ids are never read
+ *  by the draftable arithmetic; they only have to look like the database's. */
+function poId(k, j) {
+  return `0385d${HEX3(k)}-0000-4000-8000-${PAD12(j)}`;
+}
+
+function poRows(k, list, draft, from) {
+  return (list ?? []).map((remaining, j) =>
+    draft
+      ? { poId: poId(k, from + j), poNumber: `PO-D${k}-${from + j}`, remaining }
+      : {
+          poId: poId(k, from + j),
+          poNumber: `PO-D${k}-${from + j}`,
+          status: 'ordered',
+          expectedAt: null,
+          remaining,
+        },
+  );
+}
+
+/** The facts of draftable case `dc` (the k-th, 1-based): its base case's
+ *  facts with only what drafting reads changed. */
+export function draftableCaseFacts(fixture, dc, k) {
+  const n = fixture.cases.findIndex((c) => c.id === dc.base) + 1;
+  if (n < 1) throw new Error(`${dc.id}: unknown base case ${dc.base}`);
+  const base = fixture.cases[n - 1];
+  const facts = caseFacts(base, n);
+  const ids = caseKeyIds(base, n);
+  for (const key of [
+    ...Object.keys(dc.supply ?? {}),
+    ...(dc.hidden ?? []),
+    ...(dc.deleted ?? []),
+    ...Object.keys(dc.draftable),
+  ]) {
+    if (!(key in ids.items)) throw new Error(`${dc.id}: unknown item ${key}`);
+  }
+  if (Object.keys(dc.draftable).sort().join() !== Object.keys(ids.items).sort().join()) {
+    throw new Error(`${dc.id}: draftable must name every item of ${dc.base}`);
+  }
+  facts.items = facts.items.map((it) => {
+    const key = Object.keys(ids.items).find((x) => ids.items[x] === it.itemId);
+    if ((dc.hidden ?? []).includes(key)) return { itemId: it.itemId, visible: false };
+    const next = { ...it };
+    if ((dc.deleted ?? []).includes(key)) next.deleted = true;
+    const s = dc.supply?.[key];
+    if (s) {
+      next.inbound = {
+        rows: poRows(k, s.inbound, false, 1),
+        hiddenRemaining: s.hiddenInbound ?? 0,
+        truncated: (s.truncatedInbound ?? 0) > 0,
+        truncatedRemaining: s.truncatedInbound ?? 0,
+      };
+      next.drafts = {
+        rows: poRows(k, s.drafts, true, 50),
+        hiddenRemaining: s.hiddenDrafts ?? 0,
+        truncated: false,
+        truncatedRemaining: 0,
+      };
+      next.committedOtherShortfall = s.committedOtherShortfall ?? 0;
+    }
+    if (dc.poModule === false) {
+      next.inbound = null;
+      next.drafts = null;
+    }
+    return next;
+  });
+  return facts;
+}
+
+/** Every case's and draftable case's facts, with each item's draftable by
+ *  database id: what order_shortfall_draftable must answer. */
+export function draftableParityRows(fixture) {
+  const rows = [];
+  fixture.cases.forEach((c, i) => {
+    const n = i + 1;
+    const ids = caseKeyIds(c, n);
+    rows.push({
+      id: c.id,
+      facts: caseFacts(c, n),
+      expected: Object.fromEntries(Object.entries(c.expect.draftable).map(([k, v]) => [ids.items[k], v])),
+    });
+  });
+  (fixture.draftableCases ?? []).forEach((dc, j) => {
+    const n = fixture.cases.findIndex((c) => c.id === dc.base) + 1;
+    const ids = caseKeyIds(fixture.cases[n - 1], n);
+    rows.push({
+      id: dc.id,
+      facts: draftableCaseFacts(fixture, dc, j + 1),
+      expected: Object.fromEntries(Object.entries(dc.draftable).map(([k, v]) => [ids.items[k], v])),
+    });
+  });
+  const seen = new Set();
+  for (const r of rows) {
+    if (seen.has(r.id)) throw new Error(`duplicate case id ${r.id}`);
+    seen.add(r.id);
+  }
+  return rows;
+}
+
+export function renderDraftableSql(fixture) {
+  const rows = draftableParityRows(fixture);
+  return [
+    DRAFTABLE_BEGIN_MARKER,
+    `-- ${rows.length} cases: ${rows.map((r) => r.id).join(', ')}.`,
+    `insert into dp_case (case_id, facts, expected) values\n  ${rows
+      .map((r) => `(${lit(r.id)}, ${js(r.facts)}, ${js(r.expected)})`)
+      .join(',\n  ')};`,
+    DRAFTABLE_END_MARKER,
+  ].join('\n');
+}
+
+/** Rewrite (or, with check, compare) one generated block. */
+function syncBlock({ file, begin, end, render, label, check }) {
+  const sql = readFileSync(file, 'utf8');
+  const current = checkedInBlock(sql, begin, end);
+  if (current === null) {
+    console.error(`markers not found in ${file}`);
+    return 2;
+  }
+  const next = render(loadFixture());
+  if (current === next) {
+    console.log(`${label} is up to date`);
+    return 0;
+  }
+  if (check) {
+    console.error(`${label} is stale: run node scripts/gen-readiness-parity-sql.mjs`);
+    return 1;
+  }
+  writeFileSync(file, sql.replace(current, () => next));
+  console.log(`${label} rewritten`);
+  return 0;
 }
 
 function main() {
   const check = process.argv.includes('--check');
-  const sql = readFileSync(TEST_SQL_PATH, 'utf8');
-  const current = checkedInBlock(sql);
-  if (current === null) {
-    console.error(`markers not found in ${TEST_SQL_PATH}`);
-    process.exit(2);
-  }
-  const next = renderParitySql(loadFixture());
-  if (current === next) {
-    console.log('readiness parity block is up to date');
-    return;
-  }
-  if (check) {
-    console.error('readiness parity block is stale: run node scripts/gen-readiness-parity-sql.mjs');
-    process.exit(1);
-  }
-  writeFileSync(TEST_SQL_PATH, sql.replace(current, () => next));
-  console.log('readiness parity block rewritten');
+  const results = [
+    syncBlock({
+      file: TEST_SQL_PATH,
+      begin: BEGIN_MARKER,
+      end: END_MARKER,
+      render: renderParitySql,
+      label: 'readiness parity block',
+      check,
+    }),
+    syncBlock({
+      file: DRAFTABLE_SQL_PATH,
+      begin: DRAFTABLE_BEGIN_MARKER,
+      end: DRAFTABLE_END_MARKER,
+      render: renderDraftableSql,
+      label: 'draftable parity block',
+      check,
+    }),
+  ];
+  const worst = Math.max(...results);
+  if (worst > 0) process.exit(worst);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();

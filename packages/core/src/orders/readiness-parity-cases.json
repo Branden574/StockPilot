@@ -6,7 +6,8 @@
     "After editing this file run: node scripts/gen-readiness-parity-sql.mjs (a vitest guard fails while the SQL block is stale).",
     "Holdings are [kind, warehouse, quantity]: kind rack | crate | site (NULL kind) | unplaced | staging; warehouse home (the order's) | other | org (no warehouse). On hand is the sum of the holdings unless `onHand` is given (records that disagree).",
     "Holds: own (this order), otherOrder (an approved order holding exactly what it owes, so it adds nothing to committedOtherShortfall), rental (no order).",
-    "Duplicate-item lines are excluded from the completion parity claim (complete_picking reads on hand from its cursor; 0 duplicate lines in production), so no picking case has one."
+    "Duplicate-item lines are excluded from the completion parity claim (complete_picking reads on hand from its cursor; 0 duplicate lines in production), so no picking case has one.",
+    "draftableCases (F2-5, 0385): each starts from a case's facts (`base`) and changes only what drafting reads: `supply` per item (open-PO and draft remaining per PO, units on POs the reader can't open or past the 10-row cap, other orders' committed shortfall), `hidden` items, `deleted` items, `poModule` false. Core (readiness.parity.test.ts) checks assessOrderReadiness' draftable against `draftable`; pgTAP (supabase/tests/0385_order_shortfall_po.test.sql, section P) checks order_shortfall_draftable against the same numbers, and against every case's expect.draftable."
   ],
   "cases": [
     {
@@ -295,5 +296,20 @@
         "draftable": { "k": 0 }
       }
     }
+  ],
+  "draftableCases": [
+    { "id": "D1", "base": "C4b", "title": "an open PO covers part of the shortfall: 4 short, 2 on order, 2 draftable", "supply": { "a": { "inbound": [2] } }, "draftable": { "a": 2 } },
+    { "id": "D2", "base": "C4b", "title": "a draft counts like an open PO: 4 short, 2 on order and 1 on a draft, 1 draftable", "supply": { "a": { "inbound": [2], "drafts": [1] } }, "draftable": { "a": 1 } },
+    { "id": "D3", "base": "C4b", "title": "other orders' committed shortfall takes the supply first: 3 on order or draft, 2 owed to other orders, 3 draftable", "supply": { "a": { "inbound": [2], "drafts": [1], "committedOtherShortfall": 2 } }, "draftable": { "a": 3 } },
+    { "id": "D4", "base": "C4b", "title": "units on POs the reader can't open, past the 10-row cap and on hidden drafts all count: 3 of them, 1 draftable", "supply": { "a": { "hiddenInbound": 1, "truncatedInbound": 1, "hiddenDrafts": 1 } }, "draftable": { "a": 1 } },
+    { "id": "D5", "base": "C4b", "title": "more on order than is short: nothing to draft, never below 0", "supply": { "a": { "inbound": [3, 5] } }, "draftable": { "a": 0 } },
+    { "id": "D6", "base": "C4b", "title": "other orders' committed shortfall larger than the supply: the whole shortfall is draftable", "supply": { "a": { "inbound": [1], "committedOtherShortfall": 6 } }, "draftable": { "a": 4 } },
+    { "id": "D7", "base": "C5", "title": "per item: b short 2 with a draft of 1 (1 draftable), d short 1 with nothing on order (1), a and c not short", "supply": { "b": { "drafts": [1] } }, "draftable": { "a": 0, "b": 1, "c": 0, "d": 1 } },
+    { "id": "D8", "base": "C13", "title": "a kit's stock is never drafted, whatever is on order", "supply": { "k": { "inbound": [1] } }, "draftable": { "k": 0 } },
+    { "id": "D9", "base": "C11", "title": "an item that moved to another warehouse is never drafted", "draftable": { "a": 0, "m": 0 } },
+    { "id": "D10", "base": "C4b", "title": "the purchase_orders module off (no inbound facts): nothing is draftable", "poModule": false, "draftable": { "a": 0 } },
+    { "id": "D11", "base": "C1b", "title": "an item the reader cannot read: nothing is draftable", "hidden": ["a"], "draftable": { "a": 0 } },
+    { "id": "D12", "base": "C4b", "title": "a deleted item is never drafted", "deleted": ["a"], "draftable": { "a": 0 } },
+    { "id": "D13", "base": "C2", "title": "duplicate lines are owed once per item (3 + 3 against 5 free: 1 short); 0.25 on order leaves 0.75", "supply": { "a": { "inbound": [0.25] } }, "draftable": { "a": 0.75 } }
   ]
 }
