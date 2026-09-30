@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
 import { readinessFailureAnnouncement } from '@/lib/order-readiness';
+import type { ShortfallPoOffer } from '@/lib/order-shortfall-po';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -54,7 +55,16 @@ import { useTheme } from '@/lib/use-theme';
  * the Staging tab filtered to them; without stock:transfer, core's sentence
  * instead ("Putting stock away needs the Transfer stock permission."). 44 pt,
  * disabled while anything runs and offline.
+ *
+ * DRAFT PO FOR WHAT IS SHORT (F2-5): on the full panel, when something on
+ * the order may be drafted (lib/order-shortfall-po.ts shortfallPoOffer, the
+ * web strip's rule): the button for a manager holding purchase_orders:manage
+ * with Orders and Purchase orders on, which opens the draft sheet; core's
+ * sentence instead for anyone else ("Drafting a PO needs a manager with
+ * purchase-order access."). 44 pt, disabled while anything runs and offline.
  */
+/** What "Draft PO for what is short" does, for VoiceOver. */
+export const SHORTFALL_PO_STRIP_HINT = 'Opens a sheet to draft purchase orders for what this order is short';
 /** What "Put away N items" does, for VoiceOver. */
 export const PUT_AWAY_STRIP_HINT = 'Opens Staging with these items, to put them away';
 
@@ -67,6 +77,7 @@ export function OrderReadinessSummary({
   onCheckAgain,
   hold = null,
   putAway = null,
+  shortfallPo = null,
 }: {
   result: OrderReadinessResult;
   audience: 'full' | 'requester';
@@ -86,6 +97,14 @@ export function OrderReadinessSummary({
     offer: PutAwayOffer;
     disabled: boolean;
     onPress: (itemIds: string[]) => void;
+  } | null;
+  /** F2-5 "Draft PO for what is short" (full panel only), from
+   *  lib/order-shortfall-po.ts shortfallPoOffer; null: not offered.
+   *  `disabled`: another action is running. */
+  shortfallPo?: {
+    offer: Exclude<ShortfallPoOffer, { kind: 'none' }>;
+    disabled: boolean;
+    onPress: () => void;
   } | null;
 }) {
   const { c, mode } = useTheme();
@@ -216,6 +235,24 @@ export function OrderReadinessSummary({
         ) : putAwayOffer?.kind === 'needs_permission' ? (
           <Body size={12.5} muted>
             {putAwayOffer.message}
+          </Body>
+        ) : null}
+        {shortfallPo && shortfallPo.offer.kind === 'button' ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={offline || checking || shortfallPo.disabled}
+            onPress={shortfallPo.onPress}
+            accessibilityLabel={shortfallPo.offer.accessibilityLabel}
+            accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : SHORTFALL_PO_STRIP_HINT}
+            // 44 pt, not the small Button's 36.
+            style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
+          >
+            {shortfallPo.offer.label}
+          </Button>
+        ) : shortfallPo?.offer.kind === 'needs_permission' ? (
+          <Body size={12.5} muted>
+            {shortfallPo.offer.message}
           </Body>
         ) : null}
         {hold ? (

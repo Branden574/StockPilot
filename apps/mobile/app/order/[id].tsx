@@ -35,6 +35,7 @@ import { OrderLineReadiness } from '@/components/order-line-readiness';
 import { OrderNeededByCard } from '@/components/order-needed-by-card';
 import { OrderReadinessSummary } from '@/components/order-readiness-summary';
 import { ReviseNeededBySheet } from '@/components/revise-needed-by-sheet';
+import { DraftShortfallPoSheet } from '@/components/draft-shortfall-po-sheet';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { AddOrderItemsSheet } from '@/components/add-order-items-sheet';
 import {
@@ -123,6 +124,12 @@ import {
   showNeededByCard,
 } from '@/lib/order-needed-by';
 import { readDestinationWarehouseScope } from '@/lib/holdings-elsewhere';
+import {
+  readShortfallSupplierNames,
+  shortfallPoOffer,
+  shortfallSheetOpening,
+  type ShortfallDraftRoute,
+} from '@/lib/order-shortfall-po';
 import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -185,6 +192,7 @@ import {
   type PartialAction,
   type PartialPreview,
   type OrderStatus,
+  type ShortfallPoView,
   type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
@@ -488,6 +496,17 @@ export default function OrderDetail() {
     timeZone: string;
     startNeededBy: string | null;
     orderStatus: string;
+  } | null>(null);
+  // F2-5: the draft-PO sheet, with what it opened on: the short items from
+  // the readiness the screen showed (frozen: a reload behind the sheet never
+  // swaps the rows in front of the person) and the suppliers' names.
+  const [shortfallSheet, setShortfallSheet] = React.useState<{
+    orderId: string;
+    orderLabel: string | null;
+    view: ShortfallPoView;
+    notice: string | null;
+    supplierNames: ReadonlyMap<string, string>;
+    timeZone: string | null;
   } | null>(null);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
@@ -931,6 +950,48 @@ export default function OrderDetail() {
     } finally {
       setActing(null);
     }
+  }
+
+  /**
+   * F2-5 "Draft PO for what is short": reads readiness again and the
+   * organization's supplier names together (the web dialog's reads on open;
+   * one round trip, never serial), then opens the sheet on the fresh rows,
+   * saying so when they moved (the screen reloads behind it then). A failed
+   * readiness read opens on the rows the screen shows; a failed names read
+   * names no supplier. Nothing is written here, and nothing opens an email.
+   */
+  async function openShortfallSheet() {
+    if (!order || !orgId || offline || acting !== null) return;
+    if (!shortfallSheetOpening(order.readiness, null)) return;
+    setActing('shortfall-po');
+    try {
+      const [fresh, supplierNames] = await Promise.all([
+        readOrderReadiness(supabase, order.id),
+        readShortfallSupplierNames(supabase, {
+          organizationId: orgId,
+          suppliersModule: enabledModules.has('suppliers'),
+        }),
+      ]);
+      const opening = shortfallSheetOpening(order.readiness, fresh);
+      if (!opening) return;
+      setShortfallSheet({
+        orderId: order.id,
+        orderLabel: opening.view.orderNumber,
+        view: opening.view,
+        notice: opening.notice,
+        supplierNames,
+        timeZone: order.orgTimezone,
+      });
+      if (opening.changed) void load();
+    } finally {
+      setActing(null);
+    }
+  }
+
+  /** F2-5: a created draft opens on the phone's PO screen (read-only for a draft). */
+  function openShortfallDraft(route: ShortfallDraftRoute) {
+    setShortfallSheet(null);
+    router.push(route);
   }
 
   /** F2-4: the server changed (or kept) the date: say what it did, read the order again. */
@@ -1664,6 +1725,27 @@ export default function OrderDetail() {
       canApproveOrders: rpApprove,
     });
 
+  // F2-5 "Draft PO for what is short" on the readiness card, when something
+  // on the order may be drafted: the button for a manager holding
+  // purchase_orders:manage with Orders and Purchase orders on; core's
+  // sentence for anyone else on the full panel. The server re-checks all of
+  // it (and write access to the order's warehouse, which every manager has).
+  const shownReadiness = readinessShown ? (order?.readiness ?? null) : null;
+  const ordersModuleOn = enabledModules.has('orders');
+  const purchaseOrdersModuleOn = enabledModules.has('purchase_orders');
+  const shortfallOffer = React.useMemo(
+    () =>
+      shortfallPoOffer({
+        readiness: shownReadiness,
+        fullPanel: showLineReadiness,
+        isManager,
+        canManagePurchaseOrders: rpBuy,
+        ordersModule: ordersModuleOn,
+        purchaseOrdersModule: purchaseOrdersModuleOn,
+      }),
+    [shownReadiness, showLineReadiness, isManager, rpBuy, ordersModuleOn, purchaseOrdersModuleOn],
+  );
+
   // F2-4 "Change" beside the needed-by: approvers (orders:approve, or a
   // manager by role) on an open order where Orders is on. Warehouse write
   // access is checked when the sheet opens; the server re-checks all of it.
@@ -2233,6 +2315,15 @@ export default function OrderDetail() {
               putAway={
                 putAway.strip.kind !== 'none'
                   ? { offer: putAway.strip, disabled: acting !== null, onPress: openPutAway }
+                  : null
+              }
+              shortfallPo={
+                shortfallOffer.kind !== 'none'
+                  ? {
+                      offer: shortfallOffer,
+                      disabled: acting !== null,
+                      onPress: () => void openShortfallSheet(),
+                    }
                   : null
               }
             />
@@ -3612,6 +3703,26 @@ export default function OrderDetail() {
           offline={offline}
           onClose={() => setNeededBySheet(null)}
           onSaved={(_outcome, title, message) => void handleNeededBySaved(title, message)}
+          onRefresh={() => void load()}
+        />
+      ) : null}
+
+      {/* F2-5: draft a PO for what the order is short (mounted per open, so
+          every session starts from the order as the screen showed it). The
+          drafts are not sent; nothing here emails anyone. */}
+      {shortfallSheet ? (
+        <DraftShortfallPoSheet
+          visible
+          orderId={shortfallSheet.orderId}
+          orderLabel={shortfallSheet.orderLabel}
+          startView={shortfallSheet.view}
+          startNotice={shortfallSheet.notice}
+          supplierNames={shortfallSheet.supplierNames}
+          timeZone={shortfallSheet.timeZone}
+          offline={offline}
+          onClose={() => setShortfallSheet(null)}
+          onDrafted={() => void load()}
+          onOpenDraft={openShortfallDraft}
           onRefresh={() => void load()}
         />
       ) : null}
