@@ -77,6 +77,7 @@ export default async function NewItemPage() {
     recent,
     customFieldDefs,
     sizeScaleValueRows,
+    sizeScaleRows,
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
@@ -99,10 +100,22 @@ export default async function NewItemPage() {
       .select('size_scale_id, value, is_half')
       .order('size_scale_id', { ascending: true })
       .order('sort_order', { ascending: true }),
+    // Each scale's size system (US_MENS for a shoe scale, none for apparel).
+    // The server fills an omitted size system from the category's scale, so
+    // the form needs it to know whether "Size system" still has to be picked.
+    // Same RLS scope as the values above; a handful of rows.
+    supabase.from('size_scales').select('id, size_system'),
   ]);
 
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
   const { enabled: sportsEnabled } = await checkModuleAccess('sports');
+
+  // A failed read leaves this EMPTY, which the form reads as "unknown": it
+  // then leaves the size-system check to the server rather than asking more.
+  const sizeScaleSystems: Record<string, string | null> = {};
+  for (const row of sizeScaleRows.data ?? []) {
+    sizeScaleSystems[row.id as string] = (row.size_system as string | null) ?? null;
+  }
 
   const sizeScales: Record<string, Array<{ value: string; isHalf: boolean }>> = {};
   for (const row of sizeScaleValueRows.data ?? []) {
@@ -179,8 +192,12 @@ export default async function NewItemPage() {
               sports_subcategory_key: (c.sports_subcategory_key as string | null) ?? null,
               default_unit_of_measure: (c.default_unit_of_measure as string | null) ?? null,
               size_scale_id: (c.size_scale_id as string | null) ?? null,
+              // A custom subcategory's own profile; the form reads it through
+              // the server's rule (core resolveSubcategoryProfile).
+              tracking_profile: c.tracking_profile ?? null,
             }))}
             sizeScales={sizeScales}
+            sizeScaleSystems={sizeScaleSystems}
             sportsEnabled={sportsEnabled}
             // Gates the tracking-mode override control only. The server
             // re-checks `sports:manage` on every save (resolveModeOverride).

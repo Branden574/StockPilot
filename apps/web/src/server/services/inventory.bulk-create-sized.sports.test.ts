@@ -298,4 +298,66 @@ describe('InventoryService.bulkCreateSizedVariants — sports parity with create
     ).rejects.toMatchObject({ code: 'validation_error' });
     expect(stub.chains.has('inventory_items.insert')).toBe(false);
   });
+
+  it("says a shoe run needs the category's scale to set a size system, and points at the field", async () => {
+    // A run carries no size system of its own (the schema has none), so the
+    // refusal must not ask for one the size chips never offered.
+    const stub = buildStub({
+      'categories.select': { data: shoesCategory(), error: null },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await expect(new InventoryService(ctx).bulkCreateSizedVariants({ ...BASE })).rejects.toMatchObject({
+      code: 'validation_error',
+      message:
+        "Size system is required for Shoes, and this category's size scale does not set one. Add the sizes one at a time and pick a size system for each.",
+      details: { code: 'SHOE_SIZE_SYSTEM_REQUIRED', field: 'variantSizeSystem' },
+    });
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  // Review 2026-09-29: the group was found-or-created BEFORE the per-size
+  // checks, so a refused run left an empty product group behind. create()
+  // already checks first; the run now does too.
+  it('refuses a run before any product group is looked up or written', async () => {
+    const stub = buildStub({
+      'categories.select': { data: shoesCategory(), error: null },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: { id: 'grp-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await expect(
+      new InventoryService(ctx).bulkCreateSizedVariants({
+        ...BASE,
+        productGroup: { name: 'Nike Pegasus 41', brand: 'Nike', defaultCountingUnit: 'pair' },
+      }),
+    ).rejects.toMatchObject({
+      details: { code: 'SHOE_SIZE_SYSTEM_REQUIRED', field: 'variantSizeSystem' },
+    });
+    expect(stub.fromCalls).not.toContain('product_groups');
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  it('refuses a size the scale does not know before any product group is written', async () => {
+    const stub = buildStub({
+      'categories.select': { data: jerseysCategory(), error: null },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+      'size_scale_values.select': { data: [{ value: 'M', normalized: 'M' }], error: null },
+      'product_groups.select': { data: null, error: null },
+      'product_groups.insert': { data: { id: 'grp-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await expect(
+      new InventoryService(ctx).bulkCreateSizedVariants({
+        ...BASE,
+        productGroup: { name: 'Wildcats home', team: 'Wildcats', defaultCountingUnit: 'each' },
+        variants: [{ size: 'Medium', quantity: 1 }],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.fromCalls).not.toContain('product_groups');
+  });
 });

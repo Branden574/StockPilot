@@ -15,8 +15,12 @@ import {
   deriveRackFields,
   describeFailure,
   placementAlertFor,
+  saveErrorAlert,
   sizeOptionsFromScale,
   sportsGroupFieldsFor,
+  sportsProfileFor,
+  sportsRequirementAlert,
+  sportsRequiredInputs,
   sportsProfileLabelFor,
   sportsShowsHomeAway,
   submitCreateItem,
@@ -969,6 +973,37 @@ describe('app/item/new.tsx is wired to the shared create path', () => {
     // rather than silently dropped.
     expect(src).toMatch(/variantsEnabled \? null : \(/);
   });
+
+  // Review 2026-09-29: while the size scale loaded, the required Size box was
+  // hidden (the run path was not decided yet) but Save stayed enabled and took
+  // the single-item path, refusing "Size required" with no box on screen.
+  it('does not save while the size scale is still loading', () => {
+    const save = src.slice(src.indexOf('async function save()'));
+    const guard = save.indexOf('if (sizesLoading)');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(save.indexOf('if (variantsEnabled)'));
+    expect(save.slice(guard, guard + 200)).toContain("'Sizes are still loading'");
+  });
+
+  // ...and switching to an unsized category mid-load left the flag stuck on:
+  // the cancelled request's finally skips its reset.
+  it('clears the loading flag when the new category has no sizes', () => {
+    expect(src).toMatch(
+      /if \(!sizesEnabled\) \{\s*setSizeOptions\(\[\]\);[^}]*?setSizesLoading\(false\);\s*return;\s*\}/,
+    );
+  });
+
+  it('names what the size-system chips choose for VoiceOver, on a 44 pt target', () => {
+    expect(src).toContain('accessibilityLabel={`Size system: ${SIZE_SYSTEM_LABELS[sys]}`}');
+    expect(src).toMatch(/styles\.chip,\s*styles\.chipTall/);
+    expect(src).toMatch(/chipTall: \{\s*minHeight: 44,/);
+  });
+
+  it("shows the size-system chips only when the category's scale does not supply one", () => {
+    expect(src).toMatch(
+      /sportsRequiredInputs\(sportsProfile, \{[^}]*scaleSystem: scaleSystemState/,
+    );
+  });
 });
 
 /**
@@ -1062,5 +1097,182 @@ describe('placementAlertFor — the create screens must interrupt when stock mis
     expect(alert?.body).toBe(
       placementWarningMessage('Item created', { rackName: '9-C', count: 4 }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-29, L4L: a Jersey create was refused "A size is required for this
+// product." on web. The phone asks the SAME core rule before it sends, shows
+// the inputs a single-item create needs, and names the field in its alerts.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_PROFILE = {
+  key: 'custom_singlets',
+  label: 'Singlets',
+  defaultMode: 'QUANTITY_BY_VARIANT',
+  allowedModes: ['QUANTITY_BY_VARIANT'],
+  supportedAttributes: ['team', 'size', 'jersey_number'],
+  requiredAttributes: ['jersey_number'],
+  defaultCountingUnit: 'each',
+  supportsNumbers: true,
+  supportsSizes: true,
+  supportsColors: false,
+  individualTrackingAllowed: false,
+};
+
+describe('sportsProfileFor — the server rule, on the phone', () => {
+  it('reads the built-in profile, else the category jsonb profile', () => {
+    expect(sportsProfileFor('jerseys', null)?.label).toBe('Jerseys');
+    expect(sportsProfileFor('custom_singlets', CUSTOM_PROFILE)?.label).toBe('Singlets');
+    expect(sportsProfileFor(null, null)).toBeNull();
+  });
+
+  it('drives the group inputs from a custom profile too', () => {
+    expect(sportsGroupFieldsFor('custom_singlets', CUSTOM_PROFILE).map((f) => f.key)).toEqual([
+      'team',
+    ]);
+    expect(sportsProfileLabelFor('custom_singlets', CUSTOM_PROFILE)).toBe('Singlets');
+  });
+});
+
+describe('sportsRequiredInputs — which variant inputs a phone create must show', () => {
+  const jerseys = sportsProfileFor('jerseys', null);
+  const shoes = sportsProfileFor('shoes', null);
+
+  it('shows Size (and Size system for shoes) on a single-item create', () => {
+    expect(sportsRequiredInputs(jerseys, { sizeRun: false })).toEqual({
+      size: true,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+    expect(sportsRequiredInputs(shoes, { sizeRun: false })).toEqual({
+      size: true,
+      sizeSystem: true,
+      jerseyNumber: false,
+    });
+  });
+
+  it('shows nothing for a size run, whose rows carry the size and whose scale carries the system', () => {
+    expect(sportsRequiredInputs(shoes, { sizeRun: true })).toEqual({
+      size: false,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+  });
+
+  // Review 2026-09-29: the chips showed under "Required for Shoes." even when
+  // the scale read returned US_MENS, and the save went through without a pick.
+  it("asks for a size system only when the category's scale does not set one", () => {
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: 'US_MENS' }).sizeSystem,
+    ).toBe(false);
+    expect(sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null }).sizeSystem).toBe(
+      true,
+    );
+    // Still reading: nothing flashes on screen.
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null, scaleSystem: 'pending' })
+        .sizeSystem,
+    ).toBe(false);
+    // The read failed: offer the chips, since the server may still need one.
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null, scaleSystem: 'unknown' })
+        .sizeSystem,
+    ).toBe(true);
+    expect(
+      sportsRequiredInputs(jerseys, { sizeRun: false, scaleSizeSystem: null }).sizeSystem,
+    ).toBe(false);
+  });
+
+  it('shows a required jersey number on either path', () => {
+    const custom = sportsProfileFor('custom_singlets', CUSTOM_PROFILE);
+    expect(sportsRequiredInputs(custom, { sizeRun: true }).jerseyNumber).toBe(true);
+    expect(sportsRequiredInputs(null, { sizeRun: false })).toEqual({
+      size: false,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+  });
+});
+
+describe('sportsRequirementAlert — refused before the request, naming the field', () => {
+  const jerseys = sportsProfileFor('jerseys', null);
+  const shoes = sportsProfileFor('shoes', null);
+  const known = (scaleSizeSystem: string | null) => ({ scaleSizeSystem, scaleSystemKnown: true });
+
+  it('names a missing Jersey size on a single-item create (no size chips to offer)', () => {
+    expect(
+      sportsRequirementAlert(jerseys, { variantSize: '  ' }, { sizeRun: false, ...known(null) }),
+    ).toEqual({
+      title: 'Size required',
+      body: 'Size is required for Jerseys: enter a size.',
+      field: 'variantSize',
+    });
+  });
+
+  it('is satisfied by a typed size, or by a size run', () => {
+    expect(
+      sportsRequirementAlert(jerseys, { variantSize: 'M' }, { sizeRun: false, ...known(null) }),
+    ).toBeNull();
+    expect(sportsRequirementAlert(jerseys, {}, { sizeRun: true, ...known(null) })).toBeNull();
+  });
+
+  it("lets the category's scale supply a shoe's size system, and asks when it sets none", () => {
+    expect(
+      sportsRequirementAlert(shoes, { variantSize: '10' }, { sizeRun: false, ...known('US_MENS') }),
+    ).toBeNull();
+    expect(
+      sportsRequirementAlert(shoes, { variantSize: '10' }, { sizeRun: false, ...known(null) }),
+    ).toMatchObject({ title: 'Size system required', field: 'variantSizeSystem' });
+  });
+
+  // Review 2026-09-29: "add the sizes one at a time" is not something the
+  // phone can do: a sized category whose scale loads always takes the run.
+  it('does not tell the phone to add sizes one at a time', () => {
+    expect(sportsRequirementAlert(shoes, {}, { sizeRun: true, ...known(null) })).toEqual({
+      title: 'Size system required',
+      body: "Size system is required for Shoes, and this category's size scale does not set one. Ask an admin to set a size system on the size scale, or add these items on the web.",
+      field: 'variantSizeSystem',
+    });
+  });
+
+  it('leaves the size-system question to the server when the scale could not be read', () => {
+    expect(
+      sportsRequirementAlert(
+        shoes,
+        { variantSize: '10' },
+        { sizeRun: false, scaleSizeSystem: null, scaleSystemKnown: false },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('saveErrorAlert — a server refusal names its field', () => {
+  it('titles a required-attribute refusal by the field', () => {
+    const e = Object.assign(new Error('Size is required for Jerseys: enter a size.'), {
+      details: { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
+    });
+    expect(saveErrorAlert(e)).toEqual({
+      title: 'Size required',
+      body: 'Size is required for Jerseys: enter a size.',
+    });
+  });
+
+  it('keeps the generic title for anything else', () => {
+    expect(saveErrorAlert(new Error('Network down'))).toEqual({
+      title: 'Could not add',
+      body: 'Network down',
+    });
+    expect(saveErrorAlert('nope')).toEqual({ title: 'Could not add', body: 'Unknown error' });
+  });
+});
+
+describe('buildSizedVariantsInput — a run carries its shared jersey number', () => {
+  it('forwards the number, as the web form does', () => {
+    const res = buildSizedVariantsInput(
+      { ...BASE_FORM, categoryId: CAT, jerseyNumber: '07' },
+      [{ size: 'M', quantity: 1 }],
+    );
+    expect(res.ok && res.input.jerseyNumber).toBe('07');
   });
 });

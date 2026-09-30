@@ -5,7 +5,7 @@ import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { Controller, useForm, type Resolver } from 'react-hook-form';
+import { Controller, useForm, type FieldErrors, type Resolver } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
@@ -16,6 +16,7 @@ import {
   EMPTY_SPORTS_GROUP_FIELDS,
   GROUP_LEVEL_COLOR_SUBCATEGORIES,
   SportsFields,
+  sportsFieldShown,
   type SportsGroupFieldValues,
 } from '@/components/inventory/sports-fields';
 // Dynamic import + conditional render: IsbnScanner pulls in the
@@ -66,20 +67,25 @@ import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
   APPAREL_ALPHA_SIZES,
-  DEFAULT_SUBCATEGORY_PROFILES,
   SPORTS_ERROR_META,
   TRACKING_MODE_LABELS,
   buildVariantKey,
   compareSizeValues,
   createItemSchema,
   formatRackLabel,
+  isAttributeRequired,
+  isRequiredAttributeField,
   normalizeRackFields,
+  requiredAttributeProblems,
+  resolveSubcategoryProfile,
+  sizePlaceholder,
+  type ActionError,
   type ApparelAlphaSize,
   type CountingUnit,
   type CreateItemInput,
   placementWarningMessage,
   type CustomFieldDefinition,
-  type SportsSubcategoryKey,
+  type RequiredAttributeProblem,
   type TrackingMode,
   type UpdateItemInput,
 } from '@stockpilot/core';
@@ -185,9 +191,23 @@ interface ItemFormProps {
     sports_subcategory_key?: string | null;
     default_unit_of_measure?: string | null;
     size_scale_id?: string | null;
+    /**
+     * `categories.tracking_profile` (0294): a CUSTOM subcategory's own profile.
+     * Read through core `resolveSubcategoryProfile` — the server's own rule —
+     * so the form labels and checks what the server enforces.
+     */
+    tracking_profile?: unknown;
   }>;
   /** Ordered size values per scale id, from size_scale_values. */
   sizeScales?: Record<string, Array<{ value: string; isHalf: boolean }>>;
+  /**
+   * `size_scales.size_system` per scale id. The server fills an omitted size
+   * system from the category's scale (and a size run takes it from nowhere
+   * else), so the form needs it to know whether "Size system" still has to be
+   * picked. A scale missing from the map is UNKNOWN: the form then leaves the
+   * size-system question to the server rather than asking more than it would.
+   */
+  sizeScaleSystems?: Record<string, string | null>;
   /** True when the org has the sports module on. */
   sportsEnabled?: boolean;
   /**
@@ -267,6 +287,7 @@ export function ItemForm({
   defaults,
   categories,
   sizeScales = {},
+  sizeScaleSystems = {},
   sportsEnabled = false,
   canManageSports = false,
   locations,
@@ -349,20 +370,49 @@ export function ItemForm({
     });
   }
 
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    control,
-    formState: { errors, isSubmitting },
-  } = useForm<CreateItemInput>({
+  // ── Required sports attributes (2026-09-29) ───────────────────────────────
+  // The subcategory's `requiredAttributes` are checked IN the resolver, next to
+  // the schema, so a missing Jersey size shows under the Size field in the same
+  // pass as a missing name — never first as a toast after Save. The check needs
+  // the resolved profile and the picked size chips, which are computed further
+  // down from watched values, so it is read through a ref the effect below
+  // keeps current. The server runs the SAME core rule and stays the authority.
+  const requiredCheckRef = React.useRef<(values: CreateItemInput) => RequiredAttributeProblem[]>(
+    () => [],
+  );
+  const resolver = React.useMemo<Resolver<CreateItemInput>>(() => {
     // @hookform/resolvers v5 infers the resolver's INPUT type from the schema,
     // and createItemSchema's z.preprocess fields make that input `unknown`,
     // which would untype every watch()/register() in this form and every child
     // that takes UseFormRegister<CreateItemInput>. The runtime resolver is
     // unchanged; only the inference is, so pin the type the form always had.
-    resolver: zodResolver(createItemSchema) as Resolver<CreateItemInput>,
+    const schemaResolver = zodResolver(createItemSchema) as Resolver<CreateItemInput>;
+    return async (values, context, options) => {
+      const result = await schemaResolver(values, context, options);
+      const problems = requiredCheckRef.current(values);
+      if (problems.length === 0) return result;
+      const errors: FieldErrors<CreateItemInput> = { ...result.errors };
+      for (const p of problems) {
+        // A schema error on the same field (e.g. a malformed jersey number)
+        // says more than "required" does.
+        if (!errors[p.field]) errors[p.field] = { type: 'required', message: p.hint };
+      }
+      return { values: {}, errors };
+    };
+  }, []);
+
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    setError,
+    clearErrors,
+    getValues,
+    watch,
+    control,
+    formState: { errors, isSubmitting },
+  } = useForm<CreateItemInput>({
+    resolver,
     mode: 'onBlur',
     reValidateMode: 'onChange',
     defaultValues: {
@@ -504,9 +554,15 @@ export function ItemForm({
     [categories, selectedCategory],
   );
   const subcategoryKey = selectedCategory?.sports_subcategory_key ?? null;
-  const profile = subcategoryKey
-    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
-    : null;
+  // The server's own rule (core resolveSubcategoryProfile): the built-in
+  // profile for the key, else the category's own tracking_profile. This used to
+  // read the built-in table alone, so a custom subcategory showed no sports
+  // fields while the server enforced its required attributes.
+  const selectedTrackingProfile = selectedCategory?.tracking_profile ?? null;
+  const profile = React.useMemo(
+    () => resolveSubcategoryProfile(subcategoryKey, selectedTrackingProfile),
+    [subcategoryKey, selectedTrackingProfile],
+  );
   // The mode the CATEGORY resolves to on its own, before any override. Split
   // out of `effectiveMode` so the override control can label its "no override"
   // option with the value it would fall back to.
@@ -590,14 +646,18 @@ export function ItemForm({
     if (!isEdit) {
       setValue('groupId', null);
       setValue('trackingModeOverride', undefined);
+      // A "Size is required" from the previous category no longer applies.
+      clearErrors(['variantSize', 'variantSizeSystem', 'jerseyNumber']);
     }
-  }, [watchedCategoryId, isEdit, setValue]);
+  }, [watchedCategoryId, isEdit, setValue, clearErrors]);
 
   // Debounced advisory near-miss lookup. Deliberately quiet (no request) once
   // enough of a signal exists: mirrors ProductGroupsService.candidates()'s own
   // early-exit so we don't fire a request the server would just return [] for.
   React.useEffect(() => {
-    if (!sportsEnabled || !profile || isEdit || linkedGroup) {
+    // Never on the rentals page, which sends no product group (see
+    // `sportsGrouping` below).
+    if (!sportsEnabled || !profile || isEdit || linkedGroup || isRentalFixed) {
       setGroupCandidates([]);
       return;
     }
@@ -637,7 +697,7 @@ export function ItemForm({
         });
     }, 400);
     return () => clearTimeout(timer);
-  }, [sportsEnabled, profile, isEdit, linkedGroup, sportsGroupFields]);
+  }, [sportsEnabled, profile, isEdit, linkedGroup, sportsGroupFields, isRentalFixed]);
 
   function handleUseGroupCandidate(id: string) {
     touchedRef.current = true;
@@ -655,6 +715,92 @@ export function ItemForm({
     const scaleValues = scaleId ? sizeScales[scaleId] : undefined;
     return scaleValues && scaleValues.length > 0 ? scaleValues.map((v) => v.value) : [...ALL_SIZES];
   }, [selectedCategory, sizeScales]);
+
+  // ── What the category requires, and how to ask for it ─────────────────────
+  // The scale the SERVER validates against: the category's own, else its
+  // parent's (resolveTrackingProfile's inheritance), and that scale's system,
+  // which fills an omitted size system on save.
+  const effectiveScaleId = selectedCategory?.size_scale_id ?? parentCategory?.size_scale_id ?? null;
+  const scaleSizeSystem = effectiveScaleId ? (sizeScaleSystems[effectiveScaleId] ?? null) : null;
+  // A page that did not load the scale's system (it is not in the map) must
+  // not make the form STRICTER than the server: the size-system check is then
+  // left to the server alone, which reads the scale itself.
+  const scaleSystemKnown =
+    !effectiveScaleId || Object.prototype.hasOwnProperty.call(sizeScaleSystems, effectiveScaleId);
+  const effectiveScaleValues = effectiveScaleId ? sizeScales[effectiveScaleId] : undefined;
+  // Exactly when <SportsFields> renders (below): the inputs a requirement can be
+  // satisfied in exist only then. With the module off the server refuses the
+  // category outright, so there is nothing to ask for.
+  const sportsFieldsShown = !isEdit && sportsEnabled && profile != null;
+  // ── Rentals (review 2026-09-29) ───────────────────────────────────────────
+  // The rentals page shows the sports panel so a Jersey's size can be given,
+  // but a rental create takes ONE path: the single create that carries
+  // `isRental`. So on that page there is
+  //   - no product group, no candidate "Use this group", no preview and no mode
+  //     override. A rental item in a retail group would be matched by the PO
+  //     importer (variantsByKey does not filter is_rental) and received into;
+  //     whether rentals may ever join a group is the owner's decision;
+  //   - no size chips. The sized path (bulkCreateSizedVariants) carries no
+  //     rental flag, so its rows were ORDINARY inventory and the form then
+  //     went to /dashboard/inventory. That predates the sports panel.
+  const sportsGrouping = sportsFieldsShown && !isRentalFixed;
+  const sizeRunAvailable = !isEdit && !isRentalFixed && Boolean(selectedCategory?.supports_sizes);
+  const sizeRunPicked = sizeRunAvailable && selectedSizes.length > 0;
+  const sizeRequired = sportsFieldsShown && isAttributeRequired(profile, 'size');
+  // "10.5" was the example for EVERY subcategory; on the Jerseys letter scale
+  // it is not even a size the server accepts.
+  const sizeExample = React.useMemo(
+    () =>
+      sizePlaceholder({
+        profile,
+        sizeSystem: scaleSizeSystem,
+        scaleValues: effectiveScaleValues?.map((v) => v.value) ?? null,
+      }),
+    [profile, scaleSizeSystem, effectiveScaleValues],
+  );
+  // Which required boxes the panel renders. A problem whose box is NOT on screen
+  // (a hand-made custom profile) is said in a toast on submit instead of
+  // leaving Create silently doing nothing.
+  function onInvalidSubmit() {
+    const hidden = requiredCheckRef
+      .current(getValues())
+      .find((p) => !profile || !sportsFieldShown(profile, p.field));
+    if (hidden) toast.error(hidden.message);
+  }
+
+  React.useEffect(() => {
+    requiredCheckRef.current = (values) =>
+      sportsFieldsShown && !isSportsRootMissingSubcategory
+        ? requiredAttributeProblems(profile, values, {
+            scaleSizeSystem,
+            // A picked run sends variants[], so every row has its size and the
+            // size system can only come from the scale (the server's rule).
+            sizeRun: sizeRunPicked,
+            sizeRunAvailable,
+          }).filter((p) => scaleSystemKnown || p.attribute !== 'size_system')
+        : [];
+  }, [
+    sportsFieldsShown,
+    isSportsRootMissingSubcategory,
+    profile,
+    scaleSizeSystem,
+    scaleSystemKnown,
+    sizeRunPicked,
+    sizeRunAvailable,
+  ]);
+
+  /**
+   * A refused save. When the server names a sports field (details.field, set
+   * by assertVariantAttributesValid), the sentence goes under that field as
+   * well as in the toast, so the person is pointed at the box to fix.
+   */
+  function reportSaveError(error: ActionError) {
+    const field = error.details?.field;
+    if (sportsFieldsShown && isRequiredAttributeField(field)) {
+      setError(field, { type: 'server', message: error.message }, { shouldFocus: true });
+    }
+    toast.error(error.message);
+  }
 
   // Display-only variant-identity preview (requirement: computed via the core
   // key builder, never re-implemented). The server independently recomputes
@@ -1007,7 +1153,8 @@ export function ItemForm({
     // created names its group after itself; renaming/merging groups is the
     // product-groups admin surface.
     const sportsActive = !isEdit && sportsEnabled && profile != null;
-    const sportsGroupPayload = sportsActive
+    // No group at all on the rentals page (see `sportsGrouping`).
+    const sportsGroupPayload = sportsGrouping
       ? linkedGroup
         ? // The user explicitly clicked "Use this group".
           { groupId: linkedGroup.id }
@@ -1033,7 +1180,7 @@ export function ItemForm({
     // the sized path. Gated on `sportsActive` for the same reason the control
     // is: the server refuses it anyway, this just never sends it.
     const sportsModeOverridePayload =
-      sportsActive && values.trackingModeOverride
+      sportsGrouping && values.trackingModeOverride
         ? { trackingModeOverride: values.trackingModeOverride }
         : {};
 
@@ -1043,7 +1190,12 @@ export function ItemForm({
     // routes back to the Inventory list (each variant gets its own
     // detail page so a single-item redirect would be wrong).
     const selectedCategoryAtSubmit = categories.find((c) => c.id === values.categoryId);
-    if (!isEdit && selectedCategoryAtSubmit?.supports_sizes && selectedSizes.length > 0) {
+    if (
+      !isEdit &&
+      !isRentalFixed &&
+      selectedCategoryAtSubmit?.supports_sizes &&
+      selectedSizes.length > 0
+    ) {
       if (!values.categoryId || !values.warehouseId) {
         toast.error('Pick a category and warehouse before saving variants.');
         return;
@@ -1096,7 +1248,7 @@ export function ItemForm({
           : {}),
       });
       if (!res.ok) {
-        toast.error(res.error.message);
+        reportSaveError(res.error);
         return;
       }
 
@@ -1231,7 +1383,10 @@ export function ItemForm({
         })();
     // When isRentalFixed is true, inject is_rental=true into the payload
     // so the item is classified as a rental asset regardless of form state.
-    const rentalValues = isRentalFixed ? { ...mergedValues, isRental: true } : mergedValues;
+    // A rental create also never carries a group id (see `sportsGrouping`).
+    const rentalValues = isRentalFixed
+      ? { ...mergedValues, isRental: true, ...(isEdit ? {} : { groupId: null }) }
+      : mergedValues;
     // `trackingModeOverride` already rides `values` here (it is a
     // createItemSchema field); only the group needs merging in.
     const finalValues = { ...rentalValues, ...sportsGroupPayload };
@@ -1241,7 +1396,7 @@ export function ItemForm({
         : createItemAction(finalValues as CreateItemInput);
     const res = await action;
     if (!res.ok) {
-      toast.error(res.error.message);
+      reportSaveError(res.error);
       return;
     }
 
@@ -1364,7 +1519,7 @@ export function ItemForm({
     } else {
       router.refresh();
     }
-  });
+  }, onInvalidSubmit);
 
   return (
     <form
@@ -1626,13 +1781,21 @@ export function ItemForm({
               if (!defaults?.variantSize) return <div />;
               return (
                 <Field label="Size" optional error={errors.variantSize?.message}>
-                  <Input placeholder="10.5" {...register('variantSize')} />
+                  <Input placeholder={`e.g. ${sizeExample}`} {...register('variantSize')} />
                 </Field>
               );
             }
-            if (!categorySupportsSizes) return <div />;
+            // Create-only, and never on the rentals page (sizeRunAvailable).
+            if (!categorySupportsSizes || !sizeRunAvailable) return <div />;
             return (
-              <Field label="Sizes" optional>
+              // Not "(optional)" when the category needs a size: this row and
+              // the Size box in the details panel are the two ways to give one.
+              <Field label="Sizes" optional={!sizeRequired}>
+                {sizeRequired && !sizeRunPicked && profile && (
+                  <p className="text-muted-foreground text-[11px]">
+                    {`Pick sizes to add one item per size, or enter one size in ${profile.label} details below.`}
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   {sizeChipOptions.map((s) => {
                     const picked = selectedSizes.some((x) => x.size === s);
@@ -1641,13 +1804,16 @@ export function ItemForm({
                         key={s}
                         type="button"
                         aria-pressed={picked}
-                        onClick={() =>
+                        onClick={() => {
                           setSelectedSizes((prev) =>
                             picked
                               ? prev.filter((x) => x.size !== s)
                               : [...prev, { size: s, quantity: 0 }],
-                          )
-                        }
+                          );
+                          // Picking sizes answers "Size is required"; the
+                          // next save re-checks either way.
+                          clearErrors(['variantSize', 'variantSizeSystem']);
+                        }}
                         className={cn(
                           'border-border rounded border px-2 py-1 text-xs transition-colors',
                           picked ? 'bg-foreground text-background' : 'hover:bg-muted',
@@ -1704,6 +1870,12 @@ export function ItemForm({
               errors={errors}
               groupFields={sportsGroupFields}
               onGroupFieldChange={updateSportsGroupField}
+              sizeExample={sizeExample}
+              sizeRunAvailable={sizeRunAvailable}
+              sizeRunPicked={sizeRunPicked}
+              scaleSizeSystem={scaleSizeSystem}
+              scaleSystemKnown={scaleSystemKnown}
+              groupFieldsShown={sportsGrouping}
             />
             {/*
               The authorized mode override. Rendered only for a viewer holding
@@ -1712,7 +1884,7 @@ export function ItemForm({
               server re-checks both on save via resolveModeOverride — this
               control is convenience, never authority.
             */}
-            {canManageSports && (
+            {canManageSports && sportsGrouping && (
               <div className="space-y-1.5">
                 <Label htmlFor="tracking-mode-override">Tracking mode</Label>
                 <Select
@@ -2297,8 +2469,8 @@ export function ItemForm({
         );
       })()}
 
-      {/* Create-only, for the same reason the fields above are. */}
-      {!isEdit && sportsEnabled && profile && (
+      {/* Create-only, for the same reason the fields above are; never on rentals. */}
+      {sportsGrouping && (
         <GroupingPreview
           groupName={groupNamePreview}
           variantLabel={variantLabel}

@@ -1,13 +1,12 @@
 import 'server-only';
 
 import {
+  asSizeSystem,
   buildGroupKey,
   buildVariantKey,
   lineNeedsMappingConfirmation,
-  SIZE_SYSTEMS,
   type GroupKeyParts,
   type LineResult,
-  type SizeSystem,
   type SportsErrorCode,
 } from '@stockpilot/core';
 
@@ -18,21 +17,12 @@ import type { ResolvedTrackingProfile } from './sports-profiles';
 export type { LineResult };
 
 /**
- * Narrow a free-text size system to the shared vocabulary, or to NULL.
- *
- * `po_import_lines.variant_size_system` and `inventory_items
- * .variant_size_system` are plain TEXT, and the scan extractor writes whatever
- * the document said — deliberately, because the requirements demand the source
- * value be preserved. Normalizing on READ rather than on write is what lets
- * both be true at once: the row keeps "us mens", and an unrecognized system
- * reads as MISSING, so the size-system gate fires instead of a junk value
- * riding into a permanent identity key.
+ * Narrow a free-text size system to the shared vocabulary, or to NULL. Now in
+ * @stockpilot/core (schemas/sports.ts) so the PO-import review in the browser
+ * judges a line's size system exactly as this resolver does; re-exported here
+ * so every server caller keeps its import.
  */
-export function asSizeSystem(v: string | null | undefined): SizeSystem | null {
-  if (v == null) return null;
-  const up = v.trim().toUpperCase().replace(/[\s-]+/g, '_');
-  return (SIZE_SYSTEMS as readonly string[]).includes(up) ? (up as SizeSystem) : null;
-}
+export { asSizeSystem };
 
 /**
  * The subset of a `po_import_lines` row the resolver reads.

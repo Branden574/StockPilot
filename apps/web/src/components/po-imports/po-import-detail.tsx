@@ -92,7 +92,13 @@ interface Props {
    * group/variant at all — so it is chosen in the create-items modal, never
    * inferred.
    */
-  categories?: Array<{ id: string; name: string; sportsSubcategoryKey: string | null }>;
+  categories?: Array<{
+    id: string;
+    name: string;
+    sportsSubcategoryKey: string | null;
+    /** `categories.tracking_profile`: a custom subcategory's own profile. */
+    trackingProfile?: unknown;
+  }>;
 }
 
 /**

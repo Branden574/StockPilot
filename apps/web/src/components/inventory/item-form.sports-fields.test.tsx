@@ -78,6 +78,9 @@ const PLAIN_CATEGORY: Category = {
   name: 'Electronics',
 };
 
+/** Shoes require both; a single-item create must carry them (server rule, now also the form's). */
+const SHOE_SIZE = { variantSize: '10', variantSizeSystem: 'US_MENS' as const };
+
 const SPORTS_ROOT: Category = { id: SPORTS_ROOT_ID, name: 'Sports' };
 const SPORTS_ROOT_CHILD: Category = {
   id: SPORTS_ROOT_CHILD_ID,
@@ -220,7 +223,9 @@ describe('ItemForm — sports fields render from the resolved profile (Task 11)'
     renderForm({
       categories: [SPORTS_ROOT, SHOES_CATEGORY],
       sportsEnabled: true,
-      defaults: { name: 'Nike Shoe', categoryId: SHOES_CATEGORY_ID, warehouseId: WAREHOUSE_ID },
+      // Shoes REQUIRE a size and a size system; the form now refuses a
+      // submit without them, exactly as the server always has.
+      defaults: { name: 'Nike Shoe', categoryId: SHOES_CATEGORY_ID, warehouseId: WAREHOUSE_ID, ...SHOE_SIZE },
       warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
     });
 
@@ -240,7 +245,12 @@ describe('ItemForm — sports fields render from the resolved profile (Task 11)'
     renderForm({
       categories: [SHOES_CATEGORY],
       sportsEnabled: true,
-      defaults: { name: 'Nike Pegasus 41', categoryId: SHOES_CATEGORY_ID, warehouseId: WAREHOUSE_ID },
+      defaults: {
+        name: 'Nike Pegasus 41',
+        categoryId: SHOES_CATEGORY_ID,
+        warehouseId: WAREHOUSE_ID,
+        ...SHOE_SIZE,
+      },
       warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
     });
 
@@ -274,7 +284,12 @@ describe('ItemForm — sports fields render from the resolved profile (Task 11)'
     renderForm({
       categories: [SHOES_CATEGORY],
       sportsEnabled: true,
-      defaults: { name: 'Nike Pegasus 41', categoryId: SHOES_CATEGORY_ID, warehouseId: WAREHOUSE_ID },
+      defaults: {
+        name: 'Nike Pegasus 41',
+        categoryId: SHOES_CATEGORY_ID,
+        warehouseId: WAREHOUSE_ID,
+        ...SHOE_SIZE,
+      },
       warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
     });
 
@@ -574,6 +589,7 @@ describe('ItemForm — the authorized tracking-mode override (review finding 3)'
         name: 'Nike Pegasus 41',
         categoryId: SHOES_CATEGORY_ID,
         warehouseId: WAREHOUSE_ID,
+        ...SHOE_SIZE,
       },
       warehouses: [{ id: WAREHOUSE_ID, name: 'Main' }],
     });

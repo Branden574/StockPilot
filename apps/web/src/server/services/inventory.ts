@@ -2981,38 +2981,12 @@ export class InventoryService {
       await resolveTrackingProfile(this.ctx, input.categoryId ?? null, this.trackingProfiles),
       input.trackingModeOverride,
     );
-    assertVariantAttributesValid(profile.profile, input);
-
-    let resolvedGroupId: string | null = input.groupId ?? null;
-    // Attaching to a group is the `sports` entitlement, whatever the category
-    // says. RLS already pins the group to this org (product_group_in_org, 0298)
-    // but says nothing about the module, so gate it here too.
-    if (resolvedGroupId) assertModuleEnabled(this.ctx, 'sports');
-    if (profile.isSports) {
-      assertModuleEnabled(this.ctx, 'sports');
-      if (!resolvedGroupId && input.productGroup) {
-        const groups = new ProductGroupsService(this.ctx);
-        const { group } = await groups.findOrCreate({
-          ...input.productGroup,
-          subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
-          categoryId: input.categoryId ?? null,
-          defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
-            profile.countingUnit) as CountingUnit,
-          // The group INHERITS the category's size scale, exactly as it inherits
-          // the counting unit on the line above. No caller ever sent
-          // `sizeScaleId`, so `product_groups.size_scale_id` was NULL on EVERY
-          // group ever created — and a group-scoped size count with no scale
-          // falls back to the built-in apparel letters, offering XS..5XL to
-          // count a numeric shoe run (observed in prod 2026-07-28).
-          // `profile.sizeScaleId` is the category's own scale with the parent's
-          // inherited (resolveTrackingProfile) — the same scale the size
-          // validation below runs against, so the group and its variants can
-          // never disagree about the vocabulary.
-          sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
-        });
-        resolvedGroupId = group.id;
-      }
-    }
+    // A sports category is the `sports` entitlement: refuse it FIRST, before
+    // the size scale is read or a required attribute is asked for, exactly as
+    // bulkCreateSizedVariants does. This gate used to sit below the required
+    // check, so an org without Sports was told "Size is required for Jerseys"
+    // (with no Size box on its screen) instead of being refused the category.
+    if (profile.isSports) assertModuleEnabled(this.ctx, 'sports');
 
     // ── Size normalization + the category's size scale ──────────────────────
     // IDENTICAL to what bulkCreateSizedVariants and the PO-import matcher have
@@ -3039,19 +3013,69 @@ export class InventoryService {
       normalizedVariantSize = normalizeSizeValue(rawVariantSize, resolvedSizeSystem);
       // inventory_items_variant_size_check (0298) caps this at 24 characters —
       // refuse it here so the caller gets a sentence, not a constraint name.
+      // Both refusals name the Size field (details.field), so the item form
+      // puts the sentence under the box that was typed into, not only in a
+      // toast. Same shape as assertVariantAttributesValid's refusals.
       if (!normalizedVariantSize || normalizedVariantSize.length > 24) {
         throw new ServiceError(
           'validation_error',
           `"${rawVariantSize}" is not a usable size. Sizes are 1 to 24 characters.`,
-          { code: 'SHOE_SIZE_REQUIRED' },
+          { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
         );
       }
       if (allowedSizes && !allowedSizes.has(normalizedVariantSize.toUpperCase())) {
         throw new ServiceError(
           'validation_error',
           `"${rawVariantSize}" is not a size in this category's size scale.`,
-          { code: 'SHOE_SIZE_REQUIRED' },
+          { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
         );
+      }
+    }
+
+    // ── Required attributes, on the RESOLVED values ─────────────────────────
+    // After the scale has filled an omitted size system, never before. This
+    // check used to read the RAW input, so a single shoe typed "10.5" on a
+    // US Men's category was refused "a size system is required" although the
+    // row below is stored with the scale's system, and the same size picked as
+    // a run (bulkCreateSizedVariants, which checks after the scale) was
+    // accepted. Still BEFORE the group find-or-create and every write, so a
+    // refused create leaves nothing behind. The rule is shared with the item
+    // form and the phone (@stockpilot/core requiredAttributeProblems).
+    assertVariantAttributesValid(profile.profile, {
+      variantSize: normalizedVariantSize,
+      variantSizeSystem: resolvedSizeSystem,
+      jerseyNumber: input.jerseyNumber,
+    });
+
+    let resolvedGroupId: string | null = input.groupId ?? null;
+    // Attaching to a group is the `sports` entitlement, whatever the category
+    // says. RLS already pins the group to this org (product_group_in_org, 0298)
+    // but says nothing about the module, so gate it here too.
+    if (resolvedGroupId) assertModuleEnabled(this.ctx, 'sports');
+    if (profile.isSports) {
+      // (The `sports` gate for a sports category ran above, before the size
+      // scale was read.)
+      if (!resolvedGroupId && input.productGroup) {
+        const groups = new ProductGroupsService(this.ctx);
+        const { group } = await groups.findOrCreate({
+          ...input.productGroup,
+          subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+          categoryId: input.categoryId ?? null,
+          defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+            profile.countingUnit) as CountingUnit,
+          // The group INHERITS the category's size scale, exactly as it inherits
+          // the counting unit on the line above. No caller ever sent
+          // `sizeScaleId`, so `product_groups.size_scale_id` was NULL on EVERY
+          // group ever created — and a group-scoped size count with no scale
+          // falls back to the built-in apparel letters, offering XS..5XL to
+          // count a numeric shoe run (observed in prod 2026-07-28).
+          // `profile.sizeScaleId` is the category's own scale with the parent's
+          // inherited (resolveTrackingProfile) — the same scale the size
+          // validation above runs against, so the group and its variants can
+          // never disagree about the vocabulary.
+          sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
+        });
+        resolvedGroupId = group.id;
       }
     }
 
@@ -3833,27 +3857,6 @@ export class InventoryService {
       if (gErr) throw new ServiceError('internal_error', gErr.message);
       if (!g) throw new ServiceError('not_found', 'That product group no longer exists.');
     }
-    // Inline new-group creation, byte-for-byte the branch create() runs. Add
-    // Item shows a "this will be saved as / Product group" preview BEFORE the
-    // user picks sizes, and a sized sports category (shoes) leaves through this
-    // method — without this the preview promised a group that was never saved.
-    // Only for a SPORTS category, and only when no group was chosen already.
-    if (profile.isSports && !resolvedGroupId && input.productGroup) {
-      const groups = new ProductGroupsService(this.ctx);
-      const { group } = await groups.findOrCreate({
-        ...input.productGroup,
-        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
-        categoryId: input.categoryId,
-        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
-          profile.countingUnit) as CountingUnit,
-        // Same inheritance create() applies — see the comment there. This is the
-        // path a SHOE run takes, which is exactly the group whose size count was
-        // rendering XS..5XL instead of 9 / 9.5 / 10.
-        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
-      });
-      resolvedGroupId = group.id;
-    }
-
     const seenVariantKeys = new Set<string>();
     /**
      * `variant_key` is SERVER-COMPUTED identity, always — the key decides which
@@ -3900,12 +3903,15 @@ export class InventoryService {
       }
       // The subcategory's own attribute rules, same helper create() calls. A
       // no-op for every non-sports category (it returns immediately on a null
-      // profile), so nothing that exists today changes.
-      assertVariantAttributesValid(profile.profile, {
-        variantSize: normalized,
-        variantSizeSystem: sizeSystem,
-        jerseyNumber: input.jerseyNumber,
-      });
+      // profile), so nothing that exists today changes. `sizeRun` because a
+      // run cannot carry a size system of its own: the refusal says the
+      // category's scale sets none, instead of asking for a field the size
+      // chips never offered.
+      assertVariantAttributesValid(
+        profile.profile,
+        { variantSize: normalized, variantSizeSystem: sizeSystem, jerseyNumber: input.jerseyNumber },
+        { sizeRun: true, scaleSizeSystem: sizeSystem },
+      );
       const key = variantKeyFor(normalized);
       if (seenVariantKeys.has(key)) {
         throw new ServiceError('validation_error', `Size "${raw}" is listed twice.`, {
@@ -3913,6 +3919,30 @@ export class InventoryService {
         });
       }
       seenVariantKeys.add(key);
+    }
+
+    // Inline new-group creation, byte-for-byte the branch create() runs, and
+    // AFTER every size in the run has passed its checks (the scale, the
+    // required attributes, duplicates), as in create(). It used to run before
+    // them, so a refused run left an empty product group behind. Add
+    // Item shows a "this will be saved as / Product group" preview BEFORE the
+    // user picks sizes, and a sized sports category (shoes) leaves through this
+    // method — without this the preview promised a group that was never saved.
+    // Only for a SPORTS category, and only when no group was chosen already.
+    if (profile.isSports && !resolvedGroupId && input.productGroup) {
+      const groups = new ProductGroupsService(this.ctx);
+      const { group } = await groups.findOrCreate({
+        ...input.productGroup,
+        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+        categoryId: input.categoryId,
+        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+          profile.countingUnit) as CountingUnit,
+        // Same inheritance create() applies — see the comment there. This is the
+        // path a SHOE run takes, which is exactly the group whose size count was
+        // rendering XS..5XL instead of 9 / 9.5 / 10.
+        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
+      });
+      resolvedGroupId = group.id;
     }
 
     // Per-org custom fields shared by every variant. Strip any reserved key the

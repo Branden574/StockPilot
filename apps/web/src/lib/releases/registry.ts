@@ -139,6 +139,69 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'sports-required-fields-2026-10',
+    revision: 1,
+    // fix/sports-required-attributes (no migration). Held as a draft until the
+    // web deploy, the phone update (OTA) and the Demo Co production walk are
+    // done. The follow-up that publishes it sets the real publishedAt and
+    // re-reads these words against what shipped.
+    //
+    // No release-wide audience: the New item and PO import entries are for
+    // Sports organizations (sports module) and the people who can create items
+    // or manage purchase orders, the permissions those pages and actions
+    // check. The rental entry is for every organization with Rentals on: its
+    // size buttons were offered for any category with sizes, Sports or not.
+    status: 'draft',
+    title: 'New item says which Sports details it needs, and New rental item always adds a rental item',
+    summary:
+      "On the web and in the mobile app, New item now marks the details a Sports category needs, such as a size for Jerseys, and says what is missing under the field before anything is saved, instead of refusing the save afterwards. On a PO import, a size typed on a line now answers Missing attribute. New rental item adds one rental item at a time, without size buttons.",
+    publishedAt: '2026-10-01T17:00:00Z',
+    entries: [
+      {
+        id: 'sports-new-item-required-fields',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'New item says which Sports details are required',
+        whatChanged:
+          'On the web, when you pick a Sports category such as Jerseys or Shoes, the fields it needs no longer say (optional), and the Size box shows an example that fits it, such as M for Jerseys and 10.5 for Shoes. Leaving a required field empty shows what to enter under it, for example Enter a size, or pick sizes above to add one item per size, and nothing is saved. In the mobile app, New item asks for the same details and names the missing one before it saves, for example Size required.',
+        whyItMatters:
+          'Every Sports field was labelled optional, so the first sign that a Jersey needs a size was a refused save that said only A size is required for this product.',
+        howItAffectsYou:
+          "If a value is still refused, such as a size that is not on the category's size scale, the reason also shows under that field. Picking sizes with the size buttons still adds one item per size, with no single size needed. On Shoes whose size scale sets a size system, such as US Men's, a single item can now be saved without picking one: the scale's system is used. Other Sports categories, such as Balls, still need nothing. In the mobile app, saving before a category's sizes have loaded says Sizes are still loading.",
+        whatToDo: 'Update the app when it offers the new version.',
+        audience: { anyPermission: ['items:create'], modules: ['sports'] },
+      },
+      {
+        id: 'sports-po-import-typed-size',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'A size typed on a PO import line answers Missing attribute',
+        whatChanged:
+          'In Create items on a PO import, a line with no size shows Missing attribute when you choose a Sports category that needs one. Typing the size on the line, and for Shoes picking the size system, now clears it and lets Confirm create the item. The Size, Size system and Number boxes say (required) when the chosen category needs them, and the Size box shows an example that fits the category.',
+        whyItMatters:
+          'The line stayed marked Missing attribute however its Size box was filled, so the item could not be created from the import.',
+        howItAffectsYou:
+          "The line is checked again when you confirm. On Shoes, a line needs its size system even when the category's size scale sets one: pick it on the line.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['sports'] },
+      },
+      {
+        id: 'rental-new-item-one-at-a-time',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'New rental item always adds a rental item',
+        whatChanged:
+          "New rental item no longer shows size buttons for a category with sizes. Each rental item is added on its own, and a Sports category's size is typed in the Size box, which says when it is required. A Sports rental item is not joined to a product group.",
+        whyItMatters:
+          'Picking sizes on New rental item added ordinary inventory items, not rental items, and then opened the inventory list.',
+        howItAffectsYou:
+          'To add the same rental item in several sizes, add each size on its own. Rental items you already have are unchanged.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:create'], modules: ['rentals'] },
+      },
+    ],
+  },
+  {
     id: 'order-fix-holding-up-2026-10',
     revision: 1,
     // F2-3 (no migration). Held as a draft until the web order page's

@@ -17,7 +17,7 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
-import { can, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology, type TrackingMode } from '@stockpilot/core';
 
 export default async function NewRentalItemPage() {
   const ctx = await requireOrgContext();
@@ -69,6 +69,8 @@ export default async function NewRentalItemPage() {
     warehouseCharters,
     recent,
     customFieldDefs,
+    sizeScaleValueRows,
+    sizeScaleRows,
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
@@ -79,9 +81,32 @@ export default async function NewRentalItemPage() {
     whChartersSvc.listPairs(),
     inventorySvc.getRecentDefaults('product'),
     customFieldsSvc.listDefinitions('item'),
+    // The same size-scale reads the inventory New Item page makes. This page
+    // renders the same form and creates through the same InventoryService
+    // .create(), which enforces a Sports category's required attributes — so
+    // the form needs the same facts to show and check them.
+    supabase
+      .from('size_scale_values')
+      .select('size_scale_id, value, is_half')
+      .order('size_scale_id', { ascending: true })
+      .order('sort_order', { ascending: true }),
+    supabase.from('size_scales').select('id, size_system'),
   ]);
 
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  const { enabled: sportsEnabled } = await checkModuleAccess('sports');
+
+  const sizeScales: Record<string, Array<{ value: string; isHalf: boolean }>> = {};
+  for (const row of sizeScaleValueRows.data ?? []) {
+    (sizeScales[row.size_scale_id as string] ??= []).push({
+      value: row.value as string,
+      isHalf: Boolean(row.is_half),
+    });
+  }
+  const sizeScaleSystems: Record<string, string | null> = {};
+  for (const row of sizeScaleRows.data ?? []) {
+    sizeScaleSystems[row.id as string] = (row.size_system as string | null) ?? null;
+  }
 
   const warehouseIds = new Set(warehouses.map((w) => w.id));
   const locationIds = new Set(locations.map((l) => l.id));
@@ -129,11 +154,27 @@ export default async function NewRentalItemPage() {
               warehouseId: defaultWarehouseId,
               primaryLocationId: defaultPrimaryLocationId,
             }}
+            // The sports columns too. Without them this form could not know a
+            // category is Jerseys, showed no sports fields, and the server's
+            // "Size is required" arrived as a toast with nothing to fill in.
+            // With `isRentalFixed` the form shows only the item's own variant
+            // fields (size, size system, number...): no product group, no size
+            // chips and no mode override, so a rental create stays the single
+            // create that carries isRental (see ItemForm's `sportsGrouping`).
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,
               supports_sizes: Boolean(c.supports_sizes),
+              parent_id: (c.parent_id as string | null) ?? null,
+              tracking_mode: (c.tracking_mode as TrackingMode | null) ?? null,
+              sports_subcategory_key: (c.sports_subcategory_key as string | null) ?? null,
+              default_unit_of_measure: (c.default_unit_of_measure as string | null) ?? null,
+              size_scale_id: (c.size_scale_id as string | null) ?? null,
+              tracking_profile: c.tracking_profile ?? null,
             }))}
+            sizeScales={sizeScales}
+            sizeScaleSystems={sizeScaleSystems}
+            sportsEnabled={sportsEnabled}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}

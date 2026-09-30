@@ -138,7 +138,9 @@ describe('ItemForm — the row\'s own size on edit (0303)', () => {
   it('shows the stored size for a sized row being edited', () => {
     renderForm({ id: 'item-1', quantityOnHand: 5, variantSize: 'XL' });
 
-    expect(screen.getByPlaceholderText('10.5')).toHaveValue('XL');
+    // The placeholder is an example that fits the category (core
+    // sizePlaceholder); with no category it is a letter size, never "10.5".
+    expect(screen.getByPlaceholderText('e.g. M')).toHaveValue('XL');
     expect(screen.getByText('Size')).toBeInTheDocument();
   });
 
@@ -150,7 +152,7 @@ describe('ItemForm — the row\'s own size on edit (0303)', () => {
 
     const { default: userEvent } = await import('@testing-library/user-event');
     const user = userEvent.setup();
-    const sizeInput = screen.getByPlaceholderText('10.5');
+    const sizeInput = screen.getByPlaceholderText('e.g. M');
     await user.clear(sizeInput);
     await user.type(sizeInput, 'L');
     await user.click(screen.getByRole('button', { name: /save changes/i }));
@@ -163,10 +165,12 @@ describe('ItemForm — the row\'s own size on edit (0303)', () => {
 
   it('adds no Size field to a row that has no size, or to the create form', () => {
     const { unmount } = renderForm({ id: 'item-1', quantityOnHand: 5 });
+    expect(screen.queryByPlaceholderText('e.g. M')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('10.5')).not.toBeInTheDocument();
     unmount();
 
     renderForm();
+    expect(screen.queryByPlaceholderText('e.g. M')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('10.5')).not.toBeInTheDocument();
   });
 });

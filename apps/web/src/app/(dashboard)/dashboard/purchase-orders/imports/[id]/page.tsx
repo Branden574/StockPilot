@@ -136,6 +136,9 @@ export default async function PoImportDetailPage({
           id: c.id as string,
           name: c.name as string,
           sportsSubcategoryKey: (c.sports_subcategory_key as string | null) ?? null,
+          // A custom subcategory's own profile, so the Create items review
+          // marks the attributes the server will require.
+          trackingProfile: c.tracking_profile ?? null,
         }))}
         resolutions={resolutions}
       />
