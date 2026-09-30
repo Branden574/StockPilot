@@ -38,7 +38,8 @@
 --    order's status never changes and no notification row is written.
 -- Z. The frozen objects: md5, SECURITY DEFINER, search_path and owner of the
 --    functions F2-4 promises not to touch, fingerprints of ledger.*, the 0380
---    report functions and the 0381 photo functions and policies, the
+--    report functions, the 0381 photo functions and policies, the 0382 book
+--    functions, the
 --    order_requests and schedule_events policies, and the column grants the
 --    Schedule page's re-arm (ScheduleService.update) relies on.
 --
@@ -727,6 +728,10 @@ select is(
       from pg_policy pol join pg_class c on c.oid = pol.polrelid
      where (c.relname = 'item_images') or (c.relname = 'objects' and pol.polname like 'item-images %')
     union all
+    select '0382 book functions', md5(string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef || '|' || coalesce(p.proconfig::text, '') || '|' || coalesce(p.proacl::text, ''), E'\n' order by p.oid::regprocedure::text)) || '|' || count(*)
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname in ('book_order_report_charters', 'book_order_report_lines', 'book_order_report_range', 'book_order_totals', 'book_order_totals_options', 'book_order_totals_orders')
+    union all
     select 'order_requests + schedule_events policies', md5(string_agg(c.relname || '|' || pol.polname || '|' || pol.polcmd::text || '|' || coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || '|' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '') || '|' || pol.polroles::text, E'\n' order by c.relname, pol.polname)) || '|' || count(*)
       from pg_policy pol join pg_class c on c.oid = pol.polrelid
      where c.relnamespace = 'public'::regnamespace and c.relname in ('order_requests', 'schedule_events')
@@ -734,9 +739,10 @@ select is(
   E'0380 report functions|13e9b93da345dd302ad93629ff2d1690|6\n'
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
+  '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
   'order_requests + schedule_events policies|c388801c0cca0196bed7d51dc7df2096|8',
-  'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, and the order_requests and schedule_events policies are the ones F2-4 was proven against');
+  'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against');
 select ok(
   (select bool_and(has_column_privilege('authenticated', 'public.schedule_events', c, 'UPDATE'))
      from unnest(array['starts_at', 'reminded_24h_at', 'reminded_1h_at', 'updated_by']) c),

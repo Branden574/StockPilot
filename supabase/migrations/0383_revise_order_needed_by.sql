@@ -106,9 +106,9 @@
 -- save_purchase_order_draft, next_po_number, post_receipt_v2 (public and
 -- ledger), ledger.*, tg_order_requests_insert_guard,
 -- tg_order_request_lines_guard, caller_can_read_item, the 0380 report
--- functions, the 0381 photo functions and policies, and every policy and
--- grant on order_requests and schedule_events are untouched (pgTAP 0383 Z1
--- pins the md5 of the functions).
+-- functions, the 0381 photo functions and policies, the 0382 book
+-- functions, and every policy and grant on order_requests and
+-- schedule_events are untouched (pgTAP 0383 Z1 and Z2 pin them).
 --
 -- ── PROD PUSH NOTE ─────────────────────────────────────────────────────────
 -- CREATE FUNCTION, COMMENT, GRANT and REVOKE only: catalog-only, no table
