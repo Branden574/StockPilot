@@ -20,6 +20,14 @@
 --    order of the org asked by a member, false for another org's order, and
 --    false to a signed-in caller who is not a member of the org it names (no
 --    cross-org oracle).
+-- P. The order side of the link (review finding D1): an order's organization
+--    is fixed for a signed-in caller. A manager of both orgs moving an org A
+--    order that has its org A event to org B (which left the event linked
+--    across orgs and gave org B's own event for that order a 23505) is 42501
+--    permission denied, and nothing is written. (An order's created_at and
+--    warehouse_id stay editable: owner question Q4, pinned by 0379 C1/C2.)
+-- I. An event's identity (review finding U4): a viewer re-keying their own
+--    event and its creator backdating it are 42501; nothing is written.
 -- K. Every legitimate flow still works: a manual event inserted the phone's
 --    way (staff) and the Schedule page's way (manager, with RETURNING), and by
 --    a viewer (the existing any-member insert rule is unchanged); the order
@@ -31,15 +39,22 @@
 --    the driver, assignDelivery's assignee sync and syncOrderScheduleEvent's
 --    close, both keyed on the link, bringOrderEventInStep's move) and the
 --    approver's revise_order_needed_by (0383, DEFINER) moving the order's
---    event.
--- G. The posture: authenticated may INSERT and UPDATE every column but the
---    two server-owned ones (computed over the table's columns, so a new column
---    forces a decision), holds no table-level INSERT or UPDATE, keeps SELECT
---    and DELETE, loses TRUNCATE; anon writes nothing; service_role keeps its
+--    event. Every order write the web makes through the user client, each in
+--    the exact shape it sends (assignDelivery, the internal-notes save, deny,
+--    the pick slip, the packing slip with its signature token, staging, in
+--    transit), by a manager or a staff approver, with the RETURNING it reads.
+-- G. The posture: authenticated may INSERT every schedule_events column but
+--    the two server-owned ones and UPDATE every column but those two, id and
+--    created_at (computed over the table's columns, so a new column forces a
+--    decision), holds no table-level INSERT or UPDATE, keeps SELECT and
+--    DELETE, loses TRUNCATE; anon writes nothing; service_role keeps its
 --    table grants; the predicate is 0362's body, SECURITY DEFINER, STABLE,
 --    search_path pinned, EXECUTE to authenticated and not anon; the four
 --    policies are exactly 0384's; both server-owned columns say so in their
---    comments.
+--    comments. On order_requests authenticated may UPDATE every column but
+--    organization_id (computed the same way), holds no table-level UPDATE and
+--    keeps table INSERT and SELECT; service_role keeps its table grants;
+--    organization_id says so in its comment.
 --
 -- Roles: fixtures as the test superuser; the attacks and the Schedule page as
 -- `authenticated` with request.jwt.claim.sub; the admin client as
@@ -48,7 +63,7 @@
 
 begin;
 
-select plan(41);
+select plan(57);
 
 \set orgA   '\'03840000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03840000-0000-0000-0000-00000000000b\''
@@ -61,10 +76,15 @@ select plan(41);
 \set mgrB   '\'03840000-0000-0000-0000-0000000000b1\''
 \set whA    '\'03840000-0000-0000-0000-0000000000d1\''
 \set whB    '\'03840000-0000-0000-0000-0000000000d3\''
+\set chA    '\'03840000-0000-0000-0000-0000000000c1\''
 \set ordEv  '\'03840000-0000-0000-0000-000000000101\''
 \set ordFree '\'03840000-0000-0000-0000-000000000102\''
 \set ordNew '\'03840000-0000-0000-0000-000000000103\''
 \set ordDual '\'03840000-0000-0000-0000-000000000104\''
+\set ordStg '\'03840000-0000-0000-0000-000000000105\''
+\set ordPend '\'03840000-0000-0000-0000-000000000106\''
+\set ordPk  '\'03840000-0000-0000-0000-000000000107\''
+\set ordPack '\'03840000-0000-0000-0000-000000000108\''
 \set ordB   '\'03840000-0000-0000-0000-000000000141\''
 \set evOrd  '\'03840000-0000-0000-0000-000000000201\''
 \set evMan  '\'03840000-0000-0000-0000-000000000202\''
@@ -97,6 +117,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:whA, :orgA, '0384 Main',  'WH-0384A', 'active'),
   (:whB, :orgB, '0384 Other', 'WH-0384B', 'active');
+-- A delivery order carries a charter (order_requests_delivery_target_chk).
+insert into public.charters (id, organization_id, name, code, status) values
+  (:chA, :orgA, '0384 Charter', 'CH-0384', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,   :whA, true),
   (:orgA, :stfAp, :whA, true),
@@ -104,12 +127,16 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
   (:orgA, :stfAp, 'orders:approve', true);
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, needed_by) values
-  (:ordEv,   :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days'),
-  (:ordFree, :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '4 days'),
-  (:ordNew,  :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '5 days'),
-  (:ordDual, :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '6 days'),
-  (:ordB,    :orgB, :whB, 'approved', 'internal', :mgrB, 'pickup',   date_trunc('minute', now()) + interval '3 days');
+  (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, needed_by, delivery_charter_id) values
+  (:ordEv,   :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days', null),
+  (:ordFree, :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '4 days', null),
+  (:ordNew,  :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '5 days', null),
+  (:ordDual, :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '6 days', null),
+  (:ordStg,  :orgA, :whA, 'staged_for_delivery', 'internal', :stf, 'delivery', date_trunc('minute', now()) + interval '8 days', :chA),
+  (:ordPend, :orgA, :whA, 'pending_approval',    'internal', :stf, 'pickup',   date_trunc('minute', now()) + interval '9 days', null),
+  (:ordPk,   :orgA, :whA, 'approved',            'internal', :stf, 'pickup',   date_trunc('minute', now()) + interval '10 days', null),
+  (:ordPack, :orgA, :whA, 'picking_complete',    'internal', :stf, 'delivery', date_trunc('minute', now()) + interval '11 days', :chA),
+  (:ordB,    :orgB, :whB, 'approved', 'internal', :mgrB, 'pickup',   date_trunc('minute', now()) + interval '3 days', null);
 -- evOrd: ordEv's auto event, made by the admin path for the approving staff
 -- member (stfAp, an orders:approve override), so its creator is staff.
 -- evMan: a manual event by the manager. evVwr: a manual event by the viewer.
@@ -157,6 +184,29 @@ create function pg_temp.state() returns text language sql security definer as $$
 $$;
 create temp table snap (k text primary key, v text);
 insert into snap values ('before', pg_temp.state());
+-- A statement's outcome, then undone whatever it did: its error, or 'no error'
+-- when it went through (and was rolled back with its subtransaction). So a
+-- write the schema wrongly allows cannot change what the later tests see.
+create function pg_temp.try_undo(p_sql text) returns text language plpgsql as $$
+declare v_state text; v_msg text;
+begin
+  begin
+    execute p_sql;
+    raise exception using errcode = 'XX384', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+  end;
+  return case when v_state = 'XX384' then 'no error' else v_state || ':' || v_msg end;
+end $$;
+-- The fixture orders' organization and warehouse (read as the superuser,
+-- whoever asks).
+create function pg_temp.ostate() returns text language sql security definer as $$
+  select coalesce(string_agg(o.id::text || '/' || o.organization_id::text || '/' || coalesce(o.warehouse_id::text, '-'),
+                             ',' order by o.id), '')
+    from public.order_requests o
+   where o.id::text like '03840000-%'
+$$;
+insert into snap values ('orders', pg_temp.ostate());
 
 -- A link or assignee write as SQL text.
 create function pg_temp.ins_linked(p_org uuid, p_order uuid, p_creator uuid) returns text language sql as $$
@@ -240,6 +290,36 @@ set local "request.jwt.claim.sub" to :mgrB;
 select is(pg_temp.val(format('select public.order_request_in_org(%L, %L)::text', :ordEv, :orgA)), 'false',
   'O5: order_request_in_org: false to a caller who is not a member of the org it names (no cross-org existence oracle)');
 reset role;
+
+-- ══ P. The order side of the link ═════════════════════════════════════════
+-- order_requests_update checks the caller's rights in the old org (USING) and
+-- in the new org (WITH CHECK), so a manager of both could move an order, and
+-- an order with its org A event then sat in org B (review D1).
+-- (L14 added ordFree's event, so the events are snapshotted again here.)
+insert into snap values ('beforeP', pg_temp.state());
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :dual;
+select is(pg_temp.try_undo(format('update public.order_requests set organization_id = %L, warehouse_id = %L where id = %L', :orgB, :whB, :ordDual)),
+  '42501:permission denied for table order_requests',
+  'P1 (D1): a manager of both orgs moving an org A order that has its org A event to org B: 42501 permission denied');
+reset role;
+select is(pg_temp.ostate() || '|' || pg_temp.state(), (select v from snap where k = 'orders') || '|' || (select v from snap where k = 'beforeP'),
+  'P2: P1 changed no order and no event (the org A event stays linked to its org A order)');
+
+-- ══ I. An event's identity ════════════════════════════════════════════════
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :vwr;
+select is(pg_temp.try_undo(format('update public.schedule_events set id = gen_random_uuid() where id = %L', :evVwr)),
+  '42501:permission denied for table schedule_events',
+  'I1 (U4): a viewer re-keying their own event (detaching it from its audit rows and notification links): 42501 permission denied');
+set local "request.jwt.claim.sub" to :mgr;
+select is(pg_temp.try_undo(format($q$update public.schedule_events set created_at = now() - interval '400 days' where id = %L$q$, :evMan)),
+  '42501:permission denied for table schedule_events',
+  'I2: an event''s creator backdating it: 42501 permission denied');
+reset role;
+select is(pg_temp.state(), (select v from snap where k = 'beforeP'), 'I3: neither I1 nor I2 changed an event');
 
 -- ══ K. Legitimate flows ═══════════════════════════════════════════════════
 set local "request.jwt.claim.role" to 'authenticated';
@@ -330,21 +410,65 @@ select is(pg_temp.val(format($q$select (r->>'eventUpdated') || '/' || (r->>'even
   'true/' || :evOrd, 'K13: revise_order_needed_by (staff approver, 0383) still moves the order''s own event');
 reset role;
 
+-- Every order write the web makes through the user client, in the shape it
+-- sends (services/order-requests.ts), with the RETURNING it reads.
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :mgr;
+select is(pg_temp.val(format($q$with up as (
+    update public.order_requests
+       set assigned_delivery_user_id = %L, assigned_delivery_by = %L, assigned_delivery_at = now()
+     where organization_id = %L and id = %L returning *)
+  select (count(*) = 1 and bool_and(assigned_delivery_user_id = %L) and bool_and(organization_id = %L))::text from up$q$,
+  :stf, :mgr, :orgA, :ordStg, :stf, :orgA)),
+  'true', 'KO1: assignDelivery''s write (a manager names a member as the driver, RETURNING *) still works');
+select is(pg_temp.val(format($q$with up as (update public.order_requests set internal_notes = 'Gate code 12'
+                                              where organization_id = %L and id = %L returning id)
+                                select count(*)::text from up$q$, :orgA, :ordPend)),
+  '1', 'KO2: the internal-notes save (a manager) still works');
+set local "request.jwt.claim.sub" to :stfAp;
+select is(pg_temp.val(format($q$with up as (update public.order_requests set status = 'denied', denied_reason = 'Out of season'
+                                              where organization_id = %L and id = %L and status = 'pending_approval' returning *)
+                                select count(*)::text from up$q$, :orgA, :ordPend)),
+  '1', 'KO3: deny (a staff approver, orders:approve) still works');
+select is(pg_temp.val(format($q$with up as (update public.order_requests
+                                               set status = 'pick_slip_generated', pick_slip_generated_at = now(), pick_slip_generated_by = %L
+                                             where organization_id = %L and id = %L and status = 'approved' returning *)
+                                select count(*)::text from up$q$, :stfAp, :orgA, :ordPk)),
+  '1', 'KO4: the pick slip (a staff approver) still works');
+set local "request.jwt.claim.sub" to :mgr;
+select is(pg_temp.val(format($q$with up as (update public.order_requests
+                                               set status = 'packing_slip_generated', packing_slip_generated_at = now(), packing_slip_generated_by = %L,
+                                                   signature_token = md5('0384'), signature_token_expires_at = now() + interval '30 days'
+                                             where organization_id = %L and id = %L returning *)
+                                select count(*)::text from up$q$, :mgr, :orgA, :ordPack)),
+  '1', 'KO5: the packing slip with its signature token (a manager) still works');
+select is(pg_temp.val(format($q$with up as (update public.order_requests set status = 'staged_for_delivery', staged_at = now(), staged_by = %L
+                                             where organization_id = %L and id = %L and status = 'packing_slip_generated' returning *)
+                                select count(*)::text from up$q$, :mgr, :orgA, :ordPack)),
+  '1', 'KO6: staging (a manager) still works');
+select is(pg_temp.val(format($q$with up as (update public.order_requests set status = 'in_transit', in_transit_at = now(), in_transit_by = %L
+                                             where organization_id = %L and id = %L and status = 'staged_for_delivery' returning *)
+                                select count(*)::text from up$q$, :mgr, :orgA, :ordStg)),
+  '1', 'KO7: in transit (a manager) still works');
+reset role;
+
 -- ══ G. The posture ════════════════════════════════════════════════════════
 select is(
-  (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
-     from pg_attribute a
+  (select coalesce(string_agg(a.attname || ':' || p, ',' order by a.attname, p), '')
+     from pg_attribute a cross join unnest(array['INSERT', 'UPDATE']) p
     where a.attrelid = 'public.schedule_events'::regclass and a.attnum > 0 and not a.attisdropped
       and a.attname not in ('order_request_id', 'assigned_user_id')
-      and not (has_column_privilege('authenticated', 'public.schedule_events', a.attname, 'INSERT')
-               and has_column_privilege('authenticated', 'public.schedule_events', a.attname, 'UPDATE'))),
+      and not (p = 'UPDATE' and a.attname in ('id', 'created_at'))
+      and not has_column_privilege('authenticated', 'public.schedule_events', a.attname, p)),
   '',
-  'G1: authenticated may INSERT and UPDATE every schedule_events column but the two server-owned ones (a NEW column must be granted here or added to the server-owned list)');
+  'G1: authenticated may INSERT every schedule_events column but the two server-owned ones, and UPDATE every column but those two, id and created_at (a NEW column must be granted here or added to a list)');
 select is(
   (select string_agg(c || ':' || p || '=' || has_column_privilege('authenticated', 'public.schedule_events', c, p)::text, ',' order by c, p)
-     from unnest(array['assigned_user_id', 'order_request_id']) c, unnest(array['INSERT', 'UPDATE']) p),
-  'assigned_user_id:INSERT=false,assigned_user_id:UPDATE=false,order_request_id:INSERT=false,order_request_id:UPDATE=false',
-  'G2: authenticated may neither INSERT nor UPDATE order_request_id or assigned_user_id');
+     from unnest(array['assigned_user_id', 'created_at', 'id', 'order_request_id']) c, unnest(array['INSERT', 'UPDATE']) p),
+  'assigned_user_id:INSERT=false,assigned_user_id:UPDATE=false,created_at:INSERT=true,created_at:UPDATE=false,'
+  'id:INSERT=true,id:UPDATE=false,order_request_id:INSERT=false,order_request_id:UPDATE=false',
+  'G2: authenticated may neither INSERT nor UPDATE order_request_id or assigned_user_id, and may not UPDATE id or created_at (an insert may still name them, as before)');
 select is(
   (select string_agg(p || '=' || has_table_privilege('authenticated', 'public.schedule_events', p)::text, ',' order by p)
      from unnest(array['DELETE', 'INSERT', 'SELECT', 'TRUNCATE', 'UPDATE']) p),
@@ -401,6 +525,31 @@ select is(
      join pg_attribute a on a.attrelid = 'public.schedule_events'::regclass and a.attname = c),
   'assigned_user_id:true,order_request_id:true',
   'G9: both server-owned columns say so in their column comments');
+select is(
+  (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
+     from pg_attribute a
+    where a.attrelid = 'public.order_requests'::regclass and a.attnum > 0 and not a.attisdropped
+      and a.attname <> 'organization_id'
+      and not has_column_privilege('authenticated', 'public.order_requests', a.attname, 'UPDATE')),
+  '',
+  'GO1: authenticated may UPDATE every order_requests column but organization_id (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
+select is(
+  'organization_id=' || has_column_privilege('authenticated', 'public.order_requests', 'organization_id', 'UPDATE')::text
+  || ',' ||
+  (select string_agg(p || '=' || has_table_privilege('authenticated', 'public.order_requests', p)::text, ',' order by p)
+     from unnest(array['INSERT', 'SELECT', 'UPDATE']) p),
+  'organization_id=false,INSERT=true,SELECT=true,UPDATE=false',
+  'GO2: authenticated may not UPDATE an order''s organization_id, holds no table-level UPDATE, and keeps table INSERT and SELECT');
+select is(
+  (select string_agg(p || '=' || has_table_privilege('service_role', 'public.order_requests', p)::text, ',' order by p)
+     from unnest(array['DELETE', 'INSERT', 'SELECT', 'UPDATE']) p),
+  'DELETE=true,INSERT=true,SELECT=true,UPDATE=true',
+  'GO3: service_role (the admin client: the public order link, the portal, the return prompt) keeps its order_requests table grants');
+select ok(
+  coalesce(col_description('public.order_requests'::regclass,
+             (select a.attnum from pg_attribute a where a.attrelid = 'public.order_requests'::regclass and a.attname = 'organization_id'))
+           ~ '0384', false),
+  'GO4: order_requests.organization_id says in its comment that a signed-in caller cannot change it (0384)');
 
 select * from finish();
 rollback;

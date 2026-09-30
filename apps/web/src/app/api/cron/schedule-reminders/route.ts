@@ -32,7 +32,8 @@ function secretsEqual(a: string, b: string): boolean {
  * Schedule reminders (every 10 min, vercel.json). Two windows per event:
  *   T-24h — event starts within the next 24h and reminded_24h_at is null
  *   T-1h  — event starts within the next 60min and reminded_1h_at is null
- * Recipients: the event's assigned_user_id (if any) + org owners/admins/
+ * Recipients: the event's assigned_user_id (if any, and only while an
+ * accepted, non-act-as member of the event's org) + org owners/admins/
  * managers (deduped). Each gets an in-app notification; Expo push fans out
  * from the notifications AFTER INSERT trigger (mig 0028) — never send push
  * from code on top of the insert, that double-pushes (diagnosed 2026-07-14)
@@ -231,7 +232,35 @@ export async function GET(req: Request) {
         // (daily-briefing, auto-reorder, recurring-pos, …) already filter it.
         .is('impersonation_expires_at', null);
       const userIds = new Set<string>((mgrs ?? []).map((m) => m.user_id as string));
-      if (ev.assigned_user_id) userIds.add(ev.assigned_user_id);
+      // The assignee only while an accepted, non-act-as member of THIS event's
+      // org, read the managers' way (0384 review). assigned_user_id is the
+      // order's driver, copied by autoScheduleFromOrder and assignDelivery; a
+      // manager or an approver can write any user id as an order's driver
+      // straight through PostgREST (only assignDelivery checks membership),
+      // and a driver can leave the org after being named. This loop is the one
+      // place that contacts the assignee, with the event's title and
+      // description, so it checks here, at send time, whatever wrote the id.
+      // A failed read skips the assignee (reported): the managers are still
+      // reminded, and a stranger is never.
+      if (ev.assigned_user_id && !userIds.has(ev.assigned_user_id)) {
+        const { data: assignee, error: assigneeErr } = await admin
+          .from('organization_members')
+          .select('user_id')
+          .eq('organization_id', ev.organization_id)
+          .eq('user_id', ev.assigned_user_id)
+          .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null)
+          .maybeSingle();
+        if (assigneeErr) {
+          void reportError(new Error(assigneeErr.message), {
+            tag: 'cron.schedule-reminders.assignee',
+            level: 'warning',
+            extra: { eventId: ev.id },
+          });
+        } else if ((assignee as { user_id?: string } | null)?.user_id === ev.assigned_user_id) {
+          userIds.add(ev.assigned_user_id);
+        }
+      }
       if (userIds.size === 0) continue;
 
       // ONE zone for this event's every label — see the block above tzPart.

@@ -408,9 +408,14 @@ PGTAP_TESTS=(
   # assignee) are each 42501 and write nothing; anon writes nothing. The insert
   # and update WITH CHECK also require the linked order to be in the event's
   # org (0362's order_request_in_org), so a two-org member cannot move a
-  # linked event to the other org. The phone's and the Schedule page's writes,
-  # edits of an order's event by its creator or a manager, the order flows'
-  # admin writes and the needed-by revision keep working.
+  # linked event to the other org. The order side is fixed too: authenticated
+  # may UPDATE every order_requests column but organization_id, so a two-org
+  # manager moving an order (and its event's link) to the other org is 42501;
+  # a viewer re-keying or backdating an event is 42501. The phone's and the
+  # Schedule page's writes, edits of an order's event by its creator or a
+  # manager, the web's user-client order writes (notes, deny, pick slip,
+  # packing slip, staging, assignDelivery, in transit), the order flows' admin
+  # writes and the needed-by revision keep working.
   supabase/tests/0384_schedule_event_order_link.test.sql
 
   # Storage and attachment exposure.

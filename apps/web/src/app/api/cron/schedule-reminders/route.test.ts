@@ -10,7 +10,8 @@ import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supaba
  *   - the 24h notice never follows a 1h notice (owner-reported duplicate,
  *     2026-07-11),
  *   - recipients = assignee + owner/admin/manager, deduped, pref-gated
- *     fail-open,
+ *     fail-open; the assignee only while an accepted, non-act-as member of
+ *     the event's org (0384 review),
  *   - emails now render via the es schedule family: schedule@ sender,
  *     registry subject (byte-identical to the legacy subject), pref
  *     footer, List-Unsubscribe header.
@@ -77,6 +78,72 @@ function eventIn(hoursFromNow: number, overrides: Record<string, unknown> = {}) 
   };
 }
 
+interface MemberRow {
+  user_id: string;
+  role: string;
+  accepted_at: string | null;
+  impersonation_expires_at: string | null;
+}
+
+/** Every org's members unless a test says otherwise: the manager, and the
+ *  assignee as an accepted staff member. */
+const MANAGER: MemberRow = {
+  user_id: 'user-manager',
+  role: 'manager',
+  accepted_at: '2026-01-01T00:00:00Z',
+  impersonation_expires_at: null,
+};
+const ASSIGNEE: MemberRow = {
+  user_id: 'user-assignee',
+  role: 'staff',
+  accepted_at: '2026-01-01T00:00:00Z',
+  impersonation_expires_at: null,
+};
+
+/**
+ * organization_members answered the way PostgREST would for the cron's reads:
+ * the query's own eq / in / is / not-is-null filters are applied to the
+ * members of the org it names (its organization_id filter), so a read that
+ * forgets a filter gets rows it should not, and a test fails. Any other
+ * method throws.
+ */
+function membersServed(membersOf: (orgId: string) => MemberRow[] = () => [MANAGER, ASSIGNEE]) {
+  return (call: MockCall): QueryResult => {
+    const orgAt = call.methods.findIndex(
+      (m, i) => m === 'eq' && call.args[i]?.[0] === 'organization_id',
+    );
+    const org = orgAt === -1 ? null : (call.args[orgAt]![1] as string);
+    let rows: Array<Record<string, unknown>> =
+      org === null ? [] : membersOf(org).map((m) => ({ ...m, organization_id: org }));
+    call.methods.forEach((method, i) => {
+      const [col, a, b] = (call.args[i] ?? []) as [string, unknown, unknown];
+      const get = (r: Record<string, unknown>) => r[col] ?? null;
+      switch (method) {
+        case 'select':
+          break;
+        case 'eq':
+          rows = rows.filter((r) => get(r) === a);
+          break;
+        case 'in':
+          rows = rows.filter((r) => (a as unknown[]).includes(get(r)));
+          break;
+        case 'is':
+          rows = rows.filter((r) => get(r) === a);
+          break;
+        case 'not':
+          if (a !== 'is' || b !== null) {
+            throw new Error(`membersServed cannot evaluate .not(${col}, ${String(a)}, ${String(b)})`);
+          }
+          rows = rows.filter((r) => get(r) !== null);
+          break;
+        default:
+          throw new Error(`membersServed cannot evaluate .${method}()`);
+      }
+    });
+    return { data: rows.map((r) => ({ user_id: r.user_id })), error: null };
+  };
+}
+
 function stubFor(
   events: unknown[],
   extra: Record<string, QueryResult | ((call: MockCall) => QueryResult)> = {},
@@ -85,10 +152,7 @@ function stubFor(
     'schedule_events.select': { data: events, error: null },
     // The stamp-guard update: returning a row means we won the write.
     'schedule_events.update': { data: [{ id: 'ev-1' }], error: null },
-    'organization_members.select': {
-      data: [{ user_id: 'user-manager' }],
-      error: null,
-    },
+    'organization_members.select': membersServed(),
     'user_profiles.select': {
       data: [
         { id: 'user-assignee', email: 'assignee@l4l.example', full_name: 'Theo Marsh' },
@@ -412,11 +476,133 @@ describe('GET /api/cron/schedule-reminders', () => {
 
     await GET(buildRequest('Bearer test-cron-secret'));
 
-    const chain = stub.chains.get('organization_members.select')!;
-    const args = stub.chainArgs.get('organization_members.select')!;
-    const i = chain.indexOf('is');
-    expect(i).toBeGreaterThanOrEqual(0);
-    expect(args[i]).toEqual(['impersonation_expires_at', null]);
+    // Every membership read (the managers', and the assignee's since 0384).
+    const chains = stub.chainsAll.get('organization_members.select')!;
+    const argsAll = stub.chainArgsAll.get('organization_members.select')!;
+    expect(chains.length).toBeGreaterThanOrEqual(1);
+    chains.forEach((chain, k) => {
+      const i = chain.indexOf('is');
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argsAll[k]![i]).toEqual(['impersonation_expires_at', null]);
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // THE ASSIGNEE IS REMINDED ONLY WHILE A MEMBER OF THE EVENT'S ORG (0384
+  // review, A1)
+  //
+  // assigned_user_id is the order's driver, copied by autoScheduleFromOrder and
+  // assignDelivery. A manager or an approver could write ANY user id as an
+  // order's driver straight through PostgREST (only assignDelivery checks
+  // membership; the table does not), and a driver can leave the org after
+  // being named. This cron is the one place that contacts the assignee, and it
+  // sent them the event's title and description, and a push, whatever their
+  // org. The managers were always read as accepted, non-act-as members of the
+  // event's org; the assignee now is too.
+  // ═════════════════════════════════════════════════════════════════════════
+  describe('the assignee', () => {
+    it('is not reminded when they are not a member of the event\'s org (another org\'s user named as the driver)', async () => {
+      const stub = stubFor([eventIn(0.5)], {
+        'organization_members.select': membersServed(() => [MANAGER]),
+      });
+      adminHolder.client = stub.client;
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+
+      expect(createNotificationMock).toHaveBeenCalledTimes(1);
+      expect(createNotificationMock.mock.calls[0]![0]).toMatchObject({ userId: 'user-manager' });
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(sendEmailMock.mock.calls[0]![0].to).toBe('manager@l4l.example');
+      // Their profile is not even read for this event.
+      const profileIds = (stub.chainArgsAll.get('user_profiles.select') ?? []).flatMap(
+        (args) => (args.find((a) => a[0] === 'id')?.[1] as string[] | undefined) ?? [],
+      );
+      expect(profileIds).not.toContain('user-assignee');
+    });
+
+    it.each([
+      ['whose invitation is still pending', { ...ASSIGNEE, accepted_at: null }],
+      ['whose membership is an act-as grant', { ...ASSIGNEE, role: 'owner', impersonation_expires_at: '2026-08-25T00:00:00Z' }],
+    ])('is not reminded %s', async (_label, assigneeRow) => {
+      const stub = stubFor([eventIn(0.5)], {
+        'organization_members.select': membersServed(() => [MANAGER, assigneeRow]),
+      });
+      adminHolder.client = stub.client;
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      expect(createNotificationMock.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual([
+        'user-manager',
+      ]);
+      expect(sendEmailMock.mock.calls.map((c) => c[0].to)).toEqual(['manager@l4l.example']);
+    });
+
+    it('a member is still reminded, "Assigned to you", after a read of THIS event\'s org, accepted and not act-as', async () => {
+      const stub = stubFor([eventIn(0.5)]);
+      adminHolder.client = stub.client;
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      const assigneeSend = sendEmailMock.mock.calls.map((c) => c[0]).find((s) => s.to === 'assignee@l4l.example');
+      expect(assigneeSend?.html).toContain('Assigned to you');
+      expect(createNotificationMock.mock.calls.map((c) => (c[0] as { userId: string }).userId).sort()).toEqual([
+        'user-assignee',
+        'user-manager',
+      ]);
+      // The assignee's membership read names the event's org and the assignee.
+      const chains = stub.chainsAll.get('organization_members.select')!;
+      const argsAll = stub.chainArgsAll.get('organization_members.select')!;
+      const k = chains.findIndex((chain, n) =>
+        chain.some((m, i) => m === 'eq' && argsAll[n]![i]![0] === 'user_id'),
+      );
+      expect(k).toBeGreaterThanOrEqual(0);
+      const calls = chains[k]!.map((m, i) => [m, ...argsAll[k]![i]!]);
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          ['eq', 'organization_id', 'org-1'],
+          ['eq', 'user_id', 'user-assignee'],
+          ['not', 'accepted_at', 'is', null],
+          ['is', 'impersonation_expires_at', null],
+        ]),
+      );
+    });
+
+    it('a failed membership read skips the assignee (fails closed), is reported, and still reaches the managers', async () => {
+      const { reportError } = await import('@/lib/error-reporter');
+      const managersOnly = membersServed(() => [MANAGER]);
+      const stub = stubFor([eventIn(0.5)], {
+        'organization_members.select': ((call: MockCall) =>
+          call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'user_id')
+            ? { data: null, error: { message: 'fetch failed' } }
+            : managersOnly(call)) as never,
+      });
+      adminHolder.client = stub.client;
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+      expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+      expect(createNotificationMock.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual([
+        'user-manager',
+      ]);
+      expect(sendEmailMock.mock.calls.map((c) => c[0].to)).toEqual(['manager@l4l.example']);
+      expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tag: 'cron.schedule-reminders.assignee' }),
+      );
+    });
+
+    it('an assignee who is also a manager is reached once, with no second membership read', async () => {
+      const stub = stubFor([eventIn(0.5, { assigned_user_id: 'user-manager' })]);
+      adminHolder.client = stub.client;
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      expect(stub.chainsAll.get('organization_members.select')).toHaveLength(1);
+      expect(createNotificationMock).toHaveBeenCalledTimes(1);
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(sendEmailMock.mock.calls[0]![0].html).toContain('Assigned to you');
+    });
   });
 
   // ═════════════════════════════════════════════════════════════════════════

@@ -2,9 +2,11 @@
 --
 -- SECURITY: a Schedule event's order link (schedule_events.order_request_id)
 -- and its assignee (assigned_user_id) can be set only by the server paths that
--- own them, and a linked order is always in the event's own organization.
--- Grants, the insert and update policies, and two column comments. No table,
--- column, index, function or data change.
+-- own them, and a linked order is always in the event's own organization: the
+-- event cannot move away from its order, and the order cannot move away from
+-- its event. Grants on schedule_events and order_requests, the schedule_events
+-- insert and update policies, and three column comments. No table, column,
+-- index, trigger, function or data change.
 --
 -- ── THE HOLE (pre-existing: 0255 added the columns; the policies are 0033,
 --    0203) ─────────────────────────────────────────────────────────────────
@@ -31,6 +33,20 @@
 --       The reminder cron (api/cron/schedule-reminders) emails and notifies
 --       the assignee whatever their organization, with the event's title as
 --       the subject and its description in the body.
+-- Found by the review of the first cut (local stack with that cut, rolled back):
+--   D1  The ORDER side: order_requests_update checks the caller's rights in
+--       the old org (USING) and in the new org (WITH CHECK), and order_requests
+--       has no org-pin trigger (unlike purchase_orders, inventory_items,
+--       product_groups, maintenance_requests). A manager of both orgs moved an
+--       approved org A order, whose event is in org A, to org B: the event was
+--       then linked across orgs, org A could no longer edit it (the new policy
+--       term), and org B's own event for that order got 23505.
+--   A2  The assignee through the order row: a manager or an orders:approve
+--       holder set order_requests.assigned_delivery_user_id to another org's
+--       user (only assignDelivery checks membership, in the service), and
+--       autoScheduleFromOrder copied it into the event's assignee.
+--   U4  A viewer re-keyed their own event (UPDATE ... SET id), detaching it
+--       from its audit rows and notification links.
 --
 -- ── WHO WRITES THESE TWO COLUMNS (read 2026-09-30 on ae799d94) ────────────
 --   - autoScheduleFromOrder (services/order-requests.ts, admin client):
@@ -58,6 +74,10 @@
 -- and description, 0.1-3.8 s after approval); 1 is a Schedule-page event from
 -- the day 0255 was built that names the same order, same warehouse, linked by
 -- hand. 9 assignees, all on linked events, all the order's driver, all members.
+-- order_requests: 58 columns, the same as local (column-list md5 23e19ed9...);
+-- 0 orders whose warehouse is in another org; 46 drivers, 0 non-members; 1
+-- user is owner, admin or manager of 2+ orgs; no SECURITY INVOKER function
+-- updates order_requests.
 -- No bad existing link: no data change is needed, and every existing row
 -- satisfies the new policy terms.
 --
@@ -72,19 +92,50 @@
 --    so nothing observable changes); authenticated loses TRUNCATE (not
 --    reachable through the API, and it ignores RLS). SELECT, and
 --    authenticated's DELETE, are unchanged.
+--    UPDATE also leaves out id and created_at (U4): no client writes either
+--    (ScheduleService.update and the phone never send them); an insert may
+--    still name them, as before.
 -- 2. POLICIES. schedule_events_insert and schedule_events_update keep every
 --    term they had (restated verbatim) and gain
 --    order_request_in_org(order_request_id, organization_id): 0362's
 --    null-safe predicate (the maintenance-request guard's), unchanged here.
 --    With the grants above a signed-in caller can no longer set the link, so
---    this term is what refuses the one user-client write that could still
---    create a cross-org link: moving a linked event to another org (a member
---    of both orgs, who created it or manages both, updating organization_id),
---    and it keeps holding if a column grant is ever restored. Asked by a
---    signed-in caller, it answers true only to a member of the org it names,
---    so it is no existence oracle for other orgs' order ids. A manual event
---    (no link) passes as before.
+--    a cross-org link could still come only from moving one side of it to
+--    another org. This term refuses the event side (a member of both orgs,
+--    who created the event or manages both, updating its organization_id),
+--    and it keeps holding if a column grant is ever restored; section 4
+--    refuses the order side. Asked by a signed-in caller, it answers true
+--    only to a member of the org it names, so it is no existence oracle for
+--    other orgs' order ids. A manual event (no link) passes as before.
 -- 3. COMMENTS on both columns: who sets them, and that authenticated may not.
+-- 4. order_requests (D1). authenticated loses table-level UPDATE and gets it
+--    back on every column EXCEPT organization_id, so an order cannot be
+--    moved to another org by a signed-in caller (42501). Every user-client
+--    order write leaves it out (services/order-requests.ts: assignDelivery,
+--    the notes save, deny, the pick slip, the packing slip, staging, in
+--    transit; read 2026-09-30), the phone writes orders only through
+--    /api/v1, and every SQL function that updates order_requests (approve,
+--    approve_partial, cancel, the picking functions, the signatures,
+--    revise_order_needed_by, ...) is SECURITY DEFINER and writes as its
+--    owner; production and local have no SECURITY INVOKER one. The admin
+--    client (the public order link, the portal, the return prompt) keeps its
+--    table grants. INSERT, SELECT, the order_requests policies and every
+--    other column's UPDATE are unchanged (parity). created_at and
+--    warehouse_id stay editable on purpose: whether an order's date and
+--    warehouse are fixed after submission is the open owner question Q4
+--    (Book Order Totals plan), pinned as current behaviour by pgTAP 0379
+--    C1/C2; only the organization, a tenant boundary, is fixed here, under
+--    the security rule. A column grant, not a pin trigger, because this
+--    migration changes grants, policies and comments only; a Q4 guard can be
+--    a trigger in its own migration.
+--
+-- A2 (the order's driver) is closed where it is used, not here: the reminder
+-- cron, the one place that contacts an event's assignee, now adds them only
+-- while an accepted, non-act-as member of the event's org (web, same change),
+-- which also covers a driver who left the org after being named. A write-time
+-- check would need a trigger (a WITH CHECK term cannot tell a changed driver
+-- from a driver who left later, so it would block every later write to that
+-- order). Production has 46 orders with a driver, none a non-member.
 --
 -- ── NOT DONE, AND WHY ─────────────────────────────────────────────────────
 --   - A WITH CHECK term alone ("the order is in the event's org, and the
@@ -100,21 +151,29 @@
 --     touch every event write, the reminder cron's included. A composite
 --     foreign key (order_request_id, organization_id) would be the structural
 --     form, but it is table DDL, which this migration does not do.
---   - organization_id stays updatable (parity); the policy term above is what
---     keeps a linked event in its order's org.
+--   - schedule_events.organization_id stays updatable (parity); the policy
+--     term above is what keeps a linked event in its order's org.
+--   - order_requests: anon keeps its table grants (it has no policy on the
+--     table, so it reaches no row) and authenticated keeps TRUNCATE (not
+--     reachable through the API); the other columns a signed-in approver may
+--     write are unchanged. Neither is part of this fix.
 --
--- ── A NEW COLUMN ON schedule_events ───────────────────────────────────────
+-- ── A NEW COLUMN ON schedule_events OR order_requests ─────────────────────
 -- Column grants do not follow new columns. A column the Schedule page or the
 -- phone must write needs `grant insert (col), update (col) on
 -- public.schedule_events to authenticated` in its migration; a server-owned
 -- one needs nothing. pgTAP 0384 G1 fails until one of the two is decided.
+-- Likewise a new order_requests column the app updates through the user
+-- client needs `grant update (col) on public.order_requests to
+-- authenticated` (inserts keep the table grant); pgTAP 0384 GO1 fails until
+-- it is granted (organization_id is the one column left out).
 --
 -- ── PROD PUSH NOTE ────────────────────────────────────────────────────────
 -- GRANT, REVOKE, DROP/CREATE POLICY and COMMENT only: catalog changes, no
 -- rewrite, no data. The policy DDL takes a brief ACCESS EXCLUSIVE lock on
--- schedule_events (27 rows); lock_timeout makes the push fail fast instead of
--- queueing behind a long reader (retry is the remedy). Nothing raises
--- 40001/40P01.
+-- schedule_events (27 rows), and the order_requests grants a brief lock on
+-- order_requests; lock_timeout makes the push fail fast instead of queueing
+-- behind a long reader (retry is the remedy). Nothing raises 40001/40P01.
 
 -- PLAIN `set`, not `set local` (0303/0358/0370/0374/0377/0378/0383). Reset at the end.
 set lock_timeout = '5s';
@@ -128,9 +187,10 @@ grant insert (id, organization_id, title, starts_at, ends_at, all_day, location_
               created_at, updated_at, bundle_id, bundle_quantity, bundle_warehouse_id,
               reminded_24h_at, reminded_1h_at)
   on table public.schedule_events to authenticated;
-grant update (id, organization_id, title, starts_at, ends_at, all_day, location_text,
+-- UPDATE also leaves out id and created_at (U4).
+grant update (organization_id, title, starts_at, ends_at, all_day, location_text,
               warehouse_id, requester_name, details, status, created_by, updated_by,
-              created_at, updated_at, bundle_id, bundle_quantity, bundle_warehouse_id,
+              updated_at, bundle_id, bundle_quantity, bundle_warehouse_id,
               reminded_24h_at, reminded_1h_at)
   on table public.schedule_events to authenticated;
 
@@ -180,5 +240,27 @@ comment on column public.schedule_events.assigned_user_id is
   'Who the event is for; the reminder cron emails and notifies this user. Set by the server only: '
   'autoScheduleFromOrder and assignDelivery (admin client) copy the order''s delivery driver. authenticated '
   'holds no INSERT or UPDATE on this column (0384).';
+
+-- ── 4. order_requests: an order's organization is fixed ───────────────────
+revoke update on table public.order_requests from authenticated;
+grant update (id, warehouse_id, status, requester_user_id, requester_email, requester_name,
+              requester_org_label, approved_by, approved_at, denied_reason, packaging_at,
+              ready_at, delivered_at, cancelled_at, cancelled_by, notes, internal_notes,
+              source, created_at, updated_at, confirmation_token_hash, confirmation_token_expires_at,
+              fulfillment_type, pickup_location_notes, requester_phone, assigned_picker_id,
+              pick_slip_generated_at, pick_slip_generated_by, picking_completed_at,
+              picking_completed_by, packing_slip_generated_at, packing_slip_generated_by,
+              staged_at, staged_by, assigned_delivery_user_id, assigned_delivery_by,
+              assigned_delivery_at, in_transit_at, in_transit_by, signature_token,
+              signature_token_expires_at, signed_by_name, signed_by_email, signature_data_url,
+              signed_at, completed_at, completed_by, delivery_charter_id, return_token,
+              picking_claimed_at, picking_claimed_by, signature_method, customer_id,
+              order_number, needed_by, return_prompt_sent_at, public_track_token)
+  on table public.order_requests to authenticated;
+
+comment on column public.order_requests.organization_id is
+  'The organization the order belongs to. Fixed once the order exists: authenticated holds no UPDATE on it '
+  '(0384), so an order (and the Schedule event linked to it) cannot be moved to another organization by a '
+  'signed-in caller. The admin client and SECURITY DEFINER functions never change it.';
 
 reset lock_timeout;
