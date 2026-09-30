@@ -41,12 +41,19 @@ import {
   type MobileExceptionOccurrence,
 } from '@/lib/exceptions-api';
 import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 /** The sheet's title is a heading in a bottom sheet: it grows with Dynamic
  *  Type up to the display ceiling, never so far that it pushes the numbers
  *  and the buttons off a small phone. */
 const TITLE_CAP = capTo(16, TYPE_CEILING.display);
+
+/** The note's text stops at the input ceiling, as every bordered input's
+ *  does (ui/field.tsx): uncapped, its placeholder wrapped to four lines at
+ *  AX5 and the empty field alone was taller than the body with the keyboard
+ *  up (216 pt in 202). */
+const NOTE_FONT_CAP = capTo(15, TYPE_CEILING.input);
 
 /** The words for a refused confirm when the screen sent no context. */
 const FALLBACK_ERROR_CONTEXT: ExceptionSheetConfirm['errorContext'] = {
@@ -93,6 +100,13 @@ const FALLBACK_ERROR_CONTEXT: ExceptionSheetConfirm['errorContext'] = {
  * body. The sheet is never taller than the space above the keyboard
  * (exceptionSheetLayout), so the title, Close and the buttons stay on screen
  * on a small phone at the largest text size, with the keyboard up.
+ *
+ * The keyboard (lib/use-sheet-keyboard.ts; R1 walk 2026-09-29): the body
+ * shrinks when the keyboard comes up, after the note took focus, so the note
+ * is scrolled back into view each time the body's window changes under it
+ * (at AX5 on an iPhone 17 it had fallen wholly out of view). A drag on the
+ * body, or a tap on the sheet outside the note and its buttons (the title
+ * included), puts the keyboard away without sending anything.
  */
 export function ExceptionNoteSheet({
   visible,
@@ -178,6 +192,7 @@ function SheetContent({
     availableHeight,
     topInset: insets.top,
   });
+  const [attachBody, kb] = useSheetKeyboard();
   // The last act attempt that did not succeed. Its clientEventId is reused
   // ONLY for a resend of the same action and note (clientEventIdFor); an
   // edited note is a new request, so it is never dropped as a "replay" of the
@@ -298,7 +313,11 @@ function SheetContent({
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
           ]}
         />
-        <View style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}>
+        <View
+          onStartShouldSetResponder={kb.claimTapOutside}
+          onResponderRelease={kb.onTapOutside}
+          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+        >
           <View style={styles.header}>
             <Body
               size={16}
@@ -327,9 +346,16 @@ function SheetContent({
           </View>
 
           {/* The one part that scrolls, and the one that gives way: it
-              shrinks before the title, Close or the buttons leave the screen. */}
+              shrinks before the title, Close or the buttons leave the screen,
+              and it keeps the focused note in view as it does. */}
           <ScrollView
+            ref={attachBody}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            scrollEventThrottle={16}
+            onScroll={kb.onBodyScroll}
+            onLayout={kb.onBodyLayout}
+            onContentSizeChange={kb.onBodyContentSizeChange}
             contentContainerStyle={{ gap: 12 }}
             style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
           >
@@ -373,7 +399,7 @@ function SheetContent({
                 </Body>
               </>
             ) : null}
-            <View style={{ gap: 6 }}>
+            <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
               <FieldLabel>{mode === 'note' ? 'NOTE' : 'NOTE (OPTIONAL)'}</FieldLabel>
               <TextInput
                 value={note}
@@ -381,6 +407,10 @@ function SheetContent({
                   setNote(t);
                   setError(null);
                 }}
+                onFocus={kb.onNoteFocus}
+                onBlur={kb.onNoteBlur}
+                onLayout={kb.onNoteLayout}
+                maxFontSizeMultiplier={NOTE_FONT_CAP}
                 multiline
                 editable={!submitting}
                 placeholder={

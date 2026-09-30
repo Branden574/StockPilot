@@ -11,8 +11,10 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   EXCEPTION_EVIDENCE_CAP_COPY,
@@ -37,8 +39,10 @@ import {
   removeEvidence,
   type MobileEvidencePhoto,
 } from '@/lib/exception-evidence';
+import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { photoPermissionDenial } from '@/lib/maintenance-request-photos';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -55,7 +59,25 @@ import { useTheme } from '@/lib/use-theme';
  *   - EvidenceRemoveSheet: an optional reason, and "Remove photo". A soft
  *     remove: the photo leaves the list, the timeline records who removed it
  *     and why, and the stored file is kept (owner decision F1 Q7).
+ *
+ * Both size and scroll like the Acknowledge sheet (R1 walk 2026-09-29, iPhone
+ * 17 at AX5): with the keyboard up a fixed-height body pushed the sheet off
+ * the top of the screen, title and Close with it, and nothing but the sheet's
+ * own buttons put the keyboard away. Now the sheet is never taller than the
+ * space above the keyboard (exceptionSheetLayout), the title stops growing at
+ * the display ceiling, the focused note is kept in view as the body shrinks,
+ * and a drag on the body or a tap on the sheet outside the note puts the
+ * keyboard away (lib/use-sheet-keyboard.ts).
  */
+
+/** The title grows with Dynamic Type up to the display ceiling (as the
+ *  Acknowledge sheet's does). */
+const TITLE_CAP = capTo(16, TYPE_CEILING.display);
+
+/** The note's and the reason's text stop at the input ceiling, as every
+ *  bordered input's does (ui/field.tsx), so the empty field fits the body
+ *  with the keyboard up at the largest text sizes. */
+const NOTE_FONT_CAP = capTo(15, TYPE_CEILING.input);
 
 export interface PickedEvidencePhoto {
   uri: string;
@@ -106,6 +128,17 @@ function AddSheetContent({
   const [note, setNote] = React.useState('');
   const [photos, setPhotos] = React.useState<PickedEvidencePhoto[]>([]);
   const [picking, setPicking] = React.useState(false);
+  const { height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // The height the keyboard-avoiding wrapper leaves, measured; null until
+  // the first layout pass.
+  const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
+  const layout = exceptionSheetLayout({
+    windowHeight: height,
+    availableHeight,
+    topInset: insets.top,
+  });
+  const [attachBody, kb] = useSheetKeyboard();
   const text = evidenceTextState(note);
   // Offline first: nothing is queued for later (online only, F1 Q6).
   const reason = !online ? EXCEPTION_EVIDENCE_OFFLINE_COPY : text.tooLong ? EVIDENCE_NOTE_TOO_LONG_COPY : null;
@@ -201,6 +234,7 @@ function AddSheetContent({
         style={{ flex: 1, justifyContent: 'flex-end' }}
         accessibilityViewIsModal
         onAccessibilityEscape={onClose}
+        onLayout={(e) => setAvailableHeight(e.nativeEvent.layout.height)}
       >
         <Pressable
           onPress={onClose}
@@ -212,9 +246,19 @@ function AddSheetContent({
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
           ]}
         />
-        <View style={[styles.sheet, { backgroundColor: c.card }]}>
+        <View
+          onStartShouldSetResponder={kb.claimTapOutside}
+          onResponderRelease={kb.onTapOutside}
+          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+        >
           <View style={styles.header}>
-            <Body size={16} color={c.ink} style={{ fontFamily: FONT.display, flex: 1 }} accessibilityRole="header">
+            <Body
+              size={16}
+              color={c.ink}
+              style={{ fontFamily: FONT.display, flex: 1 }}
+              accessibilityRole="header"
+              maxFontSizeMultiplier={TITLE_CAP}
+            >
               Add a photo
             </Body>
             <Pressable
@@ -227,7 +271,17 @@ function AddSheetContent({
             </Pressable>
           </View>
 
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 12 }} style={{ maxHeight: 460 }}>
+          <ScrollView
+            ref={attachBody}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            scrollEventThrottle={16}
+            onScroll={kb.onBodyScroll}
+            onLayout={kb.onBodyLayout}
+            onContentSizeChange={kb.onBodyContentSizeChange}
+            contentContainerStyle={{ gap: 12 }}
+            style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
+          >
             {photos.length > 0 ? (
               <View style={styles.previews}>
                 {photos.map((p, i) => (
@@ -268,11 +322,15 @@ function AddSheetContent({
                 </Body>
               ) : null}
             </View>
-            <View style={{ gap: 6 }}>
+            <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
               <FieldLabel>NOTE (OPTIONAL)</FieldLabel>
               <TextInput
                 value={note}
                 onChangeText={setNote}
+                onFocus={kb.onNoteFocus}
+                onBlur={kb.onNoteBlur}
+                onLayout={kb.onNoteLayout}
+                maxFontSizeMultiplier={NOTE_FONT_CAP}
                 multiline
                 placeholder="What the photo shows"
                 placeholderTextColor={c.ink4}
@@ -364,6 +422,17 @@ function RemoveSheetContent({
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // The height the keyboard-avoiding wrapper leaves, measured; null until
+  // the first layout pass.
+  const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
+  const layout = exceptionSheetLayout({
+    windowHeight: height,
+    availableHeight,
+    topInset: insets.top,
+  });
+  const [attachBody, kb] = useSheetKeyboard();
   const text = evidenceTextState(reason);
   const disabledReason = !online
     ? EVIDENCE_REMOVE_OFFLINE_COPY
@@ -390,6 +459,7 @@ function RemoveSheetContent({
         style={{ flex: 1, justifyContent: 'flex-end' }}
         accessibilityViewIsModal
         onAccessibilityEscape={onClose}
+        onLayout={(e) => setAvailableHeight(e.nativeEvent.layout.height)}
       >
         <Pressable
           onPress={onClose}
@@ -401,9 +471,19 @@ function RemoveSheetContent({
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
           ]}
         />
-        <View style={[styles.sheet, { backgroundColor: c.card }]}>
+        <View
+          onStartShouldSetResponder={kb.claimTapOutside}
+          onResponderRelease={kb.onTapOutside}
+          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+        >
           <View style={styles.header}>
-            <Body size={16} color={c.ink} style={{ fontFamily: FONT.display, flex: 1 }} accessibilityRole="header">
+            <Body
+              size={16}
+              color={c.ink}
+              style={{ fontFamily: FONT.display, flex: 1 }}
+              accessibilityRole="header"
+              maxFontSizeMultiplier={TITLE_CAP}
+            >
               Remove this photo?
             </Body>
             <Pressable
@@ -416,7 +496,17 @@ function RemoveSheetContent({
             </Pressable>
           </View>
 
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 12 }} style={{ maxHeight: 440 }}>
+          <ScrollView
+            ref={attachBody}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            scrollEventThrottle={16}
+            onScroll={kb.onBodyScroll}
+            onLayout={kb.onBodyLayout}
+            onContentSizeChange={kb.onBodyContentSizeChange}
+            contentContainerStyle={{ gap: 12 }}
+            style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
+          >
             <Image
               source={{ uri: photo.thumbUrl ?? photo.url }}
               style={styles.preview}
@@ -425,7 +515,7 @@ function RemoveSheetContent({
               accessibilityLabel={`The photo to remove. ${exceptionEvidenceAddedByCopy(photo.uploadedBy.label)}`}
             />
             <Body size={14}>{EXCEPTION_EVIDENCE_REMOVE_COPY}</Body>
-            <View style={{ gap: 6 }}>
+            <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
               <FieldLabel>REASON (OPTIONAL)</FieldLabel>
               <TextInput
                 value={reason}
@@ -433,6 +523,10 @@ function RemoveSheetContent({
                   setReason(t);
                   setError(null);
                 }}
+                onFocus={kb.onNoteFocus}
+                onBlur={kb.onNoteBlur}
+                onLayout={kb.onNoteLayout}
+                maxFontSizeMultiplier={NOTE_FONT_CAP}
                 multiline
                 editable={!submitting}
                 placeholder="Why it is being removed"

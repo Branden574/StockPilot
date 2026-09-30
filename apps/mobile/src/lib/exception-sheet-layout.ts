@@ -1,6 +1,8 @@
 /**
- * THE SIZE OF THE EXCEPTION SHEET (Acknowledge, Add note, Confirm this
- * count; review 2026-09-29).
+ * THE SIZE OF THE EXCEPTION SHEETS (Acknowledge, Add note, Confirm this
+ * count; review 2026-09-29. Add a photo and Remove this photo? since the R1
+ * walk, where a fixed 460 pt body ran them off the top at AX5 with the
+ * keyboard up).
  *
  * The sheet is pinned to the bottom of the screen, so anything taller than the
  * space it has runs off the TOP, taking the title, Close and the confirm's
