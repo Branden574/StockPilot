@@ -15,6 +15,7 @@ import {
   putAwayTargets,
   SHORTFALL_PO_FORBIDDEN_COPY,
   shortfallPoView,
+  shortfallSupplierIds,
   type OrderReadinessAssessment,
 } from '@stockpilot/core';
 
@@ -670,7 +671,8 @@ describe('ReadinessStrip — Draft PO for what is short (F2-5)', () => {
     expect(button.querySelector('svg')).not.toBeNull();
     await user.click(button);
     expect(screen.getByRole('dialog', { name: 'Draft a PO for what is short' })).toBeInTheDocument();
-    expect(loadShortfallPo).toHaveBeenCalledWith({ orderId: ORDER });
+    // The names of the suppliers its rows name, by id (F2-5 review).
+    expect(loadShortfallPo).toHaveBeenCalledWith({ orderId: ORDER, supplierIds: shortfallSupplierIds(offerView()) });
     expect(draftShortfallPos).not.toHaveBeenCalled();
     expect(routerRefresh).not.toHaveBeenCalled();
     expect(screen.queryByTestId('readiness-shortfall-po-permission')).toBeNull();
