@@ -6,6 +6,7 @@ import {
   describeReadinessRollup,
   HOLD_AVAILABLE_STOCK_LABEL,
   READINESS_NEEDS_CONNECTION_COPY,
+  SHORTFALL_PO_PHONE_STRIP_HINT,
   type OrderReadinessResult,
   type PutAwayOffer,
 } from '@stockpilot/core';
@@ -63,8 +64,6 @@ import { useTheme } from '@/lib/use-theme';
  * sentence instead for anyone else ("Drafting a PO needs a manager with
  * purchase-order access."). 44 pt, disabled while anything runs and offline.
  */
-/** What "Draft PO for what is short" does, for VoiceOver. */
-export const SHORTFALL_PO_STRIP_HINT = 'Opens a sheet to draft purchase orders for what this order is short';
 /** What "Put away N items" does, for VoiceOver. */
 export const PUT_AWAY_STRIP_HINT = 'Opens Staging with these items, to put them away';
 
@@ -244,7 +243,7 @@ export function OrderReadinessSummary({
             disabled={offline || checking || shortfallPo.disabled}
             onPress={shortfallPo.onPress}
             accessibilityLabel={shortfallPo.offer.accessibilityLabel}
-            accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : SHORTFALL_PO_STRIP_HINT}
+            accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : SHORTFALL_PO_PHONE_STRIP_HINT}
             // 44 pt, not the small Button's 36.
             style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
           >

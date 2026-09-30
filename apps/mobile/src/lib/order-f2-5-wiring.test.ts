@@ -124,11 +124,13 @@ describe('the order screen: who is offered it, and how the sheet opens', () => {
   });
 
   // Mutations caught: the two reads made one after the other (a serial round
-  // trip on the tap), the sheet opened offline, the supplier names read with
-  // the module off, the screen's rows used when a fresh read answered.
-  it('opening reads readiness and the supplier names together, then opens on the tested opening', () => {
+  // trip on the tap), the sheet opened offline, the supplier names read for
+  // the whole organization (pattern #3) instead of the shown rows' ids, a
+  // supplier the fresh rows name left unread, the screen's rows used when a
+  // fresh read answered.
+  it('opening reads readiness and the shown rows’ supplier names together, then opens on the tested opening', () => {
     expect(bodyOf(screenSrc, SCREEN_FILE, 'openShortfallSheet')).toBe(
-      "{ if (!order || !orgId || offline || acting !== null) return; if (!shortfallSheetOpening(order.readiness, null)) return; setActing('shortfall-po'); try { const [fresh, supplierNames] = await Promise.all([ readOrderReadiness(supabase, order.id), readShortfallSupplierNames(supabase, { organizationId: orgId, suppliersModule: enabledModules.has('suppliers') }) ]); const opening = shortfallSheetOpening(order.readiness, fresh); if (!opening) return; setShortfallSheet({ orderId: order.id, orderLabel: opening.view.orderNumber, view: opening.view, notice: opening.notice, supplierNames, timeZone: order.orgTimezone }); if (opening.changed) void load(); } finally { setActing(null); } }",
+      "{ if (!order || !orgId || offline || acting !== null) return; const shown = shortfallSheetOpening(order.readiness, null); if (!shown) return; setActing('shortfall-po'); try { const [fresh, firstNames] = await Promise.all([ readOrderReadiness(supabase, order.id), readShortfallSupplierNames(supabase, { organizationId: orgId, supplierIds: shortfallSupplierIds(shown.view) }) ]); const opening = shortfallSheetOpening(order.readiness, fresh); if (!opening) return; let supplierNames = firstNames; const more = supplierNames ? missingShortfallSupplierIds(opening.view, supplierNames) : []; if (supplierNames && more.length > 0) { const extra = await readShortfallSupplierNames(supabase, { organizationId: orgId, supplierIds: more }); supplierNames = extra ? new Map([...supplierNames, ...extra]) : null; } setShortfallSheet({ orderId: order.id, orderLabel: opening.view.orderNumber, view: opening.view, notice: opening.notice, supplierNames, timeZone: order.orgTimezone }); if (opening.changed) void load(); } finally { setActing(null); } }",
     );
   });
 
@@ -166,7 +168,7 @@ describe('the order screen: who is offered it, and how the sheet opens', () => {
 describe('the readiness card: the button, or core’s sentence', () => {
   it('the button is core’s label and spoken name, 44 pt, disabled offline (with the reason) or while anything runs', () => {
     expect(summary).toMatch(
-      /\{shortfallPo && shortfallPo\.offer\.kind === 'button' \? \(\s*<Button\s+size="sm"\s+variant="outline"\s+disabled=\{offline \|\| checking \|\| shortfallPo\.disabled\}\s+onPress=\{shortfallPo\.onPress\}\s+accessibilityLabel=\{shortfallPo\.offer\.accessibilityLabel\}\s+accessibilityHint=\{offline \? READINESS_NEEDS_CONNECTION_COPY : SHORTFALL_PO_STRIP_HINT\}\s+style=\{\{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP \}\}\s*>\s*\{shortfallPo\.offer\.label\}/,
+      /\{shortfallPo && shortfallPo\.offer\.kind === 'button' \? \(\s*<Button\s+size="sm"\s+variant="outline"\s+disabled=\{offline \|\| checking \|\| shortfallPo\.disabled\}\s+onPress=\{shortfallPo\.onPress\}\s+accessibilityLabel=\{shortfallPo\.offer\.accessibilityLabel\}\s+accessibilityHint=\{offline \? READINESS_NEEDS_CONNECTION_COPY : SHORTFALL_PO_PHONE_STRIP_HINT\}\s+style=\{\{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP \}\}\s*>\s*\{shortfallPo\.offer\.label\}/,
     );
     expect(summary).toMatch(
       /: shortfallPo\?\.offer\.kind === 'needs_permission' \? \(\s*<Body size=\{12\.5\} muted>\s*\{shortfallPo\.offer\.message\}/,
@@ -209,8 +211,10 @@ describe('the draft sheet', () => {
   // the choices dropped after "Stock or POs changed", a second send while the
   // first is on its way.
   it('Draft: the tested submit with the request’s key, the refusal said in place and announced, the choices kept', () => {
+    // Review: the refusal names what it unticked (adoptShortfallRefusal, the
+    // web's words), and that is what is shown and announced.
     expect(bodyOf(sheetSrc, SHEET_FILE, 'draft')).toBe(
-      '{ if (drafting.current || !sheet.canDraft) return; drafting.current = true; const lines = sheet.lines; keyRef.current = shortfallIdempotencyKey(keyRef.current, orderId, lines, mintShortfallKey); setBusy(true); setError(null); setNotice(null); const result = await submitShortfallPo({ draft: draftOrderShortfallPos, reread: (id) => readOrderReadiness(supabase, id) }, { orderId, lines, key: keyRef.current, shown: view }); drafting.current = false; setBusy(false); if (result.kind === \'created\') { setCreated(result); AccessibilityInfo.announceForAccessibility(result.message); onDrafted(); return; } setError(result.message); AccessibilityInfo.announceForAccessibility(result.message); if (result.dropKey) keyRef.current = null; if (result.view) { const next = adoptShortfallView(selection, result.view); setView(next.view); setSelection(next.selection); } if (result.closed) setClosed(true); if (result.refresh) onRefresh(); }',
+      "{ if (drafting.current || !sheet.canDraft) return; drafting.current = true; const lines = sheet.lines; keyRef.current = shortfallIdempotencyKey(keyRef.current, orderId, lines, mintShortfallKey); setBusy(true); setError(null); setNotice(null); const result = await submitShortfallPo({ draft: draftOrderShortfallPos, reread: (id) => readOrderReadiness(supabase, id) }, { orderId, lines, key: keyRef.current, shown: view }); drafting.current = false; setBusy(false); if (result.kind === 'created') { setCreated(result); AccessibilityInfo.announceForAccessibility(result.message); onDrafted(); return; } const next = adoptShortfallRefusal(selection, view, result); setError(next.message); AccessibilityInfo.announceForAccessibility(next.message); if (result.dropKey) keyRef.current = null; setView(next.view); setSelection(next.selection); if (result.closed) setClosed(true); if (result.refresh) onRefresh(); }",
     );
     expect(sheetCode).toContain('const keyRef = React.useRef<ShortfallKeyState | null>(null);');
     expect(sheetCode).toContain(
@@ -231,7 +235,10 @@ describe('the draft sheet', () => {
     );
     expect(sheetCode).toMatch(/\{offline && !finished \? \(\s*<Body size=\{12\.5\} muted>\s*\{READINESS_NEEDS_CONNECTION_COPY\}/);
     expect(bodyOf(sheetSrc, SHEET_FILE, 'requestClose')).toBe('{ if (busy) return; onClose(); }');
-    expect(bodyOf(sheetSrc, SHEET_FILE, 'edit')).toBe('{ setSelection(next); setError(null); }');
+    // Review (identical on web and phone): any edit drops the key (an edit
+    // changed back is a new request, as on the web) and clears the refusal.
+    // Mutation caught: an edit that keeps the key.
+    expect(bodyOf(sheetSrc, SHEET_FILE, 'edit')).toBe('{ setSelection(next); keyRef.current = null; setError(null); }');
   });
 
   it('every word is core’s or the tested phone words: title, rows, problems, footer, the result and the review sentence', () => {
@@ -252,12 +259,12 @@ describe('the draft sheet', () => {
       '{r.label}',
       '{r.supplier}',
       '{SHORTFALL_PO_PHONE_REVIEW_COPY}',
-      '<FieldLabel>{SHORTFALL_QUANTITY_LABEL}</FieldLabel>',
+      '<FieldLabel>{SHORTFALL_PO_QUANTITY_LABEL}</FieldLabel>',
     ]) {
       expect(sheetCode).toContain(shown);
     }
-    // No literal sentence of its own in what it renders (the scrim's and the
-    // X's spoken "Close" are the only literals).
+    // No literal sentence of its own in what it renders (every word, the
+    // spoken "Close" included, is core's).
     const sf = parseTsx(sheetSrc, SHEET_FILE);
     const literals: string[] = [];
     walkJsx(sf, (el) => {
@@ -299,7 +306,7 @@ describe('the draft sheet', () => {
       expect(hasContent(scrim!)).toBe(false);
       for (const prop of ['onPress', 'onAccessibilityTap']) expect(a(scrim!, prop)).toBe('requestClose');
       expect(a(scrim!, 'accessibilityRole')).toBe('button');
-      expect(a(scrim!, 'accessibilityLabel')).toBe('Close');
+      expect(a(scrim!, 'accessibilityLabel')).toBe('SHORTFALL_PO_CLOSE_LABEL');
       expect(a(scrim!, 'style')).toContain('StyleSheet.absoluteFill');
       expect(tagOf(card!, sf)).toBe('View');
       expect(a(card!, 'onPress')).toBeUndefined();
@@ -401,7 +408,7 @@ describe('the draft sheet', () => {
       const created = all.find((n) => a(n.el, 'onPress') === '() => onOpenDraft(r.route)')!;
       expect(created).toBeDefined();
       expect(a(created.el, 'accessibilityLabel')).toBe('r.accessibilityLabel');
-      expect(a(created.el, 'accessibilityHint')).toBe('SHORTFALL_OPEN_DRAFT_HINT');
+      expect(a(created.el, 'accessibilityHint')).toBe('SHORTFALL_PO_OPEN_DRAFT_HINT');
       expect(sheetCode).toContain('{shortfallCreatedRows(created.result, supplierNames).map((r) => (');
       const review = sheetCode.indexOf('{SHORTFALL_PO_PHONE_REVIEW_COPY}');
       expect(review).toBeGreaterThan(sheetCode.indexOf('onOpenDraft(r.route)'));

@@ -8,7 +8,9 @@ import {
   canDraftShortfallPo,
   err,
   isManagerOrAbove,
+  missingShortfallSupplierIds,
   ok,
+  readShortfallSupplierRows,
   READINESS_FORBIDDEN_COPY,
   READINESS_ORDER_NOT_FOUND_COPY,
   SHORTFALL_PO_FAILED_COPY,
@@ -19,6 +21,7 @@ import {
   type ActionResult,
   type OrderReadinessResult,
   type ShortfallPoResult,
+  type ShortfallSupplierName,
 } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
@@ -116,7 +119,12 @@ export async function draftShortfallPosAction(
   }
 }
 
-const loadShortfallSchema = z.object({ orderId: z.string().uuid() });
+const loadShortfallSchema = z.object({
+  orderId: z.string().uuid(),
+  // The suppliers the dialog's rows name (core shortfallSupplierIds): read
+  // by id, so never an organization-wide list. At most one per line.
+  supplierIds: z.array(z.string().uuid()).max(SHORTFALL_PO_MAX_LINES).default([]),
+});
 
 /** Nothing read: the dialog keeps what it has. */
 const NOTHING_LOADED: ShortfallPoLoad = { view: null, supplierNames: null };
@@ -126,10 +134,13 @@ const NOTHING_LOADED: ShortfallPoLoad = { view: null, supplierNames: null };
  * opens, and again after a draft is refused because the numbers moved
  * (shortfall_changed): the order's readiness read again, as core's shortfall
  * view (shortfallPoView, the same the page built the dialog from), and the
- * organization's supplier names for its rows (SuppliersService.listForLookups,
- * the lookup every PO page uses: [] with the Suppliers module off). Both in
- * parallel. The page itself reads neither for this, so opening an order costs
- * nothing more.
+ * names of the suppliers its rows name, by id, archived ones included
+ * (SuppliersService.namesByIds: the draft goes to the item's supplier as
+ * recorded, so an archived one is named as archived, never "couldn't be
+ * loaded"). Readiness and the names of the ids the dialog sent are read in
+ * parallel; a supplier the fresh view names beyond those is read after (rare:
+ * an item's supplier changed meanwhile). The page itself reads neither for
+ * this, so opening an order costs nothing more.
  *
  * READ ONLY, and it never throws: each half that could not be read is null
  * (the service reports its own faults; a failed supplier read is reported
@@ -159,22 +170,26 @@ export async function loadShortfallPoAction(input: z.input<typeof loadShortfallS
     purchaseOrdersModule: isModuleEnabled(ctx, 'purchase_orders'),
   });
   if (!allowed) return NOTHING_LOADED;
+  const suppliersSvc = new SuppliersService(ctx);
   const [readiness, suppliers] = await Promise.allSettled([
     new OrderReadinessService(ctx).result(parsed.data.orderId),
-    new SuppliersService(ctx).listForLookups(),
+    suppliersSvc.namesByIds(parsed.data.supplierIds),
   ]);
   const view =
     readiness.status === 'fulfilled' && readiness.value.state === 'ok'
       ? shortfallPoView(readiness.value.assessment)
       : null;
-  let supplierNames: Record<string, string> | null = null;
-  if (suppliers.status === 'fulfilled') {
-    supplierNames = {};
-    for (const s of suppliers.value as Array<{ id: string; name: string | null }>) {
-      if (typeof s.id === 'string' && typeof s.name === 'string') supplierNames[s.id] = s.name;
+  let supplierNames: Record<string, ShortfallSupplierName> | null = null;
+  try {
+    if (suppliers.status === 'rejected') throw suppliers.reason;
+    supplierNames = readShortfallSupplierRows(suppliers.value) ?? {};
+    const more = view ? missingShortfallSupplierIds(view, supplierNames) : [];
+    if (more.length > 0) {
+      supplierNames = { ...supplierNames, ...(readShortfallSupplierRows(await suppliersSvc.namesByIds(more)) ?? {}) };
     }
-  } else {
-    void reportError(suppliers.reason, {
+  } catch (e) {
+    supplierNames = null;
+    void reportError(e, {
       tag: 'actions.orders.shortfall_po_suppliers',
       level: 'warning',
       organizationId: ctx.organizationId,

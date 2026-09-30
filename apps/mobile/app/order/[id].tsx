@@ -129,6 +129,7 @@ import {
   shortfallPoOffer,
   shortfallSheetOpening,
   type ShortfallDraftRoute,
+  type ShortfallSupplierNameMap,
 } from '@/lib/order-shortfall-po';
 import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
@@ -193,6 +194,8 @@ import {
   type PartialPreview,
   type OrderStatus,
   type ShortfallPoView,
+  missingShortfallSupplierIds,
+  shortfallSupplierIds,
   type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
@@ -505,7 +508,7 @@ export default function OrderDetail() {
     orderLabel: string | null;
     view: ShortfallPoView;
     notice: string | null;
-    supplierNames: ReadonlyMap<string, string>;
+    supplierNames: ShortfallSupplierNameMap;
     timeZone: string | null;
   } | null>(null);
 
@@ -953,27 +956,33 @@ export default function OrderDetail() {
   }
 
   /**
-   * F2-5 "Draft PO for what is short": reads readiness again and the
-   * organization's supplier names together (the web dialog's reads on open;
-   * one round trip, never serial), then opens the sheet on the fresh rows,
-   * saying so when they moved (the screen reloads behind it then). A failed
-   * readiness read opens on the rows the screen shows; a failed names read
-   * names no supplier. Nothing is written here, and nothing opens an email.
+   * F2-5 "Draft PO for what is short": reads readiness again and the names of
+   * the suppliers the shown rows name (by id, archived ones included) together
+   * (the web dialog's reads on open; one round trip, never serial), then
+   * opens the sheet on the fresh rows, saying so when they moved (the screen
+   * reloads behind it then). A supplier the fresh rows name beyond those is
+   * read after (rare). A failed readiness read opens on the rows the screen
+   * shows; a failed names read says "couldn't be loaded" (core). Nothing is
+   * written here, and nothing opens an email.
    */
   async function openShortfallSheet() {
     if (!order || !orgId || offline || acting !== null) return;
-    if (!shortfallSheetOpening(order.readiness, null)) return;
+    const shown = shortfallSheetOpening(order.readiness, null);
+    if (!shown) return;
     setActing('shortfall-po');
     try {
-      const [fresh, supplierNames] = await Promise.all([
+      const [fresh, firstNames] = await Promise.all([
         readOrderReadiness(supabase, order.id),
-        readShortfallSupplierNames(supabase, {
-          organizationId: orgId,
-          suppliersModule: enabledModules.has('suppliers'),
-        }),
+        readShortfallSupplierNames(supabase, { organizationId: orgId, supplierIds: shortfallSupplierIds(shown.view) }),
       ]);
       const opening = shortfallSheetOpening(order.readiness, fresh);
       if (!opening) return;
+      let supplierNames = firstNames;
+      const more = supplierNames ? missingShortfallSupplierIds(opening.view, supplierNames) : [];
+      if (supplierNames && more.length > 0) {
+        const extra = await readShortfallSupplierNames(supabase, { organizationId: orgId, supplierIds: more });
+        supplierNames = extra ? new Map([...supplierNames, ...extra]) : null;
+      }
       setShortfallSheet({
         orderId: order.id,
         orderLabel: opening.view.orderNumber,

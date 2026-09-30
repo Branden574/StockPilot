@@ -18,7 +18,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   defaultShortfallSelection,
   READINESS_NEEDS_CONNECTION_COPY,
+  SHORTFALL_PO_CANCEL_LABEL,
+  SHORTFALL_PO_CLOSE_LABEL,
+  SHORTFALL_PO_OPEN_DRAFT_HINT,
   SHORTFALL_PO_PHONE_REVIEW_COPY,
+  SHORTFALL_PO_QUANTITY_LABEL,
   SHORTFALL_PO_SUBMIT_LABEL,
   SHORTFALL_PO_TITLE,
   shortfallIdempotencyKey,
@@ -32,11 +36,7 @@ import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { readOrderReadiness } from '@/lib/order-readiness';
 import {
-  SHORTFALL_CANCEL_LABEL,
-  SHORTFALL_CLOSE_LABEL,
-  SHORTFALL_OPEN_DRAFT_HINT,
-  SHORTFALL_QUANTITY_LABEL,
-  adoptShortfallView,
+  adoptShortfallRefusal,
   mintShortfallKey,
   setShortfallQuantity,
   shortfallCreatedRows,
@@ -45,6 +45,7 @@ import {
   toggleShortfallChoice,
   type ShortfallDraftRoute,
   type ShortfallSubmitResult,
+  type ShortfallSupplierNameMap,
 } from '@/lib/order-shortfall-po';
 import { draftOrderShortfallPos } from '@/lib/orders-api';
 import { supabase } from '@/lib/supabase';
@@ -69,13 +70,15 @@ import { useTheme } from '@/lib/use-theme';
  * decision and word is lib/order-shortfall-po.ts over core's (tested there).
  *
  * Draft sends the chosen lines with the request's idempotency key (core
- * shortfallIdempotencyKey: kept for a retry of the same request, replaced on
- * any edit), so a double tap, or a retry after an answer that never came,
- * gets the first answer and never a second draft. Offline Draft is off and
- * says it needs a connection. A refusal is said in place (role alert, and
- * announced: iOS gives the 'alert' role no trait); after "Stock or POs
- * changed since you looked" the rows show the new maxima and the person's
- * choices are kept (never lowered on their behalf). Once drafted, each draft
+ * shortfallIdempotencyKey: kept for a retry of the same request; dropped on
+ * any edit, as on the web, so an edit changed back is a new request too), so
+ * a double tap, or a retry after an answer that never came, gets the first
+ * answer and never a second draft. Offline Draft is off and says it needs a
+ * connection. A refusal is said in place (role alert, and announced: iOS
+ * gives the 'alert' role no trait) and any edit clears it, as on the web;
+ * after "Stock or POs changed since you looked" the rows show the new maxima
+ * (lowered, never raised), the person's choices are kept (never lowered on
+ * their behalf), and the refusal names what it unticked. Once drafted, each draft
  * is a row that opens it on the phone's PO screen, read-only: "Review and
  * order this draft on the web." Nothing here composes or sends mail.
  *
@@ -112,8 +115,9 @@ export function DraftShortfallPoSheet({
   /** Core's "Stock or POs changed since you looked..." when readiness read
    *  as the sheet opened offers something else than the screen showed. */
   startNotice: string | null;
-  /** The suppliers' names, read when the sheet opened. */
-  supplierNames: ReadonlyMap<string, string>;
+  /** The suppliers' names, read by id when the sheet opened (archived ones
+   *  included); null when that read failed. */
+  supplierNames: ShortfallSupplierNameMap;
   /** The organization's zone, for "Checked at". */
   timeZone: string | null;
   /** No connection: Draft is disabled, with the reason. */
@@ -135,10 +139,11 @@ export function DraftShortfallPoSheet({
   // A second tap before the re-render that disables Draft must not send a
   // second request (the key would make it a replay, but it is never sent).
   const drafting = React.useRef(false);
-  // The request's key: kept while the request is the same, replaced on any
-  // edit (core shortfallIdempotencyKey), dropped after a refusal that is not
-  // the same request tried again (lib/order-shortfall-po.ts: only busy, a
-  // fault and no answer keep it). Read only in the Draft handler.
+  // The request's key: kept while the request is the same (core
+  // shortfallIdempotencyKey), dropped on ANY edit (the web's rule: an edit
+  // changed back is a new request too) and after a refusal that is not the
+  // same request tried again (lib/order-shortfall-po.ts: only busy, a fault
+  // and no answer keep it). Read only in the Draft handler.
   const keyRef = React.useRef<ShortfallKeyState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(startNotice);
@@ -175,6 +180,9 @@ export function DraftShortfallPoSheet({
 
   function edit(next: ShortfallSelection) {
     setSelection(next);
+    // Another request now: the next Draft mints its own key, and a shown
+    // refusal (about the choice before this edit) goes. The web does the same.
+    keyRef.current = null;
     setError(null);
   }
 
@@ -206,14 +214,14 @@ export function DraftShortfallPoSheet({
       onDrafted();
       return;
     }
-    setError(result.message);
-    AccessibilityInfo.announceForAccessibility(result.message);
+    // The fresh rows with the person's choices kept, and the refusal naming
+    // what it unticked (the web's words).
+    const next = adoptShortfallRefusal(selection, view, result);
+    setError(next.message);
+    AccessibilityInfo.announceForAccessibility(next.message);
     if (result.dropKey) keyRef.current = null;
-    if (result.view) {
-      const next = adoptShortfallView(selection, result.view);
-      setView(next.view);
-      setSelection(next.selection);
-    }
+    setView(next.view);
+    setSelection(next.selection);
     if (result.closed) setClosed(true);
     if (result.refresh) onRefresh();
   }
@@ -245,7 +253,7 @@ export function DraftShortfallPoSheet({
             onPress={requestClose}
             onAccessibilityTap={requestClose}
             accessibilityRole="button"
-            accessibilityLabel="Close"
+            accessibilityLabel={SHORTFALL_PO_CLOSE_LABEL}
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
@@ -285,7 +293,7 @@ export function DraftShortfallPoSheet({
                 onPress={requestClose}
                 disabled={busy}
                 accessibilityRole="button"
-                accessibilityLabel="Close"
+                accessibilityLabel={SHORTFALL_PO_CLOSE_LABEL}
                 accessibilityState={{ disabled: busy }}
                 style={{
                   minWidth: MIN_TAP,
@@ -342,7 +350,7 @@ export function DraftShortfallPoSheet({
                       onPress={() => onOpenDraft(r.route)}
                       accessibilityRole="button"
                       accessibilityLabel={r.accessibilityLabel}
-                      accessibilityHint={SHORTFALL_OPEN_DRAFT_HINT}
+                      accessibilityHint={SHORTFALL_PO_OPEN_DRAFT_HINT}
                       style={[styles.createdRow, { borderColor: c.hair }]}
                     >
                       <View style={{ flex: 1, gap: 2 }}>
@@ -412,7 +420,7 @@ export function DraftShortfallPoSheet({
                         </View>
                       </Pressable>
                       {row.draftable ? (
-                        <FieldLabel>{SHORTFALL_QUANTITY_LABEL}</FieldLabel>
+                        <FieldLabel>{SHORTFALL_PO_QUANTITY_LABEL}</FieldLabel>
                       ) : null}
                       {row.draftable ? (
                         <TextInput
@@ -495,12 +503,12 @@ export function DraftShortfallPoSheet({
               onPress={requestClose}
               disabled={busy}
               accessibilityRole="button"
-              accessibilityLabel={finished ? SHORTFALL_CLOSE_LABEL : SHORTFALL_CANCEL_LABEL}
+              accessibilityLabel={finished ? SHORTFALL_PO_CLOSE_LABEL : SHORTFALL_PO_CANCEL_LABEL}
               accessibilityState={{ disabled: busy }}
               style={[styles.action, { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 }]}
             >
               <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
-                {finished ? SHORTFALL_CLOSE_LABEL : SHORTFALL_CANCEL_LABEL}
+                {finished ? SHORTFALL_PO_CLOSE_LABEL : SHORTFALL_PO_CANCEL_LABEL}
               </Mono>
             </Pressable>
           </View>

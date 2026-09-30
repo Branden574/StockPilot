@@ -7,10 +7,13 @@ import {
   SHORTFALL_PO_BUSY_COPY,
   SHORTFALL_PO_CHANGED_COPY,
   SHORTFALL_PO_CONFLICT_COPY,
-  SHORTFALL_PO_FAILED_COPY,
+  SHORTFALL_PO_NO_ANSWER_COPY,
+  SHORTFALL_PO_NOT_APPLICABLE_COPY,
   SHORTFALL_PO_NOTHING_LEFT_COPY,
   SHORTFALL_PO_NOT_SENT_COPY,
+  SHORTFALL_SUPPLIER_NOT_FOUND_COPY,
   SHORTFALL_SUPPLIER_UNKNOWN_COPY,
+  shortfallArchivedSupplierCopy,
   shortfallPoView,
   type ShortfallPoResult,
   type ShortfallPoView,
@@ -115,7 +118,10 @@ function shortfallView(over: { a?: Json; b?: Json; c?: Json; d?: Json } = {}): S
   return shortfallPoView(r.assessment);
 }
 
-const NAMES = { [SUP1]: 'Acme Supply', [SUP2]: 'Paper Co' };
+const NAMES = {
+  [SUP1]: { name: 'Acme Supply', archived: false },
+  [SUP2]: { name: 'Paper Co', archived: false },
+};
 
 function offer(v: ShortfallPoView = shortfallView()): ShortfallPoOffer {
   return { orderId: ORDER, view: v, timeZone: 'America/Los_Angeles' };
@@ -207,7 +213,9 @@ describe('DraftShortfallPoButton and the page-mounted dialog', () => {
     const { dialog } = await openDialog();
     expect(dialog).toBeInTheDocument();
     expect(screen.getByTestId('readiness-draft-shortfall-po')).toHaveAttribute('aria-haspopup', 'dialog');
-    expect(loadAction).toHaveBeenCalledWith({ orderId: ORDER });
+    // The names of the suppliers the rows name, by id (never an
+    // organization-wide list: pattern #3, review).
+    expect(loadAction).toHaveBeenCalledWith({ orderId: ORDER, supplierIds: [SUP1, SUP2] });
     expect(draftAction).not.toHaveBeenCalled();
     expect(routerRefresh).not.toHaveBeenCalled();
   });
@@ -430,8 +438,9 @@ describe('DraftShortfallPoDialog: what it sends', () => {
     draftAction.mockRejectedValueOnce(new Error('network'));
     await openDialog();
     submit();
-    // A lost answer: whether the drafts exist is unknown, said inline.
-    expect(await screen.findByTestId('draft-shortfall-po-error')).toHaveTextContent(SHORTFALL_PO_FAILED_COPY);
+    // A lost answer: whether the drafts exist is unknown, said inline, in
+    // core's words for exactly that (review: not "couldn't be created").
+    expect(await screen.findByTestId('draft-shortfall-po-error')).toHaveTextContent(SHORTFALL_PO_NO_ANSWER_COPY);
     expect(screen.getByTestId('draft-shortfall-po-error')).toHaveAttribute('role', 'alert');
     const first = sentKey(0);
 
@@ -530,7 +539,14 @@ describe('DraftShortfallPoDialog: when stock or POs changed (shortfall_changed)'
     expect(within(row(A)).getByTestId('draft-shortfall-po-problem')).toHaveTextContent('At most 3 can be drafted now.');
     expect(qty(B).value).toBe('5');
     expect(within(row(B)).queryByTestId('draft-shortfall-po-problem')).toBeNull();
-    expect(within(row(C)).getByTestId('draft-shortfall-po-problem')).toHaveTextContent(SHORTFALL_PO_NOTHING_LEFT_COPY);
+    // C has nothing left (the database said 0): no longer offered, unticked,
+    // and the alert names it (review: a screen reader heard only the generic
+    // sentence). The phone does exactly the same (core shortfallViewWithMaxima).
+    expect(row(C).getAttribute('data-state')).toBe('covered');
+    expect(within(row(C)).getByTestId('draft-shortfall-po-detail')).toHaveTextContent(SHORTFALL_PO_NOTHING_LEFT_COPY);
+    expect(screen.getByTestId('draft-shortfall-po-error')).toHaveTextContent(
+      `${SHORTFALL_PO_CHANGED_COPY} No longer chosen: Erasers. Nothing is left to draft for it.`,
+    );
     // Readiness read again, and the page behind.
     expect(loadAction).toHaveBeenCalledTimes(2);
     expect(routerRefresh).toHaveBeenCalledTimes(1);
@@ -570,7 +586,9 @@ describe('DraftShortfallPoDialog: when stock or POs changed (shortfall_changed)'
     expect(within(row(C)).getByTestId('draft-shortfall-po-detail')).toHaveTextContent(
       'Already on draft PO-2026-0048 (not ordered yet)',
     );
-    expect(screen.getByTestId('draft-shortfall-po-error')).toHaveTextContent(SHORTFALL_PO_CHANGED_COPY);
+    expect(screen.getByTestId('draft-shortfall-po-error')).toHaveTextContent(
+      `${SHORTFALL_PO_CHANGED_COPY} No longer chosen: Erasers. Nothing is left to draft for it.`,
+    );
 
     // Fixed by the person, the next press is a new request.
     fireEvent.change(qty(A), { target: { value: '3' } });
@@ -603,5 +621,160 @@ describe('DraftShortfallPoDialog: when stock or POs changed (shortfall_changed)'
     expect(within(row(A)).getByTestId('draft-shortfall-po-supplier')).toHaveTextContent('Acme Supply');
     submit();
     expect(draftAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DraftShortfallPoDialog: review fixes (one rule and one sentence on both platforms)', () => {
+  it("the database's current most lowers a row's most, never raises it (the phone's rule, in core)", async () => {
+    draftAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: SHORTFALL_PO_CHANGED_COPY,
+        details: { reason: 'shortfall_changed', current: { [A]: 12, [B]: 6, [C]: 5 } },
+      },
+    });
+    await openDialog();
+    loadAction.mockResolvedValueOnce({ view: null, supplierNames: null });
+    fireEvent.change(qty(A), { target: { value: '10' } });
+    // 10 is above A's 8: said under the field, nothing sent.
+    submit();
+    expect(draftAction).not.toHaveBeenCalled();
+    fireEvent.change(qty(A), { target: { value: '8' } });
+    submit();
+    await screen.findByTestId('draft-shortfall-po-error');
+    await waitFor(() => expect(loadAction).toHaveBeenCalledTimes(2));
+    // 12 from the database does not lift A's most above the 8 its words were written for.
+    fireEvent.change(qty(A), { target: { value: '10' } });
+    expect(within(row(A)).getByTestId('draft-shortfall-po-problem')).toHaveTextContent('At most 8 can be drafted now.');
+  });
+
+  it('a refusal whose re-read leaves nothing to draft is said ONCE (not as the alert and again above it)', async () => {
+    draftAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: SHORTFALL_PO_NOT_APPLICABLE_COPY,
+        details: { reason: 'not_applicable', status: 'picking_complete' },
+      },
+    });
+    await openDialog();
+    const picked = orderReadinessFacts(ORDER, 'picking_complete', [{ lineId: 'L1', itemId: A, requested: 10 }], [
+      visibleItemFacts(A, { name: 'Pencils', sku: 'PEN-1', supplierId: SUP1 }),
+    ]);
+    const r = readinessOk(picked);
+    if (r.state !== 'ok') throw new Error('fixture');
+    loadAction.mockResolvedValueOnce({ view: shortfallPoView(r.assessment), supplierNames: NAMES });
+    submit();
+    await waitFor(() => expect(loadAction).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryAllByTestId('draft-shortfall-po-row')).toHaveLength(0));
+    expect(screen.getByTestId('draft-shortfall-po-error')).toHaveTextContent(SHORTFALL_PO_NOT_APPLICABLE_COPY);
+    expect(screen.queryByTestId('draft-shortfall-po-unavailable')).toBeNull();
+    expect(screen.getAllByText(SHORTFALL_PO_NOT_APPLICABLE_COPY)).toHaveLength(1);
+  });
+
+  it('an edit clears a shown refusal (as on the phone); the row problems stay under their fields', async () => {
+    draftAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: SHORTFALL_PO_BUSY_COPY, details: { reason: 'busy', retryable: true } },
+    });
+    await openDialog();
+    submit();
+    await screen.findByTestId('draft-shortfall-po-error');
+    fireEvent.change(qty(A), { target: { value: '9' } });
+    expect(screen.queryByTestId('draft-shortfall-po-error')).toBeNull();
+    expect(within(row(A)).getByTestId('draft-shortfall-po-problem')).toHaveTextContent('At most 8 can be drafted now.');
+  });
+
+  it('items the fresh read unticks are named in the alert too; an edit made meanwhile is not overwritten', async () => {
+    draftAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: SHORTFALL_PO_CHANGED_COPY,
+        details: { reason: 'shortfall_changed', current: { [A]: 8, [B]: 6, [C]: 5 } },
+      },
+    });
+    await openDialog();
+    // The read again: B now fully on a draft (nothing left).
+    loadAction.mockResolvedValueOnce({
+      view: shortfallView({
+        b: {
+          drafts: {
+            rows: [{ poId: 'dpo-1', poNumber: 'PO-2026-0043', remaining: 10 }],
+            hiddenRemaining: 0,
+            truncated: false,
+            truncatedRemaining: 0,
+          },
+        },
+      }),
+      supplierNames: NAMES,
+    });
+    submit();
+    await waitFor(() =>
+      expect(screen.getByTestId('draft-shortfall-po-error')).toHaveTextContent(
+        `${SHORTFALL_PO_CHANGED_COPY} No longer chosen: Notebooks. Nothing is left to draft for it.`,
+      ),
+    );
+    expect(checkbox(B).checked).toBe(false);
+  });
+
+  it('names an archived supplier as archived, and "not found" only when a read answered without it', async () => {
+    loadAction.mockResolvedValue({
+      view: null,
+      supplierNames: { [SUP1]: { name: 'Acme Supply', archived: false }, [SUP2]: { name: 'Paper Co', archived: true } },
+    } satisfies ShortfallPoLoad);
+    await openDialog();
+    expect(within(row(B)).getByTestId('draft-shortfall-po-supplier')).toHaveTextContent(
+      shortfallArchivedSupplierCopy('Paper Co'),
+    );
+    expect(shortfallArchivedSupplierCopy('Paper Co')).toBe(
+      'Paper Co (an archived supplier): check the supplier before ordering.',
+    );
+  });
+
+  it('a supplier a successful read did not return is "not found", never "couldn\'t be loaded"', async () => {
+    const pending = deferred<ShortfallPoLoad>();
+    loadAction.mockReturnValue(pending.promise);
+    render(
+      <>
+        <DraftShortfallPoDialog offer={offer()} />
+        <DraftShortfallPoButton orderId={ORDER} />
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Draft PO for what is short' }));
+    await act(async () => pending.resolve({ view: null, supplierNames: { [SUP1]: { name: 'Acme Supply', archived: false } } }));
+    expect(within(row(B)).getByTestId('draft-shortfall-po-supplier')).toHaveTextContent(SHORTFALL_SUPPLIER_NOT_FOUND_COPY);
+    expect(within(row(B)).getByTestId('draft-shortfall-po-supplier')).not.toHaveTextContent(SHORTFALL_SUPPLIER_UNKNOWN_COPY);
+  });
+
+  it("focus goes to the strip's Check again when the dialog closes after the button is gone (WCAG 2.4.3)", async () => {
+    draftAction.mockResolvedValue({ ok: true, data: result() });
+    const o = offer();
+    const { rerender } = render(
+      <>
+        <DraftShortfallPoDialog offer={o} />
+        <DraftShortfallPoButton orderId={o.orderId} />
+        <button type="button" data-testid="readiness-recheck">
+          Check again
+        </button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Draft PO for what is short' }));
+    await waitFor(() => expect(loadAction).toHaveBeenCalledTimes(1));
+    submit();
+    await screen.findByTestId('draft-shortfall-po-result');
+    // The refresh after drafting: nothing left, so no button any more.
+    rerender(
+      <>
+        <DraftShortfallPoDialog offer={null} />
+        <button type="button" data-testid="readiness-recheck">
+          Check again
+        </button>
+      </>,
+    );
+    fireEvent.click(screen.getByTestId('draft-shortfall-po-close'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('readiness-recheck')));
   });
 });

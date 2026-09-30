@@ -20,8 +20,14 @@
  *   - the drafts the selection makes (`shortfallDraftGroups`, the database's
  *     grouping and order) and the footer sentence;
  *   - the idempotency key's lifecycle (minted for a request, reused for its
- *     retries, replaced on any edit);
- *   - the answer's parser, the refusals, and every sentence.
+ *     retries; both screens drop it on any edit, so the next Draft mints one);
+ *   - the supplier names (read by id, archived ones included) and how a row
+ *     names its supplier;
+ *   - the database's current maxima laid over the rows after a refusal
+ *     (`shortfallViewWithMaxima`) and the sentence naming what was unticked;
+ *   - the answer's parser, the refusals, the timeline entry and every
+ *     sentence, the screens' control words included, so the web and the
+ *     phone say exactly the same.
  *
  * The numbers come from readiness (readiness.ts itemQuantities: `draftable`,
  * the twin of order_shortfall_draftable in 0385, held equal by the shared
@@ -87,7 +93,26 @@ export const SHORTFALL_PO_NOT_SENT_COPY =
   'Drafts are not sent. Set the destination and order them on Purchase orders.';
 export const SHORTFALL_NO_SUPPLIER_COPY =
   'No supplier: goes on a draft without one; choose a supplier before ordering.';
+/** The supplier names could not be read (only then). */
 export const SHORTFALL_SUPPLIER_UNKNOWN_COPY = "Its supplier (the name couldn't be loaded).";
+/** The names were read, but not this supplier's (not one of the organization's). */
+export const SHORTFALL_SUPPLIER_NOT_FOUND_COPY = 'Its supplier (not found).';
+/** An archived supplier: the draft still goes to it (the item's supplier as
+ *  recorded, as every PO path does), so the buyer is told to check it. */
+export function shortfallArchivedSupplierCopy(name: string): string {
+  return `${name} (an archived supplier): check the supplier before ordering.`;
+}
+
+// The screens' own controls and hints, the same on the web and the phone.
+/** The quantity field's name (the web's column header, the phone's label). */
+export const SHORTFALL_PO_QUANTITY_LABEL = 'Quantity';
+export const SHORTFALL_PO_CANCEL_LABEL = 'Cancel';
+export const SHORTFALL_PO_CLOSE_LABEL = 'Close';
+/** A created draft's row: what opening it does (VoiceOver hint). */
+export const SHORTFALL_PO_OPEN_DRAFT_HINT = 'Opens this draft PO';
+/** The phone's readiness-card button, for VoiceOver (the web button's name is
+ *  its visible label). */
+export const SHORTFALL_PO_PHONE_STRIP_HINT = 'Opens a sheet to draft purchase orders for what this order is short';
 
 export const SHORTFALL_PO_FORBIDDEN_COPY = 'Drafting a PO needs a manager with purchase-order access.';
 export const SHORTFALL_PO_NO_WAREHOUSE_ACCESS_COPY =
@@ -111,6 +136,19 @@ export const SHORTFALL_PO_CONFLICT_COPY =
   'This request was already used for different quantities. Press Draft again.';
 export const SHORTFALL_PO_INVALID_COPY = 'Choose at least one item, with a quantity above 0 for each.';
 export const SHORTFALL_PO_FAILED_COPY = "The draft POs couldn't be created just now. Try again.";
+/** No answer came back (the connection dropped, a timeout on the way): the
+ *  drafts may exist. The screens keep the request's key, so pressing Draft
+ *  again answers with the drafts already made instead of making more. */
+export const SHORTFALL_PO_NO_ANSWER_COPY =
+  'No answer came back, so the drafts may or may not have been made. Press Draft again: if they were made, it shows them instead of making more.';
+/** The database's statement timeout (57014): the whole call rolled back. */
+export const SHORTFALL_PO_TIMEOUT_COPY = 'Drafting took too long, so nothing was drafted. Try again.';
+/** An answer came back that this build cannot read (a phone older or newer
+ *  than the server): the drafts may exist; readiness is read again. */
+export const SHORTFALL_PO_UNREADABLE_COPY =
+  "The drafts may have been created, but the answer couldn't be read. What is already on a draft is shown; check it before drafting again.";
+/** The phone route's rate limit. */
+export const SHORTFALL_PO_TOO_MANY_COPY = 'Too many requests. Wait a moment and try again.';
 export const SHORTFALL_PO_NOTHING_SHORT_COPY = 'Nothing on this order is short.';
 export const SHORTFALL_PO_NOTHING_VISIBLE_SHORT_COPY = 'Nothing you can see on this order is short.';
 export const SHORTFALL_PO_NOTHING_LEFT_COPY = 'Nothing is left to draft for this item.';
@@ -284,12 +322,24 @@ export function shortfallPoView(assessment: OrderReadinessAssessment): Shortfall
       rows.push({ ...common, onOrderOrDraft: 0, draftable: 0, state: 'kit', detail: KIT_COPY });
     } else if (q.draftable > EPS) {
       const covered = q4(short - q.draftable);
+      // What is on order or on a draft that other orders' committed
+      // shortfall takes first (readiness.ts: draftable nets it out). Without
+      // this the row read only "Short 10" right after a draft for it, when
+      // another approved order was short of the same item (review).
+      const taken = q4(Math.min(q.inboundRemaining + q.draftRemaining, f.committedOtherShortfall));
+      const parts = [`Short ${fq(short)}`];
+      if (covered > EPS) parts.push(`already on order or draft ${fq(covered)}`);
+      if (taken > EPS) {
+        parts.push(
+          `${fq(taken)} ${covered > EPS ? 'more ' : ''}on order or draft ${Math.abs(taken - 1) < EPS ? 'is' : 'are'} already needed by other orders`,
+        );
+      }
       rows.push({
         ...common,
         onOrderOrDraft: covered > EPS ? covered : 0,
         draftable: q.draftable,
         state: 'draftable',
-        detail: covered > EPS ? `Short ${fq(short)} · already on order or draft ${fq(covered)}` : `Short ${fq(short)}`,
+        detail: parts.join(' · '),
       });
     } else {
       rows.push({
@@ -313,14 +363,70 @@ export function shortfallPoView(assessment: OrderReadinessAssessment): Shortfall
   };
 }
 
-/** A row's supplier, as the dialog names it. */
-export function shortfallSupplierLabel(
-  supplierId: string | null,
-  names: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
-): string {
+// ── Suppliers ───────────────────────────────────────────────────────────────
+
+/** A supplier's name as the screens read it (by id, archived ones included). */
+export interface ShortfallSupplierName {
+  name: string;
+  /** deleted_at is set: archived on the Suppliers screen. */
+  archived: boolean;
+}
+
+/** Supplier id to name, as read for a view's rows. */
+export type ShortfallSupplierNames =
+  | ReadonlyMap<string, ShortfallSupplierName>
+  | Readonly<Record<string, ShortfallSupplierName>>;
+
+function nameOf(names: ShortfallSupplierNames, id: string): ShortfallSupplierName | undefined {
+  return names instanceof Map
+    ? names.get(id)
+    : (names as Readonly<Record<string, ShortfallSupplierName>>)[id];
+}
+
+/**
+ * A row's supplier, as both screens name it. `names` is null when the names
+ * could not be read (only then: "couldn't be loaded"). The draft goes to the
+ * item's supplier as recorded, an archived one included (0385, as every PO
+ * path), so an archived supplier is named as archived with a word to check
+ * it; an id the read did not return is "not found".
+ */
+export function shortfallSupplierLabel(supplierId: string | null, names: ShortfallSupplierNames | null): string {
   if (!supplierId) return SHORTFALL_NO_SUPPLIER_COPY;
-  const name = names instanceof Map ? names.get(supplierId) : (names as Record<string, string>)[supplierId];
-  return name && name.trim() !== '' ? name : SHORTFALL_SUPPLIER_UNKNOWN_COPY;
+  if (names === null) return SHORTFALL_SUPPLIER_UNKNOWN_COPY;
+  const found = nameOf(names, supplierId);
+  if (!found || found.name.trim() === '') return SHORTFALL_SUPPLIER_NOT_FOUND_COPY;
+  return found.archived ? shortfallArchivedSupplierCopy(found.name) : found.name;
+}
+
+/** The suppliers a view's rows name, sorted: the ids to read names for (by id,
+ *  so never an organization-wide list and never past a row cap). */
+export function shortfallSupplierIds(view: ShortfallPoView): string[] {
+  return [...new Set(view.rows.map((r) => r.supplierId).filter((id): id is string => !!id))].sort();
+}
+
+/** The view's suppliers a names read has not answered for (all of them when
+ *  there is no read yet). */
+export function missingShortfallSupplierIds(view: ShortfallPoView, names: ShortfallSupplierNames | null): string[] {
+  const ids = shortfallSupplierIds(view);
+  if (names === null) return ids;
+  return ids.filter((id) => nameOf(names, id) === undefined);
+}
+
+/**
+ * Supplier rows ({id, name, deleted_at}, as both screens select them) as
+ * names; a row without an id or a name is left out. Null when the answer is
+ * not a list.
+ */
+export function readShortfallSupplierRows(rows: unknown): Record<string, ShortfallSupplierName> | null {
+  if (!Array.isArray(rows)) return null;
+  const out: Record<string, ShortfallSupplierName> = {};
+  for (const row of rows as unknown[]) {
+    if (typeof row !== 'object' || row === null) continue;
+    const r = row as { id?: unknown; name?: unknown; deleted_at?: unknown };
+    if (typeof r.id !== 'string' || typeof r.name !== 'string' || r.name.trim() === '') continue;
+    out[r.id] = { name: r.name, archived: r.deleted_at !== null && r.deleted_at !== undefined };
+  }
+  return out;
 }
 
 /** A row read aloud (VoiceOver, screen readers): the item, its numbers and
@@ -449,6 +555,48 @@ export function keepShortfallSelection(
     if (r.state === 'draftable' && !(r.itemId in out)) out[r.itemId] = { checked: false, quantity: String(r.draftable) };
   }
   return { selection: out, unchosen };
+}
+
+/**
+ * The database's current most per item (shortfall_changed's
+ * `details.current`) laid over the rows, for the moment before readiness is
+ * read again, or when it cannot be: a row may be drafted up to the smaller of
+ * the two numbers, never more than it offered (its words were written for
+ * that number), and a row with nothing left is no longer offered
+ * (SHORTFALL_PO_NOTHING_LEFT_COPY). An item the database did not answer for
+ * counts as nothing left. The same on the web and the phone.
+ */
+export function shortfallViewWithMaxima(
+  view: ShortfallPoView,
+  current: Readonly<Record<string, number>>,
+): ShortfallPoView {
+  const rows = view.rows.map((r): ShortfallPoRow => {
+    if (r.state !== 'draftable') return r;
+    const now = current[r.itemId.toLowerCase()] ?? current[r.itemId];
+    const max = typeof now === 'number' && Number.isFinite(now) ? q4(Math.max(0, Math.min(now, r.draftable))) : 0;
+    if (max > EPS) return { ...r, draftable: max };
+    return { ...r, draftable: 0, onOrderOrDraft: r.short, state: 'covered', detail: SHORTFALL_PO_NOTHING_LEFT_COPY };
+  });
+  return { ...view, rows, draftableCount: rows.filter((r) => r.state === 'draftable').length };
+}
+
+/**
+ * The chosen items a refusal unticked (keepShortfallSelection's `unchosen`),
+ * named from the rows the person chose them on: "No longer chosen: Maus I.
+ * Nothing is left to draft for it." Null when none (or none the view names).
+ */
+export function shortfallUnchosenCopy(before: ShortfallPoView, unchosen: readonly string[]): string | null {
+  const byId = new Map(before.rows.map((r) => [r.itemId, r.itemName]));
+  const names = unchosen.map((id) => byId.get(id)).filter((n): n is string => typeof n === 'string' && n.trim() !== '');
+  if (names.length === 0) return null;
+  return `No longer chosen: ${names.join(', ')}. Nothing is left to draft for ${names.length === 1 ? 'it' : 'them'}.`;
+}
+
+/** A refusal's sentence with the unticked items named after it, so a screen
+ *  reader hears both in one announcement. */
+export function shortfallRefusalCopy(message: string, before: ShortfallPoView, unchosen: readonly string[]): string {
+  const extra = shortfallUnchosenCopy(before, unchosen);
+  return extra ? `${message} ${extra}` : message;
 }
 
 /** shortfall_changed's detail (the current draftable per item, `details.current`
@@ -661,6 +809,40 @@ export function shortfallPoCreatedCopy(result: ShortfallPoResult): string {
 /** One created draft, as a result row: "PO-2026-0005 · 2 lines, 7 units". */
 export function shortfallPoCreatedRowCopy(c: ShortfallPoCreated): string {
   return `${c.poNumber} · ${c.lineCount} ${c.lineCount === 1 ? 'line' : 'lines'}, ${fq(c.units)} ${Math.abs(c.units - 1) < EPS ? 'unit' : 'units'}`;
+}
+
+/**
+ * The order timeline's detail for order_request.shortfall_po_drafted, from
+ * the audit entry's metadata (po_numbers, lines [{item_id, quantity,
+ * purchase_order_id}], written by the service; never a cost):
+ *   "Draft PO-2026-0052 for 1 item, 1 unit. Drafts are not sent."
+ *   "2 draft POs for 3 items, 15.5 units: PO-..., PO-.... Drafts are not sent."
+ * Null for an entry it cannot read: it says nothing rather than guess.
+ */
+export function shortfallPoTimelineDetail(metadata: unknown): string | null {
+  if (typeof metadata !== 'object' || metadata === null) return null;
+  const md = metadata as { po_numbers?: unknown; lines?: unknown };
+  const numbers = Array.isArray(md.po_numbers)
+    ? md.po_numbers.filter((n): n is string => typeof n === 'string' && n.trim() !== '')
+    : [];
+  const drafted = Array.isArray(md.lines)
+    ? (md.lines as unknown[]).filter(
+        (l): l is { item_id: string; quantity: number } =>
+          typeof l === 'object' &&
+          l !== null &&
+          typeof (l as { item_id?: unknown }).item_id === 'string' &&
+          typeof (l as { quantity?: unknown }).quantity === 'number' &&
+          Number.isFinite((l as { quantity: number }).quantity) &&
+          (l as { quantity: number }).quantity > 0,
+      )
+    : [];
+  if (numbers.length === 0 || drafted.length === 0) return null;
+  const items = new Set(drafted.map((l) => l.item_id.toLowerCase())).size;
+  const units = q4(drafted.reduce((sum, l) => sum + l.quantity, 0));
+  const what = `${items} ${items === 1 ? 'item' : 'items'}, ${fq(units)} ${Math.abs(units - 1) < EPS ? 'unit' : 'units'}`;
+  return numbers.length === 1
+    ? `Draft ${numbers[0]} for ${what}. Drafts are not sent.`
+    : `${numbers.length} draft POs for ${what}: ${numbers.join(', ')}. Drafts are not sent.`;
 }
 
 // ── Refusals ────────────────────────────────────────────────────────────────

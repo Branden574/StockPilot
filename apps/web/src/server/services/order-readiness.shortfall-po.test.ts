@@ -29,6 +29,7 @@ import {
   SHORTFALL_PO_ORDERS_OFF_COPY,
   SHORTFALL_PO_PURCHASE_ORDERS_OFF_COPY,
   SHORTFALL_PO_SIGN_IN_COPY,
+  SHORTFALL_PO_TIMEOUT_COPY,
   type ModuleId,
   type Role,
 } from '@stockpilot/core';
@@ -369,7 +370,8 @@ describe("draft_order_shortfall_pos's refusals, in core words (pattern #28: exac
     ['the save refused a kit', { message: '"Box set" is a pre-assembled kit, and kits can\'t be ordered on a purchase order: they are built from their components. Order the components instead.', code: '22023', hint: 'po_line_bundle' }, 'validation_error', '"Box set" is a pre-assembled kit, and kits can\'t be ordered on a purchase order: they are built from their components. Order the components instead.', { reason: 'item_not_draftable' }],
     ['another org\'s item', { message: 'An item … is not part of this organization.', code: '42501', hint: 'po_not_in_org' }, 'validation_error', SHORTFALL_PO_ITEM_NOT_DRAFTABLE_COPY, { reason: 'item_not_draftable' }],
     ['a lock wait', { message: 'canceling statement due to lock timeout', code: '55P03' }, 'conflict', SHORTFALL_PO_BUSY_COPY, { reason: 'busy', retryable: true }],
-    ['a statement timeout', { message: 'canceling statement due to statement timeout', code: '57014' }, 'conflict', SHORTFALL_PO_BUSY_COPY, { reason: 'busy', retryable: true }],
+    // Review: a timeout is not "being changed at the same time"; it rolled back.
+    ['a statement timeout', { message: 'canceling statement due to statement timeout', code: '57014' }, 'conflict', SHORTFALL_PO_TIMEOUT_COPY, { reason: 'busy', retryable: true }],
     ['a PO number taken meanwhile', { message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"', code: '23505' }, 'conflict', SHORTFALL_PO_BUSY_COPY, { reason: 'busy', retryable: true }],
   ];
 

@@ -15,9 +15,16 @@ import {
   SHORTFALL_PO_NOTHING_LEFT_COPY,
   SHORTFALL_PO_NOTHING_SHORT_COPY,
   SHORTFALL_PO_PURCHASE_ORDERS_OFF_COPY,
+  SHORTFALL_PO_NO_ANSWER_COPY,
   SHORTFALL_PO_SIGN_IN_COPY,
+  SHORTFALL_PO_TOO_MANY_COPY,
+  SHORTFALL_PO_UNREADABLE_COPY,
+  SHORTFALL_SUPPLIER_NOT_FOUND_COPY,
   SHORTFALL_SUPPLIER_UNKNOWN_COPY,
   ShortfallPoResultShapeError,
+  shortfallArchivedSupplierCopy,
+  shortfallViewWithMaxima,
+  type ShortfallSupplierName,
   defaultShortfallSelection,
   shortfallIdempotencyKey,
   shortfallPoCreatedCopy,
@@ -38,10 +45,7 @@ import {
   fxResult,
 } from './__fixtures__/readiness-facts';
 import {
-  SHORTFALL_TOO_MANY_COPY,
-  SHORTFALL_UNREADABLE_COPY,
-  adoptShortfallView,
-  applyShortfallMaxima,
+  adoptShortfallRefusal,
   mintShortfallKey,
   readShortfallSupplierNames,
   setShortfallQuantity,
@@ -67,7 +71,7 @@ const SUP1 = '0a000000-0000-4000-8000-00000000c001';
 const SUP2 = '0a000000-0000-4000-8000-00000000c002';
 const PO_A = '0a000000-0000-4000-8000-00000000d001';
 const PO_B = '0a000000-0000-4000-8000-00000000d002';
-const NAMES = new Map([[SUP1, 'Acme School Supply']]);
+const NAMES: ReadonlyMap<string, ShortfallSupplierName> = new Map([[SUP1, { name: 'Acme School Supply', archived: false }]]);
 
 const EMPTY_PO = { rows: [], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 };
 
@@ -319,9 +323,21 @@ describe('the sheet’s rows, footer and Draft', () => {
     expect(setShortfallQuantity(sel, view, FX_ITEM_B, '3')).toBe(sel);
   });
 
-  it('a supplier whose name was not read says core’s "couldn’t be loaded"', () => {
-    const sheet = shortfallSheetView({ ...base, supplierNames: new Map(), selection: defaultShortfallSelection(view) });
-    expect(sheet.rows[0]!.supplier).toBe(SHORTFALL_SUPPLIER_UNKNOWN_COPY);
+  // Review: "couldn't be loaded" only for a read that failed; an archived
+  // supplier (the draft still goes to it) is named as archived; an id a read
+  // that answered did not return is "not found". The web's words exactly.
+  it('a supplier: "couldn’t be loaded" only when the read failed, "an archived supplier", or "not found"', () => {
+    const sel = defaultShortfallSelection(view);
+    expect(shortfallSheetView({ ...base, supplierNames: null, selection: sel }).rows[0]!.supplier).toBe(
+      SHORTFALL_SUPPLIER_UNKNOWN_COPY,
+    );
+    expect(shortfallSheetView({ ...base, supplierNames: new Map(), selection: sel }).rows[0]!.supplier).toBe(
+      SHORTFALL_SUPPLIER_NOT_FOUND_COPY,
+    );
+    const archived = new Map([[SUP1, { name: 'Acme School Supply', archived: true }]]);
+    const sheet = shortfallSheetView({ ...base, supplierNames: archived, selection: sel });
+    expect(sheet.rows[0]!.supplier).toBe(shortfallArchivedSupplierCopy('Acme School Supply'));
+    expect(sheet.rows[0]!.accessibilityLabel).toContain('Supplier: Acme School Supply (an archived supplier): check the supplier before ordering.');
   });
 
   it('while drafting, and once refused for good, Draft is off', () => {
@@ -455,8 +471,10 @@ describe('submitShortfallPo: what a Draft press says', () => {
       refresh: true,
     });
     if (out.kind !== 'refused' || !out.view) throw new Error('expected a view');
-    const kept = adoptShortfallView(defaultShortfallSelection(view), out.view);
+    const kept = adoptShortfallRefusal(defaultShortfallSelection(view), view, out);
     expect(kept.selection[FX_ITEM_A]).toEqual({ checked: true, quantity: '10' });
+    // Nothing was unticked (A still has 4, C still 5): the refusal as sent.
+    expect(kept.message).toBe(SHORTFALL_PO_CHANGED_COPY);
     const sheet = shortfallSheetView({ view: kept.view, selection: kept.selection, supplierNames: NAMES, offline: false, busy: false, closed: false });
     expect(sheet.rows[0]!.detail).toBe('Short 10 · already on order or draft 6');
     expect(sheet.rows[0]!.problem).toBe('At most 4 can be drafted now.');
@@ -478,6 +496,36 @@ describe('submitShortfallPo: what a Draft press says', () => {
       [FX_ITEM_C, 'covered', 0],
     ]);
     expect(out.view.rows[2]!.detail).toBe(SHORTFALL_PO_NOTHING_LEFT_COPY);
+    // Review: the unticked item is named in the refusal, as on the web.
+    const kept = adoptShortfallRefusal(defaultShortfallSelection(view), view, out);
+    expect(kept.selection[FX_ITEM_C]).toBeUndefined();
+    expect(kept.message).toBe(`${SHORTFALL_PO_CHANGED_COPY} No longer chosen: Glue sticks. Nothing is left to draft for it.`);
+    expect(kept.view).toBe(out.view);
+  });
+
+  it('a refusal that leaves nothing to draft at all is said alone (no list of every item)', async () => {
+    const d = deps({
+      draft: vi.fn(async () => {
+        throw refusal(409, SHORTFALL_PO_NOT_APPLICABLE_COPY, { reason: 'not_applicable', status: 'picking_complete' });
+      }),
+      reread: vi.fn(async () => order({ status: 'picking_complete', phase: 'picked' })),
+    });
+    const out = await submitShortfallPo(d, input);
+    if (out.kind !== 'refused') throw new Error('expected a refusal');
+    expect(adoptShortfallRefusal(defaultShortfallSelection(view), view, out).message).toBe(SHORTFALL_PO_NOT_APPLICABLE_COPY);
+  });
+
+  it('a refusal with no fresh rows keeps the rows and the choice as they were', () => {
+    const sel = defaultShortfallSelection(view);
+    const kept = adoptShortfallRefusal(sel, view, {
+      kind: 'refused',
+      reason: 'busy',
+      message: SHORTFALL_PO_BUSY_COPY,
+      dropKey: false,
+      closed: false,
+      refresh: false,
+    });
+    expect(kept).toEqual({ view, selection: sel, message: SHORTFALL_PO_BUSY_COPY });
   });
 
   it('the order moved past drafting: the refusal closes the sheet, with the fresh rows (none)', async () => {
@@ -493,14 +541,14 @@ describe('submitShortfallPo: what a Draft press says', () => {
   });
 
   // Plan iOS walk: "airplane mode mid-request, then a retry with the same key, gives one draft".
-  it('no answer: core’s "try again" (the web’s words), the key KEPT so the retry is the same request', async () => {
+  it('no answer: core’s sentence for exactly that (the drafts may exist; the web’s words), the key KEPT so the retry is the same request', async () => {
     const d = deps({
       draft: vi.fn(async () => {
         throw new TypeError('Network request failed');
       }),
     });
     const out = await submitShortfallPo(d, input);
-    expect(out).toEqual({ kind: 'refused', reason: 'failed', message: SHORTFALL_PO_FAILED_COPY, dropKey: false, closed: false, refresh: false });
+    expect(out).toEqual({ kind: 'refused', reason: 'failed', message: SHORTFALL_PO_NO_ANSWER_COPY, dropKey: false, closed: false, refresh: false });
     expect(d.reread).not.toHaveBeenCalled();
   });
 
@@ -529,7 +577,7 @@ describe('submitShortfallPo: what a Draft press says', () => {
   it('the route’s own answers: rate limit, signed out, the MFA step-up, a fault (never raw server text)', async () => {
     const run = async (status: number, message: string, details?: unknown) =>
       submitShortfallPo(deps({ draft: vi.fn(async () => { throw refusal(status, message, details); }) }), input);
-    expect(await run(429, 'Too many requests — slow down.')).toMatchObject({ reason: 'rate_limited', message: SHORTFALL_TOO_MANY_COPY, dropKey: false });
+    expect(await run(429, 'Too many requests — slow down.')).toMatchObject({ reason: 'rate_limited', message: SHORTFALL_PO_TOO_MANY_COPY, dropKey: false });
     expect(await run(401, 'unauthenticated')).toMatchObject({ reason: 'unauthenticated', message: SHORTFALL_PO_SIGN_IN_COPY, closed: true });
     expect(await run(403, 'Re-authenticate with MFA before performing this action.', { reason: 'aal2_required' })).toMatchObject({
       reason: 'forbidden',
@@ -549,7 +597,7 @@ describe('submitShortfallPo: what a Draft press says', () => {
       reread: vi.fn(async () => drafted),
     });
     const out = await submitShortfallPo(d, input);
-    expect(out).toMatchObject({ kind: 'refused', reason: 'unreadable', message: SHORTFALL_UNREADABLE_COPY, dropKey: false, refresh: true });
+    expect(out).toMatchObject({ kind: 'refused', reason: 'unreadable', message: SHORTFALL_PO_UNREADABLE_COPY, dropKey: false, refresh: true });
     expect(out.kind === 'refused' && out.view?.rows[0]?.detail).toBe('Already on draft PO-2026-0044 (not ordered yet)');
   });
 
@@ -567,6 +615,10 @@ describe('submitShortfallPo: what a Draft press says', () => {
 });
 
 describe('after drafting: each draft opens on the phone’s PO screen', () => {
+  it('a failed names read says "couldn’t be loaded" under a draft with a supplier', () => {
+    expect(shortfallCreatedRows(RESULT, null)[0]!.supplier).toBe(SHORTFALL_SUPPLIER_UNKNOWN_COPY);
+  });
+
   it('its row (core’s words), its supplier as the web shows it, and a typed route', () => {
     expect(shortfallCreatedRows(RESULT, NAMES)).toEqual([
       {
@@ -587,10 +639,10 @@ describe('after drafting: each draft opens on the phone’s PO screen', () => {
   });
 });
 
-describe('applyShortfallMaxima', () => {
+describe('the server’s maxima over the rows: core’s shortfallViewWithMaxima (the web’s rule too)', () => {
   it('never raises a most; an item missing from the answer has nothing left', () => {
     const view = viewOf(order());
-    const out = applyShortfallMaxima(view, { [FX_ITEM_A]: 99 });
+    const out = shortfallViewWithMaxima(view, { [FX_ITEM_A]: 99 });
     expect(out.rows.map((r) => [r.state, r.draftable])).toEqual([
       ['draftable', 10],
       ['covered', 0],
@@ -600,14 +652,14 @@ describe('applyShortfallMaxima', () => {
   });
 });
 
-describe('readShortfallSupplierNames (the web dialog’s lookups)', () => {
+describe('readShortfallSupplierNames (by id, archived included: the web’s read)', () => {
   function client(answer: { data: unknown; error: unknown } | Error) {
     const calls: unknown[][] = [];
     const chain = {
       select: (...a: unknown[]) => (calls.push(['select', ...a]), chain),
       eq: (...a: unknown[]) => (calls.push(['eq', ...a]), chain),
-      is: async (...a: unknown[]) => {
-        calls.push(['is', ...a]);
+      in: async (...a: unknown[]) => {
+        calls.push(['in', ...a]);
         if (answer instanceof Error) throw answer;
         return answer;
       },
@@ -615,24 +667,42 @@ describe('readShortfallSupplierNames (the web dialog’s lookups)', () => {
     return { calls, from: vi.fn((table: string) => (calls.push(['from', table]), chain)) };
   }
 
-  it("reads this organization's suppliers that are not archived, and names them by id", async () => {
-    const c = client({ data: [{ id: SUP1, name: 'Acme School Supply' }, { id: SUP2, name: '  ' }, { id: 7, name: 'x' }], error: null });
-    const names = await readShortfallSupplierNames(c, { organizationId: 'org-1', suppliersModule: true });
-    expect([...names]).toEqual([[SUP1, 'Acme School Supply']]);
+  it('reads only the suppliers asked for, by id, archived ones marked, and names them by id', async () => {
+    const c = client({
+      data: [
+        { id: SUP1, name: 'Acme School Supply', deleted_at: null },
+        { id: SUP2, name: 'Old Paper Co', deleted_at: '2026-09-01T00:00:00Z' },
+        { id: 7, name: 'x' },
+      ],
+      error: null,
+    });
+    const names = await readShortfallSupplierNames(c, { organizationId: 'org-1', supplierIds: [SUP2, SUP1, SUP1] });
+    expect(names && [...names]).toEqual([
+      [SUP1, { name: 'Acme School Supply', archived: false }],
+      [SUP2, { name: 'Old Paper Co', archived: true }],
+    ]);
     expect(c.calls).toEqual([
       ['from', 'suppliers'],
-      ['select', 'id, name'],
+      ['select', 'id, name, deleted_at'],
       ['eq', 'organization_id', 'org-1'],
-      ['is', 'deleted_at', null],
+      ['in', 'id', [SUP1, SUP2]],
     ]);
   });
 
-  it('none when the suppliers module is off (no read), and none on a failed read (never throws)', async () => {
-    const off = client({ data: [], error: null });
-    expect((await readShortfallSupplierNames(off, { organizationId: 'o', suppliersModule: false })).size).toBe(0);
-    expect(off.from).not.toHaveBeenCalled();
-    expect((await readShortfallSupplierNames(client({ data: null, error: { message: 'x' } }), { organizationId: 'o', suppliersModule: true })).size).toBe(0);
-    expect((await readShortfallSupplierNames(client(new Error('offline')), { organizationId: 'o', suppliersModule: true })).size).toBe(0);
+  it('whatever the Suppliers module says (a record’s label), nothing read for no ids, and null on a failed read (never throws)', async () => {
+    const none = client({ data: [], error: null });
+    expect(await readShortfallSupplierNames(none, { organizationId: 'o', supplierIds: [] })).toEqual(new Map());
+    expect(none.from).not.toHaveBeenCalled();
+    expect(await readShortfallSupplierNames(client({ data: null, error: { message: 'x' } }), { organizationId: 'o', supplierIds: [SUP1] })).toBeNull();
+    expect(await readShortfallSupplierNames(client(new Error('offline')), { organizationId: 'o', supplierIds: [SUP1] })).toBeNull();
+  });
+
+  it('more than 100 ids are read in batches of 100 (a bounded URL; no row cap either way)', async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `0a000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    const c = client({ data: [], error: null });
+    await readShortfallSupplierNames(c, { organizationId: 'o', supplierIds: ids });
+    const batches = c.calls.filter((x) => x[0] === 'in').map((x) => (x[2] as string[]).length);
+    expect(batches).toEqual([100, 50]);
   });
 });
 

@@ -12,19 +12,24 @@ import {
   parseShortfallChangedDetail,
   parseShortfallQuantity,
   readinessCheckedAtCopy,
-  SHORTFALL_PO_FAILED_COPY,
+  SHORTFALL_PO_CANCEL_LABEL,
+  SHORTFALL_PO_CHANGED_COPY,
+  SHORTFALL_PO_CLOSE_LABEL,
   SHORTFALL_PO_INVALID_COPY,
+  SHORTFALL_PO_NO_ANSWER_COPY,
+  SHORTFALL_PO_QUANTITY_LABEL,
   SHORTFALL_PO_SUBMIT_LABEL,
   SHORTFALL_PO_TITLE,
-  SHORTFALL_PO_CHANGED_COPY,
-  SHORTFALL_SUPPLIER_UNKNOWN_COPY,
   shortfallDraftGroups,
   shortfallIdempotencyKey,
   shortfallPoCreatedCopy,
   shortfallPoCreatedRowCopy,
   shortfallPoFooterCopy,
   shortfallPoRetryable,
+  shortfallRefusalCopy,
+  shortfallSupplierIds,
   shortfallSupplierLabel,
+  shortfallViewWithMaxima,
   type ActionResult,
   type ShortfallKeyState,
   type ShortfallPoFailureReason,
@@ -33,6 +38,7 @@ import {
   type ShortfallPoRow,
   type ShortfallPoView,
   type ShortfallSelection,
+  type ShortfallSupplierName,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -81,19 +87,10 @@ function draftableChanged(a: ShortfallPoView, b: ShortfallPoView): boolean {
   return key(a) !== key(b);
 }
 
-/** The database's current most per item (shortfall_changed), applied to the
- *  rows at once, before readiness is read again: a row keeps its words until
- *  that read answers, and its field then says the new most. */
-function withCurrentMaxima(view: ShortfallPoView, current: Record<string, number> | null): ShortfallPoView {
-  if (!current) return view;
-  return {
-    ...view,
-    rows: view.rows.map((r) => {
-      const now = current[r.itemId.toLowerCase()];
-      return r.state === 'draftable' && now !== undefined ? { ...r, draftable: now } : r;
-    }),
-  };
-}
+/** Where focus goes when the dialog closes and the button that opened it is
+ *  gone (drafting took everything, so the refresh removed it): the strip's
+ *  "Check again", which is always there, rather than the page's body. */
+const FOCUS_FALLBACK = '[data-testid="readiness-recheck"]';
 
 type Phase = { step: 'choose' } | { step: 'drafting' } | { step: 'done'; result: ShortfallPoResult };
 
@@ -118,10 +115,12 @@ type Phase = { step: 'choose' } | { step: 'drafting' } | { step: 'done'; result:
  * choice makes, in the database's grouping (one per supplier, one more for the
  * items with no supplier), and says drafts are not sent.
  *
- * ON OPEN, one read (loadShortfallPoAction): readiness again and the supplier
- * names, in parallel; the page reads neither for this. A fresh answer that
- * offers something else replaces the rows and says so, keeping whatever was
- * already chosen (core keepShortfallSelection).
+ * ON OPEN, one read (loadShortfallPoAction): readiness again and the names of
+ * the suppliers the rows name (by id, archived ones included: core
+ * shortfallSupplierLabel says "an archived supplier"), in parallel; the page
+ * reads neither for this. A fresh answer that offers something else replaces
+ * the rows and says so, keeping whatever was already chosen (core
+ * keepShortfallSelection).
  *
  * DRAFT sends the chosen lines with an idempotency key minted for THAT
  * request (core shortfallIdempotencyKey): pressing Draft again for the same
@@ -131,14 +130,18 @@ type Phase = { step: 'choose' } | { step: 'drafting' } | { step: 'done'; result:
  *
  * REFUSALS stay in the dialog as an inline alert in core's words (pattern
  * #20). When stock or POs moved (shortfall_changed), the database's current
- * most applies to the rows at once, readiness is read again, and the choice
- * is KEPT: a quantity above the new most is shown as a problem to fix, never
- * lowered silently; an item with nothing left is unticked. "Busy" and a lost
- * answer keep the key, so pressing Draft again is the same request.
+ * most applies to the rows at once (core shortfallViewWithMaxima, the phone's
+ * rule too: a most is lowered, never raised), readiness is read again, and the
+ * choice is KEPT: a quantity above the new most is shown as a problem to fix,
+ * never lowered silently; an item with nothing left is unticked, and the
+ * alert names it (core shortfallRefusalCopy). "Busy" and a lost answer keep
+ * the key, so pressing Draft again is the same request. Any edit clears a
+ * shown refusal and drops the key, as on the phone.
  *
  * DONE: core's sentence from the answer (never from what was asked for) and a
- * link to each draft. The page is read again behind it. Drafts are not sent,
- * and nothing here emails or notifies anyone.
+ * link to each draft. The page is read again behind it. Drafts are not sent;
+ * no email or in-app notification goes out (the organization's integrations
+ * receive po.created per draft, as for every draft PO).
  *
  * THE PAGE MOUNTS IT ONCE, at the top, with `offer` null when nothing is
  * offered; an open dialog keeps its own copy until it is closed.
@@ -161,7 +164,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
   const [session, setSession] = React.useState<{ orderId: string; timeZone: string } | null>(null);
   const [view, setView] = React.useState<ShortfallPoView | null>(null);
   const [selection, setSelection] = React.useState<ShortfallSelection>({});
-  const [names, setNames] = React.useState<Record<string, string> | null>(null);
+  const [names, setNames] = React.useState<Record<string, ShortfallSupplierName> | null>(null);
   const [namesFailed, setNamesFailed] = React.useState(false);
   const [keyState, setKeyState] = React.useState<ShortfallKeyState | null>(null);
   const [phase, setPhase] = React.useState<Phase>({ step: 'choose' });
@@ -174,6 +177,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
   const inFlight = React.useRef(false);
   /** Bumped on every load and on close: an older answer is dropped. */
   const loadSeq = React.useRef(0);
+  /** Bumped on every edit: a refusal's words are not brought back over an
+   *  edit made while readiness was being read again. */
+  const editSeq = React.useRef(0);
   const openedBy = React.useRef<HTMLElement | null>(null);
 
   const drafting = phase.step === 'drafting';
@@ -184,20 +190,23 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     if (!touched.current) setKeyState(null);
   }
 
-  /** Reads readiness and the supplier names. `opened`: the view the dialog
-   *  opened with (the page's), when this is the read on open. */
-  async function load(forOrder: string, opened: ShortfallPoView | null) {
+  /** Reads readiness and the names of the suppliers `shown` names (the fresh
+   *  view's others too: the action reads those after). `opened`: the view the
+   *  dialog opened with (the page's), when this is the read on open. Answers
+   *  the fresh view it adopted, or null. */
+  async function load(forOrder: string, shown: ShortfallPoView, opened: ShortfallPoView | null) {
     const seq = ++loadSeq.current;
     let res: ShortfallPoLoad | null;
     try {
-      res = await loadShortfallPoAction({ orderId: forOrder });
+      res = await loadShortfallPoAction({ orderId: forOrder, supplierIds: shortfallSupplierIds(shown) });
     } catch {
       res = null;
     }
-    if (seq !== loadSeq.current) return;
+    if (seq !== loadSeq.current) return null;
     // Names already read stay when a later read fails.
-    if (res?.supplierNames) {
-      setNames(res.supplierNames);
+    const fresh = res?.supplierNames;
+    if (fresh) {
+      setNames((prev) => ({ ...prev, ...fresh }));
       setNamesFailed(false);
     } else {
       setNamesFailed(true);
@@ -207,7 +216,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     if (res?.view && !inFlight.current) {
       adopt(res.view);
       if (opened && draftableChanged(opened, res.view)) setNotice(SHORTFALL_PO_CHANGED_COPY);
+      return res.view;
     }
+    return null;
   }
 
   function onOpenChange(next: boolean) {
@@ -227,7 +238,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
       setError(null);
       setNotice(null);
       setOpen(true);
-      void load(live.orderId, live.view);
+      void load(live.orderId, live.view, live.view);
       return;
     }
     loadSeq.current++;
@@ -246,14 +257,17 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
 
   function returnFocus(e: Event) {
     const opener = openedBy.current;
-    const target =
-      opener && opener.isConnected
-        ? opener
-        : session
-          ? document.querySelector<HTMLElement>(`[data-shortfall-po="${session.orderId}"]`)
-          : null;
-    // The button is gone once nothing is left to draft: focus then goes where
-    // the dialog library puts it.
+    const usable = (el: HTMLElement | null): el is HTMLElement =>
+      !!el && el.isConnected && !(el as HTMLButtonElement).disabled;
+    const candidates = [
+      opener,
+      session ? document.querySelector<HTMLElement>(`[data-shortfall-po="${session.orderId}"]`) : null,
+      // The button is gone once nothing is left to draft (the refresh after
+      // drafting): the strip's "Check again", never the page's body (WCAG
+      // 2.4.3, review).
+      document.querySelector<HTMLElement>(FOCUS_FALLBACK),
+    ];
+    const target = candidates.find(usable);
     if (!target) return;
     e.preventDefault();
     target.focus();
@@ -261,8 +275,12 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
 
   function edit(itemId: string, change: { checked?: boolean; quantity?: string }) {
     touched.current = true;
-    // Any edit is another request: the next Draft mints its own key.
+    editSeq.current++;
+    // Any edit is another request: the next Draft mints its own key. A shown
+    // refusal was about the choice before the edit, so it goes too (the
+    // phone's rule; each row's own problem stays under its field).
     setKeyState(null);
+    setError(null);
     setSelection((sel) => {
       const cur = sel[itemId];
       if (!cur) return sel;
@@ -303,11 +321,11 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     }
     inFlight.current = false;
     if (!res) {
-      // Whether the drafts were made is unknown. The key stays with this
-      // request: pressing Draft again either makes them or answers with the
-      // ones already made, never both.
+      // Whether the drafts were made is unknown, and core's sentence says so.
+      // The key stays with this request: pressing Draft again either makes
+      // them or answers with the ones already made, never both.
       setPhase({ step: 'choose' });
-      setError(SHORTFALL_PO_FAILED_COPY);
+      setError(SHORTFALL_PO_NO_ANSWER_COPY);
       return;
     }
     if (res.ok) {
@@ -318,20 +336,40 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
     }
     const details = res.error.details ?? {};
     const reason = (typeof details.reason === 'string' ? details.reason : 'failed') as ShortfallPoFailureReason;
+    const message = res.error.message;
     setPhase({ step: 'choose' });
-    setError(res.error.message);
     // Only "busy" and a fault are the same request tried again.
     if (!shortfallPoRetryable(reason)) setKeyState(null);
-    if (reason === 'shortfall_changed') {
-      const patched = withCurrentMaxima(view, parseShortfallChangedDetail(details.current));
+    // The rows the person chose on, and what a refusal unticks from them:
+    // named in the alert, so a screen reader hears which items went.
+    const before = view;
+    let chosen = selection;
+    let unchosen: string[] = [];
+    let shown = view;
+    const current = reason === 'shortfall_changed' ? parseShortfallChangedDetail(details.current) : null;
+    if (current) {
+      // The database's own numbers, at once (core: lowered, never raised).
+      shown = shortfallViewWithMaxima(view, current);
+      const kept = keepShortfallSelection(chosen, shown);
+      chosen = kept.selection;
+      unchosen = kept.unchosen;
       touched.current = true;
-      setView(patched);
-      setSelection((sel) => keepShortfallSelection(sel, patched).selection);
+      setView(shown);
+      setSelection(chosen);
     }
+    setError(shortfallRefusalCopy(message, before, unchosen));
     if (RELOAD_ON.has(reason)) {
       touched.current = true;
-      void load(session.orderId, null);
       router.refresh();
+      const edits = editSeq.current;
+      const fresh = await load(session.orderId, shown, null);
+      // Items the fresh numbers untick too, named with the rest, unless the
+      // person has edited since (the refusal is then theirs to have cleared)
+      // or nothing is left to draft at all (that sentence says it all).
+      if (fresh && fresh.unavailable === null && editSeq.current === edits && !inFlight.current) {
+        const more = keepShortfallSelection(chosen, fresh).unchosen;
+        if (more.length > 0) setError(shortfallRefusalCopy(message, before, [...unchosen, ...more]));
+      }
     }
     if (reason === 'not_found') {
       // The page it sits on is replaced by "not found", and the dialog with it.
@@ -353,10 +391,14 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
   const canDraft = !!view && view.draftableCount > 0 && chosenLines.length > 0 && !drafting;
   const qtyHeaderId = `${ids}-qty-header`;
 
+  // A supplier in core's words: its name (or "an archived supplier"); "not
+  // found" only when a read that answered did not name it; "couldn't be
+  // loaded" when no read answered for it; null (a placeholder) while the
+  // first read is on its way.
   const supplierText = (supplierId: string | null): string | null => {
-    if (!supplierId) return shortfallSupplierLabel(null, {});
-    if (names) return shortfallSupplierLabel(supplierId, names);
-    return namesFailed ? SHORTFALL_SUPPLIER_UNKNOWN_COPY : null;
+    if (!supplierId) return shortfallSupplierLabel(null, null);
+    if (names && (supplierId in names || !namesFailed)) return shortfallSupplierLabel(supplierId, names);
+    return namesFailed ? shortfallSupplierLabel(supplierId, null) : null;
   };
 
   return (
@@ -403,7 +445,9 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
           </ul>
         )}
 
-        {!done && view && view.rows.length === 0 && (
+        {/* Not twice: a refusal that says the same (picked or closed, more
+            lines than are checked) is the alert below. */}
+        {!done && view && view.rows.length === 0 && view.unavailableCopy !== error && (
           <p className="text-sm" data-testid="draft-shortfall-po-unavailable">
             {view.unavailableCopy}
           </p>
@@ -414,7 +458,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
             {view.draftableCount > 0 && (
               <div className="text-muted-foreground flex justify-end px-3 text-xs" aria-hidden>
                 <span id={qtyHeaderId} className="w-24 text-right">
-                  Quantity
+                  {SHORTFALL_PO_QUANTITY_LABEL}
                 </span>
               </div>
             )}
@@ -462,12 +506,12 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         <DialogFooter>
           {done ? (
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="draft-shortfall-po-close">
-              Close
+              {SHORTFALL_PO_CLOSE_LABEL}
             </Button>
           ) : (
             <>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={drafting}>
-                Cancel
+                {SHORTFALL_PO_CANCEL_LABEL}
               </Button>
               <Button
                 type="button"

@@ -26,7 +26,8 @@ export const dynamic = 'force-dynamic';
  * floor, takes the reorder drafts' lock, recomputes what may be drafted and
  * refuses anything above it (never lowers it). One draft per supplier plus
  * one for the items with no supplier, all or nothing. Drafts are not sent;
- * nothing is emailed or notified.
+ * no email and no in-app notification is sent (the organization's configured
+ * integrations receive po.created per new draft, as for every draft PO).
  *
  * Body: {
  *   lines: [{ itemId: uuid, quantity: number > 0 }], 1 to 200, one per item;

@@ -172,7 +172,9 @@ export async function reviseOrderNeededBy(
  * shortfallIdempotencyKey: the same request keeps its key, so a retry after a
  * lost answer gets the first answer and never a second draft). The server
  * drafts one PO per supplier plus one for the items with no supplier, all or
- * nothing, sends nothing and emails no one.
+ * nothing, emails no one and writes no notification (the organization's
+ * configured integrations receive po.created per new draft, as for every
+ * draft PO).
  * Answers core's ShortfallPoResult (parseShortfallPoResult; `replay` true for
  * a repeated key). Throws an ApiError carrying `details.reason` on a refusal
  * (409 shortfall_changed with `details.current`, idempotency_conflict,

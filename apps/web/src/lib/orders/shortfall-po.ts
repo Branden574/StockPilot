@@ -1,4 +1,4 @@
-import type { ShortfallPoView } from '@stockpilot/core';
+import type { ShortfallPoView, ShortfallSupplierName } from '@stockpilot/core';
 
 /**
  * DRAFT A PO FOR WHAT AN ORDER IS SHORT (F2-5), the web order page's plumbing.
@@ -29,14 +29,15 @@ export interface ShortfallPoOffer {
 /**
  * What loadShortfallPoAction answers when the dialog opens, and again after a
  * refusal because the numbers moved: readiness read again (the view) and the
- * organization's supplier names (SuppliersService.listForLookups, id to
- * name). Either is null when it could not be read: the dialog keeps the view
- * it has, and a supplier it cannot name says so (core
- * SHORTFALL_SUPPLIER_UNKNOWN_COPY). The draft itself re-checks everything.
+ * names of the suppliers the rows name, read by id, archived ones included
+ * (SuppliersService.namesByIds; id to {name, archived}). Either is null when
+ * it could not be read: the dialog keeps the view it has, and a supplier it
+ * cannot name says so (core shortfallSupplierLabel). The draft itself
+ * re-checks everything.
  */
 export interface ShortfallPoLoad {
   view: ShortfallPoView | null;
-  supplierNames: Record<string, string> | null;
+  supplierNames: Record<string, ShortfallSupplierName> | null;
 }
 
 /** Opens the dialog; `trigger` is the button pressed (focus returns to it). */

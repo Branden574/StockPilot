@@ -50,6 +50,25 @@ import {
   shortfallRowAccessibilityLabel,
   shortfallSupplierLabel,
   type ShortfallPoView,
+  // F2-5 review fixes
+  missingShortfallSupplierIds,
+  readShortfallSupplierRows,
+  SHORTFALL_PO_CANCEL_LABEL,
+  SHORTFALL_PO_CLOSE_LABEL,
+  SHORTFALL_PO_NO_ANSWER_COPY,
+  SHORTFALL_PO_OPEN_DRAFT_HINT,
+  SHORTFALL_PO_PHONE_STRIP_HINT,
+  SHORTFALL_PO_QUANTITY_LABEL,
+  SHORTFALL_PO_TIMEOUT_COPY,
+  SHORTFALL_PO_TOO_MANY_COPY,
+  SHORTFALL_PO_UNREADABLE_COPY,
+  SHORTFALL_SUPPLIER_NOT_FOUND_COPY,
+  shortfallArchivedSupplierCopy,
+  shortfallPoTimelineDetail,
+  shortfallRefusalCopy,
+  shortfallSupplierIds,
+  shortfallUnchosenCopy,
+  shortfallViewWithMaxima,
 } from './shortfall-po';
 
 // ── Builders (the readiness facts, as order_readiness_facts returns them) ────
@@ -181,12 +200,50 @@ describe('shortfallPoView', () => {
     expect(v.unavailable).toBeNull();
     expect(v.orderNumber).toBe('SO-000123');
     expect(v.rows.map((r) => [r.itemId, r.state, r.short, r.onOrderOrDraft, r.draftable, r.detail])).toEqual([
-      ['a', 'draftable', 10, 1, 9, 'Short 10 · already on order or draft 1'],
+      // The 4 other orders need is said too (review: the row hid it).
+      ['a', 'draftable', 10, 1, 9, 'Short 10 · already on order or draft 1 · 4 more on order or draft are already needed by other orders'],
       ['b', 'draftable', 5, 0, 5, 'Short 5'],
     ]);
     expect(v.draftableCount).toBe(2);
     expect(v.hiddenItems).toBe(0);
     expect(v.hiddenNote).toBeNull();
+  });
+
+  // Review (numbers lens): two approved orders each 10 short of X, nothing
+  // held. Drafting 10 for SO-A leaves SO-A's draftable at 10 (SO-B's 10 takes
+  // that draft first), and the row said only "Short 10": the draft just made
+  // was invisible and drafting was offered again.
+  it('a row says when what is on order or on a draft is already needed by other orders', () => {
+    const v = view(
+      facts(
+        [
+          { id: 'l1', item: 'a', requested: 10 },
+          { id: 'l2', item: 'b', requested: 12 },
+          { id: 'l3', item: 'c', requested: 5 },
+        ],
+        [
+          // a: 10 short; a draft of 10; another approved order 10 short: 10 - max(0, 10 - 10) = 10.
+          item('a', { drafts: drafts([['PO-2026-0001', 10]]), committedOtherShortfall: 10 }),
+          // b: 12 short; 6 on order + 2 on a draft; other orders need 3: 12 - max(0, 8 - 3) = 7.
+          item('b', {
+            inbound: inbound([['PO-2026-0002', 6]]),
+            drafts: drafts([['PO-2026-0003', 2]]),
+            committedOtherShortfall: 3,
+          }),
+          // c: 5 short; 1 on order, 1 needed elsewhere: all 5 draftable.
+          item('c', { inbound: inbound([['PO-2026-0004', 1]]), committedOtherShortfall: 1 }),
+        ],
+      ),
+    );
+    expect(v.rows.map((r) => [r.itemId, r.draftable, r.onOrderOrDraft, r.detail])).toEqual([
+      ['a', 10, 0, 'Short 10 · 10 on order or draft are already needed by other orders'],
+      ['b', 7, 5, 'Short 12 · already on order or draft 5 · 3 more on order or draft are already needed by other orders'],
+      ['c', 5, 0, 'Short 5 · 1 on order or draft is already needed by other orders'],
+    ]);
+    // Read aloud too (the row's accessibility label carries its detail).
+    expect(shortfallRowAccessibilityLabel(v.rows[0]!, 'Acme')).toBe(
+      'Item a, SKU-a. Short 10 · 10 on order or draft are already needed by other orders. Up to 10 can be drafted. Supplier: Acme.',
+    );
   });
 
   it('a short item that open POs or drafts already cover is shown, not draftable, with what covers it', () => {
@@ -296,12 +353,63 @@ describe('shortfallPoView', () => {
 
 describe('the supplier and the row, in words', () => {
   it('names the supplier, says when there is none, and never invents a name', () => {
-    const names = new Map([[SUP1, 'Acme School Supply']]);
+    const names = new Map([[SUP1, { name: 'Acme School Supply', archived: false }]]);
     expect(shortfallSupplierLabel(SUP1, names)).toBe('Acme School Supply');
-    expect(shortfallSupplierLabel(SUP1, { [SUP1]: 'Acme School Supply' })).toBe('Acme School Supply');
+    expect(shortfallSupplierLabel(SUP1, { [SUP1]: { name: 'Acme School Supply', archived: false } })).toBe('Acme School Supply');
     expect(shortfallSupplierLabel(null, names)).toBe(SHORTFALL_NO_SUPPLIER_COPY);
+    expect(shortfallSupplierLabel(null, null)).toBe(SHORTFALL_NO_SUPPLIER_COPY);
     expect(SHORTFALL_NO_SUPPLIER_COPY).toBe('No supplier: goes on a draft without one; choose a supplier before ordering.');
-    expect(shortfallSupplierLabel(SUP2, names)).toBe(SHORTFALL_SUPPLIER_UNKNOWN_COPY);
+  });
+
+  // Review (three lenses): an item whose supplier is archived goes on a draft
+  // for that supplier (0385, as the reorder drafts), but the old label said
+  // its name "couldn't be loaded", which was not what happened.
+  it('says "couldn\'t be loaded" only when the names read failed; an archived supplier is named as archived; an id the read did not return is "not found"', () => {
+    expect(shortfallSupplierLabel(SUP1, null)).toBe(SHORTFALL_SUPPLIER_UNKNOWN_COPY);
+    expect(SHORTFALL_SUPPLIER_UNKNOWN_COPY).toBe("Its supplier (the name couldn't be loaded).");
+    const names = new Map([
+      [SUP1, { name: 'Acme School Supply', archived: true }],
+    ]);
+    expect(shortfallSupplierLabel(SUP1, names)).toBe(shortfallArchivedSupplierCopy('Acme School Supply'));
+    expect(shortfallArchivedSupplierCopy('Acme School Supply')).toBe(
+      'Acme School Supply (an archived supplier): check the supplier before ordering.',
+    );
+    expect(shortfallSupplierLabel(SUP2, names)).toBe(SHORTFALL_SUPPLIER_NOT_FOUND_COPY);
+    expect(SHORTFALL_SUPPLIER_NOT_FOUND_COPY).toBe('Its supplier (not found).');
+    // A blank name is not a name.
+    expect(shortfallSupplierLabel(SUP1, new Map([[SUP1, { name: '  ', archived: false }]]))).toBe(
+      SHORTFALL_SUPPLIER_NOT_FOUND_COPY,
+    );
+  });
+
+  it('reads supplier rows (id, name, deleted_at) into names, archived included, and never guesses at a bad row', () => {
+    expect(
+      readShortfallSupplierRows([
+        { id: SUP1, name: 'Acme', deleted_at: null },
+        { id: SUP2, name: 'Old Co', deleted_at: '2026-09-01T00:00:00Z' },
+        { id: 'x', name: '', deleted_at: null },
+        { id: 7, name: 'bad id' },
+        null,
+      ]),
+    ).toEqual({ [SUP1]: { name: 'Acme', archived: false }, [SUP2]: { name: 'Old Co', archived: true } });
+    expect(readShortfallSupplierRows('nope')).toBeNull();
+  });
+
+  it('lists the suppliers a view names (to read their names by id: no organization-wide list, no row cap) and the ones a read has not answered', () => {
+    const v = view(
+      facts(
+        [
+          { id: 'l1', item: 'a', requested: 3 },
+          { id: 'l2', item: 'b', requested: 3 },
+          { id: 'l3', item: 'c', requested: 3 },
+        ],
+        [item('a', { supplierId: SUP2 }), item('b', { supplierId: SUP1 }), item('c', { supplierId: null })],
+      ),
+    );
+    expect(shortfallSupplierIds(v)).toEqual([SUP1, SUP2]);
+    expect(missingShortfallSupplierIds(v, { [SUP1]: { name: 'Acme', archived: false } })).toEqual([SUP2]);
+    expect(missingShortfallSupplierIds(v, new Map([[SUP1, { name: 'A', archived: false }], [SUP2, { name: 'B', archived: true }]]))).toEqual([]);
+    expect(missingShortfallSupplierIds(v, null)).toEqual([SUP1, SUP2]);
   });
 
   it('reads a row aloud in one sentence each, without doubled periods', () => {
@@ -621,6 +729,130 @@ describe('every sentence (honest words)', () => {
       expect(s, s).not.toMatch(/\bbooks?\b|%|guarantee|verified/i);
       // "sent" only as "not sent".
       expect(s.replace(/\bnot sent\b/g, ''), s).not.toMatch(/\bsent\b|\bemailed\b|\bnotified\b/i);
+    }
+  });
+});
+
+// ── Review fixes (F2-5 review: one rule and one sentence on both platforms) ──
+
+describe('shortfallViewWithMaxima (the database\'s current most, laid over the rows when readiness cannot be read again)', () => {
+  const v = view(
+    facts(
+      [
+        { id: 'l1', item: 'a', requested: 6 },
+        { id: 'l2', item: 'b', requested: 4 },
+        { id: 'l3', item: 'c', requested: 3 },
+        { id: 'l4', item: 'd', requested: 2 },
+      ],
+      [item('a'), item('b'), item('c'), item('d', { inbound: inbound([['PO-2026-0009', 5]]) })],
+    ),
+  );
+
+  it('lowers a most, never raises one, and a row with nothing left is no longer offered', () => {
+    const out = shortfallViewWithMaxima(v, { a: 2, b: 9, c: 0 });
+    expect(out.rows.map((r) => [r.itemId, r.state, r.draftable, r.detail])).toEqual([
+      ['a', 'draftable', 2, 'Short 6'],
+      // 9 is more than the 4 the row offered: the row keeps 4.
+      ['b', 'draftable', 4, 'Short 4'],
+      ['c', 'covered', 0, SHORTFALL_PO_NOTHING_LEFT_COPY],
+      // Not draftable before: untouched.
+      ['d', 'covered', 0, v.rows[3]!.detail],
+    ]);
+    expect(out.draftableCount).toBe(2);
+    expect(out.rows.find((r) => r.itemId === 'c')!.onOrderOrDraft).toBe(3);
+  });
+
+  it('an item the database did not answer for is treated as nothing left (never more than it said)', () => {
+    const out = shortfallViewWithMaxima(v, { a: 6 });
+    expect(out.rows.map((r) => [r.itemId, r.state, r.draftable])).toEqual([
+      ['a', 'draftable', 6],
+      ['b', 'covered', 0],
+      ['c', 'covered', 0],
+      ['d', 'covered', 0],
+    ]);
+  });
+});
+
+describe('the items unticked after a refusal, named (screen readers heard only the generic sentence)', () => {
+  const before = view(
+    facts(
+      [
+        { id: 'l1', item: 'a', requested: 3 },
+        { id: 'l2', item: 'b', requested: 3 },
+      ],
+      [item('a', { name: 'Maus I' }), item('b', { name: 'Maus II' })],
+    ),
+  );
+
+  it('says which chosen items are no longer chosen, and nothing when none', () => {
+    expect(shortfallUnchosenCopy(before, [])).toBeNull();
+    expect(shortfallUnchosenCopy(before, ['a'])).toBe('No longer chosen: Maus I. Nothing is left to draft for it.');
+    expect(shortfallUnchosenCopy(before, ['a', 'b'])).toBe(
+      'No longer chosen: Maus I, Maus II. Nothing is left to draft for them.',
+    );
+    // An id the view does not know is not named.
+    expect(shortfallUnchosenCopy(before, ['zz'])).toBeNull();
+  });
+
+  it('adds it to the refusal, so it is announced with it', () => {
+    expect(shortfallRefusalCopy(SHORTFALL_PO_CHANGED_COPY, before, ['b'])).toBe(
+      `${SHORTFALL_PO_CHANGED_COPY} No longer chosen: Maus II. Nothing is left to draft for it.`,
+    );
+    expect(shortfallRefusalCopy(SHORTFALL_PO_CHANGED_COPY, before, [])).toBe(SHORTFALL_PO_CHANGED_COPY);
+  });
+
+  it('keepShortfallSelection lists exactly the chosen rows it unticks', () => {
+    const after = shortfallViewWithMaxima(before, { a: 0, b: 3 });
+    const sel = { a: { checked: true, quantity: '3' }, b: { checked: true, quantity: '3' } };
+    expect(keepShortfallSelection(sel, after).unchosen).toEqual(['a']);
+    expect(keepShortfallSelection({ ...sel, a: { checked: false, quantity: '3' } }, after).unchosen).toEqual([]);
+  });
+});
+
+describe('the timeline entry (moved from the web page into core)', () => {
+  it('names the drafts, how many items and units, and that drafts are not sent; says nothing it cannot read', () => {
+    expect(
+      shortfallPoTimelineDetail({
+        po_numbers: ['PO-2026-0052'],
+        lines: [{ item_id: 'A', quantity: 1, purchase_order_id: 'p1' }],
+      }),
+    ).toBe('Draft PO-2026-0052 for 1 item, 1 unit. Drafts are not sent.');
+    expect(
+      shortfallPoTimelineDetail({
+        po_numbers: ['PO-2026-0052', 'PO-2026-0053'],
+        lines: [
+          { item_id: 'a', quantity: 10, purchase_order_id: 'p1' },
+          { item_id: 'b', quantity: 5.5, purchase_order_id: 'p1' },
+          { item_id: 'c', quantity: 0, purchase_order_id: 'p2' },
+          { item_id: 'A', quantity: 0.0001 },
+        ],
+      }),
+    ).toBe('2 draft POs for 2 items, 15.5001 units: PO-2026-0052, PO-2026-0053. Drafts are not sent.');
+    expect(shortfallPoTimelineDetail({ po_numbers: [], lines: [{ item_id: 'a', quantity: 1 }] })).toBeNull();
+    expect(shortfallPoTimelineDetail({ po_numbers: ['PO-1'], lines: 'x' })).toBeNull();
+    expect(shortfallPoTimelineDetail(null)).toBeNull();
+  });
+});
+
+describe('words both platforms say (were phone-only or missing)', () => {
+  it('the controls, the hints, and the sentences for an answer that never came, a timeout, an unreadable answer and the rate limit', () => {
+    expect(SHORTFALL_PO_QUANTITY_LABEL).toBe('Quantity');
+    expect(SHORTFALL_PO_CANCEL_LABEL).toBe('Cancel');
+    expect(SHORTFALL_PO_CLOSE_LABEL).toBe('Close');
+    expect(SHORTFALL_PO_OPEN_DRAFT_HINT).toBe('Opens this draft PO');
+    expect(SHORTFALL_PO_PHONE_STRIP_HINT).toBe('Opens a sheet to draft purchase orders for what this order is short');
+    // A lost answer: the drafts may exist; the same request again shows them.
+    expect(SHORTFALL_PO_NO_ANSWER_COPY).toBe(
+      'No answer came back, so the drafts may or may not have been made. Press Draft again: if they were made, it shows them instead of making more.',
+    );
+    // A statement timeout rolls the whole call back.
+    expect(SHORTFALL_PO_TIMEOUT_COPY).toBe('Drafting took too long, so nothing was drafted. Try again.');
+    expect(SHORTFALL_PO_UNREADABLE_COPY).toBe(
+      "The drafts may have been created, but the answer couldn't be read. What is already on a draft is shown; check it before drafting again.",
+    );
+    expect(SHORTFALL_PO_TOO_MANY_COPY).toBe('Too many requests. Wait a moment and try again.');
+    for (const t of [SHORTFALL_PO_NO_ANSWER_COPY, SHORTFALL_PO_TIMEOUT_COPY, SHORTFALL_PO_UNREADABLE_COPY]) {
+      expect(t, t).not.toMatch(/\bbooks?\b|%|guarantee|verified|\bsent\b|emailed|notified/i);
     }
   });
 });

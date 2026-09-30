@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import { audit } from './audit';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -24,6 +25,8 @@ export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
 
 export const updateSupplierSchema = createSupplierSchema.partial();
 export type UpdateSupplierInput = z.infer<typeof updateSupplierSchema>;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class SuppliersService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -58,6 +61,35 @@ export class SuppliersService {
   async listForLookups() {
     if (!isModuleEnabled(this.ctx, 'suppliers')) return [];
     return this.list();
+  }
+
+  /**
+   * The names of the given suppliers, ARCHIVED ONES INCLUDED, read by id
+   * (batched `.in()`, each batch paged: no organization-wide list and no
+   * PostgREST row cap, pattern #3). For a LABEL of the supplier a record
+   * already carries, where "archived" is part of the honest answer: F2-5's
+   * shortfall rows name the supplier each draft will go to, which is the
+   * item's supplier as recorded, archived or not (0385, as every PO path).
+   *
+   * Not gated on the Suppliers module, like PurchaseOrdersService's supplier
+   * names for the reorder drafts and the phone's PO screen: the record names
+   * its supplier whatever the module says (suppliers_select admits every
+   * member). A picker still uses listForLookups(). Ids that are not uuids are
+   * dropped before the read. Throws on a failed read.
+   */
+  async namesByIds(ids: readonly string[]): Promise<Array<{ id: string; name: string; deleted_at: string | null }>> {
+    const wanted = [...new Set(ids.filter((id) => UUID_RE.test(id)).map((id) => id.toLowerCase()))];
+    if (wanted.length === 0) return [];
+    const ctx = this.ctx;
+    return fetchAllRowsByIds<{ id: string; name: string; deleted_at: string | null }>(wanted, (batch) => (from, to) =>
+      ctx.supabase
+        .from('suppliers')
+        .select('id, name, deleted_at')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .order('id')
+        .range(from, to),
+    );
   }
 
   async list(opts: { includeArchived?: boolean } = {}) {
