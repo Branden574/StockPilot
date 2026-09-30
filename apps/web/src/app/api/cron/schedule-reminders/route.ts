@@ -194,16 +194,26 @@ export async function GET(req: Request) {
       if (!isOneHour && !isDayAhead) continue;
 
       // Stamp FIRST (crash-safe dedupe), and only proceed if we won the write.
+      // Also guarded on the start and the status this run READ: the events
+      // were read at the top and each is stamped only after the emails for
+      // the ones before it, and meanwhile a needed-by change
+      // (revise_order_needed_by) or a Schedule edit can move the event, or it
+      // can be closed. A move clears both stamps so the NEW time is reminded;
+      // a stamp from this stale read would send a reminder naming the old time
+      // and then suppress the new time's day-ahead one. Such an event is
+      // skipped here, and the next run reads it as it is.
       const stamp = isOneHour ? { reminded_1h_at: nowIso } : { reminded_24h_at: nowIso };
       const guard = isOneHour ? 'reminded_1h_at' : 'reminded_24h_at';
       const { data: stamped } = await admin
         .from('schedule_events')
         .update(stamp)
         .eq('id', ev.id)
+        .eq('starts_at', ev.starts_at)
+        .eq('status', 'scheduled')
         .is(guard, null)
         .select('id')
         .maybeSingle();
-      if (!stamped) continue; // another run beat us
+      if (!stamped) continue; // another run beat us, or the event moved or closed
 
       // Recipients: assignee + org managers, deduped.
       const { data: mgrs } = await admin
