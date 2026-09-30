@@ -1,5 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { ArrowLeft } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -15,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PoAttachments } from '@/components/po-attachments';
+import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
@@ -77,6 +79,15 @@ interface ReceiptHistoryItem {
 export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  // The root stack shows no header, so this screen carries its own Back (the
+  // other card screens' chip). A draft opened from the order's "Draft PO for
+  // what is short" result is read-only here, and was left only by the edge
+  // swipe before (local walk 2026-09-30). Opened with nothing behind it (a
+  // link), it goes home, as the order screen does.
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   const { orgId } = useOrg();
   const [header, setHeader] = React.useState<PoHeader | null>(null);
@@ -576,6 +587,10 @@ export default function PoReceiveScreen() {
           headerTintColor: theme.text,
         }}
       />
+      {/* Above every state (loading, "Could not load this PO", the PO). */}
+      <View style={styles.topbar}>
+        <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+      </View>
 
       {loading ? (
         <View style={styles.center}>
@@ -1002,6 +1017,8 @@ function formatReceiptDate(iso: string | null): string {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // The order screen's top bar: the 44 pt chip frame, 3 pt outside the 38 pt chip.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   headerBar: {
     flexDirection: 'row',
     alignItems: 'center',

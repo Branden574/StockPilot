@@ -425,6 +425,24 @@ describe('the draft sheet', () => {
       // The offline note stays beside Draft, outside the body.
       expect(sheetCode.indexOf('{READINESS_NEEDS_CONNECTION_COPY}')).toBeGreaterThan(sheetCode.indexOf('</ScrollView>'));
     });
+
+    // Local walk 2026-09-30 (iPad, AX5): the body scrolled to the footer
+    // before Draft kept that offset when the result replaced the rows, so the
+    // sheet opened mid-sentence with "Created 2 draft POs:" hidden above.
+    // Mutation caught: the result shown without bringing its start into view.
+    it('the result is the first thing in the body, which is scrolled to it', () => {
+      expect(sheetCode).toMatch(
+        /React\.useEffect\(\(\) => \{\s*if \(created !== null\) bodyNode\.current\?\.scrollTo\(\{ y: 0, animated: true \}\);\s*\}, \[created\]\);/,
+      );
+      const opening = ts.isJsxElement(body.el) ? body.el.openingElement.getEnd() : body.el.getEnd();
+      const bodyText = codeOnly(sheetSrc.slice(opening, body.el.getEnd()));
+      // Only the refusal (cleared when Draft is pressed) and the opening
+      // notice (hidden once drafted) come before it.
+      const createdAt = bodyText.indexOf('{created ? (');
+      expect(createdAt).toBeGreaterThan(-1);
+      expect(bodyText.slice(0, createdAt)).toMatch(/\{notice && !error && !created \? \(/);
+      expect(sheetCode).toMatch(/setBusy\(true\);\s*setError\(null\);/);
+    });
   });
 });
 
@@ -473,5 +491,24 @@ describe('the PO screen opens a draft read-only', () => {
     expect(po).toMatch(/\{reviewOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
     expect(po).toMatch(/\{reviewOnly \? \(\s*<View style=\{styles\.partNotice\}>\s*<Text style=\{styles\.partNoticeText\}>\{PO_DRAFT_REVIEW_COPY\}<\/Text>/);
     expect(po).toContain("if (s === 'draft') return 'Draft';");
+  });
+
+  // Local walk 2026-09-30 (iPad and iPhone 17): the root stack shows no
+  // header and this screen drew none of its own, so a draft opened from the
+  // sheet's result rows (read-only, nothing to do there) could be left only
+  // by the edge swipe. Every other card screen has the Back chip.
+  // Mutations caught: no Back; Back only once the PO has loaded (loading and
+  // "Could not load this PO" had no way out); a Back under 44 pt or unnamed;
+  // no way home when the screen was opened with nothing to go back to.
+  it('a Back chip, 44 pt and named, sits above every state of the screen', () => {
+    expect(po).toContain("import { ArrowLeft } from 'lucide-react-native';");
+    expect(po).toContain("import { IconChip } from '@/components/ui/row';");
+    expect(count(po, '<IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />')).toBe(1);
+    expect(po).toMatch(
+      /const goBack = \(\) => \{\s*if \(router\.canGoBack\(\)\) router\.back\(\);\s*else router\.replace\('\/'\);\s*\};/,
+    );
+    const back = po.indexOf('<IconChip icon={ArrowLeft}');
+    expect(back).toBeGreaterThan(po.indexOf('<Stack.Screen'));
+    expect(back).toBeLessThan(po.indexOf('{loading ? ('));
   });
 });

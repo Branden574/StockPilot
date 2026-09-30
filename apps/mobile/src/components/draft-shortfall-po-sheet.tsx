@@ -165,6 +165,12 @@ export function DraftShortfallPoSheet({
   React.useEffect(() => {
     if (error !== null) bodyNode.current?.scrollTo({ y: 0, animated: true });
   }, [error]);
+  // The result replaces the rows and is the first thing in the body: its
+  // start ("Created 2 draft POs: ...") is brought into view wherever the
+  // body was scrolled before Draft (at large text sizes it was hidden above).
+  React.useEffect(() => {
+    if (created !== null) bodyNode.current?.scrollTo({ y: 0, animated: true });
+  }, [created]);
   // The web dialog's notice is a polite live region; iOS gives a Text none,
   // so it is announced when the sheet opens with it.
   React.useEffect(() => {
