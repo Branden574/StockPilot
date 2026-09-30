@@ -829,8 +829,13 @@ select is(
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
-  'order_requests + schedule_events policies|c388801c0cca0196bed7d51dc7df2096|8',
-  'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against');
+  -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
+  -- schedule_events insert and update WITH CHECK gained
+  -- order_request_in_org(order_request_id, organization_id); every earlier
+  -- term is kept (0384's pgTAP G8 pins the exact text). F2-4's function
+  -- never changes the link, so what it was proven against still holds.
+  'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8',
+  'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against (schedule_events as 0384 left them)');
 select ok(
   (select bool_and(has_column_privilege('authenticated', 'public.schedule_events', c, 'UPDATE'))
      from unnest(array['starts_at', 'reminded_24h_at', 'reminded_1h_at', 'updated_by']) c),
