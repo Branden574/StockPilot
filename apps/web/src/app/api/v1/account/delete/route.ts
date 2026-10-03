@@ -170,7 +170,9 @@ export async function POST(req: NextRequest) {
           { status: 403 },
         );
       }
-      // gone: the account no longer exists (another request deleted it). The
+      // gone: the account no longer exists. Reached only in a race: this
+      // request's bearer was verified (getUser) while GoTrue still had the
+      // user, and another request deleted the account before this check. The
       // phone then signs out and says it was deleted, which is the truth; the
       // request that deleted it wrote the audit row (review R7).
       if (check.kind === 'gone') return NextResponse.json({ ok: true });

@@ -571,11 +571,12 @@ export async function deleteOwnAccountAction(input: {
       }
       // retry (a row lock or a deadlock) or check_failed: nothing was changed.
       if (check.kind !== 'gone') return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
-      // gone: the account no longer exists. The session cookie is verified
-      // locally (getClaims), so a second browser or tab still reaches here
-      // after the person's phone or another tab deleted it. Say so and end
-      // this browser's session below; the request that deleted it wrote the
-      // audit row (review R7).
+      // gone: the account no longer exists. Reached only in a race: this
+      // request passed the MFA gate while GoTrue still had the user, and the
+      // person's other request (the phone, another tab) deleted the account
+      // before this check; once it is gone, the gate itself refuses first. Say
+      // so and end this browser's session below; the request that deleted it
+      // wrote the audit row (review R7).
     } else {
       // Now delete the auth user. Profile + membership rows cascade via the
       // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
