@@ -39,12 +39,16 @@ export type AccountDeletionCheck =
   | {
       ok: false;
       /**
-       *  - blocked: a record the organization keeps refuses the delete (the
-       *    first refusal's constraint and table are carried for reports);
+       *  - blocked: a record the organization keeps refuses the delete, an
+       *    integrity refusal (SQLSTATE class 23: a RESTRICT or NO ACTION key,
+       *    a CHECK, a NOT NULL); the first refusal's constraint and table are
+       *    carried for reports;
        *  - retry: a row lock or a deadlock (55P03, 40P01): nothing changed,
        *    try again in a minute;
        *  - check_failed: the check itself could not answer (RPC error,
-       *    unexpected shape): fail closed;
+       *    unexpected shape, or any other error the dry run caught: a
+       *    read-only transaction, a lost privilege, a trigger's raise): fail
+       *    closed and report it as an error;
        *  - gone: there is no such account (already deleted).
        */
       kind: 'blocked' | 'retry' | 'check_failed' | 'gone';
@@ -70,6 +74,18 @@ export function accountDeleteRateKey(userId: string): string {
 }
 
 const RETRY_SQLSTATES = new Set(['55P03', '40P01']);
+
+/**
+ * Only an integrity refusal means "a record the organization keeps".
+ * account_deletion_check returns every error its subtransaction catches as
+ * reason 'blocked' with the SQLSTATE; anything outside class 23 is the system
+ * failing (a read-only transaction answered 25006 and a lost DELETE privilege
+ * 42501 in rolled-back probes, review R1), so it must say "try again" and be
+ * reported as an error, never "linked to records" at info level.
+ */
+function isIntegrityRefusal(sqlstate: string): boolean {
+  return sqlstate.startsWith('23');
+}
 
 /**
  * Ask the database whether `userId`'s account can be deleted. Never throws:
@@ -116,6 +132,13 @@ export async function checkAccountDeletable(
     if (sqlstate && RETRY_SQLSTATES.has(sqlstate)) {
       return { ok: false, kind: 'retry', sqlstate };
     }
+    if (!sqlstate || !isIntegrityRefusal(sqlstate)) {
+      void reportError(new Error('account_deletion_check caught an error that is not a refusal'), {
+        tag: 'account.delete.check_failed',
+        extra: { source, sqlstate: sqlstate ?? null, constraint: constraint ?? null, table: table ?? null },
+      });
+      return { ok: false, kind: 'check_failed', ...(sqlstate ? { sqlstate } : {}) };
+    }
     // Expected for accounts linked to kept records (plan O-A2-3); reported at
     // info level with the constraint and table names only, so support can
     // see what blocks a request without any person's data in the report.
@@ -138,6 +161,46 @@ export async function checkAccountDeletable(
     extra: { source, reason: typeof answer.reason === 'string' ? answer.reason : null },
   });
   return { ok: false, kind: 'check_failed' };
+}
+
+/**
+ * What happened when `auth.admin.deleteUser` answered an error (review R7).
+ *
+ *  - deleted_elsewhere: GoTrue answered the DELETE itself with 404
+ *    user_not_found, so the account was already gone when this request asked
+ *    (another request deleted it, the same person's phone and browser at once).
+ *    That request writes its own audit row.
+ *  - deleted: any other error (a lost reply: AuthRetryableFetchError status 0;
+ *    a 5xx), and GoTrue now says the user does not exist: this request's
+ *    delete happened and only its reply failed. The caller writes the audit
+ *    row and answers success.
+ *  - not_deleted: the account is still there, or GoTrue could not answer the
+ *    second question either. The caller keeps its failure answer.
+ *
+ * Only a 404 that carries code `user_not_found` (both the DELETE and
+ * GET /admin/users/<id> answer that for a missing user on GoTrue v2,
+ * a2-evidence/review-gotrue-shapes.log) counts as proof. Never throws.
+ */
+export type FailedDeleteSettlement = 'deleted' | 'deleted_elsewhere' | 'not_deleted';
+
+function isUserNotFound(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as { status?: unknown; code?: unknown };
+  return o.status === 404 && o.code === 'user_not_found';
+}
+
+export async function settleFailedDelete(
+  admin: AdminClient,
+  userId: string,
+  deleteError: unknown,
+): Promise<FailedDeleteSettlement> {
+  if (isUserNotFound(deleteError)) return 'deleted_elsewhere';
+  try {
+    const { error } = await admin.auth.admin.getUserById(userId);
+    return isUserNotFound(error) ? 'deleted' : 'not_deleted';
+  } catch {
+    return 'not_deleted';
+  }
 }
 
 /**

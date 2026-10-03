@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { useStepUp } from '@/components/auth/step-up-modal';
+import { orphanAccountNotices } from '@/components/platform/remove-org-notices';
 import { removeOrgAction } from '@/server/actions/platform-admin';
 
 /**
@@ -78,19 +79,18 @@ export function RemoveOrgDialog({
         res = await removeOrgAction(payload);
       }
       if (res.ok) {
-        const { deletedUsers, keptUsers } = res.data;
+        const { deletedUsers, keptUsers, failedUsers } = res.data;
         toast.success(
           deletedUsers > 0
             ? `Deleted “${orgName}” and ${deletedUsers} orphaned account${deletedUsers === 1 ? '' : 's'}.`
             : `Deleted “${orgName}”.`,
         );
-        // Accounts linked to records kept elsewhere (or whose delete failed)
-        // are left in place and counted, never reported as deleted (0388).
-        if (keptUsers > 0) {
-          toast.info(
-            `${keptUsers} account${keptUsers === 1 ? ' was' : 's were'} kept because ${keptUsers === 1 ? 'it is' : 'they are'} linked to records that must be kept.`,
-          );
-        }
+        // Accounts linked to records kept elsewhere, and accounts whose check
+        // or delete failed, are left in place and counted apart, never
+        // reported as deleted (0388, review R8).
+        const notices = orphanAccountNotices({ keptUsers, failedUsers });
+        if (notices.kept) toast.info(notices.kept);
+        if (notices.failed) toast.warning(notices.failed);
         setOpen(false);
         reset();
         router.push('/platform');

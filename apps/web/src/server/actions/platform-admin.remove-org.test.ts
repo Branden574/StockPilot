@@ -10,12 +10,21 @@ import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock'
  * `{ error }` and count the account as deleted anyway, so the operator's dialog
  * and the platform audit could claim accounts were gone while they were not.
  * Now it asks account_deletion_check first: an account linked to records kept
- * elsewhere is kept and counted, a failed delete is kept and counted, an
- * account already gone is neither.
+ * elsewhere is KEPT and counted; a check that could not answer, or a delete
+ * that failed, is counted as FAILED (review R8: it used to be counted as kept
+ * "because linked to records", so a transient fault read as a permanent
+ * refusal); a delete that errored although GoTrue no longer has the user is
+ * DELETED (review R7); an account already gone is neither.
  */
 
-const { deleteUser, recordPlatformAudit, reportError } = vi.hoisted(() => ({
-  deleteUser: vi.fn(async (_uid: string) => ({ error: null as { message: string } | null })),
+const { deleteUser, getUserById, recordPlatformAudit, reportError } = vi.hoisted(() => ({
+  deleteUser: vi.fn(async (_uid: string) => ({
+    error: null as { message: string; status?: number; code?: string; name?: string } | null,
+  })),
+  getUserById: vi.fn(async (_uid: string) => ({
+    data: { user: { id: 'present' } as { id: string } | null },
+    error: null as { message: string; status?: number; code?: string } | null,
+  })),
   recordPlatformAudit: vi.fn(async (_row: unknown) => {}),
   reportError: vi.fn(async () => {}),
 }));
@@ -52,7 +61,15 @@ const adminStub = makeSupabaseStub({
     // The pre-delete member list, then the membership counts (0 = orphan).
     if (callArgs(call, 'select')?.[0] === 'user_id') {
       return {
-        data: [{ user_id: 'u-free' }, { user_id: 'u-blocked' }, { user_id: 'u-gone' }, { user_id: 'u-fails' }],
+        data: [
+          { user_id: 'u-free' },
+          { user_id: 'u-blocked' },
+          { user_id: 'u-gone' },
+          { user_id: 'u-fails' },
+          { user_id: 'u-retry' },
+          { user_id: 'u-broken' },
+          { user_id: 'u-lost-reply' },
+        ],
         error: null,
       };
     }
@@ -63,7 +80,7 @@ const adminStub = makeSupabaseStub({
     return { data: answers[uid] ?? { deletable: true }, error: null };
   },
 });
-(adminStub.client.auth as { admin?: unknown }).admin = { deleteUser };
+(adminStub.client.auth as { admin?: unknown }).admin = { deleteUser, getUserById };
 
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => adminStub.client,
@@ -82,13 +99,25 @@ beforeEach(() => {
     table: 'public.receipts',
   };
   answers['u-gone'] = { deletable: false, reason: 'not_found' };
-  deleteUser.mockImplementation(async (uid: string) =>
-    uid === 'u-fails' ? { error: { message: 'Database error deleting user' } } : { error: null },
+  // A row lock (try again), and a fault that is not a refusal (review R1).
+  answers['u-retry'] = { deletable: false, reason: 'blocked', sqlstate: '55P03', constraint: null, table: null };
+  answers['u-broken'] = { deletable: false, reason: 'blocked', sqlstate: '42501', constraint: null, table: null };
+  deleteUser.mockImplementation(async (uid: string) => {
+    if (uid === 'u-fails') return { error: { message: 'Database error deleting user' } };
+    if (uid === 'u-lost-reply') {
+      return { error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' } };
+    }
+    return { error: null };
+  });
+  getUserById.mockImplementation(async (uid: string) =>
+    uid === 'u-lost-reply'
+      ? { data: { user: null }, error: { status: 404, code: 'user_not_found', message: 'User not found' } }
+      : { data: { user: { id: uid } }, error: null },
   );
 });
 
 describe('removeOrgAction orphan cleanup', () => {
-  it('deletes only what the check allows and counts the rest as kept', async () => {
+  it('deletes only what the check allows; kept (linked records) and failed are counted apart', async () => {
     const res = await removeOrgAction({
       orgId: ORG_ID,
       passphrase: 'pp',
@@ -97,25 +126,43 @@ describe('removeOrgAction orphan cleanup', () => {
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // u-free deleted; u-blocked kept (linked records); u-fails kept (its
-    // deleteUser { error } is read, no longer counted as deleted); u-gone
-    // already gone: neither.
-    expect(res.data).toEqual({ deletedUsers: 1, keptUsers: 2 });
-    expect(deleteUser.mock.calls.map((c) => c[0]).sort()).toEqual(['u-fails', 'u-free']);
+    // u-free deleted; u-lost-reply deleted (its deleteUser errored but GoTrue
+    // no longer has the user); u-blocked kept (linked records); u-fails failed
+    // (its deleteUser { error } is read, no longer counted as deleted);
+    // u-retry and u-broken failed (the check could not answer, never "linked
+    // records"); u-gone already gone: neither.
+    expect(res.data).toEqual({ deletedUsers: 2, keptUsers: 1, failedUsers: 3 });
+    expect(deleteUser.mock.calls.map((c) => c[0]).sort()).toEqual(['u-fails', 'u-free', 'u-lost-reply']);
+    expect(getUserById.mock.calls.map((c) => c[0]).sort()).toEqual(['u-fails', 'u-lost-reply']);
     expect(adminStub.rpcCalls.filter((c) => c.name === 'account_deletion_check').map((c) => c.args)).toEqual([
       { p_user_id: 'u-free' },
       { p_user_id: 'u-blocked' },
       { p_user_id: 'u-gone' },
       { p_user_id: 'u-fails' },
+      { p_user_id: 'u-retry' },
+      { p_user_id: 'u-broken' },
+      { p_user_id: 'u-lost-reply' },
     ]);
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'platform-admin.orphan-user-delete', extra: { uid: 'u-fails' } }),
+      expect.objectContaining({
+        tag: 'platform-admin.orphan-user-delete',
+        extra: { uid: 'u-fails', settled: 'not_deleted' },
+      }),
+    );
+    // The lost reply is still reported, as a warning (the account is gone).
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'platform-admin.orphan-user-delete',
+        level: 'warning',
+        extra: { uid: 'u-lost-reply', settled: 'deleted' },
+      }),
     );
     expect(recordPlatformAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'org_deleted',
-        detail: expect.objectContaining({ deletedOrphanUsers: 1, keptOrphanUsers: 2 }),
+        detail: expect.objectContaining({ deletedOrphanUsers: 2, keptOrphanUsers: 1, failedOrphanUsers: 3 }),
       }),
     );
   });
@@ -123,7 +170,7 @@ describe('removeOrgAction orphan cleanup', () => {
   it('without the orphan option deletes no account and keeps none', async () => {
     const res = await removeOrgAction({ orgId: ORG_ID, passphrase: 'pp', confirmName: 'Throwaway' });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.data).toEqual({ deletedUsers: 0, keptUsers: 0 });
+    if (res.ok) expect(res.data).toEqual({ deletedUsers: 0, keptUsers: 0, failedUsers: 0 });
     expect(deleteUser).not.toHaveBeenCalled();
   });
 });

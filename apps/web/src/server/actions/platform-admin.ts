@@ -12,7 +12,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
-import { checkAccountDeletable } from '@/server/lib/account-deletion';
+import { checkAccountDeletable, settleFailedDelete } from '@/server/lib/account-deletion';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { insertAuditRowReported } from '@/server/services/audit';
 
@@ -385,7 +385,7 @@ const removeOrgSchema = z.object({
  */
 export async function removeOrgAction(
   input: z.input<typeof removeOrgSchema>,
-): Promise<ActionResult<{ deletedUsers: number; keptUsers: number }>> {
+): Promise<ActionResult<{ deletedUsers: number; keptUsers: number; failedUsers: number }>> {
   const gate = await checkPlatformAdmin({ requireStepUp: true });
   if (!gate.ok) {
     return gate.reason === 'aal2_required'
@@ -477,11 +477,16 @@ export async function removeOrgAction(
   //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
   //    Then ask the database whether the account can go (0388's dry run,
   //    always undone): an account linked to records kept elsewhere is KEPT and
-  //    counted, never half-deleted. A deleteUser `{ error }` is read (it used
-  //    to be ignored and the account counted as deleted anyway), reported and
-  //    counted as kept. An account already gone is neither.
+  //    counted, never half-deleted. A check that could not answer (a row lock,
+  //    a fault) or a delete that failed is counted as FAILED, apart from kept,
+  //    so the dialog never calls a transient fault "linked to records" (review
+  //    R8). A deleteUser `{ error }` is read (it used to be ignored and the
+  //    account counted as deleted anyway) and settled: if GoTrue no longer has
+  //    the user, the delete happened and only its reply failed (review R7).
+  //    An account already gone is neither.
   let deletedUsers = 0;
   let keptUsers = 0;
+  let failedUsers = 0;
   for (const uid of orphanUserIds) {
     try {
       const { count } = await admin
@@ -491,21 +496,25 @@ export async function removeOrgAction(
       if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
       const check = await checkAccountDeletable(admin, uid, 'platform');
       if (!check.ok) {
-        if (check.kind !== 'gone') keptUsers += 1;
+        if (check.kind === 'blocked') keptUsers += 1;
+        else if (check.kind !== 'gone') failedUsers += 1;
         continue;
       }
       const { error: delUserErr } = await admin.auth.admin.deleteUser(uid);
       if (delUserErr) {
-        keptUsers += 1;
+        const settled = await settleFailedDelete(admin, uid, delUserErr);
         await reportError(new Error(delUserErr.message), {
           tag: 'platform-admin.orphan-user-delete',
-          extra: { uid },
+          ...(settled === 'not_deleted' ? {} : { level: 'warning' as const }),
+          extra: { uid, settled },
         });
+        if (settled === 'deleted') deletedUsers += 1;
+        else if (settled === 'not_deleted') failedUsers += 1;
         continue;
       }
       deletedUsers += 1;
     } catch (e) {
-      keptUsers += 1;
+      failedUsers += 1;
       await reportError(e, { tag: 'platform-admin.orphan-user-delete', extra: { uid } });
     }
   }
@@ -521,8 +530,9 @@ export async function removeOrgAction(
       slug: o.slug,
       deletedOrphanUsers: deletedUsers,
       keptOrphanUsers: keptUsers,
+      failedOrphanUsers: failedUsers,
     },
   });
   revalidatePath('/platform');
-  return ok({ deletedUsers, keptUsers });
+  return ok({ deletedUsers, keptUsers, failedUsers });
 }

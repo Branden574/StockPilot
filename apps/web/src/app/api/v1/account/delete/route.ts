@@ -13,6 +13,7 @@ import {
   accountDeleteRateKey,
   auditAccountDeleted,
   checkAccountDeletable,
+  settleFailedDelete,
 } from '@/server/lib/account-deletion';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -32,7 +33,7 @@ export const runtime = 'nodejs';
  * Contract:
  *   POST /api/v1/account/delete
  *   body: { confirm: "DELETE" }
- *   200: { ok: true }                          // the account is gone
+ *   200: { ok: true }                          // the account is gone (also when it was already gone)
  *   400: { error: "validation_error", message }
  *   403: { error: "forbidden", message }       // sole-owner with co-members
  *   403: { error: "account_linked_records", message } // kept records refuse it (0388)
@@ -169,6 +170,10 @@ export async function POST(req: NextRequest) {
           { status: 403 },
         );
       }
+      // gone: the account no longer exists (another request deleted it). The
+      // phone then signs out and says it was deleted, which is the truth; the
+      // request that deleted it wrote the audit row (review R7).
+      if (check.kind === 'gone') return NextResponse.json({ ok: true });
       return NextResponse.json(
         { error: 'check_failed', message: ACCOUNT_DELETE_RETRY_COPY },
         { status: 503 },
@@ -176,7 +181,11 @@ export async function POST(req: NextRequest) {
     }
 
     const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);
-    if (authErr) {
+    // deleteUser can answer an error although the account is gone: GoTrue
+    // committed and the reply was lost, or another request deleted it first
+    // (404 user_not_found). Ask GoTrue again before answering (review R7).
+    const settled = authErr ? await settleFailedDelete(admin, ctx.userId, authErr) : 'deleted';
+    if (authErr && settled === 'not_deleted') {
       // SP-008 on the phone: this used to log and answer { ok: true }, and the
       // phone signed out and said "Account deleted" while the account was
       // alive. Now, as on the web: report, end the live sessions best-effort,
@@ -195,16 +204,26 @@ export async function POST(req: NextRequest) {
         { status: 500 },
       );
     }
+    if (authErr) {
+      void reportError(new Error(authErr.message), {
+        tag: 'account.delete.auth_delete_error_but_gone',
+        level: 'warning',
+        extra: { userId: ctx.userId, source: 'mobile', settled },
+      });
+    }
 
     // The account is gone: now the audit row, through the admin client with
     // the organization this request acted in (user_id null: the profile no
-    // longer exists). It never went through audit()'s withContext() fallback,
-    // which redirects on /api (the bug that dropped every mobile row once).
-    await auditAccountDeleted({
-      userId: ctx.userId,
-      organizationId: ctx.organizationId ?? null,
-      reason: 'self_deletion_mobile',
-    });
+    // longer exists), written by the request that deleted it. It never went
+    // through audit()'s withContext() fallback, which redirects on /api (the
+    // bug that dropped every mobile row once).
+    if (settled === 'deleted') {
+      await auditAccountDeleted({
+        userId: ctx.userId,
+        organizationId: ctx.organizationId ?? null,
+        reason: 'self_deletion_mobile',
+      });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {

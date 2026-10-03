@@ -127,7 +127,12 @@ const {
      *  2026-07-21 incident). Hoisted so a test can make it fail. */
     adminAuth: {
       deleteUser: vi.fn(async (_userId: string) => ({
-        error: null as { message: string } | null,
+        error: null as { message: string; status?: number; code?: string; name?: string } | null,
+      })),
+      /** Review R7: asked only after deleteUser answered an error. */
+      getUserById: vi.fn(async (_userId: string) => ({
+        data: { user: { id: 'user-1' } as { id: string } | null },
+        error: null as { message: string; status?: number; code?: string } | null,
       })),
     },
     /** 0388 — account_deletion_check, the dry run the action asks first. */
@@ -148,6 +153,7 @@ vi.mock('@/lib/supabase/admin', () => ({
     auth: {
       admin: {
         deleteUser: adminAuth.deleteUser,
+        getUserById: adminAuth.getUserById,
       },
     },
     rpc: adminRpc,
@@ -235,6 +241,7 @@ beforeEach(() => {
   mfaState.totp = [];
   mfaState.currentLevel = 'aal1';
   adminAuth.deleteUser.mockImplementation(async () => ({ error: null }));
+  adminAuth.getUserById.mockImplementation(async () => ({ data: { user: { id: 'user-1' } }, error: null }));
   adminRpc.mockImplementation(async () => ({ data: { deletable: true }, error: null }));
   checkRateLimitMock.mockImplementation(async () => ({ allowed: true, count: 1, resetAt: 0 }));
   insertAuditRowReportedMock.mockImplementation(async () => true);
@@ -859,6 +866,79 @@ describe('deleteOwnAccountAction', () => {
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('internal_error');
+    });
+  });
+
+  /**
+   * Review R7 (2026-10-03): deleteUser can answer an error although the
+   * account is gone (a lost reply after GoTrue committed; or the person's
+   * phone deleted it first, so this DELETE found no user). The person used to
+   * be told "could not be deleted" and no audit row was written. Now the
+   * action asks GoTrue again and answers the truth.
+   */
+  describe('when deleteUser errors but the account is gone (review R7)', () => {
+    const NOT_FOUND = { name: 'AuthApiError', status: 404, code: 'user_not_found', message: 'User not found' };
+
+    it('a lost reply, then GoTrue has no such user: success, the audit row, and this browser signed out', async () => {
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({
+        error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+      }));
+      adminAuth.getUserById.mockImplementationOnce(async () => ({ data: { user: null }, error: NOT_FOUND }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(adminAuth.getUserById).toHaveBeenCalledWith('user-1');
+      expect(insertAuditRowReportedMock).toHaveBeenCalledTimes(1);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.deactivated',
+          user_id: null,
+          metadata: expect.objectContaining({ entity_id: 'user-1', reason: 'self_deletion' }),
+        }),
+      );
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'account.delete.auth_delete_error_but_gone', level: 'warning' }),
+      );
+      expect(reportErrorMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'account.delete.auth_delete_failed' }),
+      );
+    });
+
+    it('404 user_not_found to the delete (deleted by another request): success, no second audit row', async () => {
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: NOT_FOUND }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(adminAuth.getUserById).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+    });
+
+    it('the check finds no such account (deleted from another device): success, nothing deleted or written here', async () => {
+      adminRpc.mockImplementationOnce(async () => ({
+        data: { deletable: false, reason: 'not_found' },
+        error: null,
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    });
+
+    it('a lost reply while the account is still there keeps the failure answer (SP-008)', async () => {
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({
+        error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('internal_error');
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
+      expect(cookieSignOut).not.toHaveBeenCalled();
     });
   });
 });

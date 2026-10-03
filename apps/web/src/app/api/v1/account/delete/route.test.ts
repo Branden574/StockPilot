@@ -25,14 +25,21 @@ vi.mock('@/server/services/audit', () => ({
   insertAuditRowReported: vi.fn(async () => true),
 }));
 
-const deleteUser = vi.fn(async (_id: string) => ({ error: null as { message: string } | null }));
+const deleteUser = vi.fn(async (_id: string) => ({
+  error: null as { message: string; status?: number; code?: string; name?: string } | null,
+}));
+/** Review R7: asked only after deleteUser answered an error. */
+const getUserById = vi.fn(async (_id: string) => ({
+  data: { user: { id: 'present' } as { id: string } | null },
+  error: null as { message: string; status?: number; code?: string } | null,
+}));
 /** account_deletion_check (0388), the dry run the route asks first. */
 const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
   data: { deletable: true } as unknown,
   error: null as { code?: string } | null,
 }));
 vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: vi.fn(() => ({ auth: { admin: { deleteUser } }, rpc })),
+  createAdminClient: vi.fn(() => ({ auth: { admin: { deleteUser, getUserById } }, rpc })),
 }));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
@@ -85,6 +92,7 @@ describe('POST /api/v1/account/delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     deleteUser.mockResolvedValue({ error: null });
+    getUserById.mockResolvedValue({ data: { user: { id: USER_ID } }, error: null });
     rpc.mockResolvedValue({ data: { deletable: true }, error: null });
     checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: 0 });
   });
@@ -187,6 +195,84 @@ describe('POST /api/v1/account/delete', () => {
     );
     expect(insertAuditRowReported).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  // Review R7 (2026-10-03): deleteUser can answer an error although the
+  // account is gone. The phone used to get 500 "could not be deleted" and no
+  // audit row was written; now the route asks GoTrue again.
+  it('a lost reply, then GoTrue has no such user: 200, the audit row written, no revoke', async () => {
+    const stub = happyStub();
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+    });
+    getUserById.mockResolvedValueOnce({
+      data: { user: null },
+      error: { status: 404, code: 'user_not_found', message: 'User not found' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(getUserById).toHaveBeenCalledWith(USER_ID);
+    expect(insertAuditRowReported).toHaveBeenCalledTimes(1);
+    expect(insertAuditRowReported).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organization_id: 'org-1',
+        user_id: null,
+        metadata: expect.objectContaining({ entity_id: USER_ID, reason: 'self_deletion_mobile' }),
+      }),
+    );
+    expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.auth_delete_error_but_gone', level: 'warning' }),
+    );
+  });
+
+  it('404 user_not_found to the delete (deleted by another request): 200, no second audit row', async () => {
+    const stub = happyStub();
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthApiError', status: 404, code: 'user_not_found', message: 'User not found' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(getUserById).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+  });
+
+  it('the check finds no such account: 200, nothing deleted or written here', async () => {
+    const stub = happyStub();
+    rpc.mockResolvedValueOnce({ data: { deletable: false, reason: 'not_found' }, error: null });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
+
+  // Review R1: an error the dry run caught that is not an integrity refusal
+  // is "try again" (503), never "linked to records" (403).
+  it('a non-integrity error in the dry run (42501) answers 503 try-again, not 403', async () => {
+    const stub = happyStub();
+    rpc.mockResolvedValueOnce({
+      data: { deletable: false, reason: 'blocked', sqlstate: '42501', constraint: null, table: null },
+      error: null,
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toBe('check_failed');
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 
   it('a blocked account gets 403 account_linked_records with the plain sentence, and nothing is deleted or written', async () => {
