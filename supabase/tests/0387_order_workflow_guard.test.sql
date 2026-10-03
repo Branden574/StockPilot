@@ -285,7 +285,16 @@ select e.ord, :orgA, :whA, e.from_s, 'internal', :req,
 -- policy, and the role and claims set_config switched) is rolled back.
 -- 'ok:<rows>[:<p_check>]' when it went through (p_check runs as the superuser
 -- inside the same subtransaction, before the undo), else
--- '<sqlstate>:<hint or ->:<message>'.
+-- '<sqlstate>:<hint or ->:<message>'. pg_temp.hint drops supautils'
+-- generic "Grant the required privileges ..." hint, which the stack adds to
+-- every privilege error for its hint_roles (anon, authenticated,
+-- service_role) and which depends on the image: the assertions pin only the
+-- guard's own hints.
+create function pg_temp.hint(p_hint text) returns text language sql immutable as $$
+  select case when p_hint is null or p_hint = ''
+                or p_hint like 'Grant the required privileges to the current role with:%'
+              then '-' else p_hint end
+$$;
 create function pg_temp.attempt(p_as text, p_sub uuid, p_sql text, p_prep text default null, p_check text default null)
 returns text language plpgsql as $$
 declare v_state text; v_msg text; v_hint text; v_n bigint; v_seen text;
@@ -310,7 +319,7 @@ begin
   if v_state = 'XX387' then
     return 'ok:' || v_n::text || coalesce(':' || v_seen, '');
   end if;
-  return v_state || ':' || coalesce(nullif(v_hint, ''), '-') || ':' || v_msg;
+  return v_state || ':' || pg_temp.hint(v_hint) || ':' || v_msg;
 end $$;
 -- One statement that returns a value, as p_as, KEPT when it succeeds:
 -- '<value>[|<p_check>]' (p_check as the superuser, after the call), else the
@@ -332,7 +341,7 @@ begin
     end if;
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
-    return v_state || ':' || coalesce(nullif(v_hint, ''), '-') || ':' || v_msg;
+    return v_state || ':' || pg_temp.hint(v_hint) || ':' || v_msg;
   end;
   return coalesce(v, 'null') || coalesce('|' || v_seen, '');
 end $$;
