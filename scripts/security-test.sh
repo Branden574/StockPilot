@@ -791,10 +791,13 @@ WEB_TESTS=(
   # orders:approve or the assigned driver (installed phones' request shape).
   # Every other refusal is one byte-identical 404, an entitled member whose
   # MFA is unsatisfied gets 403, the member path is limited to 60 an hour per
-  # member and the per-token limit is keyed by the token's hash; every
-  # digital hand-over is audited without the token. The sign page verifies its
-  # session locally without refreshing it. The warehouse slip is for the same
-  # people and its QR is never the digest. GET /api/v1/orders/[id] returns an
+  # member and never counts against a per-token bucket, and a link counts
+  # against its own (keyed by the token's hash), so no member can use up
+  # another's; every digital hand-over is audited without the token. The sign
+  # page verifies its session locally without refreshing it. The warehouse
+  # slip is for the same people, its QR is never the digest, and it and the
+  # order page's raw link are held back while an MFA step-up is owed. The
+  # signature image route is listed above. GET /api/v1/orders/[id] returns an
   # allow-listed order (no token, signature or internal note). The image
   # route reads the side table first; return and track tokens are read side
   # first and written only there; the scan lookup hashes before it matches.
@@ -803,7 +806,6 @@ WEB_TESTS=(
   src/app/api/orders/sign/route.member.test.ts
   'src/app/orders/sign/[token]/page.test.tsx'
   'src/app/api/orders/[id]/packing-slip-warehouse.pdf/route.test.ts'
-  'src/app/api/orders/[id]/signature/route.test.ts'
   'src/app/api/v1/orders/[id]/route.test.ts'
   src/app/api/v1/orders/signature-lookup/route.test.ts
   'src/app/api/v1/public/order-requests/[id]/route.test.ts'
