@@ -132,7 +132,7 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           "Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is offered only while the stock on record equals the counted number. It is also not offered while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item. In these cases the page says why. Confirming needs permission to adjust stock and a connection. After you confirm, a later count that does not match opens a new exception.",
         whatToDo:
-          'No action needed on the web. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
+          'No action needed. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
       },

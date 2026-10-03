@@ -1828,7 +1828,7 @@ describe('count differences release 2 (confirm this count) is published', () => 
     // ended words) is announced on its own, by exceptions-session-ended-2026-10
     // (claims review 2026-10-03).
     expect(entry!.whatToDo).toBe(
-      'No action needed on the web. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
+      'No action needed. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
     );
     expect(all).not.toMatch(/latest update|close the app|open it again/i);
     expect(all).not.toMatch(/offers the new version|update the app|App Store|unauthenticated/i);
