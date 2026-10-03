@@ -1,0 +1,436 @@
+{
+  "about": [
+    "ONE FIXTURE, TWO ENGINES (phone ordering plan 3.2 step 3 and graft 3). Each case is a create body and what each engine must answer for its SHAPE, so the TypeScript schema and place_order_request cannot drift.",
+    "Core (packages/core/src/orders/place-order.parity.test.ts) reads each body with parseOrderCreateRequest and checks `core`.",
+    "pgTAP (supabase/tests/<M1>_place_order_request.test.sql, PO-2) gets a generated block (scripts/gen-place-order-parity-sql.mjs): per case, the p_request the service would build from the body, the key, and `sql`. place_order_request must raise exactly that for a refused case and write nothing, or get past step 3 for an accepted one.",
+    "Bodies: `body` patches the base body key by key (a value of \"$delete\" removes the key). The generator puts idempotencyKey (one per case), placerUserId (ids.placer) and warehouseId (ids.warehouse) first. A line {\"item\": k} is item k (ids.itemPrefix + k as 12 hex digits); {\"itemId\": ...} is used as written. `lines` may be {\"repeat\": n, \"quantity\": q} for n distinct items. A string may be {\"$repeat\": \"x\", \"times\": n, \"suffix\": \"...\"}. \"$site\", \"$bundle\" and \"$other\" are ids.site, ids.bundle and ids.other.",
+    "The database side: `sqlPatch` patches the generated p_request (snake_case) for a case only the database can see, and `sqlKey` replaces the key (null for none). The service passes the body's values through (kits stay out: they are the audit note only), surface 'app' unless patched. The parity organization's zone is UTC, so needed_by is the wall clock with Z; converting in a real zone is the service's (core wallClockToInstant), and whether it is still to come is step 8, not shape.",
+    "core: \"accept\" or {\"reason\", \"field\"?} (parseOrderCreateRequest's refusal). sql: \"accept\" (gets past step 3: no 22023 is raised), {\"sqlstate\": \"22023\", \"hint\": \"order_invalid\" | \"delivery_needs_site\" | \"idempotency_key_required\" | \"idempotency_key_invalid\", \"field\"?} or {\"sqlstate\": \"42501\", \"hint\": \"placer_mismatch\"} (step 1), or \"unreachable\": core refuses the body and the service never calls the database, so there is nothing to check there.",
+    "Both engines: trimming removes the whitespace JavaScript's String.prototype.trim removes; lengths are characters (code points), as Postgres length() counts them; each line's quantity must be a whole number of at least 1 BEFORE lines of the same item are summed, then each item's sum is at most 10,000 and the total at most 10,000 (per item first, then the total); email: one @, something on each side, a dot in the domain, no whitespace, at most 254 characters; the on-behalf name and email come both or neither.",
+    "After editing this file run: node scripts/gen-place-order-parity-sql.mjs (then --check passes, and the core parity test checks the block)."
+  ],
+  "ids": {
+    "org": "0f0e0000-0000-4000-8000-00000000000a",
+    "placer": "0f0e0000-0000-4000-8000-0000000000a1",
+    "other": "0f0e0000-0000-4000-8000-0000000000a2",
+    "warehouse": "0f0e0000-0000-4000-8000-0000000000d1",
+    "site": "0f0e0000-0000-4000-8000-0000000000c1",
+    "bundle": "0f0e0000-0000-4000-8000-0000000000b1",
+    "itemPrefix": "0f0e1000-0000-4000-8000-",
+    "keyPrefix": "0f0e2000-0000-4000-8000-"
+  },
+  "base": {
+    "fulfillmentType": "pickup",
+    "deliveryCharterId": null,
+    "onBehalfOf": null,
+    "notes": null,
+    "neededByLocal": null,
+    "lines": [{ "item": 1, "quantity": 2 }]
+  },
+  "cases": [
+    {
+      "id": "A01",
+      "title": "a pickup order for oneself, one line",
+      "body": {},
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A02",
+      "title": "a delivery on behalf of someone, with a needed-by, notes and kits",
+      "body": {
+        "fulfillmentType": "delivery",
+        "deliveryCharterId": "$site",
+        "onBehalfOf": { "name": "Maria Lopez", "email": "maria@example.org" },
+        "notes": "Room 12, by Friday",
+        "neededByLocal": "2026-10-05T10:00",
+        "lines": [
+          { "item": 1, "quantity": 2 },
+          { "item": 2, "quantity": 10 }
+        ],
+        "kits": [{ "bundleId": "$bundle", "count": 2 }]
+      },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A03",
+      "title": "100 lines, the most allowed",
+      "body": { "lines": { "repeat": 100, "quantity": 1 } },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A04",
+      "title": "one line of 10,000 units, the most allowed",
+      "body": { "lines": [{ "item": 1, "quantity": 10000 }] },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A05",
+      "title": "10,000 units across two lines, the most allowed",
+      "body": {
+        "lines": [
+          { "item": 1, "quantity": 5000 },
+          { "item": 2, "quantity": 5000 }
+        ]
+      },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A06",
+      "title": "notes of 2,000 characters",
+      "body": { "notes": { "$repeat": "n", "times": 2000 } },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A07",
+      "title": "notes of 2,000 four-byte characters (a character is a code point)",
+      "body": { "notes": { "$repeat": "𝐀", "times": 2000 } },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A08",
+      "title": "2,000 characters of notes between spaces, tabs and newlines (trimmed first)",
+      "body": { "notes": { "$repeat": "n", "times": 2000, "prefix": " \t\n", "suffix": "\n  " } },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A09",
+      "title": "blank notes (read as none)",
+      "body": { "notes": " \n\t " },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A10",
+      "title": "a 120-character name and a 254-character email",
+      "body": {
+        "onBehalfOf": {
+          "name": { "$repeat": "n", "times": 120 },
+          "email": { "$repeat": "e", "times": 242, "suffix": "@example.org" }
+        }
+      },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A11",
+      "title": "a name and an email between spaces (trimmed first)",
+      "body": { "onBehalfOf": { "name": "  Maria Lopez ", "email": " maria@example.org\t" } },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A12",
+      "title": "the same item on two lines, 3 and 4 (summed to 7)",
+      "body": {
+        "lines": [
+          { "item": 1, "quantity": 3 },
+          { "item": 1, "quantity": 4 }
+        ]
+      },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "R01",
+      "title": "no lines",
+      "body": { "lines": [] },
+      "core": { "reason": "invalid", "field": "lines" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
+    },
+    {
+      "id": "R02",
+      "title": "101 lines",
+      "body": { "lines": { "repeat": 101, "quantity": 1 } },
+      "core": { "reason": "too_many_lines" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
+    },
+    {
+      "id": "R03",
+      "title": "a quantity of 0",
+      "body": { "lines": [{ "item": 1, "quantity": 0 }] },
+      "core": { "reason": "invalid", "field": "quantity" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R04",
+      "title": "a negative quantity",
+      "body": { "lines": [{ "item": 1, "quantity": -3 }] },
+      "core": { "reason": "invalid", "field": "quantity" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R05",
+      "title": "a quantity of 10,001",
+      "body": { "lines": [{ "item": 1, "quantity": 10001 }] },
+      "core": { "reason": "too_many_units" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R06",
+      "title": "a quantity of 1.5",
+      "body": { "lines": [{ "item": 1, "quantity": 1.5 }] },
+      "core": { "reason": "quantity_not_whole" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R07",
+      "title": "two half units of one item (each line must be whole before the sum)",
+      "body": {
+        "lines": [
+          { "item": 1, "quantity": 0.5 },
+          { "item": 1, "quantity": 0.5 }
+        ]
+      },
+      "core": { "reason": "quantity_not_whole" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R08",
+      "title": "a quantity sent as text",
+      "body": { "lines": [{ "item": 1, "quantity": "2" }] },
+      "core": { "reason": "invalid", "field": "quantity" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R09",
+      "title": "a total of 10,001 across two items",
+      "body": {
+        "lines": [
+          { "item": 1, "quantity": 5000 },
+          { "item": 2, "quantity": 5001 }
+        ]
+      },
+      "core": { "reason": "too_many_units" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "total" }
+    },
+    {
+      "id": "R10",
+      "title": "the same item twice, 6,000 and 5,000 (its sum is over the per-item cap, checked before the total)",
+      "body": {
+        "lines": [
+          { "item": 1, "quantity": 6000 },
+          { "item": 1, "quantity": 5000 }
+        ]
+      },
+      "core": { "reason": "too_many_units" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R11",
+      "title": "notes of 2,001 characters",
+      "body": { "notes": { "$repeat": "n", "times": 2001 } },
+      "core": { "reason": "notes_too_long" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "notes" }
+    },
+    {
+      "id": "R12",
+      "title": "a 121-character name",
+      "body": {
+        "onBehalfOf": { "name": { "$repeat": "n", "times": 121 }, "email": "maria@example.org" }
+      },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R13",
+      "title": "a blank name with an email (both or neither)",
+      "body": { "onBehalfOf": { "name": "   ", "email": "maria@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R14",
+      "title": "a name with an empty email (both or neither)",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R15",
+      "title": "an email with no @",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria.example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R16",
+      "title": "an email with two @",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@x@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R17",
+      "title": "an email with a space in it",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria lopez@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R18",
+      "title": "an email with no dot in the domain",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@localhost" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R19",
+      "title": "a 255-character email",
+      "body": {
+        "onBehalfOf": {
+          "name": "Maria",
+          "email": { "$repeat": "e", "times": 243, "suffix": "@example.org" }
+        }
+      },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R20",
+      "title": "delivery without a site",
+      "body": { "fulfillmentType": "delivery" },
+      "core": { "reason": "delivery_needs_site" },
+      "sql": { "sqlstate": "22023", "hint": "delivery_needs_site" }
+    },
+    {
+      "id": "R21",
+      "title": "pickup with a site (core refuses the body; the database drops a pickup's site)",
+      "body": { "deliveryCharterId": "$site" },
+      "core": { "reason": "invalid", "field": "deliveryCharterId" },
+      "sql": "accept"
+    },
+    {
+      "id": "R22",
+      "title": "a method that is neither pickup nor delivery",
+      "body": { "fulfillmentType": "shipping" },
+      "core": { "reason": "invalid", "field": "fulfillmentType" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "fulfillment_type" }
+    },
+    {
+      "id": "R23",
+      "title": "an item id that is not a uuid",
+      "body": { "lines": [{ "itemId": "item-1", "quantity": 1 }] },
+      "core": { "reason": "invalid", "field": "itemId" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
+    },
+    {
+      "id": "R24",
+      "title": "a warehouse id that is not a uuid",
+      "body": { "warehouseId": "dc4" },
+      "core": { "reason": "invalid", "field": "warehouseId" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "warehouse" }
+    },
+    {
+      "id": "R25",
+      "title": "a site id that is not a uuid",
+      "body": { "fulfillmentType": "delivery", "deliveryCharterId": "clovis" },
+      "core": { "reason": "invalid", "field": "deliveryCharterId" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "site" }
+    },
+    {
+      "id": "R26",
+      "title": "a needed-by of 30 February",
+      "body": { "neededByLocal": "2027-02-30T10:00" },
+      "core": { "reason": "needed_by_invalid_time" },
+      "sql": "unreachable"
+    },
+    {
+      "id": "R27",
+      "title": "a needed-by with seconds",
+      "body": { "neededByLocal": "2026-10-05T10:00:00" },
+      "core": { "reason": "needed_by_invalid_time" },
+      "sql": "unreachable"
+    },
+    {
+      "id": "R28",
+      "title": "a needed-by that is already an instant",
+      "body": { "neededByLocal": "2026-10-05T17:00:00.000Z" },
+      "core": { "reason": "needed_by_invalid_time" },
+      "sql": "unreachable"
+    },
+    {
+      "id": "R29",
+      "title": "a placer id that is not a uuid (refused at step 1, before the key)",
+      "body": { "placerUserId": "me" },
+      "core": { "reason": "invalid", "field": "placerUserId" },
+      "sql": { "sqlstate": "42501", "hint": "placer_mismatch" }
+    },
+    {
+      "id": "R30",
+      "title": "another member as the placer (core cannot know the session; step 1 refuses it)",
+      "body": { "placerUserId": "$other" },
+      "core": "accept",
+      "sql": { "sqlstate": "42501", "hint": "placer_mismatch" }
+    },
+    {
+      "id": "R31",
+      "title": "a key that is not a uuid",
+      "body": { "idempotencyKey": "shortfall-123" },
+      "sqlKey": "shortfall-123",
+      "core": { "reason": "invalid", "field": "idempotencyKey" },
+      "sql": { "sqlstate": "22023", "hint": "idempotency_key_invalid" }
+    },
+    {
+      "id": "R32",
+      "title": "no key",
+      "body": { "idempotencyKey": "$delete" },
+      "sqlKey": null,
+      "core": { "reason": "invalid", "field": "idempotencyKey" },
+      "sql": { "sqlstate": "22023", "hint": "idempotency_key_required" }
+    },
+    {
+      "id": "R33",
+      "title": "an unknown key (.strict())",
+      "body": { "price": 1 },
+      "core": { "reason": "invalid", "field": "price" },
+      "sql": "unreachable"
+    },
+    {
+      "id": "R34",
+      "title": "an unknown key on a line (.strict())",
+      "body": { "lines": [{ "item": 1, "quantity": 1, "unitCost": 0 }] },
+      "core": { "reason": "invalid", "field": "unitCost" },
+      "sql": "unreachable"
+    },
+    {
+      "id": "D01",
+      "title": "a surface that is neither web nor app (the service sets it)",
+      "body": {},
+      "sqlPatch": { "surface": "ios" },
+      "core": "accept",
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "surface" }
+    },
+    {
+      "id": "D02",
+      "title": "a needed_by that is not a timestamp",
+      "body": {},
+      "sqlPatch": { "needed_by": "tomorrow" },
+      "core": "accept",
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "needed_by" }
+    },
+    {
+      "id": "D03",
+      "title": "lines that are not a list",
+      "body": {},
+      "sqlPatch": { "lines": { "item_id": "0f0e1000-0000-4000-8000-000000000001", "quantity": 1 } },
+      "core": "accept",
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
+    },
+    {
+      "id": "D04",
+      "title": "an on-behalf email with no name",
+      "body": {},
+      "sqlPatch": { "on_behalf_email": "maria@example.org" },
+      "core": "accept",
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    }
+  ]
+}
