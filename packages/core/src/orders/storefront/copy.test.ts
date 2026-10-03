@@ -60,7 +60,10 @@ describe("copy.ts holds the web storefront's words of today", () => {
     ['cartLineAtMaxCopy', ['`All ${available} available are in your cart`']],
     ['cartLineOverCopy', ['`Only ${available} in stock — reduce quantity`']],
     ['kitsAvailableCopy', ["`${kits} ${kits === 1 ? 'kit' : 'kits'} available`"]],
-    ['kitLimitedByCopy', ['Limited by {nameOf(availability.limiting.component)} ( {availability.limiting.available})']],
+    [
+      'kitLimitedByCopy',
+      ['Limited by {nameOf(availability.limiting.component)} ( {availability.limiting.available})'],
+    ],
     ['kitNotEnoughCopy', ['`Not enough ${name} for that many kits. Nothing was added.`']],
     [
       'successNotifiedCopy',
@@ -83,7 +86,9 @@ describe("copy.ts holds the web storefront's words of today", () => {
     expect(copy.kitsAvailableCopy(1)).toBe('1 kit available');
     expect(copy.kitsAvailableCopy(60)).toBe('60 kits available');
     expect(copy.kitLimitedByCopy('Backpack', 60)).toBe('Limited by Backpack (60)');
-    expect(copy.kitNotEnoughCopy('Backpack')).toBe('Not enough Backpack for that many kits. Nothing was added.');
+    expect(copy.kitNotEnoughCopy('Backpack')).toBe(
+      'Not enough Backpack for that many kits. Nothing was added.',
+    );
     expect(copy.successNotifiedCopy('pickup')).toBe(
       "Your manager has been notified. You'll get an email when it's approved and stock is reserved for pickup.",
     );
