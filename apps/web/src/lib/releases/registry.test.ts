@@ -1872,6 +1872,14 @@ describe('account deletion for people who placed orders is held as a draft', () 
     expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
   });
 
+  it('sits above every published release (drafts go at the top), directly above the newest one', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES.slice(at + 1).every((r) => r.status !== 'draft')).toBe(true);
+    expect(RELEASES[at + 1]?.id).toBe('exceptions-session-ended-2026-10');
+  });
+
   it('is dated after every published release, so publishing it makes it newer than all of them', () => {
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));

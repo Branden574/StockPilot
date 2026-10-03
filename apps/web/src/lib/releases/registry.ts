@@ -28,6 +28,44 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'account-deletion-orders-2026-10',
+    revision: 1,
+    // Account deletion for people who placed orders (migration 0388, security
+    // slice A2, plan section 10 item 16). Held as a DRAFT until 0388 is
+    // pushed and verified, the web deploy (the check before the delete, the
+    // Deleted user label on the list, detail, print and export) and the phone
+    // update that names the requester Deleted user are out (owner rule:
+    // publish once phones have the update). The follow-up that publishes it
+    // sets the real publishedAt and re-reads these words against what
+    // shipped. At the top of the list and dated after every published
+    // release (drafts go above the newest published release, pinned by the
+    // ended-session fix's test); the publishing follow-up sets the real date
+    // and keeps it the newest.
+    //
+    // For everyone: anyone can delete their own account (Settings, on the
+    // web and the phone), and no page is linked.
+    status: 'draft',
+    title: 'Deleting your account works when you have placed orders',
+    summary:
+      'If you had placed an order, deleting your account from Settings failed. It now works, and your orders stay with your organization with “Deleted user” as the requester.',
+    publishedAt: '2026-10-11T17:00:00Z',
+    entries: [
+      {
+        id: 'account-deletion-orders',
+        category: 'fixed',
+        area: 'Account',
+        title: 'Deleting your account works when you have placed orders',
+        whatChanged:
+          'Account deletion no longer fails for people who placed orders. Orders placed by a deleted account show “Deleted user” as the requester on the web and the phone. If an account is linked to records the organization must keep, such as received stock, the app now says so and changes nothing.',
+        whyItMatters:
+          'The delete used to fail with a general error, and on the phone it could say the account was deleted when it was not.',
+        howItAffectsYou:
+          'Nothing changes unless you delete your account or see an order placed by someone who did.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'exceptions-session-ended-2026-10',
     revision: 1,
     // Shipped in count differences R2 (#308, 77e5659f); published in the same
@@ -135,43 +173,6 @@ export const RELEASES: Release[] = [
           'No action needed. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
-      },
-    ],
-  },
-  {
-    id: 'account-deletion-orders-2026-10',
-    revision: 1,
-    // Account deletion for people who placed orders (migration 0388, security
-    // slice A2, plan section 10 item 16). Held as a DRAFT until 0388 is
-    // pushed and verified, the web deploy (the check before the delete, the
-    // Deleted user label on the list, detail, print and export) and the phone
-    // update that names the requester Deleted user are out (owner rule:
-    // publish once phones have the update). The follow-up that publishes it
-    // sets the real publishedAt and re-reads these words against what
-    // shipped. Placed below the count-confirm draft, whose test pins it at
-    // the top and dated after every release, and dated after every published
-    // release; the publishing follow-up sets the real date and order.
-    //
-    // For everyone: anyone can delete their own account (Settings, on the
-    // web and the phone), and no page is linked.
-    status: 'draft',
-    title: 'Deleting your account works when you have placed orders',
-    summary:
-      'If you had placed an order, deleting your account from Settings failed. It now works, and your orders stay with your organization with “Deleted user” as the requester.',
-    publishedAt: '2026-10-11T17:00:00Z',
-    entries: [
-      {
-        id: 'account-deletion-orders',
-        category: 'fixed',
-        area: 'Account',
-        title: 'Deleting your account works when you have placed orders',
-        whatChanged:
-          'Account deletion no longer fails for people who placed orders. Orders placed by a deleted account show “Deleted user” as the requester on the web and the phone. If an account is linked to records the organization must keep, such as received stock, the app now says so and changes nothing.',
-        whyItMatters:
-          'The delete used to fail with a general error, and on the phone it could say the account was deleted when it was not.',
-        howItAffectsYou:
-          'Nothing changes unless you delete your account or see an order placed by someone who did.',
-        whatToDo: 'No action needed.',
       },
     ],
   },
