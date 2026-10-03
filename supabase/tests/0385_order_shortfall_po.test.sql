@@ -1052,7 +1052,18 @@ select is(
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
-  '0384 column grants (order_requests, schedule_events)|951362776d6d97800ba9d458c0642484|589\n'
+  -- Re-pinned by 0387 (was 951362776d6d97800ba9d458c0642484|589): 0387
+  -- revokes every anon privilege on order_requests (232 rows here),
+  -- authenticated's table REFERENCES (58) and its UPDATE on 38 columns (38);
+  -- schedule_events is unchanged. F2-5's function writes none of those
+  -- columns (it does not write order_requests), so what it was proven
+  -- against still holds.
+  -- PLACEHOLDER-0387-Z2: this value is PREDICTED, not yet computed on the
+  -- stack: production's own column_privileges rows (which equal the old local
+  -- pin) minus exactly the rows 0387's revokes remove. The test stage must
+  -- replace it with the value the stack gives after migration up, and drop
+  -- this PLACEHOLDER line (A-NOTES.md TODO).
+  '0384 column grants (order_requests, schedule_events)|34395ad1d1d38ebf688f8c0b9c6f150c|261\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
   'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
