@@ -1,4 +1,10 @@
 // Shared types for the orders/new v2 picker.
+//
+// The storefront's shared shapes (aisles, sites and the cart) moved, unchanged,
+// to @stockpilot/core (orders/storefront/item.ts and cart.ts) for phone
+// ordering PO-1 and are re-exported below under the same names. CatalogItem
+// stays here: it is the web's row, a superset of core's StorefrontItem, and it
+// carries `price`, which core's shape deliberately does not.
 
 export interface CatalogItem {
   id: string;
@@ -31,97 +37,12 @@ export interface CatalogItem {
   reorderPoint: number;
 }
 
-export interface AisleSummary {
-  /** null = synthetic "Uncategorized" bucket */
-  id: string | null;
-  name: string;
-  itemCount: number;
-}
-
-export interface CartLineState {
-  itemId: string;
-  quantity: number;
-}
-
-/**
- * Units one kit put on each cart line: itemId → units. A kit's lines are
- * ordinary lines; this only remembers how much of each line came from the kit,
- * so taking the kit out never takes units added by hand (storefront-kits.ts).
- */
-export type CartKitShares = Record<string, number>;
-
-export interface CartState {
-  warehouseId: string;
-  charterId: string | null;
-  fulfillmentType: 'pickup' | 'delivery';
-  onBehalfOf: { name: string; email: string } | null;
-  notes: string;
-  /** "Needed by" datetime-local value ('YYYY-MM-DDTHH:mm') or ''. Optional;
-   *  drives the auto-created schedule event at approval (mig 0255). */
-  neededBy: string;
-  lines: CartLineState[];
-  /**
-   * bundleId → the units that kit put on each line. Never more than a line
-   * holds: every change to a line by hand shrinks it to fit. A draft saved
-   * before kits existed has none and loads with `{}`.
-   */
-  kits: Record<string, CartKitShares>;
-}
-
-export type CartAction =
-  | { type: 'hydrate'; state: CartState }
-  | { type: 'add'; itemId: string; quantity?: number }
-  | { type: 'inc'; itemId: string }
-  | { type: 'dec'; itemId: string }
-  /** Set exact qty for a line. Quantity <= 0 removes the line entirely
-   *  so the same action handles "type 0 to clear" + "type 5 to set". */
-  | { type: 'set-qty'; itemId: string; quantity: number }
-  | { type: 'remove'; itemId: string }
-  /**
-   * A kit's planned line changes (storefront-kits.ts planKitChange), applied
-   * as one step: each line moves by `delta` (a line at 0 or less is removed)
-   * and the kit's record of its units moves with it.
-   */
-  | { type: 'apply-kit'; bundleId: string; changes: Array<{ itemId: string; delta: number }> }
-  | { type: 'clear' }
-  /**
-   * Back to a blank order, keeping only the warehouse and the pickup/delivery
-   * mode. Distinct from `clear`, which empties the BASKET mid-order and must
-   * leave the setup answers alone. Dispatch this when an order is finished —
-   * see handleDone in orders-storefront.tsx.
-   */
-  | { type: 'reset' }
-  | {
-      type: 'set-setup';
-      patch: Partial<Pick<CartState, 'charterId' | 'fulfillmentType' | 'onBehalfOf'>>;
-    }
-  | { type: 'set-notes'; value: string }
-  | { type: 'set-needed-by'; value: string };
-
-/**
- * `charters.address` is a jsonb blob, not a typed column set. Every key is
- * optional and any of them can be null or an empty string in prod.
- *
- * The regional key is **`region`**, NOT `state`. Reading `state` returns
- * undefined for every row in the database.
- */
-export interface CharterAddress {
-  line1?: string | null;
-  line2?: string | null;
-  city?: string | null;
-  region?: string | null;
-  postalCode?: string | null;
-  country?: string | null;
-}
-
-/**
- * A delivery site as the storefront sees it. The UI calls a charter a "site".
- * `address` is present for 12 of 16 prod charters; null for the rest, and the
- * renderer must print NOTHING rather than an empty labelled block when it is.
- */
-export interface StorefrontCharter {
-  id: string;
-  name: string;
-  code: string | null;
-  address: CharterAddress | null;
-}
+export type {
+  AisleSummary,
+  CartAction,
+  CartKitShares,
+  CartLineState,
+  CartState,
+  CharterAddress,
+  StorefrontCharter,
+} from '@stockpilot/core';
