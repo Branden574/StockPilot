@@ -114,6 +114,7 @@ const {
   insertAuditRowReportedMock,
   revokeAllSessionsForUserMock,
   reportErrorMock,
+  cookieSignOut,
 } =
   vi.hoisted(() => ({
     logoStorage: {
@@ -139,6 +140,7 @@ const {
     insertAuditRowReportedMock: vi.fn(async (_row: Record<string, unknown>) => true),
     revokeAllSessionsForUserMock: vi.fn(async () => ({ ok: true, sessionIds: [] as string[] })),
     reportErrorMock: vi.fn(async () => undefined),
+    cookieSignOut: vi.fn(async (_opts?: { scope?: string }) => ({ error: null as unknown })),
   }));
 
 vi.mock('@/lib/supabase/admin', () => ({
@@ -483,6 +485,10 @@ describe('deleteOwnAccountAction', () => {
     stubHolder.stub.client.auth.mfa.getAuthenticatorAssuranceLevel.mockImplementation(
       async () => ({ data: { currentLevel: mfaState.currentLevel }, error: null }),
     );
+    // The browser's own session, ended after a successful delete (walk B9).
+    (stubHolder.stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut =
+      cookieSignOut;
+    cookieSignOut.mockImplementation(async () => ({ error: null }));
   });
 
   it('rejects without the typed DELETE confirmation', async () => {
@@ -513,6 +519,15 @@ describe('deleteOwnAccountAction', () => {
     expect(result.ok).toBe(true);
     expect(order).toEqual(['check', 'deleteUser', 'audit']);
     expect(adminRpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: 'user-1' });
+    // This browser's session ends too: the access token in the cookie outlives
+    // the account (the proxy verifies it locally), and without this the
+    // browser stayed signed in with no membership and landed on Create your
+    // workspace (walk B9). Local scope: the account is gone, nothing to revoke.
+    expect(cookieSignOut).toHaveBeenCalledTimes(1);
+    expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(cookieSignOut.mock.invocationCallOrder[0]).toBeGreaterThan(
+      adminAuth.deleteUser.mock.invocationCallOrder[0]!,
+    );
     expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
     expect(stubHolder.stub!.chains.get('user_profiles.update')).toBeUndefined();
     expect(audit).not.toHaveBeenCalled();
@@ -529,6 +544,31 @@ describe('deleteOwnAccountAction', () => {
         }),
       }),
     );
+  });
+
+  it('a failed local sign-out after the delete still answers ok (the account is gone) and is reported', async () => {
+    cookieSignOut.mockImplementationOnce(async () => {
+      throw new Error('cookie store unavailable');
+    });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result.ok).toBe(true);
+    expect(adminAuth.deleteUser).toHaveBeenCalledTimes(1);
+    expect(insertAuditRowReportedMock).toHaveBeenCalledTimes(1);
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.local_signout_failed' }),
+    );
+  });
+
+  it('a refused or failed delete never ends the browser session through this path', async () => {
+    adminRpc.mockImplementationOnce(async () => ({
+      data: { deletable: false, reason: 'blocked', sqlstate: '23503' },
+      error: null,
+    }));
+    await deleteOwnAccountAction({ confirm: 'DELETE' });
+    adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: { message: 'boom' } }));
+    await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(cookieSignOut).not.toHaveBeenCalled();
   });
 
   it('an account linked to kept records is refused with the plain sentence and nothing is written', async () => {

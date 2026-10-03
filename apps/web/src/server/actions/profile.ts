@@ -628,6 +628,23 @@ export async function deleteOwnAccountAction(input: {
       reason: 'self_deletion',
     });
 
+    // End THIS browser's session too. deleteUser removes the refresh tokens,
+    // but the access token in the cookie stays valid until it expires and the
+    // proxy verifies it locally (getClaims), so the browser stayed "signed
+    // in" as a person with no membership: /signin bounced to /dashboard and
+    // then to Create your workspace (local walk, 0388). The phone already
+    // signs itself out after a 200. signOut removes the local session (the
+    // auth cookies) even though GoTrue no longer knows the user: auth-js
+    // ignores its 401/403/404 there. Best-effort: the account is already gone.
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch (signOutErr) {
+      void reportError(signOutErr, {
+        tag: 'account.delete.local_signout_failed',
+        extra: { userId: session.userId },
+      });
+    }
+
     revalidatePath('/', 'layout');
     return ok(undefined);
   } catch (e) {
