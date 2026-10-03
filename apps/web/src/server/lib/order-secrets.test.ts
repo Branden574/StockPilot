@@ -7,6 +7,8 @@ import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import {
   handOverLinkWanted,
+  handOverMfaBlock,
+  handOverMfaPanelMessage,
   hasCapturedSignature,
   isHandOverEntitled,
   LINK_SIGN_LIMIT_PER_HOUR,
@@ -234,8 +236,41 @@ describe('isHandOverEntitled (who may collect a signature or print its QR)', () 
   });
 });
 
+describe('handOverMfaBlock (F2): the MFA rule assertPermission applies, for the raw hand-over link', () => {
+  it('nothing in the way when MFA is not required, or is satisfied', () => {
+    expect(handOverMfaBlock({ mfaRequired: false, mfaSatisfied: true })).toBeNull();
+    expect(handOverMfaBlock({ mfaRequired: false, mfaSatisfied: false })).toBeNull();
+    expect(handOverMfaBlock({ mfaRequired: true, mfaSatisfied: true, mfaEnrolled: true })).toBeNull();
+  });
+
+  it('an enrolled member at AAL1 must step up (aal2_required), in the shared gate words', () => {
+    expect(handOverMfaBlock({ mfaRequired: true, mfaSatisfied: false, mfaEnrolled: true })).toEqual({
+      reason: 'aal2_required',
+      message: 'Re-authenticate with MFA before performing this action.',
+    });
+  });
+
+  it('a member bound by a policy who has not enrolled must enroll (mfa_required)', () => {
+    expect(handOverMfaBlock({ mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false })?.reason).toBe('mfa_required');
+    expect(handOverMfaBlock({ mfaRequired: true, mfaSatisfied: false })?.reason).toBe('mfa_required');
+  });
+
+  it("the panel's words say what to do to collect a signature", () => {
+    expect(handOverMfaPanelMessage('aal2_required')).toBe('Re-authenticate with MFA to collect a signature.');
+    expect(handOverMfaPanelMessage('mfa_required')).toBe(
+      'Set up multi-factor authentication in Settings to collect a signature.',
+    );
+  });
+});
+
 describe('the order page panel props', () => {
-  const base = { showActionsPanel: true, viewerMayHandOver: true, status: 'staged_for_pickup', signatureTokenColumn: DIGEST };
+  const base = {
+    showActionsPanel: true,
+    viewerMayHandOver: true,
+    mfaBlocked: false,
+    status: 'staged_for_pickup',
+    signatureTokenColumn: DIGEST,
+  };
   it('a link only at staged for pickup or in transit, only for someone who may hand it over, only when minted', () => {
     expect(handOverLinkWanted(base)).toBe(true);
     expect(handOverLinkWanted({ ...base, status: 'in_transit' })).toBe(true);
@@ -245,6 +280,11 @@ describe('the order page panel props', () => {
     expect(handOverLinkWanted({ ...base, viewerMayHandOver: false })).toBe(false);
     expect(handOverLinkWanted({ ...base, showActionsPanel: false })).toBe(false);
     expect(handOverLinkWanted({ ...base, signatureTokenColumn: null })).toBe(false);
+  });
+
+  it('F2: no link while the viewer owes an MFA step-up (the link hands over with no session)', () => {
+    expect(handOverLinkWanted({ ...base, mfaBlocked: true })).toBe(false);
+    expect(handOverLinkWanted({ ...base, status: 'in_transit', mfaBlocked: true })).toBe(false);
   });
 
   it('View signature shows for a digital hand-over even once the image leaves the row (slice C); never for paper', () => {

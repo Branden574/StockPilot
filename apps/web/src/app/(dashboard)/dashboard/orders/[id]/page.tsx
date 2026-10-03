@@ -101,6 +101,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
   handOverLinkWanted,
+  handOverMfaBlock,
+  handOverMfaPanelMessage,
   hasCapturedSignature,
   resolveReturnToken,
   signatureLinkToken,
@@ -1043,10 +1045,21 @@ export default async function OrderDetailPage({
   //     signed (staged for pickup, in transit) and only for someone who may
   //     hand it over (orders:approve or the assigned driver). The raw token
   //     when its digest is the column, else a raw column minted before 0389;
-  //     never a digest (the sign page would then ask for a session).
+  //     never a digest (the sign page would then ask for a session). Not
+  //     while the viewer owes an MFA step-up (F2): the link completes the
+  //     hand-over with no session, so it follows assertPermission's rule, and
+  //     the panel says what to do instead. The MFA state is the service
+  //     context's (every read above already used it, request-cached, so no
+  //     round trip); a context that failed holds the link back too.
+  const handOverMfaState = await contextStarted.then(
+    (svcCtx) => ({ known: true as const, block: handOverMfaBlock(svcCtx) }),
+    () => ({ known: false as const, block: null }),
+  );
+  const handOverMfa = handOverMfaState.block;
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
     viewerMayHandOver: canApprove || isAssignedDriver,
+    mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
     status: request.status,
     signatureTokenColumn: request.signature_token,
   });
@@ -1677,6 +1690,7 @@ export default async function OrderDetailPage({
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
               signatureToken={handOverLink?.token ?? null}
+              handOverMfaMessage={handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null}
               hasSignature={hasCapturedSignature(request)}
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}

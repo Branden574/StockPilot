@@ -96,6 +96,10 @@ interface Props {
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
   signatureToken: string | null;
+  /** Set when the Collect signature link is held back because the viewer
+   *  owes an MFA step-up (migration 0389, desk check F2): the button stays
+   *  enabled and says this instead of opening the sign page. */
+  handOverMfaMessage?: string | null;
   /** Whether a signature exists — drives the "View signature" button. The
    *  actual data-URL blob is fetched lazily on dialog-open (see the sig
    *  dialog) instead of shipped in the RSC payload. */
@@ -209,6 +213,7 @@ export function ManagerActionsPanel({
   fulfillmentType,
   assignedDeliveryUserId,
   signatureToken,
+  handOverMfaMessage = null,
   hasSignature,
   signedByName,
   signedAt,
@@ -568,7 +573,7 @@ export function ManagerActionsPanel({
 
   function collectSignature() {
     if (!signatureToken) {
-      toast.error('No signature token on this order — regenerate the packing slip.');
+      toast.error(handOverMfaMessage ?? 'No signature token on this order — regenerate the packing slip.');
       return;
     }
     window.open(`/orders/sign/${signatureToken}`, '_blank', 'noopener,noreferrer');
@@ -898,11 +903,15 @@ export function ManagerActionsPanel({
           {(status === 'staged_for_pickup' || status === 'in_transit') && (
             <>
               {/* The sign page opens in the "anyway" click itself, so the
-                  browser still treats it as the person's own action. */}
+                  browser still treats it as the person's own action. With no
+                  link (held back for MFA) the click only says why, so the
+                  departure check is not asked first. */}
               <Button
                 variant="gradient"
-                onClick={() => guardDeparture('signature', collectSignature)}
-                disabled={busy !== null || !signatureToken}
+                onClick={() =>
+                  signatureToken ? guardDeparture('signature', collectSignature) : collectSignature()
+                }
+                disabled={busy !== null || (!signatureToken && !handOverMfaMessage)}
               >
                 <ClipboardCheck className="h-3.5 w-3.5" />
                 Collect signature

@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { isHandOverEntitled, signatureLinkToken } from '@/server/lib/order-secrets';
+import { handOverMfaBlock, isHandOverEntitled, signatureLinkToken } from '@/server/lib/order-secrets';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -47,6 +47,16 @@ export async function GET(
     if (!isHandOverEntitled(ctx, detail.request)) {
       return NextResponse.json(
         { error: 'forbidden', message: 'Only someone who can hand this order over can print its warehouse slip.' },
+        { status: 403 },
+      );
+    }
+    // The QR completes the hand-over with no session, so an MFA step-up the
+    // caller still owes holds it back, as the sign route's member path and
+    // assertPermission do (desk check F2).
+    const mfa = handOverMfaBlock(ctx);
+    if (mfa) {
+      return NextResponse.json(
+        { error: 'forbidden', message: mfa.message, details: { reason: mfa.reason } },
         { status: 403 },
       );
     }

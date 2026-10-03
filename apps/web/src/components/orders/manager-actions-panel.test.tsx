@@ -21,6 +21,8 @@ import {
   stageOrderAction,
 } from '@/server/actions/order-requests';
 
+import { toast } from 'sonner';
+
 import { ManagerActionsPanel } from './manager-actions-panel';
 
 // Next's Link does navigation gymnastics we don't care about here — stub it
@@ -751,6 +753,47 @@ describe('ManagerActionsPanel — the confirm before an order leaves short (F2-2
     await user.click(screen.getByRole('button', { name: 'Collect signature' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Migration 0389, desk check F2: the Collect signature link completes the
+// hand-over with no session, so the page holds it back while the viewer owes
+// an MFA step-up and hands the panel the words instead.
+describe('ManagerActionsPanel — Collect signature held back for MFA (0389, F2)', () => {
+  const manager = { canApprove: true, viewerRole: 'manager' as const };
+  const openSpy = vi.fn();
+
+  beforeEach(() => {
+    openSpy.mockReset();
+    vi.mocked(toast.error).mockReset();
+    vi.stubGlobal('open', openSpy);
+    return () => vi.unstubAllGlobals();
+  });
+
+  it('the button stays enabled and says what to do; no sign page opens and no departure confirm is asked', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'staged_for_pickup',
+          signatureToken: null,
+          handOverMfaMessage: 'Re-authenticate with MFA to collect a signature.',
+          departureLines: SHORT_LINES,
+        })}
+      />,
+    );
+    const button = screen.getByRole('button', { name: 'Collect signature' });
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(toast.error).toHaveBeenCalledWith('Re-authenticate with MFA to collect a signature.');
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('with no link and nothing to say (no token minted), the button is disabled, as before', () => {
+    render(<ManagerActionsPanel {...baseProps({ ...manager, status: 'in_transit', signatureToken: null })} />);
+    expect(screen.getByRole('button', { name: 'Collect signature' })).toBeDisabled();
   });
 });
 

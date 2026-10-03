@@ -3,6 +3,7 @@ import 'server-only';
 import { can, type Permission, type Role } from '@stockpilot/core';
 
 import { sha256Hex } from '@/lib/token-hash';
+import { mfaGateError } from '@/server/services/context';
 
 /**
  * ORDER SECRETS (migration 0389, slice B "order secrets, expand").
@@ -204,24 +205,57 @@ export function isHandOverEntitled(
   return order.assigned_delivery_user_id != null && order.assigned_delivery_user_id === ctx.userId;
 }
 
+/**
+ * The MFA step-up that stands between an entitled member and the order's RAW
+ * hand-over link (desk check F2). The sign route's member path answers an
+ * entitled member whose session needs a step-up with 403 (R3); the order
+ * page's link and the warehouse slip's QR hand over the same order with no
+ * session at all, so they follow the same rule `assertPermission` applies to
+ * every privileged action: MFA required and not satisfied means no raw link.
+ * Null when nothing is in the way; else the reason and the shared words.
+ */
+export function handOverMfaBlock(ctx: {
+  readonly mfaRequired: boolean;
+  readonly mfaSatisfied: boolean;
+  readonly mfaEnrolled?: boolean;
+}): { reason: 'aal2_required' | 'mfa_required'; message: string } | null {
+  if (!ctx.mfaRequired || ctx.mfaSatisfied) return null;
+  const gate = mfaGateError({ mfaEnrolled: ctx.mfaEnrolled });
+  const reason = gate.details?.reason === 'mfa_required' ? 'mfa_required' : 'aal2_required';
+  return { reason, message: gate.message };
+}
+
+/**
+ * The panel's words when the Collect signature link is held back for MFA:
+ * what to do, in the panel's own terms (the gate's words name no action).
+ */
+export function handOverMfaPanelMessage(reason: 'aal2_required' | 'mfa_required'): string {
+  return reason === 'mfa_required'
+    ? 'Set up multi-factor authentication in Settings to collect a signature.'
+    : 'Re-authenticate with MFA to collect a signature.';
+}
+
 /** The statuses an order can be signed for at (confirm_order_signature's). */
 export const SIGNABLE_STATUSES: readonly string[] = ['staged_for_pickup', 'in_transit'];
 
 /**
  * Does the order page hand the actions panel a "Collect signature" link? Only
  * while the order can be signed, only when the panel shows, only for someone
- * who may hand it over, and only when a token was minted (the page then reads
+ * who may hand it over, only when no MFA step-up is outstanding (F2:
+ * handOverMfaBlock), and only when a token was minted (the page then reads
  * the raw one with signatureLinkToken). Pure, so the page's rule is testable.
  */
 export function handOverLinkWanted(v: {
   showActionsPanel: boolean;
   viewerMayHandOver: boolean;
+  mfaBlocked: boolean;
   status: string;
   signatureTokenColumn: string | null;
 }): boolean {
   return (
     v.showActionsPanel &&
     v.viewerMayHandOver &&
+    !v.mfaBlocked &&
     SIGNABLE_STATUSES.includes(v.status) &&
     v.signatureTokenColumn !== null
   );

@@ -14,7 +14,9 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
  *   - the QR carries the RAW token from order_request_secrets when its sha256
  *     is the order's column; else a raw column minted before 0389 (no side
  *     token hashes to it, until slice C); else no QR (a cleared column, or a
- *     side table that cannot be read). Never the digest.
+ *     side table that cannot be read). Never the digest;
+ *   - an entitled member who still owes an MFA step-up gets 403 with the
+ *     reason, as the sign route's member path does (desk check F2).
  */
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
@@ -161,5 +163,45 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     get.mockResolvedValue(detail(DIGEST));
     expect((await call()).status).toBe(200);
     expect(qrUrl()).toBeNull();
+  });
+
+  it('F2: an entitled member who owes an MFA step-up gets 403 with the reason, no PDF, no export budget spent', async () => {
+    const s = makeSupabaseStub({ 'warehouses.select': { data: { name: 'DC4' }, error: null } });
+    vi.mocked(withApiContext).mockResolvedValue({
+      ...makeServiceContext(s.client, { role: 'admin', mfaRequired: true, mfaSatisfied: false }),
+      mfaEnrolled: true,
+    } as never);
+    get.mockResolvedValue(detail(DIGEST));
+    const res = await call();
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; message: string; details: { reason: string } };
+    expect(body).toEqual({
+      error: 'forbidden',
+      message: 'Re-authenticate with MFA before performing this action.',
+      details: { reason: 'aal2_required' },
+    });
+    expect(JSON.stringify(body)).not.toContain(RAW);
+    expect(render).not.toHaveBeenCalled();
+    expect(exportRateLimited).not.toHaveBeenCalled();
+  });
+
+  it('F2: the assigned driver under a policy who has not enrolled gets 403 mfa_required', async () => {
+    const s = makeSupabaseStub({ 'warehouses.select': { data: { name: 'DC4' }, error: null } });
+    vi.mocked(withApiContext).mockResolvedValue({
+      ...makeServiceContext(s.client, { role: 'staff', userId: 'drv', mfaRequired: true, mfaSatisfied: false }),
+      mfaEnrolled: false,
+    } as never);
+    get.mockResolvedValue(detail(DIGEST, 'drv'));
+    const res = await call();
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { details: { reason: string } }).details.reason).toBe('mfa_required');
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it('F2: a satisfied step-up (AAL2) prints as before', async () => {
+    signIn({ role: 'admin', mfaRequired: true, mfaSatisfied: true });
+    get.mockResolvedValue(detail(DIGEST));
+    expect((await call()).status).toBe(200);
+    expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${RAW}`);
   });
 });
