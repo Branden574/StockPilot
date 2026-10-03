@@ -35,12 +35,26 @@
 --    P8  no constraint in public or auth is DEFERRABLE and no constraint
 --        trigger is deferrable (a deferred check would run at commit, outside
 --        the check's subtransaction).
+--    P8b the only NOT VALID constraint in public or auth is
+--        order_requests_delivery_target_chk (review R6, 2026-10-03): Postgres
+--        re-checks a NOT VALID CHECK on every update of a row, the FK's
+--        SET NULL included, so a legacy row that breaks it refuses the
+--        deletion of anyone it names (5 such orders and 2 accounts in
+--        production, both already refused by RESTRICT keys). A new NOT VALID
+--        constraint changes who can be deleted and is reviewed with the A3
+--        census; P8c proves the refusal.
+--    P8c a row that breaks the NOT VALID CHECK makes the check answer blocked
+--        23514 order_requests_delivery_target_chk, and nothing changes (at
+--        the end of the file: it drops and re-adds that CHECK, undone by the
+--        file's rollback).
 --    (P9, a row lock held by another session, is in
 --    scripts/db-concurrency/0388_requester_delete_race.sh: pgTAP has one
 --    session.)
 -- C. C1 the only function in any schema whose body deletes from auth.users or
 --    user_profiles is account_deletion_check; C2 its posture (body md5,
---    DEFINER, search_path and lock_timeout 900ms, owner, EXECUTE list).
+--    DEFINER, search_path and lock_timeout 900ms, owner, EXECUTE list); C3
+--    deadlock_timeout on this stack is above that lock_timeout (review R3;
+--    production's is read at R0).
 -- D. Item 16 (requester_deleted_at, its trigger, identity_chk relaxed):
 --    D5-D10 the marker is stamped only when a non-API role nulls a requester
 --        whose profile is gone; D8, D9, D9b posture;
@@ -65,7 +79,7 @@
 
 begin;
 
-select plan(92);
+select plan(95);
 
 \set orgA   '\'03880000-0000-0000-0000-00000000000a\''
 \set own    '\'03880000-0000-0000-0000-0000000000a0\''
@@ -466,6 +480,12 @@ select is(
     where c.contype = 'f' and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass) and c.condeferrable)::text,
   '0/0/0',
   'P8: no constraint in public or auth is DEFERRABLE, no constraint trigger there is deferrable, and no key in any schema that references a user is: every check of a deletion fires inside account_deletion_check''s subtransaction');
+select is(
+  (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname, ',' order by c.conname collate "C"), '')
+     from pg_constraint c join pg_namespace n on n.oid = c.connamespace
+    where n.nspname in ('public', 'auth') and not c.convalidated),
+  'order_requests.order_requests_delivery_target_chk',
+  'P8b: the only NOT VALID constraint in public or auth is order_requests_delivery_target_chk (a legacy row breaking it refuses the FK''s SET NULL, P8c): a new one changes who can be deleted and is reviewed with the A3 census');
 
 -- ══ C. The check is the only deleter of accounts, and its posture ═════════
 select is(
@@ -479,6 +499,11 @@ select is(
      from pg_proc p where p.oid = to_regprocedure('public.account_deletion_check(uuid)')),
   '15968336d457e56544f3a2421e807b35|true|{"search_path=public, pg_temp",lock_timeout=900ms}|postgres',
   'C2: account_deletion_check is 0388''s body, SECURITY DEFINER, search_path pinned, lock_timeout 900ms (below deadlock_timeout 1s), owned by postgres (its EXECUTE list is P5a)');
+select cmp_ok(
+  (select setting::int from pg_settings where name = 'deadlock_timeout'),
+  '>',
+  900,
+  'C3: deadlock_timeout (ms) on this stack is above account_deletion_check''s lock_timeout 900ms, so a row lock ends the check with 55P03 before its wait can make an order write the deadlock victim (production''s value is read at R0)');
 
 -- ══ D. Item 16: the marker ════════════════════════════════════════════════
 select is(
@@ -698,6 +723,27 @@ select is(
          and c.conname in ('order_requests_identity_chk', 'order_requests_requester_deleted_chk')),
   'true,true,true,true,true',
   'K: both functions, the new column and both CHECKs say in their comments what 0388 does');
+
+-- ══ P8c. A row that breaks the NOT VALID CHECK refuses the deletion ═══════
+-- Last in the file: it drops and re-adds order_requests_delivery_target_chk
+-- (NOT VALID, the same definition), undone by the file's rollback. The free
+-- staff member (no orders, deletable in P1) gets one closed delivery order
+-- with no charter, the shape of production's 5 legacy rows.
+alter table public.order_requests drop constraint order_requests_delivery_target_chk;
+insert into public.order_requests
+  (organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, delivery_charter_id)
+values (:orgA, :whA, 'cancelled', 'internal', :free, 'delivery', null);
+alter table public.order_requests add constraint order_requests_delivery_target_chk check (
+  (fulfillment_type = 'delivery' and delivery_charter_id is not null)
+  or (fulfillment_type = 'pickup' and delivery_charter_id is null)) not valid;
+select is(
+  (select r->>'deletable' || '/' || (r->>'reason') || '/' || (r->>'sqlstate') || '/' || (r->>'constraint') || '/' || (r->>'table')
+     from (select pg_temp.call_as('service_role', null,
+                    format('select public.account_deletion_check(%L)::text', :free))::jsonb as r) x)
+  || '/' || (select count(*) from auth.users where id = :free)::text
+  || '/' || (select count(*) from public.order_requests where requester_user_id = :free)::text,
+  'false/blocked/23514/order_requests_delivery_target_chk/public.order_requests/1/1',
+  'P8c: a row breaking the NOT VALID delivery_target_chk refuses the FK''s SET NULL: the check answers blocked 23514 (an integrity refusal, "linked records"), and the account and its order are unchanged');
 
 select * from finish();
 rollback;

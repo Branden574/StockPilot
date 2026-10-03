@@ -513,7 +513,9 @@ PGTAP_TESTS=(
   # service_role only, refuses an authenticated or anon JWT, lock_timeout
   # 900ms) dry-runs the delete and always undoes it; it is the only function
   # in any schema that deletes from auth.users or user_profiles. Nothing in
-  # public or auth is DEFERRABLE (the dry run would miss a deferred check).
+  # public or auth is DEFERRABLE (the dry run would miss a deferred check),
+  # and the only NOT VALID constraint is delivery_target_chk, whose legacy
+  # rows refuse a deletion (pinned, and the refusal proven).
   # The two-session proofs (delete against approve, the dry run against a
   # row lock, numbering) are scripts/db-concurrency/0388_requester_delete_race.sh;
   # the lock footprint is scripts/db-concurrency/0388_migration_lock_footprint.sh.
@@ -777,8 +779,11 @@ WEB_TESTS=(
   # nothing and fail closed), write no profile tombstone, write the
   # user.deactivated row only after the delete succeeded (user_id null), are
   # rate limited before the check, and report a failed delete honestly (the
-  # phone used to answer 200); the platform cleanup counts kept accounts
-  # instead of claiming them deleted.
+  # phone used to answer 200). Only an integrity refusal (class 23) is
+  # "linked to records"; any other error the dry run caught is a reported
+  # check failure. A deleteUser error is settled against GoTrue, so an
+  # account that is gone is never reported as kept. The platform cleanup
+  # counts kept and failed accounts apart instead of claiming them deleted.
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
   src/server/actions/platform-admin.remove-org.test.ts
