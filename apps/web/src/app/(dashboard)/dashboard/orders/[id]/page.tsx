@@ -1050,7 +1050,16 @@ export default async function OrderDetailPage({
     status: request.status,
     signatureTokenColumn: request.signature_token,
   });
-  const secretsAdmin = requesterReturnEligible || wantsHandOverLink ? createAdminClient() : null;
+  // Without a service-role key (a misconfigured preview) the page renders
+  // with no return link and no hand-over link rather than failing.
+  let secretsAdmin: ReturnType<typeof createAdminClient> | null = null;
+  if (requesterReturnEligible || wantsHandOverLink) {
+    try {
+      secretsAdmin = createAdminClient();
+    } catch {
+      secretsAdmin = null;
+    }
+  }
   const [requesterReturnToken, handOverLink] = await Promise.all([
     requesterReturnEligible && secretsAdmin
       ? resolveReturnToken(secretsAdmin, id, request.return_token)

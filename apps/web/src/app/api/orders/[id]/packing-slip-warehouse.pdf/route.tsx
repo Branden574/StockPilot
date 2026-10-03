@@ -68,9 +68,14 @@ export async function GET(
     // side table cannot vouch for, or a failed side read, prints no QR, which
     // is today's no-token branch below. The order column alone is never put
     // in the QR when it is a digest.
-    const link = detail.request.signature_token
-      ? await signatureLinkToken(createAdminClient(), id, detail.request.signature_token)
-      : null;
+    let link: Awaited<ReturnType<typeof signatureLinkToken>> = null;
+    if (detail.request.signature_token) {
+      try {
+        link = await signatureLinkToken(createAdminClient(), id, detail.request.signature_token);
+      } catch {
+        link = null; // no service-role key: the slip prints without a QR (warned below)
+      }
+    }
     const token = link?.token ?? null;
     let qrDataUrl: string | null = null;
     if (token) {

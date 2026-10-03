@@ -40,8 +40,13 @@ vi.mock('@/server/services/order-requests', () => ({
     get = get;
   },
 }));
-const adminHolder = { client: null as unknown };
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
+const adminHolder = { client: null as unknown, throws: false };
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    if (adminHolder.throws) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    return adminHolder.client;
+  },
+}));
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -95,6 +100,7 @@ function qrUrl(): string | null {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(exportRateLimited).mockResolvedValue(null);
+  adminHolder.throws = false;
   side(RAW);
 });
 
@@ -137,6 +143,14 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     signIn({ role: 'manager' });
     side(RAW);
     get.mockResolvedValue(detail(null));
+    expect((await call()).status).toBe(200);
+    expect(qrUrl()).toBeNull();
+  });
+
+  it('no service-role key: the slip still prints, with no QR (never the digest)', async () => {
+    signIn({ role: 'manager' });
+    adminHolder.throws = true;
+    get.mockResolvedValue(detail(DIGEST));
     expect((await call()).status).toBe(200);
     expect(qrUrl()).toBeNull();
   });
