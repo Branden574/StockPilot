@@ -300,6 +300,10 @@ export const COUNT_VARIANCE_CLEARS_TITLE = 'What clears this';
 export const CONFIRM_COUNT_LABEL = 'Confirm this count';
 export const CONFIRM_COUNT_INSTEAD_LABEL = 'Confirm this count instead';
 export const EXCEPTION_CONFIRM_OFFLINE_COPY = 'You are offline. Confirming a count needs a connection.';
+/** The act gate refused (no stock:adjust, or no write access to the item's
+ *  warehouse): the sentence for an act and for a confirm, on the web and the
+ *  phone. */
+export const EXCEPTION_ACT_REFUSED_COPY = 'You do not have permission to act on this exception.';
 /** The confirmation step's note placeholder, also shown by a sheet whose
  *  confirm the server stopped offering. */
 export const CONFIRM_COUNT_NOTE_PLACEHOLDER = 'How you checked, for example counted twice on the floor';
@@ -806,6 +810,10 @@ export function describeConfirmError(
       return NOT_COUNTABLE;
     case 'not_counter':
       return notCounterReason(ctx.counterLabel?.trim() || null);
+    case 'not_permitted':
+      // Reached only when access changed after the page loaded: the page
+      // withholds Confirm from a reader the act gate refuses.
+      return EXCEPTION_ACT_REFUSED_COPY;
     case 'busy':
       return 'A check is running. Try again in a moment.';
     case 'unavailable':

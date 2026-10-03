@@ -18,6 +18,7 @@ import {
   countVarianceClearCopy,
   countVarianceLead,
   describeConfirmError,
+  EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_CONFIRM_OFFLINE_COPY,
   EXCEPTION_NONE_CONFIRMED_COPY,
   isCountConfirmReason,
@@ -922,6 +923,11 @@ describe('describeConfirmError', () => {
     expect(describeConfirmError('not_counter', web)).toBe(
       'Only Dana Lee, who counted it, or a manager can confirm this count.',
     );
+    // The act gate refused (permission or warehouse changed after the page
+    // loaded): the act route's sentence, one copy for the web and the phone.
+    expect(describeConfirmError('not_permitted', web)).toBe('You do not have permission to act on this exception.');
+    expect(describeConfirmError('not_permitted', phone)).toBe('You do not have permission to act on this exception.');
+    expect(EXCEPTION_ACT_REFUSED_COPY).toBe('You do not have permission to act on this exception.');
     expect(describeConfirmError('busy', web)).toBe('A check is running. Try again in a moment.');
     expect(describeConfirmError('unavailable', web)).toBe('Confirming is unavailable right now. Reload to try again.');
   });

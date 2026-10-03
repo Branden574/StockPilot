@@ -2,6 +2,7 @@ import {
   confirmUnavailableCopy,
   describeConfirmError,
   EXCEPTION_ACT_RESOLVED_COPY,
+  EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_CONFIRM_OFFLINE_COPY,
   EXCEPTION_RULES,
   exceptionActDisabledReason,
@@ -685,7 +686,7 @@ export function describeActError(e: unknown): string {
   if (status === 409 && reason === 'client_event_id_conflict') {
     return 'This could not be saved as sent. Please try again.';
   }
-  if (status === 403) return 'You do not have permission to act on this exception.';
+  if (status === 403) return EXCEPTION_ACT_REFUSED_COPY;
   if (status === 404) return 'This exception is no longer available to you.';
   if (status === 429) return 'Too many requests. Wait a moment and try again.';
   if (status === 400 && reason === 'note_required') return 'Add a note.';

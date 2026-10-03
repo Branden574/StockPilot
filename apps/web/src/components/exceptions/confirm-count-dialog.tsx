@@ -58,9 +58,11 @@ import { confirmExceptionCountAction } from '@/server/actions/exceptions';
  *
  * Refusals show inline with role="alert" (pattern #20), worded by core
  * describeConfirmError from the action's `reason`, never from message text.
- * A refusal that is not about the confirm itself (the act gate, the rate
- * limit, a note the server refused, a server problem) keeps the action's
- * words, the ones the page's other exception actions show.
+ * A refusal that is not about the confirm itself (the app's act gate, the
+ * rate limit, a note the server refused, a server problem) keeps the
+ * action's words, the ones the page's other exception actions show. Closing
+ * the dialog after a refusal or no answer refreshes the page, so it shows the
+ * row as it now is instead of the Confirm that was just refused.
  *
  * Online only and never queued, like every other exception action.
  */
@@ -68,8 +70,9 @@ import { confirmExceptionCountAction } from '@/server/actions/exceptions';
 interface ConfirmCountContextValue {
   /** Confirm is offered to this reader on this row. */
   offered: boolean;
-  /** Opens the dialog; `note` is carried over from the Acknowledge step. */
-  openConfirm: (note?: string) => void;
+  /** Opens the dialog; `note` is carried over from the Acknowledge step, and
+   *  `opener` is the button pressed (focus returns to it on Cancel). */
+  openConfirm: (note?: string, opener?: HTMLElement | null) => void;
   /** "Count confirmed. EX-000059 is closed." once a confirm succeeded. */
   success: string | null;
   statusRef: React.RefObject<HTMLParagraphElement | null>;
@@ -78,10 +81,11 @@ interface ConfirmCountContextValue {
 const ConfirmCountContext = React.createContext<ConfirmCountContextValue | null>(null);
 
 /** Reasons whose words are the action's own message: not refusals of the
- *  confirm itself but of the reader or the request. No reason at all (not
- *  found, a server problem) is the action's message too. */
+ *  confirm itself but of the request (the rate limit, a note or a payload
+ *  the server refused). No reason at all (not found, the app's act gate, a
+ *  server problem) is the action's message too. The database's act gate
+ *  (not_permitted) is core's, as on the phone. */
 const ACTION_WORDED_REASONS: ReadonlySet<string> = new Set([
-  'not_permitted',
   'rate_limited',
   'note_too_long',
   'invalid_argument',
@@ -122,14 +126,23 @@ export function ConfirmCountProvider({
   // Set on success, read once when the dialog hands focus back.
   const succeededRef = React.useRef(false);
   // The button that opened the dialog: focus goes back to it on Cancel (the
-  // dialog has no Radix trigger to return to).
+  // dialog has no Radix trigger to return to). Passed in by the button: Safari
+  // and Firefox on macOS do not focus a button on a mouse click, so the
+  // focused element is then the page itself.
   const openerRef = React.useRef<HTMLElement | null>(null);
+  // A send was refused or got no answer: the page behind the dialog may be
+  // stale (the row resolved, a newer count, the stock moved, or the confirm
+  // landed), so closing the dialog refreshes it. Not on the refusal itself:
+  // a refresh that turns the block null would close the dialog and take its
+  // words with it.
+  const staleRef = React.useRef(false);
 
   const canOpen = offered && confirm !== null;
   const openConfirm = React.useCallback(
-    (note?: string) => {
+    (note?: string, opener?: HTMLElement | null) => {
       if (!canOpen) return;
-      openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      openerRef.current =
+        opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       setInitialNote(note ?? '');
       setOpen(true);
     },
@@ -143,9 +156,18 @@ export function ConfirmCountProvider({
   function onOpenChange(next: boolean) {
     if (!next && busyRef.current) return;
     setOpen(next);
+    if (!next && staleRef.current) {
+      staleRef.current = false;
+      router.refresh();
+    }
+  }
+
+  function onFailed() {
+    staleRef.current = true;
   }
 
   function onConfirmed(message: string) {
+    staleRef.current = false;
     succeededRef.current = true;
     setSuccess(message);
     setOpen(false);
@@ -166,6 +188,7 @@ export function ConfirmCountProvider({
             recountNumber={recountNumber}
             busyRef={busyRef}
             onCancel={() => onOpenChange(false)}
+            onFailed={onFailed}
             onConfirmed={onConfirmed}
             onCloseAutoFocus={(e) => {
               e.preventDefault();
@@ -195,6 +218,7 @@ function ConfirmCountDialogBody({
   recountNumber,
   busyRef,
   onCancel,
+  onFailed,
   onConfirmed,
   onCloseAutoFocus,
 }: {
@@ -206,6 +230,8 @@ function ConfirmCountDialogBody({
   recountNumber: number | null;
   busyRef: React.RefObject<boolean>;
   onCancel: () => void;
+  /** A send was refused or got no answer. */
+  onFailed: () => void;
   onConfirmed: (message: string) => void;
   onCloseAutoFocus: (e: Event) => void;
 }) {
@@ -240,12 +266,14 @@ function ConfirmCountDialogBody({
       // No answer: it may have landed. The payload is kept, so pressing again
       // resends it and the server answers the replay.
       setError(NO_ANSWER_COPY);
+      onFailed();
       return;
     } finally {
       busyRef.current = false;
       setPending(false);
     }
     if ('error' in res) {
+      onFailed();
       const reason = res.error.reason;
       setError(
         reason === null || ACTION_WORDED_REASONS.has(reason)
@@ -360,7 +388,7 @@ export function ConfirmCountButton() {
       variant="default"
       size="default"
       className="pointer-coarse:min-h-11"
-      onClick={() => ctx.openConfirm()}
+      onClick={(e) => ctx.openConfirm(undefined, e.currentTarget)}
       data-testid="confirm-count-button"
     >
       {CONFIRM_COUNT_LABEL}
@@ -381,7 +409,7 @@ export function ConfirmCountInsteadButton({ note, disabled = false }: { note: st
       size="sm"
       className="h-auto px-0 py-1 text-sm pointer-coarse:min-h-11"
       disabled={disabled}
-      onClick={() => ctx.openConfirm(note)}
+      onClick={(e) => ctx.openConfirm(note, e.currentTarget)}
       data-testid="confirm-count-instead"
     >
       {CONFIRM_COUNT_INSTEAD_LABEL}

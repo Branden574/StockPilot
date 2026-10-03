@@ -6,6 +6,7 @@ import {
   countConfirmGate,
   countConfirmState,
   countVarianceNumbers,
+  EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULE_IDS,
   formatCycleCountNumber,
@@ -2116,6 +2117,13 @@ const CONFIRM_CONFLICT_HINTS: ReadonlySet<string> = new Set([
  *   `unknown`.  22023: validation_error.  23505 (the RPC maps its own; this is
  *   the backstop): conflict `already_confirmed`.  55P03 (the org's lock held
  *   past 5 s): conflict `busy`, retryable.  Anything else: internal_error.
+ *
+ * 57014 (statement_timeout, 8 s for authenticated) stays internal_error, a
+ * reported failure, on purpose, as for the sync. lock_timeout (5 s) applies to
+ * each wait, so only two long waits in a row (the org's sync lock, then the
+ * row) could add up to it, and the transactions that hold those locks (a
+ * sync, an act, evidence, an escalation step) last milliseconds. If one ever
+ * does, it is a slow database worth a report, not a busy check to retry.
  */
 export function mapConfirmError(error: { code?: string; message: string; hint?: string | null }): ServiceError {
   const hint = error.hint ?? null;
@@ -2127,9 +2135,7 @@ export function mapConfirmError(error: { code?: string; message: string; hint?: 
         });
       }
       if (hint === 'not_permitted') {
-        return new ServiceError('forbidden', 'You do not have permission to confirm this count.', {
-          reason: 'not_permitted',
-        });
+        return new ServiceError('forbidden', EXCEPTION_ACT_REFUSED_COPY, { reason: 'not_permitted' });
       }
       if (hint === 'not_authenticated') {
         return new ServiceError('unauthenticated', 'Sign in to confirm this count.');

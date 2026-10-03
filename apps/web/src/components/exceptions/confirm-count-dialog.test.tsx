@@ -245,6 +245,9 @@ describe('Confirm this count (web dialog)', () => {
     ],
     ['not_countable', {}, 'This item can no longer be counted, so this exception closes at the next check.'],
     ['not_counter', {}, 'Only Dana Lee, who counted it, or a manager can confirm this count.'],
+    // The database's act gate (permission or warehouse access changed after
+    // the page loaded): core's words, the phone's too.
+    ['not_permitted', {}, 'You do not have permission to act on this exception.'],
     ['busy', {}, 'A check is running. Try again in a moment.'],
     ['unavailable', {}, 'Confirming is unavailable right now. Reload to try again.'],
     ['unknown', {}, 'This count could not be confirmed. Refresh and try again.'],
@@ -263,7 +266,6 @@ describe('Confirm this count (web dialog)', () => {
   });
 
   it.each([
-    ['not_permitted', 'You do not have permission to confirm this count.'],
     ['rate_limited', 'Too many requests. Wait a moment and try again.'],
     ['note_too_long', 'Notes can be at most 1,000 characters.'],
     [null, 'You do not have write access to this warehouse.'],
@@ -292,13 +294,74 @@ describe('Confirm this count (web dialog)', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Count confirmed. EX-000059 is closed.');
   });
 
-  it('Cancel sends nothing and returns focus to the button that opened it', async () => {
+  it('Cancel sends nothing, refreshes nothing and returns focus to the button that opened it', async () => {
     const { opener } = await openDialog();
     await press('Cancel');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(confirmExceptionCountAction).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
     await waitFor(() => expect(document.activeElement).toBe(opener));
     expect(screen.getByTestId('confirm-count-status')).toHaveTextContent(/^$/);
+  });
+
+  // Mutation caught: the opener read from document.activeElement only. Safari
+  // and Firefox on macOS do not focus a button on a mouse click, so the
+  // focused element is the page itself when the dialog opens.
+  it.each([
+    ['Confirm this count', {}],
+    ['Confirm this count instead', { insteadNote: 'Items recounted' }],
+  ])('opened by a click that does not focus the button (%s), Cancel still returns focus to it', async (name, props) => {
+    render(<Harness {...props} />);
+    const opener = screen.getByRole('button', { name });
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).not.toBe(opener);
+    await act(async () => {
+      fireEvent.click(opener);
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await press('Cancel');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  // Mutation caught: closing after a refusal without a refresh (the page then
+  // offers the same stale Confirm, and reopening gets the same refusal).
+  it.each([
+    ['count_changed', { error: { message: 'x', reason: 'count_changed' } }],
+    ['occurrence_resolved', { error: { message: 'x', reason: 'occurrence_resolved' } }],
+    ['busy', { error: { message: 'x', reason: 'busy', retryable: true } }],
+    ['no reason', { error: { message: 'Exception not found.', reason: null } }],
+  ])('after a refusal (%s), closing the dialog refreshes the page once, so it shows the row as it now is', async (_label, answer) => {
+    confirmExceptionCountAction.mockResolvedValue(answer);
+    const { opener } = await openDialog();
+    await press('Confirm and close');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    // Not while the refusal is on screen: a refresh could close the dialog
+    // and take its words with it.
+    expect(refresh).not.toHaveBeenCalled();
+    await press('Cancel');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    // Opened again and closed with nothing sent: no second refresh.
+    await act(async () => {
+      fireEvent.click(opener);
+    });
+    await press('Cancel');
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('after no answer, closing the dialog refreshes too (the confirm may have landed)', async () => {
+    confirmExceptionCountAction.mockRejectedValueOnce(new Error('fetch failed'));
+    await openDialog();
+    await press('Confirm and close');
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the server. Try again.');
+    expect(refresh).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a note over 1,000 characters before sending it', async () => {

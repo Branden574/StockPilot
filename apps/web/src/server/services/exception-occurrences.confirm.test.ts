@@ -692,6 +692,12 @@ describe('mapConfirmError', () => {
     if (code !== 'internal_error') expect(e.message).toMatch(/^[A-Z].*\.$/);
   });
 
+  it('words not_permitted as core does for the web and the phone (the act route\'s sentence)', () => {
+    expect(mapConfirmError({ code: '42501', hint: 'not_permitted', message: 'not_permitted' }).message).toBe(
+      'You do not have permission to act on this exception.',
+    );
+  });
+
   it('never keys on the message text', () => {
     expect(mapConfirmError({ code: 'P0001', hint: 'stock_moved', message: 'occurrence_resolved' }).details).toEqual({
       reason: 'stock_moved',
