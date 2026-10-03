@@ -356,6 +356,18 @@ describe('get: the countConfirm block', () => {
     // database agrees): Confirm is offered.
     const gone = svcFor(detailResults({ row }));
     expect((await gone.svc.get(OCC)).countConfirm).toMatchObject({ state: 'confirmable', canConfirm: true });
+    // Nor can one whose line, recorded from an earlier capture, can no longer
+    // re-check the item (pgTAP C11d: the database confirms it and closes the
+    // pointer).
+    const dormant = svcFor(
+      detailResults({
+        row,
+        lines: [
+          { id: 'l1', cycle_count_id: RECOUNT, counted_quantity: 9, expected_quantity: 2, rechecks: false, count: { count_number: 40, status: 'in_progress', organization_id: ORG } },
+        ],
+      }),
+    );
+    expect((await dormant.svc.get(OCC)).countConfirm).toMatchObject({ state: 'confirmable', canConfirm: true });
   });
 
   it('stock_moved: the stock on record changed since the count', async () => {

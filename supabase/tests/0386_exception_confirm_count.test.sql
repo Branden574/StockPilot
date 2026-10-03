@@ -21,8 +21,9 @@
 --    not_permitted (manager without stock:adjust, viewer), P0002 (another
 --    warehouse, another org); counted_by null; resolved rows and replay;
 --    count_changed (another count, another number, a newer posted count);
---    recount_in_progress, and a cancelled recount whose pointer is closed
---    first; not_confirmable; not_countable (rental, archived); stock_moved,
+--    recount_in_progress, and a cancelled recount, an in-progress recount
+--    whose line can no longer re-check the item, and one that no longer holds
+--    the item, each pointer closed first; not_confirmable; not_countable (rental, archived); stock_moved,
 --    and a transfer that nets to zero; no stock written; the item's live
 --    warehouse; already_confirmed (never 23505); count_in_progress and the
 --    lines that do not block; the check order.
@@ -50,7 +51,7 @@
 
 begin;
 
-select plan(72);
+select plan(75);
 
 \set orgA  '\'03860000-0000-0000-0000-00000000000a\''
 \set orgB  '\'03860000-0000-0000-0000-00000000000b\''
@@ -83,6 +84,8 @@ select plan(72);
 \set c10b  '\'03860000-0000-0000-0000-000000000f0b\''
 \set c11a  '\'03860000-0000-0000-0000-000000000f11\''
 \set c11b  '\'03860000-0000-0000-0000-000000000f12\''
+\set c11d  '\'03860000-0000-0000-0000-000000000f1d\''
+\set c11e  '\'03860000-0000-0000-0000-000000000f1e\''
 \set c12   '\'03860000-0000-0000-0000-000000000f1c\''
 \set c13a  '\'03860000-0000-0000-0000-000000000f13\''
 \set c13b  '\'03860000-0000-0000-0000-000000000f14\''
@@ -162,6 +165,8 @@ insert into public.inventory_items (id, organization_id, warehouse_id, sku, name
   (:c10b, :orgA, :w1, 'X0386-C10B', 'Newer count posted',     10, 'active'),
   (:c11a, :orgA, :w1, 'X0386-C11A', 'Recount running',        10, 'active'),
   (:c11b, :orgA, :w1, 'X0386-C11B', 'Recount cancelled',      10, 'active'),
+  (:c11d, :orgA, :w1, 'X0386-C11D', 'Recount no longer rechecks', 10, 'active'),
+  (:c11e, :orgA, :w1, 'X0386-C11E', 'Recount without the item', 10, 'active'),
   (:c12,  :orgA, :w1, 'X0386-C12',  'Over reserved',          10, 'active'),
   (:c13a, :orgA, :w1, 'X0386-C13A', 'Made rental',            10, 'active'),
   (:c13b, :orgA, :w1, 'X0386-C13B', 'Archived later',         10, 'active'),
@@ -581,13 +586,16 @@ select is(
 -- main count is posted its line can no longer re-check the item.
 select pg_temp.start(:mgr, :orgA, :w1, array[:c18d]::uuid[]) as "x18d" \gset
 select pg_temp.rec(:mgr, :'x18d', :c18d, 12);
+-- Z11d is a count opened BEFORE the main count that holds C11D uncounted, so
+-- C11D's Recount links it (C11d below).
+select pg_temp.start(:mgr, :orgA, :w1, array[:c11d]::uuid[]) as "z11d" \gset
 -- c14b's stock on Rack 1-A (so the count attributes its difference there).
 select pg_temp.adjust(:mgr, :c14b, 10, :r1);
 select pg_temp.start(:mgr, :orgA, :w1,
-  array[:c1, :c2, :c3, :c4, :c5, :c8, :c10a, :c10b, :c11a, :c11b, :c13a, :c13b, :c14a, :c14b, :c16,
+  array[:c1, :c2, :c3, :c4, :c5, :c8, :c10a, :c10b, :c11a, :c11b, :c11d, :c11e, :c13a, :c13b, :c14a, :c14b, :c16,
         :c18a, :c18b, :c18c, :c18d]::uuid[]) as "cca" \gset
 select pg_temp.rec(:stA, :'cca', i, 7)
-  from unnest(array[:c1, :c2, :c4, :c5, :c10a, :c10b, :c11a, :c11b, :c13a, :c13b, :c14a, :c14b, :c16,
+  from unnest(array[:c1, :c2, :c4, :c5, :c10a, :c10b, :c11a, :c11b, :c11d, :c11e, :c13a, :c13b, :c14a, :c14b, :c16,
                     :c18a, :c18b, :c18c, :c18d]::uuid[]) i;
 select pg_temp.rec(:mgr, :'cca', :c3, 7);
 select pg_temp.rec(:mgr, :'cca', :c8, 7);
@@ -605,13 +613,14 @@ select is(
   row((:'sync1'::jsonb)->'raised', (select count(*) from public.exception_occurrences o where o.organization_id = :orgA and o.resolved_at is null),
       (select string_agg(distinct (o.facts->>'variance'), ',') from public.exception_occurrences o where o.organization_id = :orgA and o.rule = 'count_variance'),
       (select bool_and(o.facts->>'cycleCountId' = :'cca') from public.exception_occurrences o where o.organization_id = :orgA and o.rule = 'count_variance'))::text,
-  row('20'::jsonb, 20::bigint, '-3', true)::text,
-  'setup: the post and the sync raise 19 count differences (all -3, all naming the count) and the over_reserved row');
+  row('22'::jsonb, 22::bigint, '-3', true)::text,
+  'setup: the post and the sync raise 21 count differences (all -3, all naming the count) and the over_reserved row');
 
 select pg_temp.open_occ(:c1) as "o1", pg_temp.open_occ(:c2) as "o2", pg_temp.open_occ(:c3) as "o3",
        pg_temp.open_occ(:c4) as "o4", pg_temp.open_occ(:c5) as "o5", pg_temp.open_occ(:c8) as "o8",
        pg_temp.open_occ(:c10a) as "o10a", pg_temp.open_occ(:c10b) as "o10b",
        pg_temp.open_occ(:c11a) as "o11a", pg_temp.open_occ(:c11b) as "o11b",
+       pg_temp.open_occ(:c11d) as "o11d", pg_temp.open_occ(:c11e) as "o11e",
        pg_temp.open_occ(:c13a) as "o13a", pg_temp.open_occ(:c13b) as "o13b",
        pg_temp.open_occ(:c14a) as "o14a", pg_temp.open_occ(:c14b) as "o14b", pg_temp.open_occ(:c16) as "o16",
        pg_temp.open_occ(:c18a) as "o18a", pg_temp.open_occ(:c18b) as "o18b",
@@ -728,6 +737,49 @@ select is(
   row(array['raised:-:system', 'recount_linked:' || :'rc11b' || ':' || :mgr, 'recount_closed:' || :'rc11b' || ':system',
             'count_confirmed:' || :'cca' || ':' || :stA], null::uuid)::text,
   'C11c: its pointer is closed first: raised, recount linked, recount closed (system), count confirmed');
+-- C11d: a linked recount IN PROGRESS whose line can no longer re-check the
+-- item. Z11d was opened before the main count with C11D uncounted, so the
+-- Recount links it; staff A then records it from a phone capture made before
+-- the main count was (the capture time is clamped to Z11d's start, earlier
+-- than every line of the main count). Posting Z11d could not change the
+-- item's latest count, so it cannot settle the row: it does not block, and
+-- its pointer is closed first. (A refusal here would leave a dormant recount
+-- blocking Confirm with no way through but a cancel, while the page, which
+-- reads the same lineRechecks false, offers Confirm.)
+select pg_temp.recount(:mgr, :orgA, :'o11d', 'k-0386-11d');
+select pg_temp.as_user(:stA);
+update public.cycle_count_lines
+   set counted_quantity = 9, counted_by = :stA, counted_at = now(), captured_at = now()
+ where cycle_count_id = :'z11d' and item_id = :c11d;
+select pg_temp.as_owner();
+select is(
+  (select row(o.recount_cycle_count_id, c.status, public.cycle_count_line_rechecks(l))::text
+     from public.exception_occurrences o
+     join public.cycle_counts c on c.id = o.recount_cycle_count_id
+     join public.cycle_count_lines l on l.cycle_count_id = c.id and l.item_id = o.item_id
+    where o.id = :'o11d'),
+  row(:'z11d'::uuid, 'in_progress', false)::text,
+  'C11d (setup): the Recount linked the count opened before the main count, which is in progress and whose line, recorded from the earlier capture, can no longer re-check the item');
+select pg_temp.confirm_as(:stA, :'o11d', :'cca', 7) as "cf11d" \gset
+select is(
+  row(:'cf11d', pg_temp.tl(:'o11d'),
+      (select recount_cycle_count_id from public.exception_occurrences where id = :'o11d'))::text,
+  row('ok:counter',
+      array['raised:-:system', 'recount_linked:' || :'z11d' || ':' || :mgr, 'recount_closed:' || :'z11d' || ':system',
+            'count_confirmed:' || :'cca' || ':' || :stA], null::uuid)::text,
+  'C11d: a linked recount in progress whose line can no longer re-check the item does not block: confirmed by the counter, its pointer closed first (recount closed by the system, then count confirmed)');
+-- C11e: a linked recount in progress that no longer holds a line for the
+-- item (the line was deleted) does not block either.
+select pg_temp.recount(:mgr, :orgA, :'o11e', 'k-0386-11e') as "rc11e" \gset
+delete from public.cycle_count_lines where cycle_count_id = :'rc11e' and item_id = :c11e;
+select pg_temp.confirm_as(:stA, :'o11e', :'cca', 7) as "cf11e" \gset
+select is(
+  row((select status from public.cycle_counts where id = :'rc11e'), :'cf11e',
+      pg_temp.tl(:'o11e'), (select recount_cycle_count_id from public.exception_occurrences where id = :'o11e'))::text,
+  row('in_progress', 'ok:counter',
+      array['raised:-:system', 'recount_linked:' || :'rc11e' || ':' || :mgr, 'recount_closed:' || :'rc11e' || ':system',
+            'count_confirmed:' || :'cca' || ':' || :stA], null::uuid)::text,
+  'C11e: a linked recount in progress that no longer holds a line for the item does not block: confirmed, its pointer closed first');
 
 -- ═══ C12, C13 ═════════════════════════════════════════════════════════════
 select is(pg_temp.confirm_as(:stA, :'o12', :'cca', 7), 'P0001:not_confirmable',
