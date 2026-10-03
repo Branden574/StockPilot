@@ -75,12 +75,14 @@ export { cartTotals, type CartTotals } from '@stockpilot/core';
  * not outlook.office.com, why the name-addr chip is OWA-only — moved with the
  * code it documents and is now in that module.
  *
- * WHAT STAYED: everything above this line. The catalog filter/sort pipeline,
+ * WHAT STAYED OUT OF THE DELIVERY MODULE: the catalog filter/sort pipeline,
  * the status derivation and `successRefLine` are storefront concerns with no
- * delivery involvement, and `CatalogItem` stays in `../v2/types` — the whole
- * point of the builder's narrowed item type is that it cannot reach `price` or
- * any other staff-only field, and widening core's view of an item would undo
- * that.
+ * delivery involvement, so they were not moved into core's delivery-request
+ * module. (Phone ordering PO-1 later moved them to core's own storefront
+ * module, orders/storefront/logic.ts; this file re-exports them, see the top.)
+ * `CatalogItem` stays in `../v2/types` — the whole point of the builder's
+ * narrowed item type is that it cannot reach `price` or any other staff-only
+ * field, and widening core's view of an item would undo that.
  *
  * NOTHING IN WEB CHANGED SHAPE. Every symbol this file exported before the
  * move it still exports, under the same name and the same signature, so every

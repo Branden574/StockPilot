@@ -169,7 +169,8 @@ export function filterPreparedCatalog<T extends StorefrontItem>(
   const out: T[] = [];
   prepared.items.forEach((it, i) => {
     if (category !== 'all') {
-      if (category === 'uncategorized' ? it.categoryId !== null : it.categoryId !== category) return;
+      if (category === 'uncategorized' ? it.categoryId !== null : it.categoryId !== category)
+        return;
     }
     if (tokens.length > 0) {
       const hay = prepared.haystacks[i] ?? '';
@@ -228,7 +229,6 @@ export function clampQty(value: number, available: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(Math.max(0, available), Math.floor(value)));
 }
-
 
 /** itemId → qty map so memoized cards take qty as a scalar prop. */
 export function buildQtyMap(lines: readonly CartLineState[]): Map<string, number> {

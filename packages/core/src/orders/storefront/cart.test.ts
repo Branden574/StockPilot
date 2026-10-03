@@ -244,12 +244,16 @@ describe('isPristineCart (exported by core for PO-1)', () => {
     expect(isPristineCart(seed)).toBe(true);
     // The warehouse and the method are seeded on every load, so a draft that
     // carries only those restores nothing.
-    expect(isPristineCart({ ...seed, fulfillmentType: 'delivery', warehouseId: 'wh-2' })).toBe(true);
+    expect(isPristineCart({ ...seed, fulfillmentType: 'delivery', warehouseId: 'wh-2' })).toBe(
+      true,
+    );
   });
 
   it('a line, a requester, a site, notes or a needed-by is worth restoring', () => {
     expect(isPristineCart(cartReducer(seed, { type: 'add', itemId: 'i-1' }))).toBe(false);
-    expect(isPristineCart({ ...seed, onBehalfOf: { name: 'Maria', email: 'maria@example.org' } })).toBe(false);
+    expect(
+      isPristineCart({ ...seed, onBehalfOf: { name: 'Maria', email: 'maria@example.org' } }),
+    ).toBe(false);
     expect(isPristineCart({ ...seed, charterId: 'ch-1' })).toBe(false);
     expect(isPristineCart({ ...seed, notes: 'rush' })).toBe(false);
     expect(isPristineCart({ ...seed, neededBy: '2026-10-05T10:00' })).toBe(false);

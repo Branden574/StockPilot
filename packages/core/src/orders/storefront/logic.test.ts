@@ -403,12 +403,49 @@ describe('availabilityLabel: the long form (the phone)', () => {
 
 describe('prepareCatalog / filterPreparedCatalog: the same rows as filterCatalog', () => {
   const rows = [
-    makeItem({ id: 'planner', name: 'L4L Weekly Planner', sku: 'PLN-001', categoryId: 'cat-office', categoryName: 'Office', quantityOnHand: 50 }),
-    makeItem({ id: 'polo-w', name: "L4L Polo (Women's)", sku: 'POL-W', categoryId: 'cat-apparel', categoryName: 'Apparel', quantityOnHand: 3, reorderPoint: 5 }),
-    makeItem({ id: 'mug', name: 'Camp Mug', sku: 'MUG-11', categoryId: 'cat-office', categoryName: 'Office', quantityOnHand: 0 }),
+    makeItem({
+      id: 'planner',
+      name: 'L4L Weekly Planner',
+      sku: 'PLN-001',
+      categoryId: 'cat-office',
+      categoryName: 'Office',
+      quantityOnHand: 50,
+    }),
+    makeItem({
+      id: 'polo-w',
+      name: "L4L Polo (Women's)",
+      sku: 'POL-W',
+      categoryId: 'cat-apparel',
+      categoryName: 'Apparel',
+      quantityOnHand: 3,
+      reorderPoint: 5,
+    }),
+    makeItem({
+      id: 'mug',
+      name: 'Camp Mug',
+      sku: 'MUG-11',
+      categoryId: 'cat-office',
+      categoryName: 'Office',
+      quantityOnHand: 0,
+    }),
     makeItem({ id: 'loose', name: 'Loose Item', sku: 'LOOSE-1' }),
-    makeItem({ id: 'held', name: 'Held Backpack', sku: 'BAG-2', categoryId: 'cat-apparel', categoryName: 'Apparel', quantityOnHand: 4, reservedQuantity: 4 }),
-    makeItem({ id: 'polo-m', name: 'L4L Polo (Men)', sku: 'POL-M', categoryId: 'cat-apparel', categoryName: 'Apparel', quantityOnHand: 40 }),
+    makeItem({
+      id: 'held',
+      name: 'Held Backpack',
+      sku: 'BAG-2',
+      categoryId: 'cat-apparel',
+      categoryName: 'Apparel',
+      quantityOnHand: 4,
+      reservedQuantity: 4,
+    }),
+    makeItem({
+      id: 'polo-m',
+      name: 'L4L Polo (Men)',
+      sku: 'POL-M',
+      categoryId: 'cat-apparel',
+      categoryName: 'Apparel',
+      quantityOnHand: 40,
+    }),
   ];
   const prepared = prepareCatalog(rows);
   const statuses: Array<ReadonlySet<ItemStatus>> = [
@@ -420,7 +457,17 @@ describe('prepareCatalog / filterPreparedCatalog: the same rows as filterCatalog
     new Set<ItemStatus>(['low', 'out']),
   ];
   const categories = ['all', 'uncategorized', 'cat-office', 'cat-apparel', 'cat-none'];
-  const searches = ['', '  ', 'polo', 'POLO w', 'pol-', 'office', 'apparel bag', 'zzz', ' l4l   polo '];
+  const searches = [
+    '',
+    '  ',
+    'polo',
+    'POLO w',
+    'pol-',
+    'office',
+    'apparel bag',
+    'zzz',
+    ' l4l   polo ',
+  ];
 
   it('agrees with filterCatalog on every combination of category, search and availability', () => {
     let checked = 0;
@@ -428,9 +475,10 @@ describe('prepareCatalog / filterPreparedCatalog: the same rows as filterCatalog
       for (const search of searches) {
         for (const availability of statuses) {
           const input: CatalogFilterInput = { category, search, availability };
-          expect(filterPreparedCatalog(prepared, input).map((r) => r.id), JSON.stringify({ category, search, a: [...availability] })).toEqual(
-            filterCatalog(rows, input).map((r) => r.id),
-          );
+          expect(
+            filterPreparedCatalog(prepared, input).map((r) => r.id),
+            JSON.stringify({ category, search, a: [...availability] }),
+          ).toEqual(filterCatalog(rows, input).map((r) => r.id));
           checked += 1;
         }
       }
@@ -440,7 +488,11 @@ describe('prepareCatalog / filterPreparedCatalog: the same rows as filterCatalog
 
   it('hands back the same row objects, in catalog order', () => {
     const none = new Set<ItemStatus>();
-    const out = filterPreparedCatalog(prepared, { category: 'all', search: 'polo', availability: none });
+    const out = filterPreparedCatalog(prepared, {
+      category: 'all',
+      search: 'polo',
+      availability: none,
+    });
     expect(out).toEqual([rows[1], rows[5]]);
     expect(out[0]).toBe(rows[1]);
   });
