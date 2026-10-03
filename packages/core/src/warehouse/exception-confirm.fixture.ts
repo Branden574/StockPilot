@@ -6,12 +6,16 @@ import type { CountConfirmedAs } from './exceptions';
  * restated in two places, held equal by a shared table).
  *
  * core countConfirmGate decides whether the web page and the phone offer
- * Confirm this count; the database function exception_confirm_count (0383)
+ * Confirm this count; the database function exception_confirm_count (0386)
  * decides whether a confirm is accepted. The same reader x state table below
  * is asserted against both: exception-confirm.test.ts checks countConfirmGate
- * cell by cell, and the pgTAP file for 0383 restates these rows as its
- * C-matrix, using GATE_REASON_TO_RPC for the answer each reason becomes. If
- * either side changes, its test fails against this table.
+ * cell by cell, and the pgTAP file for 0386
+ * (supabase/tests/0386_exception_confirm_count.test.sql, section M) probes
+ * the database cell by cell from a block of these rows, with
+ * GATE_REASON_TO_RPC's answer for each. exception-confirm.fixture.test.ts
+ * holds that block equal to this table, so an edit here fails until the
+ * block is updated, and the updated block fails pgTAP until the database
+ * answers the same way.
  *
  * Written out cell by cell on purpose: a table computed from the function it
  * checks would agree with any bug in it.
@@ -147,7 +151,15 @@ export const GATE_EXPECTATIONS: Record<string, Record<CountConfirmState, GateCel
 /** The answer exception_confirm_count gives for each gate reason (SQLSTATE
  *  and hint), 'ok' for a confirm it accepts. `rechecking` and `count_changed`
  *  are one refusal in the database; `unavailable` (a read the app could not
- *  make) exists only in the app. */
+ *  make) exists only in the app.
+ *
+ *  `rechecking` maps to count_changed in the matrix's state (the linked
+ *  recount counted the item, with a later observation, and was posted). The
+ *  app also says rechecking for a posted recount that did NOT count the item
+ *  (or whose line is superseded), until the post's forced sync applies it:
+ *  the facts' count is then still the item's latest, so the database would
+ *  accept a confirm the app does not offer for those minutes. That is the
+ *  safe direction (withheld, never offered and refused). */
 export const GATE_REASON_TO_RPC: Record<CountConfirmReason | 'ok', { sqlstate: string; hint: string } | 'app_only'> = {
   not_permitted: { sqlstate: '42501', hint: 'not_permitted' },
   not_counter: { sqlstate: '42501', hint: 'not_counter' },

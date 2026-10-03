@@ -35,8 +35,9 @@
 --    settles; `dropped` and `settled`.
 -- X. EX-000059's shape (the owner's case), start to end.
 -- M. The gate agreement (pattern #26): the reader x state table of
---    packages/core/src/warehouse/exception-confirm.fixture.ts, restated here
---    cell by cell with GATE_REASON_TO_RPC's answers.
+--    packages/core/src/warehouse/exception-confirm.fixture.ts, written out
+--    here cell by cell with GATE_REASON_TO_RPC's answers, in a block that
+--    exception-confirm.fixture.test.ts holds equal to the fixture.
 --
 -- TIME. now() is the transaction start for the whole file; counts completed
 -- here carry it. Records stamp baseline_at with clock_timestamp(), so a later
@@ -1002,29 +1003,92 @@ select :orgM, 9500 + row_number() over (order by m.item_id), 'count_variance', m
        now(), :'ccm', 7, 7, 'manager'
   from mx m where m.state = 'already_confirmed';
 
--- The fixture (GATE_READERS x GATE_EXPECTATIONS, 'unavailable' is app-only),
--- and GATE_REASON_TO_RPC.
+-- The fixture, cell by cell: GATE_READERS x GATE_EXPECTATIONS ('unavailable'
+-- is app-only), and GATE_REASON_TO_RPC's answer for each cell. The block
+-- between the markers is written out from exception-confirm.fixture.ts and
+-- held equal to it by exception-confirm.fixture.test.ts (core vitest), so the
+-- fixture cannot change without this matrix changing with it.
 create temp table gate_cell (reader text, state text, cell text, primary key (reader, state));
-insert into gate_cell
-select r.reader, s.state,
-       case
-         when r.reader in ('viewer', 'manager without stock:adjust') then 'not_permitted'
-         when s.state <> 'confirmable' then s.state
-         when r.reader in ('counter (staff)', 'counter (manager)') then 'counter'
-         when r.reader in ('manager who did not count', 'manager, counted_by null') then 'manager'
-         else 'not_counter'
-       end
-  from (values ('counter (staff)'), ('counter (manager)'), ('manager who did not count'), ('staff who did not count'),
-               ('viewer'), ('manager without stock:adjust'), ('staff, counted_by null'), ('manager, counted_by null')) r(reader),
-       (values ('recount_in_progress'), ('count_in_progress'), ('rechecking'), ('count_changed'), ('not_countable'),
-               ('stock_moved'), ('already_confirmed'), ('confirmable')) s(state);
 create temp table gate_rpc (cell text primary key, answer text not null);
-insert into gate_rpc values
-  ('not_permitted', '42501:not_permitted'), ('not_counter', '42501:not_counter'),
-  ('recount_in_progress', 'P0001:recount_in_progress'), ('count_in_progress', 'P0001:count_in_progress'),
-  ('rechecking', 'P0001:count_changed'), ('count_changed', 'P0001:count_changed'),
-  ('not_countable', 'P0001:not_countable'), ('stock_moved', 'P0001:stock_moved'),
-  ('already_confirmed', 'P0001:already_confirmed'), ('counter', 'ok:counter'), ('manager', 'ok:manager');
+-- BEGIN GATE FIXTURE (generated from exception-confirm.fixture.ts; held by exception-confirm.fixture.test.ts)
+insert into gate_cell (reader, state, cell) values
+  ('counter (staff)', 'recount_in_progress', 'recount_in_progress'),
+  ('counter (staff)', 'count_in_progress', 'count_in_progress'),
+  ('counter (staff)', 'rechecking', 'rechecking'),
+  ('counter (staff)', 'count_changed', 'count_changed'),
+  ('counter (staff)', 'not_countable', 'not_countable'),
+  ('counter (staff)', 'stock_moved', 'stock_moved'),
+  ('counter (staff)', 'already_confirmed', 'already_confirmed'),
+  ('counter (staff)', 'confirmable', 'counter'),
+  ('counter (manager)', 'recount_in_progress', 'recount_in_progress'),
+  ('counter (manager)', 'count_in_progress', 'count_in_progress'),
+  ('counter (manager)', 'rechecking', 'rechecking'),
+  ('counter (manager)', 'count_changed', 'count_changed'),
+  ('counter (manager)', 'not_countable', 'not_countable'),
+  ('counter (manager)', 'stock_moved', 'stock_moved'),
+  ('counter (manager)', 'already_confirmed', 'already_confirmed'),
+  ('counter (manager)', 'confirmable', 'counter'),
+  ('manager who did not count', 'recount_in_progress', 'recount_in_progress'),
+  ('manager who did not count', 'count_in_progress', 'count_in_progress'),
+  ('manager who did not count', 'rechecking', 'rechecking'),
+  ('manager who did not count', 'count_changed', 'count_changed'),
+  ('manager who did not count', 'not_countable', 'not_countable'),
+  ('manager who did not count', 'stock_moved', 'stock_moved'),
+  ('manager who did not count', 'already_confirmed', 'already_confirmed'),
+  ('manager who did not count', 'confirmable', 'manager'),
+  ('staff who did not count', 'recount_in_progress', 'recount_in_progress'),
+  ('staff who did not count', 'count_in_progress', 'count_in_progress'),
+  ('staff who did not count', 'rechecking', 'rechecking'),
+  ('staff who did not count', 'count_changed', 'count_changed'),
+  ('staff who did not count', 'not_countable', 'not_countable'),
+  ('staff who did not count', 'stock_moved', 'stock_moved'),
+  ('staff who did not count', 'already_confirmed', 'already_confirmed'),
+  ('staff who did not count', 'confirmable', 'not_counter'),
+  ('viewer', 'recount_in_progress', 'not_permitted'),
+  ('viewer', 'count_in_progress', 'not_permitted'),
+  ('viewer', 'rechecking', 'not_permitted'),
+  ('viewer', 'count_changed', 'not_permitted'),
+  ('viewer', 'not_countable', 'not_permitted'),
+  ('viewer', 'stock_moved', 'not_permitted'),
+  ('viewer', 'already_confirmed', 'not_permitted'),
+  ('viewer', 'confirmable', 'not_permitted'),
+  ('manager without stock:adjust', 'recount_in_progress', 'not_permitted'),
+  ('manager without stock:adjust', 'count_in_progress', 'not_permitted'),
+  ('manager without stock:adjust', 'rechecking', 'not_permitted'),
+  ('manager without stock:adjust', 'count_changed', 'not_permitted'),
+  ('manager without stock:adjust', 'not_countable', 'not_permitted'),
+  ('manager without stock:adjust', 'stock_moved', 'not_permitted'),
+  ('manager without stock:adjust', 'already_confirmed', 'not_permitted'),
+  ('manager without stock:adjust', 'confirmable', 'not_permitted'),
+  ('staff, counted_by null', 'recount_in_progress', 'recount_in_progress'),
+  ('staff, counted_by null', 'count_in_progress', 'count_in_progress'),
+  ('staff, counted_by null', 'rechecking', 'rechecking'),
+  ('staff, counted_by null', 'count_changed', 'count_changed'),
+  ('staff, counted_by null', 'not_countable', 'not_countable'),
+  ('staff, counted_by null', 'stock_moved', 'stock_moved'),
+  ('staff, counted_by null', 'already_confirmed', 'already_confirmed'),
+  ('staff, counted_by null', 'confirmable', 'not_counter'),
+  ('manager, counted_by null', 'recount_in_progress', 'recount_in_progress'),
+  ('manager, counted_by null', 'count_in_progress', 'count_in_progress'),
+  ('manager, counted_by null', 'rechecking', 'rechecking'),
+  ('manager, counted_by null', 'count_changed', 'count_changed'),
+  ('manager, counted_by null', 'not_countable', 'not_countable'),
+  ('manager, counted_by null', 'stock_moved', 'stock_moved'),
+  ('manager, counted_by null', 'already_confirmed', 'already_confirmed'),
+  ('manager, counted_by null', 'confirmable', 'manager');
+insert into gate_rpc (cell, answer) values
+  ('not_permitted', '42501:not_permitted'),
+  ('not_counter', '42501:not_counter'),
+  ('recount_in_progress', 'P0001:recount_in_progress'),
+  ('count_in_progress', 'P0001:count_in_progress'),
+  ('rechecking', 'P0001:count_changed'),
+  ('count_changed', 'P0001:count_changed'),
+  ('not_countable', 'P0001:not_countable'),
+  ('stock_moved', 'P0001:stock_moved'),
+  ('already_confirmed', 'P0001:already_confirmed'),
+  ('counter', 'ok:counter'),
+  ('manager', 'ok:manager');
+-- END GATE FIXTURE
 create temp table gate_reader (reader text primary key, uid uuid not null, variant text not null);
 insert into gate_reader values
   ('counter (staff)', :stA, 'A'), ('counter (manager)', :mgr, 'M'), ('manager who did not count', :mgr, 'A'),
