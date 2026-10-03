@@ -12,6 +12,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer';
 
+import { detailRequesterName } from '@/lib/orders/requester-name';
 import type { OrderRequestDetail } from '@/server/services/order-requests';
 
 /**
@@ -632,9 +633,10 @@ export async function renderPickSlipPdf(
     : '—';
   // Use the resolved requester identity from the detail (falls back to the
   // joined user_profiles for internal self-submit orders, where the raw
-  // `request.requester_name` column is NULL). Only show "—" / "" when even
-  // the resolved value is absent.
-  const requesterName = detail.requesterName ?? '—';
+  // `request.requester_name` column is NULL), or "Deleted user" when the
+  // requester deleted their account (0388, review R9). Only show "—" / ""
+  // when even that is absent.
+  const requesterName = detailRequesterName(detail) ?? '—';
   const requesterEmail = detail.requesterEmail ?? '';
   const fulfillmentLabel = request.fulfillment_type === 'pickup' ? 'Pickup' : 'Delivery';
   const destination = request.requester_org_label ?? warehouseName ?? '—';
