@@ -225,3 +225,61 @@ describe('POST /api/v1/public/order-requests — rate limiting', () => {
     expect(reportErrorMock).not.toHaveBeenCalled();
   });
 });
+
+// Migration 0389: the request's own track token is written to the
+// service-only order_request_secrets, never to the order row every member
+// reads, inside the same rollback path as the lines.
+describe('POST /api/v1/public/order-requests — the track token lives in order_request_secrets (0389)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkRateLimitMock.mockImplementation(async (_key, _limit, windowMs) => ({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + windowMs,
+    }));
+  });
+
+  it('writes the token to a side row for the new order, not to the order row, and links it in trackUrl', async () => {
+    const stub = wireHappyAdmin();
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { trackUrl: string };
+    const t = new URL(`https://x${json.trackUrl}`).searchParams.get('t');
+    expect(t).toMatch(/^[0-9a-f]{64}$/);
+
+    const orderInsert = stub.chainArgsAll.get('order_requests.insert')?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(orderInsert).not.toHaveProperty('public_track_token');
+    const sideInsert = stub.chainArgsAll.get('order_request_secrets.insert')?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(sideInsert).toEqual({ order_request_id: 'req-1', organization_id: 'org-1', public_track_token: t });
+  });
+
+  it('a failed side-row write deletes the order and answers 500, before any line is written', async () => {
+    // The happy-path wiring, with the side-row insert failing.
+    const s2 = makeSupabaseStub({
+      'organizations.select.maybeSingle': { data: { id: 'org-1' }, error: null },
+      'organization_modules.select.maybeSingle': { data: { module_id: 'public_requests' }, error: null },
+      'warehouses.select.maybeSingle': {
+        data: { id: WAREHOUSE_ID, is_public_orderable: true, organization_id: 'org-1' },
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [{ id: ITEM_ID, warehouse_id: WAREHOUSE_ID, unit_cost: 8.5, item_type: 'book', status: 'active', deleted_at: null }],
+        error: null,
+      },
+      'order_requests.insert.single': { data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID }, error: null },
+      'order_request_secrets.insert': { data: null, error: { message: 'insert failed' } },
+      'order_request_lines.insert': { data: null, error: null },
+      'rpc:cleanup_expired_unconfirmed_order_requests': { data: null, error: null },
+    });
+    adminHolder.client = s2.client;
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(500);
+    expect(s2.chainArgsAll.get('order_requests.delete')?.[0]).toContainEqual(['id', 'req-1']);
+    expect(s2.chainsAll.get('order_request_lines.insert')).toBeUndefined();
+    expect(sendOrderRequestEmailMock).not.toHaveBeenCalled();
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'public.order-requests.secret-insert' }),
+    );
+  });
+});

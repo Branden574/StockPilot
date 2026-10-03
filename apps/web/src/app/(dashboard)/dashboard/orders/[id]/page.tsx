@@ -99,7 +99,12 @@ import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { resolveReturnToken, signatureLinkToken } from '@/server/lib/order-secrets';
+import {
+  handOverLinkWanted,
+  hasCapturedSignature,
+  resolveReturnToken,
+  signatureLinkToken,
+} from '@/server/lib/order-secrets';
 import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
@@ -1039,17 +1044,18 @@ export default async function OrderDetailPage({
   //     hand it over (orders:approve or the assigned driver). The raw token
   //     when its digest is the column, else a raw column minted before 0389;
   //     never a digest (the sign page would then ask for a session).
-  const handOverLinkWanted =
-    showActionsPanel &&
-    (canApprove || isAssignedDriver) &&
-    (request.status === 'staged_for_pickup' || request.status === 'in_transit') &&
-    request.signature_token !== null;
-  const secretsAdmin = requesterReturnEligible || handOverLinkWanted ? createAdminClient() : null;
+  const wantsHandOverLink = handOverLinkWanted({
+    showActionsPanel,
+    viewerMayHandOver: canApprove || isAssignedDriver,
+    status: request.status,
+    signatureTokenColumn: request.signature_token,
+  });
+  const secretsAdmin = requesterReturnEligible || wantsHandOverLink ? createAdminClient() : null;
   const [requesterReturnToken, handOverLink] = await Promise.all([
     requesterReturnEligible && secretsAdmin
       ? resolveReturnToken(secretsAdmin, id, request.return_token)
       : Promise.resolve(null),
-    handOverLinkWanted && secretsAdmin
+    wantsHandOverLink && secretsAdmin
       ? signatureLinkToken(secretsAdmin, id, request.signature_token)
       : Promise.resolve(null),
   ]);
@@ -1662,9 +1668,7 @@ export default async function OrderDetailPage({
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
               signatureToken={handOverLink?.token ?? null}
-              hasSignature={
-                request.signature_method === 'digital' || Boolean(request.signature_data_url)
-              }
+              hasSignature={hasCapturedSignature(request)}
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}

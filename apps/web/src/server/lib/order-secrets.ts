@@ -194,6 +194,41 @@ export function isHandOverEntitled(
   return order.assigned_delivery_user_id != null && order.assigned_delivery_user_id === ctx.userId;
 }
 
+/** The statuses an order can be signed for at (confirm_order_signature's). */
+export const SIGNABLE_STATUSES: readonly string[] = ['staged_for_pickup', 'in_transit'];
+
+/**
+ * Does the order page hand the actions panel a "Collect signature" link? Only
+ * while the order can be signed, only when the panel shows, only for someone
+ * who may hand it over, and only when a token was minted (the page then reads
+ * the raw one with signatureLinkToken). Pure, so the page's rule is testable.
+ */
+export function handOverLinkWanted(v: {
+  showActionsPanel: boolean;
+  viewerMayHandOver: boolean;
+  status: string;
+  signatureTokenColumn: string | null;
+}): boolean {
+  return (
+    v.showActionsPanel &&
+    v.viewerMayHandOver &&
+    SIGNABLE_STATUSES.includes(v.status) &&
+    v.signatureTokenColumn !== null
+  );
+}
+
+/**
+ * Did the order capture a signature IMAGE (drives the panel's "View
+ * signature")? A digital hand-over always did; the method says so even once
+ * slice C moves the image off the order row. A paper signature has no image.
+ */
+export function hasCapturedSignature(row: {
+  signature_method?: string | null;
+  signature_data_url?: string | null;
+}): boolean {
+  return row.signature_method === 'digital' || Boolean(row.signature_data_url);
+}
+
 /**
  * The order's return token for a link: the side table first, then the legacy
  * column (an older token may already be in the requester's inbox). A failed

@@ -180,6 +180,40 @@ describe('loadRequesterReturnContext (token validation)', () => {
   });
 });
 
+// Migration 0389: return tokens minted since 0389 live in the service-only
+// order_request_secrets; tokens minted earlier are still on
+// order_requests.return_token until slice C. Both open exactly their order.
+describe('loadRequesterReturnContext (where the token is found, 0389)', () => {
+  it('a side-table token resolves its order by id, without asking the order column', async () => {
+    const stub = makeStub({
+      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+    });
+    const ctx = await loadRequesterReturnContext(stub.client, TOKEN);
+    expect(ctx?.orderRequestId).toBe(ORDER_ID);
+    expect(stub.chainArgsAll.get('order_request_secrets.select')?.[0]).toContainEqual(['return_token', TOKEN]);
+    const orderReads = stub.chainArgsAll.get('order_requests.select') ?? [];
+    expect(orderReads).toHaveLength(1);
+    expect(orderReads[0]).toContainEqual(['id', ORDER_ID]);
+    expect(JSON.stringify(orderReads)).not.toContain('return_token');
+  });
+
+  it('a token minted before 0389 is found on the order column', async () => {
+    const stub = makeStub({ 'order_request_secrets.select': { data: [], error: null } });
+    const ctx = await loadRequesterReturnContext(stub.client, TOKEN);
+    expect(ctx?.orderRequestId).toBe(ORDER_ID);
+    expect(stub.chainArgsAll.get('order_requests.select')?.[0]).toContainEqual(['return_token', TOKEN]);
+  });
+
+  it('a failed side read still tries the column; neither matching is a 404 (null)', async () => {
+    const stub = makeStub({
+      'order_request_secrets.select': { data: null, error: { message: 'down' } },
+      'order_requests.select': { data: [], error: null },
+    });
+    expect(await loadRequesterReturnContext(stub.client, TOKEN)).toBeNull();
+    expect(stub.fromCalls).toContain('order_requests');
+  });
+});
+
 describe('createRequesterReturn (server-side re-validation)', () => {
   it('creates a source=requester, status=requested return for a valid token', async () => {
     const stub = makeStub();
