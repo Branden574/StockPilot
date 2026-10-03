@@ -462,6 +462,39 @@ describe('describeConfirmCountError: a server without the confirm route', () => 
   });
 });
 
+// R2 contract capture (2026-09-30): the exceptions routes answer a 401 as
+// { error: 'unauthenticated' } with no sentence, and api() carries the code
+// as the message. The Acknowledge, Add note and Confirm sheets printed
+// "unauthenticated". One function words both (pattern #26: the confirm's
+// sibling was fixed with it), and neither shows the network layer's text.
+describe('describeActError and describeConfirmCountError: never a bare code, never the network\'s text', () => {
+  const ctx = { recount: 'can' as const, recountNumber: null, counterLabel: null };
+  const unauthenticated = () => apiError(401, 'unauthenticated', undefined, 'unauthenticated');
+
+  it('a 401 says the session ended, on both sheets', () => {
+    expect(describeActError(unauthenticated())).toBe('Your session has ended. Sign in again.');
+    expect(describeConfirmCountError(unauthenticated(), ctx)).toBe('Your session has ended. Sign in again.');
+  });
+
+  it('an answer that carries only a code reads the fallback; a sentence from the server is used as is', () => {
+    const codeOnly = apiError(400, 'validation_error', undefined, 'validation_error');
+    expect(describeActError(codeOnly)).toBe('Could not save. Check your connection and try again.');
+    expect(describeConfirmCountError(codeOnly, ctx)).toBe('Could not save. Check your connection and try again.');
+    expect(
+      describeConfirmCountError(apiError(400, 'The request body is not valid JSON.', undefined, 'validation_error'), ctx),
+    ).toBe('The request body is not valid JSON.');
+  });
+
+  it('no answer: the phone\'s one sentence, except the app\'s own (the timeout, an answer it could not read)', () => {
+    const ios = new Error('fetch failed: UnexpectedException: The network connection was lost. (at ExpoModulesCore/Promise.swift:56)');
+    expect(describeActError(ios)).toBe(CONNECTION_FAILURE_COPY);
+    expect(describeConfirmCountError(ios, ctx)).toBe(CONNECTION_FAILURE_COPY);
+    expect(describeActError(new Error(REQUEST_TIMED_OUT_COPY))).toBe(REQUEST_TIMED_OUT_COPY);
+    expect(describeActError(new ExceptionsResponseError())).toBe(new ExceptionsResponseError().message);
+    expect(describeActError('not an error')).toBe(CONNECTION_FAILURE_COPY);
+  });
+});
+
 describe('actOnException', () => {
   it('posts the action, the note and the client event id', async () => {
     apiMock.api.mockResolvedValueOnce({ occurrence: occurrence({ acknowledgedAt: '2026-09-24T19:00:00Z' }) });

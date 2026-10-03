@@ -60,7 +60,7 @@ function orgsStub(opts: {
   return stub;
 }
 
-const APPLIED = { status: 'applied', raised: 0, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0 };
+const APPLIED = { status: 'applied', raised: 0, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0, factsOmitted: 0, settled: 0 };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,6 +111,16 @@ describe('GET /api/cron/exception-occurrences — the sweep', () => {
     expect(syncOrg.mock.calls.map((c) => c[0])).toEqual(['b', 'a', 'c', 'f', 'e', 'g', 'd']);
     for (const call of syncOrg.mock.calls) expect(call[1]).toEqual({ reason: 'cron' });
     expect(await res.json()).toMatchObject({ orgs: 7, processed: 7, deferredForTime: 0, applied: 7 });
+  });
+
+  it('sums the settled count (lines held because they were confirmed, 0386) over the orgs applied, for the log', async () => {
+    orgsStub({ orgs: ['a', 'b', 'c'] });
+    syncOrg
+      .mockResolvedValueOnce({ ...APPLIED, settled: 2 })
+      .mockResolvedValueOnce({ status: 'busy' })
+      .mockResolvedValueOnce({ ...APPLIED, settled: 1 });
+    const res = await GET(req('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ processed: 3, applied: 2, busy: 1, settled: 3 });
   });
 
   it('orgs that never complete a sync cannot use up the budget ahead of due ones', async () => {

@@ -5,6 +5,7 @@ import {
   CONFIRM_COUNT_INSTEAD_LABEL,
   CONFIRM_COUNT_LABEL,
   CONFIRM_COUNT_NOTE_PLACEHOLDER,
+  CONFIRMED_ONLY_FILTER_LABEL,
   confirmationFactsRow,
   confirmUnavailableCopy,
   confirmCountButtonHint,
@@ -17,7 +18,9 @@ import {
   countVarianceClearCopy,
   countVarianceLead,
   describeConfirmError,
+  EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_CONFIRM_OFFLINE_COPY,
+  EXCEPTION_NONE_CONFIRMED_COPY,
   isCountConfirmReason,
   isCountConfirmState,
   recountAbilityOf,
@@ -865,6 +868,15 @@ describe('confirmCountDialogCopy', () => {
   });
 });
 
+// The web Resolved tab's filter (plan 7.3, 9.7): the oversight view of the
+// risk the owner accepted, named as every confirmed row is worded.
+describe('the Resolved filter for confirmed rows', () => {
+  it('names the rows it lists as the timeline does, and says when there are none', () => {
+    expect(CONFIRMED_ONLY_FILTER_LABEL).toBe('Closed without a second count');
+    expect(EXCEPTION_NONE_CONFIRMED_COPY).toBe('Nothing was closed without a second count in the last 30 days.');
+  });
+});
+
 describe('confirmCountButtonHint', () => {
   it('says what the button opens and what confirming does, for VoiceOver', () => {
     expect(confirmCountButtonHint({ facts: FACTS, reference: 'EX-000059' })).toBe(
@@ -911,6 +923,11 @@ describe('describeConfirmError', () => {
     expect(describeConfirmError('not_counter', web)).toBe(
       'Only Dana Lee, who counted it, or a manager can confirm this count.',
     );
+    // The act gate refused (permission or warehouse changed after the page
+    // loaded): the act route's sentence, one copy for the web and the phone.
+    expect(describeConfirmError('not_permitted', web)).toBe('You do not have permission to act on this exception.');
+    expect(describeConfirmError('not_permitted', phone)).toBe('You do not have permission to act on this exception.');
+    expect(EXCEPTION_ACT_REFUSED_COPY).toBe('You do not have permission to act on this exception.');
     expect(describeConfirmError('busy', web)).toBe('A check is running. Try again in a moment.');
     expect(describeConfirmError('unavailable', web)).toBe('Confirming is unavailable right now. Reload to try again.');
   });

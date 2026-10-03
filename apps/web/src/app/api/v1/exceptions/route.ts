@@ -23,8 +23,10 @@ export const dynamic = 'force-dynamic';
  * `status` defaults to open; anything but `resolved` reads as open.
  * `itemId=<uuid>` narrows the list to one item's occurrences (the item
  * screen's open issues, and the exceptions "Count this item" passes to the
- * recount so they are linked to it); a malformed one is a 400. A failed read
- * is a 500, never an empty list.
+ * recount so they are linked to it); a malformed one is a 400. With
+ * `status=resolved`, `confirmed=1` lists only the rows a count confirmation
+ * closed (0386, "Closed without a second count"); it is ignored for the open
+ * list. A failed read is a 500, never an empty list.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -33,8 +35,9 @@ export async function GET(req: NextRequest) {
   const search = new URL(req.url).searchParams;
   const status = search.get('status') === 'resolved' ? 'resolved' : 'open';
   const itemId = search.get('itemId');
+  const confirmedOnly = status === 'resolved' && search.get('confirmed') === '1';
   try {
-    const result = await new ExceptionOccurrencesService(ctx).list({ status, itemId });
+    const result = await new ExceptionOccurrencesService(ctx).list({ status, itemId, confirmedOnly });
     return NextResponse.json(
       { organizationId: ctx.organizationId, ...result },
       { headers: { 'Cache-Control': 'private, no-store' } },

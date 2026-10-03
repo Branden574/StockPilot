@@ -441,9 +441,11 @@ set local role to 'service_role';
 
 -- S1-S4: the first sync raises EX-1 with a raised event and starts tracking.
 insert into cur_present (tag, entry) values ('L', pg_temp.e('label_mismatch', :iL));
+-- The whole answer: 0386 added `settled` (count_variance entries held because
+-- their count line was confirmed), 0 in every sync of this file.
 select is(
   pg_temp.sync(60),
-  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0, "settled": 0}'::jsonb,
   'S1: the first sync raises one occurrence');
 select is(
   (select row(o.occurrence_number, o.rule, o.location_id, o.warehouse_id, o.recurrence_index,
@@ -510,7 +512,7 @@ insert into cur_present (tag, entry) values
   ('Y',    pg_temp.e('orphaned_stock', :iY, :rW2));
 select is(
   pg_temp.sync(57),
-  '{"skipped": false, "raised": 12, "seen": 1, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0}'::jsonb,
+  '{"skipped": false, "raised": 12, "seen": 1, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0, "settled": 0}'::jsonb,
   'S9: twelve raised, one seen again');
 select is(
   (select array_agg(o.item_id::text order by o.occurrence_number)
@@ -609,7 +611,7 @@ select is(
   pg_temp.sync(53, p_extra => jsonb_build_array(
     pg_temp.e('over_reserved', :itemB),              -- another org's item
     pg_temp.e('orphaned_stock', :iL, :rB))),          -- this org's item at another org's location
-  '{"skipped": false, "raised": 1, "seen": 10, "resolved": 3, "recountsClosed": 1, "dropped": 2, "factsOmitted": 0}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 10, "resolved": 3, "recountsClosed": 1, "dropped": 2, "factsOmitted": 0, "settled": 0}'::jsonb,
   'S22: one raised, ten seen, three resolved, one recount closed, two cross-org entries dropped');
 select is(
   (select array_agg(o.rule || ':' || coalesce(o.resolved_reason, 'open') order by o.occurrence_number)
@@ -651,7 +653,7 @@ select is(
 select is(
   public.exceptions_sync(:orgB, now() - interval '50 minutes', array['over_reserved', 'label_mismatch'], '{}', '{}',
     jsonb_build_array(pg_temp.e('over_reserved', :itemB), pg_temp.e('label_mismatch', :iL)), '[]'),
-  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 1, "factsOmitted": 0}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 1, "factsOmitted": 0, "settled": 0}'::jsonb,
   'S30: an org B sync drops org A''s item and raises only its own');
 reset role;
 select is(
@@ -1129,7 +1131,7 @@ insert into cur_present (tag, entry) values
   ('Hold', pg_temp.e('label_mismatch', :iHold, null, '{"label": "70-A"}'::jsonb));
 select is(
   pg_temp.sync(40),
-  '{"skipped": false, "raised": 2, "seen": 10, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1}'::jsonb,
+  '{"skipped": false, "raised": 2, "seen": 10, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1, "settled": 0}'::jsonb,
   'F1: an oversized facts object does not stop the sync: both new rows are raised, the ten open rows seen, one facts object omitted');
 select is(
   (select row((select o.facts from public.exception_occurrences o
@@ -1151,7 +1153,7 @@ update cur_present set entry = pg_temp.e('label_mismatch', :iHold, null,
 delete from cur_present where tag = 'Ch1';
 select is(
   pg_temp.sync(39),
-  '{"skipped": false, "raised": 0, "seen": 11, "resolved": 1, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1}'::jsonb,
+  '{"skipped": false, "raised": 0, "seen": 11, "resolved": 1, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1, "settled": 0}'::jsonb,
   'F3: a refresh with oversized facts applies too, and counts the omission');
 select is(
   (select row((select o.facts from public.exception_occurrences o

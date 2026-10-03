@@ -39,7 +39,20 @@ import { assertSystemContext, type SystemServiceContext } from './lib/system-con
  * system when a complete evaluation no longer finds it. A person can
  * acknowledge an occurrence and add notes; nobody can mark one resolved,
  * because "resolved" means the condition is gone, and only an evaluation can
- * say that.
+ * say that. The one exception (0386, owner decision 2026-09-29) is a count
+ * difference: the person who counted it, or a manager, can confirm the counted
+ * number (exception_confirm_count), which resolves that occurrence as
+ * `confirmed` without a second count.
+ *
+ * ═══ A CONFIRMED COUNT LINE IS SETTLED (0386) ═══
+ *
+ * This evaluator does not change for it. It still reports a count_variance
+ * entry whose latest line differs from the stock on record at that count;
+ * exceptions_sync's step 2b holds (neither opens nor resolves) an entry whose
+ * facts.cycleCountId was confirmed for that item, under the same org lock the
+ * confirm takes. A later count is a new line: it opens a new occurrence (a
+ * recurrence) when it differs, and nothing when it matches. A missing or
+ * malformed cycleCountId is never settled, so the difference shows.
  *
  * ═══ WHY ONLY THE SYSTEM EVALUATES ═══
  *

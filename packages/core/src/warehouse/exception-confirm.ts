@@ -9,6 +9,7 @@ import {
 } from './exception-recount';
 import {
   countVarianceNumbers,
+  EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_SYNC_INTERVAL_MINUTES,
   roundQuantity,
   signedQuantity,
@@ -299,12 +300,22 @@ export const COUNT_VARIANCE_CLEARS_TITLE = 'What clears this';
 export const CONFIRM_COUNT_LABEL = 'Confirm this count';
 export const CONFIRM_COUNT_INSTEAD_LABEL = 'Confirm this count instead';
 export const EXCEPTION_CONFIRM_OFFLINE_COPY = 'You are offline. Confirming a count needs a connection.';
+/** The act gate refused (no stock:adjust, or no write access to the item's
+ *  warehouse): the sentence for an act and for a confirm, on the web and the
+ *  phone. */
+export const EXCEPTION_ACT_REFUSED_COPY = 'You do not have permission to act on this exception.';
 /** The confirmation step's note placeholder, also shown by a sheet whose
  *  confirm the server stopped offering. */
 export const CONFIRM_COUNT_NOTE_PLACEHOLDER = 'How you checked, for example counted twice on the floor';
 /** The one button of a confirm sheet whose confirm the server stopped
  *  offering while it was open: nothing is left to confirm. */
 export const CONFIRM_COUNT_CLOSE_LABEL = 'Close';
+/** The web Resolved tab's filter that lists only the exceptions a count
+ *  confirmation closed: an oversight view of the risk the owner accepted
+ *  (a confirmed count closes without anyone counting it again). */
+export const CONFIRMED_ONLY_FILTER_LABEL = 'Closed without a second count';
+/** That filter, with nothing in the Resolved window. */
+export const EXCEPTION_NONE_CONFIRMED_COPY = `Nothing was closed without a second count in the last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days.`;
 const ACK = 'Acknowledging does not clear this.';
 const MODULE_OFF =
   'Cycle Counts is turned off for this organization, so it cannot be recounted until it is turned on again.';
@@ -799,6 +810,10 @@ export function describeConfirmError(
       return NOT_COUNTABLE;
     case 'not_counter':
       return notCounterReason(ctx.counterLabel?.trim() || null);
+    case 'not_permitted':
+      // Reached only when access changed after the page loaded: the page
+      // withholds Confirm from a reader the act gate refuses.
+      return EXCEPTION_ACT_REFUSED_COPY;
     case 'busy':
       return 'A check is running. Try again in a moment.';
     case 'unavailable':

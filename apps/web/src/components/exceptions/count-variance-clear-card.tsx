@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { ConfirmCountButton } from '@/components/exceptions/confirm-count-dialog';
 import { RecountButton } from '@/components/exceptions/recount-selection';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { ExceptionOccurrence } from '@/server/services/exception-occurrences';
@@ -10,6 +11,7 @@ import {
   countVarianceClearCopy,
   RECOUNT_NONE_LINKED_COPY,
   type CountConfirmBlock,
+  type CountVarianceClearCopy,
   type OccurrenceState,
 } from '@stockpilot/core';
 
@@ -26,17 +28,40 @@ import {
  * did: the active recount (linked to its count), that none is linked, Recount
  * itself, and what a count covers or why this reader cannot start one.
  *
- * `countConfirm` is the server's block; this release never sends one, so the
- * words are the recount-only ones and nothing here offers Confirm. Whether
- * Recount shows, and whether it is the filled button, is core's too
- * (offerRecount, recountEmphasis): filled only where it is this reader's way
- * to clear the row, outline beside Confirm and while the row settles by
- * itself (a linked recount in progress, a posted one being checked), and
- * hidden once the item can no longer be counted.
+ * `countConfirm` is the server's block (count differences R2, 0386): with it,
+ * the words follow its state first and then the reader, and Confirm this
+ * count (the filled button) is offered where core says so (offerConfirm: the
+ * reader can confirm a confirmable row). It opens the page's confirm dialog
+ * (ConfirmCountProvider). Without a block (the switch off), the words are the
+ * recount-only ones and nothing here names Confirm. Whether Recount shows,
+ * and whether it is the filled button, is core's too (offerRecount,
+ * recountEmphasis): filled only where it is this reader's way to clear the
+ * row, outline beside Confirm and while the row settles by itself (a linked
+ * recount in progress, a posted one being checked), and hidden once the item
+ * can no longer be counted.
  *
- * Server-safe (no 'use client'): the page renders it, and RecountButton is its
- * own client component (recurring pattern #8).
+ * Server-safe (no 'use client'): the page renders it and calls
+ * countVarianceClearCopyFor, and ConfirmCountButton and RecountButton are
+ * their own client components (recurring pattern #8).
  */
+export function countVarianceClearCopyFor(
+  o: ExceptionOccurrence,
+  displayed: OccurrenceState,
+  countConfirm: CountConfirmBlock | null,
+): CountVarianceClearCopy {
+  // The one input for the card's words and buttons and for the page's
+  // "Confirm this count instead" (pattern #26: one predicate, offerConfirm).
+  return countVarianceClearCopy({
+    facts: o.facts,
+    displayed,
+    recount: o.recount,
+    canAct: o.canAct,
+    canRecount: o.canRecount,
+    recountUnavailableReason: o.recountUnavailableReason,
+    confirm: countConfirm,
+  });
+}
+
 export function CountVarianceClearCard({
   occurrence: o,
   displayed,
@@ -48,15 +73,7 @@ export function CountVarianceClearCard({
   countConfirm: CountConfirmBlock | null;
   timeZone: string;
 }) {
-  const copy = countVarianceClearCopy({
-    facts: o.facts,
-    displayed,
-    recount: o.recount,
-    canAct: o.canAct,
-    canRecount: o.canRecount,
-    recountUnavailableReason: o.recountUnavailableReason,
-    confirm: countConfirm,
-  });
+  const copy = countVarianceClearCopyFor(o, displayed, countConfirm);
   const titleId = `count-variance-clears-${o.id}`;
   return (
     <Card role="region" aria-labelledby={titleId} data-testid="count-variance-clears">
@@ -78,16 +95,19 @@ export function CountVarianceClearCard({
         ) : copy.offerRecount ? (
           <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
         ) : null}
-        {copy.offerRecount ? (
+        {copy.offerConfirm || copy.offerRecount ? (
           <div className="flex flex-wrap gap-2">
-            <RecountButton
-              occurrenceId={o.id}
-              reference={o.reference}
-              timeZone={timeZone}
-              variant={copy.recountEmphasis === 'primary' ? 'default' : 'outline'}
-              size="default"
-              className="pointer-coarse:min-h-11"
-            />
+            {copy.offerConfirm ? <ConfirmCountButton /> : null}
+            {copy.offerRecount ? (
+              <RecountButton
+                occurrenceId={o.id}
+                reference={o.reference}
+                timeZone={timeZone}
+                variant={copy.recountEmphasis === 'primary' ? 'default' : 'outline'}
+                size="default"
+                className="pointer-coarse:min-h-11"
+              />
+            ) : null}
           </div>
         ) : null}
         {copy.recountLine ? <p className="text-muted-foreground">{copy.recountLine}</p> : null}

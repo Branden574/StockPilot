@@ -154,7 +154,7 @@ describe('syncOrg — throttle, force, and never throwing', () => {
       },
       'stock_reservations.select': { data: [], error: null },
       'rpc:exceptions_sync': opts.rpc ?? {
-        data: { skipped: false, raised: 1, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0 },
+        data: { skipped: false, raised: 1, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0, settled: 2 },
         error: null,
       },
     });
@@ -183,6 +183,8 @@ describe('syncOrg — throttle, force, and never throwing', () => {
       recountsClosed: 0,
       dropped: 0,
       factsOmitted: 0,
+      // count_variance entries held because their line was confirmed (0386).
+      settled: 2,
     });
     // The evaluator's count read (_latest_count_lines), then the apply.
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['_latest_count_lines', 'exceptions_sync']);
@@ -613,10 +615,10 @@ describe('get: kinds and reasons this build cannot word (R1)', () => {
     const d = await svc.get(OCC);
     expect(d.occurrence.resolvedReason).toBeNull();
     expect(d.history.map((h) => h.resolvedReason)).toEqual([null, 'confirmed']);
-    // No confirmation columns exist yet: never a made-up confirmation.
+    // No confirmation columns set on these rows: never a made-up confirmation.
     expect(d.occurrence.confirmation).toBeNull();
     expect(d.history.map((h) => h.confirmedAs)).toEqual([null, null]);
-    // Confirm stays off: no countConfirm block is sent.
+    // A resolved row (and not a count difference) carries no countConfirm block.
     expect(d.countConfirm ?? null).toBeNull();
   });
 

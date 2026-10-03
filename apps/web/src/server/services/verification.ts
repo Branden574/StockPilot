@@ -18,9 +18,9 @@ import {
 import { chunkInFilterValues, mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
-import { personFor } from './exception-occurrences';
 import { countStartBlock } from './lib/count-start-preflight';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
+import { personFor } from './lib/occurrence-person';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
 
@@ -390,7 +390,7 @@ export class VerificationService {
     ]);
     const summary = summaries.get(itemId);
     if (!summary) throw new ServiceError('not_found', 'That item was not found.');
-    const named = await this.nameCountPeople(summary);
+    const named = await nameCountPeople(this.ctx, summary);
     const block = countStartBlock(this.ctx);
     return {
       itemId,
@@ -655,42 +655,42 @@ export class VerificationService {
       return resolveOrgTimezone(null);
     }
   }
+}
 
-  /**
-   * The counter's and the poster's names as the reader sees them (a profile
-   * the reader can no longer see is a former member, as everywhere else). A
-   * failed read leaves both unnamed, so the words leave them out: a name is
-   * never guessed, and "Former member" is never said of someone who is not.
-   */
-  private async nameCountPeople(
-    summary: ItemVerificationSummary,
-  ): Promise<ItemVerificationSummary> {
-    const count = summary.lastCount;
-    if (!count) return summary;
-    const ids = [count.countedBy?.id, count.postedBy?.id].filter((v): v is string => !!v);
-    if (ids.length === 0) return summary;
-    type ProfileRow = { id: string; full_name: string | null; email: string | null };
-    let profiles: ProfileRow[];
-    try {
-      const res = await this.ctx.supabase
-        .from('user_profiles')
-        .select('id, full_name, email')
-        // in-list-bound: at most two ids, the counter and the poster.
-        .in('id', Array.from(new Set(ids)));
-      if (res.error) throw new Error(postgrestErrorText(res.error, res));
-      profiles = (res.data ?? []) as ProfileRow[];
-    } catch (err) {
-      reportDegradedRead('verification.count_people_unavailable', err, { itemId: summary.itemId });
-      return summary;
-    }
-    const byId = new Map(profiles.map((p) => [p.id, p]));
-    const name = (person: VerificationPerson | null): VerificationPerson | null =>
-      person?.id
-        ? { id: person.id, label: personFor(person.id, byId.get(person.id) ?? null).label }
-        : person;
-    return {
-      ...summary,
-      lastCount: { ...count, countedBy: name(count.countedBy), postedBy: name(count.postedBy) },
-    };
+/**
+ * The counter's and the poster's names as the reader sees them (a profile
+ * the reader can no longer see is a former member, as everywhere else). A
+ * failed read leaves both unnamed, so the words leave them out: a name is
+ * never guessed, and "Former member" is never said of someone who is not.
+ * Shared with the exception detail's countConfirm block (one naming rule).
+ */
+export async function nameCountPeople(
+  ctx: ServiceContext,
+  summary: ItemVerificationSummary,
+): Promise<ItemVerificationSummary> {
+  const count = summary.lastCount;
+  if (!count) return summary;
+  const ids = [count.countedBy?.id, count.postedBy?.id].filter((v): v is string => !!v);
+  if (ids.length === 0) return summary;
+  type ProfileRow = { id: string; full_name: string | null; email: string | null };
+  let profiles: ProfileRow[];
+  try {
+    const res = await ctx.supabase
+      .from('user_profiles')
+      .select('id, full_name, email')
+      // in-list-bound: at most two ids, the counter and the poster.
+      .in('id', Array.from(new Set(ids)));
+    if (res.error) throw new Error(postgrestErrorText(res.error, res));
+    profiles = (res.data ?? []) as ProfileRow[];
+  } catch (err) {
+    reportDegradedRead('verification.count_people_unavailable', err, { itemId: summary.itemId });
+    return summary;
   }
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+  const name = (person: VerificationPerson | null): VerificationPerson | null =>
+    person?.id ? { id: person.id, label: personFor(person.id, byId.get(person.id) ?? null).label } : person;
+  return {
+    ...summary,
+    lastCount: { ...count, countedBy: name(count.countedBy), postedBy: name(count.postedBy) },
+  };
 }
