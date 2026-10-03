@@ -28,27 +28,96 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'exceptions-session-ended-2026-10',
+    revision: 1,
+    // Shipped in count differences R2 (#308, 77e5659f); published in the same
+    // change as the count confirm's release and dated after it, so it sits
+    // above it. On the web, fail() in server/actions/exceptions.ts now
+    // rethrows framework control flow first (unstable_rethrow), so
+    // withContext's redirect('/signin') for a signed-out session reaches the
+    // browser, which goes to the sign-in page; it used to be caught and
+    // answered "Something went wrong. Please try again." (live with web build
+    // 0f540fe33eae). In the mobile app,
+    // describeActError, which the Acknowledge, Add note and Confirm this count
+    // sheets use, reads a 401 as core's VERIFICATION_SESSION_ENDED_COPY; the
+    // sheets printed the route's bare code, "unauthenticated". That part is
+    // the over-the-air update (OTA group a6a9c7e9, live), which loads when the
+    // app is opened again, with no prompt; confirming itself never needed it.
+    //
+    // A lost permission is not announced: the phone's words for a 403 did not
+    // change (describeActError already said EXCEPTION_ACT_REFUSED_COPY's
+    // sentence), and on the web the app's own gate answers a lost permission
+    // first, with its own words; only the database's refusal, behind it, now
+    // shares the phone's sentence.
+    //
+    // Addressed as the Exceptions pages are reached (items:read); the entry
+    // as the sheets and the web actions it names are offered (stock:adjust,
+    // the gate of acknowledging, adding a note and confirming).
+    status: 'published',
+    title: 'Exceptions ask you to sign in again when your session has ended',
+    summary:
+      'On the web, an action on an exception after your session has ended now takes you to the sign-in page, instead of saying "Something went wrong. Please try again." In the mobile app, after the latest update, the Acknowledge, Add note and Confirm this count sheets say "Your session has ended. Sign in again."',
+    publishedAt: '2026-10-03T19:08:00Z',
+    audience: { anyPermission: ['items:read'] },
+    entries: [
+      {
+        id: 'exceptions-session-ended',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'An ended session leads to sign-in, not an error, on exceptions',
+        whatChanged:
+          'On the web, when your session has ended, an action on an exception, such as Acknowledge, Add note or Confirm this count, now takes you to the sign-in page. In the mobile app, after the latest update, the Acknowledge, Add note and Confirm this count sheets say "Your session has ended. Sign in again."',
+        whyItMatters:
+          'On the web, the action said "Something went wrong. Please try again." Trying again failed the same way. In the mobile app, the sheets showed only the word unauthenticated.',
+        howItAffectsYou:
+          'Nothing was saved when this happened. Sign in again, then open the exception and try again.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+    ],
+  },
+  {
     id: 'count-confirm-2026-10',
     revision: 1,
-    // Count differences, release 2 of 2 (migration 0386; owner decision
-    // 2026-09-29, "1 and 2"). Held as a DRAFT until 0386 is pushed and
-    // verified, the web deploy (the confirm dialog and the Resolved filter)
-    // and the Demo Co production walk are done. The phone needs no update:
-    // its Confirm sheet shipped in release 1, dormant until the server sends
-    // the countConfirm block. The follow-up that publishes it sets the real
-    // publishedAt and re-reads these words against what shipped. Dated after
-    // every other release, the drafts included: drafts newest first.
+    // Count differences, release 2 of 2 (migration 0386, pushed 2026-10-03
+    // 13:23:33Z; owner decision 2026-09-29, "1 and 2"). Held as a draft until
+    // 0386 was pushed and verified, the web deploy (web build 0f540fe33eae,
+    // served since 13:24:30Z: the confirm dialog and the Resolved filter) and
+    // the Demo Co production walk (119 checks passed: EX-000025 confirmed in
+    // the mobile app as the counter, its recurrence EX-000026 confirmed on the
+    // web after a linked recount was cancelled) were done. Confirming needs no
+    // phone update: the Confirm sheet shipped in release 1 and the walk
+    // confirmed on the bundle phones already ran. The R2 phone update (OTA
+    // group a6a9c7e9, iOS update 01a10220) says a session ended instead of
+    // printing "unauthenticated", and loads when the app is opened again, with
+    // no prompt; it is announced on its own (exceptions-session-ended-2026-10,
+    // above), so this release's What to do never suggests confirming needs
+    // it. Published after them; no draft is left.
+    //
+    // Its words were re-read against what shipped. Who confirms: the person
+    // who recorded the counted line, or a manager, admin or owner
+    // (has_org_role manager), each through the act gate (stock:adjust and
+    // access to the item's live warehouse), so never "a manager" alone.
+    // Confirm is offered only while the stock on record equals the counted
+    // number (a move that nets to zero still allows it), not "once it has
+    // changed". Before this, a count difference cleared only when a later
+    // count matched. The timeline line reads "Count confirmed by <name>, who
+    // counted it, without a second count". The dialog's "If a later count
+    // does not match the stock on record, a new exception opens." is read at
+    // the moment of confirming; on its own here it says so after a confirm.
     //
     // Addressed as the page it links to is reached (Exceptions: items:read),
     // then as confirming is offered: stock:adjust, the floor the server
     // asserts before exception_confirm_count, where Cycle Counts is on
     // (count differences come only from posted counts; plan section 10 keeps
     // the module on purpose, though a manager can confirm with it off).
-    status: 'draft',
+    status: 'published',
     title: 'Confirm a counted number to close a count difference',
     summary:
-      'If the counted number is right, the person who counted it or a manager can now confirm it and close the exception, on the web and in the mobile app, without a second count. Acknowledging still leaves it open.',
-    publishedAt: '2026-10-12T17:00:00Z',
+      "On the web and in the mobile app, if a count difference's counted number is right, the person who counted the item, or a manager, admin or owner, can now confirm it. Confirming closes the exception without a second count. Acknowledging still leaves it open.",
+    publishedAt: '2026-10-03T18:40:00Z',
     audience: { anyPermission: ['items:read'] },
     entries: [
       {
@@ -57,13 +126,13 @@ export const RELEASES: Release[] = [
         area: 'Cycle counts',
         title: 'Confirm this count closes a count difference',
         whatChanged:
-          'A Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, on the web and in the mobile app. It shows the counted number and the stock on record before the count and now, and closes the exception when you choose Confirm and close. The timeline records who confirmed it, whether they counted it, and that it closed without a second count. On the web, Closed without a second count on the Resolved tab lists only the exceptions closed this way.',
+          'On the web and in the mobile app, a Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, admins and owners. It shows the counted number and the stock on record before the count and now, and closes the exception when you choose Confirm and close. The timeline records who confirmed it, whether they counted it, and that it closed without a second count. On the web, Closed without a second count on the Resolved tab lists only the exceptions closed this way.',
         whyItMatters:
-          'Until now only a second count could close one of these, so a number already checked on the floor stayed open, and acknowledging it did not close it.',
+          'Until now a count difference cleared only when a later count matched the stock on record, so it stayed open even when the counted number had already been checked on the floor. Acknowledging it did not close it.',
         howItAffectsYou:
-          'Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it. Confirming needs a connection. If a later count does not match the stock on record, a new exception opens.',
+          "Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is offered only while the stock on record equals the counted number. It is also not offered while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item. In these cases the page says why. Confirming needs permission to adjust stock and a connection. After you confirm, a later count that does not match opens a new exception.",
         whatToDo:
-          'Open an exception under Count did not match the stock on record. If the counted number is right, choose Confirm this count.',
+          'No action needed. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
       },
