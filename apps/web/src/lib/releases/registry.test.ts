@@ -573,9 +573,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // wording release was published after this one (and F2-1's, F2-2's, the
     // needed-by time's, the draft POs count's, Book Order Totals', the report
     // scope fix's, the small fixes', F2-3's, the Sports fields', the count
-    // difference words', Book Order Totals by charter's, F2-4's and F2-5's
-    // after it).
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // difference words', Book Order Totals by charter's, F2-4's, F2-5's and
+    // the count confirm's after it).
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -748,8 +748,9 @@ describe('F2-1 (order readiness) is published', () => {
     // wording, F2-2's, the needed-by time's, the draft POs count's, Book Order
     // Totals', the report scope fix's, the small fixes', F2-3's, the Sports
     // fields', the count difference words', Book Order Totals by charter's,
-    // F2-4's and F2-5's releases were published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // F2-4's, F2-5's and the count confirm's releases were published after
+    // this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1007,9 +1008,9 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // The notice offers the newest unread release: the needed-by time's, the
     // draft POs count's, Book Order Totals', the report scope fix's, the small
     // fixes', F2-3's, the Sports fields', the count difference words', Book
-    // Order Totals by charter's, F2-4's and F2-5's releases were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // Order Totals by charter's, F2-4's, F2-5's and the count confirm's
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1273,9 +1274,9 @@ describe('Book Order Totals is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release; the report scope fix's,
     // the small fixes', F2-3's, the Sports fields', the count difference
-    // words', Book Order Totals by charter's, F2-4's and F2-5's releases were
-    // published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // words', Book Order Totals by charter's, F2-4's, F2-5's and the count
+    // confirm's releases were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1380,8 +1381,9 @@ describe('the report scope release is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the small fixes', F2-3's,
     // the Sports fields', the count difference words', Book Order Totals by
-    // charter's, F2-4's and F2-5's releases were published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // charter's, F2-4's, F2-5's and the count confirm's releases were
+    // published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1441,9 +1443,9 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the Sports fields', the
-    // count difference words', Book Order Totals by charter's, F2-4's and
-    // F2-5's were published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // count difference words', Book Order Totals by charter's, F2-4's, F2-5's
+    // and the count confirm's were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1535,14 +1537,16 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
 });
 
 /**
- * Count differences, release 2 (confirm this count, migration 0386) is held
- * as a DRAFT until 0386 is pushed and verified, the web deploy and the Demo Co
- * production walk are done; the phone needs no update (its Confirm sheet
- * shipped dormant in release 1). Pinned by id, never by index. The follow-up
- * that publishes it sets 'published' and the real publishedAt, re-reads its
- * words against what shipped, and flips the first pin here.
+ * Count differences, release 2 (confirm this count, migration 0386) was held
+ * as a DRAFT until 0386 was pushed and verified (2026-10-03 13:23Z), the web
+ * deploy (web build 0f540fe33eae) and the Demo Co production walk (EX-000025
+ * confirmed in the mobile app as the counter, its recurrence EX-000026 on the
+ * web; 119 checks passed). Confirming needs no phone update (the Confirm
+ * sheet shipped in release 1); the R2 phone update (OTA group a6a9c7e9) says
+ * a session ended. Pinned by id, never by index. This follow-up publishes it.
+ * It was the last draft: none is left.
  */
-describe('count differences release 2 (confirm this count) is held as a draft', () => {
+describe('count differences release 2 (confirm this count) is published', () => {
   const ID = 'count-confirm-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
   const everyone: ReleaseViewer = {
@@ -1552,32 +1556,47 @@ describe('count differences release 2 (confirm this count) is held as a draft', 
   };
   const published = (): Release => ({ ...release(), status: 'published' });
 
-  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+  it('is published after 0386, the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.releases.map((r) => r.id)).not.toContain(ID);
-    expect(list.latestUnread?.id).not.toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).not.toContain(ID);
-    // Preparing it changes nothing a client can observe.
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The newest published release: the notice offers it.
+    expect(list.latestUnread?.id).toBe(ID);
+    // An old phone build lists at most three unread releases, newest first:
+    // this one, F2-5's and F2-4's.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      ID,
+      'order-shortfall-po-2026-10',
+      'order-needed-by-change-2026-10',
+    ]);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the walk ended (2026-10-03 14:07Z)
+    // and the phone update was published (14:17Z): never the draft's
+    // placeholder date.
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-03T14:17:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-04T00:00:00Z'));
   });
 
-  it('sits at the top (pinned by id), dated after every other release, the drafts included, so publishing it makes it the newest', () => {
-    expect(RELEASES.findIndex((r) => r.id === ID)).toBe(0);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+  it('is the newest release, at the top (pinned by id): dated after every release below it, with no draft left below it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    // R2 was the last draft, so none is left; a later draft goes above it.
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    // After release 1, which it builds on.
-    expect(Date.parse(release().publishedAt)).toBeGreaterThan(
-      Date.parse(RELEASES.find((r) => r.id === 'count-difference-words-2026-10')!.publishedAt),
-    );
-    const list = buildReleaseList([published(), ...RELEASES.filter((r) => r.id !== ID)], everyone, [], null);
-    expect(list.latestUnread?.id).toBe(ID);
+    // Above release 1, which it builds on, and above F2-5's.
+    expect(at).toBeLessThan(RELEASES.findIndex((r) => r.id === 'count-difference-words-2026-10'));
+    expect(at).toBeLessThan(RELEASES.findIndex((r) => r.id === 'order-shortfall-po-2026-10'));
   });
 
   it('is addressed as the page it links to is reached (Exceptions: items:read), then as confirming is offered (stock:adjust, Cycle Counts on)', () => {
@@ -1593,9 +1612,12 @@ describe('count differences release 2 (confirm this count) is held as a draft', 
       permissions: ReleaseViewer['permissions'],
       enabledModules: ModuleId[] = ['cycle_counts'],
     ) => visibleReleases([published()], { role, permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
-    // A counter (staff with stock:adjust) and a manager are told.
+    // A counter (staff with stock:adjust) and a manager, admin or owner are
+    // told.
     expect(reader('staff', ['items:read', 'stock:adjust'])).toEqual(['confirm-this-count']);
     expect(reader('manager', ['items:read', 'stock:adjust', 'cycle_counts:assign'])).toEqual(['confirm-this-count']);
+    expect(reader('admin', ['items:read', 'stock:adjust'])).toEqual(['confirm-this-count']);
+    expect(reader('owner', ['items:read', 'stock:adjust'])).toEqual(['confirm-this-count']);
     // A viewer (items:read only) is never offered Confirm.
     expect(reader('viewer', ['items:read'])).toEqual([]);
     // Nobody where Cycle Counts is off, and nobody who cannot open Exceptions.
@@ -1603,19 +1625,28 @@ describe('count differences release 2 (confirm this count) is held as a draft', 
     expect(reader('staff', ['stock:adjust'])).toEqual([]);
   });
 
-  it("names both platforms, says it in the screens' own words, and states the risk plainly", () => {
+  // Publish claim check 2026-10-03, against the merged code (77e5659f) and
+  // the Demo Co production walk.
+  it("names both platforms and who confirms, says it in the screens' own words, and states the risk plainly", () => {
     const r = release();
     const [entry] = r.entries;
-    // Old phones show only the title and the summary: it stands alone.
+    // Old phones show only the title and the summary: it stands alone, names
+    // both platforms and who may confirm. The gate's manager is a manager,
+    // admin or owner (core countConfirmGate isManager, 0386 has_org_role
+    // manager), so never "a manager" alone.
     expect(r.summary).toBe(
-      'If the counted number is right, the person who counted it or a manager can now confirm it and close the exception, on the web and in the mobile app, without a second count. Acknowledging still leaves it open.',
+      "On the web and in the mobile app, if a count difference's counted number is right, the person who counted the item, or a manager, admin or owner, can now confirm it. Confirming closes the exception without a second count. Acknowledging still leaves it open.",
     );
-    const text = readerText(r).join(' ');
+    expect(entry!.whatChanged).toMatch(
+      /^On the web and in the mobile app, a Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, admins and owners\. /,
+    );
+    const all = readerText(r).join(' ');
+    expect(all).not.toMatch(/or a manager can now confirm|and to managers, on the web/);
     // The screens' words, from core.
-    expect(text).toContain(EXCEPTION_RULES.count_variance.label);
-    expect(text).toContain(CONFIRM_COUNT_LABEL);
-    expect(text).toContain(confirmCountDialogCopy({ reference: null, confirm: WORDS_BLOCK }).confirmLabel);
-    expect(text).toContain(CONFIRMED_ONLY_FILTER_LABEL);
+    expect(all).toContain(EXCEPTION_RULES.count_variance.label);
+    expect(all).toContain(CONFIRM_COUNT_LABEL);
+    expect(all).toContain(confirmCountDialogCopy({ reference: null, confirm: WORDS_BLOCK }).confirmLabel);
+    expect(all).toContain(CONFIRMED_ONLY_FILTER_LABEL);
     // The consequence the dialog states, word for word.
     const consequenceTail = 'If a later count does not match the stock on record, a new exception opens.';
     expect(confirmCountDialogCopy({ reference: null, confirm: WORDS_BLOCK }).consequence).toContain(consequenceTail);
@@ -1624,29 +1655,57 @@ describe('count differences release 2 (confirm this count) is held as a draft', 
     expect(entry!.howItAffectsYou).toContain(
       'Confirming closes the exception without a second count, so confirm only a number you are sure of.',
     );
-    // Each rule that withholds Confirm, as the page words it (review of the
-    // plan's critique: "linked", and the other count in progress).
+    // The stock rule as the gate states it (core countConfirmState
+    // stock_moved, 0386 check 13): offered only while the stock on record
+    // EQUALS the counted number. A move that nets to zero still allows it, so
+    // never "once the stock on record has changed since the count".
     expect(entry!.howItAffectsYou).toContain(
-      'Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it.',
+      'Confirm is offered only while the stock on record equals the counted number.',
     );
+    expect(all).not.toContain('has changed since the count');
+    // Each other rule that withholds Confirm, as the page words it (review of
+    // the plan's critique: "linked", and the other count in progress). The
+    // page says why in each case; for another count in progress it says what
+    // happens when that count is posted, not what clears this one.
+    expect(entry!.howItAffectsYou).toContain(
+      'It is also not offered while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item. In these cases the page says why.',
+    );
+    expect(all).not.toContain('the page then says what clears it');
     // Not every reader can start a recount (staff, the counters this entry is
     // new for, never can: Recount needs a manager who can assign counts), so
     // never "use Recount then" or "Recount is still there": every sentence
     // that names Recount says a manager starts it, as the page does.
-    expect(text).not.toMatch(/use Recount/);
-    expect(text).not.toMatch(/Recount is still there/);
-    const recountSentences = text.split(/(?<=\.)\s+/).filter((s) => /\bRecount\b/.test(s));
+    expect(all).not.toMatch(/use Recount/);
+    expect(all).not.toMatch(/Recount is still there/);
+    const recountSentences = all.split(/(?<=\.)\s+/).filter((s) => /\bRecount\b/.test(s));
     expect(recountSentences.length).toBeGreaterThan(0);
     for (const s of recountSentences) expect(s, s).toMatch(/\ba manager\b/);
     expect(entry!.howItAffectsYou).toContain(
       'If you are not sure, have it counted again; a manager can start that with Recount.',
     );
-    expect(entry!.howItAffectsYou).toContain('Confirming needs a connection.');
+    // The act gate every confirmer passes first (stock:adjust, then access
+    // to the item's live warehouse), and the phone's offline rule (a confirm
+    // is never queued).
+    expect(entry!.howItAffectsYou).toContain('Confirming needs permission to adjust stock and a connection.');
+    // Before R2 a count difference CLEARED only when a later count matched
+    // (an archived item resolves another way, never as cleared), so never
+    // "only a second count could close one".
+    expect(entry!.whyItMatters).toMatch(
+      /^Until now a count difference cleared only when a later count matched the stock on record, /,
+    );
+    expect(all).not.toContain('only a second count could close');
     // The filter is web only; the phone's list shows the role in each chip.
     expect(entry!.whatChanged).toContain('On the web, Closed without a second count on the Resolved tab');
+    // The phone part is an over-the-air update: it loads when the app is
+    // opened again, with no prompt.
+    expect(entry!.whatToDo).toBe(
+      'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
+    );
+    expect(all).not.toMatch(/offers the new version|update the app|App Store|unauthenticated/i);
     // Acknowledging still does not close it.
     expect(r.summary).toContain('Acknowledging still leaves it open.');
-    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate|undo/i);
+    expect(all).toContain('stock on record');
+    expect(all).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate|undo/i);
   });
 });
 
@@ -1675,11 +1734,16 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The newest published release: the notice offers it.
-    expect(list.latestUnread?.id).toBe(ID);
+    // The notice offers the newest unread release: the count confirm's was
+    // published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first:
-    // this one, F2-4's and Book Order Totals by charter's.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+    // once the newer release is read, this one, F2-4's and Book Order Totals
+    // by charter's.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toEqual([
       ID,
       'order-needed-by-change-2026-10',
       'book-order-totals-charters-dates-2026-10',
@@ -1693,12 +1757,9 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-03T00:00:00Z'));
   });
 
-  it('is the newest release, at the top (pinned by id): dated after every release below it, with no draft left below it', () => {
+  it('is dated after every release below it (pinned by id); releases above it were published later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    // F2-5 was the last draft, so none is left; a later draft goes above it.
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
@@ -1834,9 +1895,9 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The notice offers the newest unread release: F2-5's was published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // The notice offers the newest unread release: F2-5's and the count
+    // confirm's were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -1951,8 +2012,8 @@ describe('the small-fixes release is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-3's, the Sports
     // fields', the count difference words', Book Order Totals by charter's,
-    // F2-4's and F2-5's were published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // F2-4's, F2-5's and the count confirm's were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2150,9 +2211,9 @@ describe('Book Order Totals by charter and dates is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The notice offers the newest unread release: F2-4's and F2-5's were
-    // published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // The notice offers the newest unread release: F2-4's, F2-5's and the
+    // count confirm's were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2278,8 +2339,9 @@ describe('count differences say what clears them (release 1) is published', () =
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: Book Order Totals by
-    // charter's, F2-4's and F2-5's were published after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // charter's, F2-4's, F2-5's and the count confirm's were published after
+    // this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2405,9 +2467,9 @@ describe('the Sports required details release is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the count difference
-    // words', Book Order Totals by charter's, F2-4's and F2-5's were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('order-shortfall-po-2026-10');
+    // words', Book Order Totals by charter's, F2-4's, F2-5's and the count
+    // confirm's were published after this one.
+    expect(list.latestUnread?.id).toBe('count-confirm-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(

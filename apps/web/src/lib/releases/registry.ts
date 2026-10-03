@@ -30,25 +30,39 @@ export const RELEASES: Release[] = [
   {
     id: 'count-confirm-2026-10',
     revision: 1,
-    // Count differences, release 2 of 2 (migration 0386; owner decision
-    // 2026-09-29, "1 and 2"). Held as a DRAFT until 0386 is pushed and
-    // verified, the web deploy (the confirm dialog and the Resolved filter)
-    // and the Demo Co production walk are done. The phone needs no update:
-    // its Confirm sheet shipped in release 1, dormant until the server sends
-    // the countConfirm block. The follow-up that publishes it sets the real
-    // publishedAt and re-reads these words against what shipped. Dated after
-    // every other release, the drafts included: drafts newest first.
+    // Count differences, release 2 of 2 (migration 0386, pushed 2026-10-03
+    // 13:23:33Z; owner decision 2026-09-29, "1 and 2"). Held as a draft until
+    // 0386 was pushed and verified, the web deploy (web build 0f540fe33eae,
+    // served since 13:24:30Z: the confirm dialog and the Resolved filter) and
+    // the Demo Co production walk (119 checks passed: EX-000025 confirmed in
+    // the mobile app as the counter, its recurrence EX-000026 confirmed on the
+    // web after a linked recount was cancelled) were done. Confirming needs no
+    // phone update: the Confirm sheet shipped in release 1 and the walk
+    // confirmed on the bundle phones already ran. The R2 phone update (OTA
+    // group a6a9c7e9, iOS update 01a10220) says a session ended instead of
+    // printing "unauthenticated", and loads when the app is opened again, with
+    // no prompt. Published after them, the newest release; no draft is left.
+    //
+    // Its words were re-read against what shipped. Who confirms: the person
+    // who recorded the counted line, or a manager, admin or owner
+    // (has_org_role manager), each through the act gate (stock:adjust and
+    // access to the item's live warehouse), so never "a manager" alone.
+    // Confirm is offered only while the stock on record equals the counted
+    // number (a move that nets to zero still allows it), not "once it has
+    // changed". Before this, a count difference cleared only when a later
+    // count matched. The timeline line reads "Count confirmed by <name>, who
+    // counted it, without a second count".
     //
     // Addressed as the page it links to is reached (Exceptions: items:read),
     // then as confirming is offered: stock:adjust, the floor the server
     // asserts before exception_confirm_count, where Cycle Counts is on
     // (count differences come only from posted counts; plan section 10 keeps
     // the module on purpose, though a manager can confirm with it off).
-    status: 'draft',
+    status: 'published',
     title: 'Confirm a counted number to close a count difference',
     summary:
-      'If the counted number is right, the person who counted it or a manager can now confirm it and close the exception, on the web and in the mobile app, without a second count. Acknowledging still leaves it open.',
-    publishedAt: '2026-10-12T17:00:00Z',
+      "On the web and in the mobile app, if a count difference's counted number is right, the person who counted the item, or a manager, admin or owner, can now confirm it. Confirming closes the exception without a second count. Acknowledging still leaves it open.",
+    publishedAt: '2026-10-03T18:40:00Z',
     audience: { anyPermission: ['items:read'] },
     entries: [
       {
@@ -57,13 +71,13 @@ export const RELEASES: Release[] = [
         area: 'Cycle counts',
         title: 'Confirm this count closes a count difference',
         whatChanged:
-          'A Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, on the web and in the mobile app. It shows the counted number and the stock on record before the count and now, and closes the exception when you choose Confirm and close. The timeline records who confirmed it, whether they counted it, and that it closed without a second count. On the web, Closed without a second count on the Resolved tab lists only the exceptions closed this way.',
+          'On the web and in the mobile app, a Count did not match the stock on record exception now offers Confirm this count to the person who counted the item and to managers, admins and owners. It shows the counted number and the stock on record before the count and now, and closes the exception when you choose Confirm and close. The timeline records who confirmed it, whether they counted it, and that it closed without a second count. On the web, Closed without a second count on the Resolved tab lists only the exceptions closed this way.',
         whyItMatters:
-          'Until now only a second count could close one of these, so a number already checked on the floor stayed open, and acknowledging it did not close it.',
+          'Until now a count difference cleared only when a later count matched the stock on record, so it stayed open even when the counted number had already been checked on the floor. Acknowledging it did not close it.',
         howItAffectsYou:
-          'Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it. Confirming needs a connection. If a later count does not match the stock on record, a new exception opens.',
+          "Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is offered only while the stock on record equals the counted number. It is also not offered while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item. In these cases the page says why. Confirming needs permission to adjust stock and a connection. If a later count does not match the stock on record, a new exception opens.",
         whatToDo:
-          'Open an exception under Count did not match the stock on record. If the counted number is right, choose Confirm this count.',
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update. To confirm, open an exception under Count did not match the stock on record, and if the counted number is right, choose Confirm this count.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
       },
