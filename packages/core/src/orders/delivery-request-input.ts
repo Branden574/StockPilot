@@ -37,11 +37,14 @@
  * Pure TS, no React, no DOM, no network. Safe under Hermes.
  */
 
+import type { OrderLineQuantity } from './cart-totals';
 import type {
   DeliveryRequestInput,
+  DeliveryRequestItemRef,
   DeliveryRequestRecipients,
   DeliveryRequestSite,
 } from './delivery-request';
+import type { OrderSummary } from './place-order';
 import { resolveRequesterIdentity } from './requester-identity';
 import { resolveOrgTimezone } from '../time/org-timezone';
 
@@ -155,5 +158,86 @@ export function buildDeliveryRequestInput(
     // is closed at the type level so no staff-only field (cost, price) can
     // reach a message that leaves the building.
     itemMap: new Map(lines.map((l) => [l.itemId, { name: l.name, sku: l.sku ?? '' }])),
+  };
+}
+
+// ── From a submission (phone ordering PO-1) ────────────────────────────────
+
+/**
+ * What the success screen knows besides the placed order: the setup the
+ * person chose and the body they sent (frozen with the key). Every field is
+ * what the web success overlay passes today (storefront-overlays.tsx, the
+ * DeliveryRequestAction input), so the phone's draft and the web's are the
+ * same message.
+ */
+export interface DeliveryRequestSubmissionSetup {
+  /** The Ship from warehouse's display name. */
+  warehouseName: string;
+  /** The site chosen in the setup, as the storefront holds it. Used only when
+   *  it is the site the order was placed for (see below). */
+  destination: DeliveryRequestSite | null;
+  /** The placer's display label and email, for an order placed for
+   *  themselves (the overlay's `viewerLabel` and `viewerEmail`). */
+  viewerLabel: string;
+  viewerEmail: string | null;
+  /** RAW `organizations.timezone`; resolved here (`resolveOrgTimezone`). */
+  orgTimezone: string | null;
+  /** The sent body's notes and lines. */
+  notes: string | null;
+  lines: readonly OrderLineQuantity[];
+  /** Only `name` and `sku` reach the message (`DeliveryRequestItemRef`). */
+  itemMap: ReadonlyMap<string, DeliveryRequestItemRef>;
+}
+
+/**
+ * The delivery-request (or pickup-request) draft's input for an order just
+ * placed, from the place answer's summary and the submission's setup.
+ *
+ * Two differences from `buildDeliveryRequestInput` above, both deliberate:
+ *
+ *   - THE REAL METHOD. That builder stamps `fulfillmentType: 'delivery'`,
+ *     because both surfaces offer it only on delivery orders. The success
+ *     screen offers "Email pickup request" too, so the method comes from the
+ *     placed order, and a pickup draft never carries a destination.
+ *   - THE STORED INSTANT. `neededByLocal` is the order's stored needed-by
+ *     instant (`summary.neededBy`), not the wall clock typed into the cart.
+ *     The builder reads it with `new Date(...)`; a zone-less wall clock would
+ *     be read in the DEVICE's zone, so a phone set to another zone would mail
+ *     a different time from the one the server stored in the organization's
+ *     zone. An ISO instant reads the same everywhere.
+ *
+ * The destination is the setup's site only when it is the site the order was
+ * placed for (`summary.deliveryCharterId`); otherwise the draft names none
+ * rather than a site the order is not going to.
+ *
+ * For a Pacific browser and a Pacific organization (today's web) the result
+ * renders byte for byte the draft the web success overlay renders; the web's
+ * storefront parity test pins that against the real overlay.
+ */
+export function deliveryRequestInputFromSubmission(
+  summary: OrderSummary,
+  setup: DeliveryRequestSubmissionSetup,
+  recipients: DeliveryRequestRecipients,
+): DeliveryRequestInput {
+  const delivery = summary.fulfillmentType === 'delivery';
+  const destination =
+    delivery && setup.destination !== null && setup.destination.id === summary.deliveryCharterId
+      ? setup.destination
+      : null;
+  const requested = summary.requestedFor;
+  return {
+    recipients,
+    orderId: summary.id,
+    orderNumber: summary.orderNumber,
+    fulfillmentType: summary.fulfillmentType,
+    warehouseName: setup.warehouseName,
+    destination,
+    requestedFor: requested.self ? setup.viewerLabel : requested.name,
+    requesterEmail: requested.self ? setup.viewerEmail : requested.email,
+    neededByLocal: summary.neededBy ?? '',
+    orgTimezone: resolveOrgTimezone(setup.orgTimezone),
+    notes: setup.notes ?? '',
+    lines: setup.lines,
+    itemMap: setup.itemMap,
   };
 }

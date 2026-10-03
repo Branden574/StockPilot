@@ -748,6 +748,12 @@ const RENDERS_PRECOMPUTED = [
   // nothing of their own.
   'apps/web/src/components/orders/storefront/storefront-kit-card.tsx',
   'apps/web/src/server/loaders/orders-kits.ts',
+  // The storefront row's shared type, moved to core for phone ordering
+  // (PO-1, 2026-10-03): `StorefrontItem` is the part of v2/types.ts's
+  // `CatalogItem` the web and the phone share. It carries the `rackLabel` the
+  // storefront loader computed (the BIN_FIRST_EXCEPTION above), exactly as
+  // v2/types.ts does, and decides nothing.
+  'packages/core/src/orders/storefront/item.ts',
 ] as const;
 
 /**
