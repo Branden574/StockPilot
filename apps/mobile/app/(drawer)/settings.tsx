@@ -665,10 +665,12 @@ function SettingRow({
  * their account from inside the app — not via a website link.
  *
  * Step 1: warn what will happen, offer Cancel.
- * Step 2: type-DELETE prompt — calls /api/v1/account/delete which
- *         tombstones the profile + invalidates the auth user.
+ * Step 2: type-DELETE prompt — calls /api/v1/account/delete, which asks
+ *         the database first and then deletes the auth user (0388).
  * On success, the auth context is torn down via signOut so the app
- * lands back at the sign-in screen.
+ * lands back at the sign-in screen. Any refusal (linked records, try
+ * again, a failed delete) arrives as a non-2xx with a message: it is
+ * shown and the app stays signed in.
  */
 /** useAuth().signOut: after a deletion it is called to discard, not to ask. */
 type SignOutFn = (opts?: { afterAccountDeleted?: boolean }) => Promise<void> | void;

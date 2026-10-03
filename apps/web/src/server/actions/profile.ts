@@ -9,8 +9,20 @@ import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import {
+  ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_RATE_LIMIT,
+  ACCOUNT_DELETE_RATE_WINDOW_MS,
+  ACCOUNT_DELETE_RETRY_COPY,
+  ACCOUNT_DELETE_SIGNED_OUT_COPY,
+  accountDeleteRateKey,
+  auditAccountDeleted,
+  checkAccountDeletable,
+  settleFailedDelete,
+} from '@/server/lib/account-deletion';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -466,10 +478,13 @@ const deleteAccountSchema = z.object({
 });
 
 /**
- * Self-service account deletion. Soft-deletes the profile (sets
- * `deleted_at`), then deletes the underlying auth user via the admin
- * client which cascades to membership rows on the `user_profiles.id`
- * FK with `on delete cascade`.
+ * Self-service account deletion. Asks the database whether the account can
+ * go (`account_deletion_check`, migration 0388: a dry run of the real delete,
+ * always undone), then deletes the auth user through the admin client, which
+ * cascades to the profile and the memberships; orders the person placed are
+ * kept with "Deleted user" as the requester. The `user.deactivated` audit row
+ * is written only after the delete succeeded. Nothing is written when the
+ * account cannot go: no tombstone, no audit row.
  *
  * Owners of an org with other accepted members cannot delete their
  * own account — they must first transfer ownership (handled separately
@@ -527,75 +542,131 @@ export async function deleteOwnAccountAction(input: {
       }
     }
 
-    // Soft-delete the profile row first — the FK is `on delete cascade`
-    // on the auth.users side, so admin.deleteUser() would otherwise
-    // erase the profile before we get a chance to mark it deleted for
-    // historical reference (movements, audit rows, etc. all retain the
-    // user_id with a tombstoned profile this way).
-    const deletedAt = new Date().toISOString();
-    const { error: profileErr } = await supabase
-      .from('user_profiles')
-      .update({ deleted_at: deletedAt })
-      .eq('id', session.userId);
-    if (profileErr) throw new ServiceError('internal_error', profileErr.message);
+    // Each attempt runs a full dry-run cascade (row locks on every row that
+    // names the person), so a member may not hammer it: 5 per 10 minutes.
+    const rl = await checkRateLimit(
+      accountDeleteRateKey(session.userId),
+      ACCOUNT_DELETE_RATE_LIMIT,
+      ACCOUNT_DELETE_RATE_WINDOW_MS,
+    );
+    if (!rl.allowed) return err('rate_limited', ACCOUNT_DELETE_RETRY_COPY);
 
-    await audit({
-      event: 'user.deactivated',
-      entityType: 'user',
-      entityId: session.userId,
-      reason: 'self_deletion',
-    });
+    // The organization the audit row is filed under, read BEFORE the delete
+    // removes the membership (null for a person with no membership, SP-129).
+    const memberships = await getSessionMemberships();
+    const auditOrganizationId =
+      memberships.length > 0 ? (await withContext()).organizationId : null;
 
-    // Now invalidate the auth user. Profile + membership rows cascade
-    // via the user_profiles.id -> auth.users(id) on delete cascade FK.
+    // Ask first (0388). Every answer but "deletable" changes nothing. There is
+    // no profile tombstone any more: nothing reads user_profiles.deleted_at
+    // (see SP-008 below), so on a failure it only marked a live account as
+    // deleted, and on success the profile cascades away with it.
     const admin = createAdminClient();
-    const { error: authErr } = await admin.auth.admin.deleteUser(session.userId);
-    if (authErr) {
-      // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
-      //
-      // This used to log the failure and return ok(). The comment justifying
-      // that said "the profile tombstone already prevents login through the
-      // app, and the cascade will fire on the next admin retry". BOTH halves
-      // were false, and had always been:
-      //
-      //   • NOTHING in any identity funnel reads user_profiles.deleted_at.
-      //     loadSessionAndContext selects `disabled_at`; ACCOUNT_STATUS_COLUMNS
-      //     is `'disabled_at'`; isAccountDisabled (packages/core) reads only
-      //     disabled_at; 0310's is_org_member checks only disabled_at. 0171
-      //     added the column with no trigger and no policy. The tombstoned user
-      //     signs straight back in with every membership intact.
-      //   • There is no retry. No cron, no queue, no admin tool re-attempts
-      //     this delete.
-      //
-      // So the failure mode was: deleteUser 401s (exactly the 2026-07-21
-      // service-role key outage, where every createAdminClient path failed
-      // while user-authed reads stayed up), the action returns ok, the UI says
-      // "Your account has been deleted." and the audit log records
-      // 'user.deactivated' — while the account is entirely alive. That is a
-      // false promise under App Store 5.1.1(v) / GDPR and a false audit row.
-      //
-      // Now: report it, end the live sessions best-effort, and TELL the user it
-      // failed. `deleted_at` is deliberately left stamped — it is the marker an
-      // operator (or a future retry) uses to find the half-deleted account, and
-      // it is inert for login precisely because nothing reads it.
-      await reportError(new Error(authErr.message), {
-        tag: 'account.delete.auth_delete_failed',
-        extra: { userId: session.userId, source: 'web' },
-      });
-      try {
-        // Not silent (pattern #28): revokeAllSessionsForUser reports its own
-        // failure and returns { ok: false } rather than throwing. The try/catch
-        // is only for the case where the admin client itself is unusable — the
-        // same dead key that broke the delete above — which must not turn a
-        // reported refusal into an unhandled throw.
-        await revokeAllSessionsForUser(session.userId);
-      } catch (revokeErr) {
-        console.error('[deleteOwnAccount] session revoke failed:', revokeErr);
+    const check = await checkAccountDeletable(admin, session.userId, 'web');
+    // Whether THIS request deleted the account (and so writes the audit row).
+    let deletedHere = false;
+    if (!check.ok) {
+      if (check.kind === 'blocked') {
+        return err('conflict', ACCOUNT_DELETE_BLOCKED_COPY, { reason: 'account_linked_records' });
       }
-      return err(
-        'internal_error',
-        'Your account could not be deleted right now. Please try again.',
-      );
+      // retry (a row lock or a deadlock) or check_failed: nothing was changed.
+      if (check.kind !== 'gone') return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
+      // gone: the account no longer exists. Reached only in a race: this
+      // request passed the MFA gate while GoTrue still had the user, and the
+      // person's other request (the phone, another tab) deleted the account
+      // before this check; once it is gone, the gate itself refuses first. Say
+      // so and end this browser's session below; the request that deleted it
+      // wrote the audit row (review R7).
+    } else {
+      // Now delete the auth user. Profile + membership rows cascade via the
+      // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
+      // orders are kept (0388).
+      const { error: authErr } = await admin.auth.admin.deleteUser(session.userId);
+      // deleteUser can answer an error although the account is gone: GoTrue
+      // committed and the reply was lost, or another request deleted it first
+      // (404 user_not_found). Ask GoTrue again before telling the person it
+      // failed (review R7).
+      const settled = authErr ? await settleFailedDelete(admin, session.userId, authErr) : 'deleted';
+      if (authErr && settled === 'not_deleted') {
+        // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
+        //
+        // This used to log the failure and return ok(). The comment justifying
+        // that said "the profile tombstone already prevents login through the
+        // app, and the cascade will fire on the next admin retry". BOTH halves
+        // were false, and had always been:
+        //
+        //   • NOTHING in any identity funnel reads user_profiles.deleted_at.
+        //     loadSessionAndContext selects `disabled_at`; ACCOUNT_STATUS_COLUMNS
+        //     is `'disabled_at'`; isAccountDisabled (packages/core) reads only
+        //     disabled_at; 0310's is_org_member checks only disabled_at. 0171
+        //     added the column with no trigger and no policy. The tombstoned user
+        //     signs straight back in with every membership intact.
+        //   • There is no retry. No cron, no queue, no admin tool re-attempts
+        //     this delete.
+        //
+        // So the failure mode was: deleteUser 401s (exactly the 2026-07-21
+        // service-role key outage, where every createAdminClient path failed
+        // while user-authed reads stayed up), the action returns ok, the UI says
+        // "Your account has been deleted." and the audit log records
+        // 'user.deactivated' — while the account is entirely alive. That is a
+        // false promise under App Store 5.1.1(v) / GDPR and a false audit row.
+        //
+        // Now: report it, end the live sessions best-effort, and TELL the user it
+        // failed. Since 0388 the check above runs first and nothing is written
+        // before the delete, so a failure here (a transient error after a passing
+        // check) leaves no tombstone and no audit row to undo.
+        await reportError(new Error(authErr.message), {
+          tag: 'account.delete.auth_delete_failed',
+          extra: { userId: session.userId, source: 'web' },
+        });
+        try {
+          // Not silent (pattern #28): revokeAllSessionsForUser reports its own
+          // failure and returns { ok: false } rather than throwing. The try/catch
+          // is only for the case where the admin client itself is unusable — the
+          // same dead key that broke the delete above — which must not turn a
+          // reported refusal into an unhandled throw.
+          await revokeAllSessionsForUser(session.userId);
+        } catch (revokeErr) {
+          console.error('[deleteOwnAccount] session revoke failed:', revokeErr);
+        }
+        return err('internal_error', ACCOUNT_DELETE_SIGNED_OUT_COPY);
+      }
+      if (authErr) {
+        void reportError(new Error(authErr.message), {
+          tag: 'account.delete.auth_delete_error_but_gone',
+          level: 'warning',
+          extra: { userId: session.userId, source: 'web', settled },
+        });
+      }
+      deletedHere = settled === 'deleted';
+    }
+
+    // The account is gone: now the audit row (user_id null, the profile no
+    // longer exists; the entity id keeps who it was), written by the request
+    // that deleted it.
+    if (deletedHere) {
+      await auditAccountDeleted({
+        userId: session.userId,
+        organizationId: auditOrganizationId,
+        reason: 'self_deletion',
+      });
+    }
+
+    // End THIS browser's session too. deleteUser removes the refresh tokens,
+    // but the access token in the cookie stays valid until it expires and the
+    // proxy verifies it locally (getClaims), so the browser stayed "signed
+    // in" as a person with no membership: /signin bounced to /dashboard and
+    // then to Create your workspace (local walk, 0388). The phone already
+    // signs itself out after a 200. signOut removes the local session (the
+    // auth cookies) even though GoTrue no longer knows the user: auth-js
+    // ignores its 401/403/404 there. Best-effort: the account is already gone.
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch (signOutErr) {
+      void reportError(signOutErr, {
+        tag: 'account.delete.local_signout_failed',
+        extra: { userId: session.userId },
+      });
     }
 
     revalidatePath('/', 'layout');

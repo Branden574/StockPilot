@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   can,
+  DELETED_REQUESTER_LABEL,
   formatOrderNumber,
   formatWallClock,
   HOLD_BUSY_COPY,
@@ -13,6 +14,7 @@ import {
   HOLD_ORDER_NOT_FOUND_COPY,
   holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
+  isDeletedRequester,
   isManagerOrAbove,
   isNeededByWithinReach,
   lineOwedUnits,
@@ -244,6 +246,12 @@ export interface OrderRequestSummary {
   requesterEmail: string | null;
   requesterName: string | null;
   requesterOrgLabel: string | null;
+  /**
+   * True when the requester deleted their account (migration 0388): the ROW
+   * has no requester id and no requester email (core `isDeletedRequester`,
+   * strict null on the raw columns, never the profile-resolved ones).
+   */
+  requesterDeleted: boolean;
   source: OrderRequestSource;
   lineCount: number;
   totalQuantity: number;
@@ -269,6 +277,8 @@ export interface OrderExportRow {
   requesterName: string | null;
   requesterEmail: string | null;
   requesterOrgLabel: string | null;
+  /** The requester deleted their account (0388); see OrderRequestSummary. */
+  requesterDeleted: boolean;
   warehouseName: string | null;
   /** Delivery charter "Name (CODE)" when set; null for pickup orders. */
   charterLabel: string | null;
@@ -855,6 +865,10 @@ export class OrderRequestsService {
         requesterEmail,
         requesterName,
         requesterOrgLabel: (r.requester_org_label as string | null) ?? null,
+        requesterDeleted: isDeletedRequester({
+          requesterUserId: (r.requester_user_id as string | null) ?? null,
+          requesterEmail: (r.requester_email as string | null) ?? null,
+        }),
         source: r.source as OrderRequestSource,
         lineCount: lines.length,
         totalQuantity: lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0),
@@ -1007,6 +1021,10 @@ export class OrderRequestsService {
         requesterName,
         requesterEmail,
         requesterOrgLabel: (r.requester_org_label as string | null) ?? null,
+        requesterDeleted: isDeletedRequester({
+          requesterUserId: (r.requester_user_id as string | null) ?? null,
+          requesterEmail: (r.requester_email as string | null) ?? null,
+        }),
         warehouseName: wh?.name ?? null,
         charterLabel,
         fulfillmentType: (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
@@ -1272,9 +1290,20 @@ export class OrderRequestsService {
     const profileDisplay = profile
       ? profile.fullName?.trim() || profile.email?.trim() || null
       : null;
+    // A requester who deleted their account (0388) leaves no requester id and,
+    // on the rows that never held one, no email: "Deleted user" rather than
+    // "External requester", inferred from the raw columns (core).
     const requesterDisplay = h.requester_user_id
       ? (profileDisplay ?? '(team member)')
-      : `${h.requester_name ?? 'External requester'}${h.requester_org_label ? ' · ' + h.requester_org_label : ''}`;
+      : `${
+          h.requester_name ??
+          (isDeletedRequester({
+            requesterUserId: (h.requester_user_id as string | null) ?? null,
+            requesterEmail: (h.requester_email as string | null) ?? null,
+          })
+            ? DELETED_REQUESTER_LABEL
+            : 'External requester')
+        }${h.requester_org_label ? ' · ' + h.requester_org_label : ''}`;
 
     return {
       request: h,

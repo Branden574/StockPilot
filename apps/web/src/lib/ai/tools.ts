@@ -34,7 +34,7 @@ import {
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { ORDER_STATUS_KEYS, isOrderStatusKey } from '@stockpilot/core';
+import { DELETED_REQUESTER_LABEL, ORDER_STATUS_KEYS, isOrderStatusKey } from '@stockpilot/core';
 
 import type { MovementType } from '@stockpilot/core';
 
@@ -2154,6 +2154,10 @@ const listOrderRequestsTool: ToolExecutor = {
         if (r.requesterUserId) {
           const u = userMap.get(r.requesterUserId);
           requesterDisplay = dataTag(u?.fullName || u?.email || '(team member)');
+        } else if (r.requesterDeleted && !r.requesterName) {
+          // The requester deleted their account (0388) and the row held no
+          // name: our own words, so a data tag, not an untrusted one.
+          requesterDisplay = dataTag(DELETED_REQUESTER_LABEL);
         } else {
           requesterDisplay = untrustedTag(
             `${r.requesterName ?? 'External requester'}${r.requesterOrgLabel ? ' · ' + r.requesterOrgLabel : ''}`,

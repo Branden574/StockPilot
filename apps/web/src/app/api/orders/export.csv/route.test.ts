@@ -52,6 +52,7 @@ const SAMPLE_ROW: OrderExportRow = {
   requesterName: 'Jane Picker',
   requesterEmail: 'jane@example.com',
   requesterOrgLabel: 'Site A',
+  requesterDeleted: false,
   warehouseName: 'Main WH',
   charterLabel: 'North Charter (NCH)',
   fulfillmentType: 'delivery',

@@ -495,6 +495,31 @@ PGTAP_TESTS=(
   # footprint (no lock that stops an order read while the push runs) is
   # scripts/db-concurrency/0387_migration_lock_footprint.sh.
   supabase/tests/0387_order_workflow_guard.test.sql
+  # Explicit order numbers and account deletion (0388): authenticated holds
+  # INSERT on order_requests only for the 13 columns create_order_request
+  # names, so no member can insert an order with order_number = bigint max
+  # (every later order in the organization then failed 22003), and none can
+  # set id, updated_at, internal_notes, requester_org_label, created_at or a
+  # workflow column on insert; one TAP line per refused column, read from the
+  # catalog. service_role, postgres, the public link and the portal still
+  # insert. Deleting the account of a requester (internal with no email, or
+  # portal) succeeds: a SECURITY INVOKER trigger stamps requester_deleted_at
+  # only when a non-API role nulls a requester whose profile is gone, and
+  # identity_chk accepts the stamp; a live requester nulled by service_role
+  # still fails 23514, an API role never stamps (proven with the column grant
+  # put back), and no order gains the person's email, name or phone. Approver,
+  # picker, canceller and cycle-count counter deletions null every user
+  # column; other rows stay byte-identical. account_deletion_check (DEFINER,
+  # service_role only, refuses an authenticated or anon JWT, lock_timeout
+  # 900ms) dry-runs the delete and always undoes it; it is the only function
+  # in any schema that deletes from auth.users or user_profiles. Nothing in
+  # public or auth is DEFERRABLE (the dry run would miss a deferred check),
+  # and the only NOT VALID constraint is delivery_target_chk, whose legacy
+  # rows refuse a deletion (pinned, and the refusal proven).
+  # The two-session proofs (delete against approve, the dry run against a
+  # row lock, numbering) are scripts/db-concurrency/0388_requester_delete_race.sh;
+  # the lock footprint is scripts/db-concurrency/0388_migration_lock_footprint.sh.
+  supabase/tests/0388_order_number_and_requester_deletion.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -747,6 +772,21 @@ WEB_TESTS=(
   # its real status. Self-policing: a route that calls the limiter must be
   # listed there, and the limiter-first idiom fails it.
   src/app/api/export-routes.limit-order.test.ts
+
+  # Account deletion (0388): the web action, the phone route and the
+  # platform console ask account_deletion_check before they change anything
+  # (blocked, lock or deadlock, check failure and an unknown answer all change
+  # nothing and fail closed), write no profile tombstone, write the
+  # user.deactivated row only after the delete succeeded (user_id null), are
+  # rate limited before the check, and report a failed delete honestly (the
+  # phone used to answer 200). Only an integrity refusal (class 23) is
+  # "linked to records"; any other error the dry run caught is a reported
+  # check failure. A deleteUser error is settled against GoTrue, so an
+  # account that is gone is never reported as kept. The platform cleanup
+  # counts kept and failed accounts apart instead of claiming them deleted.
+  src/server/lib/account-deletion.test.ts
+  src/app/api/v1/account/delete/route.test.ts
+  src/server/actions/platform-admin.remove-org.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

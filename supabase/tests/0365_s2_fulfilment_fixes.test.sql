@@ -20,12 +20,17 @@
 --                components and kit items and refuse a component the caller
 --                cannot see; no shortage row on an item that is not here;
 --                create_order_request ignores a caller's status and source.
+--                Since 0388 authenticated may INSERT only the 13 columns
+--                create_order_request names, so 29 and 30b are refused by the
+--                column privilege before the insert guard runs; 29b grants
+--                the columns back inside an undone subtransaction and proves
+--                the insert guard still refuses behind the privilege.
 --
 -- Roles: `set local role authenticated` with request.jwt.claim.sub, as the
 -- house tests do. Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(42);
+select plan(44);
 
 \set org     '\'03650000-0000-0000-0000-00000000000a\''
 \set u_mgr   '\'03650000-0000-0000-0000-0000000000a1\''
@@ -317,15 +322,56 @@ select throws_ok(
            values (%L, %L, %L, 'internal', 'approved', 'pickup')$$, :org, :whA, :u_stf),
   '42501', 'A new order request starts pending approval.',
   '28: a direct insert cannot arrive approved (it would skip approval and the stock check)');
+-- Re-pinned by 0388 (was the insert guard's message, 'A new order request
+-- cannot carry approval, picking, delivery or signature details.'):
+-- authenticated may not INSERT approved_by or approved_at since 0388, and
+-- Postgres checks column privileges before any trigger. 29b keeps the guard's
+-- own refusal covered.
 select throws_ok(
   format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type, approved_by, approved_at)
            values (%L, %L, %L, 'internal', 'pending_approval', 'pickup', %L, now())$$, :org, :whA, :u_stf, :u_mgr),
-  '42501', 'A new order request cannot carry approval, picking, delivery or signature details.',
-  '29: nor carry a forged approver');
+  '42501', 'permission denied for table order_requests',
+  '29: nor carry a forged approver (refused by the column privilege, 0388)');
+reset role;
+-- One statement as authenticated with p_sub's claims after p_prep (a grant),
+-- ALWAYS undone: the block ends by raising, so the write, the grant and the
+-- role switch roll back with its subtransaction (0387's pg_temp.attempt).
+create function pg_temp.attempt_granted(p_sub uuid, p_sql text, p_prep text)
+returns text language plpgsql as $f$
+declare v_state text; v_msg text;
+begin
+  begin
+    execute p_prep;
+    perform set_config('request.jwt.claim.sub', p_sub::text, true);
+    perform set_config('request.jwt.claim.role', 'authenticated', true);
+    perform set_config('role', 'authenticated', true);
+    execute p_sql;
+    raise exception using errcode = 'XX365', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+  end;
+  return v_state || ':' || v_msg;
+end $f$;
+select is(
+  pg_temp.attempt_granted(:u_stf,
+    format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type, approved_by, approved_at)
+             values (%L, %L, %L, 'internal', 'pending_approval', 'pickup', %L, now())$$, :org, :whA, :u_stf, :u_mgr),
+    'grant insert (approved_by, approved_at) on table public.order_requests to authenticated'),
+  '42501:A new order request cannot carry approval, picking, delivery or signature details.',
+  '29b: with INSERT (approved_by, approved_at) granted back (undone), the insert guard alone still refuses a forged approver');
+set local role to 'authenticated';
+-- Re-pinned by 0388 (was the same insert naming created_at '2001-01-01',
+-- which the guard overwrote): authenticated may not INSERT created_at since
+-- 0388 (30b), so the plain request names only granted columns.
 select lives_ok(
+  format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type)
+           values (%L, %L, %L, 'internal', 'pending_approval', 'pickup')$$, :org, :whA, :u_stf),
+  '30: a plain pending request still inserts');
+select throws_ok(
   format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type, created_at)
            values (%L, %L, %L, 'internal', 'pending_approval', 'pickup', '2001-01-01')$$, :org, :whA, :u_stf),
-  '30: a plain pending request still inserts');
+  '42501', 'permission denied for table order_requests',
+  '30b: a request that names created_at is refused by the column privilege (0388; the insert guard used to overwrite it)');
 select throws_ok(
   format($$insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)$$, :ordLine, :itemR),
   '42501', 'That item cannot be ordered: it is deleted, a rental item, or not received yet.',

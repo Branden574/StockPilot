@@ -62,3 +62,38 @@ export function resolveRequesterIdentity(
   const profile = typeof fromProfile === 'string' ? fromProfile.trim() : '';
   return profile || null;
 }
+
+/**
+ * The requester label for an order whose requester deleted their account.
+ * Owner decision O-A2-1 (2026-10-03): plain words, no name.
+ */
+export const DELETED_REQUESTER_LABEL = 'Deleted user';
+
+/**
+ * Whether an order's requester deleted their account, read from the ROW's own
+ * columns (never a resolved or profile-joined value).
+ *
+ * Migration 0388 lets an account that placed orders be deleted: the
+ * user_profiles foreign key nulls `requester_user_id`, and a trigger stamps
+ * `requester_deleted_at` in its place. `order_requests_identity_chk` then
+ * holds, for every row:
+ *   - internal: a requester id, an email or the stamp;
+ *   - public link: an email;
+ *   - portal: a requester id or the stamp.
+ * So a row with NO requester id and NO requester email is exactly a row whose
+ * requester was deleted (and that row held no email of its own). The app infers
+ * it from those two columns rather than reading the new column, so every
+ * deployed web build and every installed phone bundle reads the same rows the
+ * same way whatever order the migration and the deploys land in.
+ *
+ * STRICT null on both: an empty-string email is a present (if useless) value
+ * the CHECK accepts, so it is not proof the requester was deleted. Rows that
+ * already held the deleted person's email or name keep showing it; nothing
+ * about the person is copied onto any order when the account goes.
+ */
+export function isDeletedRequester(row: {
+  requesterUserId: string | null | undefined;
+  requesterEmail: string | null | undefined;
+}): boolean {
+  return row.requesterUserId === null && row.requesterEmail === null;
+}

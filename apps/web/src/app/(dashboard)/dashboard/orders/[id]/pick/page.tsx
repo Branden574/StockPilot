@@ -5,6 +5,7 @@ import { DigitalPick } from '@/components/orders/digital-pick';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { detailRequesterName } from '@/lib/orders/requester-name';
 import { createClient } from '@/lib/supabase/server';
 import { isManagerOrAbove, type OrderReadinessResult } from '@stockpilot/core';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
@@ -122,7 +123,7 @@ export default async function DigitalPickPage({
         <h1 className="font-display text-2xl">Pick slip</h1>
         <p className="text-muted-foreground mt-1 text-sm">
           Order #{id.slice(0, 8).toUpperCase()} ·{' '}
-          {detail.requesterName ?? detail.requesterEmail ?? '—'}
+          {detailRequesterName(detail) ?? detail.requesterEmail ?? '—'}
         </p>
       </header>
       <div className="mt-6">

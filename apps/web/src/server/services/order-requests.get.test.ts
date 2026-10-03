@@ -120,6 +120,52 @@ describe('OrderRequestsService.get requester resolution', () => {
 });
 
 /**
+ * Migration 0388: an account that placed orders can be deleted. The FK nulls
+ * requester_user_id and the row keeps no email of its own, so the detail
+ * names the requester "Deleted user" (core `isDeletedRequester`, read from
+ * the raw columns), never "External requester".
+ */
+describe('OrderRequestsService.get: a requester who deleted their account', () => {
+  it('no requester id and no email on the row: "Deleted user"', async () => {
+    const stub = getStub(
+      baseHeader({ requester_user_id: null, requester_name: null, requester_email: null }),
+    );
+    const detail = await svc(stub).get('ord-1');
+    expect(detail.requesterDisplay).toBe('Deleted user');
+    expect(detail.requesterName).toBeNull();
+    expect(detail.requesterEmail).toBeNull();
+  });
+
+  it('an on-behalf order (email, no name) is still an external requester', async () => {
+    const stub = getStub(
+      baseHeader({ requester_user_id: null, requester_email: 'onbehalf@site.org' }),
+    );
+    const detail = await svc(stub).get('ord-1');
+    expect(detail.requesterDisplay).toBe('External requester');
+  });
+
+  it('an empty-string email is not a deletion (strict null)', async () => {
+    const stub = getStub(baseHeader({ requester_user_id: null, requester_email: '' }));
+    const detail = await svc(stub).get('ord-1');
+    expect(detail.requesterDisplay).toBe('External requester');
+  });
+
+  it('a row that already held the name keeps showing it, with its org label', async () => {
+    const stub = getStub(
+      baseHeader({
+        requester_user_id: null,
+        requester_name: 'Cust Co',
+        requester_email: 'buyer@cust.example',
+        requester_org_label: 'Site B',
+        source: 'portal',
+      }),
+    );
+    const detail = await svc(stub).get('ord-1');
+    expect(detail.requesterDisplay).toBe('Cust Co · Site B');
+  });
+});
+
+/**
  * SP-025 (bug-pattern #5 — filtering on a column the select omitted).
  *
  * The order detail page renders an amber "Items were added after the pick slip
