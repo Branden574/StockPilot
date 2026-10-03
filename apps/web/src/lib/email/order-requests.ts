@@ -32,6 +32,7 @@ import {
 } from './unsubscribe';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveTrackToken } from '@/server/lib/order-secrets';
 
 import type {
   DetailCell,
@@ -64,7 +65,8 @@ interface SendInput {
    * practice just the public submit route, whose request body carries it.
    * It can no longer be read from the DB (hashed at rest), so status
    * transition emails omit it; their "Track" CTA `&t=` scope comes from
-   * `request.public_track_token` instead (see buildTrackUrl). When absent,
+   * the request's own track token instead (order_request_secrets since
+   * 0389, else `request.public_track_token`; see requestTrackToken). When absent,
    * catalog-linking CTAs (e.g. the cancelled email's "start a new
    * request") degrade to no link rather than a broken one.
    */
@@ -251,6 +253,8 @@ function buildTrackUrl(
   appUrl: string,
   recipientEmail: string,
   publicRequestToken: string | null,
+  /** The request's own track token, resolved by requestTrackToken (0389). */
+  requestTrackTokenValue: string | null,
 ): string {
   // B2B portal customers are authenticated but have NO dashboard access — send
   // them to their portal, where their order history lives.
@@ -267,8 +271,25 @@ function buildTrackUrl(
   // caller-supplied catalog token remains an accepted fallback for the one
   // send that happens while the plaintext is still in hand (the submit
   // route's confirm email) and for legacy rows without a track token.
-  const trackToken = row.public_track_token ?? publicRequestToken;
+  const trackToken = requestTrackTokenValue ?? publicRequestToken;
   return trackToken ? `${base}&t=${encodeURIComponent(trackToken)}` : base;
+}
+
+/**
+ * The request's own public track token for a /r/track link, or null when the
+ * link does not need one (portal and signed-in requesters link elsewhere).
+ * Since migration 0389 the public submit writes it to the service-only
+ * order_request_secrets, so it is read there first, then from the legacy
+ * order column (tokens minted before 0389, until slice C moves them). Without
+ * a service-role key the column is all there is.
+ */
+async function requestTrackToken(row: OrderRequestRow): Promise<string | null> {
+  if (row.source === 'portal' || row.requester_user_id) return null;
+  try {
+    return await resolveTrackToken(createAdminClient(), row.id, row.public_track_token ?? null);
+  } catch {
+    return row.public_track_token ?? null;
+  }
 }
 
 /**
@@ -1225,7 +1246,13 @@ export async function sendOrderRequestEmail(
   const trackUrl =
     kind === 'confirm_request' && confirmationToken
       ? `${appUrl}/r/confirm?id=${request.id}&t=${encodeURIComponent(confirmationToken)}`
-      : buildTrackUrl(request, appUrl, recipientEmail, publicRequestToken ?? null);
+      : buildTrackUrl(
+          request,
+          appUrl,
+          recipientEmail,
+          publicRequestToken ?? null,
+          await requestTrackToken(request),
+        );
   const unsubscribe = buildUnsubscribeUrl(request, appUrl, recipientEmail);
 
   const reasonText =

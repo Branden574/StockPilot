@@ -4,6 +4,7 @@ import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
+import { resolveTrackToken } from '@/server/lib/order-secrets';
 import { getPublicDriverLocation } from '@/server/services/delivery-tracking';
 
 export const runtime = 'nodejs';
@@ -65,10 +66,12 @@ export async function GET(
   const orgId = h.organization_id;
 
   // Same three accepted credentials as the status read (mig 0330): the
-  // request's own track token, or a live org/link catalog token compared
-  // as sha256(token) against the hashed at-rest columns.
+  // request's own track token (the service-only side table first since 0389,
+  // then the legacy column), or a live org/link catalog token compared as
+  // sha256(token) against the hashed at-rest columns.
   const tokenHash = sha256Hex(token);
-  let authorized = h.public_track_token !== null && token === h.public_track_token;
+  const trackToken = await resolveTrackToken(admin, id, h.public_track_token);
+  let authorized = trackToken !== null && token === trackToken;
   if (!authorized) {
     const { data: orgMatch } = await admin
       .from('organizations')

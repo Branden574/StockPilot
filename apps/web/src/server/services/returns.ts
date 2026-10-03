@@ -11,6 +11,7 @@ import {
 } from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { orderIdForReturnToken } from '@/server/lib/order-secrets';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -1264,10 +1265,16 @@ export async function loadRequesterReturnContext(
   // hitting the DB so a malformed token is a cheap 404, not a 500.
   if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
 
+  // Since 0389 the token is minted into order_request_secrets (service-only);
+  // a token minted earlier is still on order_requests.return_token until
+  // slice C moves it. Either opens exactly its one order.
+  const orderId = await orderIdForReturnToken(admin, token);
+  if (!orderId) return null;
+
   const { data: order, error: orderError } = await admin
     .from('order_requests')
     .select('id, organization_id, status, requester_email, requester_name')
-    .eq('return_token', token)
+    .eq('id', orderId)
     .maybeSingle();
   if (orderError || !order) return null;
 

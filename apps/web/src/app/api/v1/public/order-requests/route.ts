@@ -573,8 +573,8 @@ export async function POST(req: NextRequest) {
   // Per-request tracking token (mig 0330): the catalog token the requester
   // submitted with is hashed at rest now, so later status emails cannot
   // rebuild a /r/track `&t=` from it — this per-request token is what they
-  // embed instead (raw at rest by design, same posture as return_token:
-  // single-order scope, useless without the matching requester email).
+  // embed instead. Since 0389 it is written to the service-only
+  // order_request_secrets, not to the order row every member reads.
   const trackToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
@@ -609,7 +609,6 @@ export async function POST(req: NextRequest) {
       pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
-      public_track_token: trackToken,
     })
     .select('*')
     .single();
@@ -623,6 +622,26 @@ export async function POST(req: NextRequest) {
     );
   }
   const header = headerRow as OrderRequestRow;
+
+  // The track token's side row (0389), inside the same rollback path as the
+  // lines: without it the requester's tracking link would open nothing, so a
+  // failed write removes the header (the side row cascades with it).
+  const { error: secretErr } = await admin.from('order_request_secrets').insert({
+    order_request_id: header.id,
+    organization_id: organizationId,
+    public_track_token: trackToken,
+  });
+  if (secretErr) {
+    await admin.from('order_requests').delete().eq('id', header.id);
+    await reportError(secretErr, {
+      tag: 'public.order-requests.secret-insert',
+      extra: { headerId: header.id },
+    });
+    return NextResponse.json(
+      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
+      { status: 500 },
+    );
+  }
 
   const linePayload = dedupedLines.map((l) => ({
     order_request_id: header.id,

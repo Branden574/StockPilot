@@ -9,12 +9,37 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
+ * The order fields this route returns, and no others (migration 0389). It
+ * used to return the whole row (`select('*')`) to any bearer member: the
+ * signature token (the hand-over credential), the return and track tokens,
+ * the customer's signature image and email, and the internal notes. Every
+ * phone bundle reads only `lines` (digital-pick.tsx since 0b8db084); the
+ * phone's type names id, status, assigned_picker_id and picking_claimed_at.
+ */
+const ORDER_DETAIL_FIELDS = [
+  'id',
+  'status',
+  'order_number',
+  'warehouse_id',
+  'fulfillment_type',
+  'assigned_picker_id',
+  'picking_claimed_at',
+  'picking_claimed_by',
+] as const;
+
+function allowListedOrder(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ORDER_DETAIL_FIELDS) out[key] = row[key] ?? null;
+  return out;
+}
+
+/**
  * Order detail for the mobile app — the REST parity for the web order page's
- * server load. Returns the order header AND its per-line items (with quantity_
- * requested / quantity_picked / quantity_fulfilled and the embedded item), which
- * the native digital-pick screen needs. Auth via withApiContext (Bearer); the
- * service's get() is org-scoped + RLS-guarded, so a caller only ever sees their
- * own org's order.
+ * server load. Returns an allow-listed order header (ORDER_DETAIL_FIELDS) AND
+ * its per-line items (with quantity_requested / quantity_picked /
+ * quantity_fulfilled and the embedded item), which the native digital-pick
+ * screen needs. Auth via withApiContext (Bearer); the service's get() is
+ * org-scoped + RLS-guarded, so a caller only ever sees their own org's order.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
@@ -24,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const detail = await new OrderRequestsService(ctx).get(id);
     return NextResponse.json({
-      order: detail.request,
+      order: allowListedOrder(detail.request as unknown as Record<string, unknown>),
       lines: detail.lines,
       warehouseName: detail.warehouseName,
       requesterName: detail.requesterName,

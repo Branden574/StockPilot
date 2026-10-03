@@ -97,7 +97,9 @@ import { canStartCount } from '@/server/services/lib/count-start-preflight';
 import { getWarehouseAccess, roleSeesEveryWarehouse } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { resolveReturnToken, signatureLinkToken } from '@/server/lib/order-secrets';
 import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
@@ -1019,15 +1021,39 @@ export default async function OrderDetailPage({
     (sum, l) => sum + (Number(l.quantity_fulfilled) || 0),
     0,
   );
-  const requesterReturnPath =
+  const requesterReturnEligible =
     isOwnRequest &&
     !can(ctx, 'returns:manage') &&
     orderIsReturnable &&
     returnsModuleEnabled &&
-    request.return_token &&
-    totalFulfilledForReturns > 0
-      ? `/returns/request/${request.return_token}`
-      : null;
+    totalFulfilledForReturns > 0;
+
+  // ORDER SECRETS (migration 0389). The raw tokens live in
+  // order_request_secrets, which only the admin client reads; the order row
+  // every member reads holds the signature token's sha256 (for tokens minted
+  // since 0389). Read only for the viewer who gets the link:
+  //   - the requester's own return link: the side table first, then the
+  //     legacy column (an older token may already be in their inbox);
+  //   - the panel's "Collect signature" link: only while the order can be
+  //     signed (staged for pickup, in transit) and only for someone who may
+  //     hand it over (orders:approve or the assigned driver). The raw token
+  //     when its digest is the column, else a raw column minted before 0389;
+  //     never a digest (the sign page would then ask for a session).
+  const handOverLinkWanted =
+    showActionsPanel &&
+    (canApprove || isAssignedDriver) &&
+    (request.status === 'staged_for_pickup' || request.status === 'in_transit') &&
+    request.signature_token !== null;
+  const secretsAdmin = requesterReturnEligible || handOverLinkWanted ? createAdminClient() : null;
+  const [requesterReturnToken, handOverLink] = await Promise.all([
+    requesterReturnEligible && secretsAdmin
+      ? resolveReturnToken(secretsAdmin, id, request.return_token)
+      : Promise.resolve(null),
+    handOverLinkWanted && secretsAdmin
+      ? signatureLinkToken(secretsAdmin, id, request.signature_token)
+      : Promise.resolve(null),
+  ]);
+  const requesterReturnPath = requesterReturnToken ? `/returns/request/${requesterReturnToken}` : null;
 
   // Item-level summary for the add-items picker: it labels a pick that would
   // TOP UP an existing line instead of creating one. Summed PER ITEM because an
@@ -1635,8 +1661,10 @@ export default async function OrderDetailPage({
               hasRequesterNote={Boolean(request.notes?.trim())}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
-              signatureToken={request.signature_token}
-              hasSignature={Boolean(request.signature_data_url)}
+              signatureToken={handOverLink?.token ?? null}
+              hasSignature={
+                request.signature_method === 'digital' || Boolean(request.signature_data_url)
+              }
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}

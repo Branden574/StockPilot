@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { can } from '@stockpilot/core';
-
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { isHandOverEntitled, readOrderSecrets } from '@/server/lib/order-secrets';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +24,12 @@ export const dynamic = 'force-dynamic';
  * order's assigned delivery driver may read the signature; everyone else 403s.
  * A shared export throttle matches the sibling order-document routes so the
  * endpoint can't be scripted to exfiltrate signatures in bulk.
+ *
+ * The phone reads it through the alias /api/v1/orders/[id]/signature (the
+ * Vercel firewall bypass covers /api/v1*), since migration 0389; it used to
+ * select the image straight from the table. The image is read from
+ * order_request_secrets first (slice C moves stored images there, off the
+ * member-readable order row), then from the order column.
  */
 export async function GET(
   req: NextRequest,
@@ -52,18 +58,25 @@ export async function GET(
   // the signature dialog) renders: can(orders:approve) OR the assigned driver.
   // Reuses the assigned-driver predicate from OrderRequestsService.markInTransit
   // (assigned_delivery_user_id is non-null AND equals the caller).
-  const isAssignedDriver =
-    row?.assigned_delivery_user_id != null &&
-    row.assigned_delivery_user_id === ctx.userId;
-  if (!can(ctx, 'orders:approve') && !isAssignedDriver) {
+  if (!isHandOverEntitled(ctx, { assigned_delivery_user_id: row?.assigned_delivery_user_id ?? null })) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
   // The throttle counts only reads the caller may make (a refused caller must
   // not spend the shared export budget or trip the abuse alert).
   const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
   if (limited) return limited;
+  if (!row) return NextResponse.json({ signatureDataUrl: null });
 
+  // Side table first (an order of this organization: the row above was read
+  // with the caller's own client, scoped to ctx.organizationId). A failed side
+  // read falls back to the column, which holds every image until slice C.
+  let side: Awaited<ReturnType<typeof readOrderSecrets>>;
+  try {
+    side = await readOrderSecrets(createAdminClient(), id);
+  } catch {
+    side = { ok: false };
+  }
   return NextResponse.json({
-    signatureDataUrl: row?.signature_data_url ?? null,
+    signatureDataUrl: (side.ok ? side.secrets?.signatureDataUrl : null) ?? row.signature_data_url ?? null,
   });
 }

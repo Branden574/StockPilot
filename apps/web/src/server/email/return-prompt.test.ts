@@ -20,7 +20,12 @@ import { maybeSendReturnPrompt } from './return-prompt';
  *     one-click unsubscribe THIS email advertises is suppressed — and the
  *     0278 marker is not burned on that skip. The lookup fails CLOSED;
  *   • a failed guard read (order, module, lines) stops with reason 'error'
- *     before any token is minted, instead of reading as a skip.
+ *     before any token is minted, instead of reading as a skip;
+ *   • migration 0389: the token comes from ONE call to
+ *     order_return_token_ensure (service role, atomic, never rotates: it
+ *     keeps a side-table token, else moves the legacy column token, else
+ *     mints). The raw token is never written to the order row; a failed
+ *     ensure stops with reason 'error'.
  */
 
 const sendEmailMock = vi.hoisted(() => vi.fn());
@@ -60,8 +65,10 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     'organization_modules.select': MODULE_ON,
     'order_request_lines.select': FULFILLED_LINES,
-    // Guarded marker claim (and, when minting, the token update) succeed.
-    'order_requests.update': { data: [{ id: ORDER_ID, return_token: TOKEN }], error: null },
+    // The guarded marker claim succeeds.
+    'order_requests.update': { data: [{ id: ORDER_ID }], error: null },
+    // order_return_token_ensure (0389) answers the order's token.
+    'rpc:order_return_token_ensure': { data: TOKEN, error: null },
     ...overrides,
   });
 }
@@ -214,15 +221,15 @@ describe('maybeSendReturnPrompt', () => {
   it('email-less order still MINTS a token (dashboard link) — no email, marker untouched', async () => {
     // Staff-created internal orders have requester_email NULL by construction,
     // but their requester is still entitled to the "Request a return" link on
-    // /dashboard/orders/[id], which requires a minted return_token. The mint is
+    // /dashboard/orders/[id], which requires a minted return token. The mint is
     // structural (status + module + fulfilled); only the EMAIL needs an address.
     const stub = makeStub({
       'order_requests.select': {
-        data: [{ ...COMPLETED_ORDER, requester_email: null, return_token: null }],
+        data: [{ ...COMPLETED_ORDER, requester_email: null }],
         error: null,
       },
-      'order_requests.update': {
-        data: [{ id: ORDER_ID, return_token: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }],
+      'rpc:order_return_token_ensure': {
+        data: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         error: null,
       },
     });
@@ -231,14 +238,13 @@ describe('maybeSendReturnPrompt', () => {
     expect(res).toEqual({ sent: false, reason: 'no_requester_email' });
     expect(sendEmailMock).not.toHaveBeenCalled();
 
-    // Exactly ONE update ran — the guarded token mint. The 0278 marker stays
-    // NULL (marker = email sent), so a later completion path can still prompt
-    // once if an email is ever added.
-    const updates = stub.chainArgsAll.get('order_requests.update') ?? [];
-    expect(updates).toHaveLength(1);
-    const mintArgs = updates[0]!;
-    expect(mintArgs).toContainEqual(['return_token', null]); // guarded mint
-    expect(mintArgs).not.toContainEqual(['return_prompt_sent_at', null]); // no marker claim
+    // The token was ensured exactly once, for this order, through the RPC
+    // (0389), and NO order update ran: no token is written to the member-
+    // readable row, and the 0278 marker stays NULL (marker = email sent).
+    expect(stub.rpcCalls).toEqual([
+      { name: 'order_return_token_ensure', args: { p_order_id: ORDER_ID } },
+    ]);
+    expect(stub.chainArgsAll.get('order_requests.update') ?? []).toHaveLength(0);
   });
 
   it('SUPPRESSED: a public requester who used one-click unsubscribe gets no prompt, and the marker is NOT burned', async () => {
@@ -340,17 +346,13 @@ describe('maybeSendReturnPrompt', () => {
   ])(
     'a failed %s read stops with reason error, reports, and mints no token',
     async (_table, key, tag) => {
-      // The order has no token yet, so reaching the mint would show up as an
-      // order_requests update.
+      // Reaching the mint would show up as an order_return_token_ensure call.
       const stub = makeStub({
-        'order_requests.select': {
-          data: [{ ...COMPLETED_ORDER, return_token: null }],
-          error: null,
-        },
         [key]: { data: null, error: { message: 'connection reset' } },
       });
       const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
       expect(res).toEqual({ sent: false, reason: 'error' });
+      expect(stub.rpcCalls).toEqual([]);
       expect(stub.chains.get('order_requests.update')).toBeUndefined();
       expect(sendEmailMock).not.toHaveBeenCalled();
       expect(reportErrorMock).toHaveBeenCalledWith(
@@ -369,26 +371,48 @@ describe('maybeSendReturnPrompt', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
-  it('mints the return token (guarded on NULL) when the order has none', async () => {
+  it('mints the return token through order_return_token_ensure, and links the token it answers', async () => {
+    const minted = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const stub = makeStub({
-      'order_requests.select': {
-        data: [{ ...COMPLETED_ORDER, return_token: null }],
-        error: null,
-      },
-      // Both updates (mint + marker) succeed; the mint returns the new token.
-      'order_requests.update': () => ({
-        data: [{ id: ORDER_ID, return_token: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }],
-        error: null,
-      }),
+      'rpc:order_return_token_ensure': { data: minted, error: null },
     });
     const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
     expect(res).toEqual({ sent: true });
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
-    // The mint is guarded on return_token IS NULL so a replay never rotates
-    // an already-issued token.
-    const allArgs = stub.chainArgsAll.get('order_requests.update') ?? [];
-    const mintChainArgs = allArgs[0]!;
-    expect(mintChainArgs).toContainEqual(['return_token', null]);
+    const args = sendEmailMock.mock.calls[0]![0] as { text: string };
+    expect(args.text).toContain(`${APP_URL}/returns/request/${minted}`);
+    // One ensure call; the only order update is the marker claim, which
+    // writes no token.
+    expect(stub.rpcCalls).toEqual([
+      { name: 'order_return_token_ensure', args: { p_order_id: ORDER_ID } },
+    ]);
+    const updates = stub.chainArgsAll.get('order_requests.update') ?? [];
+    expect(updates).toHaveLength(1);
+    expect(JSON.stringify(updates[0])).not.toContain('return_token');
+    // The order read no longer asks for the token column at all.
+    const select = (stub.chainArgsAll.get('order_requests.select') ?? [])[0]?.[0]?.[0] as string;
+    expect(select).not.toContain('return_token');
+  });
+
+  it('a failed ensure stops with reason error, reports, and sends nothing', async () => {
+    const stub = makeStub({
+      'rpc:order_return_token_ensure': { data: null, error: { message: 'connection reset' } },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: false, reason: 'error' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chains.get('order_requests.update')).toBeUndefined();
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'orders.return-prompt.token_ensure' }),
+    );
+  });
+
+  it('an ensure that answers no token stops with no_token and sends nothing', async () => {
+    const stub = makeStub({ 'rpc:order_return_token_ensure': { data: null, error: null } });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: false, reason: 'no_token' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it('BEST-EFFORT: resolves (no throw) when the email send fails; marker stays set', async () => {

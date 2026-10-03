@@ -2,6 +2,8 @@ import QRCode from 'qrcode';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { isHandOverEntitled, signatureLinkToken } from '@/server/lib/order-secrets';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -37,6 +39,17 @@ export async function GET(
   try {
     const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);
+    // This slip carries the order's hand-over QR (the link that completes
+    // it with no sign-in), so it is for the people who may hand the order
+    // over: effective orders:approve or the order's assigned driver, the
+    // audience of the panel's "Print warehouse slip" button. Any other member
+    // could open the order and used to get the QR too (migration 0389).
+    if (!isHandOverEntitled(ctx, detail.request)) {
+      return NextResponse.json(
+        { error: 'forbidden', message: 'Only someone who can hand this order over can print its warehouse slip.' },
+        { status: 403 },
+      );
+    }
     if (!VISIBLE_STATUSES.includes(detail.request.status)) {
       return NextResponse.json(
         { error: 'not_yet_generated', message: 'Generate packing slips first.' },
@@ -49,7 +62,16 @@ export async function GET(
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
-    const token = detail.request.signature_token;
+    // The QR carries the RAW token (migration 0389): the side table's, when
+    // its sha256 is the order's column; else the column itself when no side
+    // token hashes to it (minted before 0389, until slice C). A column the
+    // side table cannot vouch for, or a failed side read, prints no QR, which
+    // is today's no-token branch below. The order column alone is never put
+    // in the QR when it is a digest.
+    const link = detail.request.signature_token
+      ? await signatureLinkToken(createAdminClient(), id, detail.request.signature_token)
+      : null;
+    const token = link?.token ?? null;
     let qrDataUrl: string | null = null;
     if (token) {
       const url = `${env.NEXT_PUBLIC_APP_URL}/orders/sign/${token}`;
@@ -68,11 +90,13 @@ export async function GET(
     } else {
       // packing_slip_generated and later all have signature_token minted
       // by the workflow RPCs. Hitting this branch means the token was
-      // wiped out-of-band — surface it instead of silently producing a
-      // packing slip with no scannable QR.
+      // wiped out-of-band, or the side table could not be read — surface it
+      // instead of silently producing a packing slip with no scannable QR.
+      // Never the token itself.
       console.warn('[packing-slip-warehouse] missing signature_token', {
         orderId: id,
         status: detail.request.status,
+        columnSet: detail.request.signature_token !== null,
       });
     }
 

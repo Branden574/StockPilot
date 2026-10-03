@@ -5,6 +5,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
+import { readOrderSecrets } from '@/server/lib/order-secrets';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -118,6 +119,14 @@ export async function GET(
   };
   const orgId = h.organization_id;
 
+  // The request's own track and return tokens (migration 0389): the
+  // service-only order_request_secrets first (every public submit since
+  // 0389), then the legacy order columns (until slice C moves them). A failed
+  // side read leaves the columns, which is what this route read before.
+  const side = await readOrderSecrets(admin, h.id);
+  const trackToken = (side.ok ? side.secrets?.publicTrackToken : null) ?? h.public_track_token;
+  const returnToken = (side.ok ? side.secrets?.returnToken : null) ?? h.return_token;
+
   // Token authorization (mig 0330) — three accepted credentials, all
   // scoped to the request's own org, all failing to the same generic 404:
   //   a) the request's per-request track token (what status emails embed) —
@@ -129,7 +138,7 @@ export async function GET(
   //      the submit flow hands out link-token track URLs, so a link token
   //      must keep authorizing the read exactly like the legacy org token.
   const tokenHash = sha256Hex(token);
-  let authorized = h.public_track_token !== null && token === h.public_track_token;
+  let authorized = trackToken !== null && token === trackToken;
   if (!authorized) {
     const { data: orgMatch } = await admin
       .from('organizations')
@@ -233,7 +242,7 @@ export async function GET(
   let returnPath: string | null = null;
   if (
     (h.status === 'completed' || h.status === 'delivered') &&
-    h.return_token &&
+    returnToken &&
     lines.some((l) => l.quantityFulfilled > 0)
   ) {
     const { data: returnsMod } = await admin
@@ -243,7 +252,7 @@ export async function GET(
       .eq('module_id', 'returns')
       .eq('enabled', true)
       .maybeSingle();
-    if (returnsMod) returnPath = `/returns/request/${h.return_token}`;
+    if (returnsMod) returnPath = `/returns/request/${returnToken}`;
   }
 
   // Same reasoning as denied_reason: the `notes` field is a
