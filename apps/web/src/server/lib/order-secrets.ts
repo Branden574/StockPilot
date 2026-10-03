@@ -46,10 +46,20 @@ interface SelectChain {
 /**
  * Hand-overs one signed-in member may record per hour through the sign
  * route's member path (R4: 60; the busiest organization recorded at most 3 in
- * any hour and 6 in a day, and a pickup day can bunch them). The per-token
- * limit (10 per hour per presented token) still applies to every caller.
+ * any hour and 6 in a day, and a pickup day can bunch them). Keyed by the
+ * member, so nobody else can use it up.
  */
 export const MEMBER_SIGN_LIMIT_PER_HOUR = 60;
+
+/**
+ * Attempts per hour on one signature LINK (the raw token of a printed QR or
+ * the panel's link, or a legacy raw column), keyed by the hash of the
+ * presented value. Applied only once the token matched as a link: the member
+ * path (a digest, which every member reads) never counts against it, so a
+ * member who cannot hand the order over cannot lock the entitled phones out
+ * (desk check F3).
+ */
+export const LINK_SIGN_LIMIT_PER_HOUR = 10;
 
 /** 64 hex characters: the shape of every signature token and digest. */
 export const SIGNATURE_TOKEN_RE = /^[0-9a-f]{64}$/i;

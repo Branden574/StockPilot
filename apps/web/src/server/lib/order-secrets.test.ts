@@ -9,6 +9,7 @@ import {
   handOverLinkWanted,
   hasCapturedSignature,
   isHandOverEntitled,
+  LINK_SIGN_LIMIT_PER_HOUR,
   MEMBER_SIGN_LIMIT_PER_HOUR,
   orderIdForReturnToken,
   readOrderSecrets,
@@ -226,6 +227,10 @@ describe('isHandOverEntitled (who may collect a signature or print its QR)', () 
 
   it('the member path allows 60 hand-overs an hour per member (R4)', () => {
     expect(MEMBER_SIGN_LIMIT_PER_HOUR).toBe(60);
+  });
+
+  it('a link allows 10 attempts an hour per token (F3: never counted on the member path)', () => {
+    expect(LINK_SIGN_LIMIT_PER_HOUR).toBe(10);
   });
 });
 

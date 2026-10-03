@@ -18,6 +18,7 @@ import {
 } from '@/server/lib/order-handover-notify';
 import {
   isHandOverEntitled,
+  LINK_SIGN_LIMIT_PER_HOUR,
   MEMBER_SIGN_LIMIT_PER_HOUR,
   resolveSignatureToken,
   SIGNATURE_TOKEN_RE,
@@ -189,18 +190,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Rate-limit per token. Closed mode: a DB outage denies rather than
-  // unlocks unlimited submissions on a public endpoint. The bucket key is the
-  // token's sha256, never the token: rate_limit_buckets persists its keys, and
-  // a raw token there is a credential at rest (the 0330 posture).
-  const rl = await checkRateLimit(
-    `order-sign:${sha256Hex(parsed.data.token)}`,
-    10,
-    ONE_HOUR_MS,
-    'closed',
-  );
-  if (!rl.allowed) return rateLimited();
-
   let admin;
   try {
     admin = createAdminClient();
@@ -230,6 +219,22 @@ export async function POST(req: NextRequest) {
   //               or the order's assigned driver. Installed phones post the
   //               column with their bearer, so they keep working unchanged.
   // Every refusal is the same 404 an unknown token gets.
+  //
+  // The limits are applied AFTER the match, each keyed to whoever can reach
+  // it, so nobody can use up someone else's (desk check F3):
+  //   - a link (link or legacy_link) counts against its token: 10 an hour,
+  //     keyed by sha256(presented). Only a holder of that value (the printed
+  //     QR, the panel's link) can fill it. Closed mode: a DB outage denies
+  //     rather than unlocks unlimited submissions on a public endpoint. The
+  //     key is the hash, never the token: rate_limit_buckets persists its
+  //     keys, and a raw token there is a credential at rest (the 0330
+  //     posture).
+  //   - the member path never touches a per-token bucket. Every member reads
+  //     the digest, so a token-keyed bucket would let a viewer post it ten
+  //     times and lock every installed phone's Collect signature out of that
+  //     order for an hour. An entitled member counts against their OWN
+  //     bucket (60 an hour); a refusal counts against nothing and is the one
+  //     404, so no refusal changes what anyone else gets.
   const match = await resolveSignatureToken<SignOrderRow>(
     admin,
     parsed.data.token,
@@ -239,7 +244,15 @@ export async function POST(req: NextRequest) {
   const order = match.order;
   const via: SignatureTokenVia = match.via;
   let memberUserId: string | null = null;
-  if (via === 'member') {
+  if (via !== 'member') {
+    const rl = await checkRateLimit(
+      `order-sign:${sha256Hex(parsed.data.token)}`,
+      LINK_SIGN_LIMIT_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    );
+    if (!rl.allowed) return rateLimited();
+  } else {
     const ctx = await memberContextFor(req, order.organization_id);
     if (!ctx || ctx.organizationId !== order.organization_id || !isHandOverEntitled(ctx, order)) {
       return notFound();

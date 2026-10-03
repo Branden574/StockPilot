@@ -19,8 +19,10 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
  *
  * Every refusal is the same 404 body an unknown token gets (no oracle). An
  * entitled member whose MFA is unsatisfied gets 403 (R3). The member path is
- * limited to 60 an hour per member (R4); the per-token limit stays, keyed by
- * the token's hash. Every digital hand-over writes order.signature_collected.
+ * limited to 60 an hour per member (R4) and never counts against a per-token
+ * bucket; a link counts against its token's (10 an hour, keyed by the token's
+ * hash), applied once it matched as a link, so no member can use up another's
+ * (desk check F3). Every digital hand-over writes order.signature_collected.
  */
 
 vi.mock('next/cache', () => ({ revalidateTag: vi.fn() }));
@@ -335,18 +337,77 @@ describe('every refusal is byte-identical to an unknown token', () => {
 });
 
 describe('rate limits', () => {
-  it('the per-token limit still applies to every caller, keyed by the hash of the presented token (never the token)', async () => {
+  it('a link counts against its token, keyed by the hash of the presented token (never the token), 10 an hour, closed', async () => {
     await POST(request(RAW));
     const keys = checkRateLimit.mock.calls.map((c) => c[0]);
-    expect(keys).toContain(`order-sign:${sha256Hex(RAW)}`);
+    expect(keys).toEqual([`order-sign:${sha256Hex(RAW)}`]);
     expect(keys.join('|')).not.toContain(RAW);
     const perToken = checkRateLimit.mock.calls.find((c) => c[0] === `order-sign:${sha256Hex(RAW)}`)!;
     expect(perToken.slice(1)).toEqual([10, 60 * 60 * 1000, 'closed']);
 
     checkRateLimit.mockImplementation(async () => ({ allowed: false }));
+    world.status = 'staged_for_pickup';
     const res = await POST(request(RAW));
     expect(res.status).toBe(429);
     expect(confirmCalls()).toHaveLength(1); // only the first call reached it
+    expect(world.status).toBe('staged_for_pickup');
+  });
+
+  it('a legacy raw column counts against its own token the same way', async () => {
+    world.column = LEGACY;
+    world.side = null;
+    checkRateLimit.mockImplementation(async () => ({ allowed: false }));
+    const res = await POST(request(LEGACY));
+    expect(res.status).toBe(429);
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).toEqual([`order-sign:${sha256Hex(LEGACY)}`]);
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  it('an unknown token counts against no bucket and is the one 404', async () => {
+    const res = await POST(request('7a'.repeat(32)));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('F3: a viewer posting the digest again and again uses up nothing an entitled phone needs', async () => {
+    // A real limiter: a count per key, refused past the limit.
+    const counts = new Map<string, number>();
+    checkRateLimit.mockImplementation(async (key: string, max: number) => {
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { allowed: n <= max };
+    });
+    vi.mocked(withApiContext).mockResolvedValue(member({ role: 'viewer', userId: 'viewer-f3' }) as never);
+    for (let i = 0; i < 25; i += 1) {
+      const res = await POST(request(DIGEST, { authorization: 'Bearer viewer', 'x-organization-id': ORG }));
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    }
+    // No per-token bucket was ever touched on the member path (neither the
+    // digest's nor its hash's), and the viewer has no member bucket either.
+    expect([...counts.keys()]).toEqual([]);
+    // The installed phone of a manager still hands the order over.
+    vi.mocked(withApiContext).mockResolvedValue(member({ role: 'manager', userId: 'mgr-f3' }) as never);
+    const res = await POST(request(DIGEST, { authorization: 'Bearer manager', 'x-organization-id': ORG }));
+    expect(res.status).toBe(200);
+    expect(world.status).toBe('completed');
+    expect([...counts.keys()]).toEqual(['order-sign:member:mgr-f3']);
+  });
+
+  it("F3: an entitled member's own limit is theirs alone: another manager is unaffected", async () => {
+    const counts = new Map<string, number>();
+    checkRateLimit.mockImplementation(async (key: string, max: number) => {
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { allowed: n <= max };
+    });
+    counts.set('order-sign:member:mgr-a', 60);
+    vi.mocked(withApiContext).mockResolvedValue(member({ role: 'manager', userId: 'mgr-a' }) as never);
+    expect((await POST(request(DIGEST, { authorization: 'Bearer a' }))).status).toBe(429);
+    expect(world.status).toBe('staged_for_pickup');
+    vi.mocked(withApiContext).mockResolvedValue(member({ role: 'manager', userId: 'mgr-b' }) as never);
+    expect((await POST(request(DIGEST, { authorization: 'Bearer b' }))).status).toBe(200);
   });
 
   it('the member path is limited to 60 an hour per member, counted only once the member is entitled', async () => {
