@@ -1,3 +1,5 @@
+import { DELETED_REQUESTER_LABEL } from '@stockpilot/core';
+
 import type { OrderRequestSummary } from '@/server/services/order-requests';
 
 /**
@@ -15,5 +17,6 @@ export function summaryRequesterLabel(r: OrderRequestSummary): string {
   }
   if (r.requesterEmail) return r.requesterEmail;
   if (r.requesterUserId) return 'Team member';
-  return 'External requester';
+  // The requester deleted their account (0388): no id and no email on the row.
+  return r.requesterDeleted ? DELETED_REQUESTER_LABEL : 'External requester';
 }

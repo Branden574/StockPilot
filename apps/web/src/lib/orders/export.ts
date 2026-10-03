@@ -1,3 +1,5 @@
+import { DELETED_REQUESTER_LABEL } from '@stockpilot/core';
+
 import type {
   OrderExportRow,
   OrderRequestStatus,
@@ -152,7 +154,10 @@ export function orderExportCells(
     // Short, stable order number derived from the UUID — the order detail
     // page + emails refer to orders this way; full UUID would bloat the export.
     order_number: r.id.slice(0, 8).toUpperCase(),
-    requester: r.requesterName ?? r.requesterEmail ?? '(external)',
+    // A requester who deleted their account (0388) left no name or email on
+    // the row: say so rather than calling them external.
+    requester:
+      r.requesterName ?? r.requesterEmail ?? (r.requesterDeleted ? DELETED_REQUESTER_LABEL : '(external)'),
     requester_email: r.requesterEmail ?? '',
     charter_destination: r.charterLabel ?? r.warehouseName ?? '',
     warehouse: r.warehouseName ?? '',

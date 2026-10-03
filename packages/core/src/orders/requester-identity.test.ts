@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveRequesterIdentity } from './requester-identity';
+import { DELETED_REQUESTER_LABEL, isDeletedRequester, resolveRequesterIdentity } from './requester-identity';
 
 /**
  * The shared two-source fallback for who asked for an order.
@@ -52,5 +52,36 @@ describe('resolveRequesterIdentity', () => {
     const junk = { toString: () => 'nope' } as unknown as string;
     expect(resolveRequesterIdentity(junk, 'jane@cvsouth.org')).toBe('jane@cvsouth.org');
     expect(resolveRequesterIdentity(junk, junk)).toBeNull();
+  });
+});
+
+/**
+ * A deleted requester (migration 0388) is inferred from the row's own two
+ * columns, strictly: no requester id AND no requester email.
+ */
+describe('isDeletedRequester', () => {
+  it('no requester id and no email: the requester deleted their account', () => {
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: null })).toBe(true);
+  });
+
+  it('an empty-string email is not proof of a deletion (strict null)', () => {
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: '' })).toBe(false);
+  });
+
+  it('a requester id means a live team member', () => {
+    expect(isDeletedRequester({ requesterUserId: 'u-1', requesterEmail: null })).toBe(false);
+  });
+
+  it('an email with no requester id is an on-behalf or public-link order (or a row that already held it)', () => {
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: 'x@site.org' })).toBe(false);
+  });
+
+  it('an undefined field (a select that did not read the column) is never treated as deleted', () => {
+    expect(isDeletedRequester({ requesterUserId: undefined, requesterEmail: null })).toBe(false);
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: undefined })).toBe(false);
+  });
+
+  it('the label is plain words', () => {
+    expect(DELETED_REQUESTER_LABEL).toBe('Deleted user');
   });
 });

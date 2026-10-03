@@ -137,3 +137,50 @@ describe.each([
     }
   });
 });
+
+/**
+ * Migration 0388: an order whose requester deleted their account has no
+ * requester id and no email on the row. The assistant names that requester
+ * "Deleted user": our own words, so fenced as data but never recorded as
+ * stranger taint (which would block a manager quoting it in a write).
+ */
+describe('listOrderRequests: a requester who deleted their account', () => {
+  const summary = (overrides: Record<string, unknown>) => ({
+    id: 'ord-1',
+    status: 'pending_approval',
+    requesterUserId: null,
+    requesterEmail: null,
+    requesterName: null,
+    requesterOrgLabel: null,
+    requesterDeleted: false,
+    warehouseName: 'Main WH',
+    lineCount: 1,
+    totalQuantity: 2,
+    createdAt: '2026-10-01T10:00:00.000Z',
+    approvedAt: null,
+    ...overrides,
+  });
+
+  it('names a deleted requester "Deleted user" as a data tag, not stranger taint', async () => {
+    const { createUntrustedOriginRegistry, runWithUntrustedOrigins } = await import('./untrusted');
+    orderListMock.mockResolvedValueOnce([summary({ requesterDeleted: true })]);
+    const registry = createUntrustedOriginRegistry();
+    const res = (await runWithUntrustedOrigins(registry, () =>
+      TOOL_CATALOG.listOrderRequests!.execute({}, ctx),
+    )) as { requests: Array<{ requesterDisplay: unknown }> };
+    expect(res.requests[0]!.requesterDisplay).toBe('<data>Deleted user</data>');
+    expect(registry.phrases.size).toBe(0);
+    expect(registry.shingles.size).toBe(0);
+  });
+
+  it('an external requester with no name is still "External requester", tainted as before', async () => {
+    const { createUntrustedOriginRegistry, runWithUntrustedOrigins } = await import('./untrusted');
+    orderListMock.mockResolvedValueOnce([summary({ requesterEmail: 'x@site.org' })]);
+    const registry = createUntrustedOriginRegistry();
+    const res = (await runWithUntrustedOrigins(registry, () =>
+      TOOL_CATALOG.listOrderRequests!.execute({}, ctx),
+    )) as { requests: Array<{ requesterDisplay: unknown }> };
+    expect(res.requests[0]!.requesterDisplay).toBe('<data>External requester</data>');
+    expect(registry.phrases.size).toBeGreaterThan(0);
+  });
+});
