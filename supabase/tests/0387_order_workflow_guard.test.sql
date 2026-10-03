@@ -63,7 +63,8 @@
 --         SECURITY INVOKER function updates order_requests (UPDATE or
 --         MERGE); every SECURITY DEFINER updater is pinned by
 --         schema-qualified name and owner (15, all public, all owned by
---         postgres), and so is every SECURITY DEFINER function that inserts,
+--         postgres; 16 since 0389 added generate_order_packing_slips), and
+--         so is every SECURITY DEFINER function that inserts,
 --         merges or deletes order rows (AL9d: today only the expired
 --         confirmation cleanup), whether or not an API role holds EXECUTE: a
 --         trigger function fires without EXECUTE, and a DEFINER body runs as
@@ -718,9 +719,16 @@ select is(
   'public.approve_order_request:postgres,public.approve_partial:postgres,public.assign_picking:postgres,'
   'public.cancel_order_request:postgres,public.claim_picking:postgres,public.close_partial:postgres,'
   'public.complete_picking:postgres,public.confirm_order_signature:postgres,public.confirm_physical_signature:postgres,'
-  'public.confirm_public_order_request:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
+  'public.confirm_public_order_request:postgres,public.generate_order_packing_slips:postgres,'
+  'public.partial_pick_line:postgres,public.release_picking:postgres,'
   'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres',
-  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 15, owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
+  -- Re-pinned by 0389 (was the 15 above without generate_order_packing_slips):
+  -- the packing-slip mint moved off the user client into a DEFINER body that
+  -- gates in itself (signed in, member, orders module, orders:approve,
+  -- warehouse write) and writes only picking_complete/packing_slip_generated
+  -- -> packing_slip_generated, an edge the guard allows API roles anyway;
+  -- 0389_order_secrets_expand.test.sql G1-G8 prove its gates.
+  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 16, owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
 select is(
   (select coalesce(string_agg(f.fn || ':' || f.owner, ',' order by f.fn collate "C"), '')
      from fn_scope f
