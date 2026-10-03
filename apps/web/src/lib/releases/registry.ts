@@ -61,7 +61,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Until now only a second count could close one of these, so a number already checked on the floor stayed open, and acknowledging it did not close it.',
         howItAffectsYou:
-          'Confirming closes the exception without a second count, so confirm only a number you are sure of. Recount is still there when you are not. Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it. Confirming needs a connection. If a later count does not match the stock on record, a new exception opens.',
+          'Confirming closes the exception without a second count, so confirm only a number you are sure of. If you are not sure, have it counted again; a manager can start that with Recount. Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it. Confirming needs a connection. If a later count does not match the stock on record, a new exception opens.',
         whatToDo:
           'Open an exception under Count did not match the stock on record. If the counted number is right, choose Confirm this count.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },

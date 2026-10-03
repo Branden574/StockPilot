@@ -1629,8 +1629,18 @@ describe('count differences release 2 (confirm this count) is held as a draft', 
     expect(entry!.howItAffectsYou).toContain(
       'Confirm is not offered once the stock on record has changed since the count, while a recount linked to this exception is in progress, or while another count in progress has recorded a different number for the item; the page then says what clears it.',
     );
-    // Not every reader can start a recount: never "use Recount then".
+    // Not every reader can start a recount (staff, the counters this entry is
+    // new for, never can: Recount needs a manager who can assign counts), so
+    // never "use Recount then" or "Recount is still there": every sentence
+    // that names Recount says a manager starts it, as the page does.
     expect(text).not.toMatch(/use Recount/);
+    expect(text).not.toMatch(/Recount is still there/);
+    const recountSentences = text.split(/(?<=\.)\s+/).filter((s) => /\bRecount\b/.test(s));
+    expect(recountSentences.length).toBeGreaterThan(0);
+    for (const s of recountSentences) expect(s, s).toMatch(/\ba manager\b/);
+    expect(entry!.howItAffectsYou).toContain(
+      'If you are not sure, have it counted again; a manager can start that with Recount.',
+    );
     expect(entry!.howItAffectsYou).toContain('Confirming needs a connection.');
     // The filter is web only; the phone's list shows the role in each chip.
     expect(entry!.whatChanged).toContain('On the web, Closed without a second count on the Resolved tab');
