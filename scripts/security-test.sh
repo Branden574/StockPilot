@@ -483,8 +483,11 @@ PGTAP_TESTS=(
   # close partial, both signatures, the picker claims, the needed-by
   # revision), the admin client and the approved_by FK's SET NULL on account
   # deletion (run as the table owner even when the deleting session is
-  # authenticated) still work, and the 13 DEFINER writers an API role may
-  # execute are pinned by name. The two-session proofs are
+  # authenticated) still work. The writer census scans every schema: only
+  # the two approval bodies assign approval values, no SECURITY INVOKER
+  # function updates the table, and the 15 DEFINER writers (whoever may
+  # execute them; a trigger function needs no EXECUTE) are pinned by name and
+  # owner. The two-session proofs are
   # scripts/db-concurrency/0387_workflow_guard_race.sh.
   supabase/tests/0387_order_workflow_guard.test.sql
 

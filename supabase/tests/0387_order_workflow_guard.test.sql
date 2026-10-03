@@ -47,11 +47,15 @@
 --         (service_role), partial_pick_line, claim_picking (picker columns,
 --         now revoked from authenticated) and revise_order_needed_by
 --         (needed_by, now revoked);
---    AL9  the writer census: only the two approval bodies assign approval
---         values; no SECURITY INVOKER function updates order_requests; the
---         SECURITY DEFINER writers executable by authenticated or anon are
---         exactly 13, by name (a new one fails here and is reviewed for its
---         own gate);
+--    AL9  the writer census, over every schema but pg_catalog and
+--         information_schema (extension members and session temp schemas
+--         left out): only the two approval bodies assign approval values; no
+--         SECURITY INVOKER function updates order_requests; every SECURITY
+--         DEFINER writer is pinned by schema-qualified name and owner (15,
+--         all public, all owned by postgres), whether or not an API role
+--         holds EXECUTE: a trigger function fires without EXECUTE, so a new
+--         DEFINER writer in any schema fails here and is reviewed for its
+--         own gate;
 --    AL10 posture: the guard (body md5, INVOKER, search_path, owner, no
 --         EXECUTE for PUBLIC, anon or authenticated), its trigger, the order
 --         of the BEFORE UPDATE triggers, the trigger census, the comments, and
@@ -615,31 +619,42 @@ select is(
   'true|true',
   'AL8k: revise_order_needed_by (DEFINER, a staff approver) still changes needed_by (revoked from authenticated under O5)');
 
+-- AL9 scans every schema except pg_catalog and information_schema. Left
+-- out: extension members (pgTAP and the other extensions' own functions, not
+-- ours to review) and the session temp schemas (pg_temp_N, pg_toast_temp_N:
+-- this suite's own helpers, one of which builds A7's UPDATE text, and nothing
+-- another session or an API role can reach). The census is a temp view so
+-- the three assertions read one definition.
+create temp view writer_census as
+select n.nspname || '.' || p.proname as fn, p.prosecdef, pg_get_userbyid(p.proowner) as owner, p.prosrc
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname not in ('pg_catalog', 'information_schema')
+   and n.nspname !~ '^pg_(toast_)?temp_'
+   and not exists (select 1 from pg_depend d
+                    where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+   and p.prosrc ~* $re$update\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$;
 select is(
-  (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname || '.' || p.proname collate "C"), '')
-     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname in ('public', 'ledger', 'private')
-      and p.prosrc ~* $re$update\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$
-      and p.prosrc ~* $re$status\s*=\s*'approved'|approved_by\s*=|approved_at\s*=$re$),
+  (select coalesce(string_agg(w.fn, ',' order by w.fn collate "C"), '')
+     from writer_census w
+    where w.prosrc ~* $re$status\s*=\s*'approved'|approved_by\s*=|approved_at\s*=$re$),
   'public.approve_order_request,public.approve_partial',
-  'AL9a: only approve_order_request and approve_partial assign status approved, approved_by or approved_at in a function that updates order_requests');
+  'AL9a: in every schema, only approve_order_request and approve_partial assign status approved, approved_by or approved_at in a function that updates order_requests');
 select is(
-  (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname || '.' || p.proname collate "C"), '')
-     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname in ('public', 'ledger', 'private') and not p.prosecdef
-      and p.prosrc ~* $re$update\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$),
+  (select coalesce(string_agg(w.fn, ',' order by w.fn collate "C"), '')
+     from writer_census w
+    where not w.prosecdef),
   '',
-  'AL9b: no SECURITY INVOKER function updates order_requests (schema prefix optional), so no API-role writer needs a flag; a new one fails here');
+  'AL9b: in every schema, no SECURITY INVOKER function updates order_requests (schema prefix optional), so no API-role writer needs a flag; a new one fails here');
 select is(
-  (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname || '.' || p.proname collate "C"), '')
-     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname in ('public', 'ledger', 'private') and p.prosecdef
-      and p.prosrc ~* $re$update\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$
-      and (has_function_privilege('authenticated', p.oid, 'EXECUTE') or has_function_privilege('anon', p.oid, 'EXECUTE'))),
-  'public.approve_order_request,public.approve_partial,public.assign_picking,public.cancel_order_request,public.claim_picking,'
-  'public.close_partial,public.complete_picking,public.confirm_physical_signature,public.partial_pick_line,public.release_picking,'
-  'public.reopen_picking,public.resume_fulfillment,public.revise_order_needed_by',
-  'AL9c: the SECURITY DEFINER writers of order_requests an API role may execute are exactly these 13 (each bypasses the guard by design: a new one fails here and is reviewed for its own gate)');
+  (select coalesce(string_agg(w.fn || ':' || w.owner, ',' order by w.fn collate "C"), '')
+     from writer_census w
+    where w.prosecdef),
+  'public.approve_order_request:postgres,public.approve_partial:postgres,public.assign_picking:postgres,'
+  'public.cancel_order_request:postgres,public.claim_picking:postgres,public.close_partial:postgres,'
+  'public.complete_picking:postgres,public.confirm_order_signature:postgres,public.confirm_physical_signature:postgres,'
+  'public.confirm_public_order_request:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
+  'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres',
+  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 15, owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
