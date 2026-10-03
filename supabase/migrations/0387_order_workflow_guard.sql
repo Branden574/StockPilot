@@ -47,7 +47,11 @@
 --     (updated_at).
 --   - FK actions: order_requests_approved_by_fkey ON DELETE SET NULL nulls
 --     approved_by when an approver's account is deleted (web, phone and
---     platform deletion). RI actions run as the table owner (postgres).
+--     platform deletion). RI actions run as the table owner (postgres), so
+--     the guard never refuses one. (Older than 0387 and unchanged by it:
+--     deleting the account of a member who placed an internal order with no
+--     requester_email still fails on order_requests_identity_chk when the
+--     requester_user_id FK sets the requester to null.)
 --   - The phone never writes order_requests (every bundle in history); its
 --     order actions go through /api/v1, the service and the RPCs.
 --
@@ -67,8 +71,17 @@
 --   make reports status_through_rpc_only (42501).
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
--- 42501 (PostgREST answers 403) with a stable hint: approval_through_rpc_only
--- or status_through_rpc_only. Never 40001 or 40P01 (PostgREST retries those).
+-- The guard's own refusals: 42501 (PostgREST answers 403) with a stable hint,
+-- approval_through_rpc_only or status_through_rpc_only. The column revokes
+-- refuse a write naming a revoked column before any row is read: 42501
+-- "permission denied for table order_requests" (the hint, if any, is the
+-- platform's, not ours). Unchanged by 0387: an illegal edge is P0001
+-- invalid_status_transition, the insert guard and the policies' WITH CHECK
+-- refuse with 42501 and no hint, and a row a policy's USING hides (an UPDATE
+-- by a viewer, a requester or another organization; any DELETE, whose policy
+-- is false) is simply not touched: no error (PostgREST 200 or 204).
+-- Compare refusals by sqlstate only. Never 40001 or 40P01 (PostgREST retries
+-- those).
 --
 -- ── COLUMN REVOKES ────────────────────────────────────────────────────────
 -- authenticated holds no table-level UPDATE since 0384, so column revokes take
