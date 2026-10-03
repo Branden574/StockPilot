@@ -20,8 +20,9 @@
 -- RPCs own: cancel (skips the hold release and the restock), picking complete
 -- (skips the stock draw), completed or backordered (skips the hand-over
 -- accounting and the signature), resume, reopen and close partial. And it
--- could forge or erase the approval, completion and signature stamps. Nobody
--- has used it: all 90 L4L approvals carry their audit row and their holds.
+-- could forge or erase the approval, completion and signature stamps. At
+-- audit time (2026-10-02) every L4L approval carried its audit row and its
+-- holds; no use of the raw approval was found.
 --
 -- ── WHO WRITES ORDER STATUS AND THE GUARDED COLUMNS (census on 853d6def) ──
 --   - approve_order_request, approve_partial: the only writers of approved,
