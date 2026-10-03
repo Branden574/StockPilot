@@ -8,6 +8,7 @@ import {
   CONFIRM_COUNT_LABEL,
   confirmCountDialogCopy,
   CONFIRMED_ONLY_FILTER_LABEL,
+  DELETED_REQUESTER_LABEL,
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   describeShortPickLines,
@@ -1836,6 +1837,84 @@ describe('count differences release 2 (confirm this count) is published', () => 
     expect(r.summary).toContain('Acknowledging still leaves it open.');
     expect(all).toContain('stock on record');
     expect(all).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate|undo/i);
+  });
+});
+
+/**
+ * Account deletion for people who placed orders (migration 0388, security
+ * slice A2) is held as a DRAFT until 0388 is pushed and verified, the web
+ * deploy is live and phones have the update that names the requester
+ * "Deleted user". Pinned by id, never by index. The follow-up that publishes
+ * it sets 'published' and the real publishedAt, re-reads its words against
+ * what shipped, and flips the first pin here.
+ */
+describe('account deletion for people who placed orders is held as a draft', () => {
+  const ID = 'account-deletion-orders-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('is dated after every published release, so publishing it makes it newer than all of them', () => {
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const others = RELEASES.filter((r) => r.id !== ID && r.status === 'published');
+    const list = buildReleaseList([published(), ...others], everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+  });
+
+  it('is a fix to Account for everyone, with no link, and every reader is told once it is published', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual(['account-deletion-orders']);
+    const [entry] = release().entries;
+    expect(entry!.category).toBe('fixed');
+    expect(entry!.area).toBe('Account');
+    expect(entry!.link).toBeUndefined();
+    expect(entry!.audience).toBeUndefined();
+    for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
+      const seen = visibleReleases([published()], { role, permissions: [], enabledModules: [] });
+      expect(seen.map((r) => r.id), role).toEqual([ID]);
+    }
+  });
+
+  it('says what shipped: the label, the kept records, and nothing it does not do', () => {
+    const r = release();
+    const [entry] = r.entries;
+    const text = [
+      r.title,
+      r.summary,
+      entry!.whatChanged,
+      entry!.whyItMatters,
+      entry!.howItAffectsYou,
+      entry!.whatToDo,
+    ].join(' ');
+    // The label the web and the phone render (core DELETED_REQUESTER_LABEL).
+    expect(r.summary).toContain(`“${DELETED_REQUESTER_LABEL}” as the requester`);
+    expect(entry!.whatChanged).toContain(
+      `“${DELETED_REQUESTER_LABEL}” as the requester on the web and the phone`,
+    );
+    // A blocked account is told, and nothing changes.
+    expect(entry!.whatChanged).toContain('the app now says so and changes nothing');
+    expect(entry!.whatToDo).toBe('No action needed.');
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|instantly|email(ed)? you|notif/i);
   });
 });
 
