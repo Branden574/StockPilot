@@ -2798,8 +2798,19 @@ describe('order secrets slice B (a digital signature on the order timeline) is h
 
   it('sits among the drafts above every published release, dated after every published release', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
     expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
     for (const r of RELEASES.filter((x) => x.status !== 'draft')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('keeps every release: it sits above the account deletion draft (0388, published first), dated after every release below it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    const a2 = RELEASES.findIndex((r) => r.id === 'account-deletion-orders-2026-10');
+    expect(a2).toBeGreaterThan(at);
+    expect(RELEASES[a2]?.status).toBe('draft');
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -2814,5 +2825,10 @@ describe('order secrets slice B (a digital signature on the order timeline) is h
     // The phone's View signature follows the web's audience.
     expect(text).toContain('order approvers and the order');
     expect(text).not.toMatch(/\bbooks?\b|token|hash|secret|%/i);
+  });
+
+  it('promises no collector name: the signature page (the web panel, a printed QR) records none (desk check F4)', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/who collected|name of the person|collected by|signed in/i);
   });
 });
