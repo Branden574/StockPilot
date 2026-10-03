@@ -61,6 +61,20 @@ now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 # An order's status / approver / approval time, and its active holds.
 state()   { q "select status || '/' || coalesce(approved_by::text, 'null') || '/' || coalesce(approved_at::text, 'null') from public.order_requests where id = '$1'"; }
 held_for() { q "select coalesce(sum(quantity), 0)::int from public.stock_reservations where order_request_id = '$1' and released_at is null"; }
+# wait_sleeping <application_name>: wait (up to about 20 s) until session A's
+# backend sits in its pg_sleep, i.e. it has taken the order-row lock and holds
+# it, before B starts. Polling pg_stat_activity instead of a fixed sleep means
+# a slow container start cannot make B begin before A holds the lock.
+wait_sleeping() {
+  local _
+  for _ in $(seq 1 100); do
+    if [ "$(q "select count(*) from pg_stat_activity where application_name = '$1' and wait_event = 'PgSleep'")" = "1" ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
 
 cleanup() {
   if ! "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
@@ -118,12 +132,13 @@ then
 fi
 
 # approve_vs_patch <tag> <order> <B's SET list>: A (MGR) approves the order
-# through the RPC and holds its transaction 3 s; at 1 s, B (MGR2) sends a raw
-# PATCH of the order with the given SET list, as authenticated. Records how
-# long B took.
+# through the RPC and holds its transaction 3 s; once A sits in its pg_sleep
+# (holding the row), B (MGR2) sends a raw PATCH of the order with the given
+# SET list, as authenticated. Records how long B took.
 approve_vs_patch() {
   local tag="$1" o="$2" set_list="$3"
   ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$tag.A.out" 2>&1 <<SQL
+set application_name to '0387-race-$tag-A';
 begin;
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
@@ -134,7 +149,7 @@ commit;
 SQL
   ) &
   local pid=$!
-  sleep 1
+  wait_sleeping "0387-race-$tag-A" || bad "$tag: session A never reached its pg_sleep (it did not take the row lock)"
   local t0; t0=$(now_ms)
   "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$tag.B.out" 2>&1 <<SQL
 begin;
@@ -187,6 +202,7 @@ check "2e: the holds are A's (5)" "$(held_for "$O2")" "5"
 # ═══ 3. A raw deny first, the approval meanwhile ══════════════════════════
 echo "== 3. a raw deny (allowlisted edge) holds the order; approve_order_request meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/deny.A.out" 2>&1 <<SQL
+set application_name to '0387-race-deny-A';
 begin;
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
@@ -198,7 +214,7 @@ commit;
 SQL
 ) &
 PID=$!
-sleep 1
+wait_sleeping "0387-race-deny-A" || bad "deny: session A never reached its pg_sleep (it did not take the row lock)"
 T0=$(now_ms)
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/deny.B.out" 2>&1 <<SQL
 begin;
