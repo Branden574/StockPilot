@@ -1060,7 +1060,13 @@ select is(
   -- against still holds. Computed on the local stack after 0387 (equal to
   -- the value predicted from production's own column_privileges rows minus
   -- exactly the rows 0387's revokes remove).
-  '0384 column grants (order_requests, schedule_events)|34395ad1d1d38ebf688f8c0b9c6f150c|261\n'
+  -- Re-pinned by 0388 (was 34395ad1d1d38ebf688f8c0b9c6f150c|261): 0388
+  -- replaces authenticated's table INSERT on order_requests with INSERT on
+  -- the 13 columns create_order_request names (45 INSERT rows fewer) and
+  -- adds requester_deleted_at, which authenticated may only SELECT (one
+  -- SELECT row more). F2-5's function inserts no order, so what it was
+  -- proven against still holds. Computed on the local stack after 0388.
+  '0384 column grants (order_requests, schedule_events)|963d3a00efec2f702ff628845abd4056|217\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
   'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'

@@ -16,7 +16,12 @@
 --    A5  clearing approved_by, proven the same way;
 --    A6  upserts: INSERT .. ON CONFLICT DO UPDATE to approved (the guard),
 --        one carrying approved_by (the column privilege), and approved back
---        to pending_approval (the transition trigger, which sorts first);
+--        to pending_approval (the transition trigger, which sorts first).
+--        Since 0388 authenticated may not INSERT id, so each upsert is
+--        refused by that privilege first; A6g, A6bg and A6cg grant the
+--        INSERT back inside the undone subtransaction and prove the update
+--        guard, the approved_by UPDATE privilege and the transition trigger
+--        still refuse behind it;
 --    A7  every one of the 30 edges the transition trigger allows, each on its
 --        own fixture order, as a manager with RETURNING *: the six
 --        allowlisted edges go through (A-L4), the other 24 are refused, one
@@ -25,8 +30,9 @@
 --        columns, is 42501 permission denied;
 --    A9  anon holds no privilege on order_requests (and is refused reading
 --        or writing it); authenticated holds no TRUNCATE, REFERENCES,
---        TRIGGER or MAINTAIN, keeps SELECT, INSERT and DELETE, and may
---        UPDATE exactly 19 columns;
+--        TRIGGER or MAINTAIN, keeps SELECT and DELETE (and, since 0388,
+--        INSERT on 13 columns only, not table INSERT), and may UPDATE
+--        exactly 19 columns;
 --    A10 the guard raises 42501 only, never 40001 or 40P01.
 -- AL. Legitimate paths:
 --    AL1  approve_order_request (a manager) approves, stamps the approver and
@@ -80,7 +86,7 @@
 
 begin;
 
-select plan(85);
+select plan(88);
 
 \set orgA   '\'03870000-0000-0000-0000-00000000000a\''
 \set orgZ   '\'03870000-0000-0000-0000-00000000000b\''
@@ -436,13 +442,26 @@ select is(
   'approved/' || :mgr || '/true|false,false',
   'A5c: after A4 and A5 the approver is unchanged and none of the test grants survived its subtransaction');
 
+-- Re-pinned by 0388 (was '42501:status_through_rpc_only:order_status_through_rpc_only'):
+-- 0388 leaves authenticated no INSERT on id, and Postgres checks column
+-- privileges before any trigger, so the upsert stops there. A6g grants the
+-- INSERT on id back (inside the undone subtransaction) and keeps the update
+-- guard's upsert coverage.
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
                             values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup')
                             on conflict (id) do update set status = 'approved'$q$, :oA6a, :orgA, :whA, :mgr)),
+  '42501:-:permission denied for table order_requests',
+  'A6: an upsert (INSERT .. ON CONFLICT DO UPDATE SET status = approved) naming id is refused by the column privilege (0388: authenticated may not INSERT id)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
+                            values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup')
+                            on conflict (id) do update set status = 'approved'$q$, :oA6a, :orgA, :whA, :mgr),
+                  'grant insert (id) on table public.order_requests to authenticated'),
   '42501:status_through_rpc_only:order_status_through_rpc_only',
-  'A6: an upsert (INSERT .. ON CONFLICT DO UPDATE SET status = approved) on a pending order passes the insert guard and is refused by the update guard');
+  'A6g: with INSERT (id) granted back, the same upsert passes the insert guard and is refused by the update guard');
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, approved_by)
@@ -450,13 +469,36 @@ select is(
                             on conflict (id) do update set approved_by = excluded.approved_by$q$, :oApr, :orgA, :whA, :mgr, :stfAp)),
   '42501:-:permission denied for table order_requests',
   'A6b: an upsert that sets approved_by on conflict is refused by the column privilege');
+-- Added by 0388: A6b above now stops at the INSERT privilege on id (and on
+-- approved_by) before the approved_by UPDATE privilege it was written to
+-- prove. With INSERT (id, approved_by) granted back, what refuses it is the
+-- UPDATE privilege on approved_by that 0387 revoked (the message is the same).
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, approved_by)
+                            values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup', %L)
+                            on conflict (id) do update set approved_by = excluded.approved_by$q$, :oApr, :orgA, :whA, :mgr, :stfAp),
+                  'grant insert (id, approved_by) on table public.order_requests to authenticated'),
+  '42501:-:permission denied for table order_requests',
+  'A6bg: with INSERT (id, approved_by) granted back, the upsert that sets approved_by on conflict is still refused, by the approved_by UPDATE privilege');
+-- Re-pinned by 0388 (was 'P0001:-:invalid_status_transition'): refused by
+-- the INSERT privilege on id first; A6cg keeps the transition trigger's
+-- coverage.
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
                             values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup')
                             on conflict (id) do update set status = excluded.status$q$, :oA6c, :orgA, :whA, :mgr)),
+  '42501:-:permission denied for table order_requests',
+  'A6c: an upsert moving an approved order back to pending_approval, naming id, is refused by the column privilege (0388)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
+                            values (%L, %L, %L, 'pending_approval', 'internal', %L, 'pickup')
+                            on conflict (id) do update set status = excluded.status$q$, :oA6c, :orgA, :whA, :mgr),
+                  'grant insert (id) on table public.order_requests to authenticated'),
   'P0001:-:invalid_status_transition',
-  'A6c: an upsert moving an approved order back to pending_approval is refused by the transition trigger, which fires before the guard');
+  'A6cg: with INSERT (id) granted back, the same upsert is refused by the transition trigger, which fires before the guard');
 
 select * from pg_temp.edge_tests(:mgr);
 select is(
@@ -507,8 +549,10 @@ select is(
   (select string_agg(p || '=' || has_table_privilege('authenticated', 'public.order_requests', p)::text, ',' order by p collate "C")
      from unnest(array['DELETE', 'INSERT', 'MAINTAIN', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE']) p)
   || '|REFERENCES(any column)=' || has_any_column_privilege('authenticated', 'public.order_requests', 'REFERENCES')::text,
-  'DELETE=true,INSERT=true,MAINTAIN=false,REFERENCES=false,SELECT=true,TRIGGER=false,TRUNCATE=false,UPDATE=false|REFERENCES(any column)=false',
-  'A9c: authenticated holds no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN and no table UPDATE, and keeps table SELECT, INSERT and DELETE');
+  -- Re-pinned by 0388 (was INSERT=true): 0388 replaces table INSERT with
+  -- INSERT on the 13 columns create_order_request names (0388 N1).
+  'DELETE=true,INSERT=false,MAINTAIN=false,REFERENCES=false,SELECT=true,TRIGGER=false,TRUNCATE=false,UPDATE=false|REFERENCES(any column)=false',
+  'A9c: authenticated holds no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN and no table UPDATE or INSERT (0388: INSERT on 13 columns), and keeps table SELECT and DELETE');
 select is(
   (select string_agg(a.attname, ',' order by a.attname)
      from pg_attribute a
@@ -702,14 +746,21 @@ select is(
      from pg_trigger t
     where t.tgrelid = 'public.order_requests'::regclass and not t.tgisinternal
       and (t.tgtype & 1) = 1 and (t.tgtype & 2) = 2 and (t.tgtype & 16) = 16),
-  array['order_requests_set_updated_at', 'trg_order_requests_validate_transition', 'trg_order_requests_workflow_guard'],
+  -- Re-pinned by 0388 (was the three without trg_order_requests_requester_deleted):
+  -- 0388's marker trigger (UPDATE OF requester_user_id) sorts second; it
+  -- only stamps requester_deleted_at and depends on no other trigger.
+  array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_validate_transition',
+        'trg_order_requests_workflow_guard'],
   'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard');
 select is(
   (select md5(string_agg(t.tgname::text || '|' || t.tgfoid::regproc::text || '|' || t.tgenabled::text || '|' || t.tgtype::text, E'\n' order by t.tgname))
           || '|' || count(*)
      from pg_trigger t where t.tgrelid = 'public.order_requests'::regclass and not t.tgisinternal),
-  'dc435bd583fc39db07353311079239b4|6',
-  'AL10d: order_requests carries exactly its five earlier triggers plus the guard (census e6ea64a2...|5 plus one row)');
+  -- Re-pinned by 0388 (was dc435bd583fc39db07353311079239b4|6): plus
+  -- trg_order_requests_requester_deleted (tgtype 19). Computed on the local
+  -- stack after 0388.
+  'f92aca15c9e9f07893e77259e81cb7e9|7',
+  'AL10d: order_requests carries exactly its five earlier triggers, the guard and 0388''s marker trigger (census e6ea64a2...|5 plus two rows)');
 select is(
   coalesce(obj_description('public.tg_order_requests_workflow_guard()'::regprocedure, 'pg_proc') ~ '0387', false)::text || ','
   || coalesce(col_description('public.order_requests'::regclass,

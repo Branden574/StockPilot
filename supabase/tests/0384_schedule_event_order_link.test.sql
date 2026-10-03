@@ -53,8 +53,10 @@
 --    policies are exactly 0384's; both server-owned columns say so in their
 --    comments. On order_requests authenticated may UPDATE every column but
 --    organization_id (computed the same way; re-pinned by 0387, which also
---    withholds 38 more columns), holds no table-level UPDATE and
---    keeps table INSERT and SELECT; service_role keeps its table grants;
+--    withholds 38 more columns, and by 0388, whose requester_deleted_at
+--    authenticated may not update), holds no table-level UPDATE, keeps
+--    table SELECT and (since 0388) holds INSERT only on the 13 columns
+--    create_order_request names; service_role keeps its table grants;
 --    organization_id says so in its comment.
 --
 -- Roles: fixtures as the test superuser; the attacks and the Schedule page as
@@ -535,6 +537,10 @@ select is(
 -- created_at and warehouse_id (owner Q4) and delivery_charter_id (owner Q7)
 -- stay updatable. 0387's pgTAP A8 writes each of the 38 and A9d pins the 19
 -- that remain.
+-- Re-pinned by 0388 (was the same list without requester_deleted_at): 0388
+-- adds order_requests.requester_deleted_at, stamped only by its trigger when
+-- the user_profiles FK nulls the requester; authenticated may read it and
+-- may not update it, so it joins this list (sorted by name).
 select is(
   (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
      from pg_attribute a
@@ -543,17 +549,22 @@ select is(
   'approved_at,approved_by,assigned_picker_id,cancelled_at,cancelled_by,completed_at,completed_by,'
   'confirmation_token_expires_at,confirmation_token_hash,customer_id,delivered_at,fulfillment_type,id,needed_by,notes,'
   'order_number,organization_id,packaging_at,picking_claimed_at,picking_claimed_by,picking_completed_at,'
-  'picking_completed_by,pickup_location_notes,public_track_token,ready_at,requester_email,requester_name,'
+  'picking_completed_by,pickup_location_notes,public_track_token,ready_at,requester_deleted_at,requester_email,requester_name,'
   'requester_org_label,requester_phone,requester_user_id,return_prompt_sent_at,return_token,signature_data_url,'
   'signature_method,signed_at,signed_by_email,signed_by_name,source,updated_at',
-  'GO1: authenticated may UPDATE every order_requests column but organization_id and the 38 columns 0387 revokes (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
+  'GO1: authenticated may UPDATE every order_requests column but organization_id, the 38 columns 0387 revokes and 0388''s requester_deleted_at (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
+-- Re-pinned by 0388 (was INSERT=true): 0388 replaces authenticated's
+-- table-level INSERT on order_requests with INSERT on the 13 columns
+-- create_order_request names (an explicit order_number from any member made
+-- every later order in the organization fail 22003). 0388's pgTAP N1 pins the
+-- 13 and N4 refuses each other column.
 select is(
   'organization_id=' || has_column_privilege('authenticated', 'public.order_requests', 'organization_id', 'UPDATE')::text
   || ',' ||
   (select string_agg(p || '=' || has_table_privilege('authenticated', 'public.order_requests', p)::text, ',' order by p)
      from unnest(array['INSERT', 'SELECT', 'UPDATE']) p),
-  'organization_id=false,INSERT=true,SELECT=true,UPDATE=false',
-  'GO2: authenticated may not UPDATE an order''s organization_id, holds no table-level UPDATE, and keeps table INSERT and SELECT');
+  'organization_id=false,INSERT=false,SELECT=true,UPDATE=false',
+  'GO2: authenticated may not UPDATE an order''s organization_id, holds no table-level UPDATE or INSERT (0388: INSERT on 13 columns only), and keeps table SELECT');
 select is(
   (select string_agg(p || '=' || has_table_privilege('service_role', 'public.order_requests', p)::text, ',' order by p)
      from unnest(array['DELETE', 'INSERT', 'SELECT', 'UPDATE']) p),
