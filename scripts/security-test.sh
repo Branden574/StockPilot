@@ -488,7 +488,9 @@ PGTAP_TESTS=(
   # function updates the table, and the 15 DEFINER writers (whoever may
   # execute them; a trigger function needs no EXECUTE) are pinned by name and
   # owner. The two-session proofs are
-  # scripts/db-concurrency/0387_workflow_guard_race.sh.
+  # scripts/db-concurrency/0387_workflow_guard_race.sh; the migration's lock
+  # footprint (no lock that stops an order read while the push runs) is
+  # scripts/db-concurrency/0387_migration_lock_footprint.sh.
   supabase/tests/0387_order_workflow_guard.test.sql
 
   # Storage and attachment exposure.

@@ -81,9 +81,17 @@
 -- staging, delivery-assignment and in-transit stamps, signature_token and its
 -- expiry, created_at, warehouse_id and delivery_charter_id.
 --
--- Lock footprint: CREATE TRIGGER takes SHARE ROW EXCLUSIVE on order_requests
--- and each REVOKE a short catalog lock; lock_timeout 5s fails the push fast
--- instead of queueing behind a long transaction. This migration writes no row.
+-- Lock footprint (read from pg_locks on the local stack; the push holds each
+-- lock to the end of the file): CREATE OR REPLACE TRIGGER takes SHARE ROW
+-- EXCLUSIVE on order_requests and COMMENT ON COLUMN SHARE UPDATE EXCLUSIVE;
+-- the REVOKEs and CREATE OR REPLACE FUNCTION take no lock on the table. None
+-- of these conflicts with a reader (ACCESS SHARE), so order pages, the RLS
+-- subqueries on order_request_lines and order_request_attachments, and an
+-- open report export are never blocked and never block the push. Writers
+-- (ROW EXCLUSIVE) wait while the file runs (56 ms on the local stack).
+-- lock_timeout 5s fails the push fast instead of queueing behind a long
+-- writer. Proven by scripts/db-concurrency/0387_migration_lock_footprint.sh.
+-- This migration writes no row.
 
 set lock_timeout = '5s';
 
@@ -141,11 +149,14 @@ comment on function public.tg_order_requests_workflow_guard() is
 
 revoke all on function public.tg_order_requests_workflow_guard() from public, anon, authenticated;
 
-drop trigger if exists trg_order_requests_workflow_guard on public.order_requests;
 -- Name sorts after trg_order_requests_validate_transition ('v' < 'w'), so an
 -- illegal edge still reports invalid_status_transition first, and before the
--- routing plan's trg_order_requests_zreview_gate.
-create trigger trg_order_requests_workflow_guard
+-- routing plan's trg_order_requests_zreview_gate. CREATE OR REPLACE, as
+-- 0360 and 0362-0365 do, and never DROP TRIGGER IF EXISTS first: a DROP
+-- takes ACCESS EXCLUSIVE on order_requests even when the trigger does not
+-- exist, and the push would hold it to the end of the file, stopping every
+-- order read.
+create or replace trigger trg_order_requests_workflow_guard
   before update on public.order_requests
   for each row execute function public.tg_order_requests_workflow_guard();
 
