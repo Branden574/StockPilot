@@ -223,10 +223,13 @@ describe('the departure confirm guards every step that takes the order further f
 // (a hand-over) with no departure confirm. Mutation caught (each): opening
 // the pad straight from the scan again, or asking without core's risk.
 describe('the Scan tab asks before a scanned packing slip is signed', () => {
+  // Migration 0389: the order is read through POST
+  // /api/v1/orders/signature-lookup in the scan tab's organization (the order
+  // row holds the token's sha256, so a direct member read finds nothing).
   it("the slip's order is read and core's risk asked before the pad opens; Fix the order opens the order", () => {
     const code = codeOnly(scanTab);
     expect(code).toMatch(
-      /const signToken = parseSignToken\(data\);\s*if \(signToken\) \{\s*const scanned = await readSignatureOrder\(supabase, orgId, signToken\);\s*const risk = scanSignatureDeparture\(scanned\);\s*setBusy\(false\);\s*if \(!risk\) \{\s*openSignaturePad\(signToken\);\s*return;\s*\}\s*Alert\.alert\(risk\.title, risk\.message, departureConfirmButtons\(risk, \{/,
+      /const signToken = parseSignToken\(data\);\s*if \(signToken\) \{\s*const scanned = await readSignatureOrder\(\s*\(path, body\) => api\(path, \{ method: 'POST', body, orgId \}\),\s*signToken,?\s*\);\s*const risk = scanSignatureDeparture\(scanned\);\s*setBusy\(false\);\s*if \(!risk\) \{\s*openSignaturePad\(signToken\);\s*return;\s*\}\s*Alert\.alert\(risk\.title, risk\.message, departureConfirmButtons\(risk, \{/,
     );
     expect(code).toMatch(/onProceed: \(\) => openSignaturePad\(signToken\),/);
     expect(code).toMatch(
