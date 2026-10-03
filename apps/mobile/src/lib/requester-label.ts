@@ -1,3 +1,5 @@
+import { DELETED_REQUESTER_LABEL, isDeletedRequester } from '@stockpilot/core';
+
 /**
  * Resolve an order's requester display name on mobile, mirroring the web's
  * `summaryRequesterLabel` + `OrderRequestsService` join.
@@ -23,6 +25,13 @@ export function profileFromEmbed(embed: unknown): RequesterProfile | null {
   };
 }
 
+/**
+ * `requesterEmail` and `requesterUserId` must be the ROW's raw columns (both
+ * callers pass them): a requester who deleted their account (migration 0388)
+ * leaves no id and, on the rows that never held one, no email, and the label
+ * then reads "Deleted user" instead of calling that person external (core's
+ * `isDeletedRequester`, strict null).
+ */
 export function resolveRequesterLabel(args: {
   requesterName: string | null;
   requesterEmail: string | null;
@@ -31,5 +40,9 @@ export function resolveRequesterLabel(args: {
 }): string {
   const name = args.requesterName?.trim() || args.profile?.full_name?.trim() || '';
   const email = args.requesterEmail?.trim() || args.profile?.email?.trim() || '';
-  return name || email || (args.requesterUserId ? 'Team member' : 'External requester');
+  if (name || email) return name || email;
+  if (args.requesterUserId) return 'Team member';
+  return isDeletedRequester({ requesterUserId: args.requesterUserId, requesterEmail: args.requesterEmail })
+    ? DELETED_REQUESTER_LABEL
+    : 'External requester';
 }
