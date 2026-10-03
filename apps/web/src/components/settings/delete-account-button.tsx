@@ -52,10 +52,11 @@ export function DeleteAccountButton() {
         description={
           <div className="space-y-2">
             <p>
-              This will remove your access immediately and tombstone your
-              profile across StockPilot. Historical records (movements,
-              audit log entries, comments) will still show your name where
-              they already reference it.
+              This deletes your account and removes your access immediately.
+              Orders you placed stay with your organization, with “Deleted
+              user” as the requester. If your account is linked to records
+              your organization must keep, such as received stock, you will
+              be told and nothing will change.
             </p>
             <p>
               If you own a workspace with other members, transfer ownership

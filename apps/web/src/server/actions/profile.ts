@@ -9,8 +9,19 @@ import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import {
+  ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_RATE_LIMIT,
+  ACCOUNT_DELETE_RATE_WINDOW_MS,
+  ACCOUNT_DELETE_RETRY_COPY,
+  ACCOUNT_DELETE_SIGNED_OUT_COPY,
+  accountDeleteRateKey,
+  auditAccountDeleted,
+  checkAccountDeletable,
+} from '@/server/lib/account-deletion';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -466,10 +477,13 @@ const deleteAccountSchema = z.object({
 });
 
 /**
- * Self-service account deletion. Soft-deletes the profile (sets
- * `deleted_at`), then deletes the underlying auth user via the admin
- * client which cascades to membership rows on the `user_profiles.id`
- * FK with `on delete cascade`.
+ * Self-service account deletion. Asks the database whether the account can
+ * go (`account_deletion_check`, migration 0388: a dry run of the real delete,
+ * always undone), then deletes the auth user through the admin client, which
+ * cascades to the profile and the memberships; orders the person placed are
+ * kept with "Deleted user" as the requester. The `user.deactivated` audit row
+ * is written only after the delete succeeded. Nothing is written when the
+ * account cannot go: no tombstone, no audit row.
  *
  * Owners of an org with other accepted members cannot delete their
  * own account — they must first transfer ownership (handled separately
@@ -527,28 +541,39 @@ export async function deleteOwnAccountAction(input: {
       }
     }
 
-    // Soft-delete the profile row first — the FK is `on delete cascade`
-    // on the auth.users side, so admin.deleteUser() would otherwise
-    // erase the profile before we get a chance to mark it deleted for
-    // historical reference (movements, audit rows, etc. all retain the
-    // user_id with a tombstoned profile this way).
-    const deletedAt = new Date().toISOString();
-    const { error: profileErr } = await supabase
-      .from('user_profiles')
-      .update({ deleted_at: deletedAt })
-      .eq('id', session.userId);
-    if (profileErr) throw new ServiceError('internal_error', profileErr.message);
+    // Each attempt runs a full dry-run cascade (row locks on every row that
+    // names the person), so a member may not hammer it: 5 per 10 minutes.
+    const rl = await checkRateLimit(
+      accountDeleteRateKey(session.userId),
+      ACCOUNT_DELETE_RATE_LIMIT,
+      ACCOUNT_DELETE_RATE_WINDOW_MS,
+    );
+    if (!rl.allowed) return err('rate_limited', ACCOUNT_DELETE_RETRY_COPY);
 
-    await audit({
-      event: 'user.deactivated',
-      entityType: 'user',
-      entityId: session.userId,
-      reason: 'self_deletion',
-    });
+    // The organization the audit row is filed under, read BEFORE the delete
+    // removes the membership (null for a person with no membership, SP-129).
+    const memberships = await getSessionMemberships();
+    const auditOrganizationId =
+      memberships.length > 0 ? (await withContext()).organizationId : null;
 
-    // Now invalidate the auth user. Profile + membership rows cascade
-    // via the user_profiles.id -> auth.users(id) on delete cascade FK.
+    // Ask first (0388). Every answer but "deletable" changes nothing. There is
+    // no profile tombstone any more: nothing reads user_profiles.deleted_at
+    // (see SP-008 below), so on a failure it only marked a live account as
+    // deleted, and on success the profile cascades away with it.
     const admin = createAdminClient();
+    const check = await checkAccountDeletable(admin, session.userId, 'web');
+    if (!check.ok) {
+      if (check.kind === 'blocked') {
+        return err('conflict', ACCOUNT_DELETE_BLOCKED_COPY, { reason: 'account_linked_records' });
+      }
+      // retry (a row lock or a deadlock), check_failed, or gone (never
+      // expected for a live session): nothing was changed.
+      return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
+    }
+
+    // Now delete the auth user. Profile + membership rows cascade via the
+    // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
+    // orders are kept (0388).
     const { error: authErr } = await admin.auth.admin.deleteUser(session.userId);
     if (authErr) {
       // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
@@ -575,9 +600,9 @@ export async function deleteOwnAccountAction(input: {
       // false promise under App Store 5.1.1(v) / GDPR and a false audit row.
       //
       // Now: report it, end the live sessions best-effort, and TELL the user it
-      // failed. `deleted_at` is deliberately left stamped — it is the marker an
-      // operator (or a future retry) uses to find the half-deleted account, and
-      // it is inert for login precisely because nothing reads it.
+      // failed. Since 0388 the check above runs first and nothing is written
+      // before the delete, so a failure here (a transient error after a passing
+      // check) leaves no tombstone and no audit row to undo.
       await reportError(new Error(authErr.message), {
         tag: 'account.delete.auth_delete_failed',
         extra: { userId: session.userId, source: 'web' },
@@ -592,11 +617,16 @@ export async function deleteOwnAccountAction(input: {
       } catch (revokeErr) {
         console.error('[deleteOwnAccount] session revoke failed:', revokeErr);
       }
-      return err(
-        'internal_error',
-        'Your account could not be deleted right now. Please try again.',
-      );
+      return err('internal_error', ACCOUNT_DELETE_SIGNED_OUT_COPY);
     }
+
+    // The account is gone: now the audit row (user_id null, the profile no
+    // longer exists; the entity id keeps who it was).
+    await auditAccountDeleted({
+      userId: session.userId,
+      organizationId: auditOrganizationId,
+      reason: 'self_deletion',
+    });
 
     revalidatePath('/', 'layout');
     return ok(undefined);

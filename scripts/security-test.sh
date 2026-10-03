@@ -770,6 +770,18 @@ WEB_TESTS=(
   # its real status. Self-policing: a route that calls the limiter must be
   # listed there, and the limiter-first idiom fails it.
   src/app/api/export-routes.limit-order.test.ts
+
+  # Account deletion (0388): the web action, the phone route and the
+  # platform console ask account_deletion_check before they change anything
+  # (blocked, lock or deadlock, check failure and an unknown answer all change
+  # nothing and fail closed), write no profile tombstone, write the
+  # user.deactivated row only after the delete succeeded (user_id null), are
+  # rate limited before the check, and report a failed delete honestly (the
+  # phone used to answer 200); the platform cleanup counts kept accounts
+  # instead of claiming them deleted.
+  src/server/lib/account-deletion.test.ts
+  src/app/api/v1/account/delete/route.test.ts
+  src/server/actions/platform-admin.remove-org.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

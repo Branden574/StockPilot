@@ -78,12 +78,19 @@ export function RemoveOrgDialog({
         res = await removeOrgAction(payload);
       }
       if (res.ok) {
-        const { deletedUsers } = res.data;
+        const { deletedUsers, keptUsers } = res.data;
         toast.success(
           deletedUsers > 0
             ? `Deleted “${orgName}” and ${deletedUsers} orphaned account${deletedUsers === 1 ? '' : 's'}.`
             : `Deleted “${orgName}”.`,
         );
+        // Accounts linked to records kept elsewhere (or whose delete failed)
+        // are left in place and counted, never reported as deleted (0388).
+        if (keptUsers > 0) {
+          toast.info(
+            `${keptUsers} account${keptUsers === 1 ? ' was' : 's were'} kept because ${keptUsers === 1 ? 'it is' : 'they are'} linked to records that must be kept.`,
+          );
+        }
         setOpen(false);
         reset();
         router.push('/platform');

@@ -12,6 +12,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
+import { checkAccountDeletable } from '@/server/lib/account-deletion';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { insertAuditRowReported } from '@/server/services/audit';
 
@@ -384,7 +385,7 @@ const removeOrgSchema = z.object({
  */
 export async function removeOrgAction(
   input: z.input<typeof removeOrgSchema>,
-): Promise<ActionResult<{ deletedUsers: number }>> {
+): Promise<ActionResult<{ deletedUsers: number; keptUsers: number }>> {
   const gate = await checkPlatformAdmin({ requireStepUp: true });
   if (!gate.ok) {
     return gate.reason === 'aal2_required'
@@ -474,7 +475,13 @@ export async function removeOrgAction(
   //    before each delete: the org cascade has already removed this org's
   //    membership rows, so any remaining row means the user was added to another
   //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
+  //    Then ask the database whether the account can go (0388's dry run,
+  //    always undone): an account linked to records kept elsewhere is KEPT and
+  //    counted, never half-deleted. A deleteUser `{ error }` is read (it used
+  //    to be ignored and the account counted as deleted anyway), reported and
+  //    counted as kept. An account already gone is neither.
   let deletedUsers = 0;
+  let keptUsers = 0;
   for (const uid of orphanUserIds) {
     try {
       const { count } = await admin
@@ -482,9 +489,23 @@ export async function removeOrgAction(
         .select('organization_id', { count: 'exact', head: true })
         .eq('user_id', uid);
       if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
-      await admin.auth.admin.deleteUser(uid);
+      const check = await checkAccountDeletable(admin, uid, 'platform');
+      if (!check.ok) {
+        if (check.kind !== 'gone') keptUsers += 1;
+        continue;
+      }
+      const { error: delUserErr } = await admin.auth.admin.deleteUser(uid);
+      if (delUserErr) {
+        keptUsers += 1;
+        await reportError(new Error(delUserErr.message), {
+          tag: 'platform-admin.orphan-user-delete',
+          extra: { uid },
+        });
+        continue;
+      }
       deletedUsers += 1;
     } catch (e) {
+      keptUsers += 1;
       await reportError(e, { tag: 'platform-admin.orphan-user-delete', extra: { uid } });
     }
   }
@@ -494,8 +515,14 @@ export async function removeOrgAction(
     actorEmail: gate.session.email,
     action: 'org_deleted',
     targetOrganizationId: null, // the org row is gone; keep name/slug in detail
-    detail: { orgId: o.id, name: o.name, slug: o.slug, deletedOrphanUsers: deletedUsers },
+    detail: {
+      orgId: o.id,
+      name: o.name,
+      slug: o.slug,
+      deletedOrphanUsers: deletedUsers,
+      keptOrphanUsers: keptUsers,
+    },
   });
   revalidatePath('/platform');
-  return ok({ deletedUsers });
+  return ok({ deletedUsers, keptUsers });
 }

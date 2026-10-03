@@ -116,10 +116,10 @@ export default async function ProfileSettingsPage({
           <CardHeader>
             <CardTitle className="text-base text-destructive">Delete account</CardTitle>
             <CardDescription>
-              Permanently remove your access to StockPilot and tombstone your
-              profile. Historical records you touched stay attributed to your
-              name. If you own a workspace with other members, transfer
-              ownership first.
+              Permanently delete your account and your access to StockPilot.
+              Orders you placed stay with your organization, with “Deleted
+              user” as the requester. If you own a workspace with other
+              members, transfer ownership first.
             </CardDescription>
           </CardHeader>
           <CardContent>

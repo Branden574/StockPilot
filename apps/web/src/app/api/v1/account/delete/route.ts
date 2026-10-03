@@ -2,8 +2,19 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { audit } from '@/server/services/audit';
+import {
+  ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_RATE_LIMIT,
+  ACCOUNT_DELETE_RATE_WINDOW_MS,
+  ACCOUNT_DELETE_RETRY_COPY,
+  ACCOUNT_DELETE_SIGNED_OUT_COPY,
+  accountDeleteRateKey,
+  auditAccountDeleted,
+  checkAccountDeletable,
+} from '@/server/lib/account-deletion';
+import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 export const runtime = 'nodejs';
 
@@ -21,10 +32,18 @@ export const runtime = 'nodejs';
  * Contract:
  *   POST /api/v1/account/delete
  *   body: { confirm: "DELETE" }
- *   200: { ok: true }
+ *   200: { ok: true }                          // the account is gone
  *   400: { error: "validation_error", message }
  *   403: { error: "forbidden", message }       // sole-owner with co-members
- *   500: { error: "internal_error", message }
+ *   403: { error: "account_linked_records", message } // kept records refuse it (0388)
+ *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes
+ *   503: { error: "check_failed", message }    // the check could not answer, or a row lock: try again
+ *   500: { error: "internal_error", message }  // the delete itself failed (sessions revoked)
+ *
+ * Every installed phone shows `message` for any non-2xx and stays signed in
+ * (settings.tsx performDelete), so these answers need no phone change.
+ * Nothing is written before the delete (no profile tombstone); the
+ * `user.deactivated` row is written after it succeeded (0388).
  */
 export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -120,49 +139,72 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Soft-delete profile first so audit / movement rows retain a
-    // tombstoned reference. The cascading FK in auth.users will
-    // hard-delete the rest when admin.deleteUser fires.
-    const deletedAt = new Date().toISOString();
-    const { error: profileErr } = await ctx.supabase
-      .from('user_profiles')
-      .update({ deleted_at: deletedAt })
-      .eq('id', ctx.userId);
-    if (profileErr) {
+    // Each attempt runs a full dry-run cascade (row locks on every row that
+    // names the person), so 5 per 10 minutes, as on the web.
+    const rl = await checkRateLimit(
+      accountDeleteRateKey(ctx.userId),
+      ACCOUNT_DELETE_RATE_LIMIT,
+      ACCOUNT_DELETE_RATE_WINDOW_MS,
+    );
+    if (!rl.allowed) {
       return NextResponse.json(
-        { error: 'internal_error', message: profileErr.message },
+        { error: 'rate_limited', message: ACCOUNT_DELETE_RETRY_COPY },
+        {
+          status: 429,
+          headers: {
+            'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+          },
+        },
+      );
+    }
+
+    // Ask first (migration 0388): a dry run of the real delete, always undone.
+    // Every answer but "deletable" changes nothing.
+    const admin = createAdminClient();
+    const check = await checkAccountDeletable(admin, ctx.userId, 'mobile');
+    if (!check.ok) {
+      if (check.kind === 'blocked') {
+        return NextResponse.json(
+          { error: 'account_linked_records', message: ACCOUNT_DELETE_BLOCKED_COPY },
+          { status: 403 },
+        );
+      }
+      return NextResponse.json(
+        { error: 'check_failed', message: ACCOUNT_DELETE_RETRY_COPY },
+        { status: 503 },
+      );
+    }
+
+    const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);
+    if (authErr) {
+      // SP-008 on the phone: this used to log and answer { ok: true }, and the
+      // phone signed out and said "Account deleted" while the account was
+      // alive. Now, as on the web: report, end the live sessions best-effort,
+      // and say it failed. Nothing was written before the delete.
+      await reportError(new Error(authErr.message), {
+        tag: 'account.delete.auth_delete_failed',
+        extra: { userId: ctx.userId, source: 'mobile' },
+      });
+      try {
+        await revokeAllSessionsForUser(ctx.userId);
+      } catch (revokeErr) {
+        console.error('[v1/account/delete] session revoke failed:', revokeErr);
+      }
+      return NextResponse.json(
+        { error: 'internal_error', message: ACCOUNT_DELETE_SIGNED_OUT_COPY },
         { status: 500 },
       );
     }
 
-    // Bearer/API callers MUST pass their ServiceContext to audit(). Without it
-    // audit() falls back to withContext() -> requireOrgContext(), which calls
-    // redirect('/signin') on any /api request (the proxy never sets the session
-    // header for /api, so the session is always null there). The resulting
-    // NEXT_REDIRECT was swallowed by audit()'s own best-effort catch, so every
-    // MOBILE self-deletion tombstoned + hard-deleted the account while writing
-    // NO 'user.deactivated' row -- and audit_logs is the only record that
-    // survives the auth.users cascade. The web action (deleteOwnAccountAction)
-    // has a cookie session so its fallback worked, which is why the two
-    // surfaces diverged silently. Mirrors v1/movements/[id]/note.
-    await audit(
-      {
-        event: 'user.deactivated',
-        entityType: 'user',
-        entityId: ctx.userId,
-        reason: 'self_deletion_mobile',
-      },
-      ctx,
-    );
-
-    const admin = createAdminClient();
-    const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);
-    if (authErr) {
-      // Same logic as the web action: profile tombstone already blocks
-      // login, so we log and return success rather than producing a
-      // half-deleted UX state the user can't recover from.
-      console.error('[v1/account/delete] auth.admin.deleteUser failed:', authErr.message);
-    }
+    // The account is gone: now the audit row, through the admin client with
+    // the organization this request acted in (user_id null: the profile no
+    // longer exists). It never went through audit()'s withContext() fallback,
+    // which redirects on /api (the bug that dropped every mobile row once).
+    await auditAccountDeleted({
+      userId: ctx.userId,
+      organizationId: ctx.organizationId ?? null,
+      reason: 'self_deletion_mobile',
+    });
 
     return NextResponse.json({ ok: true });
   } catch (e) {
