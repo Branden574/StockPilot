@@ -274,7 +274,7 @@ select is(
   'S4a: the columns, their types and NOT NULLs');
 select is(
   (select string_agg(x, E'\n' order by x collate "C") from (
-     select c.contype || ':'
+     select c.contype::text || ':'
             || (select string_agg(a.attname, ',' order by a.attnum) from pg_attribute a
                  where a.attrelid = c.conrelid and a.attnum = any (c.conkey)) || ':'
             || coalesce((select r.relname from pg_class r where r.oid = c.confrelid), '-') || ':'
@@ -283,11 +283,11 @@ select is(
        from pg_constraint c
       where c.conrelid = 'public.order_request_secrets'::regclass and c.contype in ('f', 'p', 'u')) t),
   E'f:order_request_id:order_requests:c:false\n'
-  E'f:organization_id:organizations:c:false\n'
-  E'p:order_request_id:-:-:false\n'
-  E'u:public_track_token:-:-:false\n'
-  E'u:return_token:-:-:false\n'
-  E'u:signature_token:-:-:false',
+  'f:organization_id:organizations:c:false\n'
+  'p:order_request_id:-:-:false\n'
+  'u:public_track_token:-:-:false\n'
+  'u:return_token:-:-:false\n'
+  'u:signature_token:-:-:false',
   'S4b: one row per order; the three tokens unique; both foreign keys cascade on delete and none is DEFERRABLE');
 select is(
   pg_temp.attempt('postgres', null,

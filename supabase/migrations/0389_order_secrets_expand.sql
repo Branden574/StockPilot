@@ -163,7 +163,7 @@ begin
   -- row the write will change. It does NOT conflict with FOR KEY SHARE, the
   -- lock a child-row insert's foreign-key check takes, so the side-table
   -- insert of order_return_token_ensure or the public submit can never wait
-  -- on this mint while it waits on them (no deadlock, no 40P01).
+  -- on this mint while it waits on them (no deadlock).
   select * into v_row from public.order_requests o where o.id = p_id for no key update;
   if not found then
     raise exception 'order_request_not_found' using errcode = 'P0002';
