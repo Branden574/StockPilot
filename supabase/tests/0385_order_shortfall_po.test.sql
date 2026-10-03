@@ -1057,12 +1057,9 @@ select is(
   -- authenticated's table REFERENCES (58) and its UPDATE on 38 columns (38);
   -- schedule_events is unchanged. F2-5's function writes none of those
   -- columns (it does not write order_requests), so what it was proven
-  -- against still holds.
-  -- PLACEHOLDER-0387-Z2: this value is PREDICTED, not yet computed on the
-  -- stack: production's own column_privileges rows (which equal the old local
-  -- pin) minus exactly the rows 0387's revokes remove. The test stage must
-  -- replace it with the value the stack gives after migration up, and drop
-  -- this PLACEHOLDER line (A-NOTES.md TODO).
+  -- against still holds. Computed on the local stack after 0387 (equal to
+  -- the value predicted from production's own column_privileges rows minus
+  -- exactly the rows 0387's revokes remove).
   '0384 column grants (order_requests, schedule_events)|34395ad1d1d38ebf688f8c0b9c6f150c|261\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
   'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8\n'
