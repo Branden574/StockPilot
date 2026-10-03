@@ -8,7 +8,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { NEEDED_BY_IN_PAST_COPY, NEEDED_BY_OUT_OF_RANGE_COPY } from './needed-by-revision';
 import {
@@ -18,7 +20,15 @@ import {
   mintOrderSubmissionKey,
   OrderAnswerShapeError,
   orderAlreadyPlacedCopy,
+  orderCallResultFromAction,
+  orderSubmissionCanResend,
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_EMAIL_MAX,
+  ORDER_NOTES_MAX,
+  ORDER_REFUSED_FINAL_COPY,
+  ORDER_RESEND_REFUSED_COPY,
+  ORDER_TIMEZONE_UNREADABLE_COPY,
+  ORDER_UNCONFIRMED_STALE_BODY_COPY,
   ORDER_BODY_UNREADABLE_COPY,
   ORDER_BUSY_COPY,
   ORDER_CONFLICT_COPY,
@@ -318,8 +328,68 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
       'pickup with a site',
       body({ deliveryCharterId: SITE }),
       'invalid',
-      'deliveryCharterId',
+      'pickupSite',
       ORDER_PICKUP_HAS_SITE_COPY,
+    ],
+    [
+      'a delivery whose site id is not a uuid (a client fault, not a pickup with a site)',
+      body({ fulfillmentType: 'delivery', deliveryCharterId: 'clovis' }),
+      'invalid',
+      'deliveryCharterId',
+      ORDER_BODY_UNREADABLE_COPY,
+    ],
+    [
+      'a missing site key',
+      (() => {
+        const b = body();
+        delete b.deliveryCharterId;
+        return b;
+      })(),
+      'invalid',
+      'deliveryCharterId',
+      ORDER_BODY_UNREADABLE_COPY,
+    ],
+    [
+      'an unknown key named like a field with its own words (quantity)',
+      body({ quantity: 3 }),
+      'invalid',
+      'body',
+      ORDER_BODY_UNREADABLE_COPY,
+    ],
+    [
+      'an unknown key named like a field with its own words (pickupSite)',
+      body({ pickupSite: SITE }),
+      'invalid',
+      'body',
+      ORDER_BODY_UNREADABLE_COPY,
+    ],
+    [
+      'an unknown key on a line named like a field with its own words (lines)',
+      body({ lines: [{ itemId: ITEM_A, quantity: 1, lines: 2 }] }),
+      'invalid',
+      'body',
+      ORDER_BODY_UNREADABLE_COPY,
+    ],
+    [
+      'an email with a one-letter top-level domain (the web refuses it today)',
+      body({ onBehalfOf: { name: 'Maria', email: 'maria@gmail.c' } }),
+      'on_behalf_invalid',
+      undefined,
+      ORDER_ON_BEHALF_INVALID_COPY,
+    ],
+    [
+      'an email with two dots in a row',
+      body({ onBehalfOf: { name: 'Maria', email: 'maria..lopez@example.org' } }),
+      'on_behalf_invalid',
+      undefined,
+      ORDER_ON_BEHALF_INVALID_COPY,
+    ],
+    [
+      'an email with a no-break space inside',
+      body({ onBehalfOf: { name: 'Maria', email: 'maria lopez@example.org' } }),
+      'on_behalf_invalid',
+      undefined,
+      ORDER_ON_BEHALF_INVALID_COPY,
     ],
     [
       'a method that is neither',
@@ -494,7 +564,7 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
 
   it("a direct safeParse puts core's sentence on every issue, never zod's", () => {
     for (const [, raw] of cases) {
-      const r = orderCreateRequestSchema.safeParse(raw);
+      const r = orderCreateRequestSchema().safeParse(raw);
       expect(r.success).toBe(false);
       if (r.success) continue;
       for (const issue of r.error.issues) {
@@ -503,6 +573,117 @@ describe("orderCreateRequestSchema: every refusal, with core's words", () => {
         );
       }
     }
+  });
+
+  it('the schema is built once, on first use', () => {
+    expect(orderCreateRequestSchema()).toBe(orderCreateRequestSchema());
+  });
+});
+
+describe('the on-behalf email: the rule the web applies today', () => {
+  // apps/web/src/server/actions/order-requests.ts reads the on-behalf email
+  // with z.string().trim().email().max(254). PO-2 moves the web onto core,
+  // so core must accept and refuse exactly what that accepts and refuses.
+  const webToday = z.string().trim().email().max(254);
+  const corpus = [
+    'maria@example.org',
+    'MARIA.LOPEZ@EXAMPLE.ORG',
+    "o'neil+orders@sub.example.co.uk",
+    'a_b-c@x-y.org',
+    'a@b.co',
+    'a@xn--bcher-kva.example',
+    '  maria@example.org\t',
+    ' maria@example.org﻿',
+    ' maria@example.org ',
+    'maria@gmail.c',
+    'maria@example.o1',
+    'maria..lopez@example.org',
+    '.maria@example.org',
+    'maria.@example.org',
+    'maria@example..org',
+    '"maria"@example.org',
+    'maria@-example.org',
+    'maria@example_x.org',
+    'maría@example.org',
+    'maria@exämple.org',
+    'maria@1.2.3.4',
+    'maria@[10.0.0.1]',
+    'maria@localhost',
+    'maria lopez@example.org',
+    'maria lopez@example.org',
+    'maria@x@example.org',
+    'maria.example.org',
+    '@example.org',
+    'maria@',
+    '',
+    `${'e'.repeat(242)}@example.org`,
+    `${'e'.repeat(243)}@example.org`,
+  ];
+
+  it.each(corpus)('%j', (email) => {
+    const web = webToday.safeParse(email).success;
+    const core = parseOrderCreateRequest(body({ onBehalfOf: { name: 'Maria', email } })).ok;
+    expect(core).toBe(web);
+  });
+
+  it('refuses the addresses the plan sketch let through', () => {
+    for (const email of ['maria@gmail.c', 'maria..lopez@example.org', '"q"@x.yz', 'a@-x.yz']) {
+      expect(refusal(body({ onBehalfOf: { name: 'Maria', email } })).reason).toBe(
+        'on_behalf_invalid',
+      );
+    }
+    expect(ORDER_EMAIL_MAX).toBe(254);
+  });
+});
+
+describe('importing this module runs nothing', () => {
+  // Core's index re-exports place-order, so every web page that bundles core
+  // and the phone at start-up evaluate its top level. A call there (a zod
+  // chain, a formatter) is kept by the web's tree-shaking (core has no
+  // "sideEffects": false) and run by Metro, which does not tree-shake. The
+  // PO-1 review measured +3,608 bytes on 129 web routes from exactly that.
+  function topLevelCalls(rel: string): string[] {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), rel);
+    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    const found: string[] = [];
+    const visit = (n: ts.Node): void => {
+      // A function's or a class's body runs when it is called, not on import.
+      if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+      if (ts.isCallExpression(n) || ts.isNewExpression(n) || ts.isTaggedTemplateExpression(n)) {
+        found.push(n.getText(sf).slice(0, 60));
+        return;
+      }
+      ts.forEachChild(n, visit);
+    };
+    for (const st of sf.statements) {
+      if (ts.isImportDeclaration(st) || ts.isExportDeclaration(st)) continue;
+      visit(st);
+    }
+    return found;
+  }
+
+  it.each(['place-order.ts', 'storefront/copy.ts'])('%s has no call at its top level', (rel) => {
+    expect(topLevelCalls(rel)).toEqual([]);
+  });
+
+  it('the guard sees a top-level call', () => {
+    const probe = ts.createSourceFile('x.ts', 'const a = f(); const b = () => g();', 99, true);
+    const calls: string[] = [];
+    probe.forEachChild(function visit(n): void {
+      if (ts.isFunctionLike(n)) return;
+      if (ts.isCallExpression(n)) calls.push(n.getText(probe));
+      n.forEachChild(visit);
+    });
+    expect(calls).toEqual(['f()']);
+  });
+
+  it('the cap sentences are written out, and still say the caps', () => {
+    expect(ORDER_TOO_MANY_UNITS_COPY).toBe(
+      `An order request can have at most ${ORDER_MAX_UNITS.toLocaleString('en-US')} units.`,
+    );
+    expect(ORDER_NOTES_TOO_LONG_COPY).toBe(
+      `Manager notes can be at most ${ORDER_NOTES_MAX.toLocaleString('en-US')} characters.`,
+    );
   });
 });
 
@@ -957,6 +1138,91 @@ describe('classifyOrderSubmitResult: the key stays live', () => {
     });
   });
 
+  it("a web action's error, with the status its code gets on the API", () => {
+    // services/context.ts serviceErrorStatus, restated (core cannot import
+    // the web): PO-2 passes the real one.
+    const statusOf = (code: string) =>
+      ({
+        unauthenticated: 401,
+        forbidden: 403,
+        module_disabled: 403,
+        not_found: 404,
+        validation_error: 400,
+        conflict: 409,
+        plan_limit_exceeded: 409,
+      })[code] ?? 500;
+    const fail = (code: string, details?: Record<string, unknown>) =>
+      ({ ok: false, error: { code, message: 'x', ...(details ? { details } : {}) } }) as const;
+
+    // A refusal recorded under the key is final on any send.
+    const settled = fail('validation_error', {
+      reason: 'item_not_orderable',
+      settled: true,
+      items: { [ITEM_A]: 'rental' },
+    });
+    for (const sends of [1, 2]) {
+      expect(
+        classifyOrderSubmitResult(orderCallResultFromAction(settled, statusOf), { sends }),
+      ).toMatchObject({ final: true, outcome: 'refused', recorded: true });
+    }
+    // An unrecorded refusal: final on the only send, live on a resend.
+    const permission = orderCallResultFromAction(
+      fail('forbidden', { reason: 'permission' }),
+      statusOf,
+    );
+    expect(classifyOrderSubmitResult(permission, { sends: 1 })).toMatchObject({
+      final: true,
+      outcome: 'refused',
+      reason: 'permission',
+    });
+    expect(classifyOrderSubmitResult(permission, { sends: 2 })).toMatchObject({
+      final: false,
+      why: 'refused',
+    });
+    // Busy, withdrawn, a fault.
+    expect(
+      classifyOrderSubmitResult(
+        orderCallResultFromAction(fail('conflict', { reason: 'busy', retryable: true }), statusOf),
+        { sends: 1 },
+      ),
+    ).toMatchObject({ final: false, why: 'busy' });
+    expect(
+      classifyOrderSubmitResult(
+        orderCallResultFromAction(
+          fail('conflict', { reason: 'submission_withdrawn', settled: true }),
+          statusOf,
+        ),
+        { sends: 2 },
+      ),
+    ).toEqual({ final: true, outcome: 'withdrawn' });
+    expect(
+      classifyOrderSubmitResult(
+        orderCallResultFromAction(fail('internal_error', { reason: 'failed' }), statusOf),
+        { sends: 1 },
+      ),
+    ).toMatchObject({ final: false, why: 'server_fault' });
+    // The placed answer is the action's data.
+    expect(
+      classifyOrderSubmitResult(
+        orderCallResultFromAction({ ok: true, data: placeAnswer(false) }, statusOf),
+        { sends: 1 },
+      ),
+    ).toMatchObject({ final: true, outcome: 'placed', replay: false });
+    // A status the function cannot give is no answer: locked, never unlocked.
+    expect(
+      classifyOrderSubmitResult(
+        orderCallResultFromAction(fail('forbidden', { reason: 'permission' }), () => Number.NaN),
+        { sends: 1 },
+      ),
+    ).toMatchObject({ final: false, why: 'no_answer' });
+    // Handing the action's error in WITHOUT a status reads as no answer, the
+    // safe side: this is why the adapter exists.
+    expect(classifyOrderSubmitResult(thrown(settled.error), { sends: 1 })).toMatchObject({
+      final: false,
+      why: 'no_answer',
+    });
+  });
+
   it('never reads message text', () => {
     // A message that says "withdrawn", "placed" or "settled" changes nothing.
     const o = classifyOrderSubmitResult(
@@ -1300,6 +1566,29 @@ describe('orderSubmission: the cart unlocks only on a final outcome', () => {
     );
   });
 
+  it('the key tracked is the key in the body: a send or a restore that disagrees changes nothing', () => {
+    // The server places under the body's key; the status read and Don't send
+    // it use the tracked key. If they differed, a withdraw could settle the
+    // wrong key as "not sent" while the body's key placed the order.
+    const mismatched = { ...BODY, idempotencyKey: OTHER_USER } as OrderCreateRequestInput;
+    expect(run([{ type: 'send', key: KEY, body: mismatched, at: AT }])).toBe(ORDER_SUBMISSION_OPEN);
+    expect(
+      run([
+        {
+          type: 'restore',
+          pending: {
+            key: KEY,
+            body: mismatched,
+            state: 'possibly_sent',
+            sends: 1,
+            firstSentAt: AT,
+          },
+        },
+      ]),
+    ).toBe(ORDER_SUBMISSION_OPEN);
+    expect(run([send]).phase).toBe('sending');
+  });
+
   it('a send or a withdraw happens only on a tap: no answer ever produces one', () => {
     // Every transition out of an answer lands in a state with no call out.
     const answers: OrderCallResult[] = [
@@ -1346,17 +1635,124 @@ describe('parsePendingOrderSubmission (the stored record)', () => {
     expect(parsePendingOrderSubmission(stored, OTHER_USER)).toBeNull();
   });
 
-  it('drops a record it cannot read', () => {
+  it('drops a record it cannot read, or cannot tie to this account and this key', () => {
     expect(parsePendingOrderSubmission(null, PLACER)).toBeNull();
     expect(parsePendingOrderSubmission({ ...stored, state: 'sent' }, PLACER)).toBeNull();
     expect(parsePendingOrderSubmission({ ...stored, key: 'k' }, PLACER)).toBeNull();
     expect(parsePendingOrderSubmission({ ...stored, sends: 0 }, PLACER)).toBeNull();
     expect(parsePendingOrderSubmission({ ...stored, firstSentAt: '' }, PLACER)).toBeNull();
-    expect(
-      parsePendingOrderSubmission({ ...stored, body: { ...body(), lines: [] } }, PLACER),
-    ).toBeNull();
     // The key in the body must be the record's key.
     expect(parsePendingOrderSubmission({ ...stored, key: OTHER_USER }, PLACER)).toBeNull();
+    // No body, or a body that names no placer: nothing ties it to this account.
+    expect(parsePendingOrderSubmission({ ...stored, body: null }, PLACER)).toBeNull();
+    expect(parsePendingOrderSubmission({ ...stored, body: [body()] }, PLACER)).toBeNull();
+    const noPlacer = body();
+    delete noPlacer.placerUserId;
+    expect(parsePendingOrderSubmission({ ...stored, body: noPlacer }, PLACER)).toBeNull();
+    expect(
+      parsePendingOrderSubmission({ ...stored, body: body({ placerUserId: 42 }) }, PLACER),
+    ).toBeNull();
+  });
+
+  describe("a record of this account whose body today's schema no longer reads", () => {
+    // Written by an earlier build (a cap tightened, a field changed) before an
+    // answer was lost. The key may have placed an order: settle, never guess.
+    const staleBody = { ...body(), lines: [], requesterPhone: null };
+    const stale = { ...stored, body: staleBody };
+
+    it('is kept, flagged, not dropped', () => {
+      const p = parsePendingOrderSubmission(stale, PLACER);
+      expect(p).toEqual({ ...stale, bodyUnreadable: true });
+      expect(parsePendingOrderSubmission(stale, PLACER.toUpperCase())).not.toBeNull();
+    });
+
+    it('still belongs to its account only, and to its key only', () => {
+      expect(parsePendingOrderSubmission(stale, OTHER_USER)).toBeNull();
+      expect(parsePendingOrderSubmission({ ...stale, key: OTHER_USER }, PLACER)).toBeNull();
+      expect(
+        parsePendingOrderSubmission(
+          { ...stale, body: { ...staleBody, idempotencyKey: 'shortfall-1' } },
+          PLACER,
+        ),
+      ).toBeNull();
+    });
+
+    it("stays locked: a status read or Don't send it settles it, Check and finish is not offered", () => {
+      const p = parsePendingOrderSubmission(stale, PLACER)!;
+      const s = run([{ type: 'restore', pending: p }]);
+      expect(s.phase).toBe('unconfirmed');
+      expect(orderSubmissionLocked(s)).toBe(true);
+      expect(orderSubmissionCanResend(s)).toBe(false);
+      expect(run([{ type: 'resend' }], s)).toBe(s);
+      expect(refuseAddWhileLocked(pendingOrderSubmissionOf(s))).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+      expect(
+        run(
+          [
+            {
+              type: 'status-result',
+              result: answered(200, { organizationId: ORG, outcome: 'none' }),
+            },
+          ],
+          s,
+        ),
+      ).toBe(s);
+      expect(
+        run(
+          [
+            {
+              type: 'status-result',
+              result: answered(200, { organizationId: ORG, outcome: 'placed', order: summary() }),
+            },
+          ],
+          s,
+        ),
+      ).toMatchObject({ phase: 'placed' });
+      const withdrawing = run([{ type: 'withdraw' }], s);
+      expect(withdrawing.phase).toBe('withdrawing');
+      expect(
+        run(
+          [
+            {
+              type: 'withdraw-result',
+              result: answered(200, { organizationId: ORG, outcome: 'withdrawn' }),
+            },
+          ],
+          withdrawing,
+        ),
+      ).toEqual({ phase: 'withdrawn' });
+      // A readable record can be resent.
+      const fine = run([
+        { type: 'restore', pending: parsePendingOrderSubmission(stored, PLACER)! },
+      ]);
+      expect(orderSubmissionCanResend(fine)).toBe(true);
+      expect(orderSubmissionCanResend(run([send]))).toBe(false);
+    });
+
+    it('the flag is worked out on every read, never trusted from storage', () => {
+      // Pattern #9: a stored flag must not stick once the body reads again.
+      const p = parsePendingOrderSubmission({ ...stored, bodyUnreadable: true }, PLACER);
+      expect(p).toEqual(stored);
+      expect(p && 'bodyUnreadable' in p).toBe(false);
+    });
+
+    it('the panel says why it cannot be sent again, and what settles it', () => {
+      const ctx = { surface: 'web' as const, bodyUnreadable: true };
+      const last = {
+        final: false as const,
+        why: 'no_answer' as const,
+        reason: null,
+        details: null,
+      };
+      expect(orderUnconfirmedCopy(last, ctx)).toBe(ORDER_UNCONFIRMED_STALE_BODY_COPY);
+      expect(orderUnconfirmedCopy({ ...last, why: 'busy' }, ctx)).toBe(
+        ORDER_UNCONFIRMED_STALE_BODY_COPY,
+      );
+      expect(ORDER_UNCONFIRMED_STALE_BODY_COPY).not.toMatch(/Check and finish/);
+      expect(ORDER_UNCONFIRMED_STALE_BODY_COPY).toMatch(/Don't send it/);
+      expect(
+        orderUnconfirmedCopy({ ...last, why: 'refused', reason: 'unauthenticated' }, ctx),
+      ).toBe(ORDER_SIGN_IN_COPY);
+    });
   });
 });
 
@@ -1419,7 +1815,7 @@ describe('the words', () => {
     );
     expect(orderRefusalCopy('unauthenticated', null, ctx)).toBe(ORDER_SIGN_IN_COPY);
     expect(orderRefusalCopy('failed', null, ctx)).toBe(ORDER_FAULT_COPY);
-    expect(orderRefusalCopy(null, null, ctx)).toBe(ORDER_FAULT_COPY);
+    expect(orderRefusalCopy(null, null, ctx)).toBe(ORDER_REFUSED_FINAL_COPY);
     expect(orderRefusalCopy('submission_withdrawn', null, ctx)).toBe(ORDER_WITHDRAWN_COPY);
     expect(orderRefusalCopy('unavailable', null, ctx)).toBe(ORDER_PHONE_UNAVAILABLE_COPY);
     expect(orderRefusalCopy('invalid', d({ field: 'lines' }), ctx)).toBe(ORDER_LINES_EMPTY_COPY);
@@ -1500,6 +1896,68 @@ describe('the words', () => {
     );
   });
 
+  it("a final refusal core has no reason for says it wasn't sent, never Check and finish", () => {
+    // Refused on the only send, so nothing was placed and the cart is
+    // unlocked: there is no Check and finish button to point at.
+    const answers: OrderCallResult[] = [
+      thrown(new ApiError('Forbidden', 403)), // the edge's HTML 403
+      thrown(new ApiError('Payload too large', 413)), // an HTML 413
+      refused(400, 'validation_error'), // a route 400 with no details.reason
+      refused(404, 'not_found'), // our JSON, no reason
+      refused(422, 'unprocessable', { reason: 'something_new' }),
+    ];
+    for (const r of answers) {
+      const o = classifyOrderSubmitResult(r, { sends: 1 });
+      expect(o).toMatchObject({ final: true, outcome: 'refused', recorded: false });
+      if (!o.final || o.outcome !== 'refused') continue;
+      const words = orderRefusalCopy(o.reason, o.details, ctx);
+      expect(words, o.reason).toBe(ORDER_REFUSED_FINAL_COPY);
+      expect(words).not.toMatch(/Check and finish/);
+    }
+    expect(ORDER_REFUSED_FINAL_COPY).toBe("It wasn't sent. Check the order and submit it again.");
+    // The same answers to a RESEND leave the key live: the cause, then the
+    // way out.
+    for (const r of answers) {
+      const o = classifyOrderSubmitResult(r, { sends: 2 });
+      expect(o.final).toBe(false);
+      if (o.final) continue;
+      expect(orderUnconfirmedCopy(o, ctx)).toBe(
+        `${ORDER_RESEND_REFUSED_COPY} ${ORDER_REFUSED_RESEND_SUFFIX_COPY}`,
+      );
+    }
+  });
+
+  it('a time zone that could not be read: final on the only send, with a next step', () => {
+    const o = classifyOrderSubmitResult(
+      refused(409, 'conflict', { reason: 'timezone_unreadable', retryable: true }),
+      { sends: 1 },
+    );
+    expect(o).toMatchObject({ final: true, outcome: 'refused', reason: 'timezone_unreadable' });
+    expect(orderRefusalCopy('timezone_unreadable', null, ctx)).toBe(
+      "Your organization's time zone couldn't be read, so it wasn't sent. Wait a moment, then submit it again.",
+    );
+    // On a resend it is only the cause; the suffix says what to do.
+    const nf = {
+      final: false as const,
+      why: 'refused' as const,
+      reason: 'timezone_unreadable',
+      details: null,
+    };
+    expect(orderUnconfirmedCopy(nf, ctx)).toBe(
+      `${ORDER_TIMEZONE_UNREADABLE_COPY} ${ORDER_REFUSED_RESEND_SUFFIX_COPY}`,
+    );
+  });
+
+  it('a site on a pickup and a malformed site id get their own words', () => {
+    expect(orderRefusalCopy('invalid', d({ field: 'pickupSite' }), ctx)).toBe(
+      "A pickup order doesn't take a delivery site.",
+    );
+    expect(orderRefusalCopy('invalid', d({ field: 'deliveryCharterId' }), ctx)).toBe(
+      ORDER_BODY_UNREADABLE_COPY,
+    );
+    expect(orderRefusalCopy('invalid', d({ field: 'body' }), ctx)).toBe(ORDER_BODY_UNREADABLE_COPY);
+  });
+
   it('the already-placed line names the SO number', () => {
     expect(orderAlreadyPlacedCopy({ orderNumber: 123, orderLabel: 'SO-000123' })).toBe(
       'It had already been placed: SO-000123.',
@@ -1532,8 +1990,16 @@ describe('the words', () => {
       ORDER_PHONE_AAL2_UNCONFIRMED_COPY,
       ORDER_SIGN_IN_COPY,
       ORDER_REFUSED_RESEND_SUFFIX_COPY,
+      ORDER_RESEND_REFUSED_COPY,
+      ORDER_UNCONFIRMED_STALE_BODY_COPY,
     ]) {
       expect(text).not.toMatch(/try again/i);
     }
+    // A final refusal never points at Check and finish, a button its state
+    // does not show; the fault sentence (an unknown outcome) always does.
+    for (const text of [ORDER_REFUSED_FINAL_COPY, ORDER_PICKUP_HAS_SITE_COPY]) {
+      expect(text).not.toMatch(/Check and finish/);
+    }
+    expect(ORDER_FAULT_COPY).toMatch(/Check and finish/);
   });
 });

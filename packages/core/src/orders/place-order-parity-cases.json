@@ -2,11 +2,11 @@
   "about": [
     "ONE FIXTURE, TWO ENGINES (phone ordering plan 3.2 step 3 and graft 3). Each case is a create body and what each engine must answer for its SHAPE, so the TypeScript schema and place_order_request cannot drift.",
     "Core (packages/core/src/orders/place-order.parity.test.ts) reads each body with parseOrderCreateRequest and checks `core`.",
-    "pgTAP (supabase/tests/<M1>_place_order_request.test.sql, PO-2) gets a generated block (scripts/gen-place-order-parity-sql.mjs): per case, the p_request the service would build from the body, the key, and `sql`. place_order_request must raise exactly that for a refused case and write nothing, or get past step 3 for an accepted one.",
-    "Bodies: `body` patches the base body key by key (a value of \"$delete\" removes the key). The generator puts idempotencyKey (one per case), placerUserId (ids.placer) and warehouseId (ids.warehouse) first. A line {\"item\": k} is item k (ids.itemPrefix + k as 12 hex digits); {\"itemId\": ...} is used as written. `lines` may be {\"repeat\": n, \"quantity\": q} for n distinct items. A string may be {\"$repeat\": \"x\", \"times\": n, \"suffix\": \"...\"}. \"$site\", \"$bundle\" and \"$other\" are ids.site, ids.bundle and ids.other.",
+    "pgTAP (supabase/tests/<M1>_place_order_request.test.sql, PO-2) gets a generated block (scripts/gen-place-order-parity-sql.mjs): per case, the p_request the service would build from the body, the key, and `sql`. The block is printable ASCII: every other character in a request is written as a JSON \\uXXXX escape, which jsonb reads back to the same value. place_order_request must raise exactly that for a refused case and write nothing, or get past step 3 for an accepted one.",
+    "Bodies: `body` patches the base body key by key (a value of \"$delete\" removes the key). The generator puts idempotencyKey (one per case), placerUserId (ids.placer) and warehouseId (ids.warehouse) first. A line {\"item\": k} is item k (ids.itemPrefix + k as 12 hex digits); {\"itemId\": ...} is used as written. `lines` may be {\"repeat\": n, \"quantity\": q} for n distinct items, or {\"repeat\": n, \"quantity\": q, \"item\": k} for n lines of item k. A string may be {\"$repeat\": \"x\", \"times\": n, \"suffix\": \"...\"}. \"$site\", \"$bundle\" and \"$other\" are ids.site, ids.bundle and ids.other.",
     "The database side: `sqlPatch` patches the generated p_request (snake_case) for a case only the database can see, and `sqlKey` replaces the key (null for none). The service passes the body's values through (kits stay out: they are the audit note only), surface 'app' unless patched. The parity organization's zone is UTC, so needed_by is the wall clock with Z; converting in a real zone is the service's (core wallClockToInstant), and whether it is still to come is step 8, not shape.",
     "core: \"accept\" or {\"reason\", \"field\"?} (parseOrderCreateRequest's refusal). sql: \"accept\" (gets past step 3: no 22023 is raised), {\"sqlstate\": \"22023\", \"hint\": \"order_invalid\" | \"delivery_needs_site\" | \"idempotency_key_required\" | \"idempotency_key_invalid\", \"field\"?} or {\"sqlstate\": \"42501\", \"hint\": \"placer_mismatch\"} (step 1), or \"unreachable\": core refuses the body and the service never calls the database, so there is nothing to check there.",
-    "Both engines: trimming removes the whitespace JavaScript's String.prototype.trim removes; lengths are characters (code points), as Postgres length() counts them; each line's quantity must be a whole number of at least 1 BEFORE lines of the same item are summed, then each item's sum is at most 10,000 and the total at most 10,000 (per item first, then the total); email: one @, something on each side, a dot in the domain, no whitespace, at most 254 characters; the on-behalf name and email come both or neither.",
+    "Both engines: trimming removes exactly the characters JavaScript's String.prototype.trim removes, no fewer and no more (A13 pads a name, an email and notes with every one of them; R44 and R45 end an email with U+0085 and U+200B, which it keeps); lengths are characters (code points), as Postgres length() counts them; the line cap counts lines as sent, before lines of the same item are summed (R41); each line's quantity must be a whole number of at least 1 BEFORE lines of the same item are summed, then each item's sum is at most 10,000 and the total at most 10,000 (per item first, then the total); a quantity past the database's integer range (R42, R43) or a line that is not an object (D05) is the same 22023 order_invalid, never a cast error; email: the rule the web applies today (zod 3's .email() after trimming), /^(?!\\.)(?!.*\\.\\.)([A-Z0-9_'+\\-\\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\\-]*\\.)+[A-Z]{2,}$/i, which Postgres AREs take as written with ~*, at most 254 characters; the on-behalf name and email come both or neither; a pickup's site: core refuses it, the database drops it (R21).",
     "After editing this file run: node scripts/gen-place-order-parity-sql.mjs (then --check passes, and the core parity test checks the block)."
   ],
   "ids": {
@@ -135,6 +135,26 @@
           { "item": 1, "quantity": 4 }
         ]
       },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A13",
+      "title": "a name, an email and notes padded with every character JavaScript's trim removes (trimmed first, on both engines)",
+      "body": {
+        "onBehalfOf": {
+          "name": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffMaria Lopez\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff",
+          "email": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffmaria@example.org\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        },
+        "notes": "\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffRoom 12\t\n\u000b\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+      },
+      "core": "accept",
+      "sql": "accept"
+    },
+    {
+      "id": "A14",
+      "title": "an email with an apostrophe, a plus, a hyphen and subdomains (the web accepts it today)",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "o'neil+orders@sub.ex-ample.co.uk" } },
       "core": "accept",
       "sql": "accept"
     },
@@ -302,9 +322,9 @@
     },
     {
       "id": "R21",
-      "title": "pickup with a site (core refuses the body; the database drops a pickup's site)",
+      "title": "pickup with a site (core refuses the body, in its own words; the database drops a pickup's site)",
       "body": { "deliveryCharterId": "$site" },
-      "core": { "reason": "invalid", "field": "deliveryCharterId" },
+      "core": { "reason": "invalid", "field": "pickupSite" },
       "sql": "accept"
     },
     {
@@ -401,6 +421,83 @@
       "sql": "unreachable"
     },
     {
+      "id": "R35",
+      "title": "an email with a no-break space inside it",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria\u00a0lopez@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R36",
+      "title": "an email with a one-letter top-level domain (the web refuses it today)",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@gmail.c" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R37",
+      "title": "an email with two dots in a row",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria..lopez@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R38",
+      "title": "an email with a quoted local part",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "\"maria\"@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R39",
+      "title": "an email whose domain starts with a hyphen",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@-example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R40",
+      "title": "an email with a letter outside ASCII",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "mar\u00eda@example.org" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R41",
+      "title": "101 lines of the same item, 1 each (the line cap counts lines as sent, before the sum)",
+      "body": { "lines": { "repeat": 101, "quantity": 1, "item": 1 } },
+      "core": { "reason": "too_many_lines" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
+    },
+    {
+      "id": "R42",
+      "title": "a quantity of 3,000,000,000 (past the database's 4-byte integers)",
+      "body": { "lines": [{ "item": 1, "quantity": 3000000000 }] },
+      "core": { "reason": "too_many_units" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R43",
+      "title": "a quantity of 1e20 (past the database's 8-byte integers)",
+      "body": { "lines": [{ "item": 1, "quantity": 100000000000000000000 }] },
+      "core": { "reason": "too_many_units" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "quantity" }
+    },
+    {
+      "id": "R44",
+      "title": "an email ending in U+0085, which JavaScript's trim keeps",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@example.org\u0085" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "R45",
+      "title": "an email ending in a zero-width space (U+200B), which JavaScript's trim keeps",
+      "body": { "onBehalfOf": { "name": "Maria", "email": "maria@example.org\u200b" } },
+      "core": { "reason": "on_behalf_invalid" },
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
       "id": "D01",
       "title": "a surface that is neither web nor app (the service sets it)",
       "body": {},
@@ -431,6 +528,14 @@
       "sqlPatch": { "on_behalf_email": "maria@example.org" },
       "core": "accept",
       "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "on_behalf" }
+    },
+    {
+      "id": "D05",
+      "title": "a line that is not an object",
+      "body": {},
+      "sqlPatch": { "lines": [1] },
+      "core": "accept",
+      "sql": { "sqlstate": "22023", "hint": "order_invalid", "field": "lines" }
     }
   ]
 }

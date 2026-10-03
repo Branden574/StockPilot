@@ -71,7 +71,9 @@ const SQL_HINTS = {
   ],
   42501: ['placer_mismatch'],
 };
-const SQL_FIELDS = [
+/** The fields an order_invalid refusal may name (its detail). Core's
+ *  orderShapeRefusalFromSql answers each one. */
+export const SQL_FIELDS = [
   'lines',
   'quantity',
   'total',
@@ -118,8 +120,9 @@ function expand(fx, value) {
 
 function expandLines(fx, lines) {
   if (lines && !Array.isArray(lines) && typeof lines === 'object' && 'repeat' in lines) {
+    // n distinct items, or n lines of one item when `item` is given.
     return Array.from({ length: lines.repeat }, (_, i) => ({
-      itemId: itemId(fx, i + 1),
+      itemId: itemId(fx, 'item' in lines ? lines.item : i + 1),
       quantity: lines.quantity,
     }));
   }
@@ -217,6 +220,16 @@ export function validateFixture(fx) {
 
 const lit = (s) => (s === null || s === undefined ? 'null' : `'${String(s).replace(/'/g, "''")}'`);
 
+/** JSON text with every character outside printable ASCII as a \uXXXX escape
+ *  (a surrogate pair as two). jsonb reads it back to the same value, and no
+ *  invisible character (a no-break space, a line separator) sits in the .sql
+ *  file where an editor could change it. */
+const asciiJson = (v) =>
+  JSON.stringify(v).replace(
+    /[^\x20-\x7e]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+
 /** The data block of the M1 pgTAP file, markers included. */
 export function renderPlaceOrderParitySql(fx) {
   validateFixture(fx);
@@ -228,7 +241,7 @@ export function renderPlaceOrderParitySql(fx) {
       skipped.push(c.id);
       return;
     }
-    const req = JSON.stringify(caseSqlRequest(fx, c, n));
+    const req = asciiJson(caseSqlRequest(fx, c, n));
     const accept = c.sql === 'accept';
     rows.push(
       `(${n}, ${lit(c.id)}, ${lit(req)}::jsonb, ${lit(caseSqlKey(fx, c, n))}, ${accept ? 'null' : lit(c.sql.sqlstate)}, ${accept ? 'null' : lit(c.sql.hint)}, ${accept ? 'null' : lit(c.sql.field ?? null)})`,

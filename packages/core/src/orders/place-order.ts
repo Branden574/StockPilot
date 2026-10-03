@@ -32,6 +32,16 @@
  * Nothing here decides from message text. Every decision reads the HTTP
  * status, the error code and `details` (pattern #28: the Add items defect
  * came from parsing text).
+ *
+ * ═══ IMPORTING THIS MODULE RUNS NOTHING ═══
+ *
+ * Core's index re-exports this file, so every web page that bundles core
+ * evaluates its top level, and so does the phone at start-up (Metro does not
+ * tree-shake). The top level therefore holds only declarations and literals:
+ * the zod schema is built on first use (`orderCreateRequestSchema()`), and
+ * the cap sentences are written out. place-order.test.ts fails on any call
+ * at the top level. (The PO-1 review measured +3.6 KB on 129 web routes when
+ * the schema was built on import.)
  */
 
 import { z } from 'zod';
@@ -56,14 +66,19 @@ export const ORDER_EMAIL_MAX = 254;
 /** Kits named for the audit note (the web action's cap). */
 export const ORDER_MAX_KITS = 100;
 
-/** "10000" -> "10,000", without Intl (the phone's runtime). */
-function withCommas(n: number): string {
-  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** One @, something on each side, a dot in the domain, no whitespace. */
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/**
+ * The on-behalf email rule the web applies today: zod 3's `.email()` pattern,
+ * after trimming (apps/web/src/server/actions/order-requests.ts reads the
+ * email with z.string().trim().email().max(254)), so moving the web onto core
+ * in PO-2 accepts and refuses exactly what it does now. ASCII letters, digits
+ * and _ ' + - . before the @ (not starting or ending with a dot, no two dots
+ * in a row), dot-separated labels after it that start with a letter or digit,
+ * and a top-level domain of two or more letters. Postgres AREs support these
+ * lookaheads, so M1 uses the same pattern with `~*`. place-order.test.ts pins
+ * it to zod's own over a corpus.
+ */
+const EMAIL_RE = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9-]*\.)+[A-Z]{2,}$/i;
 /** The organization's wall clock, as a datetime-local input gives it. */
 const WALL_CLOCK_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
@@ -77,9 +92,15 @@ function charCount(s: string): number {
   return Array.from(s).length;
 }
 
-/** Whether "YYYY-MM-DDTHH:mm" names a real calendar date and time. Zone-free:
- *  the server converts it in the organization's zone and refuses a time that
- *  does not exist there (the spring-forward hour). */
+/**
+ * Whether "YYYY-MM-DDTHH:mm" names a real calendar date and time. Zone-free:
+ * the server converts it in the organization's zone with core
+ * `wallClockToInstant`, which can still answer null for a wall clock this
+ * accepts: the spring-forward hour, and years 0000 to 0099 (Date.UTC reads
+ * them as 1900 to 1999). The service (PO-2) answers that null with
+ * `needed_by_invalid_time`, never converts in a guessed zone, and never
+ * passes a null on as "no needed-by".
+ */
 export function isOrderWallClock(v: string): boolean {
   const m = WALL_CLOCK_RE.exec(v);
   if (!m) return false;
@@ -142,9 +163,12 @@ export type OrderCreateShapeReason =
 
 export interface OrderCreateRefusal {
   reason: OrderCreateShapeReason;
-  /** For `invalid`: the body field at fault: `lines` (none), `quantity`,
-   *  `itemId`, `line`, `deliveryCharterId` (a site on a pickup),
-   *  `idempotencyKey`, `placerUserId`, `body`, or the name of an unknown key. */
+  /** For `invalid`: what is at fault: `lines` (none), `quantity`, `itemId`,
+   *  `line`, `pickupSite` (a site on a pickup order), `deliveryCharterId` (a
+   *  missing or malformed site id), `idempotencyKey`, `placerUserId`,
+   *  `warehouseId`, `fulfillmentType`, `notes`, `kits`, `body`, or the name
+   *  of an unknown key (`body` when that name is one with words of its own:
+   *  `lines`, `quantity`, `pickupSite`). */
   field?: string;
   /** Core's sentence for it. */
   message: string;
@@ -152,10 +176,12 @@ export interface OrderCreateRefusal {
 
 export const ORDER_LINES_EMPTY_COPY = 'Add at least one item.';
 export const ORDER_TOO_MANY_LINES_COPY = `An order request can have at most ${ORDER_MAX_LINES} lines.`;
-export const ORDER_TOO_MANY_UNITS_COPY = `An order request can have at most ${withCommas(ORDER_MAX_UNITS)} units.`;
+// Written out, not formatted at load (see the header); the test pins both
+// numbers to the caps.
+export const ORDER_TOO_MANY_UNITS_COPY = 'An order request can have at most 10,000 units.';
 export const ORDER_QUANTITY_NOT_WHOLE_COPY = 'Quantities must be whole numbers.';
 export const ORDER_QUANTITY_INVALID_COPY = 'Each quantity must be at least 1.';
-export const ORDER_NOTES_TOO_LONG_COPY = `Manager notes can be at most ${withCommas(ORDER_NOTES_MAX)} characters.`;
+export const ORDER_NOTES_TOO_LONG_COPY = 'Manager notes can be at most 2,000 characters.';
 export const ORDER_ON_BEHALF_INVALID_COPY = `Enter their name (up to ${ORDER_ON_BEHALF_NAME_MAX} characters) and a valid email address.`;
 export const ORDER_DELIVERY_NEEDS_SITE_COPY = 'Choose a delivery site.';
 export const ORDER_PICKUP_HAS_SITE_COPY = "A pickup order doesn't take a delivery site.";
@@ -186,9 +212,16 @@ export function orderCreateRefusalCopy(reason: OrderCreateShapeReason, field?: s
     case 'invalid':
       if (field === 'lines') return ORDER_LINES_EMPTY_COPY;
       if (field === 'quantity') return ORDER_QUANTITY_INVALID_COPY;
-      if (field === 'deliveryCharterId') return ORDER_PICKUP_HAS_SITE_COPY;
+      if (field === 'pickupSite') return ORDER_PICKUP_HAS_SITE_COPY;
       return ORDER_BODY_UNREADABLE_COPY;
   }
+}
+
+/** An `invalid` field with words of its own (orderCreateRefusalCopy). An
+ *  unknown key with one of these names is reported as `body`, so it never
+ *  borrows them. */
+function hasOwnWords(field: string): boolean {
+  return field === 'lines' || field === 'quantity' || field === 'pickupSite';
 }
 
 type Params = { reason: OrderCreateShapeReason; field?: string };
@@ -205,71 +238,151 @@ const uuidField = () =>
     })
     .regex(UUID_RE, { message: ORDER_BODY_UNREADABLE_COPY });
 
-const lineSchema = z
-  .object(
-    {
-      itemId: z
-        .string({
-          required_error: ORDER_BODY_UNREADABLE_COPY,
-          invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
-        })
-        .regex(UUID_RE, { message: ORDER_BODY_UNREADABLE_COPY }),
-      quantity: z
-        .number({
-          required_error: ORDER_QUANTITY_INVALID_COPY,
-          invalid_type_error: ORDER_QUANTITY_INVALID_COPY,
-        })
-        .int({ message: ORDER_QUANTITY_NOT_WHOLE_COPY })
-        .min(1, { message: ORDER_QUANTITY_INVALID_COPY })
-        .max(ORDER_MAX_UNITS_PER_LINE, { message: ORDER_TOO_MANY_UNITS_COPY }),
-    },
-    { invalid_type_error: ORDER_BODY_UNREADABLE_COPY },
-  )
-  .strict(ORDER_BODY_UNREADABLE_COPY);
+function buildOrderCreateRequestSchema() {
+  const lineSchema = z
+    .object(
+      {
+        itemId: z
+          .string({
+            required_error: ORDER_BODY_UNREADABLE_COPY,
+            invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
+          })
+          .regex(UUID_RE, { message: ORDER_BODY_UNREADABLE_COPY }),
+        quantity: z
+          .number({
+            required_error: ORDER_QUANTITY_INVALID_COPY,
+            invalid_type_error: ORDER_QUANTITY_INVALID_COPY,
+          })
+          .int({ message: ORDER_QUANTITY_NOT_WHOLE_COPY })
+          .min(1, { message: ORDER_QUANTITY_INVALID_COPY })
+          .max(ORDER_MAX_UNITS_PER_LINE, { message: ORDER_TOO_MANY_UNITS_COPY }),
+      },
+      { invalid_type_error: ORDER_BODY_UNREADABLE_COPY },
+    )
+    .strict(ORDER_BODY_UNREADABLE_COPY);
 
-const kitSchema = z
-  .object(
-    {
-      bundleId: uuidField(),
-      count: z
-        .number({
-          required_error: ORDER_BODY_UNREADABLE_COPY,
-          invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
-        })
-        .int({ message: ORDER_BODY_UNREADABLE_COPY })
-        .min(1, { message: ORDER_BODY_UNREADABLE_COPY })
-        .max(ORDER_MAX_UNITS, { message: ORDER_BODY_UNREADABLE_COPY }),
-    },
-    { invalid_type_error: ORDER_BODY_UNREADABLE_COPY },
-  )
-  .strict(ORDER_BODY_UNREADABLE_COPY);
+  const kitSchema = z
+    .object(
+      {
+        bundleId: uuidField(),
+        count: z
+          .number({
+            required_error: ORDER_BODY_UNREADABLE_COPY,
+            invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
+          })
+          .int({ message: ORDER_BODY_UNREADABLE_COPY })
+          .min(1, { message: ORDER_BODY_UNREADABLE_COPY })
+          .max(ORDER_MAX_UNITS, { message: ORDER_BODY_UNREADABLE_COPY }),
+      },
+      { invalid_type_error: ORDER_BODY_UNREADABLE_COPY },
+    )
+    .strict(ORDER_BODY_UNREADABLE_COPY);
 
-const onBehalfSchema = z
-  .object(
-    {
-      name: z
-        .string({
-          required_error: ORDER_ON_BEHALF_INVALID_COPY,
-          invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
-        })
-        .refine((v) => {
-          const n = charCount(v.trim());
-          return n >= 1 && n <= ORDER_ON_BEHALF_NAME_MAX;
-        }, ORDER_ON_BEHALF_INVALID_COPY),
-      email: z
-        .string({
-          required_error: ORDER_ON_BEHALF_INVALID_COPY,
-          invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
-        })
-        .refine((v) => {
-          const e = v.trim();
-          return charCount(e) <= ORDER_EMAIL_MAX && EMAIL_RE.test(e);
-        }, ORDER_ON_BEHALF_INVALID_COPY),
-    },
-    { invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY },
-  )
-  .strict(ORDER_ON_BEHALF_INVALID_COPY)
-  .transform((v) => ({ name: v.name.trim(), email: v.email.trim() }));
+  const onBehalfSchema = z
+    .object(
+      {
+        name: z
+          .string({
+            required_error: ORDER_ON_BEHALF_INVALID_COPY,
+            invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
+          })
+          .refine((v) => {
+            const n = charCount(v.trim());
+            return n >= 1 && n <= ORDER_ON_BEHALF_NAME_MAX;
+          }, ORDER_ON_BEHALF_INVALID_COPY),
+        email: z
+          .string({
+            required_error: ORDER_ON_BEHALF_INVALID_COPY,
+            invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
+          })
+          .refine((v) => {
+            const e = v.trim();
+            return charCount(e) <= ORDER_EMAIL_MAX && EMAIL_RE.test(e);
+          }, ORDER_ON_BEHALF_INVALID_COPY),
+      },
+      { invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY },
+    )
+    .strict(ORDER_ON_BEHALF_INVALID_COPY)
+    .transform((v) => ({ name: v.name.trim(), email: v.email.trim() }));
+
+  return z
+    .object(
+      {
+        idempotencyKey: uuidField(),
+        placerUserId: uuidField(),
+        warehouseId: uuidField(),
+        fulfillmentType: z.enum(['pickup', 'delivery'], {
+          errorMap: () => ({ message: ORDER_BODY_UNREADABLE_COPY }),
+        }),
+        deliveryCharterId: uuidField().nullable(),
+        onBehalfOf: onBehalfSchema.nullable(),
+        notes: z
+          .string({
+            required_error: ORDER_BODY_UNREADABLE_COPY,
+            invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
+          })
+          .nullable()
+          .refine((v) => v === null || charCount(v.trim()) <= ORDER_NOTES_MAX, {
+            message: ORDER_NOTES_TOO_LONG_COPY,
+            params: why('notes_too_long'),
+          })
+          .transform((v) => (v === null ? null : v.trim() || null)),
+        neededByLocal: z
+          .string({
+            required_error: ORDER_NEEDED_BY_INVALID_TIME_COPY,
+            invalid_type_error: ORDER_NEEDED_BY_INVALID_TIME_COPY,
+          })
+          .nullable()
+          .refine((v) => v === null || isOrderWallClock(v), ORDER_NEEDED_BY_INVALID_TIME_COPY),
+        lines: z
+          .array(lineSchema, {
+            required_error: ORDER_LINES_EMPTY_COPY,
+            invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
+          })
+          .min(1, { message: ORDER_LINES_EMPTY_COPY })
+          .max(ORDER_MAX_LINES, { message: ORDER_TOO_MANY_LINES_COPY }),
+        kits: z
+          .array(kitSchema, { invalid_type_error: ORDER_BODY_UNREADABLE_COPY })
+          .max(ORDER_MAX_KITS, { message: ORDER_BODY_UNREADABLE_COPY })
+          .optional(),
+      },
+      {
+        invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
+        required_error: ORDER_BODY_UNREADABLE_COPY,
+      },
+    )
+    .strict(ORDER_BODY_UNREADABLE_COPY)
+    .superRefine((v, ctx) => {
+      if (v.fulfillmentType === 'delivery' && v.deliveryCharterId === null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['deliveryCharterId'],
+          message: ORDER_DELIVERY_NEEDS_SITE_COPY,
+          params: why('delivery_needs_site'),
+        });
+      }
+      if (v.fulfillmentType === 'pickup' && v.deliveryCharterId !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['deliveryCharterId'],
+          message: ORDER_PICKUP_HAS_SITE_COPY,
+          params: why('invalid', 'pickupSite'),
+        });
+      }
+      const total = v.lines.reduce((s, l) => s + l.quantity, 0);
+      if (total > ORDER_MAX_UNITS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['lines'],
+          message: ORDER_TOO_MANY_UNITS_COPY,
+          params: why('too_many_units'),
+        });
+      }
+    });
+}
+
+type OrderCreateRequestSchema = ReturnType<typeof buildOrderCreateRequestSchema>;
+let builtOrderCreateRequestSchema: OrderCreateRequestSchema | null = null;
 
 /**
  * The create body (plan 3.1), `.strict()`: an unknown key is refused, never
@@ -284,83 +397,27 @@ const onBehalfSchema = z
  *
  * Read it through parseOrderCreateRequest, which names the reason; a direct
  * safeParse gets core's sentence on every issue but no reason.
+ *
+ * Built on the first call and kept, never when the module loads (see the
+ * header). The plan names this `orderCreateRequestSchema`; it is a function
+ * returning the schema.
+ *
+ * Only the new body. The web action's legacy branch (PO-2, one release, for
+ * tabs opened before the deploy) receives today's body (`neededBy` as an
+ * instant, `requesterPhone` and `pickupLocationNotes` null) and reads it with
+ * its own legacy schema; `.strict()` refuses that body here, by design.
  */
-export const orderCreateRequestSchema = z
-  .object(
-    {
-      idempotencyKey: uuidField(),
-      placerUserId: uuidField(),
-      warehouseId: uuidField(),
-      fulfillmentType: z.enum(['pickup', 'delivery'], {
-        errorMap: () => ({ message: ORDER_BODY_UNREADABLE_COPY }),
-      }),
-      deliveryCharterId: uuidField().nullable(),
-      onBehalfOf: onBehalfSchema.nullable(),
-      notes: z
-        .string({
-          required_error: ORDER_BODY_UNREADABLE_COPY,
-          invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
-        })
-        .nullable()
-        .refine((v) => v === null || charCount(v.trim()) <= ORDER_NOTES_MAX, {
-          message: ORDER_NOTES_TOO_LONG_COPY,
-          params: why('notes_too_long'),
-        })
-        .transform((v) => (v === null ? null : v.trim() || null)),
-      neededByLocal: z
-        .string({
-          required_error: ORDER_NEEDED_BY_INVALID_TIME_COPY,
-          invalid_type_error: ORDER_NEEDED_BY_INVALID_TIME_COPY,
-        })
-        .nullable()
-        .refine((v) => v === null || isOrderWallClock(v), ORDER_NEEDED_BY_INVALID_TIME_COPY),
-      lines: z
-        .array(lineSchema, {
-          required_error: ORDER_LINES_EMPTY_COPY,
-          invalid_type_error: ORDER_BODY_UNREADABLE_COPY,
-        })
-        .min(1, { message: ORDER_LINES_EMPTY_COPY })
-        .max(ORDER_MAX_LINES, { message: ORDER_TOO_MANY_LINES_COPY }),
-      kits: z
-        .array(kitSchema, { invalid_type_error: ORDER_BODY_UNREADABLE_COPY })
-        .max(ORDER_MAX_KITS, { message: ORDER_BODY_UNREADABLE_COPY })
-        .optional(),
-    },
-    { invalid_type_error: ORDER_BODY_UNREADABLE_COPY, required_error: ORDER_BODY_UNREADABLE_COPY },
-  )
-  .strict(ORDER_BODY_UNREADABLE_COPY)
-  .superRefine((v, ctx) => {
-    if (v.fulfillmentType === 'delivery' && v.deliveryCharterId === null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['deliveryCharterId'],
-        message: ORDER_DELIVERY_NEEDS_SITE_COPY,
-        params: why('delivery_needs_site'),
-      });
-    }
-    if (v.fulfillmentType === 'pickup' && v.deliveryCharterId !== null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['deliveryCharterId'],
-        message: ORDER_PICKUP_HAS_SITE_COPY,
-        params: why('invalid', 'deliveryCharterId'),
-      });
-    }
-    const total = v.lines.reduce((s, l) => s + l.quantity, 0);
-    if (total > ORDER_MAX_UNITS) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['lines'],
-        message: ORDER_TOO_MANY_UNITS_COPY,
-        params: why('too_many_units'),
-      });
-    }
-  });
+export function orderCreateRequestSchema(): OrderCreateRequestSchema {
+  if (builtOrderCreateRequestSchema === null) {
+    builtOrderCreateRequestSchema = buildOrderCreateRequestSchema();
+  }
+  return builtOrderCreateRequestSchema;
+}
 
 /** The body as the client sends it. */
-export type OrderCreateRequestInput = z.input<typeof orderCreateRequestSchema>;
+export type OrderCreateRequestInput = z.input<OrderCreateRequestSchema>;
 /** The body as read: trimmed notes (empty is null), trimmed on-behalf. */
-export type OrderCreateRequest = z.output<typeof orderCreateRequestSchema>;
+export type OrderCreateRequest = z.output<OrderCreateRequestSchema>;
 
 /** The reason for one zod issue: its own when it carries one, else by where
  *  it is and what kind it is. */
@@ -370,10 +427,15 @@ function refusalOf(issue: z.ZodIssue): { reason: OrderCreateShapeReason; field?:
     if (p?.reason) return why(p.reason, p.field);
   }
   const [top, index, leaf] = issue.path;
+  const unknownKey = (keys: string[], otherwise: string) => {
+    const k = keys[0];
+    return {
+      reason: 'invalid' as const,
+      field: k === undefined ? otherwise : hasOwnWords(k) ? 'body' : k,
+    };
+  };
   if (top === undefined) {
-    if (issue.code === z.ZodIssueCode.unrecognized_keys) {
-      return { reason: 'invalid', field: issue.keys[0] ?? 'body' };
-    }
+    if (issue.code === z.ZodIssueCode.unrecognized_keys) return unknownKey(issue.keys, 'body');
     return { reason: 'invalid', field: 'body' };
   }
   switch (top) {
@@ -390,8 +452,7 @@ function refusalOf(issue: z.ZodIssue): { reason: OrderCreateShapeReason; field?:
         return { reason: 'invalid', field: 'quantity' };
       }
       if (leaf === 'itemId') return { reason: 'invalid', field: 'itemId' };
-      if (issue.code === z.ZodIssueCode.unrecognized_keys)
-        return { reason: 'invalid', field: issue.keys[0] ?? 'line' };
+      if (issue.code === z.ZodIssueCode.unrecognized_keys) return unknownKey(issue.keys, 'line');
       return { reason: 'invalid', field: 'line' };
     case 'onBehalfOf':
       return { reason: 'on_behalf_invalid' };
@@ -414,7 +475,7 @@ export type OrderCreateParse =
  * kits), then the checks across fields (delivery site, total units).
  */
 export function parseOrderCreateRequest(raw: unknown): OrderCreateParse {
-  const parsed = orderCreateRequestSchema.safeParse(raw);
+  const parsed = orderCreateRequestSchema().safeParse(raw);
   if (parsed.success) return { ok: true, value: parsed.data };
   const first = parsed.error.issues[0];
   const { reason, field } = first
@@ -719,7 +780,72 @@ export type OrderSubmitOutcome =
       details: OrderRefusalDetails | null;
     };
 
-const NO_DETAILS = readOrderRefusalDetails(null);
+/**
+ * A web server action's answer as a call result. Actions answer
+ * `{ ok: false, error: { code, message, details } }` with no HTTP status, and
+ * the classifiers read the status first: an error with none reads as no
+ * answer (locked, the safe side, but every web refusal, settled ones
+ * included, would sit behind the "not confirmed" panel). PO-2 passes
+ * `serviceErrorStatus` (apps/web/src/server/services/context.ts), so a web
+ * refusal classifies exactly as the phone's ApiError for the same code does.
+ * A success's `data` is the create, status or withdraw answer.
+ */
+export function orderCallResultFromAction(
+  res: { ok: true; data: unknown } | { ok: false; error: { code: string; details?: unknown } },
+  statusForCode: (code: string) => number,
+): OrderCallResult {
+  if (res.ok) return { ok: true, status: 200, body: res.data };
+  const { code, details } = res.error;
+  return { ok: false, error: { status: statusForCode(code), code, details } };
+}
+
+/**
+ * A shape refusal the DATABASE raised (M1 step 3: 22023 with hint
+ * `order_invalid` and a field in its detail, `delivery_needs_site`,
+ * `idempotency_key_required` or `idempotency_key_invalid`) as core's reason,
+ * so the service's 400 carries the same reason and words whichever engine
+ * refused. The route reads every body with core's schema first, so the
+ * database refusing a shape core accepted means the engines disagree (the
+ * parity fixture exists to stop that). A field that stands for several core
+ * reasons (`lines`, `quantity`), a field the service sets (`surface`) and
+ * anything unknown answer `invalid`/`body` ("couldn't be read") rather than
+ * guess. The parity test checks every pairing in the fixture.
+ */
+export function orderShapeRefusalFromSql(
+  hint: string,
+  field: string | null,
+): { reason: OrderCreateShapeReason; field?: string } {
+  const body = { reason: 'invalid' as const, field: 'body' };
+  switch (hint) {
+    case 'delivery_needs_site':
+      return { reason: 'delivery_needs_site' };
+    case 'idempotency_key_required':
+    case 'idempotency_key_invalid':
+      return { reason: 'invalid', field: 'idempotencyKey' };
+    case 'order_invalid':
+      break;
+    default:
+      return body;
+  }
+  switch (field) {
+    case 'notes':
+      return { reason: 'notes_too_long' };
+    case 'on_behalf':
+      return { reason: 'on_behalf_invalid' };
+    case 'needed_by':
+      return { reason: 'needed_by_invalid_time' };
+    case 'total':
+      return { reason: 'too_many_units' };
+    case 'fulfillment_type':
+      return { reason: 'invalid', field: 'fulfillmentType' };
+    case 'warehouse':
+      return { reason: 'invalid', field: 'warehouseId' };
+    case 'site':
+      return { reason: 'invalid', field: 'deliveryCharterId' };
+    default:
+      return body;
+  }
+}
 
 /**
  * What one SEND of a key came back with (plan 3.4's table). `sends` is how
@@ -774,7 +900,7 @@ export function classifyOrderSubmitResult(
           outcome: 'refused',
           reason: 'unavailable',
           recorded: false,
-          details: NO_DETAILS,
+          details: readOrderRefusalDetails(null),
         }
       : { final: false, why: 'unavailable', reason: 'unavailable', details: null };
   }
@@ -865,22 +991,47 @@ export function classifyOrderSettleResult(result: OrderCallResult): OrderSubmitO
  *
  * The web keeps it under `order-pending:v1:<userId>:<orgId>:<warehouseId>`,
  * the phone inside its account-scoped `workspace.orderDraft.v1...` draft.
+ *
+ * `bodyUnreadable` is set only by parsePendingOrderSubmission, for a record of
+ * this account whose body today's schema no longer reads (an earlier build
+ * wrote it). Its key may still have placed an order, so it stays live and
+ * locked: status reads and "Don't send it" settle it, and "Check and finish"
+ * is not offered (the server would refuse that body before it looked at the
+ * key). Narrow on it before sending `body`.
  */
-export interface PendingOrderSubmission {
+export type PendingOrderSubmission = {
   key: string;
-  /** The body exactly as sent: frozen while the key is live. */
-  body: OrderCreateRequestInput;
   state: 'possibly_sent';
   /** Sends of this key so far, counting one about to leave. */
   sends: number;
   firstSentAt: string;
-}
+} & (
+  | {
+      /** The body exactly as sent: frozen while the key is live. */
+      body: OrderCreateRequestInput;
+      bodyUnreadable?: undefined;
+    }
+  | {
+      /** The stored body as it was: never sent again. */
+      body: Record<string, unknown>;
+      bodyUnreadable: true;
+    }
+);
 
 /**
- * Reads a stored pending record for the signed-in user. Null when it cannot
- * be read, or when it belongs to another account (its body's placer is not
- * `sessionUserId`): a record another account left on a shared browser is
- * never shown or sent (judge X-1).
+ * Reads a stored pending record for the signed-in user.
+ *
+ * Null only when nothing ties it to this account and this key: it is not a
+ * record, its key is not uuid-shaped, its send count or first-sent time is
+ * unusable, its body is not an object, its body names another key, or its
+ * body's placer is not `sessionUserId` (a record another account left on a
+ * shared browser is never shown or sent, judge X-1).
+ *
+ * A record of this account whose body fails TODAY's schema (written by an
+ * earlier build before an answer was lost) is returned flagged
+ * `bodyUnreadable`, never dropped: dropping it would unlock the cart and
+ * forget a key that may have placed an order. The flag is worked out on every
+ * read; a stored one is ignored.
  */
 export function parsePendingOrderSubmission(
   raw: unknown,
@@ -890,17 +1041,21 @@ export function parsePendingOrderSubmission(
   if (!uuidShaped(raw.key)) return null;
   if (typeof raw.sends !== 'number' || !Number.isInteger(raw.sends) || raw.sends < 1) return null;
   if (typeof raw.firstSentAt !== 'string' || raw.firstSentAt === '') return null;
-  const body = parseOrderCreateRequest(raw.body);
-  if (!body.ok || !isRecord(raw.body)) return null;
-  if (body.value.idempotencyKey !== raw.key) return null;
-  if (body.value.placerUserId.toLowerCase() !== sessionUserId.toLowerCase()) return null;
-  return {
+  const stored = raw.body;
+  if (!isRecord(stored)) return null;
+  // Ownership and the key, apart from the schema.
+  if (stored.idempotencyKey !== raw.key) return null;
+  if (typeof stored.placerUserId !== 'string') return null;
+  if (stored.placerUserId.toLowerCase() !== sessionUserId.toLowerCase()) return null;
+  const base = {
     key: raw.key,
-    body: raw.body as OrderCreateRequestInput,
-    state: 'possibly_sent',
+    state: 'possibly_sent' as const,
     sends: raw.sends,
     firstSentAt: raw.firstSentAt,
   };
+  return parseOrderCreateRequest(stored).ok
+    ? { ...base, body: stored as OrderCreateRequestInput }
+    : { ...base, body: stored, bodyUnreadable: true };
 }
 
 // ── The state machine (plan 3.4) ────────────────────────────────────────────
@@ -972,6 +1127,12 @@ function settle(
  *
  * A send or a withdraw happens only on a tap; status reads run on their own,
  * and a status read never unlocks unless it reports a final outcome.
+ *
+ * The key tracked is always the key in the body: a send or a restore whose
+ * body names another key changes nothing (the server places under the
+ * body's key while the status read and the withdraw use the tracked one, so
+ * a mismatch could settle the wrong key as "not sent"). A record whose body
+ * this build cannot read is never resent.
  */
 export function orderSubmissionReducer(
   state: OrderSubmissionState,
@@ -980,6 +1141,7 @@ export function orderSubmissionReducer(
   switch (event.type) {
     case 'send':
       if (state.phase !== 'open') return state;
+      if (event.body.idempotencyKey !== event.key) return state;
       return {
         phase: 'sending',
         pending: {
@@ -991,7 +1153,7 @@ export function orderSubmissionReducer(
         },
       };
     case 'resend':
-      if (state.phase !== 'unconfirmed') return state;
+      if (!orderSubmissionCanResend(state)) return state;
       return { phase: 'sending', pending: { ...state.pending, sends: state.pending.sends + 1 } };
     case 'send-result': {
       if (state.phase !== 'sending') return state;
@@ -1017,12 +1179,22 @@ export function orderSubmissionReducer(
     }
     case 'restore':
       if (state.phase !== 'open') return state;
+      if (event.pending.body.idempotencyKey !== event.pending.key) return state;
       return { phase: 'unconfirmed', pending: event.pending, last: NO_ANSWER };
     case 'dismiss':
       if (state.phase === 'placed' || state.phase === 'refused' || state.phase === 'withdrawn')
         return ORDER_SUBMISSION_OPEN;
       return state;
   }
+}
+
+/** Whether "Check and finish" is offered: the key is unconfirmed and its body
+ *  can be sent again (not a record an earlier build wrote that today's schema
+ *  no longer reads). "Don't send it" is always offered while unconfirmed. */
+export function orderSubmissionCanResend(
+  state: OrderSubmissionState,
+): state is Extract<OrderSubmissionState, { phase: 'unconfirmed' }> {
+  return state.phase === 'unconfirmed' && state.pending.bodyUnreadable !== true;
 }
 
 /** The cart, the setup, the notes, the needed-by, the warehouse switch and
@@ -1090,8 +1262,21 @@ export function orderAlreadyPlacedCopy(
   return label ? `It had already been placed: ${label}.` : 'It had already been placed.';
 }
 export const ORDER_REPLAY_COPY = 'This order request was already placed.';
+/** An outcome that is NOT known (a fault, an unreadable answer): the key
+ *  stays live, so it points at Check and finish. */
 export const ORDER_FAULT_COPY =
   "The order request couldn't be confirmed. Check and finish: if it was placed, you'll see it instead of a second one.";
+/** A FINAL refusal whose reason core has no sentence for (an edge's HTML
+ *  403 or 413, a 400 with no reason): refused on the only send, so nothing
+ *  was placed and the cart is unlocked. There is no Check and finish then. */
+export const ORDER_REFUSED_FINAL_COPY = "It wasn't sent. Check the order and submit it again.";
+/** The cause, on a RESEND, when core has no sentence for the reason; the
+ *  unconfirmed panel adds ORDER_REFUSED_RESEND_SUFFIX_COPY. */
+export const ORDER_RESEND_REFUSED_COPY = "This send wasn't accepted.";
+/** The unconfirmed panel for a record an earlier build wrote whose body this
+ *  build cannot read (PendingOrderSubmission.bodyUnreadable). */
+export const ORDER_UNCONFIRMED_STALE_BODY_COPY =
+  "We sent it but did not hear back, so it may or may not have been placed. StockPilot was updated since, so it can't be sent again. Choose Don't send it: if it was placed, you'll see it; if not, your cart is unlocked.";
 export const ORDER_DEVICE_SAVE_FAILED_COPY =
   "Couldn't save your order request on this device, so it wasn't sent.";
 export const ORDER_PHONE_TURNED_OFF_COPY =
@@ -1111,7 +1296,11 @@ export const ORDER_ON_BEHALF_NOT_PERMITTED_COPY =
 export const ORDER_PLACER_MISMATCH_COPY =
   "This order request was started by a different account, so it wasn't sent.";
 export const ORDER_SITE_INACTIVE_COPY = 'That site is no longer active. Choose another site.';
+/** The cause. A final refusal adds what to do (orderRefusalCopy); on a
+ *  resend the unconfirmed panel adds the way out. */
 export const ORDER_TIMEZONE_UNREADABLE_COPY = "Your organization's time zone couldn't be read.";
+export const ORDER_TIMEZONE_UNREADABLE_FINAL_COPY =
+  "Your organization's time zone couldn't be read, so it wasn't sent. Wait a moment, then submit it again.";
 export const ORDER_ITEM_ARCHIVED_COPY = 'This item was archived.';
 export const ORDER_ITEM_NOT_AVAILABLE_COPY = "This item isn't available to you here.";
 
@@ -1155,19 +1344,23 @@ export interface OrderWordsContext {
   /** The cart's own name for an item id (null when the cart has no such line). */
   itemName?: (itemId: string) => string | null;
   warehouseName?: string | null;
+  /** The live key's record has a body this build cannot read
+   *  (PendingOrderSubmission.bodyUnreadable): Check and finish is not
+   *  offered, so the panel says what settles it instead. */
+  bodyUnreadable?: boolean;
 }
 
 /**
  * The CAUSE of a refusal, in one sentence: a schema reason, a reason the
- * service or the database recorded, or a reason raised before the key. It
- * says nothing about whether an earlier send landed; orderUnconfirmedCopy
- * adds that on a resend.
+ * service or the database recorded, or a reason raised before the key. Null
+ * when core has no sentence for the reason. It says nothing about whether an
+ * earlier send landed.
  */
-export function orderRefusalCopy(
+function refusalCauseCopy(
   reason: string | null,
   details: OrderRefusalDetails | null,
   ctx: OrderWordsContext,
-): string {
+): string | null {
   switch (reason) {
     case 'invalid':
       return orderCreateRefusalCopy('invalid', details?.field ?? undefined);
@@ -1222,13 +1415,40 @@ export function orderRefusalCopy(
       return ORDER_BUSY_COPY;
     case 'idempotency_conflict':
       return ORDER_CONFLICT_COPY;
-    default:
+    case 'failed':
       return ORDER_FAULT_COPY;
+    default:
+      return null;
   }
+}
+
+/**
+ * The words for a FINAL refusal (the `refused` phase: recorded under the key,
+ * or refused on the only send, so nothing was placed and the cart is
+ * unlocked). A reason core has no sentence for says it wasn't sent and to
+ * submit again; it never points at Check and finish, which that state does
+ * not show. On a resend, the unconfirmed panel's words come from
+ * orderUnconfirmedCopy instead.
+ */
+export function orderRefusalCopy(
+  reason: string | null,
+  details: OrderRefusalDetails | null,
+  ctx: OrderWordsContext,
+): string {
+  if (reason === 'timezone_unreadable') return ORDER_TIMEZONE_UNREADABLE_FINAL_COPY;
+  return refusalCauseCopy(reason, details, ctx) ?? ORDER_REFUSED_FINAL_COPY;
 }
 
 /** The unconfirmed panel's sentence for why the key is still live. */
 export function orderUnconfirmedCopy(last: NotFinal, ctx: OrderWordsContext): string {
+  const signIn =
+    last.why === 'refused' && (last.reason === 'unauthenticated' || last.reason === 'not_member');
+  if (ctx.bodyUnreadable) {
+    if (signIn) return ORDER_SIGN_IN_COPY;
+    if (last.why === 'refused' && last.reason === 'aal2_required' && ctx.surface === 'phone')
+      return ORDER_PHONE_AAL2_UNCONFIRMED_COPY;
+    return ORDER_UNCONFIRMED_STALE_BODY_COPY;
+  }
   switch (last.why) {
     case 'no_answer':
       return ORDER_UNCONFIRMED_BODY_COPY;
@@ -1244,11 +1464,11 @@ export function orderUnconfirmedCopy(last: NotFinal, ctx: OrderWordsContext): st
     case 'unavailable':
       return `${ORDER_PHONE_UNAVAILABLE_COPY} ${ORDER_REFUSED_RESEND_SUFFIX_COPY}`;
     case 'refused': {
-      if (last.reason === 'unauthenticated' || last.reason === 'not_member')
-        return ORDER_SIGN_IN_COPY;
+      if (signIn) return ORDER_SIGN_IN_COPY;
       if (last.reason === 'aal2_required' && ctx.surface === 'phone')
         return ORDER_PHONE_AAL2_UNCONFIRMED_COPY;
-      return `${orderRefusalCopy(last.reason, last.details, ctx)} ${ORDER_REFUSED_RESEND_SUFFIX_COPY}`;
+      const cause = refusalCauseCopy(last.reason, last.details, ctx) ?? ORDER_RESEND_REFUSED_COPY;
+      return `${cause} ${ORDER_REFUSED_RESEND_SUFFIX_COPY}`;
     }
   }
 }
