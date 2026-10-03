@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 
 import {
   can,
@@ -81,6 +82,10 @@ import type {
 type Failure = { error: { message: string; reason: string | null; retryable?: boolean } };
 
 function fail(e: unknown, tag: string): Failure {
+  // A redirect from the auth context (a signed-out session) is not a failure:
+  // rethrown so the browser goes to sign-in, never reported or worded as
+  // "Something went wrong" (the rental and label actions do the same).
+  unstable_rethrow(e);
   if (!(e instanceof ServiceError) || e.code === 'internal_error') {
     // A bug or a database failure: reported, and answered generically (the
     // /api/v1/exceptions routes report the same way).
