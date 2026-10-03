@@ -463,6 +463,38 @@ PGTAP_TESTS=(
   # second raise; confirm vs recount; 55P03 at 5 s) are
   # scripts/db-concurrency/0386_confirm_vs_sync.sh.
   supabase/tests/0386_exception_confirm_count.test.sql
+  # Only the order actions approve an order or move it along a stock edge
+  # (S0, 0387): a SECURITY INVOKER BEFORE UPDATE guard, keyed on current_user
+  # being authenticated or anon and on the status EDGE (never the new value
+  # alone), refuses a raw PATCH to approved by a manager or a staff approver
+  # (also in bulk and through an upsert), every other RPC-owned edge (cancel,
+  # picking complete, completed, backordered, resume, reopen, close partial:
+  # 24 of the transition trigger's 30 edges, one TAP line each), and any
+  # change to approved_by or approved_at, all 42501 with a stable hint
+  # (status_through_rpc_only, approval_through_rpc_only), never 40001/40P01.
+  # The six edges the web writes through the user client still go through
+  # with RETURNING *, and so does a notes save on an approved order.
+  # authenticated loses UPDATE on 38 columns (21 only the RPCs or the admin
+  # client write, 17 under owner decision O5) and TRUNCATE, REFERENCES,
+  # TRIGGER and MAINTAIN; anon loses every privilege on the table. Proven
+  # with the column grant put back inside a self-undoing subtransaction, the
+  # guard alone still refuses the approval forgery. Every DEFINER edge
+  # (approve, approve partial, cancel, complete and reopen picking, resume,
+  # close partial, both signatures, the picker claims, the needed-by
+  # revision), the admin client and the approved_by FK's SET NULL on account
+  # deletion (run as the table owner even when the deleting session is
+  # authenticated) still work. The writer census scans every schema: only
+  # the two approval bodies assign approval values, no SECURITY INVOKER
+  # function updates the table (UPDATE or MERGE), and the 15 DEFINER
+  # writers (whoever may execute them; a trigger function needs no EXECUTE)
+  # are pinned by name and owner, as is every DEFINER function that inserts,
+  # merges or deletes order rows (today only the expired-confirmation
+  # cleanup: a DEFINER insert runs as postgres, which the insert guard does
+  # not hold). The two-session proofs are
+  # scripts/db-concurrency/0387_workflow_guard_race.sh; the migration's lock
+  # footprint (no lock that stops an order read while the push runs) is
+  # scripts/db-concurrency/0387_migration_lock_footprint.sh.
+  supabase/tests/0387_order_workflow_guard.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

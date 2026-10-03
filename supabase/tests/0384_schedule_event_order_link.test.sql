@@ -52,7 +52,8 @@
 --    search_path pinned, EXECUTE to authenticated and not anon; the four
 --    policies are exactly 0384's; both server-owned columns say so in their
 --    comments. On order_requests authenticated may UPDATE every column but
---    organization_id (computed the same way), holds no table-level UPDATE and
+--    organization_id (computed the same way; re-pinned by 0387, which also
+--    withholds 38 more columns), holds no table-level UPDATE and
 --    keeps table INSERT and SELECT; service_role keeps its table grants;
 --    organization_id says so in its comment.
 --
@@ -525,14 +526,27 @@ select is(
      join pg_attribute a on a.attrelid = 'public.schedule_events'::regclass and a.attname = c),
   'assigned_user_id:true,order_request_id:true',
   'G9: both server-owned columns say so in their column comments');
+-- Re-pinned by 0387 (was: every column but organization_id updatable, the
+-- query excluding organization_id and expecting ''): 0387 revokes UPDATE on
+-- the 21 columns only the order RPCs or the admin client write and on the 17
+-- no user-client path writes (owner decision O5), so the columns
+-- authenticated may NOT update are now organization_id plus those 38. The
+-- web's user-client order writes (KO1-KO7 above) name none of them;
+-- created_at and warehouse_id (owner Q4) and delivery_charter_id (owner Q7)
+-- stay updatable. 0387's pgTAP A8 writes each of the 38 and A9d pins the 19
+-- that remain.
 select is(
   (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
      from pg_attribute a
     where a.attrelid = 'public.order_requests'::regclass and a.attnum > 0 and not a.attisdropped
-      and a.attname <> 'organization_id'
       and not has_column_privilege('authenticated', 'public.order_requests', a.attname, 'UPDATE')),
-  '',
-  'GO1: authenticated may UPDATE every order_requests column but organization_id (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
+  'approved_at,approved_by,assigned_picker_id,cancelled_at,cancelled_by,completed_at,completed_by,'
+  'confirmation_token_expires_at,confirmation_token_hash,customer_id,delivered_at,fulfillment_type,id,needed_by,notes,'
+  'order_number,organization_id,packaging_at,picking_claimed_at,picking_claimed_by,picking_completed_at,'
+  'picking_completed_by,pickup_location_notes,public_track_token,ready_at,requester_email,requester_name,'
+  'requester_org_label,requester_phone,requester_user_id,return_prompt_sent_at,return_token,signature_data_url,'
+  'signature_method,signed_at,signed_by_email,signed_by_name,source,updated_at',
+  'GO1: authenticated may UPDATE every order_requests column but organization_id and the 38 columns 0387 revokes (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
 select is(
   'organization_id=' || has_column_privilege('authenticated', 'public.order_requests', 'organization_id', 'UPDATE')::text
   || ',' ||
