@@ -38,7 +38,11 @@
 --         status, go through (the edge, never the value);
 --    AL6  deleting an approver's user_profiles row nulls approved_by through
 --         the FK, as postgres and with the deleting session's role
---         authenticated (the RI action runs as the table owner);
+--         authenticated (the RI action runs as the table owner). The
+--         fixture approvers placed no order: deleting a member who placed an
+--         internal order with no requester_email fails on
+--         order_requests_identity_chk, older than 0387 and unchanged by it
+--         (plan section 10 item 16);
 --    AL7  the admin client (service_role): the return prompt's token mint and
 --         send claim, and a status edge the guard refuses for API roles;
 --    AL8  every DEFINER edge still works: cancel (from approved and from
@@ -50,12 +54,17 @@
 --    AL9  the writer census, over every schema but pg_catalog and
 --         information_schema (extension members and session temp schemas
 --         left out): only the two approval bodies assign approval values; no
---         SECURITY INVOKER function updates order_requests; every SECURITY
---         DEFINER writer is pinned by schema-qualified name and owner (15,
---         all public, all owned by postgres), whether or not an API role
---         holds EXECUTE: a trigger function fires without EXECUTE, so a new
---         DEFINER writer in any schema fails here and is reviewed for its
---         own gate;
+--         SECURITY INVOKER function updates order_requests (UPDATE or
+--         MERGE); every SECURITY DEFINER updater is pinned by
+--         schema-qualified name and owner (15, all public, all owned by
+--         postgres), and so is every SECURITY DEFINER function that inserts,
+--         merges or deletes order rows (AL9d: today only the expired
+--         confirmation cleanup), whether or not an API role holds EXECUTE: a
+--         trigger function fires without EXECUTE, and a DEFINER body runs as
+--         postgres, which neither the insert guard nor this guard holds, so
+--         a new DEFINER writer in any schema fails here and is reviewed for
+--         its own gate. The census reads the static body text; no function
+--         that names order_requests builds SQL with EXECUTE today;
 --    AL10 posture: the guard (body md5, INVOKER, search_path, owner, no
 --         EXECUTE for PUBLIC, anon or authenticated), its trigger, the order
 --         of the BEFORE UPDATE triggers, the trigger census, the comments, and
@@ -71,7 +80,7 @@
 
 begin;
 
-select plan(84);
+select plan(85);
 
 \set orgA   '\'03870000-0000-0000-0000-00000000000a\''
 \set orgZ   '\'03870000-0000-0000-0000-00000000000b\''
@@ -632,16 +641,20 @@ select is(
 -- out: extension members (pgTAP and the other extensions' own functions, not
 -- ours to review) and the session temp schemas (pg_temp_N, pg_toast_temp_N:
 -- this suite's own helpers, one of which builds A7's UPDATE text, and nothing
--- another session or an API role can reach). The census is a temp view so
--- the three assertions read one definition.
-create temp view writer_census as
+-- another session or an API role can reach). fn_scope is that set of
+-- functions; writer_census is the ones that UPDATE order_requests (or MERGE
+-- into it, which updates through the same triggers), so the four
+-- assertions read one definition.
+create temp view fn_scope as
 select n.nspname || '.' || p.proname as fn, p.prosecdef, pg_get_userbyid(p.proowner) as owner, p.prosrc
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname not in ('pg_catalog', 'information_schema')
    and n.nspname !~ '^pg_(toast_)?temp_'
    and not exists (select 1 from pg_depend d
-                    where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
-   and p.prosrc ~* $re$update\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$;
+                    where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e');
+create temp view writer_census as
+select f.* from fn_scope f
+ where f.prosrc ~* $re$(update|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?order_requests\M"?$re$;
 select is(
   (select coalesce(string_agg(w.fn, ',' order by w.fn collate "C"), '')
      from writer_census w
@@ -653,7 +666,7 @@ select is(
      from writer_census w
     where not w.prosecdef),
   '',
-  'AL9b: in every schema, no SECURITY INVOKER function updates order_requests (schema prefix optional), so no API-role writer needs a flag; a new one fails here');
+  'AL9b: in every schema, no SECURITY INVOKER function updates order_requests (UPDATE or MERGE, schema prefix optional), so no API-role writer needs a flag; a new one fails here');
 select is(
   (select coalesce(string_agg(w.fn || ':' || w.owner, ',' order by w.fn collate "C"), '')
      from writer_census w
@@ -664,6 +677,13 @@ select is(
   'public.confirm_public_order_request:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
   'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres',
   'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 15, owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
+select is(
+  (select coalesce(string_agg(f.fn || ':' || f.owner, ',' order by f.fn collate "C"), '')
+     from fn_scope f
+    where f.prosecdef
+      and f.prosrc ~* $re$(insert\s+into|merge\s+into(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?order_requests\M$re$),
+  'public.cleanup_expired_unconfirmed_order_requests:postgres',
+  'AL9d: the SECURITY DEFINER functions that insert, merge or delete order rows, in every schema and whoever may EXECUTE them, are exactly the expired-confirmation cleanup, owned by postgres (a DEFINER insert runs as postgres, which the insert guard does not hold, so it could create an order at any status: a new one fails here and is reviewed for its own gate)');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'

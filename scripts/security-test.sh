@@ -485,9 +485,12 @@ PGTAP_TESTS=(
   # deletion (run as the table owner even when the deleting session is
   # authenticated) still work. The writer census scans every schema: only
   # the two approval bodies assign approval values, no SECURITY INVOKER
-  # function updates the table, and the 15 DEFINER writers (whoever may
-  # execute them; a trigger function needs no EXECUTE) are pinned by name and
-  # owner. The two-session proofs are
+  # function updates the table (UPDATE or MERGE), and the 15 DEFINER
+  # writers (whoever may execute them; a trigger function needs no EXECUTE)
+  # are pinned by name and owner, as is every DEFINER function that inserts,
+  # merges or deletes order rows (today only the expired-confirmation
+  # cleanup: a DEFINER insert runs as postgres, which the insert guard does
+  # not hold). The two-session proofs are
   # scripts/db-concurrency/0387_workflow_guard_race.sh; the migration's lock
   # footprint (no lock that stops an order read while the push runs) is
   # scripts/db-concurrency/0387_migration_lock_footprint.sh.
