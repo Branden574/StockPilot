@@ -48,6 +48,17 @@ vi.mock('@/server/loaders/orders-new-catalog', () => ({
   prewarmOrdersNewCatalog: (...args: [string, string]) => prewarmCatalogSpy(...args),
 }));
 
+const prewarmPhoneSpy = vi.fn(async (organizationId: string, warehouseId: string) => ({
+  organizationId,
+  warehouseId,
+  photoCount: 3,
+  ms: 1,
+  error: null as string | null,
+}));
+vi.mock('@/server/loaders/orders-phone-catalog', () => ({
+  prewarmPhoneThumbMap: (...args: [string, string]) => prewarmPhoneSpy(...args),
+}));
+
 import { GET } from './route';
 
 const [HOT_1, HOT_2] = KNOWN_HOT_ORG_IDS;
@@ -66,6 +77,13 @@ beforeEach(() => {
   prewarmInventorySpy.mockImplementation(async (organizationId, warehouseId) =>
     inventoryResult(organizationId, warehouseId),
   );
+  prewarmPhoneSpy.mockImplementation(async (organizationId, warehouseId) => ({
+    organizationId,
+    warehouseId,
+    photoCount: 3,
+    ms: 1,
+    error: null,
+  }));
 });
 
 describe('GET /api/cron/prewarm-orders-catalog', () => {
@@ -256,5 +274,48 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     // Repo rule: no silent caps — shed work must hit the logs too.
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=70'));
     warnSpy.mockRestore();
+  });
+
+  // Phone ordering PO-3: the phone storefront's photo map is warmed for every
+  // pair the web catalog is warmed for, after it, with its own result list.
+  it('warms the phone photo map for each known-hot pair, and a failure does not stop the sweep', async () => {
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: [{ id: HOT_1 }], error: null, count: 1 },
+      'warehouses.select': {
+        data: [
+          { id: 'wh-1', organization_id: HOT_1 },
+          { id: 'wh-2', organization_id: HOT_1 },
+        ],
+        error: null,
+      },
+    });
+    adminClientHolder.client = stub.client;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    prewarmPhoneSpy.mockImplementationOnce(async (organizationId, warehouseId) => ({
+      organizationId,
+      warehouseId,
+      photoCount: 0,
+      ms: 1,
+      error: 'photo sign failed',
+    }));
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(prewarmPhoneSpy.mock.calls).toEqual([
+      [HOT_1, 'wh-1'],
+      [HOT_1, 'wh-2'],
+    ]);
+    expect(prewarmCatalogSpy.mock.calls).toEqual([
+      [HOT_1, 'wh-1'],
+      [HOT_1, 'wh-2'],
+    ]);
+    expect(body.phoneThumbMaps).toEqual([
+      { organizationId: HOT_1, warehouseId: 'wh-1', photoCount: 0, ms: 1, error: 'photo sign failed' },
+      { organizationId: HOT_1, warehouseId: 'wh-2', photoCount: 3, ms: 1, error: null },
+    ]);
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('phone photo map failed for org'),
+    );
   });
 });

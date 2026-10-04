@@ -6,6 +6,8 @@ import { getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
+import type { ModuleId } from '@stockpilot/core';
+
 /**
  * The kits the New order page offers: bundles (Bundles module) whose items this
  * person can order at this warehouse, streamed with the page like the
@@ -89,16 +91,32 @@ function one<T>(value: T | T[] | null | undefined): T | null {
   return value ?? null;
 }
 
+/**
+ * Who is asking, for a request whose session is not in cookies (phone ordering
+ * PO-3). The phone's Bearer request has no cookie session: getModulesForRequest
+ * and the cookie client would answer as an anonymous visitor, so the bundles
+ * read came back empty and the page's "no kits" was a silent wrong answer.
+ * The route passes its context's own modules and client instead. Left out,
+ * both default to what the web page has always used.
+ */
+export interface OrderKitsCaller {
+  /** The organization's enabled modules (ctx.enabledModules). */
+  modules?: ReadonlySet<ModuleId>;
+  /** The caller's own client (ctx.supabase). */
+  client?: Pick<Awaited<ReturnType<typeof createClient>>, 'from'>;
+}
+
 export async function loadOrderKits(
   organizationId: string,
   warehouseId: string,
   catalog: Promise<CatalogForKits>,
+  caller: OrderKitsCaller = {},
 ): Promise<KitsResult> {
   try {
-    const modules = await getModulesForRequest(organizationId);
+    const modules = caller.modules ?? (await getModulesForRequest(organizationId));
     if (!modules.has('bundles')) return { status: 'ok', kits: [] };
 
-    const supabase = await createClient();
+    const supabase = caller.client ?? (await createClient());
     const [bundles, { items }] = await Promise.all([
       fetchAllRows<BundleRow>(
         (from, to) =>

@@ -52,12 +52,52 @@ interface CatalogForFrequentlyOrdered {
   items: ReadonlyArray<{ id: string; imageUrl: string | null }>;
 }
 
+/**
+ * Who is asking, and what the answer is for (phone ordering PO-3). Left out,
+ * everything is what the web page has always used.
+ */
+export interface FrequentlyOrderedOptions {
+  /**
+   * The caller's own client (ctx.supabase) for a request whose session is not
+   * in cookies. The phone's Bearer request has none: the cookie client was
+   * anonymous there, row level security counted no orders, and the strip came
+   * back empty as if nothing had been ordered.
+   */
+  client?: Pick<Awaited<ReturnType<typeof createClient>>, 'rpc'>;
+  /**
+   * Sign a fallback thumbnail for a strip item whose catalog row has no photo
+   * URL (the web page; default true). The phone takes its photos from
+   * GET /api/v1/orders/catalog/photos and skips this.
+   */
+  imageFallback?: boolean;
+}
+
+/** The strip, or that it could not be read (the phone shows the difference;
+ *  the web page hides the strip either way). */
+export type FrequentlyOrderedResult =
+  | { status: 'ok'; entries: FrequentlyOrderedEntry[] }
+  | { status: 'error' };
+
 export async function loadFrequentlyOrdered(
   warehouseId: string,
   catalog: Promise<CatalogForFrequentlyOrdered>,
+  options: FrequentlyOrderedOptions = {},
 ): Promise<FrequentlyOrderedEntry[]> {
+  const result = await readFrequentlyOrdered(warehouseId, catalog, options);
+  return result.status === 'ok' ? result.entries : [];
+}
+
+/**
+ * The strip with its outcome. NEVER REJECTS: a failed read is
+ * `{ status: 'error' }`, logged with a short label only.
+ */
+export async function readFrequentlyOrdered(
+  warehouseId: string,
+  catalog: Promise<CatalogForFrequentlyOrdered>,
+  options: FrequentlyOrderedOptions = {},
+): Promise<FrequentlyOrderedResult> {
   try {
-    const supabase = await createClient();
+    const supabase = options.client ?? (await createClient());
     const [top, bundle] = await Promise.all([
       supabase.rpc('order_request_top_skus_for_warehouse', {
         p_warehouse_id: warehouseId,
@@ -75,17 +115,20 @@ export async function loadFrequentlyOrdered(
       // that said least. `status` is 0 for a transport fault.
       const why = top.error.code || (top.status === 0 ? 'network' : `http-${top.status}`);
       console.warn('[frequently-ordered] top-SKUs call failed:', why);
-      return [];
+      return { status: 'error' };
     }
     const photoByItem = new Map(bundle.items.map((item) => [item.id, item.imageUrl]));
     const rows = ((top.data ?? []) as Array<{ item_id: string; request_count: number }>).filter(
       (row) => photoByItem.has(row.item_id),
     );
-    if (rows.length === 0) return [];
+    if (rows.length === 0) return { status: 'ok', entries: [] };
 
     // Rare: the catalog's photo map is allowed to miss a few URLs. Sign a small
     // thumbnail for exactly those, so an item WITH a photo never shows a glyph.
-    const missing = rows.filter((row) => !photoByItem.get(row.item_id)).map((row) => row.item_id);
+    const missing =
+      options.imageFallback === false
+        ? []
+        : rows.filter((row) => !photoByItem.get(row.item_id)).map((row) => row.item_id);
     let fallback = new Map<string, string | null>();
     if (missing.length > 0) {
       try {
@@ -95,14 +138,17 @@ export async function loadFrequentlyOrdered(
         // No fallback photo is not a reason to drop the strip.
       }
     }
-    return rows.map((row) => ({
-      itemId: row.item_id,
-      count: Number(row.request_count),
-      fallbackImageUrl: fallback.get(row.item_id) ?? null,
-    }));
+    return {
+      status: 'ok',
+      entries: rows.map((row) => ({
+        itemId: row.item_id,
+        count: Number(row.request_count),
+        fallbackImageUrl: fallback.get(row.item_id) ?? null,
+      })),
+    };
   } catch {
     // A fixed string, never the error: it can quote request details.
     console.warn('[frequently-ordered] could not be loaded; the strip stays hidden');
-    return [];
+    return { status: 'error' };
   }
 }

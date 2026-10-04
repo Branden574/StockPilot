@@ -1333,6 +1333,12 @@ export const ORDER_PHONE_TURNED_OFF_COPY =
   'Placing orders from the app is turned off right now. Use the web.';
 export const ORDER_PHONE_UNAVAILABLE_COPY =
   "Placing orders from the app isn't available right now. Use the web.";
+/** The phone storefront's reads (PO-3): a read that failed, which nothing
+ *  depends on, so pulling down reads it again. */
+export const ORDER_STOREFRONT_LOAD_FAILED_COPY = "Ordering couldn't be loaded. Pull down to try again.";
+export const ORDER_STOREFRONT_RATE_LIMITED_COPY =
+  'Too many requests. Wait a moment, then pull down to try again.';
+export const ORDER_STOREFRONT_SIGN_IN_COPY = 'Sign in again to place an order.';
 export const ORDER_NEEDS_CONNECTION_COPY = 'Needs a connection.';
 export const ORDER_ADD_WHILE_LOCKED_COPY =
   "This cart has an order request that isn't confirmed yet. Check and finish it, or choose Don't send it, before adding items.";

@@ -754,6 +754,15 @@ const RENDERS_PRECOMPUTED = [
   // storefront loader computed (the BIN_FIRST_EXCEPTION above), exactly as
   // v2/types.ts does, and decides nothing.
   'packages/core/src/orders/storefront/item.ts',
+  // The phone storefront's reads (phone ordering PO-3, 2026-10-04). The
+  // catalog answer copies each row's `rackLabel` from the storefront loader
+  // (the BIN_FIRST_EXCEPTION above) into the phone's item, field by field;
+  // `OrderCatalogItem` is that item's core type; the route tests' fixture
+  // builds catalog rows with a `rackLabel` as the loader returns them. None
+  // of them decides a label.
+  'apps/web/src/server/services/order-storefront.ts',
+  'packages/core/src/orders/storefront/phone-api.ts',
+  'apps/web/src/test/order-storefront-route-fixture.ts',
 ] as const;
 
 /**

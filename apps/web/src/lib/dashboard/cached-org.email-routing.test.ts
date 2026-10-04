@@ -23,7 +23,7 @@ vi.mock('@/lib/supabase/admin', () => ({
   }),
 }));
 
-import { getOrgEmailRouting } from './cached-org';
+import { getOrgEmailRouting, orgEmailRoutingFromRead } from './cached-org';
 
 beforeEach(() => {
   dbState.row = null;
@@ -84,5 +84,28 @@ describe('getOrgEmailRouting', () => {
     if (result.state !== 'invalid') throw new Error('expected invalid');
     expect(result.reason).toMatch(/must be exactly one plain email address/);
     expect(JSON.stringify(result)).not.toContain('learn4life');
+  });
+});
+
+// Phone ordering PO-3: the phone storefront reads the row with the caller's
+// own client (with the time zone) and maps it with the SAME rules.
+describe('orgEmailRoutingFromRead (the one mapping both reads use)', () => {
+  it('maps a read exactly as getOrgEmailRouting does', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cases: Array<[{ email_routing?: unknown } | null, { code: string; message: string } | null]> = [
+      [null, { code: '42703', message: 'column does not exist' }],
+      [null, { code: '57014', message: 'timeout' }],
+      [null, null],
+      [{ email_routing: null }, null],
+      [{ email_routing: { delivery_request: { to: 'a@example.org', cc: 'b@example.org' } } }, null],
+      [{ email_routing: { delivery_request: { to: 'not an address', cc: 'b@example.org' } } }, null],
+    ];
+    for (const [row, error] of cases) {
+      dbState.row = row;
+      dbState.error = error;
+      expect(orgEmailRoutingFromRead(row, error, 'delivery_request')).toEqual(
+        await getOrgEmailRouting('org', 'delivery_request'),
+      );
+    }
   });
 });

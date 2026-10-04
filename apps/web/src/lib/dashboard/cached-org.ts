@@ -113,6 +113,21 @@ export async function getOrgEmailRouting(
     .select('email_routing')
     .eq('id', organizationId)
     .maybeSingle();
+  return orgEmailRoutingFromRead(data, error, feature);
+}
+
+/**
+ * The routing state from one read of `organizations.email_routing`, by the
+ * rules above: 42703 (the column does not exist yet) is 'fallback', any other
+ * failure and a missing row are 'unset', a row goes through core's parser.
+ * Shared with the phone storefront (OrderStorefrontService), which reads the
+ * row with the caller's own client in the same query as the time zone.
+ */
+export function orgEmailRoutingFromRead(
+  data: unknown,
+  error: { code?: string; message?: string } | null,
+  feature: OrgEmailRoutingFeature,
+): OrgEmailRoutingReadState {
   if (error) {
     if (error.code === '42703') return { state: 'fallback' };
     console.error('[email-routing] read failed', error.code, error.message);

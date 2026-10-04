@@ -352,6 +352,11 @@ This is separate from a customer's own Settings → Admin tools, and is restrict
 - Sign in with the same account; the **drawer** switches workspace (org) — respecting the org switcher everywhere.
 - Enforces **TOTP 2FA** (AAL1→AAL2) just like the web when your org/role requires it.
 - Uses the Bearer-token `/api/v1` API and `useEnabledModules`, so the mobile app shows exactly the modules your org has enabled.
+- **Ordering API (for the phone storefront).** Three reads, each behind the Orders module, the two-factor step-up and **orders:request**, answered for the signed-in person only (never cached by a browser or proxy) and naming the organization they were answered for:
+  - `GET /api/v1/orders/storefront`: what the storefront needs once: your warehouses, who you are and whether you may order for someone else or approve, whether kits are on, the organization's time zone, where pickup and delivery request emails go, and (for anyone who can approve orders) the people recently ordered for.
+  - `GET /api/v1/orders/catalog?warehouseId=`: every item you can order at that warehouse (exactly the items your role, warehouse assignment and category access let you see), with stock on record and held stock, aisles, earmark names, delivery sites, kits and Frequently ordered. No prices. A warehouse you cannot order from is refused before anything is read.
+  - `GET /api/v1/orders/catalog/photos?warehouseId=`: a photo link for each of those items (the small thumbnail when there is one), valid for 30 days.
+  - The server setting `ORDERS_PHONE_STOREFRONT=off` turns these reads off (the app says ordering from the app is turned off and to use the web). Placing an order and checking or withdrawing one already sent stay on.
 - Ships **over-the-air (OTA)** JS updates for fast fixes between full store builds.
 
 ---

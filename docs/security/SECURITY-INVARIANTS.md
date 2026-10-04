@@ -762,6 +762,60 @@ application structure.
   generic sweep asserting that _every_ cron route is gated; adding one would be
   a worthwhile follow-up and is listed as such in the README.
 
+### INV-E4 — a Bearer route reads as the caller, and an admin read waits for the caller's own perimeter
+
+- **Invariant**: a route the phone calls with `Authorization: Bearer` makes
+  every per-caller read through `ctx.supabase`, never through the cookie client
+  (`@/lib/supabase/server` `createClient`), the request-cached helpers that use
+  it (`getModulesForRequest`, `readWarehousesForRequest`) or a page-only helper
+  (`withContext`, `requireOrgContext`). Where it reaches a shared admin-client
+  read (a cached catalog, a site list, a photo map), it first checks the id it
+  will read against what the caller can read with their own client. The phone
+  storefront's three reads (phone ordering PO-3: `GET /api/v1/orders/storefront`,
+  `/catalog`, `/catalog/photos`) are the first routes held to this by a test.
+- **Why it matters**: on a Bearer request the cookie client is anonymous, and
+  row level security answers an anonymous reader with nothing, not an error. A
+  staff member or viewer then gets an empty warehouse list, an empty catalog,
+  no kits and no Frequently ordered, silently; a test driven as a manager
+  passes with the bug in place, because owner, admin and manager skip the
+  catalog scope read. In the other direction, the storefront's sites loader
+  reads with the admin client by warehouse id alone, so a foreign id would
+  answer another organization's site names and addresses if no perimeter came
+  first (`assertWarehouseAccess` returns early for full-access roles and is not
+  enough).
+- **Enforced by**: `OrderStorefrontService` (the gates, the kill switch, the
+  warehouse perimeter from `warehouses_select` as the caller, then the loaders);
+  the web loaders' optional caller parameters (`resolveCatalogScopeKey` and
+  `loadCatalogItems` take the caller's client, `loadOrderKits` the caller's
+  modules and client, `readFrequentlyOrdered` the caller's client), outside the
+  cached callbacks, whose source text stays pinned.
+- **Tested at**: `apps/web/src/app/api/v1/orders/storefront/bearer-safe.guard.test.ts`
+  drives the three routes through the real service and loaders as a viewer
+  with category grants and a charter-scoped assignment, with the cookie client
+  and `getModulesForRequest` made to throw, and asserts the five scope helpers
+  went to `ctx.supabase` and the answers are exactly the viewer's rows; the
+  same file fails on any banned helper named in the routes, the service, the
+  answer helper or `orders-phone-catalog.ts`.
+  `apps/web/src/server/services/order-storefront.test.ts` covers the perimeter
+  (a foreign, a hidden and an archived warehouse each refused before any
+  shared read; an id in capitals read as the stored lower-case id) and the
+  trimmed, price-free item.
+- **Accepted, not enforced (same as the web)**: the photo map is signed once
+  per organization and warehouse with the admin client, and every caller at
+  that warehouse receives the same URL strings, each valid for 30 days from
+  signing (`ORDER_PHOTO_URL_TTL_SECONDS`). The answer is filtered to the
+  caller's own catalog, so a caller receives only photos of items they may
+  see, but a viewer whose category grant or assignment is later removed keeps
+  working URLs for the photos already received until they expire. The web
+  storefront's thumbnail map behaves the same way (a 30-day sign the browser
+  receives in the page payload), so the phone shows nobody anything new. The
+  signer cannot be pointed at another organization's object: image row paths
+  are held by 0381 (`item_image_row_path_ok` in the insert and update checks)
+  and 0323 (`item_images_storage_path_safe`, `item_images_thumb_path_safe`).
+  If removal must bite sooner, shorten the TTL of both maps together
+  (`ORDER_PHOTO_URL_TTL_SECONDS` and the web loader's
+  `THUMB_SIGNED_URL_TTL_SEC`).
+
 ---
 
 ## 6. The recurring bug patterns, as invariants
