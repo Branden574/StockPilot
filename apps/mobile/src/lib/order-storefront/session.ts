@@ -84,8 +84,9 @@ import { createSubmitEngine, type SubmitEngine, type SubmitEngineSnapshot } from
  *   - every call names the organization and the account (api.ts);
  *   - an answer for another organization is dropped; a scope change (another
  *     account or organization) starts over and nothing of the old one shows;
- *   - a restored unlocked cart is checked against the fresh catalog and one
- *     sentence says what changed; a restored LOCKED cart is never changed, it
+ *   - a restored unlocked cart is checked against the fresh catalog (never
+ *     the device's copy, which describes old stock) and one sentence says
+ *     what changed; a restored LOCKED cart is never changed, it
  *     is settled first (its status is read on its own, never resent);
  *   - nothing about an order is queued offline: Submit needs a connection;
  *   - EVERY WRITE IS BOUND TO THE ORGANIZATION, ACCOUNT AND WAREHOUSE IT WAS
@@ -274,7 +275,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
    *  may replace once they are settled. */
   let engineKeys = new Set<string>();
   let refusedItems = new Set<string>();
-  let restoredNotOrderable = new Set<string>();
+  /** A cart restored from the device waits for the FRESH catalog to be
+   *  checked against (desk check F9): the device's copy describes old
+   *  stock. Its marks are never kept apart: the live catalog marks a line
+   *  that is gone (build()). */
   let recheckPending = false;
   let notice: string | null = null;
   let refusal: string | null = null;
@@ -305,7 +309,6 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     const notOrderable = new Set<string>();
     if (cart && catalog.answer) for (const id of linesNotInCatalog(cart, itemMap)) notOrderable.add(id);
     for (const id of refusedItems) if (cart?.lines.some((l) => l.itemId === id)) notOrderable.add(id);
-    for (const id of restoredNotOrderable) if (cart?.lines.some((l) => l.itemId === id)) notOrderable.add(id);
     // The same marks keep the same set (the rows' memo depends on it).
     if (!sameMembers(notOrderable, lastMarks)) lastMarks = notOrderable.size === 0 ? NO_MARKS : notOrderable;
     const kitsPart = catalog.answer?.kits;
@@ -342,11 +345,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     itemMap = new Map(items.map((i) => [i.id, i]));
     prepared = prepareCatalog(items);
     catalog = { status: 'ready', answer, readAt, fromDevice, message: null, refreshing: false };
-    if (recheckPending && cart && !engineLocked()) {
+    if (recheckPending && !fromDevice && cart && !engineLocked()) {
       recheckPending = false;
       const r = recheckRestoredCart(cart, itemMap);
       cart = r.cart;
-      restoredNotOrderable = r.notOrderable;
       notice = r.notice;
     }
     return before;
@@ -452,7 +454,6 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
           };
           if (cart) cart = cartReducer(cart, { type: 'reset' });
           refusedItems = new Set();
-          restoredNotOrderable = new Set();
           notice = null;
         } else if (snap.state.phase === 'refused') {
           refusedItems = refusedItemIds(snap.state.details);
@@ -494,7 +495,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     photos = { answer: null, failed: false };
     photoRetryAt = null;
     refusedItems = new Set();
-    restoredNotOrderable = new Set();
+    recheckPending = false;
     notice = null;
     refusal = null;
     placed = null;
@@ -673,7 +674,6 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     photoRetryAt = null;
     cart = null;
     refusedItems = new Set();
-    restoredNotOrderable = new Set();
     recheckPending = false;
     notice = null;
     refusal = null;
@@ -752,7 +752,6 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       // A line taken out takes its marks with it.
       const ids = new Set(next.lines.map((l) => l.itemId));
       refusedItems = new Set([...refusedItems].filter((id) => ids.has(id)));
-      restoredNotOrderable = new Set([...restoredNotOrderable].filter((id) => ids.has(id)));
       // A change to the cart is the person moving on: a refusal, the withdrawn
       // notice and a device error are done with.
       const e = engine?.getSnapshot();

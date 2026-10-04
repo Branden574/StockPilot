@@ -799,3 +799,44 @@ describe('a photo that fails reads the map again at most once in 5 minutes per w
     expect(api.photos.mock.calls.length).toBe(atSwitch + 1);
   });
 });
+
+describe('a restored cart is checked against the fresh catalog, not the device’s copy (desk check F9)', () => {
+  const restore = (lines: { itemId: string; quantity: number }[]) => {
+    const cart = { ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }), lines };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart, submission: null }, new Date()));
+  };
+  const withB = (): OrderCatalogAnswer => {
+    const a = catalogAnswer(WH);
+    return { ...a, items: [...a.items, { ...a.items[0]!, id: B, sku: 'MG', name: 'Mug' }] };
+  };
+
+  it('an item the device’s old copy lacks but the fresh catalog lists is not marked, and Submit is not blocked', async () => {
+    // The device's copy (read earlier) has no Mug; the fresh read lists it.
+    store.data.set(orderCatalogKey({ userId: USER, orgId: ORG, warehouseId: WH }), serializeCatalog(catalogAnswer(WH), now - 3_600_000));
+    api.catalog.mockImplementation(async () => withB());
+    restore([{ itemId: A, quantity: 1 }, { itemId: B, quantity: 1 }]);
+    await session.open(scope);
+    expect(snap().catalog.fromDevice).toBe(false);
+    expect(snap().notOrderable.size).toBe(0);
+    expect(snap().notice).toBeNull();
+    expect(session.submitBlockedBy(false)).toBeNull();
+  });
+
+  it('the device’s copy alone (the fresh read failed) says nothing about what changed; its marks still stand', async () => {
+    store.data.set(orderCatalogKey({ userId: USER, orgId: ORG, warehouseId: WH }), serializeCatalog(catalogAnswer(WH), now - 3_600_000));
+    api.catalog.mockRejectedValue(new Error('offline'));
+    restore([{ itemId: A, quantity: 1 }, { itemId: B, quantity: 1 }]);
+    await session.open(scope);
+    expect(snap().catalog.fromDevice).toBe(true);
+    expect(snap().notice).toBeNull();
+    expect([...snap().notOrderable]).toEqual([B]);
+  });
+
+  it('an item the fresh catalog no longer lists is marked and said once', async () => {
+    store.data.set(orderCatalogKey({ userId: USER, orgId: ORG, warehouseId: WH }), serializeCatalog(withB(), now - 3_600_000));
+    restore([{ itemId: A, quantity: 1 }, { itemId: B, quantity: 1 }]);
+    await session.open(scope);
+    expect([...snap().notOrderable]).toEqual([B]);
+    expect(snap().notice).toMatch(/^Since this cart was saved, 1 item can't be ordered from here anymore/);
+  });
+});
