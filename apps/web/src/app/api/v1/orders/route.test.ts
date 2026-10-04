@@ -329,6 +329,13 @@ describe('POST /api/v1/orders', () => {
     expect(await res.json()).toEqual({ organizationId: ORG, error, message, details });
   });
 
+  it('the body is read before the service gates (plan 3.3): a bad body is 400 even with Orders off', async () => {
+    const stub = setup(undefined, { modules: [] });
+    const res = await POST(req({ ...BODY, lines: [{ itemId: ITEM, quantity: 0 }] }));
+    expect([res.status, (await res.json()).details]).toEqual([400, { reason: 'invalid', field: 'quantity' }]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
   it('the service gates answer 403 with their reasons (module, permission), nothing called', async () => {
     const off = setup(undefined, { modules: [] });
     let res = await POST(req(BODY));

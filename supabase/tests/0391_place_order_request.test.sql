@@ -69,7 +69,7 @@
 
 begin;
 
-select plan(51);
+select plan(53);
 
 \set orgA    '\'03910000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03910000-0000-0000-0000-00000000000b\''
@@ -423,6 +423,40 @@ select is(
   (select pg_temp.counts() = :'c1')::text,
   'true',
   'P6: the conflict wrote nothing');
+-- Every field the hash covers, one at a time: a body that differs only in it
+-- is a conflict; a body that differs only in spelling (email case, spaces,
+-- one item split over two lines) is the same request.
+create function pg_temp.base90(p_extra jsonb default '{}'::jsonb) returns jsonb language sql as $$
+  select pg_temp.req('03910000-0000-0000-0000-0000000000a1', '03910000-0000-0000-0000-0000000000d1',
+    pg_temp.l1('03910000-0000-0000-0000-000000000f01', 2),
+    jsonb_build_object('fulfillment_type', 'delivery', 'delivery_charter_id', '03910000-0000-0000-0000-0000000000e1',
+                       'on_behalf_name', 'Pat Lee', 'on_behalf_email', 'pat@example.org', 'notes', 'N',
+                       'needed_by', to_char((now() + interval '4 days') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:00"Z"')) || p_extra)
+$$;
+insert into ans values ('P5b0', pg_temp.place(:mgr, pg_temp.base90(), pg_temp.k(90)));
+select pg_temp.counts() as "c90" \gset
+select is(
+  (select string_agg(pg_temp.place(:mgr, pg_temp.base90(v.x), pg_temp.k(90)) ~ '^ERR:P0001:idempotency_conflict:\{"orderId"'
+                     || '', ',' order by v.n)::text
+     from (values
+       (1, jsonb_build_object('lines', pg_temp.l1(:iOk, 3))),
+       (2, jsonb_build_object('lines', pg_temp.l1(:iOk2, 2))),
+       (3, jsonb_build_object('notes', 'N2')),
+       (4, jsonb_build_object('needed_by', to_char((now() + interval '5 days') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:00"Z"'))),
+       (5, jsonb_build_object('fulfillment_type', 'pickup')),
+       (6, jsonb_build_object('on_behalf_name', 'Pat Leigh')),
+       (7, jsonb_build_object('on_behalf_email', 'pat.lee@example.org')),
+       (8, jsonb_build_object('warehouse_id', :whA2, 'lines', pg_temp.l1(:iMov, 2))),
+       (9, jsonb_build_object('delivery_charter_id', :chOff))) v(n, x))
+  || '|' || (select string_agg(pg_temp.brief(pg_temp.place(:mgr, pg_temp.base90(v.x), pg_temp.k(90))), ',' order by v.n)
+               from (values
+                 (1, jsonb_build_object('on_behalf_email', ' PAT@Example.ORG ')),
+                 (2, jsonb_build_object('on_behalf_name', '  Pat Lee ')),
+                 (3, jsonb_build_object('lines', jsonb_build_array(jsonb_build_object('item_id', :iOk, 'quantity', 1), jsonb_build_object('item_id', :iOk, 'quantity', 1)))),
+                 (4, jsonb_build_object('surface', 'app'))) v(n, x))
+  || '|' || (pg_temp.counts() = :'c90')::text,
+  'true,true,true,true,true,true,true,true,true|placed/true/-/null,placed/true/-/null,placed/true/-/null,placed/true/-/null|true',
+  'P5b: the hash covers the lines, the notes, the needed-by, the method, the person, the email, the warehouse and the site (each alone is a conflict), and not the email''s case or spaces, the name''s spaces, one item split over lines or the surface (each still replays); nothing was written (mutation: hash without the lines)');
 insert into ans values ('P7', pg_temp.place(:mgr, pg_temp.req(:mgr, :whA, pg_temp.l1(:iOk, 1)), pg_temp.k(1)));
 insert into ans values ('P8', pg_temp.place(:stf, pg_temp.req(:stf, :whA, pg_temp.l1(:iOk, 1)), pg_temp.k(2)));
 insert into ans values ('P9', pg_temp.place(:stf, pg_temp.req(:stf, :whA, pg_temp.l1(:iOk, 1)), pg_temp.k(3)));
@@ -563,6 +597,17 @@ begin
 end $$;
 create trigger trg_aa_0391_probe_nan before insert on public.order_request_lines
   for each row execute function public._zz0391_probe_nan();
+-- Any OTHER refusal inside the create (here a 42501 with another sentence,
+-- the class an RLS refusal belongs to) is re-raised, never recorded.
+create function public._zz0391_probe_other() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.notes = 'probe-other' then
+    raise exception 'probe: some other refusal' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+create trigger trg_aa_0391_probe_other before insert on public.order_requests
+  for each row execute function public._zz0391_probe_other();
 select pg_temp.counts() as "c4" \gset
 select is(
   pg_temp.brief(pg_temp.place(:stf, pg_temp.req(:stf, :whA, pg_temp.l1(:iPrb1), jsonb_build_object('notes', 'probe-flip')), pg_temp.k(43))) || ' '
@@ -571,10 +616,17 @@ select is(
   || (select count(*) from public.order_requests where organization_id = :orgA)::text,
   'refused/false/item_not_orderable/{} refused/false/invalid/null refused/true/invalid/null|' || split_part(:'c4', '|', 1),
   'R13: the line guard''s two sentences are caught by SQLSTATE and exact text and recorded (item_not_orderable; invalid); the order and its notifications roll back with them');
+select is(
+  pg_temp.place(:stf, pg_temp.req(:stf, :whA, pg_temp.l1(:iOk), jsonb_build_object('notes', 'probe-other')), pg_temp.k(45)) || '|'
+  || (select count(*) from public.order_submissions where key = pg_temp.k(45)::uuid)::text,
+  'ERR:42501::|0',
+  'R13b: any other error inside the create (a 42501 with another sentence) is re-raised and records nothing (only the line guard''s two sentences are caught; mutation: catch every 42501)');
 drop trigger trg_aa_0391_probe_flip on public.order_requests;
 drop trigger trg_aa_0391_probe_nan on public.order_request_lines;
+drop trigger trg_aa_0391_probe_other on public.order_requests;
 drop function public._zz0391_probe_flip();
 drop function public._zz0391_probe_nan();
+drop function public._zz0391_probe_other();
 select is(
   (select count(*) from public.inventory_items where id = :iPrb1 and is_rental)::text,
   '0',
