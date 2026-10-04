@@ -12,7 +12,11 @@
 --    for the test), a different image
 --    already in the side table, a copy altered or skipped on the way in, a
 --    null-out skipped or undone, an updated_at re-stamped, another order's
---    side image moved. X0: the fixtures are byte for byte as before.
+--    side image moved, (test stage) a side image changed after its row was
+--    nulled. Every one of the data block's 10 raise sites is covered: 9 by a
+--    planted mismatch here, the trigger-state check (which cannot be planted
+--    without editing the block) by the mutation driver (mutate-0392.py I7).
+--    X0: the fixtures are byte for byte as before.
 -- D. The move: every image lands in the side table byte for byte (an order
 --    with no side row, one whose side row holds link tokens, one whose side
 --    row already holds the same image), the rows are null, every other
@@ -43,7 +47,7 @@
 
 begin;
 
-select plan(29);
+select plan(30);
 
 \set orgA   '\'03930000-0000-0000-0000-00000000000a\''
 \set mgr    '\'03930000-0000-0000-0000-0000000000a1\''
@@ -215,6 +219,23 @@ begin
   end if;
   return v_state || ':' || v_msg;
 end $$;
+create function pg_temp.try_move_d(p_prep text) returns text language plpgsql as $$
+declare v_state text; v_msg text; v_detail text;
+begin
+  begin
+    if p_prep is not null then
+      execute p_prep;
+    end if;
+    execute pg_temp.mig('0393', '$c393_move$');
+    raise exception using errcode = 'XX393', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_detail = pg_exception_detail;
+  end;
+  if v_state = 'XX393' then
+    return 'ok';
+  end if;
+  return v_state || ':' || v_msg || ':' || coalesce(v_detail, '');
+end $$;
 create function pg_temp.fixture_state() returns text language sql stable as $$
   select md5(coalesce((select string_agg(to_jsonb(o)::text, E'\n' order by o.id)
                          from public.order_requests o where o.organization_id = '03930000-0000-0000-0000-00000000000a'), ''))
@@ -249,6 +270,14 @@ begin
     new.updated_at := old.updated_at + interval '1 second';
   end if;
   return new;
+end $$;
+
+create function zz_probe_0393.order_after() returns trigger language plpgsql as $$
+begin
+  if old.signature_data_url is not null and new.signature_data_url is null then
+    update public.order_request_secrets set signature_data_url = signature_data_url || 'x' where order_request_id = new.id;
+  end if;
+  return null;
 end $$;
 
 create temp table snap (k text primary key, v text);
@@ -309,10 +338,15 @@ select is(
                              for each row execute function zz_probe_0393.side_after(%L)', :iSideOnly)),
   'P0001:order_secrets_images_copy_mismatch',
   'X8: a side image of an order that held none on its row, moved during the copy: raises');
+select matches(
+  pg_temp.try_move_d('create trigger zz_probe_0393_oafter after update on public.order_requests
+                        for each row execute function zz_probe_0393.order_after()'),
+  '^P0001:order_secrets_images_copy_mismatch:The side table does not hold the \d+ images the rows held',
+  'X9: a side image changed after its row was nulled (after the byte check): the image checksum raises');
 select is(
   pg_temp.fixture_state(),
   (select v from snap where k = 'fixtures'),
-  'X0: after the 8 refused runs every fixture order and side row is byte for byte as before');
+  'X0: after the 9 refused runs every fixture order and side row is byte for byte as before');
 
 select lives_ok(pg_temp.mig('0393', '$c393_lock$'), 'R1a: the lock prelude replays');
 select is(
