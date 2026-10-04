@@ -262,10 +262,12 @@ export function orderReadinessAudience(
 
 /**
  * Whether the screen reads the facts at all: only at a to_pick status, and
- * only for someone who sees them, or for a manager, whose Approve partial and
- * Resume are gated on them (a manager approves by role, 0348, even with
- * orders:approve revoked). Everyone else: no read. A role this build does not
- * know is not a manager.
+ * only for someone who sees them, or for a manager by role. Since 0390 a
+ * manager whose orders:approve was revoked no longer approves (the screen
+ * offers Approve partial and Resume under orders:approve only), so for them
+ * this read is merely harmless: the function answers by permission and
+ * withholds other pending demand. Everyone else: no read. A role this build
+ * does not know is not a manager.
  */
 export function shouldReadReadiness(input: {
   status: string | null | undefined;

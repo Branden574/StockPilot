@@ -136,6 +136,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
+import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
@@ -513,6 +514,10 @@ export default function OrderDetail() {
     timeZone: string | null;
   } | null>(null);
 
+  // Role rank. Since slice D (0390) it decides only what the server still
+  // decides by role: attachments, the shortfall PO drafter, picking overrides
+  // and the paper signature. Approval-class actions follow the effective
+  // orders:approve (rpApprove, managerActions below).
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
 
@@ -1652,24 +1657,8 @@ export default function OrderDetail() {
     );
   }
 
-  // Whether the current status exposes any manager action (so we don't render an
-  // empty section at, e.g., a terminal status).
   const ft = order?.fulfillmentType;
   const st = order?.status;
-  // NOTE: the picking phase (pick_slip_generated / picking_in_progress) is
-  // intentionally NOT here — it has its own PICKING section below that renders
-  // for staff pickers too, not just managers.
-  const hasPipelineActions =
-    isManager &&
-    !!st &&
-    (st === 'pending_approval' ||
-      st === 'approved' ||
-      st === 'picking_complete' ||
-      (st === 'packing_slip_generated' && (ft === 'pickup' || ft === 'delivery')) ||
-      st === 'staged_for_delivery' ||
-      st === 'staged_for_pickup' ||
-      st === 'in_transit' ||
-      st === 'backordered');
 
   // What the stock-dependent actions render (Approve partial, Resume), from
   // readiness through core: the web page's own gates. A failed, missing or
@@ -1750,8 +1739,9 @@ export default function OrderDetail() {
     [shownReadiness, showLineReadiness, isManager, rpBuy, ordersModuleOn, purchaseOrdersModuleOn],
   );
 
-  // F2-4 "Change" beside the needed-by: approvers (orders:approve, or a
-  // manager by role) on an open order where Orders is on. Warehouse write
+  // F2-4 "Change" beside the needed-by: approvers (the effective
+  // orders:approve; since 0390 the database has no manager-by-role exception)
+  // on an open order where Orders is on. Warehouse write
   // access is checked when the sheet opens; the server re-checks all of it.
   const canChangeNeededBy =
     order !== null &&
@@ -1873,6 +1863,23 @@ export default function OrderDetail() {
           viewerCanPick,
         }).includes('reopen_picking')
       : false;
+  // Slice D (0390): the MANAGER ACTIONS section and each button in it follow
+  // the rule the server applies to that action (the effective orders:approve
+  // for approval-class actions, orders:assign_delivery for the driver, a
+  // manager or the driver for a paper signature), as the web page's
+  // showActionsPanel does; no longer role rank. The picking phase keeps its
+  // own section below. Old bundles still show these by role.
+  const managerActions = orderManagerActions({
+    status: st,
+    fulfillmentType: ft,
+    canApproveOrders: rpApprove,
+    canAssignDelivery: role !== null && can({ role: role as Role, permissions }, 'orders:assign_delivery'),
+    isManagerByRole: isManager,
+    isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
+    hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    machineOffersReopen: canReopenPicking,
+  });
+  const hasPipelineActions = managerActions.showSection;
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'
@@ -2650,8 +2657,10 @@ export default function OrderDetail() {
 
           {hasPipelineActions ? (
             <View style={{ gap: 8 }}>
-              <Eyebrow>MANAGER ACTIONS</Eyebrow>
-              {order.status === 'pending_approval' ? (
+              {/* A granted staff member or an assigned driver sees this too
+                  (slice D): it is not only a manager's section any more. */}
+              <Eyebrow>{isManager ? 'MANAGER ACTIONS' : 'ORDER ACTIONS'}</Eyebrow>
+              {managerActions.approve ? (
                 <>
                   {actionBtn('Approve', 'approve', () => void act({ action: 'approve' }, 'approve'))}
                   {/* A strict Approve would be refused: say so before the tap
@@ -2661,7 +2670,7 @@ export default function OrderDetail() {
                       {approveNotice}
                     </Body>
                   ) : null}
-                  {stockGates.approvePartial !== 'hidden'
+                  {managerActions.approvePartial && stockGates.approvePartial !== 'hidden'
                     ? actionBtn(
                         'Approve partial',
                         'approve-partial',
@@ -2671,41 +2680,43 @@ export default function OrderDetail() {
                         stockGates.notice,
                       )
                     : null}
-                  {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
+                  {managerActions.deny
+                    ? actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')
+                    : null}
                   {stockNotice}
                 </>
               ) : null}
-              {order.status === 'approved'
+              {managerActions.generatePickSlip
                 ? actionBtn('Generate pick slip', 'gps', () =>
                     void act({ action: 'generate_pick_slip' }, 'gps'),
                   )
                 : null}
-              {order.status === 'picking_complete'
+              {managerActions.generatePackingSlips
                 ? actionBtn('Generate packing slips', 'gpk', () =>
                     void act({ action: 'generate_packing_slips' }, 'gpk'),
                   )
                 : null}
-              {order.status === 'picking_complete' && canReopenPicking
+              {order.status === 'picking_complete' && managerActions.reopenPicking
                 ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
                 : null}
-              {order.status === 'packing_slip_generated' && order.fulfillmentType === 'pickup'
+              {managerActions.stageForPickup
                 ? actionBtn('Mark staged for pickup', 'stage', () =>
                     confirmDeparture('stage', () =>
                       void act({ action: 'stage', target: 'staged_for_pickup' }, 'stage'),
                     ),
                   )
                 : null}
-              {order.status === 'packing_slip_generated' && order.fulfillmentType === 'delivery'
+              {managerActions.stageForDelivery
                 ? actionBtn('Mark staged for delivery', 'stage', () =>
                     confirmDeparture('stage', () =>
                       void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
                     ),
                   )
                 : null}
-              {order.status === 'packing_slip_generated' && canReopenPicking
+              {order.status === 'packing_slip_generated' && managerActions.reopenPicking
                 ? actionBtn('Reopen picking', 'reopen', () => setReopenOpen(true), 'danger')
                 : null}
-              {order.status === 'staged_for_delivery'
+              {managerActions.assignDelivery
                 ? actionBtn(
                     order.assignedDeliveryUserId ? 'Reassign delivery' : 'Assign delivery',
                     'assign',
@@ -2713,27 +2724,27 @@ export default function OrderDetail() {
                     'default',
                   )
                 : null}
-              {order.status === 'staged_for_delivery' && order.assignedDeliveryUserId
+              {managerActions.markInTransit
                 ? actionBtn('Mark in transit', 'transit', () =>
                     confirmDeparture('in_transit', () =>
                       void act({ action: 'mark_in_transit' }, 'transit'),
                     ),
                   )
                 : null}
-              {order.status === 'staged_for_pickup' || order.status === 'in_transit' ? (
-                <>
-                  {actionBtn('Collect signature', 'sig', () =>
+              {managerActions.digitalSignature
+                ? actionBtn('Collect signature', 'sig', () =>
                     confirmDeparture('signature', collectSignature),
-                  )}
-                  {actionBtn(
+                  )
+                : null}
+              {managerActions.physicalSignature
+                ? actionBtn(
                     'Physical signature',
                     'physicalsig',
                     () => confirmDeparture('signature', promptPhysicalSignature),
                     'default',
-                  )}
-                </>
-              ) : null}
-              {order.status === 'backordered' ? (
+                  )
+                : null}
+              {managerActions.backorderedActions ? (
                 <>
                   {stockGates.resume === 'waiting' ? (
                     <Body size={12} color={c.ink4}>

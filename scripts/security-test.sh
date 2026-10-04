@@ -939,6 +939,14 @@ MOBILE_TESTS=(
   # (approvers and the assigned driver); both never throw.
   src/lib/scan-signature-departure.test.ts
   src/lib/order-signature-image.test.ts
+
+  # Approval follows the permission (0390): the order screen's actions follow
+  # the rule the server applies to each (the effective orders:approve for
+  # approval-class actions, orders:assign_delivery for the driver, a manager
+  # or the driver for a paper signature), as the web page does: a granted
+  # staff member sees Approve, a revoked manager does not, a staff driver
+  # never sees Mark in transit (owner decision O3, default).
+  src/lib/order-manager-actions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
