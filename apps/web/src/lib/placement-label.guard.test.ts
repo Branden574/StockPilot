@@ -763,6 +763,15 @@ const RENDERS_PRECOMPUTED = [
   'apps/web/src/server/services/order-storefront.ts',
   'packages/core/src/orders/storefront/phone-api.ts',
   'apps/web/src/test/order-storefront-route-fixture.ts',
+  // The phone storefront (phone ordering PO-4, 2026-10-04). The phone reads the
+  // catalog answer's `rackLabel` (api.ts), copies it into the shared
+  // StorefrontItem field by field (setup.ts catalogItems), and Quick view
+  // shows it as the item's bin (sheets.tsx). All three use the label exactly
+  // as the storefront loader computed it (the BIN_FIRST_EXCEPTION above) and
+  // decide nothing.
+  'apps/mobile/src/lib/order-storefront/api.ts',
+  'apps/mobile/src/lib/order-storefront/setup.ts',
+  'apps/mobile/src/components/order-storefront/sheets.tsx',
 ] as const;
 
 /**
