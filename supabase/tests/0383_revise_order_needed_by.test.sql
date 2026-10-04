@@ -299,13 +299,16 @@ select ok(
 select ok(
   (select p.prosrc ~ 'auth\.uid\(\)' and p.prosrc ~ 'is_org_member\(v_org\)'
           and p.prosrc ~ $re$module_enabled\(v_org, 'orders'\)$re$
-          and p.prosrc ~ $re$has_org_role\(v_org, 'manager'\)$re$
+          -- Changed on purpose by 0390 (was: the body names has_org_role(v_org,
+          -- 'manager'), the 0348 manager-or-approve gate): the role term is
+          -- gone and orders:approve alone decides (0390 R6/R10, C9/C10).
+          and p.prosrc !~ $re$has_org_role\(v_org, 'manager'\)$re$
           and p.prosrc ~ $re$has_permission\(v_org, 'orders:approve'\)$re$
           and p.prosrc ~ $re$user_can_access_inventory\(v_uid, v_wh, null, 'write'\)$re$
           and p.prosrc ~ 'where o\.id = p_id\s+for update;'
           and p.prosrc !~ '40001|40P01'
      from pg_proc p where p.oid = 'public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text)'::regprocedure),
-  'G2: its gates are in its own body (signed in, member, the orders module, the 0348 approve gate, warehouse write), it locks the order FOR UPDATE, and it never raises 40001/40P01');
+  'G2: its gates are in its own body (signed in, member, the orders module, the approve gate (orders:approve alone since 0390), warehouse write), it locks the order FOR UPDATE, and it never raises 40001/40P01');
 select is(
   (select array_agg(distinct m[1] order by m[1])
      from pg_proc p, regexp_matches(p.prosrc, $re$errcode\s*=\s*'([^']+)'$re$, 'g') m
