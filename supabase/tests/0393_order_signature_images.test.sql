@@ -8,7 +8,8 @@
 --    order_requests and order_request_secrets).
 -- X. Each abort-on-mismatch check raises on a planted mismatch, in a
 --    self-undoing subtransaction before the real replay: an image longer than
---    the side CHECK (the row CHECK dropped for the test), a different image
+--    the side CHECK (the row CHECK dropped and the capture trigger disabled
+--    for the test), a different image
 --    already in the side table, a copy altered or skipped on the way in, a
 --    null-out skipped or undone, an updated_at re-stamped, another order's
 --    side image moved. X0: the fixtures are byte for byte as before.
@@ -264,11 +265,15 @@ select is(
   'R0: the CLI recorded the lock prelude and the data block of 0393 exactly once each (this suite replays that text)');
 select is(
   pg_temp.try_move(format($q$do $p$ begin
+                               -- The capture trigger (0393 is applied) would move the image to the side
+                               -- table, whose own CHECK raises 23514 first: keep it on the row for this
+                               -- planted mismatch (desk check F2; the subtransaction undoes both).
+                               alter table public.order_requests disable trigger trg_order_requests_signature_image_capture;
                                alter table public.order_requests drop constraint order_requests_signature_data_url_len_chk;
                                update public.order_requests set signature_data_url = repeat('Z', 524289) where id = %L;
                              end $p$$q$, :iDone1)),
   'P0001:order_secrets_images_too_long',
-  'X1: an image longer than the side table''s CHECK (the row CHECK dropped for the test): refused before any write');
+  'X1: an image longer than the side table''s CHECK (the row CHECK dropped and the capture trigger disabled for the test): refused before any write');
 select is(
   pg_temp.try_move(format('update public.order_request_secrets set signature_data_url = %L where order_request_id = %L',
                           pg_temp.img('IS'), :iSame)),
