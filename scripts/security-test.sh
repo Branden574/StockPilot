@@ -541,6 +541,21 @@ PGTAP_TESTS=(
   # 3.4.0 locks on policy changes) is
   # scripts/db-concurrency/0390_migration_lock_footprint.sh.
   supabase/tests/0390_approval_follows_permission.test.sql
+  # One create path, no duplicate order (0391, phone ordering PO-2): every
+  # order goes through place_order_request (INVOKER), which checks the placer
+  # is the caller BEFORE the key (a pending send another account left on a
+  # shared browser is never placed under this one), takes the key's advisory
+  # lock, answers a replay before any floor, records refusals under the key,
+  # and creates through the frozen create_order_request (a self-submit
+  # carries no requester name or email). order_submissions: each member reads
+  # only their own rows, and an insert is accepted only while
+  # stockpilot.order_submit holds this transaction's id, raised inline by the
+  # two writers alone (census); 'on' or another transaction's id opens
+  # nothing. On-behalf ordering follows orders:approve (slice D). No foreign
+  # key on user_id (account deletion with submissions succeeds). The shape
+  # rules are generated from core's parity fixture (pre-check 3). The
+  # two-session proofs are scripts/db-concurrency/0391_place_order_races.sh.
+  supabase/tests/0391_place_order_request.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -1067,6 +1082,21 @@ if [ ${#UNLISTED[@]} -gt 0 ]; then
   exit 1
 fi
 pass "no unlisted apps/web security suites"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PRE-CHECK 3 — the place-order parity block must be current.
+#
+# place_order_request's shape rules and core's create-body schema are held
+# equal by ONE fixture (packages/core/src/orders/place-order-parity-cases.json).
+# The pgTAP file's data block is generated from it; a block older than the
+# fixture would let the two engines drift while both suites stayed green.
+# ═══════════════════════════════════════════════════════════════════════════
+if node scripts/gen-place-order-parity-sql.mjs --check; then
+  pass "place-order parity block is current"
+else
+  fail "place-order parity block is stale or malformed: run node scripts/gen-place-order-parity-sql.mjs"
+  exit 1
+fi
 
 FAILED=()
 
