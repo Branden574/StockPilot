@@ -4,13 +4,13 @@ import { sha256Hex } from '@/lib/token-hash';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
- * Migration 0389 (slice B, order secrets expand): how POST /api/orders/sign
- * (and its /api/v1 alias) decides who may complete a hand-over.
+ * Migrations 0389 and 0392 (slices B and C, order secrets): how POST
+ * /api/orders/sign (and its /api/v1 alias) decides who may complete a
+ * hand-over.
  *
  *   link        sha256(presented) is the order's column (a printed QR, the
- *               panel's link): no session, as before.
- *   legacy_link the presented value IS the column and no side token hashes to
- *               it (minted before 0389): no session, until slice C.
+ *               panel's link; 0392 hashed every older raw column in place, so
+ *               a QR printed before 0389 is a link too): no session.
  *   member      the presented value IS the column and is a DIGEST, which every
  *               member reads: only a signed-in member of the order's
  *               organization with effective orders:approve, or the order's
@@ -221,25 +221,34 @@ describe('the audit row\'s IP fits audit_logs.ip (inet)', () => {
   });
 });
 
-describe('legacy raw column (minted before 0389, until slice C)', () => {
-  it('no side row: accepted as a link with no session, audited via legacy_link', async () => {
+describe('0392: no session-free legacy link is left', () => {
+  it('a value equal to the column with no side row is a DIGEST: the one 404 without a session, nothing written', async () => {
     world.column = LEGACY;
     world.side = null;
     const res = await POST(request(LEGACY));
-    expect(res.status).toBe(200);
-    expect((confirmCalls()[0]!.args as { p_signature_token: string }).p_signature_token).toBe(LEGACY);
-    expect(withApiContext).not.toHaveBeenCalled();
-    expect(insertAuditRowReported.mock.calls[0]![0]).toMatchObject({
-      user_id: null,
-      metadata: { via: 'legacy_link' },
-    });
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(confirmCalls()).toHaveLength(0);
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
   });
 
-  it('a stale side token (a pre-deploy tab re-minted raw over a 0389 mint): still the legacy link', async () => {
+  it('the same with a stale side token: still the one 404', async () => {
     world.column = LEGACY;
     world.side = RAW;
-    expect((await POST(request(LEGACY))).status).toBe(200);
-    expect(insertAuditRowReported.mock.calls[0]![0]).toMatchObject({ metadata: { via: 'legacy_link' } });
+    const res = await POST(request(LEGACY));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  it('a QR printed before 0389 (its raw token; 0392 hashed the column in place) is a link: 200 with no session, audited via link', async () => {
+    world.column = sha256Hex(LEGACY);
+    world.side = null;
+    const res = await POST(request(LEGACY));
+    expect(res.status).toBe(200);
+    expect((confirmCalls()[0]!.args as { p_signature_token: string }).p_signature_token).toBe(sha256Hex(LEGACY));
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(insertAuditRowReported.mock.calls[0]![0]).toMatchObject({ user_id: null, metadata: { via: 'link' } });
   });
 });
 
@@ -424,8 +433,8 @@ describe('rate limits', () => {
     expect(world.status).toBe('staged_for_pickup');
   });
 
-  it('a legacy raw column counts against its own token the same way', async () => {
-    world.column = LEGACY;
+  it('a QR printed before 0389 (hashed in place by 0392) counts against its own token the same way', async () => {
+    world.column = sha256Hex(LEGACY);
     world.side = null;
     checkRateLimit.mockImplementation(async () => ({ allowed: false }));
     const res = await POST(request(LEGACY));

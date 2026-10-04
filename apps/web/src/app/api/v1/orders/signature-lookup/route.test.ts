@@ -121,10 +121,16 @@ describe('POST /api/v1/orders/signature-lookup', () => {
     expect(JSON.stringify(res.json)).not.toContain(DIGEST);
   });
 
-  it('a raw column minted before 0389 matches, until slice C', async () => {
+  it('a QR printed before 0389 matches (0392 hashed its column in place)', async () => {
+    signIn();
+    world(sha256Hex(LEGACY), null);
+    expect((await lookup({ token: LEGACY })).status).toBe(200);
+  });
+
+  it('0392: a value equal to the column (a digest, side row or not) is the same 404', async () => {
     signIn();
     world(LEGACY, null);
-    expect((await lookup({ token: LEGACY })).status).toBe(200);
+    expect(await lookup({ token: LEGACY })).toEqual({ status: 404, json: { error: 'not_found' } });
   });
 
   it('the DIGEST (what every member reads) matches nothing: the same 404', async () => {

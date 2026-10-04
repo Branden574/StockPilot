@@ -8,7 +8,7 @@ import { RequesterReturnForm } from './requester-return-form';
  * Public requester-initiated return portal (Returns Phase B, B4).
  *
  * URL: `/returns/request/<token>` — anonymous, no auth. The token is the
- * per-order `order_requests.return_token` (0156); it is the ONLY auth the
+ * per-order return token (0156; in order_request_secrets since 0389/0392); it is the ONLY auth the
  * visitor carries, and it scopes to EXACTLY ONE order. We resolve it with the
  * service-role admin client (the visitor has no JWT) and render ONLY that
  * order's still-returnable lines. No cross-order data is ever loaded or exposed.

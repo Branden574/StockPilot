@@ -168,10 +168,10 @@ export interface OrderRequestRow {
   assigned_delivery_at: string | null;
   in_transit_at: string | null;
   in_transit_by: string | null;
-  /** sha256 hex of the raw token for every mint since migration 0389 (the raw
-   *  token is in order_request_secrets, admin-only); a token minted earlier is
-   *  still raw here until slice C. Never put this value in a link or a QR:
-   *  server/lib/order-secrets signatureLinkToken picks the right one. */
+  /** sha256 hex of the raw token (the raw token is in order_request_secrets,
+   *  admin-only): every mint since migration 0389, and every older token since
+   *  0392 hashed it in place. Never put this value in a link or a QR:
+   *  server/lib/order-secrets signatureLinkToken reads the raw one. */
   signature_token: string | null;
   signature_token_expires_at: string | null;
   signed_by_name: string | null;
@@ -182,16 +182,14 @@ export interface OrderRequestRow {
   signed_at: string | null;
   completed_at: string | null;
   completed_by: string | null;
-  /** Per-order requester-return-portal token (mig 0156). NULL until minted
-   *  on completion (returns module on). Drives /returns/request/[token]. */
+  /** Always NULL since migration 0392: the requester return token (mig 0156)
+   *  lives in order_request_secrets (server/lib/order-secrets). */
   return_token: string | null;
   /** One-time return-prompt email marker (mig 0278). NULL = never sent. */
   return_prompt_sent_at: string | null;
-  /** Per-request public-tracking token (mig 0330). Minted at PUBLIC submit
-   *  only (requester_user_id null); status emails embed it as the /r/track
-   *  `&t=` scope now that the org/link catalog tokens are hashed at rest
-   *  and unreadable at send time. Grants only this one order's redacted
-   *  status view, alongside the matching requester email. */
+  /** Always NULL since migration 0392: the per-request public tracking token
+   *  (mig 0330; the /r/track `&t=` scope status emails embed) lives in
+   *  order_request_secrets (server/lib/order-secrets resolveTrackToken). */
   public_track_token: string | null;
 }
 

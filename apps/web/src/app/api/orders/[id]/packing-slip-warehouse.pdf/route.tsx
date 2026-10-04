@@ -74,21 +74,19 @@ export async function GET(
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
-    // The QR carries the RAW token (migration 0389): the side table's, when
-    // its sha256 is the order's column; else the column itself when no side
-    // token hashes to it (minted before 0389, until slice C). A column the
-    // side table cannot vouch for, or a failed side read, prints no QR, which
-    // is today's no-token branch below. The order column alone is never put
-    // in the QR when it is a digest.
-    let link: Awaited<ReturnType<typeof signatureLinkToken>> = null;
+    // The QR carries the RAW token (migrations 0389 and 0392): the side
+    // table's, when its sha256 is the order's column. The order column is
+    // always a digest since 0392 and is never put in the QR; a column the
+    // side table cannot vouch for, or a failed side read, prints no QR,
+    // which is the no-token branch below.
+    let token: string | null = null;
     if (detail.request.signature_token) {
       try {
-        link = await signatureLinkToken(createAdminClient(), id, detail.request.signature_token);
+        token = await signatureLinkToken(createAdminClient(), id, detail.request.signature_token);
       } catch {
-        link = null; // no service-role key: the slip prints without a QR (warned below)
+        token = null; // no service-role key: the slip prints without a QR (warned below)
       }
     }
-    const token = link?.token ?? null;
     let qrDataUrl: string | null = null;
     if (token) {
       const url = `${env.NEXT_PUBLIC_APP_URL}/orders/sign/${token}`;

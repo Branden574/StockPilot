@@ -243,11 +243,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Which order, and by what right (migration 0389, server/lib/order-secrets):
+  // Which order, and by what right (migrations 0389 and 0392,
+  // server/lib/order-secrets):
   //   link        sha256(presented) is the order's column: the raw token of a
-  //               printed QR or the panel's link. No session needed, as before.
-  //   legacy_link the presented value IS the column and no side token hashes
-  //               to it: a raw token minted before 0389 (until slice C).
+  //               printed QR or the panel's link (0392 hashed every older raw
+  //               column in place, so a QR printed before 0389 is a link too).
+  //               No session needed, as before.
   //   member      the presented value IS the column and is a DIGEST, which
   //               every member can read. It completes the hand-over only for
   //               a signed-in member of the order's organization who may hand
@@ -262,7 +263,7 @@ export async function POST(req: NextRequest) {
   //
   // The limits are applied AFTER the match, each keyed to whoever can reach
   // it, so nobody can use up someone else's (desk check F3):
-  //   - a link (link or legacy_link) counts against its token: 10 an hour,
+  //   - a link counts against its token: 10 an hour,
   //     keyed by sha256(presented). Only a holder of that value (the printed
   //     QR, the panel's link) can fill it. Closed mode: a DB outage denies
   //     rather than unlocks unlimited submissions on a public endpoint. The
@@ -349,8 +350,8 @@ export async function POST(req: NextRequest) {
 
   const { data: confirmed, error } = await admin.rpc('confirm_order_signature', {
     p_id: order.id,
-    // The column value (the digest for a link or a member, the raw value for
-    // a legacy link): the frozen body compares the column with it.
+    // The column value (the digest, for a link and for a member): the frozen
+    // body compares the column with it.
     p_signature_token: match.columnToken,
     p_signer_name: parsed.data.signerName,
     p_signer_email: parsed.data.signerEmail,

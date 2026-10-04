@@ -27,13 +27,15 @@ import {
 } from './order-secrets';
 
 /**
- * Migration 0389 (slice B, order secrets expand). The raw signature token of
- * every mint since 0389 lives in order_request_secrets (service-only); the
- * order column every member reads holds its sha256 as 64 lowercase hex. Until
- * slice C a raw token minted earlier is still in the column, and is a link
- * only when no side token hashes to it. These helpers are the one place that
- * rule lives (the sign route, the sign page, the warehouse slip, the order
- * page and the scan lookup all call them).
+ * Migrations 0389 and 0392 (slices B and C, order secrets). The raw signature
+ * token lives in order_request_secrets (service-only); the order column every
+ * member reads holds its sha256 as 64 lowercase hex: every mint since 0389,
+ * and every older token since 0392 hashed it in place (copying the live ones
+ * to the side table first). The return and track tokens live only in the
+ * side table since 0392. These helpers are the one place that rule lives (the
+ * sign route, the sign page, the warehouse slip, the order page, the tracker,
+ * the return portal and the scan lookup all call them), and since 0392 none
+ * of them reads or trusts an order column as a raw token.
  */
 
 const RAW = 'a1'.repeat(32);
@@ -93,22 +95,14 @@ describe('readOrderSecrets', () => {
 });
 
 describe('signatureLinkToken (the raw token for a link or a QR)', () => {
-  it('the side token when its digest is the column (minted since 0389)', async () => {
-    expect(await signatureLinkToken(secretsStub({ signature_token: RAW }).client, ORDER, DIGEST)).toEqual({
-      token: RAW,
-      source: 'side',
-    });
+  it('the side token when its digest is the column', async () => {
+    expect(await signatureLinkToken(secretsStub({ signature_token: RAW }).client, ORDER, DIGEST)).toBe(RAW);
   });
 
-  it('the column itself when no side token hashes to it: minted before 0389, or re-minted raw by a pre-deploy tab over a stale side token', async () => {
-    expect(await signatureLinkToken(secretsStub(null).client, ORDER, LEGACY)).toEqual({
-      token: LEGACY,
-      source: 'legacy_column',
-    });
-    expect(await signatureLinkToken(secretsStub({ signature_token: RAW }).client, ORDER, LEGACY)).toEqual({
-      token: LEGACY,
-      source: 'legacy_column',
-    });
+  it('0392: never the column when no side token hashes to it (no side row, or a stale side token): the column is a digest, so nothing goes in the link', async () => {
+    expect(await signatureLinkToken(secretsStub(null).client, ORDER, LEGACY)).toBeNull();
+    expect(await signatureLinkToken(secretsStub({ signature_token: RAW }).client, ORDER, LEGACY)).toBeNull();
+    expect(await signatureLinkToken(secretsStub({ signature_token: null }).client, ORDER, DIGEST)).toBeNull();
   });
 
   it('nothing when the column is empty (cleared by reopen or resume, a stale side token is ignored), without a read', async () => {
@@ -156,23 +150,31 @@ describe('resolveSignatureToken (how a presented token reaches its order)', () =
     expect(m).toMatchObject({ via: 'member', columnToken: DIGEST });
   });
 
-  it('legacy_link: a raw column with no side row, or with only a stale side token (until slice C)', async () => {
-    expect(await resolveSignatureToken(signStub({ column: LEGACY }).client, LEGACY, 'id')).toMatchObject({
-      via: 'legacy_link',
-      columnToken: LEGACY,
-    });
-    expect(
-      await resolveSignatureToken(signStub({ column: LEGACY, side: RAW }).client, LEGACY, 'id'),
-    ).toMatchObject({ via: 'legacy_link' });
-    expect(
-      await resolveSignatureToken(signStub({ column: LEGACY, side: null }).client, LEGACY, 'id'),
-    ).toMatchObject({ via: 'legacy_link' });
-  });
-
-  it('a side table that cannot be read fails CLOSED: a column match then needs the entitled session (member)', async () => {
+  it('0392: a value equal to the column is ALWAYS member (a digest), whatever the side table holds: no session-free legacy link is left', async () => {
+    for (const side of [undefined, RAW, null] as const) {
+      expect(
+        await resolveSignatureToken(signStub({ column: LEGACY, side }).client, LEGACY, 'id'),
+        String(side),
+      ).toMatchObject({ via: 'member', columnToken: LEGACY });
+    }
     expect(
       await resolveSignatureToken(signStub({ column: LEGACY, sideError: true }).client, LEGACY, 'id'),
     ).toMatchObject({ via: 'member' });
+  });
+
+  it('0392: resolving never reads the side table (the column decides: a digest of the presented value is a link, the value itself a member)', async () => {
+    const s = signStub({ column: DIGEST, side: RAW });
+    await resolveSignatureToken(s.client, RAW, 'id');
+    await resolveSignatureToken(s.client, DIGEST, 'id');
+    expect(s.fromCalls).not.toContain('order_request_secrets');
+  });
+
+  it('a raw token minted before 0389 and hashed in place by 0392 is a link, like any QR', async () => {
+    const hashedLegacy = sha256Hex(LEGACY);
+    expect(await resolveSignatureToken(signStub({ column: hashedLegacy }).client, LEGACY, 'id')).toMatchObject({
+      via: 'link',
+      columnToken: hashedLegacy,
+    });
   });
 
   it('no match: an unknown token, a cleared column, a malformed token or a failed lookup', async () => {
@@ -183,20 +185,25 @@ describe('resolveSignatureToken (how a presented token reaches its order)', () =
   });
 });
 
-describe('return and track tokens: the side table first, then the legacy column', () => {
-  it('resolveReturnToken / resolveTrackToken', async () => {
+describe('return and track tokens: the side table only (0392 moved every column value there)', () => {
+  it('resolveReturnToken / resolveTrackToken read the side row, and nothing else', async () => {
     const side = secretsStub({ return_token: 'side-r', public_track_token: 'side-t' });
-    expect(await resolveReturnToken(side.client, ORDER, 'col-r')).toBe('side-r');
-    expect(await resolveTrackToken(side.client, ORDER, 'col-t')).toBe('side-t');
+    expect(await resolveReturnToken(side.client, ORDER)).toBe('side-r');
+    expect(await resolveTrackToken(side.client, ORDER)).toBe('side-t');
+    expect(side.fromCalls.every((t) => t === 'order_request_secrets')).toBe(true);
     const none = secretsStub(null);
-    expect(await resolveReturnToken(none.client, ORDER, 'col-r')).toBe('col-r');
-    expect(await resolveTrackToken(none.client, ORDER, null)).toBeNull();
-    const failed = secretsStub(null, { sideError: true });
-    expect(await resolveReturnToken(failed.client, ORDER, 'col-r')).toBe('col-r');
-    expect(await resolveTrackToken(failed.client, ORDER, 'col-t')).toBe('col-t');
+    expect(await resolveReturnToken(none.client, ORDER)).toBeNull();
+    expect(await resolveTrackToken(none.client, ORDER)).toBeNull();
   });
 
-  it('orderIdForReturnToken: a side token, else a legacy column token, else nothing', async () => {
+  it('a failed side read is no token (the link is left out), never a column value', async () => {
+    const failed = secretsStub(null, { sideError: true });
+    expect(await resolveReturnToken(failed.client, ORDER)).toBeNull();
+    expect(await resolveTrackToken(failed.client, ORDER)).toBeNull();
+    expect(failed.fromCalls).not.toContain('order_requests');
+  });
+
+  it('orderIdForReturnToken: a side token opens its order; an order column value opens nothing (0392)', async () => {
     const stub = (sideRows: unknown[], orderRows: unknown[]) =>
       makeSupabaseStub({
         'order_request_secrets.select': servedLikePostgrest(sideRows as Record<string, unknown>[]),
@@ -204,10 +211,15 @@ describe('return and track tokens: the side table first, then the legacy column'
       });
     const TOK = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     expect(await orderIdForReturnToken(stub([{ order_request_id: ORDER, return_token: TOK }], []).client, TOK)).toBe(ORDER);
-    expect(await orderIdForReturnToken(stub([], [{ id: 'legacy-order', return_token: TOK }]).client, TOK)).toBe(
-      'legacy-order',
-    );
-    expect(await orderIdForReturnToken(stub([], [{ id: 'other', return_token: 'x' }]).client, TOK)).toBeNull();
+    const columnOnly = stub([], [{ id: 'legacy-order', return_token: TOK }]);
+    expect(await orderIdForReturnToken(columnOnly.client, TOK)).toBeNull();
+    expect(columnOnly.fromCalls).not.toContain('order_requests');
+    expect(await orderIdForReturnToken(stub([{ order_request_id: 'other', return_token: 'x' }], []).client, TOK)).toBeNull();
+    const failed = makeSupabaseStub({
+      'order_request_secrets.select': { data: null, error: { message: 'down' } },
+      'order_requests.select': servedLikePostgrest([{ id: 'legacy-order', return_token: TOK }]),
+    });
+    expect(await orderIdForReturnToken(failed.client, TOK)).toBeNull();
   });
 });
 

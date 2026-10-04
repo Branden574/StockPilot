@@ -1038,18 +1038,18 @@ export default async function OrderDetailPage({
     returnsModuleEnabled &&
     totalFulfilledForReturns > 0;
 
-  // ORDER SECRETS (migration 0389). The raw tokens live in
+  // ORDER SECRETS (migrations 0389 and 0392). The raw tokens live in
   // order_request_secrets, which only the admin client reads; the order row
-  // every member reads holds the signature token's sha256 (for tokens minted
-  // since 0389). Read only for the viewer who gets the link:
-  //   - the requester's own return link: the side table first, then the
-  //     legacy column (an older token may already be in their inbox);
+  // every member reads holds the signature token's sha256, and its return and
+  // track columns are null (0392 moved them, same values). Read only for the
+  // viewer who gets the link:
+  //   - the requester's own return link: the side table's token;
   //   - the panel's "Collect signature" link: only while the order can be
   //     signed (staged for pickup, in transit) and only for someone who may
   //     hand it over (orders:approve, with write access to the order's
-  //     warehouse below manager rank, or the assigned driver). The raw token
-  //     when its digest is the column, else a raw column minted before 0389;
-  //     never a digest (the sign page would then ask for a session). Not
+  //     warehouse below manager rank, or the assigned driver). The raw side
+  //     token when its digest is the column; never a digest (the sign page
+  //     would then ask for a session). Not
   //     while the viewer owes an MFA step-up (F2): the link completes the
   //     hand-over with no session, so it follows assertPermission's rule, and
   //     the panel says what to do instead. The MFA state is the service
@@ -1086,7 +1086,7 @@ export default async function OrderDetailPage({
   }
   const [requesterReturnToken, handOverLink] = await Promise.all([
     requesterReturnEligible && secretsAdmin
-      ? resolveReturnToken(secretsAdmin, id, request.return_token)
+      ? resolveReturnToken(secretsAdmin, id)
       : Promise.resolve(null),
     wantsHandOverLink && secretsAdmin
       ? signatureLinkToken(secretsAdmin, id, request.signature_token)
@@ -1701,7 +1701,7 @@ export default async function OrderDetailPage({
               hasRequesterNote={Boolean(request.notes?.trim())}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
-              signatureToken={handOverLink?.token ?? null}
+              signatureToken={handOverLink}
               handOverMfaMessage={handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null}
               hasSignature={hasCapturedSignature(request)}
               signedByName={request.signed_by_name}

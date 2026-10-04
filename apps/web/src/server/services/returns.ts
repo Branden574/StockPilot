@@ -1113,7 +1113,7 @@ function generateReturnNumber(): string {
 
 /**
  * Input the public `/returns/request/[token]` page POSTs. The token is the
- * per-order `order_requests.return_token` (0156); it is the ONLY authorization
+ * per-order return token (0156; in order_request_secrets since 0389/0392); it is the ONLY authorization
  * the anonymous requester carries, so every field below is treated as hostile
  * and re-validated server-side against the order the token resolves to. The
  * client picks lines + quantities + a reason — but the service NEVER trusts the
@@ -1265,9 +1265,9 @@ export async function loadRequesterReturnContext(
   // hitting the DB so a malformed token is a cheap 404, not a 500.
   if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
 
-  // Since 0389 the token is minted into order_request_secrets (service-only);
-  // a token minted earlier is still on order_requests.return_token until
-  // slice C moves it. Either opens exactly its one order.
+  // The token lives in order_request_secrets (service-only): minted there
+  // since 0389, and 0392 moved every older one there with the same value and
+  // nulled order_requests.return_token. It opens exactly its one order.
   const orderId = await orderIdForReturnToken(admin, token);
   if (!orderId) return null;
 

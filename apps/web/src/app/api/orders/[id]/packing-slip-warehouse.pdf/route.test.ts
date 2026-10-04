@@ -12,9 +12,9 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
  *     audience). Any other member used to get the PDF, QR included: now 403,
  *     before the export budget is spent;
  *   - the QR carries the RAW token from order_request_secrets when its sha256
- *     is the order's column; else a raw column minted before 0389 (no side
- *     token hashes to it, until slice C); else no QR (a cleared column, or a
- *     side table that cannot be read). Never the digest;
+ *     is the order's column; else no QR (a cleared column, no side token that
+ *     hashes to the column, or a side table that cannot be read). Never the
+ *     digest: since 0392 the column is always one;
  *   - an entitled member who still owes an MFA step-up gets 403 with the
  *     reason, as the sign route's member path does (desk check F2).
  */
@@ -133,12 +133,16 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${RAW}`);
   });
 
-  it('a raw column minted before 0389 (no side token hashes to it) is the QR, until slice C', async () => {
+  it('0392: a column no side token hashes to prints no QR (never the column itself)', async () => {
     signIn({ role: 'manager' });
     side(null);
     get.mockResolvedValue(detail(LEGACY));
-    await call();
-    expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${LEGACY}`);
+    expect((await call()).status).toBe(200);
+    expect(qrUrl()).toBeNull();
+    side(RAW);
+    get.mockResolvedValue(detail(LEGACY));
+    expect((await call()).status).toBe(200);
+    expect(qrUrl()).toBeNull();
   });
 
   it('a stale side token with a cleared column (reopen, resume) prints no QR', async () => {

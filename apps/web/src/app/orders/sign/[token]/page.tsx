@@ -48,10 +48,11 @@ export default async function OrderSignPage({
 
   const admin = createAdminClient();
 
-  // The same resolution as the POST route (migration 0389,
+  // The same resolution as the POST route (migrations 0389 and 0392,
   // server/lib/order-secrets): a raw token from a QR or the panel's link
-  // (sha256 of it is the order's column), a raw token minted before 0389
-  // (until slice C), or the DIGEST every member can read. A digest opens the
+  // (sha256 of it is the order's column; 0392 hashed every older raw column
+  // in place, so a QR printed before 0389 resolves the same way), or the
+  // DIGEST every member can read. A digest opens the
   // page only for a signed-in member of the order's organization, verified
   // locally without refreshing the session (R1: this page cannot persist a
   // refresh); who may then hand the order over is decided by the POST route
