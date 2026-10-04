@@ -535,6 +535,52 @@ actually fire.
   allowlist row; both must be caught). 0371's own test pins the exact policy
   set on `item_stock_levels` (A1-A4).
 
+### INV-C5 — `order_submissions` is owner-only, and only the two writers insert into it
+
+- **Invariant**: `order_submissions` (0391, one record per order submission
+  key) has RLS on; `authenticated` holds SELECT and INSERT only, `anon` and
+  PUBLIC nothing, `service_role` SELECT only. Its SELECT policy shows a member
+  their own rows only (`user_id = auth.uid()` and a member of the row's
+  organization). Its INSERT policy also requires
+  `stockpilot.order_submit` to hold THIS transaction's id
+  (`pg_current_xact_id()`), the 0359 carrier pattern, and exactly two
+  functions raise that flag, inline around their one insert:
+  `place_order_request` and `withdraw_order_submission`. There is no UPDATE or
+  DELETE policy: a recorded outcome never changes. `user_id` has no foreign
+  key, so deleting an account never fails on it.
+- **Why it matters**: the record is what makes a resend of a lost order
+  request answer the first outcome instead of placing a second order, and what
+  makes "Don't send it" final. A caller who could insert a row directly could
+  mark their own key withdrawn or placed without placing anything (harmless to
+  others, but it would break the guarantee for that person), and one who could
+  read another member's rows would learn their order activity. The flag rests
+  on the 0359 premise: no API-callable function runs dynamic SQL or passes
+  caller text to `set_config`, and `set_config` is not exposed.
+- **Enforced by**: the two policies and the grants; the flag raised only
+  inline (no helper function writes the table, because any helper would have
+  to be executable by `authenticated` and could then be called with any
+  outcome); `place_order_request` comparing the body's placer with
+  `auth.uid()` before it looks at the key (a pending send left in a shared
+  browser is never placed under another account). In the app (review round
+  1): the New order page names its organization on every call and the
+  account that sent the key on the status read and the withdraw, and
+  `OrderRequestsService` refuses a mismatch (`organization_changed`,
+  `placer_mismatch`) before any function runs, never settled, so a tab left
+  in another workspace or under another account never settles a key it does
+  not hold; every refusal names the organization that answered, and core
+  `orderCallResultForOrganization` never lets an answer for another
+  organization settle a key.
+- **Tested at**: [`0391_place_order_request.test.sql`](../../supabase/tests/0391_place_order_request.test.sql)
+  G1-G6 (grants, the two policies' text, the keys, the six functions' posture,
+  the flag census, no dynamic SQL), I1-I3 (a direct insert of each outcome
+  refused; `'on'` and another transaction's id refused; SELECT shows only your
+  own rows), N1 (placer mismatch refused before the key) and D1-D3 (deletes);
+  the 0359 census tests 17, 18 and 73 keep covering the new functions;
+  `scripts/db-concurrency/0391_place_order_races.sh` proves the lock across
+  two sessions; `order-requests.create.test.ts`, `order-requests.place-action.test.ts`,
+  the two route tests, `order-submission.hook.test.tsx` and core
+  `place-order.test.ts` cover the app's organization and account checks.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure

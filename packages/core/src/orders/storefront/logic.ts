@@ -31,13 +31,20 @@ export type ViewMode = 'grid' | 'compact';
 /** 'all' | 'uncategorized' | categoryId. Mirrors the v2 aisle filter. */
 export type CategoryFilter = 'all' | 'uncategorized' | string;
 
+/**
+ * The sorts the storefront offers, the default first (phone ordering PO-2).
+ * "Featured" is gone: it was catalog order, which is name order. "Most
+ * ordered by you" was not yours: the Frequently ordered RPC counts every
+ * member's orders at the warehouse. `featured` stays a SortKey (catalog
+ * order) so a saved preference still sorts.
+ */
+export const DEFAULT_SORT: SortKey = 'name-asc';
 export const SORT_OPTIONS: ReadonlyArray<{ id: SortKey; label: string }> = [
-  { id: 'featured', label: 'Featured' },
-  { id: 'freq', label: 'Most ordered by you' },
   { id: 'name-asc', label: 'Name · A–Z' },
   { id: 'name-desc', label: 'Name · Z–A' },
   { id: 'stock-desc', label: 'Most available' },
   { id: 'stock-asc', label: 'Least available' },
+  { id: 'freq', label: 'Most ordered here' },
 ];
 
 export const AVAILABILITY_LABELS: Record<StorefrontItemStatus, string> = {

@@ -139,6 +139,28 @@ export function writeOrderPrefill(payload: OrderPrefillPayload): boolean {
 }
 
 /**
+ * Whether a handoff with items for this warehouse is waiting. A read only,
+ * nothing is cleared: the storefront asks this while a pending send has the
+ * cart locked, refuses the add in core's words, and keeps the selection for
+ * after the send settles (review round 1).
+ */
+export function hasOrderPrefill(expectedWarehouseId: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(ORDER_PREFILL_KEY);
+    if (!raw) return false;
+    const obj = JSON.parse(raw) as Partial<OrderPrefillPayload> | null;
+    return (
+      !!obj &&
+      obj.warehouseId === expectedWarehouseId &&
+      Array.isArray(obj.itemIds) &&
+      obj.itemIds.some((x) => typeof x === 'string')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read the handoff for a given warehouse and clear it (one-shot). Returns null
  * when nothing is pending, the blob is corrupt, or it targets a DIFFERENT
  * warehouse than the one asked for — in the mismatch case the blob is LEFT in

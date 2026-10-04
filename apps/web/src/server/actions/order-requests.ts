@@ -9,20 +9,25 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import {
-  can,
   err,
   formatWallClock,
   HOLD_FAILED_COPY,
+  mintOrderSubmissionKey,
   NEEDED_BY_FAILED_COPY,
   NEEDED_BY_SUGGESTION_REASON,
   ok,
-  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
+  ORDER_BODY_UNREADABLE_COPY,
+  ORDER_FAULT_COPY,
   parseWallClock,
   wallClockToInstant,
   type ActionResult,
   type HoldOrderStockResult,
   type HoldOutcome,
   type NeededByRevisionOutcome,
+  type OrderCreateRequestInput,
+  type OrderPlaceAnswer,
+  type OrderSubmissionStatus,
+  type OrderSummary,
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
@@ -38,129 +43,221 @@ function toResult<T>(error: unknown): ActionResult<T> {
  * stale avail pills for up to a minute after an order changes state — the
  * owner expects near-instant. Same global-tag pattern as user-categories
  * (these mutations are orders-of-magnitude rarer than catalog reads, so
- * nuking the tag org-wide is cheap).
+ * nuking the tag org-wide is cheap). Placing an order reserves nothing, so
+ * createOrderRequestAction does NOT call this (phone ordering PO-2: it used
+ * to empty every warm catalog on every order).
  */
 function revalidateOrdersCatalog() {
   revalidateTag('orders-new-v2-catalog', 'max');
 }
 
-// Per-line cap matches the public endpoint so a viewer can't drain an
-// entire SKU's reservations in a single submit. Total-qty refine adds
-// a second guard against split-across-many-lines abuse.
-const MAX_QTY_PER_LINE = 10_000;
-const MAX_TOTAL_QTY = 10_000;
-
-const createSchema = z
-  .object({
-    warehouseId: z.string().uuid(),
-    notes: z.string().max(2000).nullable().optional(),
-    // Structured needed-by datetime; must be in the future when provided.
-    neededBy: z
-      .string()
-      .datetime({ offset: true })
-      .nullish()
-      .refine((v) => !v || new Date(v).getTime() > Date.now(), {
-        message: 'Needed-by must be in the future.',
+/**
+ * The body a New order tab opened BEFORE the PO-2 deploy still sends (no
+ * submission key; needed-by as an instant). Read for ONE release by the
+ * legacy branch below, then removed (phone ordering plan, follow-up 9). Such
+ * a tab has no retry protection, the same as before the deploy.
+ *
+ * When it can arrive (review round 1, checked in next 16.3.5): a server
+ * action's id is a hash salted with the build's encryption key, which `next
+ * build` keeps in `.next/cache/.rscinfo` for 14 days and reuses while the
+ * build cache is restored (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is not set).
+ * Under Vercel Skew Protection (on, 12 hours) a tab from the previous
+ * deployment is pinned to THAT deployment, so for up to 12 hours an old tab
+ * runs the OLD action, which calls create_order_request directly and writes
+ * no order_submissions row. After that, an old tab reaches this branch only
+ * while the build key is unchanged; otherwise it gets "Failed to find Server
+ * Action" (it was never protected, and nothing is placed).
+ */
+const legacyCreateSchema = z.object({
+  warehouseId: z.string().uuid(),
+  notes: z.string().max(2000).nullable().optional(),
+  neededBy: z.string().datetime({ offset: true }).nullish(),
+  fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
+  requesterPhone: z.string().trim().max(40).nullish(),
+  deliveryCharterId: z.string().uuid().nullish(),
+  pickupLocationNotes: z.string().trim().max(2000).nullish(),
+  onBehalfOf: z
+    .object({
+      name: z.string().trim().min(1).max(120),
+      email: z.string().trim().email().max(254),
+    })
+    .nullish(),
+  lines: z
+    .array(
+      z.object({
+        itemId: z.string().uuid(),
+        quantity: z.coerce.number(),
+        notes: z.string().max(500).nullable().optional(),
       }),
-    // Rolling-deploy safety: default to 'pickup' when an older client
-    // bundle submits without the field. Mirrors the public POST schema
-    // so behavior stays consistent across both create surfaces.
-    fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
-    requesterPhone: z.string().trim().max(40).nullish(),
-    deliveryCharterId: z.string().uuid().nullish(),
-    pickupLocationNotes: z.string().trim().max(2000).nullish(),
-    onBehalfOf: z
-      .object({
-        name: z.string().trim().min(1).max(120),
-        email: z.string().trim().email().max(254),
-      })
-      .nullish(),
-    lines: z
-      .array(
-        z.object({
-          itemId: z.string().uuid(),
-          // I14: every order line is an integer count of books — fractional
-          // requests like 1.5 don't represent anything sensible and would
-          // confuse downstream stock-movement math. `.int()` rejects them
-          // outright; `.coerce` keeps tolerating string inputs from form
-          // posts.
-          quantity: z.coerce.number().int().positive().max(MAX_QTY_PER_LINE),
-          notes: z.string().max(500).nullable().optional(),
-        }),
-      )
-      .min(1)
-      .max(100),
-    // The kits the New order page used, for the order's audit entry only
-    // (OrderRequestsService.create). Optional: an older page sends none. The
-    // lines alone are the order.
-    kits: z
-      .array(
-        z.object({
-          bundleId: z.string().uuid(),
-          count: z.number().int().positive().max(MAX_TOTAL_QTY),
-        }),
-      )
-      .max(100)
-      .optional(),
-  })
-  .refine((v) => v.lines.reduce((s, l) => s + l.quantity, 0) <= MAX_TOTAL_QTY, {
-    message: `Total quantity across all lines cannot exceed ${MAX_TOTAL_QTY.toLocaleString()}.`,
-    path: ['lines'],
-  });
+    )
+    .min(1)
+    .max(100),
+  kits: z
+    .array(z.object({ bundleId: z.string().uuid(), count: z.number().int().positive().max(10_000) }))
+    .max(100)
+    .optional(),
+});
 
-export async function createOrderRequestAction(
-  input: z.input<typeof createSchema>,
-): Promise<ActionResult<{ id: string; orderNumber: number | null }>> {
-  const parsed = createSchema.safeParse(input);
-  if (!parsed.success)
-    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  // Cross-field check shared with the public POST route: a delivery
-  // fulfillment is meaningless without a site (charter) to ship to.
-  if (parsed.data.fulfillmentType === 'delivery' && !parsed.data.deliveryCharterId) {
-    return err('validation_error', 'Delivery orders need a site.');
+/** An action error from the order submission service: the service's code,
+ *  core's sentence and its details (reason, settled, replay, items...), so
+ *  the storefront classifies it exactly as the phone classifies the route's
+ *  answer. A fault is core's "couldn't be confirmed" sentence (reported). */
+function orderSubmissionActionError(
+  e: unknown,
+  tag: string,
+  organizationId: string | null,
+): ActionResult<never> {
+  // The organization that answered, on every refusal it made (none before the
+  // session was read), so a tab left in another workspace drops it (core
+  // orderCallResultForOrganization; review round 1).
+  const answeredBy = organizationId ? { organizationId } : {};
+  if (e instanceof ServiceError && e.code !== 'internal_error') {
+    return err(e.code, e.message, { ...(e.details ?? {}), ...answeredBy });
   }
+  void reportError(e instanceof ServiceError && e.internalDetail ? new Error(e.internalDetail) : e, { tag });
+  return err('internal_error', ORDER_FAULT_COPY, { reason: 'failed', ...answeredBy });
+}
+
+/** The organization a New order page was opened in (core's create body does
+ *  not carry it: the phone names it in X-Organization-Id). */
+const pageOrganizationSchema = z.object({ organizationId: z.string().trim().min(1).max(100) });
+
+/**
+ * Place an order request from the New order page (phone ordering PO-2). The
+ * body is core's create body (orderCreateRequestSchema: the submission key
+ * minted on the first press and kept, the placer, the wall-clock needed-by),
+ * read and refused in the service with core's words; it goes to the database
+ * through the same service method as the phone's POST /api/v1/orders.
+ *
+ * Answers `{ organizationId, result: { replay, order } }`, the body POST
+ * /api/v1/orders answers (core parseOrderPlaceAnswer reads both), with
+ * `replay: true` when the key had already placed the order. A refusal carries the service's details, `settled: true` when it is
+ * recorded under the key. revalidatePath('/dashboard/orders') stays; the
+ * storefront catalog is NOT revalidated (placing reserves nothing).
+ *
+ * `page` names the organization the page was opened in. The account's
+ * organization is its default one, which a workspace switch in another tab
+ * changes for every open tab, so a send from a tab left in another
+ * organization is refused organization_changed before any key work (never
+ * recorded, never settled), and every refusal names the organization that
+ * answered (review round 1).
+ *
+ * LEGACY BRANCH (one release): a body without a key comes from a tab opened
+ * before the deploy (see legacyCreateSchema for when one can arrive). It gets
+ * a server-minted key and the session as placer, and its needed-by instant
+ * passes through unconverted. No pending record exists for it, so it has no
+ * retry protection, as before; it names no organization.
+ */
+export async function createOrderRequestAction(
+  input: OrderCreateRequestInput | z.input<typeof legacyCreateSchema>,
+  page?: z.input<typeof pageOrganizationSchema>,
+): Promise<ActionResult<{ organizationId: string; result: { replay: boolean; order: OrderSummary } }>> {
+  let organizationId: string | null = null;
   try {
-    // Gate `onBehalfOf` to the effective orders:approve permission: the
-    // order_requests_insert policy's on-behalf branch, which since 0390 has no
-    // manager-by-role exception (a manager whose orders:approve was revoked is
-    // refused there, a staff member granted it is let through). The service
-    // itself doesn't know who's calling; building the ServiceContext here gives
-    // us the caller's permissions before we even touch the DB. The words are
-    // core's, shared with the phone's order flow.
-    if (parsed.data.onBehalfOf) {
-      const ctx = await withContext();
-      if (!can(ctx, 'orders:approve')) {
-        return err('forbidden', ORDER_ON_BEHALF_NOT_PERMITTED_COPY);
-      }
+    const keyed = !!input && typeof input === 'object' && 'idempotencyKey' in input;
+    const scope = keyed ? pageOrganizationSchema.safeParse(page) : null;
+    if (scope && !scope.success) {
+      return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'organizationId' });
     }
     const svc = await OrderRequestsService.forCurrentUser();
-    const row = await svc.create({
-      warehouseId: parsed.data.warehouseId,
-      notes: parsed.data.notes ?? null,
-      neededBy: parsed.data.neededBy ?? null,
-      fulfillmentType: parsed.data.fulfillmentType,
-      requesterPhone: parsed.data.requesterPhone ?? null,
-      deliveryCharterId: parsed.data.deliveryCharterId ?? null,
-      pickupLocationNotes: parsed.data.pickupLocationNotes ?? null,
-      onBehalfOf: parsed.data.onBehalfOf ?? null,
-      lines: parsed.data.lines.map((l) => ({
-        itemId: l.itemId,
-        quantity: l.quantity,
-        notes: l.notes ?? null,
-      })),
-      ...(parsed.data.kits && parsed.data.kits.length > 0 ? { kits: parsed.data.kits } : {}),
-    });
+    organizationId = svc.organizationId;
+    let answer: OrderPlaceAnswer;
+    if (keyed && scope?.success) {
+      answer = await svc.create({
+        body: input,
+        surface: 'web',
+        expectedOrganizationId: scope.data.organizationId,
+      });
+    } else {
+      const legacy = legacyCreateSchema.safeParse(input);
+      if (!legacy.success) {
+        return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'body' });
+      }
+      const ctx = await withContext();
+      const l = legacy.data;
+      answer = await svc.create({
+        body: {
+          idempotencyKey: mintOrderSubmissionKey(),
+          placerUserId: ctx.userId,
+          warehouseId: l.warehouseId,
+          fulfillmentType: l.fulfillmentType,
+          deliveryCharterId: l.fulfillmentType === 'delivery' ? (l.deliveryCharterId ?? null) : null,
+          onBehalfOf: l.onBehalfOf ?? null,
+          notes: l.notes ?? null,
+          neededByLocal: null,
+          lines: l.lines.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
+          ...(l.kits && l.kits.length > 0 ? { kits: l.kits } : {}),
+        },
+        surface: 'web',
+        legacyNeededBy: l.neededBy ?? null,
+      });
+    }
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
-    // `create()` already returns the full inserted row from
-    // `.insert(...).select('*').single()`, and `order_number` is assigned by the
-    // BEFORE-INSERT trigger `assign_order_request_number` (migration 0254) under
-    // an advisory lock, so it is populated by the time we get here. Returning it
-    // is what lets the success screen and the delivery-request email print the
-    // SAME handle the orders list prints.
-    return ok({ id: row.id, orderNumber: row.order_number ?? null });
+    return ok({ organizationId: answer.organizationId, result: { replay: answer.replay, order: answer.order } });
   } catch (e) {
-    return toResult(e);
+    return orderSubmissionActionError(e, 'actions.orders.create', organizationId);
+  }
+}
+
+/** A settle call names the key, the organization the page was opened in and
+ *  the account that sent the key (the pending record's placer): a tab left in
+ *  another workspace or under another account is refused before the function
+ *  runs, never settled (review round 1). */
+const submissionKeySchema = z.object({
+  warehouseId: z.string().uuid(),
+  key: z.string().uuid(),
+  organizationId: z.string().trim().min(1).max(100),
+  placerUserId: z.string().uuid(),
+});
+
+/** A settle call's input that does not read: the first field it names. */
+function submissionKeyRefusal(error: z.ZodError): ActionResult<never> {
+  const first = error.issues[0]?.path[0];
+  const field = first === 'organizationId' || first === 'placerUserId' || first === 'warehouseId' ? first : 'idempotencyKey';
+  return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field });
+}
+
+/**
+ * What happened to the caller's own submission key (the New order page's
+ * automatic check after a reload, and "Check" on the unconfirmed panel's
+ * status line). A read: `none` never unlocks the cart. Membership only.
+ */
+export async function getOrderSubmissionAction(
+  input: z.input<typeof submissionKeySchema>,
+): Promise<ActionResult<OrderSubmissionStatus>> {
+  const parsed = submissionKeySchema.safeParse(input);
+  if (!parsed.success) return submissionKeyRefusal(parsed.error);
+  let organizationId: string | null = null;
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    organizationId = svc.organizationId;
+    const { key, organizationId: pageOrganizationId, placerUserId } = parsed.data;
+    return ok(await svc.submissionStatus(key, { organizationId: pageOrganizationId, placerUserId }));
+  } catch (e) {
+    return orderSubmissionActionError(e, 'actions.orders.submission_status', organizationId);
+  }
+}
+
+/**
+ * "Don't send it": settle the caller's own submission key for good. Its
+ * answer is final: withdrawn, or the order it had already placed, or the
+ * refusal recorded for it. Membership only.
+ */
+export async function withdrawOrderSubmissionAction(
+  input: z.input<typeof submissionKeySchema>,
+): Promise<ActionResult<OrderSubmissionStatus>> {
+  const parsed = submissionKeySchema.safeParse(input);
+  if (!parsed.success) return submissionKeyRefusal(parsed.error);
+  let organizationId: string | null = null;
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    organizationId = svc.organizationId;
+    const { key, organizationId: pageOrganizationId, placerUserId } = parsed.data;
+    return ok(
+      await svc.withdrawSubmission(key, 'web', { organizationId: pageOrganizationId, placerUserId }),
+    );
+  } catch (e) {
+    return orderSubmissionActionError(e, 'actions.orders.submission_withdraw', organizationId);
   }
 }
 

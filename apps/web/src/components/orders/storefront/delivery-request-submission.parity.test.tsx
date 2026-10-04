@@ -2,19 +2,15 @@
  * The phone's success-screen email and the web's are the same message
  * (phone ordering PO-1, plan 3.7).
  *
- * The web success overlay (ReviewModal, success stage) hands
- * DeliveryRequestAction an input built from the cart: the setup, the lines,
- * the notes and the cart's needed-by WALL CLOCK. The phone will build its
- * input with core's deliveryRequestInputFromSubmission from the placed order
- * (the stored needed-by INSTANT) and the submission. This test renders the
- * REAL overlay, captures the input it passes, and checks it against core's
- * for the same submission: field by field (the needed-by naming the same
- * instant), and as the prepared draft, byte for byte.
- *
- * The needed-by agrees when the browser's zone is the organization's (L4L
- * today). The test runs in whatever zone the machine has, so it takes that
- * zone as the organization's and converts the wall clock in it, as the
- * server will.
+ * Since PO-2 the web success overlay (ReviewModal, success stage) builds its
+ * DeliveryRequestAction input with core's deliveryRequestInputFromSubmission
+ * from the PLACED order (its real method and its stored needed-by INSTANT)
+ * and the submission, as the phone will. This test renders the REAL overlay,
+ * captures the input it passes, and checks it against core's for the same
+ * submission: field by field, and as the prepared draft, byte for byte. It
+ * also pins that the overlay reads the order's instant, never the cart's
+ * wall clock (a browser in another zone than the organization would mail a
+ * different time).
  */
 import { render } from '@testing-library/react';
 import type * as React from 'react';
@@ -111,6 +107,21 @@ function renderBoth(sub: Submission) {
   const destination = sub.method === 'delivery' ? SITE : null;
   const order = { id: 'b3f1c2d4-1111-4222-8333-444455556666', orderNumber: 49 };
   const unitCount = sub.lines.reduce((s, l) => s + l.quantity, 0);
+  const at = sub.neededBy ? wallClockToInstant(sub.neededBy, ZONE) : null;
+  const summary: OrderSummary = {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    orderLabel: 'SO-000049',
+    status: 'pending_approval',
+    warehouseId: POLO.warehouseId,
+    fulfillmentType: sub.method,
+    deliveryCharterId: destination?.id ?? null,
+    neededBy: at === null ? null : new Date(at).toISOString(),
+    lineCount: sub.lines.length,
+    unitCount,
+    createdAt: '2026-10-03T16:00:00.000Z',
+    requestedFor: sub.onBehalfOf ? { self: false, ...sub.onBehalfOf } : { self: true },
+  };
   const props: React.ComponentProps<typeof ReviewModal> = {
     stage: 'success',
     lines: sub.lines,
@@ -128,7 +139,9 @@ function renderBoth(sub: Submission) {
     destination,
     deliveryRecipients: ROUTING,
     submitting: false,
-    submitted: { id: order.id, orderNumber: order.orderNumber, unitCount },
+    submitted: { order: summary, replay: false, viaWithdraw: false },
+    viewerLabel,
+    viewerEmail,
     onClose: vi.fn(),
     onConfirm: vi.fn(),
     onViewOrder: vi.fn(),
@@ -138,21 +151,6 @@ function renderBoth(sub: Submission) {
   expect(captured).toHaveLength(1);
   const web = captured[0]!;
 
-  const at = sub.neededBy ? wallClockToInstant(sub.neededBy, ZONE) : null;
-  const summary: OrderSummary = {
-    id: order.id,
-    orderNumber: order.orderNumber,
-    orderLabel: 'SO-000049',
-    status: 'pending_approval',
-    warehouseId: POLO.warehouseId,
-    fulfillmentType: sub.method,
-    deliveryCharterId: destination?.id ?? null,
-    neededBy: at === null ? null : new Date(at).toISOString(),
-    lineCount: sub.lines.length,
-    unitCount,
-    createdAt: '2026-10-03T16:00:00.000Z',
-    requestedFor: sub.onBehalfOf ? { self: false, ...sub.onBehalfOf } : { self: true },
-  };
   const recipients = brandDeliveryRecipients(ROUTING);
   const phone = deliveryRequestInputFromSubmission(
     summary,
@@ -245,5 +243,151 @@ describe('the success email: core deliveryRequestInputFromSubmission matches the
       lines: [{ itemId: PLANNER.id, quantity: 12 }],
     });
     expectSameMessage(web, phone);
+  });
+});
+
+describe("the overlay reads the PLACED order, not the cart", () => {
+  it('the needed-by is the order instant even when the cart wall clock says otherwise', () => {
+    captured.length = 0;
+    const itemMap = new Map([[POLO.id, POLO]]);
+    const summary: OrderSummary = {
+      id: 'b3f1c2d4-1111-4222-8333-444455556666',
+      orderNumber: 49,
+      orderLabel: 'SO-000049',
+      status: 'pending_approval',
+      warehouseId: POLO.warehouseId,
+      fulfillmentType: 'pickup',
+      deliveryCharterId: null,
+      neededBy: '2026-10-05T17:00:00.000Z',
+      lineCount: 1,
+      unitCount: 1,
+      createdAt: '2026-10-03T16:00:00.000Z',
+      requestedFor: { self: true },
+    };
+    render(
+      <ReviewModal
+        stage="success"
+        lines={[{ itemId: POLO.id, quantity: 1 }]}
+        itemMap={itemMap}
+        notes=""
+        summary={{
+          warehouseName: 'DC4',
+          method: 'delivery',
+          deliverTo: SITE.name,
+          requestedFor: 'Branden',
+          requesterEmail: 'branden@example.org',
+          orgTimezone: 'America/Los_Angeles',
+        }}
+        neededBy="2026-10-05T03:00"
+        destination={SITE}
+        deliveryRecipients={ROUTING}
+        submitting={false}
+        submitted={{ order: summary, replay: false, viaWithdraw: false }}
+        viewerLabel="Branden"
+        viewerEmail="branden@example.org"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onViewOrder={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const web = captured[0]!;
+    expect(web.input.neededByLocal).toBe('2026-10-05T17:00:00.000Z');
+    // The order is a pickup, whatever the setup bar shows: no destination.
+    expect(web.input.fulfillmentType).toBe('pickup');
+    expect(web.input.destination).toBeNull();
+  });
+});
+
+// ── Against the message the page sent BEFORE PO-2 (review round 1) ──────────
+//
+// The comparison above is core against the overlay, which now builds its input
+// WITH core, so it holds by construction. This block compares against the
+// input origin/main's overlay built (storefront-overlays.tsx at dcdb7ae8,
+// the success stage's DeliveryRequestAction props, with the summary
+// orders-storefront.tsx passed it), written out field for field: the cart's
+// method, site, requester and WALL CLOCK needed-by, untouched by the server.
+// The prepared email must be the same, byte for byte, for every case the
+// page can send (the organization's zone being the browser's, as at L4L).
+function inputBeforePo2(sub: Submission, viewerLabel: string, viewerEmail: string) {
+  const itemMap = new Map([
+    [POLO.id, POLO],
+    [PLANNER.id, PLANNER],
+  ]);
+  return {
+    orderId: 'b3f1c2d4-1111-4222-8333-444455556666',
+    orderNumber: 49,
+    fulfillmentType: sub.method,
+    warehouseName: 'DC4',
+    destination: sub.method === 'delivery' ? SITE : null,
+    requestedFor: sub.onBehalfOf?.name ?? viewerLabel,
+    requesterEmail: sub.onBehalfOf?.email ?? viewerEmail,
+    neededByLocal: sub.neededBy,
+    orgTimezone: ZONE,
+    notes: sub.notes,
+    lines: sub.lines,
+    itemMap,
+  };
+}
+
+describe('the success email is the message the page sent before PO-2', () => {
+  const cases: Array<[string, Submission]> = [
+    [
+      'a delivery for oneself, with a needed-by and notes',
+      {
+        method: 'delivery',
+        onBehalfOf: null,
+        neededBy: '2026-10-05T10:00',
+        notes: 'Please stage these by Friday.',
+        lines: [
+          { itemId: POLO.id, quantity: 5 },
+          { itemId: PLANNER.id, quantity: 2 },
+        ],
+      },
+    ],
+    [
+      'a pickup on behalf of someone, with no needed-by',
+      {
+        method: 'pickup',
+        onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+        neededBy: '',
+        notes: '',
+        lines: [{ itemId: POLO.id, quantity: 1 }],
+      },
+    ],
+    [
+      'a delivery on behalf of someone, late on the last day of the year',
+      {
+        method: 'delivery',
+        onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+        neededBy: '2026-12-31T23:30',
+        notes: 'Last day of the year.',
+        lines: [{ itemId: PLANNER.id, quantity: 12 }],
+      },
+    ],
+    [
+      'a delivery for oneself in the small hours, two lines, notes on two lines',
+      {
+        method: 'delivery',
+        onBehalfOf: null,
+        neededBy: '2026-11-02T00:15',
+        notes: 'Side door.\nAsk for Ms. Rivera.',
+        lines: [
+          { itemId: PLANNER.id, quantity: 3 },
+          { itemId: POLO.id, quantity: 40 },
+        ],
+      },
+    ],
+  ];
+  it.each(cases)('%s', (_label, sub) => {
+    const { web, recipients } = renderBoth(sub);
+    const before = corePrepare({
+      ...inputBeforePo2(sub, 'Branden Vincent-Walker', 'branden@example.org'),
+      recipients,
+    });
+    const now = corePrepare({ ...web.input, recipients });
+    expect(now.draft.subject).toBe(before.draft.subject);
+    expect(now.draft.body).toBe(before.draft.body);
+    expect(now).toEqual(before);
   });
 });

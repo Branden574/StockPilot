@@ -3183,3 +3183,82 @@ describe('order secrets slice B (a digital signature on the order timeline) is h
     expect(text).not.toMatch(/who collected|name of the person|collected by|signed in/i);
   });
 });
+
+/**
+ * Phone ordering PO-2 (migration 0391, one create path): held as a DRAFT
+ * until 0391 is pushed and verified, the web deploy is READY and the
+ * production smoke test that writes nothing has passed (phone-orders plan
+ * 10.1). Pinned by id, never by index. The follow-up that publishes it (plan
+ * PO-5) sets 'published' and the real publishedAt, re-reads its words against
+ * what shipped, and flips the first pin here.
+ */
+describe('one order per submission (phone ordering PO-2) is held as a draft', () => {
+  const ID = 'order-submit-once-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts, below the slice D draft and above the slice B draft, dated between them', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    const d = RELEASES.findIndex((r) => r.id === 'approval-follows-permission-2026-10');
+    const b = RELEASES.findIndex((r) => r.id === 'order-signature-timeline-2026-10');
+    expect(d).toBeLessThan(at);
+    expect(b).toBeGreaterThan(at);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    expect(Date.parse(RELEASES[d]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+  });
+
+  it('is told to whoever can open the New order page, and links there', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'order-submit-once',
+      'order-refusals-in-place',
+      'order-needed-by-org-time-zone',
+      'order-page-clearer-labels',
+    ]);
+    const [once] = r.entries;
+    expect(once!.link).toEqual({ href: '/dashboard/orders/new', label: 'Place an order' });
+    expect(once!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
+    expect(entriesFor('viewer', ['orders:request'])).toBe(4);
+    expect(entriesFor('staff', ['members:read'])).toBe(0);
+    expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+  });
+
+  it("uses the page's own words, claims no unmeasured number and teaches nothing about the check", () => {
+    const r = release();
+    const text = readerText(r).join(' ');
+    for (const label of ['Check and finish', "Don't send it", 'See my orders', 'Review order', 'Submit order request', 'Most ordered here']) {
+      expect(text).toContain(label);
+    }
+    expect(text).not.toMatch(/\d+ ?%|\bkey\b|idempotenc|hash|lock(ed)? row|database/i);
+    expect(text).not.toMatch(/\bbook\b/i);
+    expect(r.summary).toContain('never placed twice');
+  });
+
+  it('says what review round 1 changed a person can see: other tabs, another organization, items started from Items', () => {
+    const once = release().entries[0]!;
+    expect(once.howItAffectsYou).toMatch(/another tab/);
+    expect(once.howItAffectsYou).toMatch(/switch to another organization, switch back to finish it/);
+    expect(once.howItAffectsYou).toMatch(/start an order with from Items wait/);
+  });
+});

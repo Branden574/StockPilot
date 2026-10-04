@@ -81,6 +81,7 @@ export * from './orders/short-line-actions';
 export * from './orders/put-away';
 export * from './orders/partial-fulfilment';
 export * from './orders/needed-by-revision';
+export * from './orders/needed-by-words';
 export * from './orders/shortfall-po';
 export * from './orders/place-order';
 export * from './orders/order-line-item-name';

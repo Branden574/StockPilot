@@ -15,9 +15,24 @@ import type { CartAction, CartState } from './types';
 // checkout failed with "One or more items are not rental items." (Demo Co,
 // 2026-09-24). The other direction put rental lines in the Orders basket, and
 // a finished rental deleted the Orders draft. Each page now names its own
-// prefix. Orders keeps the original one, so its saved drafts still restore.
+// prefix.
+//
+// ═══ THE ORDERS DRAFT BELONGS TO ONE ACCOUNT (phone ordering PO-2, judge X-1) ═══
+//
+// `order-draft:<warehouse>` belonged to no account: on a shared front-desk
+// browser the next person to sign in opened the last person's cart, with that
+// person's on-behalf name and email. The New order page now saves under
+// `order-draft:v2:<userId>:<warehouse>` (orderDraftPrefixFor). A draft under
+// the old key is adopted ONCE, by the first signed-in person who opens that
+// warehouse, with its on-behalf name and email removed, and the old key is
+// deleted (legacyDraftPrefix below), so nobody's unsent cart vanishes at the
+// deploy. The public link (`public:`) and rentals keep their own prefixes.
 export const ORDER_DRAFT_PREFIX = 'order-draft:';
 export const RENTAL_DRAFT_PREFIX = 'rental-draft:';
+/** The New order page's draft prefix for one account. */
+export function orderDraftPrefixFor(userId: string): string {
+  return `${ORDER_DRAFT_PREFIX}v2:${userId}:`;
+}
 const SAVE_DEBOUNCE_MS = 250;
 
 // ═══ A CLEARED DRAFT STAYS CLEARED ═══
@@ -50,7 +65,20 @@ interface CartContextValue {
    * a restored draft instead of being clobbered by a later hydrate dispatch.
    */
   hydrated: boolean;
+  /**
+   * True while an order request sent from this cart is not settled (phone
+   * ordering PO-2): every change to the cart is ignored (`dispatch` drops all
+   * but `hydrate` and `reset`), so the body sent under a submission key can
+   * never differ from a resend's. Screens read it to disable their controls.
+   */
+  locked: boolean;
+  /** Lock or unlock the cart. Takes effect at once (a ref), before the next
+   *  render, so a tap in the same tick cannot change a cart being sent. */
+  setLocked: (locked: boolean) => void;
 }
+
+/** The only cart actions a locked cart accepts. */
+const LOCKED_CART_ACTIONS: ReadonlySet<CartAction['type']> = new Set(['hydrate', 'reset']);
 
 const CartContext = React.createContext<CartContextValue | null>(null);
 
@@ -68,14 +96,32 @@ const CartContext = React.createContext<CartContextValue | null>(null);
 export function CartProvider({
   initial,
   draftPrefix = ORDER_DRAFT_PREFIX,
+  legacyDraftPrefix,
   children,
 }: {
   initial: CartState;
   draftPrefix?: string;
+  /**
+   * A prefix this page used to save under (the New order page's account-less
+   * `order-draft:`). When no draft exists under `draftPrefix`, a draft under
+   * this one is adopted once, with its on-behalf name and email removed, and
+   * the old key is deleted.
+   */
+  legacyDraftPrefix?: string;
   children: React.ReactNode;
 }) {
-  const [state, dispatch] = React.useReducer(cartReducer, initial);
+  const [state, rawDispatch] = React.useReducer(cartReducer, initial);
   const [hydrated, setHydrated] = React.useState(false);
+  const [locked, setLockedState] = React.useState(false);
+  const lockedRef = React.useRef(false);
+  const setLocked = React.useCallback((next: boolean) => {
+    lockedRef.current = next;
+    setLockedState(next);
+  }, []);
+  const dispatch = React.useCallback<React.Dispatch<CartAction>>((action) => {
+    if (lockedRef.current && !LOCKED_CART_ACTIONS.has(action.type)) return;
+    rawDispatch(action);
+  }, []);
 
   // Hydration is a one-shot on mount, for the warehouse this provider was
   // mounted with. That is enough because a cart never changes warehouse while
@@ -92,6 +138,19 @@ export function CartProvider({
         const parsed = JSON.parse(raw) as CartState;
         if (parsed && parsed.warehouseId === initial.warehouseId) {
           dispatch({ type: 'hydrate', state: parsed });
+        }
+      } else if (legacyDraftPrefix !== undefined && legacyDraftPrefix !== draftPrefix) {
+        const legacyKey = `${legacyDraftPrefix}${initial.warehouseId}`;
+        const legacyRaw = localStorage.getItem(legacyKey);
+        if (legacyRaw) {
+          // Removed first: a draft that fails to parse is not adopted by the
+          // next person either.
+          localStorage.removeItem(legacyKey);
+          const parsed = JSON.parse(legacyRaw) as CartState;
+          if (parsed && parsed.warehouseId === initial.warehouseId) {
+            // Nobody's on-behalf name or email passes to another account.
+            dispatch({ type: 'hydrate', state: { ...parsed, onBehalfOf: null } });
+          }
         }
       }
     } catch {
@@ -136,7 +195,7 @@ export function CartProvider({
   }, [state, draftPrefix]);
 
   return (
-    <CartContext.Provider value={{ state, dispatch, hydrated }}>
+    <CartContext.Provider value={{ state, dispatch, hydrated, locked, setLocked }}>
       {children}
     </CartContext.Provider>
   );

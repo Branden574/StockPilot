@@ -22,6 +22,7 @@ export {
   filterCatalog,
   glyphFor,
   isBrowsingAll,
+  DEFAULT_SORT,
   SORT_OPTIONS,
   sortCatalog,
   statusOf,

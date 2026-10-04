@@ -541,6 +541,21 @@ PGTAP_TESTS=(
   # 3.4.0 locks on policy changes) is
   # scripts/db-concurrency/0390_migration_lock_footprint.sh.
   supabase/tests/0390_approval_follows_permission.test.sql
+  # One create path, no duplicate order (0391, phone ordering PO-2): every
+  # order goes through place_order_request (INVOKER), which checks the placer
+  # is the caller BEFORE the key (a pending send another account left on a
+  # shared browser is never placed under this one), takes the key's advisory
+  # lock, answers a replay before any floor, records refusals under the key,
+  # and creates through the frozen create_order_request (a self-submit
+  # carries no requester name or email). order_submissions: each member reads
+  # only their own rows, and an insert is accepted only while
+  # stockpilot.order_submit holds this transaction's id, raised inline by the
+  # two writers alone (census); 'on' or another transaction's id opens
+  # nothing. On-behalf ordering follows orders:approve (slice D). No foreign
+  # key on user_id (account deletion with submissions succeeds). The shape
+  # rules are generated from core's parity fixture (pre-check 3). The
+  # two-session proofs are scripts/db-concurrency/0391_place_order_races.sh.
+  supabase/tests/0391_place_order_request.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -853,6 +868,32 @@ WEB_TESTS=(
   # counts kept and failed accounts apart instead of claiming them deleted.
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
+
+  # One create path, no duplicate order (0391, phone ordering PO-2). The
+  # service gates (Orders module, the MFA step-up, orders:request) come before
+  # anything is read; the body's placer goes to place_order_request unchanged
+  # (never the session's, so the database's placer check means something);
+  # every raise and recorded refusal maps to its code and details, a recorded
+  # one final (settled); a replay runs no audit, email or webhook. The routes
+  # answer no-store with the organization echoed, the settle routes need only
+  # membership, and every new order goes through the one service method (no
+  # product code calls create_order_request). The New order page keeps the
+  # pending send under the signed-in account only: a shared browser's next
+  # person never sees, reads or sends it (judge X-1), and the cart draft is
+  # per account too (a legacy draft is adopted without its on-behalf name and
+  # email). Review round 1: every call names the page's organization and the
+  # settle calls the account that sent the key, refused before any key work
+  # when they differ; an answer for another organization never settles a key;
+  # the pending slot is compare-and-set across tabs.
+  src/server/services/order-requests.create.test.ts
+  src/server/actions/order-requests.place-action.test.ts
+  src/app/api/v1/orders/route.test.ts
+  'src/app/api/v1/orders/submissions/[key]/route.test.ts'
+  src/server/services/create-order-request-callers.guard.test.ts
+  src/components/orders/storefront/order-submission.test.ts
+  src/components/orders/storefront/order-submission.hook.test.tsx
+  src/components/orders/storefront/orders-storefront.submit-once.test.tsx
+  src/components/orders/v2/cart-context.drafts.test.tsx
   src/server/actions/platform-admin.remove-org.test.ts
   # Approval follows the permission (0390): the app asks the effective
   # orders:approve where the database does. Delivery assignment and the
@@ -973,6 +1014,13 @@ CORE_TESTS=(
   # approval-class actions follow it and the picker override stays manager
   # rank, as the database decides each.
   src/order-state-machine.test.ts
+  # One create path (0391, phone ordering PO-2): the create body's schema and
+  # the X-1 owner check on a stored pending send (a record another account
+  # left is never shown or sent; one of this account whose body no longer
+  # reads stays locked), and the parity fixture the database's shape rules
+  # are generated from.
+  src/orders/place-order.test.ts
+  src/orders/place-order.parity.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1067,6 +1115,21 @@ if [ ${#UNLISTED[@]} -gt 0 ]; then
   exit 1
 fi
 pass "no unlisted apps/web security suites"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PRE-CHECK 3 — the place-order parity block must be current.
+#
+# place_order_request's shape rules and core's create-body schema are held
+# equal by ONE fixture (packages/core/src/orders/place-order-parity-cases.json).
+# The pgTAP file's data block is generated from it; a block older than the
+# fixture would let the two engines drift while both suites stayed green.
+# ═══════════════════════════════════════════════════════════════════════════
+if node scripts/gen-place-order-parity-sql.mjs --check; then
+  pass "place-order parity block is current"
+else
+  fail "place-order parity block is stale or malformed: run node scripts/gen-place-order-parity-sql.mjs"
+  exit 1
+fi
 
 FAILED=()
 

@@ -9,15 +9,12 @@ import {
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_FAILED_COPY,
   NEEDED_BY_FIELD_LABEL,
-  NEEDED_BY_IN_PAST_COPY,
-  NEEDED_BY_MAX_YEARS_AHEAD,
   NEEDED_BY_MODULE_OFF_COPY,
   NEEDED_BY_NO_ANSWER_COPY,
   NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
   NEEDED_BY_NOT_APPROVER_COPY,
   NEEDED_BY_NOT_FOUND_COPY,
   NEEDED_BY_NOT_PENDING_COPY,
-  NEEDED_BY_OUT_OF_RANGE_COPY,
   NEEDED_BY_REASON_HINT,
   NEEDED_BY_REASON_LABEL,
   NEEDED_BY_REASON_MAX,
@@ -33,11 +30,9 @@ import {
   neededByCurrentCopy,
   neededByEffectCopy,
   neededByInvalidTimeCopy,
-  neededByLabel,
   neededByPreviewCopy,
   neededByRevisedCopy,
   neededByRowCopy,
-  neededByZoneNote,
   NeededByResultShapeError,
   normalizeNeededByReason,
   orderBelongsOnSchedule,
@@ -49,6 +44,13 @@ import {
   type NeededByRevisionOutcome,
   type NeededBySchedule,
 } from './needed-by-revision';
+import {
+  NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_MAX_YEARS_AHEAD,
+  NEEDED_BY_OUT_OF_RANGE_COPY,
+  neededByLabel,
+  neededByZoneNote,
+} from './needed-by-words';
 import { ALLOWED_TRANSITIONS, type OrderStatus } from '../order-state-machine';
 
 const LA = 'America/Los_Angeles';

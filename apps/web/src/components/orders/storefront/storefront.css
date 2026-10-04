@@ -2384,6 +2384,64 @@
   font-weight: 500;
   margin-bottom: 4px;
 }
+/* Phone ordering PO-2: what the review says about a send. Never colour
+   alone: each block carries its words (and the alert an icon). */
+.sp-storefront .sf-rev-alert {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--sf-crit);
+  border-radius: 10px;
+  background: var(--sf-crit-wash);
+  color: var(--sf-crit-text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.sp-storefront .sf-rev-alert svg {
+  flex: none;
+  margin-top: 2px;
+}
+.sp-storefront .sf-rev-notice {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--sf-line-strong);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--sf-ink-2);
+  line-height: 1.55;
+}
+.sp-storefront .sf-rev-unconfirmed {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--sf-warn);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--sf-warn) 12%, transparent);
+  color: var(--sf-ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.sp-storefront .sf-rev-unconfirmed .k {
+  font-weight: 600;
+  color: var(--sf-warn-text);
+  margin-bottom: 4px;
+}
+.sp-storefront .sf-rev-unconfirmed p {
+  margin: 0;
+}
+.sp-storefront .sf-cart-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--sf-line);
+  font-size: 12.5px;
+  color: var(--sf-ink-2);
+}
+.sp-storefront .sf-cart-confirm span {
+  flex: 1;
+}
 .sp-storefront .sf-modal-foot {
   padding: 14px 22px;
   border-top: 1px solid var(--sf-line);

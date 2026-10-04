@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
-import { can, deliveryRecipientsForRouting } from '@stockpilot/core';
+import { can, deliveryRecipientsForRouting, STOREFRONT_TITLE_COPY } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/request-cache';
@@ -104,7 +104,7 @@ export default async function NewOrderPage({
             ← Back to orders
           </Link>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-            Place an order
+            {STOREFRONT_TITLE_COPY}
           </h1>
         </div>
         <div className="bg-card rounded-xl border p-6 text-sm text-muted-foreground">
@@ -162,6 +162,14 @@ export default async function NewOrderPage({
       viewerEmail={ctx.email}
       orgTimezone={orgTimezone}
       deliveryRecipients={deliveryRecipients}
+      // Phone ordering PO-2: the cart draft and the pending send belong to
+      // this account in this organization (judge X-1), and the create body
+      // names this user as the placer.
+      viewerUserId={ctx.userId}
+      organizationId={ctx.organizationId}
+      // The order page's approve gate (security slice D): the effective
+      // orders:approve, never for a viewer.
+      canApproveOrders={can(ctx, 'orders:approve') && ctx.role !== 'viewer'}
     />
   );
 }

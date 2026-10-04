@@ -1,14 +1,13 @@
 // ═══ WHY THIS FILE PINS A TIMEZONE ═══
 //
-// The bug under test only exists AWAY from UTC: the "Needed by" picker built
-// its `min` with toISOString() (UTC) while <input type="datetime-local"> reads
-// min as LOCAL wall time. Under TZ=UTC the two agree and the bug is invisible,
-// so the timezone must be forced here rather than inherited from whatever
-// machine runs the suite (vitest.config.ts sets none). Node re-reads
-// process.env.TZ at runtime (v16+); ESM hoists the imports above this line,
-// but nothing here reads a clock at import time — every Date under test is
-// built inside a test body, after this has run.
-process.env.TZ = 'America/Los_Angeles';
+// The "Needed by" field is the ORGANIZATION's wall clock (phone ordering
+// PO-2): the server converts it in the organization's zone, so its floor is
+// computed there, never in the browser's zone (the older bug built it in UTC
+// and then in the browser's zone). The browser here is in Tokyo and the
+// organization in Los Angeles, so a floor built in either wrong zone fails.
+// Node re-reads process.env.TZ at runtime (v16+); nothing here reads a clock
+// at import time.
+process.env.TZ = 'Asia/Tokyo';
 
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,12 +42,18 @@ function renderRail() {
         onDec={vi.fn()}
         onSetQty={vi.fn()}
         onReview={vi.fn()}
+        orgTimezone="America/Los_Angeles"
       />
     </CartProvider>,
   );
 }
 
 describe('CartRail — Needed by picker floor', () => {
+  it('says which zone the times are in', () => {
+    renderRail();
+    expect(screen.getByText('Times are in America/Los_Angeles.')).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
@@ -56,7 +61,7 @@ describe('CartRail — Needed by picker floor', () => {
     vi.useRealTimers();
   });
 
-  it('floors the picker at now + 1 hour in LOCAL wall time, not UTC', () => {
+  it('floors the picker at now + 1 hour on the ORGANIZATION wall clock, not UTC and not the browser zone', () => {
     // 16:30 Pacific. now + 1h is 17:30 the SAME local day, but 00:30 the NEXT
     // day in UTC — the exact window where the old toISOString() min greyed out
     // every remaining hour of today in the native calendar.

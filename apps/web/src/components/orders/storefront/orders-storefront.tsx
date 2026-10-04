@@ -33,12 +33,54 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { usePerfUseful } from '@/components/perf/perf-useful';
-import { createOrderRequestAction } from '@/server/actions/order-requests';
 
-import type { OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
-
-import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
 import {
+  CART_TITLE_COPY,
+  kitNotEnoughCopy,
+  mintOrderSubmissionKey,
+  orderSubmissionLocked,
+  orderUnconfirmedCopy,
+  orderRefusalCopy,
+  pendingOrderSubmissionOf,
+  refuseAddWhileLocked,
+  ORDER_UNCONFIRMED_BODY_COPY,
+  ORDER_WITHDRAWN_COPY,
+  STOREFRONT_CHOOSE_SITE_COPY,
+  STOREFRONT_DELIVER_TO_COPY,
+  STOREFRONT_DELIVERY_SITE_COPY,
+  STOREFRONT_FOR_COPY,
+  STOREFRONT_MYSELF_COPY,
+  STOREFRONT_NO_DELIVERY_SITES_COPY,
+  STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY,
+  STOREFRONT_ON_BEHALF_NAME_PLACEHOLDER_COPY,
+  STOREFRONT_PICK_UP_AT_COPY,
+  STOREFRONT_PICKUP_OR_DELIVERY_COPY,
+  STOREFRONT_SEARCH_PLACEHOLDER_COPY,
+  STOREFRONT_SHIP_FROM_COPY,
+  STOREFRONT_SOMEONE_NEW_COPY,
+  STOREFRONT_TITLE_COPY,
+  storefrontPickupHintCopy,
+  storefrontWillCallDeskCopy,
+  SUBMIT_NO_LINES_COPY,
+  SUBMIT_NO_SITE_COPY,
+  SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
+  SUBMIT_REMOVE_UNORDERABLE_COPY,
+  type OrderCreateRequestInput,
+  type OrderSubmissionState,
+  type OrgEmailRoutingRecipientsDto,
+} from '@stockpilot/core';
+
+import {
+  CartProvider,
+  clearCartDraft,
+  initialCartState,
+  ORDER_DRAFT_PREFIX,
+  orderDraftPrefixFor,
+  useCart,
+} from '../v2/cart-context';
+import { cartStateFromPendingBody, useOrderSubmission, type OrderSubmissionControl } from './order-submission';
+import {
+  hasOrderPrefill,
   partitionPrefillAgainstCatalog,
   takeOrderPrefill,
 } from '@/lib/orders/start-order-prefill';
@@ -73,6 +115,7 @@ import { settledOutcome, useSettled, watchSettled } from './settled-promise';
 import { CatalogSkeleton } from './storefront-skeleton';
 import {
   AVAILABILITY_LABELS,
+  DEFAULT_SORT,
   SORT_OPTIONS,
   availableOf,
   buildQtyMap,
@@ -94,6 +137,7 @@ import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
 
 const GRID_PREVIEW = 4;
+const NO_REFUSED_ITEMS: ReadonlyMap<string, string> = new Map();
 const LIST_PREVIEW = 6;
 
 /** Resolved catalog payload streamed in behind the page frame. */
@@ -151,10 +195,23 @@ export interface OrdersStorefrontProps {
    * own seam.
    */
   deliveryRecipients: OrgEmailRoutingRecipientsDto | null;
+  /**
+   * The signed-in user (phone ordering PO-2): the cart draft and the pending
+   * send are kept under this account only (judge X-1), and the create body
+   * names it as the placer, which the database checks against the session.
+   */
+  viewerUserId: string;
+  /** The organization the page was rendered for; part of the pending key. */
+  organizationId: string;
+  /**
+   * Whether the success screen offers Review and approve: the effective
+   * orders:approve, never for a viewer (security slice D, the order page's
+   * approve gate), computed by the server page.
+   */
+  canApproveOrders: boolean;
 }
 
 type ReviewStage = null | 'review' | 'success';
-type SubmittedOrder = { id: string; orderNumber: number | null; unitCount: number } | null;
 
 export function OrdersStorefront(props: OrdersStorefrontProps) {
   const initial = initialCartState({
@@ -172,8 +229,17 @@ export function OrdersStorefront(props: OrdersStorefrontProps) {
   // every line with "Every line must be at the chosen warehouse" (local walk,
   // 2026-09-26). Keying the provider by warehouse mounts a fresh cart that
   // restores that warehouse's own draft, as the New rental page does.
+  //
+  // ONE ACCOUNT'S CART (phone ordering PO-2, judge X-1): the draft is saved
+  // under the signed-in user, and a draft left under the old account-less key
+  // is adopted once without its on-behalf name and email.
   return (
-    <CartProvider key={props.warehouseId} initial={initial}>
+    <CartProvider
+      key={props.warehouseId}
+      initial={initial}
+      draftPrefix={orderDraftPrefixFor(props.viewerUserId)}
+      legacyDraftPrefix={ORDER_DRAFT_PREFIX}
+    >
       <StorefrontShell {...props} />
     </CartProvider>
   );
@@ -199,7 +265,7 @@ function FrequentlyOrderedStrip({
 type FlowStage = 'browse' | 'cart' | 'review' | 'submit';
 const FLOW_STEPS: Array<{ id: FlowStage; label: string }> = [
   { id: 'browse', label: 'Browse' },
-  { id: 'cart', label: 'Cart' },
+  { id: 'cart', label: CART_TITLE_COPY },
   { id: 'review', label: 'Review' },
   { id: 'submit', label: 'Submit' },
 ];
@@ -243,9 +309,12 @@ function StorefrontShell({
   viewerEmail,
   orgTimezone,
   deliveryRecipients,
+  viewerUserId,
+  organizationId,
+  canApproveOrders,
 }: OrdersStorefrontProps) {
   const router = useRouter();
-  const { state, dispatch } = useCart();
+  const { state, dispatch, hydrated, locked, setLocked } = useCart();
 
   const [openPop, setOpenPop] = React.useState<null | 'wh' | 'person' | 'site'>(null);
   const [pendingName, setPendingName] = React.useState('');
@@ -254,7 +323,36 @@ function StorefrontShell({
   // Review stage lives up here (not in the streamed catalog) so the
   // flow indicator in the always-visible head can reflect it.
   const [reviewStage, setReviewStage] = React.useState<ReviewStage>(null);
-  const [submitted, setSubmitted] = React.useState<SubmittedOrder>(null);
+
+  // The submission key and its pending record (order-submission.ts). Read
+  // here, above the streamed catalog, so a send left unsettled by a reload
+  // locks the setup bar and the warehouse switch at once.
+  const submission = useOrderSubmission({
+    userId: viewerUserId,
+    organizationId,
+    warehouseId,
+    hydrated,
+    setLocked,
+    onRestore: (body) =>
+      dispatch({ type: 'hydrate', state: cartStateFromPendingBody(body, warehouseId) }),
+  });
+  // An unsettled send opens (and keeps) the review on its panel, a placed
+  // order its success screen. Set while rendering when the phase changes (the
+  // React pattern for state derived from a change), so a send that settles as
+  // refused or withdrawn stays on screen until the person closes it.
+  const phase = submission.state.phase;
+  const [seenPhase, setSeenPhase] = React.useState(phase);
+  if (phase !== seenPhase) {
+    setSeenPhase(phase);
+    if (phase === 'sending' || phase === 'unconfirmed' || phase === 'withdrawing') {
+      setReviewStage('review');
+    } else if (phase === 'placed') {
+      setReviewStage('success');
+    }
+  }
+  // Opening a popover on the setup bar does nothing while the cart is locked.
+  const toggle = (pop: 'wh' | 'person' | 'site') =>
+    setOpenPop((open) => (locked ? null : open === pop ? null : pop));
 
   const warehouseName =
     warehouses.find((w) => w.id === warehouseId)?.name ?? warehouseId;
@@ -280,7 +378,7 @@ function StorefrontShell({
             <Link href="/dashboard/orders" className="sf-back">
               <ChevronLeft size={12} /> Back to orders
             </Link>
-            <h1 className="sf-title">Place an Order</h1>
+            <h1 className="sf-title">{STOREFRONT_TITLE_COPY}</h1>
             <div className="sf-sub">
               Browse available inventory, add items to your cart, and submit for
               approval.
@@ -299,12 +397,13 @@ function StorefrontShell({
             tabIndex={0}
             aria-haspopup="dialog"
             aria-expanded={openPop === 'wh'}
-            onClick={() => setOpenPop(openPop === 'wh' ? null : 'wh')}
+            aria-disabled={locked}
+            onClick={() => toggle('wh')}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                setOpenPop(openPop === 'wh' ? null : 'wh');
+                toggle('wh');
               }
             }}
           >
@@ -312,7 +411,7 @@ function StorefrontShell({
               <Boxes size={15} />
             </span>
             <div style={{ minWidth: 0 }}>
-              <div className="lb">Warehouse</div>
+              <div className="lb">{STOREFRONT_SHIP_FROM_COPY}</div>
               <div className="vl">
                 {warehouseName}{' '}
                 <span className="icon">
@@ -320,8 +419,8 @@ function StorefrontShell({
                 </span>
               </div>
             </div>
-            <SfPopover open={openPop === 'wh'} onClose={() => setOpenPop(null)}>
-              <div className="sf-pop-label">Ship from</div>
+            <SfPopover open={openPop === 'wh' && !locked} onClose={() => setOpenPop(null)}>
+              <div className="sf-pop-label">{STOREFRONT_SHIP_FROM_COPY}</div>
               {warehouses.map((w) => (
                 <button
                   key={w.id}
@@ -331,7 +430,7 @@ function StorefrontShell({
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenPop(null);
-                    if (w.id !== warehouseId) {
+                    if (w.id !== warehouseId && !locked) {
                       router.push(
                         `/dashboard/orders/new?warehouseId=${encodeURIComponent(w.id)}`,
                       );
@@ -347,15 +446,16 @@ function StorefrontShell({
             </SfPopover>
           </div>
 
-          {/* Requesting for */}
+          {/* For (who the order is for) */}
           <div
             className="sf-setup-cell"
             role="button"
             tabIndex={0}
             aria-haspopup="dialog"
             aria-expanded={openPop === 'person'}
+            aria-disabled={locked}
             onClick={() => {
-              if (openPop === 'person') {
+              if (openPop === 'person' || locked) {
                 setOpenPop(null);
               } else {
                 setPendingName(state.onBehalfOf?.name ?? '');
@@ -367,7 +467,7 @@ function StorefrontShell({
               if (e.target !== e.currentTarget) return;
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                setOpenPop(openPop === 'person' ? null : 'person');
+                toggle('person');
               }
             }}
           >
@@ -375,9 +475,9 @@ function StorefrontShell({
               <Users size={15} />
             </span>
             <div style={{ minWidth: 0 }}>
-              <div className="lb">Requesting for</div>
+              <div className="lb">{STOREFRONT_FOR_COPY}</div>
               <div className="vl">
-                {state.onBehalfOf ? state.onBehalfOf.name : 'Myself'}{' '}
+                {state.onBehalfOf ? state.onBehalfOf.name : STOREFRONT_MYSELF_COPY}{' '}
                 <span className="icon">
                   <ChevronDown size={11} />
                 </span>
@@ -388,7 +488,7 @@ function StorefrontShell({
                   : viewerLabel}
               </div>
             </div>
-            <SfPopover open={openPop === 'person'} onClose={() => setOpenPop(null)}>
+            <SfPopover open={openPop === 'person' && !locked} onClose={() => setOpenPop(null)}>
               <button
                 type="button"
                 className="sf-opt"
@@ -401,7 +501,7 @@ function StorefrontShell({
               >
                 <span style={{ minWidth: 0 }}>
                   <span className="nm" style={{ display: 'block' }}>
-                    Myself
+                    {STOREFRONT_MYSELF_COPY}
                   </span>
                   <span className="sb" style={{ display: 'block' }}>
                     {viewerLabel}
@@ -414,7 +514,7 @@ function StorefrontShell({
               </button>
               {canActOnBehalf && (
                 <>
-                  <div className="sf-pop-label">On behalf of someone else</div>
+                  <div className="sf-pop-label">{STOREFRONT_SOMEONE_NEW_COPY}</div>
                   <div
                     style={{
                       display: 'flex',
@@ -425,7 +525,7 @@ function StorefrontShell({
                   >
                     <input
                       className="plain-input"
-                      placeholder="Their name"
+                      placeholder={STOREFRONT_ON_BEHALF_NAME_PLACEHOLDER_COPY}
                       value={pendingName}
                       maxLength={120}
                       onClick={(e) => e.stopPropagation()}
@@ -434,7 +534,7 @@ function StorefrontShell({
                     <input
                       className="plain-input"
                       type="email"
-                      placeholder="their.email@example.com"
+                      placeholder={STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY}
                       value={pendingEmail}
                       maxLength={254}
                       onClick={(e) => e.stopPropagation()}
@@ -470,10 +570,11 @@ function StorefrontShell({
           {/* Fulfillment segmented control */}
           <div className="sf-seg-wrap">
             <div>
-              <div className="lb">Fulfillment</div>
+              <div className="lb">{STOREFRONT_PICKUP_OR_DELIVERY_COPY}</div>
               <div className="sf-seg" role="radiogroup" aria-label="Fulfillment type">
                 <button
                   type="button"
+                  disabled={locked}
                   data-active={state.fulfillmentType === 'pickup'}
                   aria-pressed={state.fulfillmentType === 'pickup'}
                   onClick={() =>
@@ -487,6 +588,7 @@ function StorefrontShell({
                 </button>
                 <button
                   type="button"
+                  disabled={locked}
                   data-active={state.fulfillmentType === 'delivery'}
                   aria-pressed={state.fulfillmentType === 'delivery'}
                   onClick={() =>
@@ -509,9 +611,9 @@ function StorefrontShell({
                 <MapPin size={15} />
               </span>
               <div style={{ minWidth: 0 }}>
-                <div className="lb">Pick up at</div>
-                <div className="vl">{warehouseName} will-call desk</div>
-                <div className="hint">Ready within 1 business day of approval</div>
+                <div className="lb">{STOREFRONT_PICK_UP_AT_COPY}</div>
+                <div className="vl">{storefrontWillCallDeskCopy(warehouseName)}</div>
+                <div className="hint">{storefrontPickupHintCopy(warehouseName)}</div>
               </div>
             </div>
           ) : (
@@ -521,12 +623,13 @@ function StorefrontShell({
               tabIndex={0}
               aria-haspopup="dialog"
               aria-expanded={openPop === 'site'}
-              onClick={() => setOpenPop(openPop === 'site' ? null : 'site')}
+              aria-disabled={locked}
+              onClick={() => toggle('site')}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  setOpenPop(openPop === 'site' ? null : 'site');
+                  toggle('site');
                 }
               }}
             >
@@ -534,24 +637,24 @@ function StorefrontShell({
                 <MapPin size={15} />
               </span>
               <div style={{ minWidth: 0 }}>
-                <div className="lb">Deliver to</div>
+                <div className="lb">{STOREFRONT_DELIVER_TO_COPY}</div>
                 <div className="vl">
-                  {charter?.name ?? 'Choose a site…'}{' '}
+                  {charter?.name ?? STOREFRONT_CHOOSE_SITE_COPY}{' '}
                   <span className="icon">
                     <ChevronDown size={11} />
                   </span>
                 </div>
-                <div className="hint">{charter?.code ?? 'Delivery site'}</div>
+                <div className="hint">{charter?.code ?? STOREFRONT_DELIVERY_SITE_COPY}</div>
               </div>
               <SfPopover
-                open={openPop === 'site'}
+                open={openPop === 'site' && !locked}
                 onClose={() => setOpenPop(null)}
                 right
               >
-                <div className="sf-pop-label">Delivery site</div>
+                <div className="sf-pop-label">{STOREFRONT_DELIVERY_SITE_COPY}</div>
                 {chartersForWarehouse.length === 0 && (
                   <div className="sf-opt" style={{ cursor: 'default' }}>
-                    <span className="sb">No delivery sites for this warehouse.</span>
+                    <span className="sb">{STOREFRONT_NO_DELIVERY_SITES_COPY}</span>
                   </div>
                 )}
                 {chartersForWarehouse.map((c) => (
@@ -600,10 +703,11 @@ function StorefrontShell({
             viewerEmail={viewerEmail}
             reviewStage={reviewStage}
             setReviewStage={setReviewStage}
-            submitted={submitted}
-            setSubmitted={setSubmitted}
             orgTimezone={orgTimezone}
             deliveryRecipients={deliveryRecipients}
+            submission={submission}
+            viewerUserId={viewerUserId}
+            canApproveOrders={canApproveOrders}
           />
         </React.Suspense>
       </div>
@@ -714,11 +818,13 @@ interface StorefrontCatalogProps {
   viewerEmail: string;
   reviewStage: ReviewStage;
   setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
-  submitted: SubmittedOrder;
-  setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
   orgTimezone: string;
   /** See OrdersStorefrontProps.deliveryRecipients. */
   deliveryRecipients: OrgEmailRoutingRecipientsDto | null;
+  /** The submission key (order-submission.ts), owned by the shell. */
+  submission: OrderSubmissionControl;
+  viewerUserId: string;
+  canApproveOrders: boolean;
 }
 
 function StorefrontCatalog({
@@ -733,10 +839,11 @@ function StorefrontCatalog({
   viewerEmail,
   reviewStage,
   setReviewStage,
-  submitted,
-  setSubmitted,
   orgTimezone,
   deliveryRecipients,
+  submission,
+  viewerUserId,
+  canApproveOrders,
 }: StorefrontCatalogProps) {
   // Suspends until the server streams the catalog payload.
   const { items, aisles } = React.use(catalogPromise);
@@ -763,9 +870,27 @@ function StorefrontCatalog({
   // and gate every id on the resolved catalog — the authority on what is
   // orderable in this warehouse. Skipped ids (out of stock, bundle, rental,
   // wrong warehouse, restricted category) are counted, not silently dropped.
+  //
+  // It also waits for the submission's restore check (submission.ready): a
+  // send left unconfirmed by a reload locks the cart, and a locked cart takes
+  // no adds. While a key is live the selection is refused once in core's
+  // words (refuseAddWhileLocked) and KEPT; it is added once the key settles
+  // and the cart is free (after Done on a placed order). Review round 1.
   const prefillDone = React.useRef(false);
+  const prefillRefused = React.useRef(false);
+  const submissionReady = submission.ready;
+  const liveKey = pendingOrderSubmissionOf(submission.state);
+  const prefillWaits = liveKey !== null || submission.state.phase === 'placed';
   React.useEffect(() => {
-    if (prefillDone.current || !hydrated) return;
+    if (prefillDone.current || !hydrated || !submissionReady) return;
+    if (prefillWaits) {
+      const refusal = refuseAddWhileLocked(liveKey);
+      if (refusal && !prefillRefused.current && hasOrderPrefill(warehouseId)) {
+        prefillRefused.current = true;
+        toast.error(refusal);
+      }
+      return;
+    }
     prefillDone.current = true; // one attempt regardless of outcome
     const prefill = takeOrderPrefill(warehouseId);
     if (!prefill || prefill.itemIds.length === 0) return;
@@ -791,9 +916,10 @@ function StorefrontCatalog({
           : '';
       toast.success(added + left);
     }
-    // Run once when hydration settles; deps are intentionally minimal.
+    // Runs once the cart and the submission are ready and the cart is free;
+    // deps are intentionally minimal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [hydrated, submissionReady, prefillWaits]);
 
   /* --- frequently ordered --- */
   // null until the streamed list arrives. Nothing here waits for it: the sort
@@ -833,7 +959,7 @@ function StorefrontCatalog({
   const [availability, setAvailability] = React.useState<ReadonlySet<ItemStatus>>(
     () => new Set<ItemStatus>(),
   );
-  const [sort, setSort] = React.useState<SortKey>('featured');
+  const [sort, setSort] = React.useState<SortKey>(DEFAULT_SORT);
   const [view, setView] = React.useState<ViewMode>('grid');
   const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
     () => new Set<string>(),
@@ -842,7 +968,9 @@ function StorefrontCatalog({
 
   /* --- overlays --- */
   const [quickId, setQuickId] = React.useState<string | null>(null);
-  const [isPending, startTransition] = React.useTransition();
+  /** A cart that cannot be sent yet, said in the review before anything is
+   *  sent (no key is minted for it). */
+  const [preflightError, setPreflightError] = React.useState<string | null>(null);
 
   /* --- cart callbacks (stable so React.memo cards actually skip) --- */
   const linesRef = React.useRef(state.lines);
@@ -881,7 +1009,25 @@ function StorefrontCatalog({
   // — an inline `() => setReviewStage(null)` here would be a brand-new
   // function every render, forcing the modal's keydown-listener effect to
   // tear down and rebind constantly while it is open.
-  const handleReviewClose = React.useCallback(() => setReviewStage(null), [setReviewStage]);
+  //
+  // Closing after a FINAL refusal or a withdraw means it has been read: its
+  // alert or notice does not come back when the review reopens (the refused
+  // items stay marked in the cart, and Submit still waits for them). A notice
+  // that nothing was saved on the device goes too. Review round 1.
+  const subRef = React.useRef(submission.state);
+  const dismissRef = React.useRef(submission.dismiss);
+  React.useLayoutEffect(() => {
+    subRef.current = submission.state;
+    dismissRef.current = submission.dismiss;
+  });
+  const [readOutcome, setReadOutcome] = React.useState<OrderSubmissionState | null>(null);
+  const handleReviewClose = React.useCallback(() => {
+    setPreflightError(null);
+    const s = subRef.current;
+    if (s.phase === 'refused' || s.phase === 'withdrawn') setReadOutcome(s);
+    if (s.phase === 'open') dismissRef.current();
+    setReviewStage(null);
+  }, [setReviewStage]);
 
   // A kit changes the cart in ONE step, or not at all (storefront-kits.ts):
   // every component tops up to the new count, or gives back one kit's worth
@@ -893,7 +1039,7 @@ function StorefrontCatalog({
       const plan = planKitChange(kit, target, itemMap, kitSharesRef.current[kit.bundleId], qty);
       if (!plan.ok) {
         const name = componentItem(plan.short, itemMap)?.name ?? 'one of its items';
-        toast.error(`Not enough ${name} for that many kits. Nothing was added.`);
+        toast.error(kitNotEnoughCopy(name));
         return;
       }
       if (plan.changes.length > 0) {
@@ -957,27 +1103,36 @@ function StorefrontCatalog({
 
   const railRef = React.useRef<HTMLDivElement>(null);
 
-  /* --- submit (createOrderRequestAction payload + validation) --- */
+  /* --- submit: one key per submission (order-submission.ts) --- */
+  // The FIRST press mints the key and freezes the body; the record is written
+  // before the action is called, and the cart locks until the key settles.
+  // "Check and finish" resends the same body under the same key; "Don't send
+  // it" withdraws. A refusal says what to fix, inline (role="alert"), and
+  // marks the items it names from this cart.
   function handleConfirmSubmit() {
+    setPreflightError(null);
     const lines = state.lines;
     if (lines.length === 0) {
-      toast.error('Add at least one item to your cart before submitting.');
+      setPreflightError(SUBMIT_NO_LINES_COPY);
       return;
     }
     // `charter`, not `state.charterId`: a site this warehouse does not service
     // is no site. A draft saved while the cart could outlive a warehouse change
     // (fixed 2026-09-26) can carry the other warehouse's site; the setup bar
-    // already shows "Choose a site…" for it, and sending the id only drew
-    // "That site is not serviced by the chosen warehouse." from the server.
+    // already shows Choose a site for it.
     if (state.fulfillmentType === 'delivery' && !charter) {
-      toast.error('Select a delivery site in the setup bar above.');
+      setPreflightError(SUBMIT_NO_SITE_COPY);
       return;
     }
-    if (state.onBehalfOf) {
-      if (!state.onBehalfOf.name.trim() || !state.onBehalfOf.email.trim()) {
-        toast.error("Complete the requester's name and email above.");
-        return;
-      }
+    if (state.onBehalfOf && (!state.onBehalfOf.name.trim() || !state.onBehalfOf.email.trim())) {
+      setPreflightError(SUBMIT_ON_BEHALF_INCOMPLETE_COPY);
+      return;
+    }
+    // The last send refused some of these items (item_not_orderable): they
+    // are marked in the cart, and the order waits until they are removed.
+    if (lines.some((l) => refusedItems.has(l.itemId))) {
+      setPreflightError(SUBMIT_REMOVE_UNORDERABLE_COPY);
+      return;
     }
 
     // The kits, for the audit note only, as far as they have ARRIVED: Submit
@@ -986,47 +1141,37 @@ function StorefrontCatalog({
     const kitsOutcome = settledOutcome(kitsPromise);
     const offeredKits =
       kitsOutcome?.ok && kitsOutcome.value.status === 'ok' ? kitsOutcome.value.kits : [];
-    startTransition(async () => {
-      const res = await createOrderRequestAction({
-        warehouseId: state.warehouseId,
-        notes: state.notes.trim() || null,
-        // datetime-local has no offset; Date() interprets it in the user's
-        // zone, toISOString() normalizes to UTC for the zod .datetime check.
-        neededBy: state.neededBy ? new Date(state.neededBy).toISOString() : null,
-        fulfillmentType: state.fulfillmentType,
-        requesterPhone: null,
-        deliveryCharterId: state.fulfillmentType === 'delivery' ? (charter?.id ?? null) : null,
-        pickupLocationNotes: null,
-        onBehalfOf: state.onBehalfOf
-          ? {
-              name: state.onBehalfOf.name.trim(),
-              email: state.onBehalfOf.email.trim(),
-            }
-          : null,
-        lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
-        // Which kits the lines came from, for the order's audit entry only;
-        // approvers and pickers see the item lines as always.
-        kits: kitsForAudit(offeredKits, state.kits, lines),
-      });
-
-      if (!res.ok) {
-        toast.error(res.error.message);
-        return;
-      }
-
-      // Clear the persisted draft right away so a reload doesn't
-      // resurrect the just-submitted cart. In-memory lines stay until
-      // "Done" so the success screen can still show them. The key is the
-      // cart's own warehouse, the one its save effect writes under.
-      clearCartDraft(state.warehouseId);
-      setSubmitted({
-        id: res.data.id,
-        orderNumber: res.data.orderNumber,
-        unitCount: lines.reduce((s, l) => s + l.quantity, 0),
-      });
-      setReviewStage('success');
-    });
+    const kits = kitsForAudit(offeredKits, state.kits, lines);
+    const body: OrderCreateRequestInput = {
+      idempotencyKey: mintOrderSubmissionKey(),
+      placerUserId: viewerUserId,
+      warehouseId: state.warehouseId,
+      fulfillmentType: state.fulfillmentType,
+      deliveryCharterId: state.fulfillmentType === 'delivery' ? (charter?.id ?? null) : null,
+      onBehalfOf: state.onBehalfOf
+        ? { name: state.onBehalfOf.name.trim(), email: state.onBehalfOf.email.trim() }
+        : null,
+      notes: state.notes.trim() || null,
+      // The organization's wall clock, as the datetime-local field gives it;
+      // the server reads it in the organization's zone.
+      neededByLocal: state.neededBy || null,
+      lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+      // Which kits the lines came from, for the order's audit entry only;
+      // approvers and pickers see the item lines as always.
+      kits,
+    };
+    // The server reads the body with core's schema; a body it refuses on this
+    // first send is final (nothing was placed) and its words show here.
+    submission.send(body);
   }
+
+  // A placed order: the persisted draft goes at once, so a reload does not
+  // resurrect the submitted cart. In-memory lines stay until Done so the
+  // success screen can still show them.
+  const placedOrderId = submission.state.phase === 'placed' ? submission.state.order.id : null;
+  React.useEffect(() => {
+    if (placedOrderId) clearCartDraft(state.warehouseId, orderDraftPrefixFor(viewerUserId));
+  }, [placedOrderId, state.warehouseId, viewerUserId]);
 
   function handleDone() {
     // ONE `reset`, not clear + set-notes. Those two emptied the basket and the
@@ -1038,15 +1183,54 @@ function StorefrontCatalog({
     // clearCartDraft still runs, and now it holds: the debounced writer
     // recognises a pristine cart and removes the key rather than re-persisting
     // the state this dispatch just cleaned.
-    clearCartDraft(state.warehouseId);
+    clearCartDraft(state.warehouseId, orderDraftPrefixFor(viewerUserId));
     dispatch({ type: 'reset' });
+    submission.dismiss();
+    setPreflightError(null);
     setReviewStage(null);
-    setSubmitted(null);
   }
 
   function handleViewOrder() {
-    if (submitted) router.push(`/dashboard/orders/${submitted.id}`);
+    if (submission.state.phase === 'placed') {
+      router.push(`/dashboard/orders/${submission.state.order.id}`);
+    }
   }
+
+  /* --- what the submission says --- */
+  const sub = submission.state;
+  const itemName = React.useCallback(
+    (id: string) => itemMap.get(id)?.name ?? null,
+    [itemMap],
+  );
+  const wordsCtx = {
+    surface: 'web' as const,
+    itemName,
+    warehouseName,
+    bodyUnreadable:
+      (sub.phase === 'unconfirmed' || sub.phase === 'withdrawing' || sub.phase === 'sending') &&
+      sub.pending.bodyUnreadable === true,
+  };
+  // The panel shows once a send is unconfirmed, while it is withdrawn, and
+  // while a resend is out (its buttons wait); the first send keeps Submit.
+  const panelText =
+    sub.phase === 'unconfirmed' || sub.phase === 'withdrawing'
+      ? orderUnconfirmedCopy(sub.last, wordsCtx)
+      : sub.phase === 'sending' && sub.pending.sends > 1
+        ? ORDER_UNCONFIRMED_BODY_COPY
+        : null;
+  const outcomeUnread = readOutcome !== sub;
+  const refusalText =
+    submission.deviceError ??
+    preflightError ??
+    (sub.phase === 'refused' && outcomeUnread
+      ? orderRefusalCopy(sub.reason, sub.details, wordsCtx)
+      : null);
+  const noticeText = sub.phase === 'withdrawn' && outcomeUnread ? ORDER_WITHDRAWN_COPY : null;
+  // Items an item_not_orderable refusal named, marked in the cart by name.
+  const refusedItems: ReadonlyMap<string, string> =
+    sub.phase === 'refused' && sub.reason === 'item_not_orderable'
+      ? new Map(Object.entries(sub.details.items ?? {}))
+      : NO_REFUSED_ITEMS;
 
   /* --- small helpers --- */
   const toggleAvailability = (status: ItemStatus) => {
@@ -1117,7 +1301,7 @@ function StorefrontCatalog({
                   <Search size={15} />
                 </span>
                 <input
-                  placeholder="Search products, SKU, category…"
+                  placeholder={STOREFRONT_SEARCH_PLACEHOLDER_COPY}
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   aria-label="Search catalog"
@@ -1181,7 +1365,7 @@ function StorefrontCatalog({
                   aria-expanded={toolPop === 'sort'}
                 >
                   <ArrowUpDown size={13} />{' '}
-                  {SORT_OPTIONS.find((s) => s.id === sort)?.label ?? 'Featured'}
+                  {SORT_OPTIONS.find((s) => s.id === sort)?.label ?? SORT_OPTIONS[0]?.label}
                   <ChevronDown size={11} />
                 </button>
                 <SfPopover
@@ -1387,6 +1571,8 @@ function StorefrontCatalog({
             onDec={handleDec}
             onSetQty={handleSetQty}
             onReview={() => setReviewStage('review')}
+            orgTimezone={orgTimezone}
+            refusedItems={refusedItems}
           />
         </div>
       </div>
@@ -1420,8 +1606,8 @@ function StorefrontCatalog({
           method: state.fulfillmentType,
           deliverTo:
             state.fulfillmentType === 'pickup'
-              ? `${warehouseName} will-call desk`
-              : (charter?.name ?? 'Select a site'),
+              ? storefrontWillCallDeskCopy(warehouseName)
+              : (charter?.name ?? STOREFRONT_CHOOSE_SITE_COPY),
           requestedFor: state.onBehalfOf?.name ?? viewerLabel,
           requesterEmail: state.onBehalfOf?.email ?? viewerEmail,
           orgTimezone,
@@ -1429,8 +1615,22 @@ function StorefrontCatalog({
         neededBy={state.neededBy}
         destination={state.fulfillmentType === 'delivery' ? charter : null}
         deliveryRecipients={deliveryRecipients}
-        submitting={isPending}
-        submitted={submitted}
+        submitting={submission.busy || sub.phase === 'sending' || sub.phase === 'withdrawing'}
+        submitted={
+          sub.phase === 'placed'
+            ? { order: sub.order, replay: sub.replay, viaWithdraw: sub.viaWithdraw }
+            : null
+        }
+        viewerLabel={viewerLabel}
+        viewerEmail={viewerEmail}
+        unsettled={orderSubmissionLocked(sub)}
+        panelText={panelText}
+        canResend={panelText !== null && !wordsCtx.bodyUnreadable}
+        refusalText={refusalText}
+        noticeText={noticeText}
+        canApproveOrders={canApproveOrders}
+        onCheckAndFinish={submission.resend}
+        onDontSend={submission.withdraw}
         onClose={handleReviewClose}
         onConfirm={handleConfirmSubmit}
         onViewOrder={handleViewOrder}
