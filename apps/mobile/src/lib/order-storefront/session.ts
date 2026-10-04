@@ -152,6 +152,9 @@ export interface PlacedContext {
   /** The body that placed it (null when an earlier build wrote a record this
    *  one cannot read: then no email draft is offered). */
   body: OrderCreateRequestInput | null;
+  /** The success screen has shown it (desk check F10): a storefront that
+   *  comes into focus afterwards clears it instead of showing it again. */
+  shown: boolean;
 }
 
 export interface StorefrontSnapshot {
@@ -244,6 +247,8 @@ export interface StorefrontSession {
   dismissOutcome(): void;
   /** Leaving the success screen ("Place another order", "Done"). */
   finishPlaced(): void;
+  /** The success screen is showing the order placed. */
+  placedShown(): void;
   /** An item photo failed to load: read the map again (at most once in
    *  PHOTO_RETRY_MS for this warehouse). */
   photoFailed(): void;
@@ -451,6 +456,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
             replay: snap.state.replay,
             viaWithdraw: snap.state.viaWithdraw,
             body: sentBody,
+            shown: false,
           };
           if (cart) cart = cartReducer(cart, { type: 'reset' });
           refusedItems = new Set();
@@ -851,6 +857,12 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       if (engine?.getSnapshot().state.phase === 'placed') engine.dismiss();
       placed = null;
       sentBody = null;
+      publish();
+    },
+
+    placedShown() {
+      if (!placed || placed.shown) return;
+      placed = { ...placed, shown: true };
       publish();
     },
 

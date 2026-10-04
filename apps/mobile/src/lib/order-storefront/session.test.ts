@@ -840,3 +840,30 @@ describe('a restored cart is checked against the fresh catalog, not the deviceâ€
     expect(snap().notice).toMatch(/^Since this cart was saved, 1 item can't be ordered from here anymore/);
   });
 });
+
+describe('the success screen is shown once per placed order (desk check F10)', () => {
+  it('placed starts not shown; the success screen marks it shown; Done clears it and the next one starts over', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    await session.submit(false);
+    expect(snap().placed).toMatchObject({ order: { id: ORDER }, shown: false });
+    session.placedShown();
+    expect(snap().placed?.shown).toBe(true);
+    // Left by View order and on, then the storefront opened again: the same
+    // session still holds it, shown, so the storefront clears it.
+    await session.open(scope);
+    expect(snap().placed?.shown).toBe(true);
+    session.finishPlaced();
+    expect(snap().placed).toBeNull();
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    await session.submit(false);
+    expect(snap().placed?.shown).toBe(false);
+  });
+
+  it('marking with nothing placed does nothing', async () => {
+    await session.open(scope);
+    const before = snap();
+    session.placedShown();
+    expect(snap()).toBe(before);
+  });
+});

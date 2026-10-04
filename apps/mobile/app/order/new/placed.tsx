@@ -88,6 +88,12 @@ export default function OrderPlaced() {
   const layout = storefrontLayout({ width, fontScale });
 
   const placed = snap?.placed ?? null;
+  // Shown: a storefront that comes into focus later clears it instead of
+  // opening this screen again for it (desk check F10).
+  const placedId = placed?.order.id ?? null;
+  React.useEffect(() => {
+    if (placedId) session.placedShown();
+  }, [placedId, session]);
   const ready = snap?.setup.status === 'ready' ? snap.setup.answer : null;
   const warehouseName = ready?.warehouses.find((w) => w.id === placed?.order.warehouseId)?.name ?? '';
   const sites = snap?.catalog.answer?.sites;

@@ -93,6 +93,7 @@ import {
   type StorefrontRow,
 } from '@/lib/order-storefront/sections';
 import { clockLabel } from '@/lib/order-storefront/setup';
+import { placedOnStorefrontFocus } from '@/lib/order-storefront/success';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -159,12 +160,17 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   );
 
   // An order this storefront's key turned out to have placed (a status read
-  // on its own, or "Don't send it" finding it placed): the success screen.
+  // on its own, or "Don't send it" finding it placed): the success screen,
+  // once. One the success screen already showed is cleared here instead
+  // (the person left it by View order and on; desk check F10).
   const focused = useIsFocused();
   const placedId = snap?.placed?.order.id ?? null;
   React.useEffect(() => {
-    if (placedId && focused) router.push('/order/new/placed' as Href);
-  }, [placedId, focused, router]);
+    if (!placedId || !focused) return;
+    const next = placedOnStorefrontFocus(session.getSnapshot().placed);
+    if (next === 'show') router.push('/order/new/placed' as Href);
+    else if (next === 'finish') session.finishPlaced();
+  }, [placedId, focused, router, session]);
 
   // How a send ended, or a change refused, is said here too: a send can end
   // away from checkout (Don't send it on this screen's panel, a status read

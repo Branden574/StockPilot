@@ -49,6 +49,18 @@ export function successSentences(placed: PlacedContext): string[] {
   return out;
 }
 
+/**
+ * A placed order on a storefront home or browse view that comes into focus
+ * (desk check F10): one the success screen has not shown yet (a status read
+ * on its own, or "Don't send it" finding it placed) opens the success
+ * screen; one it has shown is done with (the person left by View order and
+ * on), so it is cleared and never shown again.
+ */
+export function placedOnStorefrontFocus(placed: Pick<PlacedContext, 'shown'> | null): 'show' | 'finish' | null {
+  if (!placed) return null;
+  return placed.shown ? 'finish' : 'show';
+}
+
 /** "Review and approve" for someone who holds the effective orders:approve
  *  (the server's answer, never a viewer), else "View order". */
 export function successOrderHref(orderId: string, canApproveOrders: boolean): string {

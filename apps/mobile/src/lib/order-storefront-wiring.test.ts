@@ -552,3 +552,11 @@ describe('a keystroke in the notes never redraws every storefront screen (desk c
     expect(checkout).toContain('{showNotesCounter(text) ? (');
   });
 });
+
+describe('the success screen never comes back for an order already seen (desk check F10)', () => {
+  it('the success screen marks the order shown; a storefront in focus follows the tested rule', () => {
+    expect(flat(placed)).toContain('React.useEffect(() => { if (placedId) session.placedShown(); }, [placedId, session]);');
+    expect(flat(catalog)).toContain("if (!placedId || !focused) return; const next = placedOnStorefrontFocus(session.getSnapshot().placed); if (next === 'show') router.push('/order/new/placed' as Href); else if (next === 'finish') session.finishPlaced();");
+    expect(catalog).not.toContain("if (placedId && focused) router.push('/order/new/placed' as Href);");
+  });
+});

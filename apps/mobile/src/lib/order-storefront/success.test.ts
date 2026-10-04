@@ -11,6 +11,7 @@ import {
 import type { PlacedContext } from './session';
 import {
   orderStatusLabel,
+  placedOnStorefrontFocus,
   successEmailInput,
   successOrderHref,
   successReference,
@@ -54,6 +55,7 @@ const placed = (patch: Partial<PlacedContext> = {}): PlacedContext => ({
   replay: false,
   viaWithdraw: false,
   body: BODY,
+  shown: false,
   ...patch,
 });
 
@@ -147,5 +149,17 @@ describe('the pickup or delivery request email (offered to every placer when rou
     expect(successEmailInput({ ...base, placed: placed(), recipients: null })).toBeNull();
     expect(successEmailInput({ ...base, placed: placed(), recipients: { ...ROUTING, to: 'not an address' } })).toBeNull();
     expect(successEmailInput({ ...base, placed: placed({ body: null }) })).toBeNull();
+  });
+});
+
+describe('a placed order on a storefront that comes into focus (desk check F10)', () => {
+  it('one not shown yet (a status read or Don’t send it found it placed) opens the success screen', () => {
+    expect(placedOnStorefrontFocus(placed())).toBe('show');
+  });
+  it('one already shown is done with: cleared, never shown again (the person left by View order and on)', () => {
+    expect(placedOnStorefrontFocus(placed({ shown: true }))).toBe('finish');
+  });
+  it('none: nothing', () => {
+    expect(placedOnStorefrontFocus(null)).toBeNull();
   });
 });
