@@ -100,6 +100,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
+  handOverAllowed,
   handOverLinkWanted,
   handOverMfaBlock,
   handOverMfaPanelMessage,
@@ -1043,7 +1044,8 @@ export default async function OrderDetailPage({
   //     legacy column (an older token may already be in their inbox);
   //   - the panel's "Collect signature" link: only while the order can be
   //     signed (staged for pickup, in transit) and only for someone who may
-  //     hand it over (orders:approve or the assigned driver). The raw token
+  //     hand it over (orders:approve, with write access to the order's
+  //     warehouse below manager rank, or the assigned driver). The raw token
   //     when its digest is the column, else a raw column minted before 0389;
   //     never a digest (the sign page would then ask for a session). Not
   //     while the viewer owes an MFA step-up (F2): the link completes the
@@ -1056,9 +1058,16 @@ export default async function OrderDetailPage({
     () => ({ known: false as const, block: null }),
   );
   const handOverMfa = handOverMfaState.block;
+  // Who may hand it over is the mint's rule too (review finding 1): below
+  // manager rank an approver needs write access to the order's warehouse.
+  // Their access is the read started beside the order read for F2-4
+  // (approverWarehouseAccess: an approver whose role does not decide it),
+  // request-cached, so no round trip of its own; a failed read is no access.
+  const handOverWarehouseAccess =
+    approverWarehouseAccess && !isAssignedDriver ? await approverWarehouseAccess.catch(() => null) : null;
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
-    viewerMayHandOver: canApprove || isAssignedDriver,
+    viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
     mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
     status: request.status,
     signatureTokenColumn: request.signature_token,

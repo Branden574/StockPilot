@@ -18,15 +18,15 @@ import {
   sendPartialReceiptEmail,
 } from '@/server/lib/order-handover-notify';
 import {
-  isHandOverEntitled,
   LINK_SIGN_LIMIT_PER_HOUR,
+  mayHandOverOrder,
   MEMBER_SIGN_LIMIT_PER_HOUR,
   resolveSignatureToken,
   SIGNATURE_TOKEN_RE,
   type SignatureTokenVia,
 } from '@/server/lib/order-secrets';
 import { insertAuditRowReported } from '@/server/services/audit';
-import { mfaGateError, type ServiceContext } from '@/server/services/context';
+import { isModuleEnabled, mfaGateError, type ServiceContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 
@@ -160,6 +160,30 @@ function auditIp(req: Request): string | null {
 }
 
 /**
+ * Did a browser send this cookie-authenticated post from another origin?
+ * Route handlers get no Origin check from the framework (server actions do),
+ * and the session cookies are SameSite=Lax, which still lets a page on a
+ * sibling subdomain post with them. The browser names where a post came
+ * from: Sec-Fetch-Site (anything but same-origin is refused) and Origin (its
+ * host must be this request's; "null" or an unreadable one is refused). A
+ * bearer caller (the phone) carries no ambient credential and is not judged
+ * here; a client that sends neither header is not a browser a page could
+ * drive. Same shape as /api/v1/me/release-state's isCrossSite.
+ */
+function crossSiteCookiePost(req: Request): boolean {
+  if (req.headers.get('authorization')) return false;
+  const site = req.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin') return true;
+  const origin = req.headers.get('origin');
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== new URL(req.url).host;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The caller's context IN THE ORDER'S ORGANIZATION (bearer or cookie), or
  * null. The organization header is set to the order's: withApiContext then
  * verifies an accepted membership there, so a member of several
@@ -229,8 +253,11 @@ export async function POST(req: NextRequest) {
   //               a signed-in member of the order's organization who may hand
   //               it over today: effective orders:approve (the web panel's
   //               gate, and the permission the phone's manager rank carries)
-  //               or the order's assigned driver. Installed phones post the
-  //               column with their bearer, so they keep working unchanged.
+  //               with the mint's warehouse rule below manager rank, or the
+  //               order's assigned driver (mayHandOverOrder); the orders
+  //               module on; a cookie session only from this site. Installed
+  //               phones post the column with their bearer, so they keep
+  //               working unchanged.
   // Every refusal is the same 404 an unknown token gets.
   //
   // The limits are applied AFTER the match, each keyed to whoever can reach
@@ -266,8 +293,18 @@ export async function POST(req: NextRequest) {
     );
     if (!rl.allowed) return rateLimited();
   } else {
+    // A cookie session is an ambient credential: only this site's own page
+    // (the sign page's collector) may spend it here (review finding 8).
+    if (crossSiteCookiePost(req)) return notFound();
     const ctx = await memberContextFor(req, order.organization_id);
-    if (!ctx || ctx.organizationId !== order.organization_id || !isHandOverEntitled(ctx, order)) {
+    if (
+      !ctx ||
+      ctx.organizationId !== order.organization_id ||
+      // The orders module off: the mint and the lookup refuse it too (review 9).
+      !isModuleEnabled(ctx, 'orders') ||
+      // The mint's warehouse rule for an approver below manager rank (review 1).
+      !(await mayHandOverOrder(ctx, order))
+    ) {
       return notFound();
     }
     // An entitled member already reads this order, so telling them to step up

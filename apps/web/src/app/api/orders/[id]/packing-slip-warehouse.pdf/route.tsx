@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { handOverMfaBlock, isHandOverEntitled, signatureLinkToken } from '@/server/lib/order-secrets';
+import { handOverMfaBlock, mayHandOverOrder, signatureLinkToken } from '@/server/lib/order-secrets';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -42,9 +42,11 @@ export async function GET(
     // This slip carries the order's hand-over QR (the link that completes
     // it with no sign-in), so it is for the people who may hand the order
     // over: effective orders:approve or the order's assigned driver, the
-    // audience of the panel's "Print warehouse slip" button. Any other member
+    // audience of the panel's "Print warehouse slip" button, and below
+    // manager rank only with write access to the order's warehouse, the
+    // mint's own rule (mayHandOverOrder, review finding 1). Any other member
     // could open the order and used to get the QR too (migration 0389).
-    if (!isHandOverEntitled(ctx, detail.request)) {
+    if (!(await mayHandOverOrder(ctx, detail.request))) {
       return NextResponse.json(
         { error: 'forbidden', message: 'Only someone who can hand this order over can print its warehouse slip.' },
         { status: 403 },
@@ -212,6 +214,9 @@ export async function GET(
       headers: {
         'content-type': 'application/pdf',
         'content-disposition': `inline; filename="packing-slip-warehouse-${detail.request.id.slice(0, 8)}.pdf"`,
+        // The raw hand-over QR is on it: no shared or browser cache keeps a
+        // copy (review finding 7; the sign page itself is no-store).
+        'cache-control': 'private, no-store',
       },
     });
   } catch (e) {

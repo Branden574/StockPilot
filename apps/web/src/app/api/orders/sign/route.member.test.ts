@@ -122,7 +122,7 @@ beforeEach(() => {
 });
 
 function request(token: string, headers: Record<string, string> = {}) {
-  return new Request('https://test.local/api/v1/orders/sign', {
+  const req = new Request('https://test.local/api/v1/orders/sign', {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({
@@ -131,12 +131,31 @@ function request(token: string, headers: Record<string, string> = {}) {
       signerEmail: 'sam@example.com',
       signatureDataUrl: SIGNATURE,
     }),
-  }) as never;
+  });
+  // happy-dom's Request drops the header names a browser may not set (Origin,
+  // Sec-Fetch-*), which a server receives exactly as the browser sent them:
+  // keep every header given (a plain Headers object has no such guard).
+  Object.defineProperty(req, 'headers', {
+    value: new Headers({ 'content-type': 'application/json', ...headers }),
+  });
+  return req as never;
 }
 
 /** A signed-in member, as withApiContext would build them for the order's org. */
 function member(overrides: Parameters<typeof makeServiceContext>[1]) {
   return makeServiceContext(makeSupabaseStub().client, { organizationId: ORG, ...overrides });
+}
+
+/** A signed-in member whose own client answers their warehouse assignments. */
+function memberIn(warehouses: string[], overrides: Parameters<typeof makeServiceContext>[1]) {
+  const client = makeSupabaseStub({
+    'user_warehouse_assignments.select': {
+      data: warehouses.map((warehouse_id, i) => ({ warehouse_id, is_primary: i === 0 })),
+      error: null,
+    },
+    'organization_members.select': { data: { all_warehouses: false }, error: null },
+  }).client;
+  return makeServiceContext(client, { organizationId: ORG, ...overrides });
 }
 
 function confirmCalls() {
@@ -275,11 +294,15 @@ describe('member path: the DIGEST (readable by every member) completes nothing w
   });
 
   it.each([
-    ['a manager', { role: 'manager' as const, userId: 'mgr-1' }],
-    ['a staff member granted orders:approve', { role: 'staff' as const, userId: 'stf-1', permissions: new Set(['orders:approve']) }],
-    ['the assigned driver (staff, no orders:approve)', { role: 'staff' as const, userId: DRIVER }],
-  ])('%s: hands over, audited via member with their id', async (_n, who) => {
-    vi.mocked(withApiContext).mockResolvedValue(member(who) as never);
+    ['a manager', { role: 'manager' as const, userId: 'mgr-1' }, []],
+    [
+      "a staff member granted orders:approve, assigned to the order's warehouse",
+      { role: 'staff' as const, userId: 'stf-1', permissions: new Set(['orders:approve']) },
+      ['wh-1'],
+    ],
+    ['the assigned driver (staff, no orders:approve)', { role: 'staff' as const, userId: DRIVER }, []],
+  ])('%s: hands over, audited via member with their id', async (_n, who, warehouses) => {
+    vi.mocked(withApiContext).mockResolvedValue(memberIn(warehouses, who) as never);
     const res = await POST(request(DIGEST, { authorization: 'Bearer t', 'x-organization-id': ORG }));
     expect(res.status).toBe(200);
     expect(world.status).toBe('completed');
@@ -296,6 +319,29 @@ describe('member path: the DIGEST (readable by every member) completes nothing w
       member({ role: 'manager', userId: 'mgr-2', permissions: new Set(['orders:request']) }) as never,
     );
     expect((await POST(request(DIGEST, { authorization: 'Bearer t' }))).status).toBe(404);
+  });
+
+  it("review 1: a staff member granted orders:approve but not assigned to the order's warehouse gets the one 404 (the mint's rule)", async () => {
+    vi.mocked(withApiContext).mockResolvedValue(
+      memberIn(['wh-other'], { role: 'staff', userId: 'stf-2', permissions: new Set(['orders:approve']) }) as never,
+    );
+    const res = await POST(request(DIGEST, { authorization: 'Bearer t', 'x-organization-id': ORG }));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(confirmCalls()).toHaveLength(0);
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(world.status).toBe('staged_for_pickup');
+  });
+
+  it('review 9: with the orders module off, even a manager gets the one 404 (as the mint and the lookup refuse)', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(
+      member({ role: 'manager', userId: 'mgr-3', enabledModules: new Set() }) as never,
+    );
+    const res = await POST(request(DIGEST, { authorization: 'Bearer t' }));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(confirmCalls()).toHaveLength(0);
   });
 
   it('a side table that cannot be read fails closed: a column match then needs the entitled session', async () => {
@@ -457,6 +503,50 @@ describe('rate limits', () => {
     expect(res.status).toBe(429);
     expect(confirmCalls()).toHaveLength(before);
     expect(world.status).toBe('staged_for_pickup');
+  });
+});
+
+describe('review 8: a cookie session completes a hand-over only from this site', () => {
+  // The member branch accepts the browser's cookie session (the sign page's
+  // collector posts same-origin). A page on another origin, even one on the
+  // same site, must not be able to make an entitled manager's browser post a
+  // digest with signer fields it chose: the browser says where the post came
+  // from (Sec-Fetch-Site, Origin), and anything but this origin is the one
+  // 404, before any context is built. A bearer carries no ambient credential.
+  beforeEach(() => {
+    vi.mocked(withApiContext).mockResolvedValue(member({ role: 'manager', userId: 'mgr-c' }) as never);
+  });
+
+  it.each([
+    ['another origin', { origin: 'https://evil.example' }],
+    ['a sibling subdomain (same site)', { origin: 'https://evil.test.local' }],
+    ['an opaque origin', { origin: 'null' }],
+    ['Sec-Fetch-Site cross-site', { 'sec-fetch-site': 'cross-site' }],
+    ['Sec-Fetch-Site same-site', { 'sec-fetch-site': 'same-site', origin: 'https://test.local' }],
+  ])('%s: the one 404, no context built, nothing written', async (_n, headers) => {
+    const res = await POST(request(DIGEST, headers));
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe(NOT_FOUND_TEXT);
+    expect(withApiContext).not.toHaveBeenCalled();
+    expect(confirmCalls()).toHaveLength(0);
+    expect(world.status).toBe('staged_for_pickup');
+  });
+
+  it("the sign page's own post (same origin) hands over", async () => {
+    const res = await POST(request(DIGEST, { origin: 'https://test.local', 'sec-fetch-site': 'same-origin' }));
+    expect(res.status).toBe(200);
+    expect(world.status).toBe('completed');
+  });
+
+  it('a bearer (the phone) is not judged by Origin: it has no ambient credential', async () => {
+    const res = await POST(request(DIGEST, { authorization: 'Bearer t', origin: 'https://elsewhere.example' }));
+    expect(res.status).toBe(200);
+  });
+
+  it('a raw link needs no session, so a cross-site post of a printed QR is judged as before', async () => {
+    const res = await POST(request(RAW, { origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }));
+    expect(res.status).toBe(200);
+    expect(withApiContext).not.toHaveBeenCalled();
   });
 });
 

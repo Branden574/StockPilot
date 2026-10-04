@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
+import type { Permission } from '@stockpilot/core';
+
 import { sha256Hex } from '@/lib/token-hash';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
@@ -9,9 +11,11 @@ import {
   handOverLinkWanted,
   handOverMfaBlock,
   handOverMfaPanelMessage,
+  handOverAllowed,
   hasCapturedSignature,
   isHandOverEntitled,
   LINK_SIGN_LIMIT_PER_HOUR,
+  mayHandOverOrder,
   MEMBER_SIGN_LIMIT_PER_HOUR,
   orderIdForReturnToken,
   readOrderSecrets,
@@ -233,6 +237,82 @@ describe('isHandOverEntitled (who may collect a signature or print its QR)', () 
 
   it('a link allows 10 attempts an hour per token (F3: never counted on the member path)', () => {
     expect(LINK_SIGN_LIMIT_PER_HOUR).toBe(10);
+  });
+});
+
+describe("handOverAllowed / mayHandOverOrder: the hand-over also needs the mint's warehouse rule (review finding 1)", () => {
+  // generate_order_packing_slips refuses an approver without write access to
+  // the order's warehouse (user_can_access_inventory 'write': manager rank
+  // always, else an assignment and not a viewer). The surfaces that hand the
+  // order over (the sign route's member path, the warehouse slip's QR, the
+  // order page's link) follow the same rule for everyone but the assigned
+  // driver, who was put on the order by a manager.
+  const order = (driver: string | null, warehouse: string | null = 'wh-1') => ({
+    assigned_delivery_user_id: driver,
+    warehouse_id: warehouse,
+  });
+  const staffApprover = { userId: 'stf', role: 'staff' as const, permissions: new Set<Permission>(['orders:approve']) };
+  const access = (writableIds: string[], hasAllAccess = false) => ({ hasAllAccess, writableIds });
+
+  it('manager rank needs no warehouse read (the role decides, as in user_can_access_inventory)', () => {
+    expect(handOverAllowed({ userId: 'm', role: 'manager' }, order(null), null)).toBe(true);
+    expect(handOverAllowed({ userId: 'o', role: 'owner' }, order(null, null), null)).toBe(true);
+  });
+
+  it('a staff approver only for an order in a warehouse they may write to', () => {
+    expect(handOverAllowed(staffApprover, order(null), access(['wh-1']))).toBe(true);
+    expect(handOverAllowed(staffApprover, order(null), access(['wh-2']))).toBe(false);
+    expect(handOverAllowed(staffApprover, order(null), access([], true))).toBe(true);
+    // An access read that failed (null) or an order with no warehouse is no access.
+    expect(handOverAllowed(staffApprover, order(null), null)).toBe(false);
+    expect(handOverAllowed(staffApprover, order(null, null), access(['wh-1']))).toBe(false);
+  });
+
+  it('never a viewer as an approver (a write), whatever an override grants', () => {
+    expect(
+      handOverAllowed({ userId: 'v', role: 'viewer', permissions: new Set(['orders:approve']) }, order(null), access([], true)),
+    ).toBe(false);
+  });
+
+  it('the assigned driver, with no warehouse rule; nobody without orders:approve otherwise', () => {
+    expect(handOverAllowed({ userId: 'drv', role: 'staff' }, order('drv'), null)).toBe(true);
+    expect(handOverAllowed({ userId: 'stf', role: 'staff' }, order('drv'), access(['wh-1']))).toBe(false);
+    expect(
+      handOverAllowed({ userId: 'm', role: 'manager', permissions: new Set(['orders:request']) }, order(null), null),
+    ).toBe(false);
+  });
+
+  it('mayHandOverOrder reads the warehouse access only for an approver whose role does not decide it', async () => {
+    const assignments = (rows: Array<{ warehouse_id: string; is_primary: boolean }>) =>
+      makeSupabaseStub({
+        'user_warehouse_assignments.select': { data: rows, error: null },
+        'organization_members.select': { data: { all_warehouses: false }, error: null },
+      });
+    const ctx = (supabase: unknown, over: Record<string, unknown>) =>
+      ({ organizationId: ORG, userId: 'stf', role: 'staff', supabase, ...over }) as never;
+
+    const assigned = assignments([{ warehouse_id: 'wh-1', is_primary: true }]);
+    expect(await mayHandOverOrder(ctx(assigned.client, { permissions: new Set(['orders:approve']) }), order(null))).toBe(true);
+    const elsewhere = assignments([{ warehouse_id: 'wh-2', is_primary: true }]);
+    expect(await mayHandOverOrder(ctx(elsewhere.client, { permissions: new Set(['orders:approve']) }), order(null))).toBe(false);
+    const failed = makeSupabaseStub({
+      'user_warehouse_assignments.select': { data: null, error: { message: 'down' } },
+      'organization_members.select': { data: { all_warehouses: false }, error: null },
+    });
+    expect(await mayHandOverOrder(ctx(failed.client, { permissions: new Set(['orders:approve']) }), order(null))).toBe(false);
+    // A read that throws (getWarehouseAccess then rejects) is no access either.
+    const throwing = {
+      from: () => {
+        throw new Error('socket hang up');
+      },
+    };
+    expect(await mayHandOverOrder(ctx(throwing, { permissions: new Set(['orders:approve']) }), order(null))).toBe(false);
+
+    const none = makeSupabaseStub();
+    expect(await mayHandOverOrder(ctx(none.client, { role: 'manager', userId: 'm' }), order(null))).toBe(true);
+    expect(await mayHandOverOrder(ctx(none.client, { userId: 'drv' }), order('drv'))).toBe(true);
+    expect(await mayHandOverOrder(ctx(none.client, {}), order(null))).toBe(false);
+    expect(none.fromCalls).toEqual([]);
   });
 });
 

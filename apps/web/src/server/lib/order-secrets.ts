@@ -1,7 +1,8 @@
 import 'server-only';
 
-import { can, type Permission, type Role } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Permission, type Role } from '@stockpilot/core';
 
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { sha256Hex } from '@/lib/token-hash';
 import { mfaGateError } from '@/server/services/context';
 
@@ -190,20 +191,107 @@ export async function resolveSignatureToken<Row extends { id: string }>(
 }
 
 /**
- * May this signed-in member hand the order over (collect its signature, print
- * the QR that opens it)? The union of today's audiences, so no installed
- * phone loses its button: effective `orders:approve` (the web actions panel
- * and the signature route's gate; the phone shows the button by manager rank,
- * and every manager holds orders:approve unless an override revoked it, which
- * production has none of) or the order's assigned delivery driver.
+ * The hand-over AUDIENCE by role: the union of today's audiences, so no
+ * installed phone loses its button: effective `orders:approve` (the web
+ * actions panel and the signature route's gate; the phone shows the button by
+ * manager rank, and every manager holds orders:approve unless an override
+ * revoked it, which production has none of) or the order's assigned delivery
+ * driver. The signature IMAGE route uses it as is. Every surface that hands
+ * the order over uses handOverAllowed / mayHandOverOrder below, which add the
+ * mint's warehouse rule for an approver below manager rank.
  */
 export function isHandOverEntitled(
-  ctx: { readonly userId: string; readonly role: Role; readonly permissions?: ReadonlySet<Permission> },
+  ctx: HandOverCaller,
   order: { assigned_delivery_user_id: string | null },
 ): boolean {
   if (can(ctx, 'orders:approve')) return true;
+  return isAssignedDriver(ctx, order);
+}
+
+type HandOverCaller = {
+  readonly userId: string;
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+};
+
+function isAssignedDriver(ctx: HandOverCaller, order: { assigned_delivery_user_id: string | null }): boolean {
   return order.assigned_delivery_user_id != null && order.assigned_delivery_user_id === ctx.userId;
 }
+
+/** The slice of the caller's warehouse access the hand-over rule reads. */
+export interface HandOverWarehouseAccess {
+  hasAllAccess: boolean;
+  writableIds: readonly string[];
+}
+
+/**
+ * Does an approver need their warehouse access read before the hand-over
+ * rule can answer? Only one whose role does not decide it: not the assigned
+ * driver, holding orders:approve, not a viewer, below manager rank.
+ */
+function handOverNeedsWarehouseAccess(ctx: HandOverCaller, order: { assigned_delivery_user_id: string | null }): boolean {
+  return (
+    !isAssignedDriver(ctx, order) &&
+    can(ctx, 'orders:approve') &&
+    ctx.role !== 'viewer' &&
+    !isManagerOrAbove(ctx.role)
+  );
+}
+
+/**
+ * May this signed-in member HAND THE ORDER OVER: complete it through the sign
+ * route's member path, get the warehouse slip whose QR completes it, or get
+ * the order page's raw link? isHandOverEntitled, plus the warehouse rule the
+ * mint applies (generate_order_packing_slips: user_can_access_inventory(uid,
+ * warehouse, null, 'write')), so nobody can hand over an order they could not
+ * have prepared (review finding 1):
+ *   - the order's assigned delivery driver (a manager put them on it), as
+ *     before, with no warehouse rule;
+ *   - an approver (effective orders:approve) of manager rank: the role gives
+ *     every warehouse (roleSeesEveryWarehouse; the SQL helper agrees);
+ *   - any other approver only with write access to the order's warehouse:
+ *     never a viewer, else the all-warehouses flag or the warehouse among
+ *     their writable ones (assertWarehouseAccess 'write', as the needed-by
+ *     change applies it). `access` null (not read, or a read that failed)
+ *     and an order with no warehouse are no access.
+ * Pure, so every surface applies one rule; mayHandOverOrder reads `access`.
+ * The signature IMAGE route keeps isHandOverEntitled: an image completes
+ * nothing, and its audience is unchanged since before 0389.
+ */
+export function handOverAllowed(
+  ctx: HandOverCaller,
+  order: { assigned_delivery_user_id: string | null; warehouse_id: string | null },
+  access: HandOverWarehouseAccess | null,
+): boolean {
+  if (isAssignedDriver(ctx, order)) return true;
+  if (!can(ctx, 'orders:approve')) return false;
+  if (ctx.role === 'viewer') return false;
+  if (isManagerOrAbove(ctx.role)) return true;
+  if (!access || !order.warehouse_id) return false;
+  return access.hasAllAccess || access.writableIds.includes(order.warehouse_id);
+}
+
+/**
+ * handOverAllowed with the caller's warehouse access read through their own
+ * client (getWarehouseAccess, request-cached), only when the role does not
+ * decide. A read that throws is no access.
+ */
+export async function mayHandOverOrder(
+  ctx: HandOverCaller & WarehouseAccessCtx,
+  order: { assigned_delivery_user_id: string | null; warehouse_id: string | null },
+): Promise<boolean> {
+  let access: HandOverWarehouseAccess | null = null;
+  if (handOverNeedsWarehouseAccess(ctx, order)) {
+    try {
+      access = await getWarehouseAccess(ctx);
+    } catch {
+      access = null;
+    }
+  }
+  return handOverAllowed(ctx, order, access);
+}
+
+type WarehouseAccessCtx = NonNullable<Parameters<typeof getWarehouseAccess>[0]>;
 
 /**
  * The MFA step-up that stands between an entitled member and the order's RAW

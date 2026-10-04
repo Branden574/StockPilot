@@ -198,6 +198,46 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     expect(render).not.toHaveBeenCalled();
   });
 
+  describe("review 1: a staff approver needs write access to the order's warehouse (the mint's rule)", () => {
+    function staffApproverIn(warehouses: string[]) {
+      const s = makeSupabaseStub({
+        'warehouses.select': { data: { name: 'DC4' }, error: null },
+        'user_warehouse_assignments.select': {
+          data: warehouses.map((warehouse_id, i) => ({ warehouse_id, is_primary: i === 0 })),
+          error: null,
+        },
+        'organization_members.select': { data: { all_warehouses: false }, error: null },
+      });
+      vi.mocked(withApiContext).mockResolvedValue(
+        makeServiceContext(s.client, { role: 'staff', userId: 'stf', permissions: new Set(['orders:approve']) }) as never,
+      );
+    }
+
+    it('assigned elsewhere: 403, no PDF, no QR, no export budget spent', async () => {
+      staffApproverIn(['wh-other']);
+      get.mockResolvedValue(detail(DIGEST));
+      const res = await call();
+      expect(res.status).toBe(403);
+      expect(render).not.toHaveBeenCalled();
+      expect(exportRateLimited).not.toHaveBeenCalled();
+    });
+
+    it("assigned to the order's warehouse: the slip with the raw QR", async () => {
+      staffApproverIn(['wh-1']);
+      get.mockResolvedValue(detail(DIGEST));
+      expect((await call()).status).toBe(200);
+      expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${RAW}`);
+    });
+  });
+
+  it('review 7: the slip (the carrier of the raw hand-over QR) is never stored by a cache', async () => {
+    signIn({ role: 'manager' });
+    get.mockResolvedValue(detail(DIGEST));
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+
   it('F2: a satisfied step-up (AAL2) prints as before', async () => {
     signIn({ role: 'admin', mfaRequired: true, mfaSatisfied: true });
     get.mockResolvedValue(detail(DIGEST));

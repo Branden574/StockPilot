@@ -461,6 +461,28 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     expect(sideReads()).toBe(0);
   });
 
+  it("review 1: a staff approver gets the link only for an order in a warehouse they may write to (the mint's rule)", async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(sideReads()).toBe(0);
+
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBe(RAW);
+  });
+
+  it('review 1: a failed warehouse access read gives a staff approver no link (fail closed)', async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }));
+    getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(sideReads()).toBe(0);
+  });
+
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'packing_slip_generated', signature_token: DIGEST }) }));
     await renderPage();
