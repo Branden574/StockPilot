@@ -42,22 +42,36 @@ export const RELEASES: Release[] = [
     // after every release; the publishing follow-up keeps it the newest.
     //
     // Who is told: members of organizations with Orders on. The first entry
-    // goes to staff and viewers who hold orders:approve, the people it
-    // describes (owners, admins and managers hold it by default and gain
-    // nothing; it links to the orders list, which reads that permission); the
-    // second to owners, admins and managers (a manager whose orders:approve
-    // was removed no longer holds it, so the permission cannot address them);
-    // the third to every member, since any member can be a delivery's driver.
+    // goes to staff who hold orders:approve, the people it describes (owners,
+    // admins and managers hold it by default and gain nothing; it links to
+    // the orders list, which reads that permission). Not viewers: the app
+    // refuses every write for a viewer (assertWarehouseAccess), so neither
+    // app offers a viewer approving or moving orders even with the
+    // permission (the web panel's `approves`, the phone's orderManagerActions
+    // isViewerRole); production had 0 viewers holding it on 2026-10-04. The
+    // second entry goes to owners, admins and managers (a manager whose
+    // orders:approve was removed no longer holds it, so the permission cannot
+    // address them); the third to every member, since any member can be a
+    // delivery's driver.
     //
     // What still goes by role after 0390, and the words say so: finishing or
     // releasing picking someone else claimed (complete_picking,
-    // partial_pick_line, release_picking) and recording a paper signature
-    // (confirm_physical_signature: a manager or the assigned driver). A
-    // manager whose orders:approve was removed keeps those two.
+    // partial_pick_line, release_picking). confirm_physical_signature also
+    // still admits a manager by role (or the assigned driver), but neither
+    // app offers a manager without orders:approve a hand-over step unless
+    // they are the driver (the web page's showActionsPanel needs canApprove
+    // or the driver at those statuses; the phone's section audience), so the
+    // words promise no paper signature and say neither app offers one; the
+    // server side is follow-up 4 (sec-orders plan section 10). Cancel: the
+    // web app offers it on any open order (CancelOrderButton); the mobile app
+    // only on a backordered order. The removed manager's own-order cancel
+    // "while it waits for approval" is the apps' rule (OrderRequestsService
+    // .cancel, M7); cancel_order_request lets a requester cancel at any open
+    // status (review finding 3, recorded as a follow-up).
     status: 'draft',
     title: 'Approving orders follows the approve permission',
     summary:
-      'Approving and moving orders along now follow the "Approve / fulfill orders" permission in both apps and on the server. A staff member who was given it sees Approve, Deny and the next steps in the mobile app after the latest update. A manager who had it removed can no longer approve, deny, cancel other people\'s orders or move an order along; finishing someone else\'s picking and recording a paper signature still follow the manager role.',
+      'Approving orders and moving them toward pickup or delivery now follow the "Approve / fulfill orders" permission in both apps and on the server. A staff member who was given it sees Approve, Deny and the next steps in the mobile app after the latest update. A manager who had it removed can no longer approve, deny, cancel other people\'s orders or move an order toward pickup or delivery; finishing or releasing picking that someone else claimed still follows the manager role.',
     publishedAt: '2026-10-12T17:00:00Z',
     audience: { modules: ['orders'] },
     entries: [
@@ -71,11 +85,11 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'The mobile app showed these only to owners, admins and managers, so a staff member who was given the permission could act on an order only from the web app, and some steps were missing there too.',
         howItAffectsYou:
-          'You can approve orders, move them along and cancel other people\'s orders from either app. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
+          'You can approve orders and move them along from either app. You can cancel other people\'s orders from the web app; the mobile app offers Cancel on a backordered order. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
         whatToDo:
           'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/orders', label: 'View orders' },
-        audience: { roles: ['staff', 'viewer'], anyPermission: ['orders:approve'], modules: ['orders'] },
+        audience: { roles: ['staff'], anyPermission: ['orders:approve'], modules: ['orders'] },
       },
       {
         id: 'approve-permission-removed',
@@ -83,11 +97,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Removing the approve permission from a manager now applies on the server too',
         whatChanged:
-          'When an admin removes the "Approve / fulfill orders" permission from a manager, that manager can no longer approve or deny orders, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order to its next step, in the web app, the mobile app or on the server. They can still cancel an order they placed while it waits for approval. Two steps still follow the manager role for now: finishing or releasing picking that someone else claimed, and recording a paper signature.',
+          'When an admin removes the "Approve / fulfill orders" permission from a manager, that manager can no longer approve or deny orders, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order toward pickup or delivery, in the web app, the mobile app or on the server. Neither app offers them Collect signature or Physical signature unless they are the order\'s driver. Finishing or releasing picking that someone else claimed still follows the manager role for now.',
         whyItMatters:
           'The mobile app kept showing these buttons to a manager without the permission and then refused them, and the rules behind the apps still let any manager through.',
         howItAffectsYou:
-          'Nothing changes for a manager who keeps the permission, which managers have by default.',
+          'Nothing changes for a manager who keeps the permission, which managers have by default. A manager without it can still cancel an order they placed while it waits for approval.',
         whatToDo: 'No action needed.',
         audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
       },

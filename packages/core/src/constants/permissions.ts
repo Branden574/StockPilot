@@ -374,14 +374,17 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   approval-class action: approve, deny, approve partial, cancel other
   //   people's orders, hold stock, change needed-by, pick slip, packing slips,
   //   stage, assign the picker or the driver, mark in transit, reopen, resume
-  //   and close. Still decided by manager ROLE, so a manager whose
-  //   orders:approve is removed keeps them: finishing or releasing picking
-  //   someone else claimed (complete_picking, partial_pick_line,
-  //   release_picking) and recording a paper signature
-  //   (confirm_physical_signature: a manager or the assigned driver), plus
-  //   order attachments and the shortfall PO drafter. Before adding a
-  //   permission to this set, check the RPCs the feature calls, not just its
-  //   table RLS.
+  //   and close. Still decided by manager ROLE in the database, so a manager
+  //   whose orders:approve is removed keeps them there: finishing or
+  //   releasing picking someone else claimed (complete_picking,
+  //   partial_pick_line, release_picking; both apps still offer it by role),
+  //   recording a paper signature (confirm_physical_signature: a manager or
+  //   the assigned driver; neither app offers it to such a manager unless
+  //   they are the driver, follow-up 4), order attachments and the shortfall
+  //   PO drafter. Neither app offers a viewer an approval-class action even
+  //   with the grant: the app refuses every write for a viewer
+  //   (assertWarehouseAccess). Before adding a permission to this set, check
+  //   the RPCs the feature calls, not just its table RLS.
   'purchase_orders:manage',
   'items:create',
   'items:update',
