@@ -176,6 +176,8 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 - **Pick** (`/orders/[id]/pick`): a pick list to pull stock; **Print** a packing slip/label.
 - Capture **proof of delivery** — a **signature** and photo attachments are stored with the order.
 - **Order statuses** are configurable (**Settings → Order statuses**) so the workflow matches your operation.
+- **Placing an order twice is impossible.** Each press of **Submit order request** carries one submission key. If the answer is lost (a slow connection, a closed tab), the review stays open with **Check and finish** (sends the same request again: you see the order if it was placed, or it is placed now, once), **Don't send it** (it is never placed, and the cart unlocks) and **See my orders**. The cart, the setup bar and the warehouse switch stay as they were sent until you choose; a reload remembers and checks for you. The pending request is kept only for your account on that browser.
+- **Refusals say what to fix**, in the review: an item that was archived or is no longer available to you (marked in the cart by name), a delivery site that is no longer active, a needed-by date that has passed or is more than 5 years away. The **needed-by** date and time is read in your organization's time zone, and the cart names the zone.
 
 ### Shipping & Live Tracking
 **Purpose:** buy a carrier label and track the parcel.

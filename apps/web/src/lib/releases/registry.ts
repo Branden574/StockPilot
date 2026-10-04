@@ -122,6 +122,89 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'order-submit-once-2026-10',
+    revision: 1,
+    // Phone ordering PO-2 (migration 0391: one create path, place_order_request
+    // and order_submissions). Held as a DRAFT until 0391 is pushed and
+    // verified, the web deploy is READY and the production smoke test that
+    // writes nothing has passed (phone-orders plan 10.1 step 8); the
+    // follow-up that publishes it (plan PO-5) sets the real publishedAt and
+    // re-reads these words against what shipped. Sits below the slice D draft
+    // (which must stay dated after every release) and above the slice B
+    // draft, dated between them; the publishing follow-up keeps the order
+    // newest first.
+    //
+    // What a person can see, on the web only (the phone storefront is PO-4,
+    // with its own entry): the New order page's lost-answer panel (Check and
+    // finish, Don't send it, See my orders) and the locked cart; refusals said
+    // in place, naming the items from the cart; the needed-by read in the
+    // organization's zone with the zone named; the corrected labels. The
+    // words claim no number nobody measured and no detail of how the check
+    // works. Who is told: anyone who can open the New order page (Orders on,
+    // orders:request, which every role holds by default).
+    status: 'draft',
+    title: 'Submitting an order request twice no longer places two orders',
+    summary:
+      "If the New order page sends your order request but doesn't hear back, it now keeps your cart as it was and lets you check and finish, or choose not to send it, so the order is never placed twice. Refusals say what to fix, and the needed-by time is read in your organization's time zone.",
+    publishedAt: '2026-10-11T17:10:00Z',
+    audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-submit-once',
+        category: 'fixed',
+        area: 'Orders',
+        title: "A lost answer can't place the same order twice",
+        whatChanged:
+          "If the New order page sends your order request and doesn't hear back (a slow connection, a closed tab), the review stays open with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it makes sure it is never placed and unlocks your cart.",
+        whyItMatters:
+          'Pressing Submit again after a lost answer could place the same order twice, and the approver then had to find and cancel the copy.',
+        howItAffectsYou:
+          "Until you choose, your cart, the setup bar and the warehouse switch stay as they were sent. If you reload the page, it remembers and checks for you. The pending order request is kept only for your account on that browser: someone else who signs in there never sees it or sends it.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        id: 'order-refusals-in-place',
+        category: 'improved',
+        area: 'Orders',
+        title: 'The review says why an order request was not placed',
+        whatChanged:
+          "When an order request can't be placed, the review now says why, in place: for example an item that was archived or is no longer available to you, a delivery site that is no longer active, or a needed-by date that has passed. Items that can't be ordered are marked in your cart by name.",
+        whyItMatters:
+          'The reason used to flash by in a corner of the screen, and some reasons read as a server error.',
+        howItAffectsYou:
+          'Fix what the review names, then submit again. Your cart stays as it was.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'order-needed-by-org-time-zone',
+        category: 'improved',
+        area: 'Orders',
+        title: "The needed-by time is read in your organization's time zone",
+        whatChanged:
+          "The needed-by date and time you pick on the New order page is now read in your organization's time zone, and the cart says which zone that is. The review shows the date and time before you submit.",
+        whyItMatters:
+          'It used to be read in the time zone of the computer you placed the order from, so the same choice could mean a different time for the warehouse.',
+        howItAffectsYou:
+          "If your computer is set to your organization's time zone, nothing changes for you.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'order-page-clearer-labels',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Clearer labels on the New order page',
+        whatChanged:
+          'The cart\'s button now reads Review order, because it opens the review, and the review\'s button reads Submit order request. Frequently ordered now says it counts the orders placed at that warehouse in the last 30 days, and its sort is Most ordered here. The Featured sort is gone: the list starts in name order.',
+        whyItMatters:
+          'Some labels promised something the page did not do, such as a list based on your own orders.',
+        howItAffectsYou: 'Nothing else about placing an order changes.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'order-signature-timeline-2026-10',
     revision: 1,
     // Order secrets, slice B (migration 0389). Held as a DRAFT until 0389 is

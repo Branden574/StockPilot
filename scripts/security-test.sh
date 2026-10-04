@@ -868,6 +868,29 @@ WEB_TESTS=(
   # counts kept and failed accounts apart instead of claiming them deleted.
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
+
+  # One create path, no duplicate order (0391, phone ordering PO-2). The
+  # service gates (Orders module, the MFA step-up, orders:request) come before
+  # anything is read; the body's placer goes to place_order_request unchanged
+  # (never the session's, so the database's placer check means something);
+  # every raise and recorded refusal maps to its code and details, a recorded
+  # one final (settled); a replay runs no audit, email or webhook. The routes
+  # answer no-store with the organization echoed, the settle routes need only
+  # membership, and every new order goes through the one service method (no
+  # product code calls create_order_request). The New order page keeps the
+  # pending send under the signed-in account only: a shared browser's next
+  # person never sees, reads or sends it (judge X-1), and the cart draft is
+  # per account too (a legacy draft is adopted without its on-behalf name and
+  # email).
+  src/server/services/order-requests.create.test.ts
+  src/server/actions/order-requests.place-action.test.ts
+  src/server/actions/order-requests.on-behalf.test.ts
+  src/app/api/v1/orders/route.test.ts
+  'src/app/api/v1/orders/submissions/[key]/route.test.ts'
+  src/server/services/create-order-request-callers.guard.test.ts
+  src/components/orders/storefront/order-submission.test.ts
+  src/components/orders/storefront/orders-storefront.submit-once.test.tsx
+  src/components/orders/v2/cart-context.drafts.test.tsx
   src/server/actions/platform-admin.remove-org.test.ts
   # Approval follows the permission (0390): the app asks the effective
   # orders:approve where the database does. Delivery assignment and the
@@ -988,6 +1011,13 @@ CORE_TESTS=(
   # approval-class actions follow it and the picker override stays manager
   # rank, as the database decides each.
   src/order-state-machine.test.ts
+  # One create path (0391, phone ordering PO-2): the create body's schema and
+  # the X-1 owner check on a stored pending send (a record another account
+  # left is never shown or sent; one of this account whose body no longer
+  # reads stays locked), and the parity fixture the database's shape rules
+  # are generated from.
+  src/orders/place-order.test.ts
+  src/orders/place-order.parity.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
