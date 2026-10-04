@@ -56,6 +56,7 @@ import {
   storefrontNeededByZone,
 } from '@/lib/order-storefront/checkout';
 import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { createNotesDraft, type NotesDraft } from '@/lib/order-storefront/notes-draft';
 import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
@@ -91,6 +92,11 @@ export default function Checkout() {
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
   const [sheet, setSheet] = React.useState<CheckoutSheet>(null);
+  // Manager notes are typed in the field and committed to the cart by this
+  // draft (a pause, blur, Submit, leaving), so a keystroke never redraws
+  // every storefront screen (desk check F8.1).
+  const [notesDraft] = React.useState(() => createNotesDraft({ session }));
+  React.useEffect(() => () => notesDraft.dispose(), [notesDraft]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -156,7 +162,6 @@ export default function Checkout() {
   const zone = storefrontNeededByZone(ready.orgTimezone);
   const blockedBy = session.submitBlockedBy(offline);
   const firstSendOut = snap.submission.state.phase === 'sending' && snap.submission.state.pending.sends === 1;
-  const notesLength = Array.from(cart.notes).length;
   const quantityItem = sheet?.kind === 'quantity' ? snap.itemMap.get(sheet.itemId) : undefined;
   // For follows the answer shown (canOrderOnBehalf, the effective
   // orders:approve): a cart kept for someone else by a person who no longer
@@ -301,32 +306,22 @@ export default function Checkout() {
               )}
             </View>
 
-            <View style={{ gap: 6 }}>
-              <FieldLabel>{`${CART_MANAGER_NOTES_LABEL_COPY} · ${CART_OPTIONAL_COPY}`}</FieldLabel>
-              <TextInput
-                value={cart.notes}
-                onChangeText={(value) => void session.dispatch({ type: 'set-notes', value })}
-                multiline
-                maxLength={ORDER_NOTES_MAX}
-                editable={!locked}
-                placeholder={CART_MANAGER_NOTES_PLACEHOLDER_COPY}
-                placeholderTextColor={c.ink4}
-                accessibilityLabel={CART_MANAGER_NOTES_LABEL_COPY}
-                accessibilityHint={lockHint}
-                maxFontSizeMultiplier={INPUT_CAP}
-                style={[styles.notes, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
-              />
-              {showNotesCounter(cart.notes) ? (
-                <Body size={12} color={c.ink3}>
-                  {checkoutNotesCounterCopy(notesLength, ORDER_NOTES_MAX)}
-                </Body>
-              ) : null}
-            </View>
+            <NotesField
+              key={`${snap.scope?.orgId ?? ''}:${snap.warehouseId ?? ''}`}
+              initial={cart.notes}
+              locked={locked}
+              lockHint={lockHint}
+              draft={notesDraft}
+            />
 
             <View style={{ gap: 8 }}>
               {locked ? null : (
                 <Pressable
-                  onPress={() => void session.submit(offline)}
+                  onPress={() => {
+                    // What is typed in the notes goes into the cart first.
+                    notesDraft.flush();
+                    void session.submit(offline);
+                  }}
                   disabled={blockedBy !== null || firstSendOut}
                   accessibilityRole="button"
                   accessibilityLabel={REVIEW_SUBMIT_COPY}
@@ -405,6 +400,55 @@ export default function Checkout() {
             void session.dispatch({ type: 'set-needed-by', value: wall });
           }}
         />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Manager notes: the field keeps what is typed (uncontrolled, as the search
+ * box is: a busy JS thread never drops a keystroke) and hands each change to
+ * the draft, which commits it to the cart (lib/order-storefront/notes-
+ * draft.ts). Keyed by organization and warehouse, so another cart's notes
+ * start a new field. Only this field redraws per keystroke (its counter).
+ */
+function NotesField({
+  initial,
+  locked,
+  lockHint,
+  draft,
+}: {
+  initial: string;
+  locked: boolean;
+  lockHint: string | undefined;
+  draft: NotesDraft;
+}) {
+  const { c } = useTheme();
+  const [text, setText] = React.useState(initial);
+  return (
+    <View style={{ gap: 6 }}>
+      <FieldLabel>{`${CART_MANAGER_NOTES_LABEL_COPY} · ${CART_OPTIONAL_COPY}`}</FieldLabel>
+      <TextInput
+        defaultValue={initial}
+        onChangeText={(value) => {
+          setText(value);
+          draft.change(value);
+        }}
+        onBlur={() => draft.flush()}
+        multiline
+        maxLength={ORDER_NOTES_MAX}
+        editable={!locked}
+        placeholder={CART_MANAGER_NOTES_PLACEHOLDER_COPY}
+        placeholderTextColor={c.ink4}
+        accessibilityLabel={CART_MANAGER_NOTES_LABEL_COPY}
+        accessibilityHint={lockHint}
+        maxFontSizeMultiplier={INPUT_CAP}
+        style={[styles.notes, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
+      />
+      {showNotesCounter(text) ? (
+        <Body size={12} color={c.ink3}>
+          {checkoutNotesCounterCopy(Array.from(text).length, ORDER_NOTES_MAX)}
+        </Body>
       ) : null}
     </View>
   );

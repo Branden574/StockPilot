@@ -732,3 +732,70 @@ describe('lock words go with the lock; outcome text goes once read (desk check F
     expect(storefrontOutcome(snap(), { itemName: () => null, warehouseName: null })).toBeNull();
   });
 });
+
+describe('a keystroke never re-renders every row (desk check F8.1)', () => {
+  it('a publish that changes no mark keeps the same notOrderable set and the same photos object', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    const before = snap();
+    session.dispatch({ type: 'set-notes', value: 'a' });
+    const after = snap();
+    expect(after).not.toBe(before);
+    expect(after.notOrderable).toBe(before.notOrderable);
+    expect(after.photos).toBe(before.photos);
+  });
+
+  it('with no photo map, photos is one frozen empty object', async () => {
+    api.photos.mockRejectedValue(new Error('offline'));
+    await session.open(scope);
+    const first = snap().photos;
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    expect(snap().photos).toBe(first);
+    expect(Object.keys(first)).toEqual([]);
+    expect(Object.isFrozen(first)).toBe(true);
+  });
+
+  it('a change to the marks is a new set (the rows must redraw then)', async () => {
+    const cart = { ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }), lines: [{ itemId: A, quantity: 1 }, { itemId: B, quantity: 1 }] };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart, submission: null }, new Date()));
+    await session.open(scope);
+    const marked = snap().notOrderable;
+    expect([...marked]).toEqual([B]);
+    session.dispatch({ type: 'remove', itemId: B });
+    expect(snap().notOrderable).not.toBe(marked);
+    expect(snap().notOrderable.size).toBe(0);
+  });
+});
+
+describe('a photo that fails reads the map again at most once in 5 minutes per warehouse (desk check F8.2)', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('every later error inside the 5 minutes reads nothing; after them, one read again', async () => {
+    await session.open(scope);
+    const opened = api.photos.mock.calls.length;
+    session.photoFailed();
+    await tick();
+    expect(api.photos.mock.calls.length).toBe(opened + 1);
+    // The fresh map came back; another image still fails.
+    session.photoFailed();
+    await tick();
+    session.photoFailed();
+    await tick();
+    expect(api.photos.mock.calls.length).toBe(opened + 1);
+    now += 5 * 60_000;
+    session.photoFailed();
+    await tick();
+    expect(api.photos.mock.calls.length).toBe(opened + 2);
+  });
+
+  it('another warehouse has its own allowance', async () => {
+    await session.open(scope);
+    session.photoFailed();
+    await tick();
+    await session.selectWarehouse(WH2);
+    const atSwitch = api.photos.mock.calls.length;
+    session.photoFailed();
+    await tick();
+    expect(api.photos.mock.calls.length).toBe(atSwitch + 1);
+  });
+});

@@ -114,7 +114,7 @@ describe('the routes and the way in', () => {
       }
     }
     expect(count(checkout, 'session.submit(')).toBe(1);
-    expect(checkout).toMatch(/onPress=\{\(\) => void session\.submit\(offline\)\}/);
+    expect(checkout).toMatch(/onPress=\{\(\) => \{\s*notesDraft\.flush\(\);\s*void session\.submit\(offline\);\s*\}\}/);
   });
 
   it('the deep link: a rewrite rule above the other orders rules, and the static cold-start shim', () => {
@@ -319,13 +319,13 @@ describe('the cart, the lock and the send', () => {
     for (const src of [catalog, checkout]) {
       expect(src).not.toMatch(/cartReducer\(/);
     }
-    expect(checkout).toMatch(/onPress=\{\(\) => void session\.submit\(offline\)\}\s+disabled=\{blockedBy !== null \|\| firstSendOut\}/);
+    expect(checkout).toMatch(/onPress=\{\(\) => \{\s*notesDraft\.flush\(\);\s*void session\.submit\(offline\);\s*\}\}\s+disabled=\{blockedBy !== null \|\| firstSendOut\}/);
     expect(checkout).toContain('const blockedBy = session.submitBlockedBy(offline);');
     expect(checkout).toContain('accessibilityHint={blockedBy ?? undefined}');
   });
 
   it('Submit is gone while the cart is locked; the panel takes its place', () => {
-    expect(checkout).toMatch(/\{locked \? null : \(\s*<Pressable\s+onPress=\{\(\) => void session\.submit\(offline\)\}/);
+    expect(checkout).toMatch(/\{locked \? null : \(\s*<Pressable\s+onPress=\{\(\) => \{\s*notesDraft\.flush\(\);\s*void session\.submit\(offline\);\s*\}\}/);
     expect(checkout).toMatch(/<UnconfirmedPanel\s+state=\{snap\.submission\.state\}/);
     expect(catalog).toMatch(/<UnconfirmedPanel\s+state=\{snap\.submission\.state\}/);
   });
@@ -538,5 +538,17 @@ describe('VoiceOver hears why, what and how much (desk check F7)', () => {
     expect(checkout).toContain("onDec={(itemId) => changeLine({ type: 'dec', itemId })}");
     expect(checkout).toContain("onRemove={(itemId) => changeLine({ type: 'remove', itemId })}");
     expect(catalog).toMatch(/onRemove=\{\(itemId\) => \{\s*if \(session\.dispatch\(\{ type: 'remove', itemId \}\) !== null\) return;\s*const said = lineChangeAnnouncement\(session\.getSnapshot\(\), itemId\);\s*if \(said\) say\(said\);\s*\}\}/);
+  });
+});
+
+describe('a keystroke in the notes never redraws every storefront screen (desk check F8.1)', () => {
+  it('the notes field keeps what is typed and hands it to the tested draft; the store is never written per keystroke', () => {
+    expect(checkout).toContain('const [notesDraft] = React.useState(() => createNotesDraft({ session }));');
+    expect(checkout).toContain('React.useEffect(() => () => notesDraft.dispose(), [notesDraft]);');
+    expect(checkout).toMatch(/<NotesField\s+key=\{`\$\{snap\.scope\?\.orgId \?\? ''\}:\$\{snap\.warehouseId \?\? ''\}`\}\s+initial=\{cart\.notes\}\s+locked=\{locked\}\s+lockHint=\{lockHint\}\s+draft=\{notesDraft\}/);
+    expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onBlur=\{\(\) => draft\.flush\(\)\}/);
+    expect(checkout).not.toContain('value={cart.notes}');
+    expect(checkout).not.toContain("type: 'set-notes'");
+    expect(checkout).toContain('{showNotesCounter(text) ? (');
   });
 });

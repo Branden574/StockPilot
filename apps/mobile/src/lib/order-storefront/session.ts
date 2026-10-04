@@ -195,6 +195,23 @@ const EMPTY_SUBMISSION: SubmitEngineSnapshot = {
 
 const EMPTY_PREPARED = prepareCatalog<StorefrontItem>([]);
 
+/** One empty photo map and one empty mark set for every snapshot that has
+ *  none: a publish that changes neither keeps the same objects, so the
+ *  catalog's memoized rows do not redraw on a keystroke (desk check F8.1). */
+const EMPTY_PHOTOS: Readonly<Record<string, string>> = Object.freeze({});
+const NO_MARKS: ReadonlySet<string> = new Set<string>();
+
+/** A photo that fails reads the photo map again at most once in this long,
+ *  per warehouse (desk check F8.2): a fresh map that still holds a broken
+ *  photo must not read the map again on every later error. */
+export const PHOTO_RETRY_MS = 5 * 60_000;
+
+function sameMembers(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
 export interface StorefrontSession {
   getSnapshot(): StorefrontSnapshot;
   subscribe(listener: () => void): () => void;
@@ -226,7 +243,8 @@ export interface StorefrontSession {
   dismissOutcome(): void;
   /** Leaving the success screen ("Place another order", "Done"). */
   finishPlaced(): void;
-  /** An item photo failed to load: read the map again (once). */
+  /** An item photo failed to load: read the map again (at most once in
+   *  PHOTO_RETRY_MS for this warehouse). */
   photoFailed(): void;
   /** The account or organization ended: forget everything shown. */
   close(): void;
@@ -264,6 +282,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   let sentBody: OrderCreateRequestInput | null = null;
   let lockedWarehouseIds: string[] = [];
   let serverSkewMs = 0;
+  /** When this warehouse's photo map was last read again for a failed
+   *  photo (null: not yet). */
+  let photoRetryAt: number | null = null;
+  let lastMarks: ReadonlySet<string> = NO_MARKS;
   let snapshot: StorefrontSnapshot = build();
 
   function blankCatalog(): CatalogState {
@@ -284,6 +306,8 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     if (cart && catalog.answer) for (const id of linesNotInCatalog(cart, itemMap)) notOrderable.add(id);
     for (const id of refusedItems) if (cart?.lines.some((l) => l.itemId === id)) notOrderable.add(id);
     for (const id of restoredNotOrderable) if (cart?.lines.some((l) => l.itemId === id)) notOrderable.add(id);
+    // The same marks keep the same set (the rows' memo depends on it).
+    if (!sameMembers(notOrderable, lastMarks)) lastMarks = notOrderable.size === 0 ? NO_MARKS : notOrderable;
     const kitsPart = catalog.answer?.kits;
     return {
       scope: scope ? { userId: scope.userId, orgId: scope.orgId } : null,
@@ -294,11 +318,11 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       itemMap,
       prepared,
       kits: kitsPart ? (kitsPart.status === 'ok' ? kitsPart.kits : null) : [],
-      photos: photos.answer?.photos ?? {},
+      photos: photos.answer?.photos ?? EMPTY_PHOTOS,
       cart,
       submission,
       locked: orderSubmissionLocked(submission.state),
-      notOrderable,
+      notOrderable: lastMarks,
       notice,
       refusal,
       placed,
@@ -468,6 +492,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     itemMap = new Map();
     prepared = EMPTY_PREPARED;
     photos = { answer: null, failed: false };
+    photoRetryAt = null;
     refusedItems = new Set();
     restoredNotOrderable = new Set();
     notice = null;
@@ -645,6 +670,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     itemMap = new Map();
     prepared = EMPTY_PREPARED;
     photos = { answer: null, failed: false };
+    photoRetryAt = null;
     cart = null;
     refusedItems = new Set();
     restoredNotOrderable = new Set();
@@ -831,6 +857,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
 
     photoFailed() {
       if (photos.failed) return;
+      const at = deps.now();
+      if (photoRetryAt !== null && at - photoRetryAt < PHOTO_RETRY_MS) return;
+      photoRetryAt = at;
       photos = { ...photos, failed: true };
       void readPhotos(warehouseGen, false);
     },
