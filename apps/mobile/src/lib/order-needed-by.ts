@@ -104,9 +104,11 @@ export function neededByZoneUnknownCopy(zone: string): string {
  * service refuses without (OrderRequestsService.reviseNeededByIn). A manager
  * whose orders:approve was revoked is not offered it, although the
  * database's 0348 gate would accept them: the service in front of it does
- * not. `role` is kept for the screen's call; it no longer decides.
- * Warehouse write access is checked when the sheet opens
- * (neededBySheetOpening); the server re-checks everything.
+ * not. `role` decides one thing: never a viewer, even granted
+ * orders:approve, as the web's neededByChangeView (the app refuses every
+ * write for a viewer, and the revise needs warehouse write). Warehouse write
+ * access is otherwise checked when the sheet opens (neededBySheetOpening);
+ * the server re-checks everything.
  */
 export function canOfferNeededByChange(input: {
   status: string | null | undefined;
@@ -114,7 +116,12 @@ export function canOfferNeededByChange(input: {
   canApproveOrders: boolean;
   ordersModuleEnabled: boolean;
 }): boolean {
-  return input.ordersModuleEnabled && isNeededByRevisable(input.status) && input.canApproveOrders;
+  return (
+    input.ordersModuleEnabled &&
+    isNeededByRevisable(input.status) &&
+    input.canApproveOrders &&
+    input.role !== 'viewer'
+  );
 }
 
 /** Whether the "Needed by" card shows: the order has one, or the viewer may set one. */

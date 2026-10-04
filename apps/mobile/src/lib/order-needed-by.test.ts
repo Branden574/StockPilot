@@ -129,6 +129,13 @@ describe('who is offered Change', () => {
     expect(canOfferNeededByChange({ ...base, role: 'owner', canApproveOrders: false })).toBe(false);
   });
 
+  it('a viewer granted orders:approve is NOT offered it, as on the web (slice D review, findings 1 and 10)', () => {
+    // The web's neededByChangeView returns null for role viewer, and the
+    // app refuses every write for a viewer (assertWarehouseAccess); the
+    // revise function needs warehouse write, which a viewer never has.
+    expect(canOfferNeededByChange({ ...base, role: 'viewer', canApproveOrders: true })).toBe(false);
+  });
+
   it('nobody else, a closed order, or Orders off', () => {
     expect(canOfferNeededByChange({ ...base, canApproveOrders: false })).toBe(false);
     expect(canOfferNeededByChange({ ...base, role: null, canApproveOrders: false })).toBe(false);
