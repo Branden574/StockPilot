@@ -277,6 +277,11 @@ describe('accessibility and Dynamic Type', () => {
     expect(catalog).toMatch(/<StorefrontState[\s\S]*?outcome=\{outcome\}[\s\S]*?\/>/);
   });
 
+  it('what a screen said is dismissed when the person leaves it, so it never comes back on reopen (F4)', () => {
+    expect(flat(checkout)).toContain('useFocusEffect( React.useCallback(() => { void session.openCheckout(); return () => session.dismissOutcome(); }, [session]), );');
+    expect(flat(catalog)).toContain('useFocusEffect( React.useCallback(() => { void session.focus(); return () => session.dismissOutcome(); }, [session]), );');
+  });
+
   it('every touchable in the storefront is a named button, radio or link, in no other touchable', () => {
     for (const file of STOREFRONT_FILES) {
       const src = readFileSync(file, 'utf8');

@@ -408,11 +408,17 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       now: () => new Date(deps.now()),
     });
     let lastPhase = next.getSnapshot().state.phase;
+    let lastLocked = orderSubmissionLocked(next.getSnapshot().state);
     engineUnsub = next.subscribe(() => {
       const snap = next.getSnapshot();
       const phase = snap.state.phase;
       if (phase !== lastPhase) {
         lastPhase = phase;
+        // The lock's words go with the lock (the Ship from, add and change
+        // refusals): the outcome sentence says what happened instead.
+        const nowLocked = orderSubmissionLocked(snap.state);
+        if (lastLocked && !nowLocked) refusal = null;
+        lastLocked = nowLocked;
         if (snap.state.phase === 'placed') {
           placed = {
             order: snap.state.order,
@@ -721,8 +727,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       const ids = new Set(next.lines.map((l) => l.itemId));
       refusedItems = new Set([...refusedItems].filter((id) => ids.has(id)));
       restoredNotOrderable = new Set([...restoredNotOrderable].filter((id) => ids.has(id)));
-      const s = engine?.getSnapshot().state;
-      if (s && (s.phase === 'refused' || s.phase === 'withdrawn')) engine?.dismiss();
+      // A change to the cart is the person moving on: a refusal, the withdrawn
+      // notice and a device error are done with.
+      const e = engine?.getSnapshot();
+      if (e && (e.state.phase === 'refused' || e.state.phase === 'withdrawn' || e.deviceError !== null)) engine?.dismiss();
       saveCart();
       publish();
       return null;

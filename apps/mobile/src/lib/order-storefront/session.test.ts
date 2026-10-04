@@ -667,3 +667,68 @@ describe('a final outcome reached away from checkout is said where it lands (des
     expect(storefrontOutcome(snap(), ctx)?.text).toBe(ORDER_WITHDRAWN_COPY);
   });
 });
+
+describe('lock words go with the lock; outcome text goes once read (desk check F4)', () => {
+  const lostAnswer = async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    await session.submit(false);
+    expect(snap().locked).toBe(true);
+  };
+
+  it('after Don’t send it, the Ship from sentence is gone (the desk check’s repro)', async () => {
+    await lostAnswer();
+    expect(await session.selectWarehouse(WH2)).toBe(STOREFRONT_SHIP_FROM_LOCKED_COPY);
+    await session.dontSend();
+    expect(snap().locked).toBe(false);
+    expect(snap().refusal).toBeNull();
+    expect(storefrontOutcome(snap(), { itemName: () => null, warehouseName: null })?.text).toBe(ORDER_WITHDRAWN_COPY);
+  });
+
+  it('after a status read finds it placed, the add-while-locked sentence is gone', async () => {
+    await lostAnswer();
+    expect(session.dispatch({ type: 'add', itemId: A })).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'placed', order: SUMMARY } });
+    await session.focus();
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('placed'));
+    expect(snap().refusal).toBeNull();
+  });
+
+  it('after a status read finds it refused, the cart-locked sentence is gone', async () => {
+    await lostAnswer();
+    expect(session.dispatch({ type: 'clear' })).toBe(STOREFRONT_CART_LOCKED_COPY);
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'refused', refusal: { reason: 'permission', settled: true } } });
+    await session.focus();
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('refused'));
+    expect(snap().refusal).toBeNull();
+  });
+
+  it('a device error goes with the next change to the cart', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    const setItem = store.setItem;
+    store.setItem = async (k, v) => {
+      if (k === draftKey) throw new Error('disk full');
+      return setItem(k, v);
+    };
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    expect(snap().submission.deviceError).not.toBeNull();
+    store.setItem = setItem;
+    session.dispatch({ type: 'inc', itemId: A });
+    expect(snap().submission.deviceError).toBeNull();
+    expect(storefrontOutcome(snap(), { itemName: () => null, warehouseName: null })).toBeNull();
+  });
+
+  it('read: dismissing clears a refused or withdrawn outcome and a refusal, never a placed order or a lock', async () => {
+    await lostAnswer();
+    expect(await session.selectWarehouse(WH2)).toBe(STOREFRONT_SHIP_FROM_LOCKED_COPY);
+    session.dismissOutcome();
+    expect(snap().refusal).toBeNull();
+    expect(snap().locked).toBe(true);
+    await session.dontSend();
+    session.dismissOutcome();
+    expect(storefrontOutcome(snap(), { itemName: () => null, warehouseName: null })).toBeNull();
+  });
+});

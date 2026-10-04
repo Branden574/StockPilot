@@ -128,7 +128,10 @@ export function createSubmitEngine(deps: SubmitEngineDeps): SubmitEngine {
 
   const settleWith = async (event: OrderSubmissionEvent) => {
     const next = orderSubmissionReducer(state, event);
-    if (next !== state) await commit(next, false);
+    if (next === state) return;
+    await commit(next, false);
+    // A key settled: a resend that could not be saved is no longer the news.
+    if (!orderSubmissionLocked(state)) deviceError = null;
   };
 
   const call = async (run: () => Promise<OrderCallResult>): Promise<OrderCallResult> => {

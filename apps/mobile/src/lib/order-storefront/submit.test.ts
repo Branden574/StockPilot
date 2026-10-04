@@ -322,6 +322,30 @@ describe('Check and finish (a resend of the same key and body)', () => {
   });
 });
 
+describe('a device error ends with the lock (desk check F4)', () => {
+  it('a resend whose write-ahead failed, then settled by a status read: the device sentence goes', async () => {
+    const e = await unconfirmed();
+    persistFails = true;
+    await e.checkAndFinish();
+    expect(e.getSnapshot().deviceError).toBe(ORDER_DEVICE_SAVE_FAILED_COPY);
+    persistFails = false;
+    replies = [{ status: 200, body: { organizationId: ORG, outcome: 'withdrawn' } }];
+    await e.readStatus();
+    expect(phase(e)).toBe('withdrawn');
+    expect(e.getSnapshot().deviceError).toBeNull();
+  });
+
+  it('a status read that keeps it unconfirmed keeps the sentence', async () => {
+    const e = await unconfirmed();
+    persistFails = true;
+    await e.checkAndFinish();
+    persistFails = false;
+    replies = [{ status: 200, body: { organizationId: ORG, outcome: 'none' } }];
+    await e.readStatus();
+    expect(e.getSnapshot().deviceError).toBe(ORDER_DEVICE_SAVE_FAILED_COPY);
+  });
+});
+
 describe('"Don\'t send it" (the withdraw: its answer is final)', () => {
   it('withdrawn: unlocked; the call names the placer', async () => {
     const e = await unconfirmed();

@@ -94,6 +94,9 @@ export default function Checkout() {
   useFocusEffect(
     React.useCallback(() => {
       void session.openCheckout();
+      // Leaving checkout: what it said (a refusal, the withdrawn notice, a
+      // refused change) has been read, so it is not shown again on return.
+      return () => session.dismissOutcome();
     }, [session]),
   );
 

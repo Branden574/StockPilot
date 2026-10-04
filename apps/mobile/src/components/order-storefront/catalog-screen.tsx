@@ -149,6 +149,9 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   useFocusEffect(
     React.useCallback(() => {
       void session.focus();
+      // Leaving this screen: what it said has been read (a placed order and
+      // the lock itself are never dismissed here).
+      return () => session.dismissOutcome();
     }, [session]),
   );
 
