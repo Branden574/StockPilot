@@ -46,7 +46,9 @@
 --     null driver (driver_not_member); the wrong status
 --     (not_staged_for_delivery); a foreign or missing order (P0002); anon (no
 --     EXECUTE); the module off; the last of two kept calls wins; and the
---     revoked manager cannot make themself the driver by either road (E9).
+--     revoked manager cannot make themself the driver by either road (E9);
+--     the driver counts as a member as is_org_member counts one: a disabled
+--     member and an expired impersonation are refused (E10).
 -- F.  mark_order_in_transit: an approver who is not the driver, the owner,
 --     the granted staff member and the granted staff driver are answered; a
 --     staff driver without orders:approve and the revoked manager (driver or
@@ -78,6 +80,8 @@
 --       and revise) are in sec-orders/mutate-0390.py with their targets.
 --   M16 assign_order_delivery without the orders:approve gate              -> E2 (mgrNo, stfAD), E9
 --   M17 a header change in one body (order_readiness_facts VOLATILE)       -> R11, P3
+--   M18 assign_order_delivery's driver check without is_org_member's
+--       disabled and impersonation clauses (accepted only)                -> E10
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt (always undone) or pg_temp.call_as (kept), which switch role
@@ -87,7 +91,7 @@
 
 begin;
 
-select plan(54);
+select plan(55);
 
 \set orgA    '\'03900000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03900000-0000-0000-0000-00000000000b\''
@@ -602,6 +606,20 @@ select is(
               :mgrNo, :mgrNo, :oStg)),
   '42501:orders_approve:forbidden / ok:0',
   'E9: the manager whose orders:approve is revoked cannot make themself the driver (and then hand the order over as the driver): the function refuses (orders_approve) and a raw update matches no row (the update policy)');
+-- E10 (slice D review, finding 4): the driver counts as a member exactly as
+-- is_org_member counts the caller (0310): accepted, no expired impersonation,
+-- not disabled. Each prep runs as the superuser inside the undone attempt.
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select public.assign_order_delivery(%L, %L)', :oStg, :stf),
+                  format('update public.user_profiles set disabled_at = now() where id = %L', :stf)) || ' / '
+  || pg_temp.attempt('authenticated', :mgr, format('select public.assign_order_delivery(%L, %L)', :oStg, :stf),
+                  format($q$update public.organization_members set impersonation_expires_at = now() - interval '1 minute'
+                             where organization_id = %L and user_id = %L$q$, :orgA, :stf)) || ' / '
+  || pg_temp.attempt('authenticated', :mgr, format('select public.assign_order_delivery(%L, %L)', :oStg, :stf),
+                  format($q$update public.organization_members set impersonation_expires_at = now() + interval '1 hour'
+                             where organization_id = %L and user_id = %L$q$, :orgA, :stf)),
+  'P0001:driver_not_member:driver_not_member / P0001:driver_not_member:driver_not_member / ok:1',
+  'E10: a disabled member and a member whose impersonation has expired are not drivers (driver_not_member); a live impersonation membership is, as is_org_member counts it');
 
 -- ══ F. mark_order_in_transit ══════════════════════════════════════════════
 select is(

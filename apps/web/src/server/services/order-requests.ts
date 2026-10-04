@@ -4160,8 +4160,11 @@ export class OrderRequestsService {
     // since 0390 the order update policy admits orders:approve holders only,
     // so the delivery stamps are no longer written through the user client.
     // The function re-checks every gate above (both permissions, write
-    // access, staged_for_delivery under the order's row lock, an accepted
-    // member as the driver) and stamps assigned_delivery_by itself.
+    // access, staged_for_delivery under the order's row lock) and stamps
+    // assigned_delivery_by itself. Its driver rule is stricter than the read
+    // above: a member as is_org_member counts one (accepted, no expired
+    // impersonation, not disabled); a driver it refuses comes back as
+    // driver_not_member, worded as the read's own refusal.
     const { data: updated, error } = await this.ctx.supabase.rpc('assign_order_delivery', {
       p_id: id,
       p_driver: deliveryUserId,

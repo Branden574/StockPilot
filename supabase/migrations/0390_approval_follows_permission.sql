@@ -175,14 +175,22 @@ begin
       using errcode = 'P0001', hint = 'not_staged_for_delivery', detail = v_row.status;
   end if;
 
-  -- The driver: an accepted member of the order's organization (the rule
-  -- OrderRequestsService.assignDelivery checks before it calls this).
+  -- The driver: a member of the order's organization as is_org_member (0310)
+  -- counts the caller: accepted, no expired impersonation, not disabled. The
+  -- assigned driver may hand the order over (confirm_physical_signature, the
+  -- sign route), so a disabled account or a lapsed impersonation never
+  -- becomes one. OrderRequestsService.assignDelivery checks acceptance before
+  -- it calls this; this check is the full rule.
   if p_driver is null or not exists (
        select 1
          from public.organization_members m
         where m.organization_id = v_org
           and m.user_id = p_driver
-          and m.accepted_at is not null) then
+          and m.accepted_at is not null
+          and (m.impersonation_expires_at is null or m.impersonation_expires_at > now())
+          and not exists (
+                select 1 from public.user_profiles up
+                 where up.id = m.user_id and up.disabled_at is not null)) then
     raise exception 'driver_not_member' using errcode = 'P0001', hint = 'driver_not_member';
   end if;
 
@@ -289,8 +297,9 @@ comment on function public.assign_order_delivery(uuid, uuid) is
   'orders_assign_delivery), orders:approve (42501, hint orders_approve: what '
   'the update policy asked before 0390), write access to the order''s warehouse (42501, hint '
   'warehouse_write), status staged_for_delivery (P0001 delivery_not_assignable, '
-  'hint not_staged_for_delivery, detail = the status), and a driver who is an '
-  'accepted member of the order''s org (P0001 driver_not_member). Locks the '
+  'hint not_staged_for_delivery, detail = the status), and a driver who is a '
+  'member of the order''s org as is_org_member counts one (accepted, no expired '
+  'impersonation, not disabled; P0001 driver_not_member). Locks the '
   'order row (FOR NO KEY UPDATE); two calls serialize and the last one wins. '
   'Never raises 40001/40P01. SECURITY DEFINER, lock_timeout 5s, EXECUTE to '
   'authenticated only.';
