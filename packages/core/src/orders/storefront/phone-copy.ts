@@ -110,6 +110,12 @@ export const CHECKOUT_NAME_LABEL_COPY = 'Name';
 export const CHECKOUT_EMAIL_LABEL_COPY = 'Email';
 export const CHECKOUT_USE_PERSON_COPY = 'Order for them';
 export const CHECKOUT_NEEDED_BY_CLEAR_COPY = 'Clear';
+export const CHECKOUT_NEEDED_BY_ZONE_UNREADABLE_COPY =
+  "Your organization's time zone couldn't be read, so a needed-by date can't be chosen here. You can still place the order.";
+/** The organization's zone is one this phone's engine does not know. */
+export function checkoutNeededByZoneUnknownCopy(zone: string): string {
+  return `This phone can't show times in ${zone}, so a needed-by date can't be chosen here. You can still place the order.`;
+}
 /** Manager notes' counter, shown from 1,800 characters: "1,850 / 2,000". */
 export function checkoutNotesCounterCopy(length: number, max: number): string {
   return `${groupThousands(length)} / ${groupThousands(max)}`;

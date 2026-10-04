@@ -35,6 +35,9 @@ describe('the templated sentences', () => {
     expect(phone.signOutUnconfirmedOrdersCopy(2)).toBe('2 order requests were sent but not confirmed.');
     expect(phone.signInHeldPlacedCopy('SO-000123')).toBe('Your order request SO-000123 was placed.');
     expect(phone.signInHeldPlacedCopy(null)).toBe('Your order request was placed.');
+    expect(phone.checkoutNeededByZoneUnknownCopy('Asia/Kolkata')).toBe(
+      "This phone can't show times in Asia/Kolkata, so a needed-by date can't be chosen here. You can still place the order.",
+    );
   });
 
   it('the stock notice names each line once, in the plan’s words', () => {
