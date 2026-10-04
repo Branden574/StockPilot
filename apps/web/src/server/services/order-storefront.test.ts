@@ -34,7 +34,12 @@ const {
 vi.mock('server-only', () => ({}));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
   CATALOG_ROW_CEILING: 10_000,
-  resolveCatalogScopeKey: resolveScopeKeyMock,
+  // Through a plain function that hands the service a promise of its own: a
+  // vi.fn tracks its settled results by attaching handlers to the promise it
+  // returns, which would hide an unhandled rejection from the stray-rejection
+  // test below.
+  resolveCatalogScopeKey: (...args: unknown[]) =>
+    (resolveScopeKeyMock(...args) as Promise<string>).then((key) => key),
   loadCatalogItemsCached: catalogCachedMock,
   loadChartersForWarehouse: chartersMock,
 }));
