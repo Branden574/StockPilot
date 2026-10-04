@@ -3,6 +3,7 @@ import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Body, Display } from '@/components/ui/text';
+import type { StorefrontOutcome } from '@/lib/order-storefront/outcome';
 import type { SetupState } from '@/lib/order-storefront/session';
 import { STOREFRONT_GUTTER } from '@/lib/order-storefront/layout';
 import { ACCENT } from '@/lib/theme';
@@ -14,7 +15,9 @@ import { useTheme } from '@/lib/use-theme';
  * right now. Use the web." / "...isn't available right now..."), a refusal
  * (signed out, no permission, the module off) or a read that failed (pull
  * down to read it again). Core's words; nothing to submit is offered, but
- * a send that is not settled still gets its unconfirmed panel.
+ * a send that is not settled still gets its unconfirmed panel, and how it
+ * ended is said here (lib/order-storefront/outcome.ts; the catalog screen
+ * announces it).
  */
 export function StorefrontState({
   topBar,
@@ -23,6 +26,7 @@ export function StorefrontState({
   refreshing,
   onRefresh,
   panel,
+  outcome,
 }: {
   topBar: React.ReactNode;
   title: string;
@@ -32,6 +36,8 @@ export function StorefrontState({
   /** A send not settled still settles with no storefront (the unconfirmed
    *  panel: the kill switch keeps create and settle up). */
   panel?: React.ReactNode;
+  /** How that send ended (withdrawn, refused, the device could not save). */
+  outcome?: StorefrontOutcome | null;
 }) {
   const { c } = useTheme();
   return (
@@ -47,6 +53,11 @@ export function StorefrontState({
           {title}
         </Display>
         {panel ?? null}
+        {outcome ? (
+          <Body size={14} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+            {outcome.text}
+          </Body>
+        ) : null}
         {setup.status === 'loading' ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 24 }} />
         ) : (

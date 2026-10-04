@@ -261,9 +261,20 @@ describe('accessibility and Dynamic Type', () => {
     const panel = codeOnly(read(PANEL));
     expect(panel).toMatch(/<Body size=\{13\.5\} color=\{c\.ink\} accessibilityRole="alert">\s*\{message\}/);
     expect(panel).toContain('AccessibilityInfo.announceForAccessibility(`${ORDER_UNCONFIRMED_TITLE_COPY}. ${message}`);');
-    expect(checkout).toMatch(/accessibilityRole="alert">\s*\{refusalText\}/);
-    expect(checkout).toContain('if (refusalText) AccessibilityInfo.announceForAccessibility(refusalText);');
-    expect(catalog).toContain('if (refusal) AccessibilityInfo.announceForAccessibility(refusal);');
+  });
+
+  it('how a send ended is said on checkout, home and browse, and the turned-off or refused screen, by the tested helper, and announced where shown (F3)', () => {
+    const state = codeOnly(read(`${COMPONENTS}/storefront-state.tsx`));
+    expect(checkout).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName, warehouseName: warehouse?.name ?? null }) : null;');
+    expect(catalog).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName: outcomeItemName, warehouseName: outcomeWarehouse }) : null;');
+    for (const src of [checkout, catalog, state]) {
+      expect(src).toMatch(/\{outcome \? \(\s*<Body size=\{1[34](\.5)?\} color=\{outcome\.tone === 'calm' \? c\.ink : ACCENT\.crit\} accessibilityRole="alert">\s*\{outcome\.text\}/);
+    }
+    for (const src of [checkout, catalog]) {
+      expect(src).toContain('if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);');
+      expect(src).not.toMatch(/snap\.refusal \?|refusalText/);
+    }
+    expect(catalog).toMatch(/<StorefrontState[\s\S]*?outcome=\{outcome\}[\s\S]*?\/>/);
   });
 
   it('every touchable in the storefront is a named button, radio or link, in no other touchable', () => {

@@ -25,7 +25,6 @@ import {
   CHECKOUT_DELIVERY_COPY,
   CHECKOUT_PICKUP_COPY,
   ORDER_NOTES_MAX,
-  ORDER_WITHDRAWN_COPY,
   REVIEW_SUBMIT_COPY,
   REVIEW_SUBTITLE_COPY,
   REVIEW_TITLE_COPY,
@@ -38,7 +37,6 @@ import {
   STOREFRONT_SHIP_FROM_COPY,
   checkoutNotesCounterCopy,
   neededByZoneNote,
-  orderRefusalCopy,
   storefrontPickupHintCopy,
 } from '@stockpilot/core';
 
@@ -57,6 +55,7 @@ import {
   storefrontNeededByZone,
 } from '@/lib/order-storefront/checkout';
 import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -107,20 +106,17 @@ export default function Checkout() {
     router.replace('/order/new/placed' as Href);
   }, [placedId, focused, router, session]);
 
-  // A final refusal or the withdrawn notice is announced once.
-  const outcome = snap?.submission.state;
+  // How a send ended (a final refusal, withdrawn, the device could not save
+  // it) or a change refused, said in place and announced on this screen
+  // while it is the one shown (lib/order-storefront/outcome.ts).
   const itemName = React.useMemo(() => itemNameFrom(snap?.itemMap ?? new Map()), [snap?.itemMap]);
   const ready = snap?.setup.status === 'ready' ? snap.setup.answer : null;
   const warehouse = ready?.warehouses.find((w) => w.id === snap?.warehouseId) ?? null;
-  const refusalText =
-    outcome?.phase === 'refused'
-      ? orderRefusalCopy(outcome.reason, outcome.details, { surface: 'phone', itemName, warehouseName: warehouse?.name ?? null })
-      : outcome?.phase === 'withdrawn'
-        ? ORDER_WITHDRAWN_COPY
-        : (snap?.submission.deviceError ?? snap?.refusal ?? null);
+  const outcome = snap ? storefrontOutcome(snap, { itemName, warehouseName: warehouse?.name ?? null }) : null;
+  const outcomeText = outcome?.text ?? null;
   React.useEffect(() => {
-    if (refusalText) AccessibilityInfo.announceForAccessibility(refusalText);
-  }, [refusalText]);
+    if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);
+  }, [outcomeText, focused]);
 
   const leave = () => {
     if (router.canGoBack()) router.back();
@@ -188,9 +184,9 @@ export default function Checkout() {
               onDontSend={() => void session.dontSend()}
               onSeeOrders={() => router.push('/orders' as Href)}
             />
-            {refusalText ? (
-              <Body size={14} color={outcome?.phase === 'withdrawn' ? c.ink : ACCENT.crit} accessibilityRole="alert">
-                {refusalText}
+            {outcome ? (
+              <Body size={14} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+                {outcome.text}
               </Body>
             ) : null}
             {snap.notice ? (

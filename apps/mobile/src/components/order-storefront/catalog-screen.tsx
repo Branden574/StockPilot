@@ -68,6 +68,7 @@ import {
 } from '@/lib/order-storefront/a11y';
 import { itemNameFrom } from '@/lib/order-storefront/checkout';
 import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import {
   EMPTY_FILTER,
@@ -159,11 +160,18 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
     if (placedId && focused) router.push('/order/new/placed' as Href);
   }, [placedId, focused, router]);
 
-  // What changed is announced (iOS gives a Text no live region).
-  const refusal = snap?.refusal ?? null;
+  // How a send ended, or a change refused, is said here too: a send can end
+  // away from checkout (Don't send it on this screen's panel, a status read
+  // on open or on focus, the turned-off screen's panel). Announced while this
+  // screen is the one shown (iOS gives a Text no live region).
+  const outcomeItemName = React.useMemo(() => itemNameFrom(snap?.itemMap ?? new Map()), [snap?.itemMap]);
+  const outcomeWarehouse =
+    snap?.setup.status === 'ready' ? (snap.setup.answer.warehouses.find((w) => w.id === snap.warehouseId)?.name ?? null) : null;
+  const outcome = snap ? storefrontOutcome(snap, { itemName: outcomeItemName, warehouseName: outcomeWarehouse }) : null;
+  const outcomeText = outcome?.text ?? null;
   React.useEffect(() => {
-    if (refusal) AccessibilityInfo.announceForAccessibility(refusal);
-  }, [refusal]);
+    if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);
+  }, [outcomeText, focused]);
 
   const say = React.useCallback((message: string) => AccessibilityInfo.announceForAccessibility(message), []);
 
@@ -380,6 +388,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         setup={snap && snap.setup.status !== 'ready' ? snap.setup : { status: 'loading' }}
         refreshing={refreshing}
         onRefresh={() => void refresh()}
+        outcome={outcome}
         panel={
           snap ? (
             <UnconfirmedPanel
@@ -426,9 +435,9 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         onDontSend={() => void session.dontSend()}
         onSeeOrders={() => router.push('/orders' as Href)}
       />
-      {snap.refusal ? (
-        <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
-          {snap.refusal}
+      {outcome ? (
+        <Body size={13.5} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+          {outcome.text}
         </Body>
       ) : null}
       {snap.notice ? (

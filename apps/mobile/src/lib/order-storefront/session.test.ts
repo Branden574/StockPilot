@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_WITHDRAWN_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
   ORDER_PHONE_TURNED_OFF_COPY,
   STOREFRONT_CART_LOCKED_COPY,
@@ -16,6 +17,7 @@ import {
 } from '@stockpilot/core';
 
 import { OrderAnswerForAnotherOrganization, type OrderStorefrontApi } from './api';
+import { storefrontOutcome } from './outcome';
 import { createStorefrontSession, type SessionStore, type StorefrontSession } from './session';
 import {
   orderCatalogKey,
@@ -623,5 +625,45 @@ describe('a restored cart for someone else (desk check F2, slice D: on behalf fo
     expect(session.submitBlockedBy(false)).toBeNull();
     await session.refresh();
     expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+});
+
+describe('a final outcome reached away from checkout is said where it lands (desk check F3)', () => {
+  const pendingA: PendingOrderSubmission = {
+    key: KEY,
+    state: 'possibly_sent',
+    sends: 1,
+    firstSentAt: '2026-10-04T11:00:00.000Z',
+    body: { idempotencyKey: KEY, placerUserId: USER, warehouseId: WH, fulfillmentType: 'pickup', deliveryCharterId: null, onBehalfOf: null, notes: null, neededByLocal: null, lines: [{ itemId: A, quantity: 4 }] },
+  };
+  const ctx = { itemName: () => 'Planner', warehouseName: 'DC4' };
+  const restoreLocked = () =>
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: pendingA }, new Date()));
+
+  it('Don’t send it from home: "It was not sent. Your cart is unlocked."', async () => {
+    restoreLocked();
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.busy).toBe(false));
+    await session.dontSend();
+    expect(storefrontOutcome(snap(), ctx)?.text).toBe(ORDER_WITHDRAWN_COPY);
+  });
+
+  it('a status read on open that settles refused says why', async () => {
+    restoreLocked();
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'refused', refusal: { reason: 'permission', settled: true } } });
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('refused'));
+    expect(storefrontOutcome(snap(), ctx)?.text).toBe("Your account can't place orders. Ask an admin.");
+  });
+
+  it('with the kill switch on, Don’t send it still says it was not sent', async () => {
+    api.storefront.mockResolvedValueOnce({ organizationId: ORG, enabled: false, message: ORDER_PHONE_TURNED_OFF_COPY, serverNow: 'x' });
+    restoreLocked();
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('unconfirmed'));
+    await vi.waitFor(() => expect(snap().submission.busy).toBe(false));
+    await session.dontSend();
+    expect(snap().setup.status).toBe('off');
+    expect(storefrontOutcome(snap(), ctx)?.text).toBe(ORDER_WITHDRAWN_COPY);
   });
 });
