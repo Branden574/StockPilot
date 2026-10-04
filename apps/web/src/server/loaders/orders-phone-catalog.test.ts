@@ -19,6 +19,7 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMoc
 import {
   loadPhoneThumbMapCached,
   PHONE_SIGN_PATHS_PER_CALL,
+  PHONE_THUMB_MAP_KEY,
   prewarmPhoneThumbMap,
 } from './orders-phone-catalog';
 
@@ -264,43 +265,46 @@ describe('orders-phone-catalog.ts source', () => {
     }
   });
 
-  it('the cached callback calls no other cached helper (a cache inside a cache)', () => {
+  /** The source text of each top-level declaration the cache depends on. */
+  function declarations(): Record<string, string> {
     const sf = ts.createSourceFile(FILE, src, ts.ScriptTarget.Latest, true);
-    let callback = '';
-    const visit = (n: ts.Node) => {
-      if (
-        ts.isVariableDeclaration(n) &&
-        ts.isIdentifier(n.name) &&
-        n.name.text === 'loadPhoneThumbMapCached' &&
-        n.initializer &&
-        ts.isCallExpression(n.initializer)
-      ) {
-        callback = n.initializer.arguments[0]!.getText(sf);
+    const out: Record<string, string> = {};
+    for (const st of sf.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name) out[st.name.text] = st.getText(sf);
+      if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) {
+          if (ts.isIdentifier(d.name)) out[d.name.text] = st.getText(sf);
+        }
       }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-    expect(callback).toContain('createSignedUrls');
-    expect(callback).not.toMatch(/Cached\(|unstable_cache\(|loadCatalog|loadCharters/);
+    }
+    return out;
+  }
+
+  it('the builder calls no other cached helper (a cache inside a cache)', () => {
+    const builder = declarations().buildPhoneThumbMap!;
+    expect(builder).toContain('createSignedUrls');
+    expect(builder).not.toMatch(/Cached\(|unstable_cache\(|loadCatalog|loadCharters/);
   });
 
-  it('the cached initializer is pinned: an edit to it is a deliberate key change in the same commit', () => {
-    const sf = ts.createSourceFile(FILE, src, ts.ScriptTarget.Latest, true);
-    let text = '';
-    const visit = (n: ts.Node) => {
-      if (
-        ts.isVariableDeclaration(n) &&
-        ts.isIdentifier(n.name) &&
-        n.name.text === 'loadPhoneThumbMapCached' &&
-        n.initializer
-      ) {
-        text = n.initializer.getText(sf);
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
+  it('the cache key is stated, so every chunk and every build shares one entry', () => {
+    // unstable_cache keys on cb.toString(); the callback states its own text.
+    expect(String(CACHE_CALL![0])).toBe(PHONE_THUMB_MAP_KEY);
+    expect(PHONE_THUMB_MAP_KEY).toBe('orders-phone-thumbmap-v1');
+  });
+
+  it('the builder and the key are pinned: an edit asks, in the same commit, whether to bump the key', () => {
+    // The key no longer moves with the compiled text, so a change to what the
+    // map answers must bump PHONE_THUMB_MAP_KEY by hand. Update the pin with
+    // the bump, or with a note in the commit that the answer is unchanged.
+    const d = declarations();
+    const text = [
+      d.buildPhoneThumbMap,
+      d.PHONE_THUMB_MAP_KEY,
+      d.buildPhoneThumbMapKeyed,
+      d.loadPhoneThumbMapCached,
+    ].join('\n');
     expect(createHash('sha256').update(text).digest('hex')).toBe(PHONE_THUMB_MAP_PIN);
   });
 });
 
-const PHONE_THUMB_MAP_PIN = 'd089d854441af6658e55afe04df6b58c7e9f65d65dbdc123ff03233138610a3f';
+const PHONE_THUMB_MAP_PIN = '55b42f273cf3a91716bbbca6356b959f9152ebc748a3e2e75eccdf7a8601a71b';

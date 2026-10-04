@@ -87,96 +87,131 @@ type ImageRow = {
  * THROWS (never caches) when the image rows cannot be read, when any sign call
  * fails, or when more than 10% of the signs fail.
  */
-export const loadPhoneThumbMapCached = unstable_cache(
-  async (organizationId: string, warehouseId: string): Promise<PhoneThumbMap> => {
-    const supabase = createAdminClient();
-    let rows: ImageRow[];
-    try {
-      rows = await fetchAllRows<ImageRow>(
-        (from, to) =>
-          supabase
-            .from('item_images')
-            .select(
-              'item_id, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
-            )
-            .eq('organization_id', organizationId)
-            .eq('item.warehouse_id', warehouseId)
-            .is('item.deleted_at', null)
-            .order('is_primary', { ascending: false })
-            .order('sort_order', { ascending: true })
-            .order('id', { ascending: true })
-            .range(from, to) as unknown as PromiseLike<{
-            data: ImageRow[] | null;
-            error: { message: string } | null;
-          }>,
-      );
-    } catch (err) {
-      const cause =
-        err instanceof ServiceError
-          ? (err.internalDetail ?? err.message)
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      throw new Error(`[orders-phone] photo map image rows read failed: ${cause}`);
-    }
+async function buildPhoneThumbMap(
+  organizationId: string,
+  warehouseId: string,
+): Promise<PhoneThumbMap> {
+  const supabase = createAdminClient();
+  let rows: ImageRow[];
+  try {
+    rows = await fetchAllRows<ImageRow>(
+      (from, to) =>
+        supabase
+          .from('item_images')
+          .select(
+            'item_id, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
+          )
+          .eq('organization_id', organizationId)
+          .eq('item.warehouse_id', warehouseId)
+          .is('item.deleted_at', null)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: ImageRow[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+  } catch (err) {
+    const cause =
+      err instanceof ServiceError
+        ? (err.internalDetail ?? err.message)
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    throw new Error(`[orders-phone] photo map image rows read failed: ${cause}`);
+  }
 
-    // First row per item wins (is_primary DESC, sort_order ASC, id ASC).
-    const pathByItem = new Map<string, string>();
-    const seen = new Set<string>();
-    for (const row of rows) {
-      if (seen.has(row.item_id)) continue;
-      seen.add(row.item_id);
-      const path = row.thumb_path ?? row.storage_path;
-      if (path) pathByItem.set(row.item_id, path);
-    }
+  // First row per item wins (is_primary DESC, sort_order ASC, id ASC).
+  const pathByItem = new Map<string, string>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.item_id)) continue;
+    seen.add(row.item_id);
+    const path = row.thumb_path ?? row.storage_path;
+    if (path) pathByItem.set(row.item_id, path);
+  }
 
-    const toSign = [...pathByItem.entries()].map(([itemId, path]) => ({ itemId, path }));
-    const signedAt = new Date();
-    const photos: Record<string, string> = {};
-    let failed = 0;
-    for (let i = 0; i < toSign.length; i += PHONE_SIGN_PATHS_PER_CALL) {
-      const chunk = toSign.slice(i, i + PHONE_SIGN_PATHS_PER_CALL);
-      const { data, error } = await supabase.storage
-        .from('item-images')
-        .createSignedUrls(
-          chunk.map((t) => t.path),
-          ORDER_PHOTO_URL_TTL_SECONDS,
-        );
-      // Any failed call fails the whole map: never a partly photo-less map
-      // cached for 4 h.
-      if (error) {
-        throw new Error(
-          `[orders-phone] photo sign failed (paths ${i + 1}-${i + chunk.length} of ${toSign.length}): ${error.message}`,
-        );
-      }
-      const urlByPath = new Map<string, string>();
-      for (const s of data ?? []) {
-        if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
-      }
-      for (const t of chunk) {
-        const url = urlByPath.get(t.path);
-        if (url) photos[t.itemId] = url;
-        else failed += 1;
-      }
-    }
-
-    if (toSign.length > 0 && failed / toSign.length > SIGN_FAILURE_THROW_RATIO) {
+  const toSign = [...pathByItem.entries()].map(([itemId, path]) => ({ itemId, path }));
+  const signedAt = new Date();
+  const photos: Record<string, string> = {};
+  let failed = 0;
+  for (let i = 0; i < toSign.length; i += PHONE_SIGN_PATHS_PER_CALL) {
+    const chunk = toSign.slice(i, i + PHONE_SIGN_PATHS_PER_CALL);
+    const { data, error } = await supabase.storage.from('item-images').createSignedUrls(
+      chunk.map((t) => t.path),
+      ORDER_PHOTO_URL_TTL_SECONDS,
+    );
+    // Any failed call fails the whole map: never a partly photo-less map
+    // cached for 4 h.
+    if (error) {
       throw new Error(
-        `[orders-phone] photo map sign failure ratio too high (${failed}/${toSign.length}), not caching`,
+        `[orders-phone] photo sign failed (paths ${i + 1}-${i + chunk.length} of ${toSign.length}): ${error.message}`,
       );
     }
+    const urlByPath = new Map<string, string>();
+    for (const s of data ?? []) {
+      if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
+    }
+    for (const t of chunk) {
+      const url = urlByPath.get(t.path);
+      if (url) photos[t.itemId] = url;
+      else failed += 1;
+    }
+  }
 
-    const map: PhoneThumbMap = { signedAt: signedAt.toISOString(), photos };
-    const chars = JSON.stringify(map).length;
-    if (chars > PHONE_THUMB_MAP_WARN_CHARS) {
-      console.warn(
-        `[orders-phone] photo map for warehouse ${warehouseId}: ${Object.keys(photos).length} entries, ${chars} chars serialized, past the 1.5 MB warning line; Next does not cache an entry over 2 MB, so past that every request rebuilds and re-signs it`,
-      );
-    }
-    return map;
+  if (toSign.length > 0 && failed / toSign.length > SIGN_FAILURE_THROW_RATIO) {
+    throw new Error(
+      `[orders-phone] photo map sign failure ratio too high (${failed}/${toSign.length}), not caching`,
+    );
+  }
+
+  const map: PhoneThumbMap = { signedAt: signedAt.toISOString(), photos };
+  const chars = JSON.stringify(map).length;
+  if (chars > PHONE_THUMB_MAP_WARN_CHARS) {
+    console.warn(
+      `[orders-phone] photo map for warehouse ${warehouseId}: ${Object.keys(photos).length} entries, ${chars} chars serialized, past the 1.5 MB warning line; Next does not cache an entry over 2 MB, so past that every request rebuilds and re-signs it`,
+    );
+  }
+  return map;
+}
+
+/**
+ * The version of the map's shape and rules. Bump it with ANY change to
+ * buildPhoneThumbMap's answer (its shape, which photo it picks, which items
+ * it covers): it is the whole cache key, so an old entry would otherwise be
+ * served in the new shape for up to 4 hours. The source pin in
+ * orders-phone-catalog.test.ts fails on every edit to the builder, so the
+ * question is asked in the commit that changes it.
+ */
+export const PHONE_THUMB_MAP_KEY = 'orders-phone-thumbmap-v1';
+
+/**
+ * ONE KEY IN EVERY CHUNK. unstable_cache keys an entry on cb.toString(), the
+ * callback's compiled text. Turbopack minifies each chunk on its own and
+ * copies a small module into every chunk that needs it, so the prewarm cron's
+ * copy of a callback and the phone routes' copy can compile to different text
+ * (measured on the 2026-10-04 build: the same callback minified as
+ * `let o,s=(0,a.createAdminClient)()` in the phone routes' chunk and
+ * `let n,s=(0,o.createAdminClient)()` in the cron's), and the cron would warm
+ * an entry the photo route never reads. (The web storefront's own loaders show
+ * the same split between the page and the route-handler layers.) So the
+ * callback states its own text: the key is PHONE_THUMB_MAP_KEY in every chunk
+ * and every build, and it moves only when that constant is bumped.
+ */
+const buildPhoneThumbMapKeyed = Object.defineProperty(
+  (organizationId: string, warehouseId: string) => buildPhoneThumbMap(organizationId, warehouseId),
+  'toString',
+  { value: () => PHONE_THUMB_MAP_KEY },
+);
+
+export const loadPhoneThumbMapCached = unstable_cache(
+  buildPhoneThumbMapKeyed,
+  [PHONE_THUMB_MAP_KEY],
+  {
+    revalidate: 4 * 60 * 60,
+    tags: ['orders-phone-thumbmap'],
   },
-  ['orders-phone-thumbmap-v1'],
-  { revalidate: 4 * 60 * 60, tags: ['orders-phone-thumbmap'] },
 );
 
 export interface PhoneThumbMapPrewarmResult {
