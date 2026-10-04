@@ -47,7 +47,11 @@
 --    writable (pins current behaviour); the order RPCs (mint, assignment, in
 --    transit) still work, and an assigned staff driver without
 --    orders:approve is refused in transit (O3 default); service_role is not
---    held.
+--    held. Account deletion (desk check F5): deleting a requester, an
+--    approver who stamped every edge, and a driver still succeeds through
+--    the restated guard (the FK actions run as the table owner, even when the
+--    deleting session is authenticated), nulls exactly their columns, and
+--    changes nothing else on the order.
 -- P. Posture: the guard's body, INVOKER, search_path, owner, no EXECUTE, its
 --    trigger, its errcodes (42501 only) and hints, comments; authenticated's
 --    UPDATE columns are exactly the ten; the frozen bodies keep their md5.
@@ -69,6 +73,7 @@
 --   M13 skip the revoke of the token columns                                -> G3, 0384 KO5, P2
 --   M14 the lock prelude takes ACCESS EXCLUSIVE                             -> R1
 --   M15 the shipments step without disabling its updated_at trigger        -> R2 (shipments_changed), D8
+--   M16 the guard keyed on the JWT role instead of current_user             -> G21 (the FK action carries the deleting session's JWT)
 --
 -- Roles: fixtures as the test superuser. Attempts run through pg_temp.attempt
 -- (always undone) or pg_temp.call_as (kept), the 0387 helpers. begin/rollback:
@@ -76,7 +81,7 @@
 
 begin;
 
-select plan(66);
+select plan(69);
 
 \set orgA   '\'03920000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03920000-0000-0000-0000-00000000000b\''
@@ -125,6 +130,11 @@ select plan(66);
 \set gSFD       '\'03920000-0000-0000-0000-000000000309\''
 \set gSFD2      '\'03920000-0000-0000-0000-000000000310\''
 \set gSignedDone '\'03920000-0000-0000-0000-000000000311\''
+\set gDelR      '\'03920000-0000-0000-0000-000000000312\''
+\set gDelA      '\'03920000-0000-0000-0000-000000000313\''
+\set delReq     '\'03920000-0000-0000-0000-0000000000f1\''
+\set delApr     '\'03920000-0000-0000-0000-0000000000f2\''
+\set delDrv     '\'03920000-0000-0000-0000-0000000000f3\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -789,6 +799,68 @@ select is(
   pg_temp.attempt('authenticated', :drv, format('select 1 from public.mark_order_in_transit(%L)', :gSFD)),
   '42501:orders_approve:forbidden',
   'G19: the order''s assigned staff driver without orders:approve is refused in transit (owner decision O3 default; plan item 14 asks for this case)');
+
+-- Account deletion through the restated guard (desk check F5). The six user
+-- columns the guard now holds (pick_slip_generated_by, staged_by,
+-- packing_slip_generated_by, assigned_delivery_user_id, assigned_delivery_by,
+-- in_transit_by) and approved_by are ON DELETE SET NULL; the FK action runs
+-- as the table owner, which the guard lets through.
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:delReq, '0392-delreq@test.local', '{}'::jsonb),
+  (:delApr, '0392-delapr@test.local', '{}'::jsonb),
+  (:delDrv, '0392-deldrv@test.local', '{}'::jsonb)
+  on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orgA, :delReq, 'staff',   now()),
+  (:orgA, :delApr, 'manager', now()),
+  (:orgA, :delDrv, 'staff',   now());
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, requester_email, fulfillment_type, delivery_charter_id,
+   approved_by, approved_at, pick_slip_generated_at, pick_slip_generated_by, packing_slip_generated_at, packing_slip_generated_by,
+   staged_at, staged_by, assigned_delivery_user_id, assigned_delivery_by, assigned_delivery_at, in_transit_at, in_transit_by,
+   signature_token, signature_token_expires_at, internal_notes, updated_at) values
+  (:gDelR, :orgA, :whA, 'staged_for_pickup', 'internal', :delReq, null, 'pickup', null,
+   :mgr, now() - interval '3 days', now() - interval '3 days', :mgr, now() - interval '2 days', :mgr,
+   now() - interval '2 days', :mgr, null, null, null, null, null,
+   pg_temp.sha('0392 delete requester'), now() + interval '9 days', 'requester leaves', now() - interval '2 days'),
+  (:gDelA, :orgA, :whA, 'in_transit', 'internal', :req, null, 'delivery', :chA,
+   :delApr, now() - interval '3 days', now() - interval '3 days', :delApr, now() - interval '2 days', :delApr,
+   now() - interval '2 days', :delApr, :delDrv, :delApr, now() - interval '2 days', now() - interval '1 day', :delApr,
+   pg_temp.sha('0392 delete approver'), now() + interval '9 days', 'approver and driver leave', now() - interval '2 days');
+create temp table del_before as
+select o.id, to_jsonb(o) as whole from public.order_requests o where o.id in (:gDelR, :gDelA);
+
+select is(
+  pg_temp.call_as('postgres', null, format('delete from auth.users where id = %L returning id::text', :delReq),
+    format($q$select o.status || '/' || coalesce(o.requester_user_id::text, 'null') || '/' || coalesce(o.requester_email, 'null') || '/'
+                     || coalesce((o.requester_deleted_at = now())::text, 'null') || '/'
+                     || ((to_jsonb(o) - array['requester_user_id', 'requester_deleted_at', 'updated_at'])
+                         = (b.whole - array['requester_user_id', 'requester_deleted_at', 'updated_at']))::text
+                from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :gDelR)),
+  :delReq || '|staged_for_pickup/null/null/true/true',
+  'G20: deleting a requester''s account (delete from auth.users, as the 0388 suite does) succeeds through the restated guard: the staged order keeps its status, stamps and token, loses only the requester, and is marked (0388)');
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('delete from public.user_profiles where id = %L', :delApr),
+    format('create policy zz_0392_probe on public.user_profiles for delete to authenticated using (id = %L)', :delApr),
+    format($q$select concat_ws('/', o.status, coalesce(o.approved_by::text, 'null'), coalesce(o.pick_slip_generated_by::text, 'null'),
+                               coalesce(o.packing_slip_generated_by::text, 'null'), coalesce(o.staged_by::text, 'null'),
+                               coalesce(o.assigned_delivery_by::text, 'null'), coalesce(o.in_transit_by::text, 'null'),
+                               (o.assigned_delivery_user_id = %L)::text,
+                               ((to_jsonb(o) - array['approved_by', 'pick_slip_generated_by', 'packing_slip_generated_by', 'staged_by',
+                                                     'assigned_delivery_by', 'in_transit_by', 'updated_at'])
+                                = (b.whole - array['approved_by', 'pick_slip_generated_by', 'packing_slip_generated_by', 'staged_by',
+                                                   'assigned_delivery_by', 'in_transit_by', 'updated_at']))::text)
+                from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :delDrv, :gDelA)),
+  'ok:1:in_transit/null/null/null/null/null/null/true/true',
+  'G21: deleting the profile of an approver who approved, made the pick slip, the packing slip and the staging, assigned the driver and marked in transit, with the DELETING session authenticated (a probe policy lets it delete), still succeeds: approved_by and the five stamp columns are nulled by the FK action (run as the table owner, not the caller) and nothing else on the order changes');
+select is(
+  pg_temp.call_as('postgres', null, format('delete from auth.users where id = %L returning id::text', :delDrv),
+    format($q$select o.status || '/' || coalesce(o.assigned_delivery_user_id::text, 'null') || '/' || (o.assigned_delivery_by = %L)::text || '/'
+                     || ((to_jsonb(o) - array['assigned_delivery_user_id', 'updated_at'])
+                         = (b.whole - array['assigned_delivery_user_id', 'updated_at']))::text
+                from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :delApr, :gDelA)),
+  :delDrv || '|in_transit/null/true/true',
+  'G22: deleting the assigned driver''s account succeeds through the restated guard: the in-transit order loses only its driver, everything else (the assigner, the stamps, the token) unchanged');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(
