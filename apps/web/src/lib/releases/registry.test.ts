@@ -2043,15 +2043,32 @@ describe('approval follows the permission is published', () => {
     );
     expect(removed!.whatChanged).toContain('assign a picker or a driver');
     expect(removed!.whatChanged).toContain("order on someone else's behalf");
+    // Before 0390 (9147755d) the phone showed its section to a manager by role
+    // and the service refused only some of it: Assign delivery asked
+    // orders:assign_delivery alone and Mark in transit the driver or a manager
+    // by role, and the update policy admitted a manager by role (claims
+    // review). So the why never says the phone refused them all.
     expect(removed!.whyItMatters).toBe(
-      "The mobile app kept showing these buttons to a manager without the permission and then refused them. The web app still let them assign a picker and order on someone else's behalf, and the rules behind both apps let any manager through.",
+      "Before this change, the mobile app showed Approve, Deny and the next steps to every manager by role. A manager without the permission could still assign a driver or mark a delivery in transit there, and assign a picker or order on someone else's behalf in the web app, because the server let a manager through by role.",
     );
+    expect(removed!.whyItMatters).not.toContain('refused');
+    // Before 0390 the phone already offered a granted staff member Hold
+    // available stock, the needed-by Change and claim and pick, and showed
+    // only the approval section by role (claims review): never "only from
+    // the web app".
+    expect(granted!.whyItMatters).toContain(
+      "The mobile app already let a staff member who was given the permission hold available stock, change an order's needed-by date, and claim and pick orders.",
+    );
+    expect(granted!.whyItMatters).toContain(
+      'But it showed Approve, Deny and the next steps only to owners, admins and managers.',
+    );
+    expect(granted!.whyItMatters).not.toContain('only from the web app');
     // Owner decision O3, default: the in-transit rule, in the service's words.
     expect(driver!.whatChanged).toContain(
       'the order screen in the mobile app, after the latest update, shows Collect signature and Physical signature once the delivery is on its way',
     );
     expect(driver!.whatChanged).toContain('Marking a delivery in transit needs the');
-    expect(driver!.whatChanged).toContain('no longer sees Mark in transit in either app');
+    expect(driver!.whatChanged).toContain('is not offered Mark in transit in either app');
     // The phone part is an over-the-air update.
     expect(granted!.whatToDo).toBe(
       'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',

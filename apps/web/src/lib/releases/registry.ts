@@ -35,10 +35,10 @@ export const RELEASES: Release[] = [
     // verified, the web deploy is READY and the production smoke test that
     // writes nothing has passed (phone-orders plan 10.1 step 8); the
     // follow-up that publishes it (plan PO-5) sets the real publishedAt and
-    // re-reads these words against what shipped. Sits below the slice D draft
-    // (which must stay dated after every release) and above the slice B
-    // draft, dated between them; the publishing follow-up keeps the order
-    // newest first.
+    // re-reads these words against what shipped. A draft sits above the
+    // newest published release: slice D's release and slice B's two are
+    // published below it, and it is dated after them; the publishing
+    // follow-up keeps the order newest first.
     //
     // What a person can see, on the web only (the phone storefront is PO-4,
     // with its own entry): the New order page's lost-answer panel (Check and
@@ -147,6 +147,19 @@ export const RELEASES: Release[] = [
     // manager assign a picker (core availableOrderActions offered
     // reassign_picker by role) and order on someone's behalf.
     //
+    // The two whys, as the code before 0390 (9147755d) did it. The phone's
+    // MANAGER ACTIONS section showed by role (hasPipelineActions: isManager),
+    // while it already offered a granted staff member Hold available stock
+    // (shouldOfferHoldStock, canApproveOrders), the needed-by Change
+    // (canOfferNeededByChange) and claim and pick (viewerCanPick: items:update,
+    // a staff default). A manager whose orders:approve was removed was refused
+    // Approve, Deny, the slips, staging, reopen, resume and close by the
+    // service (assertPermission orders:approve), but not Assign delivery
+    // (assignDelivery asked only orders:assign_delivery, a manager default, and
+    // the update policy admitted a manager by role) or Mark in transit
+    // (markInTransit asked the driver or a manager by role), so the removed
+    // entry's why names those two and never says the phone refused them all.
+    //
     // Who is told: members of organizations with Orders on. The first entry
     // goes to staff who hold orders:approve, the people it describes (owners,
     // admins and managers hold it by default and gain nothing; it links to
@@ -189,7 +202,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'If an admin gave you the "Approve / fulfill orders" permission, the order screen in the mobile app, after the latest update, shows Approve and Deny (and Approve partial when stock is short), the steps that move an order toward pickup or delivery, Reopen picking, and Resume, Close and Cancel for a backordered order. Assign delivery also needs the "Assign deliveries" permission. In the web app you can now also order on someone else\'s behalf, assign who picks an order, reopen picking, and cancel an order you placed yourself after it was approved.',
         whyItMatters:
-          'The mobile app showed these only to owners, admins and managers, so a staff member who was given the permission could act on an order only from the web app, and some steps were missing there too.',
+          "The mobile app already let a staff member who was given the permission hold available stock, change an order's needed-by date, and claim and pick orders. But it showed Approve, Deny and the next steps only to owners, admins and managers. The web app also left out some of the steps above.",
         howItAffectsYou:
           'You can approve orders and move them along from either app, for orders in the warehouses you have access to. Collect signature and Print warehouse slip now follow the same rule, unless you are the order\'s driver. You can cancel other people\'s orders from the web app; the mobile app offers Cancel on a backordered order. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
         whatToDo:
@@ -205,7 +218,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'A manager whose "Approve / fulfill orders" permission was removed can no longer approve or deny orders, order on someone else\'s behalf, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order toward pickup or delivery, in either app or on the server. Neither the web app nor the mobile app, after the latest update, offers them Collect signature or Physical signature unless they are the order\'s driver. Finishing or releasing picking that someone else claimed still follows the manager role for now.',
         whyItMatters:
-          "The mobile app kept showing these buttons to a manager without the permission and then refused them. The web app still let them assign a picker and order on someone else's behalf, and the rules behind both apps let any manager through.",
+          "Before this change, the mobile app showed Approve, Deny and the next steps to every manager by role. A manager without the permission could still assign a driver or mark a delivery in transit there, and assign a picker or order on someone else's behalf in the web app, because the server let a manager through by role.",
         howItAffectsYou:
           'Nothing changes for a manager who keeps the permission, which managers have by default. A manager without it can still cancel an order they placed while it waits for approval.',
         whatToDo: 'No action needed.',
@@ -217,7 +230,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Assigned drivers see their delivery steps in the mobile app',
         whatChanged:
-          'If you are the assigned driver of a delivery, the order screen in the mobile app, after the latest update, shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, so a driver without it no longer sees Mark in transit in either app.',
+          'If you are the assigned driver of a delivery, the order screen in the mobile app, after the latest update, shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, so a driver without it is not offered Mark in transit in either app.',
         whyItMatters:
           'The mobile app showed these steps only to owners, admins and managers. A driver without the approve permission could press Mark in transit in the web app and was told the order status had changed.',
         howItAffectsYou:
