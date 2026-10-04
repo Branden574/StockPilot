@@ -22,7 +22,8 @@ vi.mock('@/lib/export-rate-limit', () => ({
 }));
 
 // The service-only side table (migration 0389), read with the admin client
-// after the gate. Empty by default: the image is on the order row until slice C.
+// after the gate. It holds the image by default: since 0393 every image lives
+// there and the order row's column is always null.
 const adminHolder = { client: null as unknown, throws: false };
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
@@ -40,6 +41,7 @@ function sideImage(image: string | null, error = false) {
 
 const ORDER_ID = 'abcdef12-3456-7890-abcd-ef1234567890';
 const SIGNATURE = 'data:image/png;base64,iVBORw0KGgoAAAANS';
+const COLUMN_LEFTOVER = 'data:image/png;base64,Y29sdW1u';
 
 function buildCtx(opts: {
   role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
@@ -51,7 +53,8 @@ function buildCtx(opts: {
   const stub = makeSupabaseStub({
     'order_requests.select': {
       data: {
-        signature_data_url: opts.signature ?? SIGNATURE,
+        // A value left in the order column must never be served (0393).
+        signature_data_url: opts.signature ?? COLUMN_LEFTOVER,
         assigned_delivery_user_id: opts.assignedDriverId ?? null,
       },
       error: null,
@@ -81,7 +84,7 @@ describe('GET /api/orders/[id]/signature', () => {
     vi.clearAllMocks();
     vi.mocked(exportRateLimited).mockResolvedValue(null);
     adminHolder.throws = false;
-    sideImage(null);
+    sideImage(SIGNATURE);
   });
 
   it('401s without an auth context', async () => {
@@ -134,24 +137,40 @@ describe('GET /api/orders/[id]/signature', () => {
     expect(body.signatureDataUrl).toBe(SIGNATURE);
   });
 
-  it('reads the image from order_request_secrets first (slice C moves images there), then the order column', async () => {
+  it('0393: reads the image from order_request_secrets only, and never the order column (not even selected)', async () => {
     const SIDE = 'data:image/png;base64,c2lkZQ==';
     sideImage(SIDE);
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
     expect(((await (await GET(buildRequest(), PARAMS)).json()) as { signatureDataUrl: string }).signatureDataUrl).toBe(SIDE);
-    // No side image: the column.
+    // No side image: no image, even with a value left in the column.
     sideImage(null);
-    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
-    expect(((await (await GET(buildRequest(), PARAMS)).json()) as { signatureDataUrl: string }).signatureDataUrl).toBe(SIGNATURE);
-    // A failed side read, or no service key: the column, never a 500.
+    const ctx = buildCtx({ role: 'manager' });
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx);
+    const none = (await (await GET(buildRequest(), PARAMS)).json()) as { signatureDataUrl: string | null };
+    expect(none.signatureDataUrl).toBeNull();
+    expect(JSON.stringify(none)).not.toContain(COLUMN_LEFTOVER);
+  });
+
+  it('0393: the row read selects only what the gate needs', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select': { data: { assigned_delivery_user_id: null }, error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce({ ...buildCtx({ role: 'manager' }), supabase: stub.client as never });
+    expect((await GET(buildRequest(), PARAMS)).status).toBe(200);
+    expect(stub.chainArgs.get('order_requests.select')?.[0]).toEqual(['assigned_delivery_user_id']);
+  });
+
+  it('a failed side read, or no service key, is no image (the empty state), never a 500 and never the column', async () => {
     sideImage(null, true);
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
-    expect((await GET(buildRequest(), PARAMS)).status).toBe(200);
+    const failed = await GET(buildRequest(), PARAMS);
+    expect(failed.status).toBe(200);
+    expect(((await failed.json()) as { signatureDataUrl: string | null }).signatureDataUrl).toBeNull();
     adminHolder.throws = true;
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
     const res = await GET(buildRequest(), PARAMS);
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { signatureDataUrl: string }).signatureDataUrl).toBe(SIGNATURE);
+    expect(((await res.json()) as { signatureDataUrl: string | null }).signatureDataUrl).toBeNull();
   });
 
   it('a refused caller never reaches the side table', async () => {

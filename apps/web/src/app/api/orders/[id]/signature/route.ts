@@ -30,9 +30,10 @@ const NO_STORE = { 'cache-control': 'private, no-store' } as const;
  *
  * The phone reads it through the alias /api/v1/orders/[id]/signature (the
  * Vercel firewall bypass covers /api/v1*), since migration 0389; it used to
- * select the image straight from the table. The image is read from
- * order_request_secrets first (slice C moves stored images there, off the
- * member-readable order row), then from the order column.
+ * select the image straight from the table. Since 0393 the image lives only
+ * in order_request_secrets (the order row's column is always null: 0393 moved
+ * every stored image there and its trigger moves every new one), read with
+ * the admin client after the gate.
  */
 export async function GET(
   req: NextRequest,
@@ -46,16 +47,14 @@ export async function GET(
 
   const { data, error } = await ctx.supabase
     .from('order_requests')
-    .select('signature_data_url, assigned_delivery_user_id')
+    .select('assigned_delivery_user_id')
     .eq('organization_id', ctx.organizationId)
     .eq('id', id)
     .maybeSingle();
   if (error) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
-  const row = data as
-    | { signature_data_url: string | null; assigned_delivery_user_id: string | null }
-    | null;
+  const row = data as { assigned_delivery_user_id: string | null } | null;
 
   // Same gate the page uses to decide whether the actions panel (and therefore
   // the signature dialog) renders: can(orders:approve) OR the assigned driver
@@ -70,9 +69,10 @@ export async function GET(
   if (limited) return limited;
   if (!row) return NextResponse.json({ signatureDataUrl: null }, { headers: NO_STORE });
 
-  // Side table first (an order of this organization: the row above was read
+  // The side table (an order of this organization: the row above was read
   // with the caller's own client, scoped to ctx.organizationId). A failed side
-  // read falls back to the column, which holds every image until slice C.
+  // read, or no service key, is no image (the dialog's empty state), never a
+  // 500.
   let side: Awaited<ReturnType<typeof readOrderSecrets>>;
   try {
     side = await readOrderSecrets(createAdminClient(), id);
@@ -80,7 +80,7 @@ export async function GET(
     side = { ok: false };
   }
   return NextResponse.json(
-    { signatureDataUrl: (side.ok ? side.secrets?.signatureDataUrl : null) ?? row.signature_data_url ?? null },
+    { signatureDataUrl: side.ok ? (side.secrets?.signatureDataUrl ?? null) : null },
     { headers: NO_STORE },
   );
 }
