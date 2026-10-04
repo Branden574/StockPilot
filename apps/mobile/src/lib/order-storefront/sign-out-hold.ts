@@ -1,8 +1,12 @@
 import {
+  SIGN_IN_HELD_DROPPED_COPY,
+  SIGN_IN_HELD_WITHDRAWN_COPY,
+  SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY,
   SIGN_OUT_WITHDRAW_UNANSWERED_COPY,
   classifyOrderSettleResult,
   formatOrderNumber,
   orderAlreadyPlacedCopy,
+  signInHeldPlacedCopy,
   orderCallResultForOrganization,
   type OrderCallResult,
   type PendingOrderSubmission,
@@ -30,7 +34,18 @@ import { ORDER_DRAFT_PREFIX, unsettledSubmissions } from './store';
  * says "Your order request SO-… was placed."; refused or withdrawn clears it;
  * still unknown offers "Don't send it" and "See my orders". Nothing is ever
  * resent. Pure, apart from the injected calls.
+ *
+ * THE EDGES (desk check F5). A status read at sign-out that finds a key
+ * placed is said before the session ends ("Your order request SO-… was
+ * placed."). "Don't send it" at sign-in always says what happened. A marker
+ * that can no longer be checked from this phone is dropped once, with one
+ * sentence: its organization is not among the account's memberships (a list
+ * that was read; an unread one never drops anything), a call refused for
+ * membership, or still unknown 30 days after it was sent.
  */
+
+/** A held key still unknown this long after it was sent is dropped. */
+export const ORDER_HOLD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const ORDER_HOLD_PREFIX = 'orderSubmissionHold.v1.';
 
@@ -126,14 +141,21 @@ export function mergeHolds(
 export type HoldCheck =
   | { outcome: 'placed'; label: string | null }
   | { outcome: 'settled' }
+  /** Refused because this account is not a member of its organization: it
+   *  can never be checked from here. */
+  | { outcome: 'gone' }
   | { outcome: 'unknown' };
 
 /** Read through core: placed names its order, refused and withdrawn clear
- *  the marker silently, anything else (none, no answer, a refusal of the
- *  read itself) keeps it. An answer for another organization is no answer. */
+ *  the marker silently, a refusal that names membership drops it, anything
+ *  else (none, no answer, any other refusal of the read itself, a 401 that
+ *  may be the session) keeps it. An answer for another organization is no
+ *  answer. */
 export function holdCheckFrom(result: OrderCallResult, orgId: string): HoldCheck {
   const outcome = classifyOrderSettleResult(orderCallResultForOrganization(result, orgId));
-  if (!outcome.final) return { outcome: 'unknown' };
+  if (!outcome.final) {
+    return outcome.why === 'refused' && outcome.reason === 'not_member' ? { outcome: 'gone' } : { outcome: 'unknown' };
+  }
   if (outcome.outcome === 'placed') {
     return { outcome: 'placed', label: outcome.order.orderLabel ?? formatOrderNumber(outcome.order.orderNumber) };
   }
@@ -184,11 +206,17 @@ export function createSignOutOrderSubmissions(deps: {
     async count() {
       return (await live()).length;
     },
+    /** Read each one's status. The orders found placed (their labels), to
+     *  say before the session ends. */
     async settle() {
+      const placed: (string | null)[] = [];
       for (const s of await live()) {
         const check = holdCheckFrom(await deps.calls.status(scopeOf(s.orgId), s.pending.key), s.orgId);
-        if (check.outcome !== 'unknown') settled.add(`${s.orgId}.${s.pending.key}`);
+        if (check.outcome === 'unknown') continue;
+        settled.add(`${s.orgId}.${s.pending.key}`);
+        if (check.outcome === 'placed') placed.push(check.label);
       }
+      return { placed };
     },
     async withdraw() {
       const placed: string[] = [];
@@ -215,6 +243,11 @@ export function createSignOutOrderSubmissions(deps: {
       if (result.unanswered > 0) lines.push(SIGN_OUT_WITHDRAW_UNANSWERED_COPY);
       if (lines.length > 0) await deps.say(lines.join(' '));
     },
+    /** Say the orders the status reads found placed ("Your order request
+     *  SO-… was placed."). Nothing when there are none. */
+    async reportPlaced(labels: readonly (string | null)[]) {
+      if (labels.length > 0) await deps.say(labels.map(signInHeldPlacedCopy).join(' '));
+    },
   };
 }
 
@@ -225,6 +258,9 @@ export interface HeldCheckResult {
   placed: (string | null)[];
   /** Still not known: offer "Don't send it" and "See my orders". */
   unknown: OrderSubmissionHold[];
+  /** Markers dropped because they can no longer be checked from this phone
+   *  (say SIGN_IN_HELD_DROPPED_COPY once). */
+  dropped: number;
 }
 
 /**
@@ -237,22 +273,41 @@ export async function checkHeldSubmissions(deps: {
   userId: string;
   store: HoldStore;
   calls: HoldCalls;
+  /** Reads the account's accepted memberships (asked only when a marker is
+   *  held). Null, empty or a failed read: not known, so nothing is dropped
+   *  for it. */
+  memberOrgIds?: () => Promise<readonly string[] | null>;
+  now?: () => number;
 }): Promise<HeldCheckResult> {
   const key = orderHoldKey(deps.userId);
   const holds = parseHolds(await deps.store.getItem(key));
-  if (holds.length === 0) return { placed: [], unknown: [] };
+  if (holds.length === 0) return { placed: [], unknown: [], dropped: 0 };
   const onDevice = new Set((await deviceSends(deps.store, deps.userId)).map((s) => `${s.orgId}.${s.pending.key}`));
+  const memberIds = deps.memberOrgIds ? await deps.memberOrgIds().catch(() => null) : null;
+  const members = memberIds && memberIds.length > 0 ? new Set(memberIds) : null;
+  const now = (deps.now ?? Date.now)();
   const kept: OrderSubmissionHold[] = [];
   const placed: (string | null)[] = [];
   const unknown: OrderSubmissionHold[] = [];
+  let dropped = 0;
   for (const h of holds) {
     if (onDevice.has(`${h.orgId}.${h.key}`)) {
       kept.push(h);
       continue;
     }
+    if (members && !members.has(h.orgId)) {
+      dropped += 1;
+      continue;
+    }
     const check = holdCheckFrom(await deps.calls.status({ orgId: h.orgId, userId: deps.userId }, h.key), h.orgId);
     if (check.outcome === 'placed') placed.push(check.label);
+    else if (check.outcome === 'gone') dropped += 1;
     else if (check.outcome === 'unknown') {
+      const sent = Date.parse(h.sentAt);
+      if (Number.isFinite(sent) && now - sent > ORDER_HOLD_MAX_AGE_MS) {
+        dropped += 1;
+        continue;
+      }
       kept.push(h);
       unknown.push(h);
     }
@@ -260,7 +315,23 @@ export async function checkHeldSubmissions(deps: {
   const raw = serializeHolds(kept);
   if (raw === null) await deps.store.removeItem(key);
   else if (kept.length !== holds.length) await deps.store.setItem(key, raw);
-  return { placed, unknown };
+  return { placed, unknown, dropped };
+}
+
+/** What "Don't send it" at sign-in says: not sent; already placed (its
+ *  label); can no longer be checked here; or, with no answer, that it will be
+ *  asked again. */
+export function heldWithdrawSentence(check: HoldCheck): string {
+  switch (check.outcome) {
+    case 'placed':
+      return orderAlreadyPlacedCopy({ orderNumber: null, orderLabel: check.label });
+    case 'settled':
+      return SIGN_IN_HELD_WITHDRAWN_COPY;
+    case 'gone':
+      return SIGN_IN_HELD_DROPPED_COPY;
+    case 'unknown':
+      return SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY;
+  }
 }
 
 /** "Don't send it" for a held key: withdraw it (its answer is final). */

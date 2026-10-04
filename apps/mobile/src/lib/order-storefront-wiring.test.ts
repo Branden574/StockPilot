@@ -446,6 +446,13 @@ describe('signing out and signing back in', () => {
     const layout = codeOnly(read('app/_layout.tsx'));
     expect(layout).toContain('useHeldOrderSubmissions(session?.user?.id ?? null, seeOrders);');
   });
+
+  it('at sign-in: a dropped marker is said once, Don’t send it always says what happened, and no answer is offered again (F5)', () => {
+    const runtime = flat(codeOnly(read('src/lib/order-storefront/runtime.ts')));
+    expect(runtime).toContain('memberOrgIds: async () => (await loadOrgs(userId))?.map((o) => o.id) ?? null,');
+    expect(runtime).toContain('if (result.dropped > 0) Alert.alert(SIGN_IN_HELD_DROPPED_COPY);');
+    expect(runtime).toContain("void withdrawHeldSubmission(deps, hold) .catch((): HoldCheck => ({ outcome: 'unknown' })) .then((check) => { if (check.outcome === 'unknown') offered.current.delete(id); Alert.alert(heldWithdrawSentence(check)); }),");
+  });
 });
 
 describe('the storefront’s words are core’s', () => {

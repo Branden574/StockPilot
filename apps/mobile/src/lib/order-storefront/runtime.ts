@@ -5,20 +5,20 @@ import { Alert, AppState } from 'react-native';
 import {
   ORDER_DONT_SEND_COPY,
   ORDER_SEE_MY_ORDERS_COPY,
+  SIGN_IN_HELD_DROPPED_COPY,
   SIGN_IN_HELD_NOT_NOW_COPY,
   SIGN_IN_HELD_UNCONFIRMED_COPY,
   SIGN_IN_HELD_UNCONFIRMED_TITLE_COPY,
-  orderAlreadyPlacedCopy,
   signInHeldPlacedCopy,
 } from '@stockpilot/core';
 
 import { accountEpoch } from '../account-epoch';
 import { useAuth } from '../auth-context';
 import { isOfflineState } from '../exceptions-api';
-import { useWorkspace } from '../use-workspace';
+import { loadOrgs, useWorkspace } from '../use-workspace';
 import { orderStorefrontApi, orderStore } from './services';
 import { createStorefrontSession, type StorefrontSession, type StorefrontSnapshot } from './session';
-import { checkHeldSubmissions, withdrawHeldSubmission } from './sign-out-hold';
+import { checkHeldSubmissions, heldWithdrawSentence, withdrawHeldSubmission, type HoldCheck } from './sign-out-hold';
 
 /**
  * THE PHONE STOREFRONT'S HOOKS (phone ordering PO-4): the one session of this
@@ -100,8 +100,11 @@ export function useStorefrontScope(): void {
 /**
  * At sign-in, and when the app returns to the foreground, the order requests
  * this account held at its last sign-out are checked (reads only): placed is
- * said; still unknown offers "Don't send it" and "See my orders". Each is
- * offered once per app run. Never resends.
+ * said; one that can no longer be checked from this phone (an organization
+ * the account left, or 30 days unknown) is dropped with one sentence; still
+ * unknown offers "Don't send it" and "See my orders", once per app run.
+ * "Don't send it" always says what happened; with no answer it is offered
+ * again. Never resends.
  */
 export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () => void): void {
   const offered = React.useRef(new Set<string>());
@@ -113,13 +116,20 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
 
   React.useEffect(() => {
     if (!userId) return;
-    const deps = { userId, store: orderStore, calls: orderStorefrontApi };
+    const deps = {
+      userId,
+      store: orderStore,
+      calls: orderStorefrontApi,
+      // Read only when a marker is held; a failed read drops nothing.
+      memberOrgIds: async () => (await loadOrgs(userId))?.map((o) => o.id) ?? null,
+    };
     const run = async () => {
       if (running.current) return;
       running.current = true;
       try {
         const result = await checkHeldSubmissions(deps);
         for (const label of result.placed) Alert.alert(signInHeldPlacedCopy(label));
+        if (result.dropped > 0) Alert.alert(SIGN_IN_HELD_DROPPED_COPY);
         for (const hold of result.unknown) {
           const id = `${hold.orgId}.${hold.key}`;
           if (offered.current.has(id)) continue;
@@ -130,11 +140,13 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
             {
               text: ORDER_DONT_SEND_COPY,
               onPress: () =>
-                void withdrawHeldSubmission(deps, hold).then((check) => {
-                  if (check.outcome === 'placed') {
-                    Alert.alert(orderAlreadyPlacedCopy({ orderNumber: null, orderLabel: check.label }));
-                  }
-                }),
+                void withdrawHeldSubmission(deps, hold)
+                  .catch((): HoldCheck => ({ outcome: 'unknown' }))
+                  .then((check) => {
+                    // No answer: not counted as offered, so it is asked again.
+                    if (check.outcome === 'unknown') offered.current.delete(id);
+                    Alert.alert(heldWithdrawSentence(check));
+                  }),
             },
           ]);
         }

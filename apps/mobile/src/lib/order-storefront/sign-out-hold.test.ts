@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { initialCartState, type OrderCallResult, type PendingOrderSubmission } from '@stockpilot/core';
+import {
+  SIGN_IN_HELD_DROPPED_COPY,
+  SIGN_IN_HELD_WITHDRAWN_COPY,
+  SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY,
+  initialCartState,
+  type OrderCallResult,
+  type PendingOrderSubmission,
+} from '@stockpilot/core';
 
 import { accountScopedStorageKeys } from '../account-eviction';
 import {
   ORDER_HOLD_PREFIX,
   checkHeldSubmissions,
   createSignOutOrderSubmissions,
+  heldWithdrawSentence,
   holdCheckFrom,
   holdFor,
   mergeHolds,
@@ -227,7 +235,7 @@ describe('the next sign-in', () => {
   it('placed: said, and the marker cleared', async () => {
     const store = held();
     const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'placed', order: ORDER })), withdraw: vi.fn() };
-    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: ['SO-000123'], unknown: [] });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: ['SO-000123'], unknown: [], dropped: 0 });
     expect(store.data.has(orderHoldKey(USER))).toBe(false);
     expect(calls.withdraw).not.toHaveBeenCalled();
   });
@@ -235,7 +243,7 @@ describe('the next sign-in', () => {
   it('withdrawn or refused: cleared without a word', async () => {
     const store = held();
     const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'withdrawn' })), withdraw: vi.fn() };
-    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [], dropped: 0 });
     expect(store.data.has(orderHoldKey(USER))).toBe(false);
   });
 
@@ -255,7 +263,7 @@ describe('the next sign-in', () => {
   it('another account’s marker is never read', async () => {
     const store = held();
     const calls = { status: vi.fn(), withdraw: vi.fn() };
-    expect(await checkHeldSubmissions({ userId: '77777777-7777-4777-8777-777777777777', store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(await checkHeldSubmissions({ userId: '77777777-7777-4777-8777-777777777777', store, calls })).toEqual({ placed: [], unknown: [], dropped: 0 });
     expect(calls.status).not.toHaveBeenCalled();
   });
 
@@ -263,8 +271,86 @@ describe('the next sign-in', () => {
     const store = withPendingDraft();
     store.data.set(orderHoldKey(USER), serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!);
     const calls = { status: vi.fn(), withdraw: vi.fn() };
-    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [], dropped: 0 });
     expect(calls.status).not.toHaveBeenCalled();
     expect(store.data.has(orderHoldKey(USER))).toBe(true);
+  });
+});
+
+describe('the sign-in and sign-out edges (desk check F5)', () => {
+  const notMember = (): OrderCallResult => ({
+    ok: false,
+    error: { status: 403, code: 'forbidden', details: { reason: 'not_member', organizationId: ORG } },
+  });
+  function held(sentAt = PENDING.firstSentAt) {
+    const store = memory();
+    store.data.set(orderHoldKey(USER), serializeHolds([{ ...holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING }), sentAt }])!);
+    return store;
+  }
+
+  it('F5.1 a status read at sign-out that finds it placed is said before the session ends', async () => {
+    const store = withPendingDraft();
+    const say = vi.fn(async () => undefined);
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'placed', order: ORDER })), withdraw: vi.fn() };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say });
+    expect(await s.settle()).toEqual({ placed: ['SO-000123'] });
+    await s.reportPlaced(['SO-000123']);
+    expect(say).toHaveBeenCalledWith('Your order request SO-000123 was placed.');
+    await s.reportPlaced([]);
+    expect(say).toHaveBeenCalledTimes(1);
+  });
+
+  it('F5.2 Don’t send it at sign-in says what happened, and no answer says it will be asked again', () => {
+    expect(heldWithdrawSentence({ outcome: 'settled' })).toBe(SIGN_IN_HELD_WITHDRAWN_COPY);
+    expect(heldWithdrawSentence({ outcome: 'placed', label: 'SO-000123' })).toBe('It had already been placed: SO-000123.');
+    expect(heldWithdrawSentence({ outcome: 'unknown' })).toBe(SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY);
+    expect(heldWithdrawSentence({ outcome: 'gone' })).toBe(SIGN_IN_HELD_DROPPED_COPY);
+  });
+
+  it('F5.3 a refusal that names membership drops the marker, once, with a sentence', async () => {
+    expect(holdCheckFrom(notMember(), ORG)).toEqual({ outcome: 'gone' });
+    const store = held();
+    const calls = { status: vi.fn(async () => notMember()), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [], dropped: 1 });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+  });
+
+  it('F5.3 an organization missing from the account’s memberships drops it without a call; an unread list never does', async () => {
+    const store = held();
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'none' })), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: USER, store, calls, memberOrgIds: async () => [] })).toMatchObject({ unknown: [{ key: KEY }], dropped: 0 });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls, memberOrgIds: async () => null })).toMatchObject({ dropped: 0 });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls, memberOrgIds: async () => Promise.reject(new Error('offline')) })).toMatchObject({ dropped: 0 });
+    expect(await checkHeldSubmissions({ userId: USER, store, calls, memberOrgIds: async () => [ORG] })).toMatchObject({ dropped: 0 });
+    calls.status.mockClear();
+    expect(await checkHeldSubmissions({ userId: USER, store, calls, memberOrgIds: async () => ['99999999-9999-4999-8999-999999999999'] })).toEqual({
+      placed: [],
+      unknown: [],
+      dropped: 1,
+    });
+    expect(calls.status).not.toHaveBeenCalled();
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+  });
+
+  it('F5.3 still unknown after 30 days: dropped with the sentence; before that, kept', async () => {
+    const now = Date.parse('2026-10-04T12:00:00.000Z');
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'none' })), withdraw: vi.fn() };
+    const fresh = held('2026-09-10T12:00:00.000Z');
+    expect(await checkHeldSubmissions({ userId: USER, store: fresh, calls, now: () => now })).toMatchObject({ dropped: 0, unknown: [{ key: KEY }] });
+    const old = held('2026-09-03T11:00:00.000Z');
+    expect(await checkHeldSubmissions({ userId: USER, store: old, calls, now: () => now })).toEqual({ placed: [], unknown: [], dropped: 1 });
+    expect(old.data.has(orderHoldKey(USER))).toBe(false);
+    // A placed answer is still said, however old.
+    const placedOld = held('2026-08-01T00:00:00.000Z');
+    calls.status.mockResolvedValueOnce(answer({ organizationId: ORG, outcome: 'placed', order: ORDER }));
+    expect(await checkHeldSubmissions({ userId: USER, store: placedOld, calls, now: () => now })).toEqual({ placed: ['SO-000123'], unknown: [], dropped: 0 });
+  });
+
+  it('F5.3 Don’t send it answered with a membership refusal clears the marker', async () => {
+    const store = held();
+    const calls = { status: vi.fn(), withdraw: vi.fn(async () => notMember()) };
+    const hold = parseHolds(store.data.get(orderHoldKey(USER)) ?? null)[0]!;
+    expect(await withdrawHeldSubmission({ userId: USER, store, calls }, hold)).toEqual({ outcome: 'gone' });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
   });
 });

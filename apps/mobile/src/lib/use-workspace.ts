@@ -75,7 +75,7 @@ function publish(next: Partial<WorkspaceState>) {
  * dropped connection, a 5xx). A failed read is not "a member of nothing":
  * hydrate() keeps the workspace already on screen instead (see there).
  */
-async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
+export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
   const { data, error } = await supabase
     .from('organization_members')
     .select('role, organization_id, organizations:organization_id (name)')

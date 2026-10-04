@@ -354,7 +354,7 @@ describe('auth-context wiring', () => {
 // settled by its key, which the sign-out removes with the account's drafts.
 describe('runSignOutFlow — order requests sent but not confirmed', () => {
   function withOrders(
-    o: { before: number; afterSettle: number; afterWithdraw?: number; placed?: string[] },
+    o: { before: number; afterSettle: number; afterWithdraw?: number; placed?: string[]; settledPlaced?: (string | null)[] },
     state: Partial<Harness['state']> = {},
   ) {
     const h = harness(state);
@@ -367,6 +367,7 @@ describe('runSignOutFlow — order requests sent but not confirmed', () => {
       settle: vi.fn(async () => {
         h.log.push('orders:settle');
         stage = 'settled';
+        return { placed: o.settledPlaced ?? [] };
       }),
       withdraw: vi.fn(async () => {
         h.log.push('orders:withdraw');
@@ -378,6 +379,9 @@ describe('runSignOutFlow — order requests sent but not confirmed', () => {
       }),
       report: vi.fn(async (r: { placed: string[]; unanswered: number }) => {
         h.log.push(`orders:report:${r.placed.join(',')}:${r.unanswered}`);
+      }),
+      reportPlaced: vi.fn(async (labels: (string | null)[]) => {
+        h.log.push(`orders:reportPlaced:${labels.join(',')}`);
       }),
     };
     h.deps.orderSubmissions = orders;
@@ -399,6 +403,20 @@ describe('runSignOutFlow — order requests sent but not confirmed', () => {
     expect(h.deps.drain).not.toHaveBeenCalled();
     expect(h.deps.confirmUnsynced).not.toHaveBeenCalled();
     expect(orders.hold).not.toHaveBeenCalled();
+  });
+
+  it('F5.1 a status read that finds one placed: said before the session ends, never held', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 0, settledPlaced: ['SO-000123'] });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.log).toContain('orders:reportPlaced:SO-000123');
+    expect(h.log.indexOf('orders:reportPlaced:SO-000123')).toBeLessThan(h.log.indexOf('signOut:global'));
+    expect(orders.hold).not.toHaveBeenCalled();
+  });
+
+  it('nothing found placed: nothing said', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 0 });
+    await runSignOutFlow(h.deps);
+    expect(orders.reportPlaced).not.toHaveBeenCalled();
   });
 
   it('still unknown: the prompt says so; Stay changes nothing', async () => {

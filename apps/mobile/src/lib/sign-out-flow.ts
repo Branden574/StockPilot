@@ -77,8 +77,9 @@ export interface EndSessionDeps {
 export interface SignOutOrderSubmissions {
   /** How many, on this device, in every organization. */
   count(): Promise<number>;
-  /** Read each one's status (never a send). Bounded by the flow. */
-  settle(): Promise<void>;
+  /** Read each one's status (never a send). Bounded by the flow. The orders
+   *  found placed. */
+  settle(): Promise<{ placed: (string | null)[] }>;
   /** "Don't send it": withdraw each. The orders found already placed. */
   withdraw(): Promise<{ placed: string[] }>;
   /** Keep a marker (ids and counts only) for each still not settled. */
@@ -86,6 +87,9 @@ export interface SignOutOrderSubmissions {
   /** Say what the withdraw found: orders already placed, and how many could
    *  not be checked (those are held like Sign out). */
   report(result: { placed: string[]; unanswered: number }): Promise<void>;
+  /** Say the orders the status reads found placed ("Your order request
+   *  SO-… was placed."), before the session ends. */
+  reportPlaced(labels: readonly (string | null)[]): Promise<void>;
 }
 
 export interface SignOutFlowDeps extends EndSessionDeps {
@@ -186,6 +190,9 @@ export async function runSignOutFlow(
   };
 
   let discard = opts.discardWithoutAsking === true;
+  // Order requests the status reads found placed: said before the session
+  // ends (plan 3.6), since their records go with the account's storage.
+  const placedAtSettle: (string | null)[] = [];
   if (!discard) {
     let unsynced = await count();
     let unconfirmed = await countOrders();
@@ -193,7 +200,13 @@ export async function runSignOutFlow(
     if ((unsynced > 0 || unconfirmed > 0) && (await deps.isOnline().catch(() => false))) {
       const work: Promise<void>[] = [];
       if (unsynced > 0) work.push(deps.drain());
-      if (unconfirmed > 0 && orders) work.push(orders.settle());
+      if (unconfirmed > 0 && orders) {
+        work.push(
+          orders.settle().then((r) => {
+            placedAtSettle.push(...r.placed);
+          }),
+        );
+      }
       await withTimeout(
         Promise.all(work).then(() => undefined),
         opts.drainTimeoutMs ?? SIGN_OUT_DRAIN_TIMEOUT_MS,
@@ -226,6 +239,14 @@ export async function runSignOutFlow(
           warn('[auth] could not report the withdrawn order requests', e);
         }
       }
+    }
+  }
+
+  if (orders && placedAtSettle.length > 0) {
+    try {
+      await orders.reportPlaced(placedAtSettle);
+    } catch (e) {
+      warn('[auth] could not report the order requests found placed', e);
     }
   }
 

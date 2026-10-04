@@ -209,6 +209,17 @@ export const SIGN_IN_HELD_UNCONFIRMED_TITLE_COPY = 'Your order request is not co
 export const SIGN_IN_HELD_UNCONFIRMED_COPY =
   "An order request you sent before signing out still isn't confirmed. Choose Don't send it to make sure it's never placed, or see your orders.";
 export const SIGN_IN_HELD_NOT_NOW_COPY = 'Not now';
+/** "Don't send it" at sign-in: the answer was withdrawn (or refused), so
+ *  nothing was placed. (Its cart went at the sign-out.) */
+export const SIGN_IN_HELD_WITHDRAWN_COPY = 'Your order request was not sent.';
+/** "Don't send it" at sign-in with no answer: asked again later. */
+export const SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY =
+  "It couldn't be checked just now. You'll be asked again the next time you open the app.";
+/** A held order request that can no longer be checked from this phone (the
+ *  account left its organization, or it was sent more than 30 days ago):
+ *  its marker is dropped, once, with this. */
+export const SIGN_IN_HELD_DROPPED_COPY =
+  'An order request you sent before signing out can no longer be checked from this phone. See your orders to find out whether it was placed.';
 
 // ── Helpers (called inside the functions above only) ───────────────────────
 
