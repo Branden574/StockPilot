@@ -49,6 +49,12 @@ function svc(
   );
 }
 
+/** What the stub answers for an rpc() call (its error type: no null hint). */
+type RpcResult = {
+  data: unknown;
+  error: { message: string; code?: string; hint?: string; details?: string } | null;
+};
+
 const STAGED_DELIVERY = {
   warehouse_id: 'wh-1',
   status: 'staged_for_delivery',
@@ -59,7 +65,7 @@ const STAGED_DELIVERY = {
 beforeEach(() => vi.clearAllMocks());
 
 describe('assignDelivery writes through assign_order_delivery (0390)', () => {
-  function assignStub(rpc: { data: unknown; error: unknown }) {
+  function assignStub(rpc: RpcResult) {
     return makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: STAGED_DELIVERY, error: null },
       'organization_members.select.maybeSingle': { data: { user_id: 'drv-2' }, error: null },
@@ -103,10 +109,10 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
     [{ code: '42501', message: 'forbidden', hint: 'warehouse_write' }, 'forbidden', "You don't have write access to this order's warehouse."],
     [{ code: 'P0001', message: 'delivery_not_assignable', hint: 'not_staged_for_delivery' }, 'validation_error', 'Delivery can only be assigned to staged-for-delivery orders.'],
     [{ code: 'P0001', message: 'driver_not_member', hint: 'driver_not_member' }, 'validation_error', 'That user is not an active member of this organization.'],
-    [{ code: 'P0002', message: 'order_request_not_found', hint: null }, 'not_found', 'Order not found'],
+    [{ code: 'P0002', message: 'order_request_not_found' }, 'not_found', 'Order not found'],
     [{ code: 'P0001', message: 'module_disabled', hint: 'module_disabled' }, 'module_disabled', 'Module not enabled for this organization: orders'],
-    [{ code: '55P03', message: 'canceling statement due to lock timeout', hint: null }, 'conflict', 'Someone else is changing this order right now. Try again.'],
-    [{ code: '42501', message: 'unauthenticated', hint: null }, 'unauthenticated', 'Sign in again to change this order.'],
+    [{ code: '55P03', message: 'canceling statement due to lock timeout' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
+    [{ code: '42501', message: 'unauthenticated' }, 'unauthenticated', 'Sign in again to change this order.'],
   ])('maps the function refusal %o to %s', async (error, code, message) => {
     const stub = assignStub({ data: null, error });
     await expect(svc(stub).assignDelivery('ord-1', 'drv-2')).rejects.toMatchObject({ code, message });
@@ -114,7 +120,7 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
   });
 
   it('an unknown database error is an internal error whose public message carries no database text', async () => {
-    const stub = assignStub({ data: null, error: { code: 'XX000', message: 'relation "order_requests" secret', hint: null } });
+    const stub = assignStub({ data: null, error: { code: 'XX000', message: 'relation "order_requests" secret' } });
     const e = await svc(stub).assignDelivery('ord-1', 'drv-2').catch((x: unknown) => x);
     expect(e).toMatchObject({ code: 'internal_error' });
     expect((e as Error).message).not.toMatch(/order_requests/);
@@ -122,7 +128,7 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
 });
 
 describe('markInTransit follows orders:approve and writes through mark_order_in_transit (0390, O3 default)', () => {
-  function transitStub(rpc: { data: unknown; error: unknown }, row = STAGED_DELIVERY) {
+  function transitStub(rpc: RpcResult, row = STAGED_DELIVERY) {
     return makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: row, error: null },
       'rpc:mark_order_in_transit': rpc,
@@ -189,7 +195,7 @@ describe('markInTransit follows orders:approve and writes through mark_order_in_
     [{ code: 'P0001', message: 'no_driver', hint: 'no_driver' }, 'validation_error', 'Assign a driver before marking in transit.'],
     [{ code: '42501', message: 'forbidden', hint: 'orders_approve' }, 'forbidden', IN_TRANSIT_NOT_APPROVER_COPY],
     [{ code: '42501', message: 'forbidden', hint: 'warehouse_write' }, 'forbidden', "You don't have write access to this order's warehouse."],
-    [{ code: '57014', message: 'canceling statement due to statement timeout', hint: null }, 'conflict', 'Someone else is changing this order right now. Try again.'],
+    [{ code: '57014', message: 'canceling statement due to statement timeout' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
   ])('maps the function refusal %o to %s, and notifies no one', async (error, code, message) => {
     const stub = transitStub({ data: null, error });
     await expect(svc(stub).markInTransit('ord-1')).rejects.toMatchObject({ code, message });
