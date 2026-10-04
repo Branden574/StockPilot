@@ -366,8 +366,13 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   suppresses the matrix's "Grant rolling out" badge) and got "Only
   //   managers can approve requests". Migration 0348 gives all seven
   //   `has_org_role('manager') OR has_permission(org,'orders:approve')`, so the
-  //   claim this comment makes is now true for it. Before adding a permission
-  //   to this set, check the RPCs the feature calls, not just its table RLS.
+  //   claim this comment makes is now true for it. Migration 0390 removes the
+  //   has_org_role term from those seven, hold_order_stock,
+  //   revise_order_needed_by, order_readiness_facts and the three order
+  //   policies, so a REVOKE is fully effective in the database too (a manager
+  //   whose orders:approve is removed is refused everywhere). Before adding a
+  //   permission to this set, check the RPCs the feature calls, not just its
+  //   table RLS.
   'purchase_orders:manage',
   'items:create',
   'items:update',
