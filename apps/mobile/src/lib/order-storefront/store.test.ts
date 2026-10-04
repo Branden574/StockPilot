@@ -4,6 +4,8 @@ import { initialCartState, type CartState, type PendingOrderSubmission } from '@
 
 import { accountScopedStorageKeys } from '../account-eviction';
 import {
+  LEAVE_DRAFT,
+  OrderDraftSlotTaken,
   cartFromPendingBody,
   createDraftWriter,
   isEmptyDraft,
@@ -20,6 +22,7 @@ import {
   serializeCatalog,
   serializeOrderDraft,
   serializePhotos,
+  storedLiveKey,
   unsettledSubmissions,
   type KeyValueStore,
 } from './store';
@@ -175,6 +178,18 @@ describe('the draft record', () => {
   });
 });
 
+describe('the live key a stored record holds', () => {
+  it('is read for exactly this account, organization and warehouse', () => {
+    const live = serializeOrderDraft(SCOPE, { cart: CART, submission: PENDING }, new Date());
+    const settled = serializeOrderDraft(SCOPE, { cart: CART, submission: null }, new Date());
+    expect(storedLiveKey(live, SCOPE)).toBe(KEY);
+    expect(storedLiveKey(settled, SCOPE)).toBeNull();
+    expect(storedLiveKey(null, SCOPE)).toBeNull();
+    expect(storedLiveKey(live, { ...SCOPE, orgId: WH })).toBeNull();
+    expect(storedLiveKey(live, { ...SCOPE, userId: OTHER_USER })).toBeNull();
+  });
+});
+
 describe('the writer (a cleared draft stays cleared; the epoch at write time)', () => {
   function timers() {
     let fn: (() => void) | null = null;
@@ -270,6 +285,25 @@ describe('the writer (a cleared draft stays cleared; the epoch at write time)', 
     await ahead;
     expect(store.log).toEqual(['set k', 'set k']);
     expect(store.data.get('k')).toBe('pending');
+  });
+
+  it('each write sees what the key holds when it runs; LEAVE_DRAFT leaves it (and refuses a write-ahead)', async () => {
+    const store = memoryStore();
+    store.data.set('k', 'held');
+    const t = timers();
+    const w = createDraftWriter({ store, key: 'k', epoch: () => 1, ...t });
+    const seen: (string | null)[] = [];
+    w.schedule((stored) => {
+      seen.push(stored);
+      return LEAVE_DRAFT;
+    });
+    t.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual(['held']);
+    await expect(w.writeNow(() => LEAVE_DRAFT)).rejects.toBeInstanceOf(OrderDraftSlotTaken);
+    expect(store.log).toEqual([]);
+    await w.writeNow((stored) => `${stored}+1`);
+    expect(store.data.get('k')).toBe('held+1');
   });
 
   it('null removes the key', async () => {

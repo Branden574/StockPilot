@@ -113,7 +113,9 @@ let api: { [K in keyof OrderStorefrontApi]: ReturnType<typeof vi.fn> };
 let epoch = 1;
 let now = Date.parse('2026-10-04T12:00:00.000Z');
 let session: StorefrontSession;
-const timers: (() => void)[] = [];
+// Each writer's waiting save, by its handle (a writer clears only its own).
+const timers = new Map<number, () => void>();
+let timerSeq = 0;
 
 function makeSession() {
   return createStorefrontSession({
@@ -123,17 +125,21 @@ function makeSession() {
     now: () => now,
     mintKey: () => KEY,
     setTimer: (fn) => {
-      timers.push(fn);
-      return timers.length;
+      timerSeq += 1;
+      timers.set(timerSeq, fn);
+      return timerSeq;
     },
-    clearTimer: () => {
-      timers.length = 0;
+    clearTimer: (handle) => {
+      timers.delete(handle as number);
     },
   });
 }
 
 async function flushSaves() {
-  while (timers.length > 0) timers.shift()!();
+  for (const [id, fn] of [...timers]) {
+    timers.delete(id);
+    fn();
+  }
   await new Promise((r) => setTimeout(r, 0));
 }
 
@@ -145,7 +151,7 @@ beforeEach(() => {
   store = memoryStore();
   epoch = 1;
   now = Date.parse('2026-10-04T12:00:00.000Z');
-  timers.length = 0;
+  timers.clear();
   api = {
     storefront: vi.fn(async () => storefrontAnswer()),
     catalog: vi.fn(async (_s, wh: string) => catalogAnswer(wh)),
@@ -445,5 +451,132 @@ describe('quantities, kits and the server’s clock', () => {
     api.storefront.mockResolvedValueOnce({ ...storefrontAnswer(), serverNow: new Date(now + 90_000).toISOString() });
     await session.open(scope);
     expect(snap().serverSkewMs).toBe(90_000);
+  });
+});
+
+describe('an answer that lands after a workspace switch (desk check F1)', () => {
+  const WHB = '77777777-7777-4777-8777-777777777777';
+  const BITEM = '88888888-8888-4888-8888-888888888888';
+  const scopeB = { userId: USER, orgId: ORG2, activeWarehouseId: null };
+  const keyA = orderDraftKey({ userId: USER, orgId: ORG, warehouseId: WH });
+  const keyB = orderDraftKey({ userId: USER, orgId: ORG2, warehouseId: WHB });
+  const readA = () => parseStoredOrderDraft(store.data.get(keyA) ?? null, { userId: USER, orgId: ORG, warehouseId: WH });
+  const readB = () => parseStoredOrderDraft(store.data.get(keyB) ?? null, { userId: USER, orgId: ORG2, warehouseId: WHB });
+  let release: (r: OrderCallResult) => void = () => undefined;
+
+  beforeEach(() => {
+    api.storefront.mockImplementation(async (s: { orgId: string }) =>
+      s.orgId === ORG2
+        ? {
+            ...storefrontAnswer(ORG2),
+            warehouses: [{ id: WHB, name: 'B' }],
+            viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true, canApproveOrders: true },
+          }
+        : storefrontAnswer(),
+    );
+    api.catalog.mockImplementation(async (s: { orgId: string }, wh: string) =>
+      s.orgId === ORG2
+        ? { ...catalogAnswer(wh, 10, ORG2), items: [{ ...catalogAnswer().items[0]!, id: BITEM, name: 'Binder' }] }
+        : catalogAnswer(wh),
+    );
+    api.place.mockImplementationOnce(() => new Promise<OrderCallResult>((r) => (release = r)));
+  });
+
+  /** Org A sends (held), the person switches to org B and builds a cart
+   *  there for someone else; then org A's answer arrives. */
+  async function sendInAThenSwitchToB(answer: OrderCallResult) {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    const sending = session.submit(false);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('sending'));
+    await session.open(scopeB);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    session.dispatch({ type: 'add', itemId: BITEM, quantity: 5 });
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: { name: 'Bee Person', email: 'bee@orgb.example' } } });
+    release(answer);
+    await sending;
+    await flushSaves();
+  }
+
+  it('a final refusal never writes org B’s cart into org A’s draft; org A’s record stays its own and settles by its key', async () => {
+    await sendInAThenSwitchToB({
+      ok: false,
+      error: { status: 403, code: 'forbidden', details: { reason: 'permission', organizationId: ORG } },
+    });
+    expect(readA()?.cart.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(readA()?.cart.onBehalfOf).toBeNull();
+    expect(readA()?.submission?.key).toBe(KEY);
+    expect(readB()?.cart.lines).toEqual([{ itemId: BITEM, quantity: 5 }]);
+    expect(readB()?.cart.onBehalfOf?.email).toBe('bee@orgb.example');
+    // Back in org A: its own cart, locked by its own key, read on its own.
+    api.status.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: { organizationId: ORG, outcome: 'refused', refusal: { reason: 'permission', settled: true } },
+    });
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('refused'));
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(snap().cart?.onBehalfOf).toBeNull();
+    expect(api.place).toHaveBeenCalledTimes(1);
+  });
+
+  it('a lost answer leaves org A’s record as it was sent (its cart, its live key)', async () => {
+    await sendInAThenSwitchToB({ ok: false, error: new Error('Request timed out.') });
+    expect(readA()?.cart.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(readA()?.submission?.key).toBe(KEY);
+    expect(readB()?.submission).toBeNull();
+  });
+
+  it('a placed answer keeps org A’s record, so going back shows the success screen for it', async () => {
+    await sendInAThenSwitchToB({ ok: true, status: 201, body: { organizationId: ORG, result: { replay: false, order: SUMMARY } } });
+    expect(readA()?.submission?.key).toBe(KEY);
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'placed', order: SUMMARY } });
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('placed'));
+    expect(snap().placed?.order.orderLabel).toBe('SO-000123');
+    expect(snap().placed?.body?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(store.data.has(keyA)).toBe(false);
+  });
+
+  it('a send already settled by the next storefront is never locked again by the old send’s late answer', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    const sending = session.submit(false);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('sending'));
+    await session.open(scopeB);
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'placed', order: SUMMARY } });
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('placed'));
+    expect(store.data.has(keyA)).toBe(false);
+    release({ ok: false, error: new Error('Request timed out.') });
+    await sending;
+    await flushSaves();
+    expect(store.data.has(keyA)).toBe(false);
+    expect(snap().locked).toBe(false);
+  });
+
+  it('a workspace switch inside the 250 ms save: each organization’s key keeps its own cart', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    await session.open(scopeB);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    session.dispatch({ type: 'add', itemId: BITEM, quantity: 5 });
+    await flushSaves();
+    expect(readA()?.cart.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(readB()?.cart.lines).toEqual([{ itemId: BITEM, quantity: 5 }]);
+  });
+
+  it('a warehouse switch inside the 250 ms save: each warehouse’s key keeps its own cart', async () => {
+    const keyA2 = orderDraftKey({ userId: USER, orgId: ORG, warehouseId: WH2 });
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 3 });
+    await session.selectWarehouse(WH2);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    await flushSaves();
+    expect(readA()?.cart.lines).toEqual([{ itemId: A, quantity: 3 }]);
+    expect(parseStoredOrderDraft(store.data.get(keyA2) ?? null, { userId: USER, orgId: ORG, warehouseId: WH2 })?.cart.lines).toEqual([
+      { itemId: A, quantity: 1 },
+    ]);
   });
 });

@@ -41,6 +41,7 @@ import {
 } from './checkout';
 import { catalogIsStale, catalogItems, initialShipFrom, photosNeedRefresh } from './setup';
 import {
+  LEAVE_DRAFT,
   createDraftWriter,
   isEmptyDraft,
   orderCatalogKey,
@@ -56,6 +57,7 @@ import {
   serializeOrderDraft,
   serializeOrderPrefs,
   serializePhotos,
+  storedLiveKey,
   unsettledSubmissions,
   type DraftScope,
   type DraftWriter,
@@ -85,7 +87,17 @@ import { createSubmitEngine, type SubmitEngine, type SubmitEngineSnapshot } from
  *   - a restored unlocked cart is checked against the fresh catalog and one
  *     sentence says what changed; a restored LOCKED cart is never changed, it
  *     is settled first (its status is read on its own, never resent);
- *   - nothing about an order is queued offline: Submit needs a connection.
+ *   - nothing about an order is queued offline: Submit needs a connection;
+ *   - EVERY WRITE IS BOUND TO THE ORGANIZATION, ACCOUNT AND WAREHOUSE IT WAS
+ *     MADE FOR (desk check F1). An engine writes only while it is the one
+ *     shown: an answer that lands after a workspace switch writes nothing,
+ *     so its key keeps the record written before the send (its own cart and
+ *     key), which that organization's next open settles by the key (a
+ *     status read, never a resend). The shown engine's writes are
+ *     compare-and-set: a live key only over no live key or its own, a
+ *     settled key's record only over its own. A debounced save carries the
+ *     scope, the cart and the engine it was made for, never what is shown
+ *     when it fires.
  */
 
 export interface SessionStore extends KeyValueStore {
@@ -240,6 +252,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   let engine: SubmitEngine | null = null;
   let engineUnsub: (() => void) | null = null;
   let writer: DraftWriter | null = null;
+  /** Every key the shown engine has held (sent or restored): the records it
+   *  may replace once they are settled. */
+  let engineKeys = new Set<string>();
   let refusedItems = new Set<string>();
   let restoredNotOrderable = new Set<string>();
   let recheckPending = false;
@@ -317,15 +332,24 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     return engine ? orderSubmissionLocked(engine.getSnapshot().state) : false;
   }
 
+  /** The cart's save, 250 ms after the last change. It is bound now to this
+   *  warehouse's key, this cart and this engine (a switch before it fires
+   *  never puts another cart under this key), and it never replaces a live
+   *  key's record: a locked cart is written by its engine only. */
   function saveCart() {
     const ds = draftScope();
-    if (!ds || !writer || !cart) return;
-    const current = () => {
-      const pending = engine ? pendingOrderSubmissionOf(engine.getSnapshot().state) : null;
-      const draft = { cart: cart!, submission: pending };
+    const w = writer;
+    const e = engine;
+    const keys = engineKeys;
+    const saved = cart;
+    if (!ds || !w || !saved) return;
+    w.schedule((stored) => {
+      if (e && orderSubmissionLocked(e.getSnapshot().state)) return LEAVE_DRAFT;
+      const held = storedLiveKey(stored, ds);
+      if (held !== null && !keys.has(held)) return LEAVE_DRAFT;
+      const draft = { cart: saved, submission: null };
       return isEmptyDraft(draft) ? null : serializeOrderDraft(ds, draft, new Date(deps.now()));
-    };
-    writer.schedule(current);
+    });
   }
 
   async function refreshLocked() {
@@ -356,19 +380,27 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       clearTimer: deps.clearTimer,
     });
     writer = draftWriter;
-    const next = createSubmitEngine({
+    const keys = new Set<string>();
+    engineKeys = keys;
+    const next: SubmitEngine = createSubmitEngine({
       organizationId: ds.orgId,
       persist: (state: OrderSubmissionState) => {
-        // The record this state needs, written now: the pending send beside
-        // the cart, or (placed) a cleared cart, so a relaunch never shows
-        // the placed cart again.
+        // The record this state needs: the pending send beside the cart, or
+        // (placed) a cleared cart, so a relaunch never shows the placed cart
+        // again. The cart is this engine's, taken now, while it is shown;
+        // an engine no longer shown (a workspace switch) writes nothing, so
+        // its key keeps the record written before its send.
         const pending = pendingOrderSubmissionOf(state);
-        const base = cart ?? initialCartState({ warehouseId: ds.warehouseId, fulfillmentType: 'pickup' });
-        const draftCart = state.phase === 'placed' ? cartReducer(base, { type: 'reset' }) : base;
-        const draft = { cart: draftCart, submission: pending };
-        return draftWriter.writeNow(() =>
-          isEmptyDraft(draft) ? null : serializeOrderDraft(ds, draft, new Date(deps.now())),
-        );
+        const own = engine === next ? cart : null;
+        return draftWriter.writeNow((stored) => {
+          if (engine !== next || own === null) return LEAVE_DRAFT;
+          const held = storedLiveKey(stored, ds);
+          if (held !== null && (pending ? held !== pending.key : !keys.has(held))) return LEAVE_DRAFT;
+          if (pending) keys.add(pending.key);
+          const recordCart = state.phase === 'placed' ? cartReducer(own, { type: 'reset' }) : own;
+          const draft = { cart: recordCart, submission: pending };
+          return isEmptyDraft(draft) ? null : serializeOrderDraft(ds, draft, new Date(deps.now()));
+        });
       },
       place: (body, onSend) => deps.api.place(cs, body, onSend),
       status: (key) => deps.api.status(cs, key),
@@ -451,6 +483,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     cart = restored?.cart ?? initialCartState({ warehouseId: id, fulfillmentType: 'pickup' });
     if (restored?.submission) {
       sentBody = restored.submission.bodyUnreadable ? null : restored.submission.body;
+      engineKeys.add(restored.submission.key);
       engine?.restore(restored.submission);
     } else if (stored && cart.lines.length > 0) {
       recheckPending = true;
@@ -586,14 +619,19 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     }
   }
 
-  function resetScope() {
+  /** Forget the scope shown. `sameAccount`: a workspace switch, whose waiting
+   *  save still lands under its own key with its own cart; otherwise (the
+   *  account ended) it is dropped. */
+  function resetScope(sameAccount: boolean) {
     scopeGen += 1;
     warehouseGen += 1;
     engineUnsub?.();
     engine?.dispose();
     engine = null;
     engineUnsub = null;
+    if (!sameAccount) writer?.dispose();
     writer = null;
+    engineKeys = new Set();
     setup = { status: 'loading' };
     warehouseId = null;
     catalog = blankCatalog();
@@ -627,7 +665,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         if (setup.status !== 'ready') await readStorefront(scopeGen);
         return;
       }
-      resetScope();
+      resetScope(scope !== null && scope.userId === next.userId);
       scope = { ...next };
       publish();
       await readStorefront(scopeGen);
@@ -782,7 +820,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     },
 
     close() {
-      resetScope();
+      resetScope(false);
       scope = null;
       publish();
     },

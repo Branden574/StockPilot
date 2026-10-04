@@ -31,6 +31,13 @@ import { parseCatalogAnswer, parsePhotosAnswer } from './api';
  * `writeNow` (the write-ahead) already counting the send that is about to
  * leave (plan 3.4 rule 2). If that write fails nothing is sent.
  *
+ * EVERY WRITE SEES WHAT THE KEY HOLDS WHEN IT RUNS. The writer reads the key
+ * first and hands it to the caller, which returns the value or LEAVE_DRAFT
+ * (the key is left as it is; a write-ahead is then refused, so nothing is
+ * sent). The session uses it as a compare-and-set (the web's slot rule,
+ * PO-2 review round 1): a record with a live key is written only over no
+ * live key or its own, and a settled key's record replaces only its own.
+ *
  * A CLEARED DRAFT STAYS CLEARED. Cart edits are saved 250 ms after the last
  * change. A save still waiting when the cart is reset, or when the account
  * ends, is cancelled, never flushed (the web's cart-context rule; the shared
@@ -223,6 +230,12 @@ export function restoredDraft(draft: OrderDraft, warehouseId: string): OrderDraf
 /** Every unsettled send of this account in this organization, from the
  *  device's draft keys (the Orders list banner, the storefront's Ship from,
  *  sign-out). `orgId` null: every organization. */
+/** The live key a stored record holds for exactly this scope, or null (no
+ *  record, a record of anyone or anywhere else, or one with no send out). */
+export function storedLiveKey(raw: string | null, scope: DraftScope): string | null {
+  return parseStoredOrderDraft(raw, scope)?.submission?.key ?? null;
+}
+
 export function unsettledSubmissions(
   entries: readonly (readonly [string, string | null])[],
   userId: string,
@@ -251,13 +264,29 @@ export class OrderDraftWriteRefused extends Error {
   }
 }
 
+/** The key holds a record this write may not replace, so it was left. */
+export class OrderDraftSlotTaken extends Error {
+  constructor() {
+    super('The order draft holds a record this write may not replace, so it was left as it is.');
+    this.name = 'OrderDraftSlotTaken';
+  }
+}
+
+/** A write's answer that leaves the key exactly as it is. */
+export const LEAVE_DRAFT: unique symbol = Symbol('leave the order draft as it is');
+
+/** What a write puts under the key, decided from what the key holds when the
+ *  write runs: a value, null (remove the key) or LEAVE_DRAFT. */
+export type DraftRead = (stored: string | null) => string | null | typeof LEAVE_DRAFT;
+
 export interface DraftWriter {
-  /** Save `read()` (evaluated at write time) 250 ms after the last call. */
-  schedule(read: () => string | null): void;
-  /** Write `read()` now, after any write already running, and wait for it.
-   *  Rejects when the device refused it or the account has ended: the caller
-   *  then sends nothing. */
-  writeNow(read: () => string | null): Promise<void>;
+  /** Save `read(stored)` (evaluated at write time) 250 ms after the last
+   *  call. LEAVE_DRAFT writes nothing. */
+  schedule(read: DraftRead): void;
+  /** Write `read(stored)` now, after any write already running, and wait for
+   *  it. Rejects when the device refused it, the account has ended or the
+   *  read answered LEAVE_DRAFT: the caller then sends nothing. */
+  writeNow(read: DraftRead): Promise<void>;
   /** Drop a save still waiting: it is never written. */
   cancel(): void;
   /** No write after this one. */
@@ -268,8 +297,9 @@ export interface DraftWriter {
 
 /**
  * One draft key's writer. Writes run one at a time, in order, so a debounced
- * save started before a write-ahead can never land after it. `null` from
- * `read()` removes the key.
+ * save started before a write-ahead can never land after it. Each reads the
+ * key first and passes it to `read`; `null` from `read` removes the key and
+ * LEAVE_DRAFT leaves it.
  */
 export function createDraftWriter(opts: {
   store: KeyValueStore;
@@ -286,13 +316,21 @@ export function createDraftWriter(opts: {
   let disposed = false;
   let chain: Promise<void> = Promise.resolve();
 
-  const queueWrite = (read: () => string | null, strict: boolean): Promise<void> => {
+  const queueWrite = (read: DraftRead, strict: boolean): Promise<void> => {
     const run = chain.then(async () => {
       if (disposed || opts.epoch() !== startEpoch) {
         if (strict) throw new OrderDraftWriteRefused();
         return;
       }
-      const value = read();
+      const value = read(await opts.store.getItem(opts.key));
+      if (value === LEAVE_DRAFT) {
+        if (strict) throw new OrderDraftSlotTaken();
+        return;
+      }
+      if (disposed || opts.epoch() !== startEpoch) {
+        if (strict) throw new OrderDraftWriteRefused();
+        return;
+      }
       if (value === null) await opts.store.removeItem(opts.key);
       else await opts.store.setItem(opts.key, value);
     });
