@@ -66,9 +66,9 @@
 --
 -- Mutation table (sec-orders/mutate-0392.py, --db): each row names what
 -- turns red.
---   M1  step 2 hashes every token, digests included (no digest exclusion)  -> R2, D1 (hash_count raises)
+--   M1  step 2 hashes every token, digests included (no digest exclusion)  -> R2 (hash_count raises; nothing applied)
 --   M2  step 1 skipped with its checks                                      -> R2 (live_unverified), D2
---   M3  updated_at trigger left enabled                                     -> R2 (other_columns_changed), D6
+--   M3  updated_at trigger left enabled                                     -> R2 (other_columns_changed raises; nothing applied)
 --   M4  dead tokens copied too                                              -> D3
 --   M5  return/track nulled before the presence check, check removed       -> X7
 --   M6  the guard keeps the packing-slip edge                               -> G1, 0387 A7 13
