@@ -3499,8 +3499,13 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(i, id).toBeGreaterThan(at);
       expect(RELEASES[i]?.status, id).toBe('published');
     }
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    // Dated after every PUBLISHED release. PO-4's phone draft, which ships
+    // after this one, sits above it and is dated later (its own block below).
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'draft')) {
+      expect(r.id).toBe('phone-place-order-2026-10');
     }
   });
 
@@ -3540,5 +3545,67 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(once.howItAffectsYou).toMatch(/another tab/);
     expect(once.howItAffectsYou).toMatch(/switch to another organization, switch back to finish it/);
     expect(once.howItAffectsYou).toMatch(/start an order with from Items wait/);
+  });
+});
+
+/**
+ * Placing an order request in the iPhone and iPad app (phone ordering PO-4) is
+ * held as a DRAFT until the OTA is out and phones launch it (plan PO-5). Pinned
+ * by id, never by index. The follow-up that publishes it sets 'published' and
+ * the real publishedAt, re-reads its words against what shipped, and flips
+ * the first pin here.
+ */
+describe('placing an order in the mobile app (phone ordering PO-4) is held as a draft', () => {
+  const ID = 'phone-place-order-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('is the newest entry, above PO-2\'s draft, and dated after every release', () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(RELEASES.findIndex((r) => r.id === 'order-submit-once-2026-10')).toBe(1);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is told to whoever can open the New order page, and links there', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    expect(r.entries.map((e) => e.id)).toEqual(['phone-place-order', 'phone-place-order-once', 'phone-orders-list-current']);
+    const [place] = r.entries;
+    expect(place!.link).toEqual({ href: '/dashboard/orders/new', label: 'Place an order' });
+    expect(place!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
+    expect(entriesFor('viewer', ['orders:request'])).toBe(3);
+    expect(entriesFor('staff', ['members:read'])).toBe(0);
+    expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+  });
+
+  it("uses the app's own words, claims no unmeasured number, says a draft for the email, and teaches nothing about the check", () => {
+    const r = release();
+    const text = readerText(r).join(' ');
+    for (const label of ['Place an order', 'Check and finish', "Don't send it", 'See my orders', 'Review and approve', 'Frequently ordered']) {
+      expect(text).toContain(label);
+    }
+    expect(text).toMatch(/email as a draft/);
+    expect(text).not.toMatch(/\d+ ?%|\bkey\b|idempotenc|hash|lock(ed)? row|database|\bsent the email\b|email (was )?sent/i);
+    expect(text).not.toMatch(/\bbook\b/i);
+    expect(r.summary).toContain('never placed twice');
   });
 });

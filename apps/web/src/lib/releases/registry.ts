@@ -28,6 +28,68 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'phone-place-order-2026-10',
+    revision: 1,
+    // Phone ordering PO-4: placing an order request in the iPhone and iPad
+    // app. Held as a DRAFT until the OTA is out and phones report launching
+    // it (plan PO-5: publish as soon as eas update:insights shows iOS
+    // launches, or after one working day, whichever is first); the follow-up
+    // that publishes it sets the real publishedAt and re-reads these words
+    // against what shipped. Dated after PO-2's draft, which ships first, and
+    // above it (newest first). The words describe what a person sees on the
+    // phone and claim no number nobody measured. Who is told: anyone who can
+    // open the New order page (Orders on, orders:request, which every role
+    // holds by default).
+    status: 'draft',
+    title: 'Place an order request from the mobile app',
+    summary:
+      "You can now place an order request in the StockPilot app on iPhone and iPad: choose the warehouse, search or browse what it has, add items or a whole kit to your cart, choose pickup or delivery and a needed-by time, and submit. If the app sends it but doesn't hear back, Check and finish sends the same request again, so it is never placed twice.",
+    publishedAt: '2026-10-12T17:10:00Z',
+    audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+    entries: [
+      {
+        id: 'phone-place-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Place an order in the mobile app',
+        whatChanged:
+          "The Orders screen in the app has a + button (and Place an order when the list is empty). It opens the order page: choose the warehouse to ship from, search by name, SKU or category, browse by category or Frequently ordered, and add items or a whole kit. Checkout shows your cart, who the order is for, pickup or delivery and the site, the needed-by time in your organization's time zone and manager notes. After you submit you see the order number and can open the order, or open a pickup or delivery request email as a draft.",
+        whyItMatters:
+          'Placing an order request needed the web. Now it works from the phone, with the same rules and the same words as the web.',
+        howItAffectsYou:
+          'Your cart is kept on your phone for each warehouse, for your account only. Submitting needs a connection; offline you can still browse the items as they were last loaded and build your cart. On an iPad the cart stays open beside the items. If you can approve orders, Review and approve takes you straight to the order.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        id: 'phone-place-order-once',
+        category: 'improved',
+        area: 'Orders',
+        title: "A lost answer on the phone can't place the same order twice",
+        whatChanged:
+          "If the app sends your order request and doesn't hear back, your cart stays as it was sent, with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it makes sure it is never placed and unlocks your cart.",
+        whyItMatters:
+          'A weak signal in a warehouse could leave you unsure whether an order request went through, and sending it again could place it twice.',
+        howItAffectsYou:
+          'Until you choose, the cart and its warehouse stay as they were sent. The app checks on its own when it comes back to the screen or the connection returns. If you sign out first, the app asks, and checks it the next time you sign in on that phone. Someone else who signs in on the same phone never sees your cart or your order request.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'phone-orders-list-current',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The Orders list in the app stays current',
+        whatChanged:
+          "The Orders list in the app loads again whenever you come back to it, says when it couldn't load instead of showing No orders yet, and labels every status the way the web does.",
+        whyItMatters:
+          'A new order did not show until the screen was opened again, and a list that failed to load looked empty.',
+        howItAffectsYou: 'Pull down on the list to load it again at any time.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
