@@ -82,6 +82,12 @@ export function storefrontInCartCopy(quantity: number): string {
 export const STOREFRONT_REMOVE_COPY = 'Remove';
 /** A line the server or the fresh catalog says can't be ordered from here. */
 export const STOREFRONT_LINE_NOT_ORDERABLE_COPY = "Can't be ordered from here anymore. Remove it.";
+/** A cart line's title while the catalog that names its item is loading or
+ *  could not be read: nothing is claimed about it yet. */
+export const STOREFRONT_LINE_DETAILS_PENDING_COPY = "This item's details aren't loaded yet.";
+/** A cart line's title once a catalog answer leaves its item out (its mark,
+ *  STOREFRONT_LINE_NOT_ORDERABLE_COPY, says what to do). */
+export const STOREFRONT_LINE_NOT_LISTED_COPY = 'An item no longer listed here';
 
 // ── Kits ────────────────────────────────────────────────────────────────────
 
@@ -207,7 +213,7 @@ export function signInHeldPlacedCopy(orderLabel: string | null): string {
 }
 export const SIGN_IN_HELD_UNCONFIRMED_TITLE_COPY = 'Your order request is not confirmed';
 export const SIGN_IN_HELD_UNCONFIRMED_COPY =
-  "An order request you sent before signing out still isn't confirmed. Choose Don't send it to make sure it's never placed, or see your orders.";
+  "An order request you sent before signing out still isn't confirmed. Choose Don't send it to stop it if it hasn't been placed yet, or see your orders.";
 export const SIGN_IN_HELD_NOT_NOW_COPY = 'Not now';
 /** "Don't send it" at sign-in: the answer was withdrawn (or refused), so
  *  nothing was placed. (Its cart went at the sign-out.) */

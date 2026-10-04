@@ -147,7 +147,8 @@ export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {
       // there when someone opens the tour, and What's New announces the
       // feature, so the tour does not launch again for everyone who finished it.
       title: 'Place an order',
-      body: 'Tap + to place an order request from your phone: search or browse, add items to your cart, then check out. Someone who approves orders reviews it before stock is reserved.',
+      // Shown to everyone who opens the tour, + or not (desk check F6.3).
+      body: 'If you can place orders, tap + to place an order request from your phone: search or browse, add items to your cart, then check out. Someone who approves orders reviews it before stock is reserved.',
       targetId: 'orders-place-order',
     },
     {

@@ -341,6 +341,11 @@ describe('misc helpers', () => {
 });
 
 describe('successRefLine', () => {
+  it('leaves out a warehouse with no name, never "SO-000049 ·  · 7 units" (phone desk check F6.4)', () => {
+    expect(successRefLine(49, 'b3f1c2d4-0000-0000-0000-000000000000', '', 7)).toBe('SO-000049 · 7 units');
+    expect(successRefLine(49, 'b3f1c2d4-0000-0000-0000-000000000000', '   ', 1)).toBe('SO-000049 · 1 unit');
+  });
+
   it('prints the CANONICAL order number, zero-padded, exactly as every other surface does', () => {
     expect(successRefLine(49, 'b3f1c2d4-0000-0000-0000-000000000000', 'DC4', 7)).toBe(
       'SO-000049 · DC4 · 7 units',

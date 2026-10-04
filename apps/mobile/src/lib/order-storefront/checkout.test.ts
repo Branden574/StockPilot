@@ -11,6 +11,9 @@ import {
   SUBMIT_REMOVE_UNORDERABLE_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
+  STOREFRONT_LINE_DETAILS_PENDING_COPY,
+  STOREFRONT_LINE_NOT_LISTED_COPY,
+  STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   checkoutNeededByZoneUnknownCopy,
   initialCartState,
   parseOrderCreateRequest,
@@ -22,6 +25,7 @@ import {
 import {
   buildOrderCreateBody,
   cartLineNote,
+  cartLineView,
   checkoutTotals,
   neededByRowValue,
   recheckRestoredCart,
@@ -140,8 +144,8 @@ describe('what a cart line says', () => {
   it('all available in the cart', () => {
     expect(cartLineNote(8, item(A, 'Planner', 8), false)).toEqual({ kind: 'at_max', message: 'All 8 available are in your cart' });
   });
-  it('not in the catalog, or refused by the server: can’t be ordered', () => {
-    expect(cartLineNote(1, undefined, false)).toEqual({ kind: 'not_orderable' });
+  it('left out of a catalog answer, or refused by the server: can’t be ordered', () => {
+    expect(cartLineNote(1, undefined, true)).toEqual({ kind: 'not_orderable' });
     expect(cartLineNote(1, item(A, 'Planner', 8), true)).toEqual({ kind: 'not_orderable' });
   });
   it('nothing to say', () => {
@@ -153,6 +157,39 @@ describe('what a cart line says', () => {
   });
   it('totals', () => {
     expect(checkoutTotals(base({ lines: [{ itemId: A, quantity: 2 }, { itemId: B, quantity: 5 }] }))).toEqual({ lines: 2, units: 7 });
+  });
+});
+
+describe('a cart line whose item the catalog shown does not name (desk check F6.2)', () => {
+  it('while the catalog loads or could not be read, nothing is claimed: a neutral title, no mark, no stepper', () => {
+    expect(cartLineNote(1, undefined, false)).toBeNull();
+    expect(cartLineView({ itemId: A, quantity: 1 }, undefined, false)).toEqual({
+      title: STOREFRONT_LINE_DETAILS_PENDING_COPY,
+      note: null,
+      stepper: false,
+    });
+  });
+  it('left out of a catalog answer (the snapshot’s notOrderable): marked once, under a title that is not the mark again', () => {
+    const v = cartLineView({ itemId: A, quantity: 1 }, undefined, true);
+    expect(v).toEqual({ title: STOREFRONT_LINE_NOT_LISTED_COPY, note: { kind: 'not_orderable' }, stepper: false });
+    expect(v.title).not.toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+  });
+  it('a known item: its name, its note, and the stepper unless it is refused', () => {
+    expect(cartLineView({ itemId: A, quantity: 8 }, item(A, 'Planner', 8), false)).toEqual({
+      title: 'Planner',
+      note: { kind: 'at_max', message: 'All 8 available are in your cart' },
+      stepper: true,
+    });
+    expect(cartLineView({ itemId: A, quantity: 1 }, item(A, 'Planner', 8), true)).toEqual({
+      title: 'Planner',
+      note: { kind: 'not_orderable' },
+      stepper: false,
+    });
+  });
+  it('no title is ever a uuid', () => {
+    for (const unorderable of [false, true]) {
+      expect(cartLineView({ itemId: A, quantity: 1 }, undefined, unorderable).title).not.toContain(A);
+    }
   });
 });
 

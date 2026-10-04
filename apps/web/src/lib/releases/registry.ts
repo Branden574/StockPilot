@@ -68,7 +68,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "A lost answer on the phone can't place the same order twice",
         whatChanged:
-          "If the app sends your order request and doesn't hear back, your cart stays as it was sent, with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it makes sure it is never placed and unlocks your cart.",
+          "If the app sends your order request and doesn't hear back, your cart stays as it was sent, with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
         whyItMatters:
           'A weak signal in a warehouse could leave you unsure whether an order request went through, and sending it again could place it twice.',
         howItAffectsYou:
@@ -123,7 +123,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "A lost answer can't place the same order twice",
         whatChanged:
-          "If the New order page sends your order request and doesn't hear back (a slow connection, a closed tab), the review stays open with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it makes sure it is never placed and unlocks your cart.",
+          "If the New order page sends your order request and doesn't hear back (a slow connection, a closed tab), the review stays open with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
         whyItMatters:
           'Pressing Submit again after a lost answer could place the same order twice, and the approver then had to find and cancel the copy.',
         howItAffectsYou:

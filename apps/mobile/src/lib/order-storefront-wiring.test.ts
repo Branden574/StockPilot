@@ -475,3 +475,27 @@ describe('the storefront’s words are core’s', () => {
     }
   });
 });
+
+describe('words that claim nothing untrue (desk check F6)', () => {
+  const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
+
+  it('a cart line is drawn from the tested view: no mark until a catalog answer leaves it out, and never the mark as its title', () => {
+    expect(cartPanel).toContain('const view = cartLineView(line, item, unorderable);');
+    expect(cartPanel).toContain('const unorderable = notOrderable.has(line.itemId);');
+    expect(cartPanel).toMatch(/<Body size=\{14\.5\} color=\{c\.ink\}>\s*\{view\.title\}\s*<\/Body>/);
+    expect(cartPanel).toMatch(/\{view\.stepper \? \(\s*<Stepper/);
+    expect(cartPanel).not.toContain('item ? item.name : STOREFRONT_LINE_NOT_ORDERABLE_COPY');
+    expect(cartPanel).not.toContain('cartLineNote(');
+  });
+
+  it('the Orders tour does not tell someone with no + to tap +', () => {
+    const tour = read('src/lib/onboarding.ts');
+    expect(tour).not.toContain("body: 'Tap + to place an order request");
+    expect(tour).toContain("body: 'If you can place orders, tap + to place an order request from your phone:");
+  });
+
+  it('the pickup hint and the success line take the warehouse name as it is (core leaves an empty one out)', () => {
+    expect(checkout).toContain("{storefrontPickupHintCopy(warehouse?.name ?? '')}");
+    expect(placed).toContain('{successReference(placed, warehouseName)}');
+  });
+});

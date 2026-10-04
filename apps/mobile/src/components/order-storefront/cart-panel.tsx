@@ -29,7 +29,7 @@ import {
   increaseLabel,
   quantityButtonLabel,
 } from '@/lib/order-storefront/a11y';
-import { cartLineNote, checkoutTotals } from '@/lib/order-storefront/checkout';
+import { cartLineView, checkoutTotals } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -131,12 +131,15 @@ export function CartPanel({
         const name = item?.name ?? line.itemId;
         const available = item ? availableOf(item) : 0;
         const unorderable = notOrderable.has(line.itemId);
-        const note = cartLineNote(line.quantity, item, unorderable);
+        // Marked only from a catalog answer (or the server's refusal): while
+        // the catalog loads, a line it does not name yet is not marked.
+        const view = cartLineView(line, item, unorderable);
+        const note = view.note;
         return (
           <View key={line.itemId} style={[styles.line, { borderColor: c.hair }]}>
             <View style={{ gap: 2 }}>
               <Body size={14.5} color={c.ink}>
-                {item ? item.name : STOREFRONT_LINE_NOT_ORDERABLE_COPY}
+                {view.title}
               </Body>
               {item?.sku ? (
                 <Mono size={11} color={c.ink4}>
@@ -150,7 +153,7 @@ export function CartPanel({
               ) : null}
             </View>
             <View style={styles.lineControls}>
-              {unorderable || !item ? null : (
+              {view.stepper ? (
                 <Stepper
                   quantity={line.quantity}
                   available={available}
@@ -164,7 +167,7 @@ export function CartPanel({
                   onInc={() => onInc(line.itemId)}
                   onCount={() => onQuantity(line.itemId)}
                 />
-              )}
+              ) : null}
               <SmallAction
                 label={STOREFRONT_REMOVE_COPY}
                 accessibilityLabel={`${STOREFRONT_REMOVE_COPY} ${name}`}

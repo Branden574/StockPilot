@@ -9,6 +9,8 @@ import {
   SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
   STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
+  STOREFRONT_LINE_DETAILS_PENDING_COPY,
+  STOREFRONT_LINE_NOT_LISTED_COPY,
   availableOf,
   cartLineAtMaxCopy,
   cartLineOverCopy,
@@ -153,17 +155,43 @@ export type CartLineNote =
   | null;
 
 /** What one cart line says under it: can't be ordered, more than available
- *  (kept, the web's warning), or everything available is in the cart. */
+ *  (kept, the web's warning), or everything available is in the cart.
+ *  `unorderable` is the snapshot's notOrderable, which only a catalog answer
+ *  (or the server's refusal) fills: a line whose item is simply not known
+ *  yet (the catalog loading, or its read failed) is not marked (desk check
+ *  F6.2). */
 export function cartLineNote(
   quantity: number,
   item: StorefrontItem | undefined,
   unorderable: boolean,
 ): CartLineNote {
-  if (unorderable || !item) return { kind: 'not_orderable' };
+  if (unorderable) return { kind: 'not_orderable' };
+  if (!item) return null;
   const available = availableOf(item);
   if (quantity > available) return { kind: 'over', message: cartLineOverCopy(available) };
   if (quantity === available && available > 0) return { kind: 'at_max', message: cartLineAtMaxCopy(available) };
   return null;
+}
+
+/** One cart line as the cart panel draws it: its title (the item's name; a
+ *  neutral sentence while its item is not known yet; never a uuid, and
+ *  never the mark again as the title), what it says under it, and whether
+ *  it has a stepper (a known item that is not marked). */
+export interface CartLineView {
+  title: string;
+  note: CartLineNote;
+  stepper: boolean;
+}
+export function cartLineView(
+  line: { itemId: string; quantity: number },
+  item: StorefrontItem | undefined,
+  unorderable: boolean,
+): CartLineView {
+  return {
+    title: item ? item.name : unorderable ? STOREFRONT_LINE_NOT_LISTED_COPY : STOREFRONT_LINE_DETAILS_PENDING_COPY,
+    note: cartLineNote(line.quantity, item, unorderable),
+    stepper: item !== undefined && !unorderable,
+  };
 }
 
 /** "3 items · 12 units" counts (core cartTotals). */

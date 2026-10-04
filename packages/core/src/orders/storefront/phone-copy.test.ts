@@ -72,6 +72,13 @@ describe('the templated sentences', () => {
     expect(phone.SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY.startsWith(ORDER_ON_BEHALF_NOT_PERMITTED_COPY)).toBe(true);
   });
 
+  it('the sign-in prompt never promises it is never placed (it may already have been)', () => {
+    expect(phone.SIGN_IN_HELD_UNCONFIRMED_COPY).not.toMatch(/never placed/);
+    expect(phone.SIGN_IN_HELD_UNCONFIRMED_COPY).toBe(
+      "An order request you sent before signing out still isn't confirmed. Choose Don't send it to stop it if it hasn't been placed yet, or see your orders.",
+    );
+  });
+
   it('no name here repeats a name copy.ts already exports', () => {
     for (const name of Object.keys(phone)) expect(Object.keys(copy)).not.toContain(name);
   });

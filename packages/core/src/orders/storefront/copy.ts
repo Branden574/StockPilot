@@ -64,7 +64,8 @@ export function storefrontWillCallDeskCopy(warehouseName: string): string {
 }
 /** Under Pick up at. Fixed words, no promised time (owner decision O2). */
 export function storefrontPickupHintCopy(warehouseName: string): string {
-  return `Collect it at the ${warehouseName} will-call desk once it's ready.`;
+  const name = warehouseName.trim();
+  return name ? `Collect it at the ${name} will-call desk once it's ready.` : "Collect it at the will-call desk once it's ready.";
 }
 export const STOREFRONT_DELIVER_TO_COPY = 'Deliver to';
 export const STOREFRONT_CHOOSE_SITE_COPY = 'Choose a site';

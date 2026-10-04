@@ -81,6 +81,9 @@ const ROUTING = { to: 'intake@example.org', cc: 'copy@example.org', toName: null
 describe('what the success screen says', () => {
   it('the reference line, the status in core’s words, and who hears about it', () => {
     expect(successReference(placed(), 'DC4')).toBe('SO-000123 · DC4 · 12 units');
+    // A warehouse no longer listed (or the turned-off path): its empty name
+    // is left out, never "SO-000123 ·  · 12 units" (desk check F6.4).
+    expect(successReference(placed(), '')).toBe('SO-000123 · 12 units');
     expect(orderStatusLabel('pending_approval')).toBe('Pending');
     expect(orderStatusLabel('staged_for_delivery')).toBe('Ready');
     expect(orderStatusLabel('mystery_state')).toBe('mystery state');

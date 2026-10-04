@@ -3609,3 +3609,17 @@ describe('placing an order in the mobile app (phone ordering PO-4) is held as a 
     expect(r.summary).toContain('never placed twice');
   });
 });
+
+/**
+ * "Don't send it" cannot promise an order request is never placed: when the
+ * earlier send already placed it, the withdraw answers with the order
+ * instead (PO-4 desk check F6.1). Neither held draft may say otherwise.
+ */
+describe('the order drafts never promise that Don\'t send it stops an order already placed', () => {
+  it.each(['phone-place-order-2026-10', 'order-submit-once-2026-10'])('%s', (id) => {
+    const r = RELEASES.find((x) => x.id === id)!;
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/never placed and unlocks|makes? sure it(?: is|'s) never placed/i);
+    expect(text).toContain("Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.");
+  });
+});
