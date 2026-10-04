@@ -852,6 +852,18 @@ WEB_TESTS=(
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
   src/server/actions/platform-admin.remove-org.test.ts
+  # Approval follows the permission (0390): the app asks the effective
+  # orders:approve where the database does. Delivery assignment and the
+  # in-transit mark write through their SECURITY DEFINER functions (no
+  # user-client UPDATE of the order left), with every refusal mapped by hint;
+  # a staff driver without orders:approve is refused in true words (owner
+  # decision O3, default); the requester self-cancel window follows the
+  # permission, not the role; on-behalf ordering is refused for a revoked
+  # manager and allowed for granted staff, and the New order page computes
+  # that on the server.
+  src/server/services/order-requests.approve-permission.test.ts
+  src/server/actions/order-requests.on-behalf.test.ts
+  src/components/orders/storefront/storefront-on-behalf.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

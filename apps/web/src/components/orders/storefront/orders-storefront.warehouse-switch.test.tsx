@@ -140,7 +140,7 @@ function page(warehouseId: string) {
       kitsPromise={settled({ status: 'ok' as const, kits: [] })}
       kitsEnabled={false}
       chartersForWarehouse={SITES[warehouseId]!}
-      viewerRole="manager"
+      canActOnBehalf
       viewerName="QA Manager"
       viewerEmail="manager@example.test"
       orgTimezone="America/Los_Angeles"

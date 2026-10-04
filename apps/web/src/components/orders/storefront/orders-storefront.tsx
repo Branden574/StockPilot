@@ -35,7 +35,7 @@ import { toast } from 'sonner';
 import { usePerfUseful } from '@/components/perf/perf-useful';
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
-import { isManagerOrAbove, type OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
+import type { OrgEmailRoutingRecipientsDto } from '@stockpilot/core';
 
 import { CartProvider, clearCartDraft, initialCartState, useCart } from '../v2/cart-context';
 import {
@@ -126,7 +126,14 @@ export interface OrdersStorefrontProps {
    */
   kitsEnabled: boolean;
   chartersForWarehouse: StorefrontCharter[];
-  viewerRole: string;
+  /**
+   * Whether the viewer may order on someone else's behalf: the EFFECTIVE
+   * orders:approve permission (overrides applied), computed by the server page
+   * with can(ctx, ...), because this client component has no request context.
+   * It is the rule the order_requests_insert policy's on-behalf branch applies
+   * since 0390, and the one createOrderRequestAction re-checks.
+   */
+  canActOnBehalf: boolean;
   viewerName: string | null;
   viewerEmail: string;
   /**
@@ -231,7 +238,7 @@ function StorefrontShell({
   kitsPromise,
   kitsEnabled,
   chartersForWarehouse,
-  viewerRole,
+  canActOnBehalf,
   viewerName,
   viewerEmail,
   orgTimezone,
@@ -252,9 +259,6 @@ function StorefrontShell({
   const warehouseName =
     warehouses.find((w) => w.id === warehouseId)?.name ?? warehouseId;
   const charter = chartersForWarehouse.find((c) => c.id === state.charterId) ?? null;
-  const canActOnBehalf = isManagerOrAbove(
-    viewerRole as Parameters<typeof isManagerOrAbove>[0],
-  );
   const viewerLabel = viewerName?.trim() || viewerEmail;
 
   const { unitCount } = cartTotals(state.lines);

@@ -88,7 +88,7 @@ describe('order transitions are compare-and-set', () => {
     expect(sendOrderRequestEmail).not.toHaveBeenCalled();
   });
 
-  it('markInTransit pins status=staged_for_delivery and refuses a lost race without re-notifying', async () => {
+  it('markInTransit refuses a lost race without re-notifying (the compare-and-set lives in mark_order_in_transit since 0390)', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
         data: {
@@ -99,13 +99,15 @@ describe('order transitions are compare-and-set', () => {
         },
         error: null,
       },
-      'order_requests.update.maybeSingle': { data: null, error: null },
+      // The function read the row under its lock and found it moved on.
+      'rpc:mark_order_in_transit': {
+        data: null,
+        error: { code: 'P0001', message: 'order_status_changed', hint: 'status_changed', details: 'in_transit' },
+      },
     });
     await expect(svc(stub).markInTransit('ord-1')).rejects.toMatchObject({ code: 'conflict' });
-    expect(argsFor(stub, 'order_requests.update', 'eq')).toContainEqual([
-      'status',
-      'staged_for_delivery',
-    ]);
+    expect(stub.rpcCalls).toEqual([{ name: 'mark_order_in_transit', args: { p_id: 'ord-1' } }]);
+    expect(stub.chains.get('order_requests.update')).toBeUndefined();
     expect(audit).not.toHaveBeenCalled();
     expect(dispatchEvent).not.toHaveBeenCalled();
     expect(sendOrderRequestEmail).not.toHaveBeenCalled();

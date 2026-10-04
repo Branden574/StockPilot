@@ -164,7 +164,7 @@ async function openPage(
         kitsPromise={kits instanceof Promise ? kits : settled(kits)}
         kitsEnabled={kitsEnabled}
         chartersForWarehouse={[]}
-        viewerRole="viewer"
+        canActOnBehalf={false}
         viewerName="Lillian"
         viewerEmail="lillian@example.test"
         orgTimezone="America/Los_Angeles"
