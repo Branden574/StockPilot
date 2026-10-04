@@ -333,7 +333,9 @@ export default async function OrderDetailPage({
   // Phase 4 — candidate drivers for the AssignDeliveryDialog only need
   // loading when the dialog can actually render: a canApprove viewer on a
   // staged_for_delivery order. Every other status skips the round-trip.
-  const driversGate = canApprove && request.status === 'staged_for_delivery';
+  // 0390: assigning needs orders:assign_delivery as well as orders:approve.
+  const canAssignDelivery = can(ctx, 'orders:assign_delivery');
+  const driversGate = canApprove && canAssignDelivery && request.status === 'staged_for_delivery';
 
   // Carrier shipping (EasyPost). showShippingPanel needs no round trip — the
   // panel renders (and self-hides via its own GET when no shipment exists)
@@ -1685,6 +1687,7 @@ export default async function OrderDetailPage({
             // none of the manager-only controls.
             <ManagerActionsPanel
               canApprove={canApprove}
+              canAssignDelivery={canAssignDelivery}
               stockGates={stockGates}
               approveNotice={approveNotice}
               partialPreview={partialPreview}

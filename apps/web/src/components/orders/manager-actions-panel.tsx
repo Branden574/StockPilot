@@ -112,6 +112,11 @@ interface Props {
    *  who sees the panel ONLY for in-transit actions; they shouldn't
    *  see Approve / Deny / Reassign / Internal-Notes. */
   canApprove: boolean;
+  /** Whether the viewer holds orders:assign_delivery, the permission
+   *  assignDelivery and assign_order_delivery ask besides orders:approve
+   *  (0390). Assign delivery shows only with both, as on the phone.
+   *  Omitted: false (the button stays hidden). */
+  canAssignDelivery?: boolean;
   /** The stock-dependent actions (core orderStockGates, fed by readiness on
    *  the server): "Approve partial" at pending_approval and "Resume
    *  fulfillment" at backordered, each hidden, enabled or DISABLED with the
@@ -219,6 +224,7 @@ export function ManagerActionsPanel({
   signedAt,
   drivers,
   canApprove,
+  canAssignDelivery = false,
   stockGates = NO_STOCK_GATES,
   approveNotice = null,
   partialPreview = null,
@@ -876,7 +882,9 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {status === 'staged_for_delivery' && canApprove && (
+          {/* assign_order_delivery asks orders:assign_delivery AND
+              orders:approve (0390); the phone shows it the same way. */}
+          {status === 'staged_for_delivery' && canApprove && canAssignDelivery && (
             <AssignDeliveryDialog
               orderId={orderId}
               drivers={drivers}

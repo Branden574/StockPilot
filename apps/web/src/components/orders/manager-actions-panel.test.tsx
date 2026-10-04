@@ -88,6 +88,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     signedAt: null,
     drivers: [],
     canApprove: false,
+    canAssignDelivery: false,
     viewerRole: 'staff',
     viewerUserId: 'me',
     assignedPickerId: null,
@@ -888,6 +889,21 @@ describe('ManagerActionsPanel — approval-class buttons follow orders:approve (
     unmount();
     render(<ManagerActionsPanel {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: 'Reopen picking' })).toBeInTheDocument();
+  });
+
+  it('Assign delivery needs orders:approve AND orders:assign_delivery, as the server and the phone ask', () => {
+    const staged = { status: 'staged_for_delivery' as const, fulfillmentType: 'delivery' as const };
+    for (const [canApprove, canAssignDelivery, shown] of [
+      [true, true, true],
+      [true, false, false],
+      [false, true, false],
+    ] as const) {
+      const { unmount } = render(
+        <ManagerActionsPanel {...baseProps({ ...staged, canApprove, canAssignDelivery, viewerRole: 'staff' })} />,
+      );
+      expect(screen.queryByRole('button', { name: /(Assign|Reassign) delivery/ }) !== null, `${canApprove}/${canAssignDelivery}`).toBe(shown);
+      unmount();
+    }
   });
 
   it('an assigned staff driver without orders:approve is not offered Mark in transit; an approver is', () => {
