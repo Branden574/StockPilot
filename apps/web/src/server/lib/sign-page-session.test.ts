@@ -144,4 +144,17 @@ describe('isActiveOrgMember (is_org_member, read with the admin client)', () => 
       await isActiveOrgMember(stub([{ organization_id: 'o', user_id: 'u', accepted_at: 'x' }], [{ id: 'u', disabled_at: 'y' }]), 'o', 'u'),
     ).toBe(false);
   });
+
+  it("review 5: an impersonation membership counts only until it expires (is_org_member's third condition)", async () => {
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const profile = [{ id: 'u', disabled_at: null }];
+    const membership = (expires: string | null) => [
+      { organization_id: 'o', user_id: 'u', accepted_at: 'x', impersonation_expires_at: expires },
+    ];
+    expect(await isActiveOrgMember(stub(membership(null), profile), 'o', 'u')).toBe(true);
+    expect(await isActiveOrgMember(stub(membership(at(60 * 60 * 1000)), profile), 'o', 'u')).toBe(true);
+    expect(await isActiveOrgMember(stub(membership(at(-60 * 1000)), profile), 'o', 'u')).toBe(false);
+    // A value that cannot be read as a time is not a live membership.
+    expect(await isActiveOrgMember(stub(membership('not-a-time'), profile), 'o', 'u')).toBe(false);
+  });
 });

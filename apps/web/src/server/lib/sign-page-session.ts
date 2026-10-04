@@ -96,8 +96,10 @@ interface Chain {
 
 /**
  * Is `userId` an accepted member of `organizationId` whose account is not
- * disabled (is_org_member's rule)? Read with the admin client; a failed read
- * is "no".
+ * disabled, and whose membership, if it is a platform impersonation grant,
+ * has not expired (is_org_member's rule, all three conditions)? Read with the
+ * admin client; a failed read, or an expiry that cannot be read as a time, is
+ * "no".
  */
 export async function isActiveOrgMember(
   admin: MembershipClient,
@@ -107,7 +109,7 @@ export async function isActiveOrgMember(
   try {
     const [member, profile] = await Promise.all([
       (admin.from('organization_members') as Chain)
-        .select('user_id')
+        .select('user_id, impersonation_expires_at')
         .eq('organization_id', organizationId)
         .eq('user_id', userId)
         .not('accepted_at', 'is', null)
@@ -118,6 +120,9 @@ export async function isActiveOrgMember(
         .maybeSingle(),
     ]);
     if (member.error || !member.data) return false;
+    // An "Act as" membership (0176) counts only until it expires (review 5).
+    const expires = (member.data as { impersonation_expires_at?: unknown }).impersonation_expires_at;
+    if (expires != null && !(typeof expires === 'string' && Date.parse(expires) > Date.now())) return false;
     if (profile.error || !profile.data) return false;
     return (profile.data as { disabled_at?: unknown }).disabled_at == null;
   } catch {
