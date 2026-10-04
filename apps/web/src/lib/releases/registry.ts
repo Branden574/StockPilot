@@ -159,7 +159,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Pressing Submit again after a lost answer could place the same order twice, and the approver then had to find and cancel the copy.',
         howItAffectsYou:
-          "Until you choose, your cart, the setup bar and the warehouse switch stay as they were sent. If you reload the page, it remembers and checks for you. The pending order request is kept only for your account on that browser: someone else who signs in there never sees it or sends it.",
+          "Until you choose, your cart, the setup bar and the warehouse switch stay as they were sent, and items you start an order with from Items wait until then. If you reload the page or open it in another tab, it remembers and checks for you. The pending order request is kept only for your account and organization on that browser: someone else who signs in there never sees it or sends it, and if you switch to another organization, switch back to finish it.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders/new', label: 'Place an order' },
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },

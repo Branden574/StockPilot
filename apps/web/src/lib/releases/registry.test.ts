@@ -3254,4 +3254,11 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(text).not.toMatch(/\bbook\b/i);
     expect(r.summary).toContain('never placed twice');
   });
+
+  it('says what review round 1 changed a person can see: other tabs, another organization, items started from Items', () => {
+    const once = release().entries[0]!;
+    expect(once.howItAffectsYou).toMatch(/another tab/);
+    expect(once.howItAffectsYou).toMatch(/switch to another organization, switch back to finish it/);
+    expect(once.howItAffectsYou).toMatch(/start an order with from Items wait/);
+  });
 });
