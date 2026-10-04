@@ -340,7 +340,7 @@ else
     bad "6a: a new order reader: $R after $((t1 - t0)) ms"
   fi
   t0="$(now_ms)"
-  R="$(printf "set lock_timeout = '3s';\nbegin;\nselect 'locked:' || count(*)::text from public.order_requests where id = '%s' for update;\nrollback;\n" "$SIDEX" | "${PSQL[@]}" 2>&1)"
+  R="$(printf "set lock_timeout = '3s';\nbegin;\nselect 'locked:' || count(*)::text from (select 1 from public.order_requests where id = '%s' for update) x;\nrollback;\n" "$SIDEX" | "${PSQL[@]}" 2>&1)"
   t1="$(now_ms)"
   if [ "$R" = "locked:1" ] && [ $((t1 - t0)) -ge 300 ] && [ $((t1 - t0)) -lt 1800 ]; then
     ok "6b: a FOR UPDATE row lock waited for the hold ($((t1 - t0)) ms) and then went through (K3: no RPC holds a row while the file waits for it)"
