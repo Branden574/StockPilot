@@ -13,7 +13,7 @@ vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: { forCurrentUser: forCurrentUserMock },
 }));
 
-import { loadFrequentlyOrdered } from './orders-frequently-ordered';
+import { loadFrequentlyOrdered, readFrequentlyOrdered } from './orders-frequently-ordered';
 
 const WAREHOUSE = 'wh-1';
 const catalog = (items: Array<{ id: string; imageUrl: string | null }>) =>
@@ -172,5 +172,68 @@ describe('loadFrequentlyOrdered', () => {
       rpcMock.mockResolvedValue({ data: null, error: null });
       await expect(loadFrequentlyOrdered(WAREHOUSE, CATALOG())).resolves.toEqual([]);
     });
+  });
+});
+
+// Phone ordering PO-3: the phone's Bearer request has no cookie session, so
+// the route passes its own client; the phone takes photos from its own route,
+// so no fallback is signed; and the phone tells "nothing ordered" from "could
+// not be read".
+describe('readFrequentlyOrdered (the phone catalog route)', () => {
+  it("asks with the caller's own client, never the cookie client", async () => {
+    createClientMock.mockRejectedValue(new Error('cookie client used on a Bearer request'));
+    const own = { rpc: vi.fn().mockResolvedValue(top(['a', 4])) };
+    const out = await readFrequentlyOrdered(WAREHOUSE, catalog([{ id: 'a', imageUrl: null }]), {
+      client: own as never,
+      imageFallback: false,
+    });
+    expect(out).toEqual({
+      status: 'ok',
+      entries: [{ itemId: 'a', count: 4, fallbackImageUrl: null }],
+    });
+    expect(own.rpc).toHaveBeenCalledWith('order_request_top_skus_for_warehouse', {
+      p_warehouse_id: 'wh-1',
+      p_days: 30,
+      p_limit: 10,
+    });
+    expect(createClientMock).not.toHaveBeenCalled();
+  });
+
+  it('signs no fallback photo when the caller takes photos elsewhere', async () => {
+    const own = { rpc: vi.fn().mockResolvedValue(top(['a', 2], ['b', 1])) };
+    await readFrequentlyOrdered(
+      WAREHOUSE,
+      catalog([
+        { id: 'a', imageUrl: null },
+        { id: 'b', imageUrl: null },
+      ]),
+      { client: own as never, imageFallback: false },
+    );
+    expect(forCurrentUserMock).not.toHaveBeenCalled();
+    expect(thumbsMock).not.toHaveBeenCalled();
+  });
+
+  it('a refused, failed or thrown read is an error, never an empty strip', async () => {
+    const refused = { rpc: vi.fn().mockResolvedValue({ data: null, error: { code: '42501' }, status: 403 }) };
+    await expect(
+      readFrequentlyOrdered(WAREHOUSE, catalog([{ id: 'a', imageUrl: null }]), { client: refused as never }),
+    ).resolves.toEqual({ status: 'error' });
+    const thrown = { rpc: vi.fn().mockRejectedValue(new Error('reset')) };
+    await expect(
+      readFrequentlyOrdered(WAREHOUSE, catalog([{ id: 'a', imageUrl: null }]), { client: thrown as never }),
+    ).resolves.toEqual({ status: 'error' });
+    const ok = { rpc: vi.fn().mockResolvedValue(top(['a', 1])) };
+    await expect(
+      readFrequentlyOrdered(WAREHOUSE, Promise.reject(new Error('catalog down')), {
+        client: ok as never,
+      }),
+    ).resolves.toEqual({ status: 'error' });
+  });
+
+  it('nothing ordered lately is ok and empty', async () => {
+    const own = { rpc: vi.fn().mockResolvedValue({ data: [], error: null }) };
+    await expect(
+      readFrequentlyOrdered(WAREHOUSE, catalog([{ id: 'a', imageUrl: null }]), { client: own as never }),
+    ).resolves.toEqual({ status: 'ok', entries: [] });
   });
 });

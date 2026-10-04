@@ -458,6 +458,13 @@ interface CatalogScope {
 
 type RpcResult = { data: unknown; error: { message: string } | null };
 
+/**
+ * The caller's OWN client, for a request whose session is not in cookies: a
+ * phone's Bearer request passes ctx.supabase (phone ordering PO-3). Left out,
+ * the cookie client is used, as the web always has.
+ */
+export type CatalogScopeClient = Pick<Awaited<ReturnType<typeof createClient>>, 'rpc'>;
+
 function readUuidSet(label: string, res: RpcResult): Set<string> {
   // A failed read DENIES: no scope is built from a helper that did not answer.
   if (res.error) {
@@ -548,7 +555,10 @@ function parseScopeKey(key: string): CatalogScope | null {
  *     OR (organization_id, category_id) IN rls_cat_allowed_category_ids() )
  *
  * and this evaluates those SAME five helpers, as the caller (their own cookie
- * client, so auth.uid() is theirs), for this one org and warehouse. Owner,
+ * client, so auth.uid() is theirs; a phone's Bearer request passes its own
+ * client as `client`, because the cookie client is anonymous there and would
+ * resolve every staff member and viewer to an empty catalog, silently), for
+ * this one org and warehouse. Owner,
  * admin and manager skip it: for them both halves are true by role (see
  * FULL_VIEW_ROLES). A staff member or viewer whose view of the warehouse turns
  * out to be the full one gets the same shared 'ALL' variant as the owner.
@@ -561,10 +571,11 @@ function parseScopeKey(key: string): CatalogScope | null {
 export async function resolveCatalogScopeKey(
   viewer: CatalogViewer,
   warehouseId: string,
+  client?: CatalogScopeClient,
 ): Promise<string> {
   if (FULL_VIEW_ROLES.has(viewer.role)) return FULL_CATALOG_SCOPE_KEY;
 
-  const supabase = await createClient();
+  const supabase = client ?? (await createClient());
   // GET: the helpers are STABLE, so PostgREST runs them read-only. Each name
   // is a literal at its call: the stock-write guard
   // (inventory-list-invalidation.guard.test.ts) refuses an RPC it cannot name.
@@ -633,9 +644,13 @@ export async function resolveCatalogScopeKey(
  * TTL tradeoff (FIX 5): 30s → 60s halves the cache-miss rate for the
  * heaviest per-request work. The cost is availability numbers being up
  * to a minute stale on cards — acceptable because they're advisory:
- * the submit path re-validates against live stock/reservations, and
- * the cap warnings in the cart handle any drift. The SCOPE is never
- * stale: it is resolved live on every request.
+ * submitting an order request reserves nothing and does not check stock
+ * (corrected 2026-10-04, phone ordering PO-3; this used to say submit
+ * re-validates live stock). Stock is checked against live stock and
+ * holds when the order is approved (approve_order_request refuses
+ * insufficient_stock; approve_partial reserves what is there and
+ * backorders the rest), and the cap warnings in the cart handle any
+ * drift. The SCOPE is never stale: it is resolved live on every request.
  */
 export const loadCatalogItemsCached = unstable_cache(
   async (
@@ -654,8 +669,9 @@ export const loadCatalogItemsCached = unstable_cache(
 export async function loadCatalogItems(
   viewer: CatalogViewer,
   warehouseId: string,
+  client?: CatalogScopeClient,
 ): Promise<CatalogItem[]> {
-  const accessKey = await resolveCatalogScopeKey(viewer, warehouseId);
+  const accessKey = await resolveCatalogScopeKey(viewer, warehouseId, client);
   return loadCatalogItemsCached(viewer.organizationId, warehouseId, accessKey);
 }
 

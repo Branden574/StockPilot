@@ -416,6 +416,74 @@ describe("loadCatalogItems — the catalog is the caller's RLS view of the wareh
   );
 });
 
+// Phone ordering PO-3: a phone's Bearer request has no cookie session, so the
+// cookie client is anonymous there and every helper would answer for nobody: a
+// staff member or viewer got an EMPTY catalog, with no error. The route passes
+// the caller's own client; the scope is then exactly the cookie path's.
+describe("loadCatalogItems — the caller's own client (a Bearer request)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createClientMock.mockRejectedValue(new Error('cookie client used on a Bearer request'));
+  });
+
+  it('a category-restricted viewer: the helpers go to the passed client, the cookie client is never made', async () => {
+    const own = makeCallerClient({
+      assigned: [WH],
+      pairs: [{ warehouse_id: WH, charter_id: CHARTER_A }],
+      allowed: [{ organization_id: ORG, category_id: CAT_Y }],
+    });
+    const admin = makeFilteringAdmin(ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    const items = await loadCatalogItems(viewer('viewer'), WH, own as never);
+    expect(items.map((i) => i.id).sort()).toEqual(['a-y', 'g-y']);
+    expect(own.rpc.mock.calls.map(([name]) => name).sort()).toEqual([
+      'rls_cat_allowed_category_ids',
+      'rls_cat_unrestricted_org_ids',
+      'rls_inv_read_assigned_warehouse_ids',
+      'rls_inv_read_full_warehouse_ids',
+      'rls_inv_read_warehouse_charter_ids',
+    ]);
+    expect(createClientMock).not.toHaveBeenCalled();
+  });
+
+  it('the passed client gives the same key as the cookie client with the same answers', async () => {
+    const answers = {
+      assigned: [WH],
+      pairs: [{ warehouse_id: WH, charter_id: CHARTER_B }],
+      allowed: [
+        { organization_id: ORG, category_id: CAT_X },
+        { organization_id: ORG, category_id: CAT_Y },
+      ],
+    };
+    const viaClient = await resolveCatalogScopeKey(viewer('staff'), WH, makeCallerClient(answers) as never);
+    createClientMock.mockResolvedValue(makeCallerClient(answers));
+    const viaCookie = await resolveCatalogScopeKey(viewer('staff'), WH);
+    expect(viaClient).toBe(viaCookie);
+    expect(viaClient).not.toBe(FULL_CATALOG_SCOPE_KEY);
+  });
+
+  it('a failed helper on the passed client still denies (throws)', async () => {
+    const own = makeCallerClient({
+      assigned: [WH],
+      override: { rls_cat_allowed_category_ids: { data: null, error: { message: 'boom' } } },
+    });
+    await expect(resolveCatalogScopeKey(viewer('viewer'), WH, own as never)).rejects.toThrow(
+      /rls_cat_allowed_category_ids failed/,
+    );
+  });
+
+  it.each(['owner', 'admin', 'manager'] as const)(
+    '%s: ALL with no read on the passed client either',
+    async (role) => {
+      const own = makeCallerClient({});
+      await expect(resolveCatalogScopeKey(viewer(role), WH, own as never)).resolves.toBe(
+        FULL_CATALOG_SCOPE_KEY,
+      );
+      expect(own.rpc).not.toHaveBeenCalled();
+    },
+  );
+});
+
 /* ---- every orderable item, not the first 500 by name ---- */
 
 // Production, 2026-09-25: DC4 held 565 orderable items and the catalog read

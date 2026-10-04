@@ -147,6 +147,47 @@ describe('loadOrderKits', () => {
   });
 });
 
+// Phone ordering PO-3: a phone's Bearer request has no cookie session, so the
+// cookie client and the request-cached module read answer as nobody. The
+// route hands over its context's own modules and client instead.
+describe('loadOrderKits with the caller handed over (a Bearer request)', () => {
+  it("reads with the caller's client and modules, never the cookie client or the request cache", async () => {
+    createClientMock.mockRejectedValue(new Error('cookie client used on a Bearer request'));
+    modulesMock.mockRejectedValue(new Error('request cache used on a Bearer request'));
+    const stub = client({ data: [NEW_HIRE], error: null });
+    const out = await loadOrderKits(ORG, DC4, Promise.resolve({ items: DC4_CATALOG }), {
+      modules: new Set(['orders', 'bundles']),
+      client: stub.client as never,
+    });
+    expect(out.status).toBe('ok');
+    expect(out.status === 'ok' && out.kits.map((k) => k.bundleId)).toEqual(['b-new-hire']);
+    expect(stub.from).toHaveBeenCalledWith('bundles');
+    expect(createClientMock).not.toHaveBeenCalled();
+    expect(modulesMock).not.toHaveBeenCalled();
+  });
+
+  it("the caller's modules decide: Bundles off reads nothing", async () => {
+    const stub = client({ data: [NEW_HIRE], error: null });
+    const out = await loadOrderKits(ORG, DC4, Promise.resolve({ items: DC4_CATALOG }), {
+      modules: new Set(['orders']),
+      client: stub.client as never,
+    });
+    expect(out).toEqual({ status: 'ok', kits: [] });
+    expect(stub.from).not.toHaveBeenCalled();
+    expect(modulesMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed read through the caller's client is still an error, never no kits", async () => {
+    const stub = client({ data: null, error: { message: 'boom', code: '57014' } });
+    await expect(
+      loadOrderKits(ORG, DC4, Promise.resolve({ items: DC4_CATALOG }), {
+        modules: new Set(['orders', 'bundles']),
+        client: stub.client as never,
+      }),
+    ).resolves.toEqual({ status: 'error' });
+  });
+});
+
 describe('resolveKits: which bundles are offered', () => {
   it('a component the visitor cannot read (row level security leaves it empty) drops the kit', () => {
     // Game Day Kit: a viewer granted only Sports reads the Football but not the
