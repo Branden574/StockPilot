@@ -29,6 +29,25 @@ const TEST_ROUTING = {
   ccName: DELIVERY_REQUEST_RECIPIENTS.ccName,
 };
 
+const PLACED = {
+  order: {
+    id: 'b3f1c2d4-1111-2222-3333-444455556666',
+    orderNumber: 49,
+    orderLabel: 'SO-000049',
+    status: 'pending_approval',
+    warehouseId: 'wh-1',
+    fulfillmentType: 'delivery' as const,
+    deliveryCharterId: 'ch-1',
+    neededBy: '2026-08-05T16:00:00.000Z',
+    lineCount: 1,
+    unitCount: 5,
+    createdAt: '2026-08-01T16:00:00.000Z',
+    requestedFor: { self: true as const },
+  },
+  replay: false,
+  viaWithdraw: false,
+};
+
 const ITEM: CatalogItem = {
   id: 'i-1',
   sku: 'APP-POLO-W',
@@ -72,7 +91,26 @@ function renderSuccess(overrides: Record<string, unknown> = {}) {
     },
     deliveryRecipients: TEST_ROUTING,
     submitting: false,
-    submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
+    submitted: {
+      order: {
+        id: 'b3f1c2d4-1111-2222-3333-444455556666',
+        orderNumber: 49,
+        orderLabel: 'SO-000049',
+        status: 'pending_approval',
+        warehouseId: 'wh-1',
+        fulfillmentType: 'delivery' as const,
+        deliveryCharterId: 'ch-1',
+        neededBy: '2026-08-05T16:00:00.000Z',
+        lineCount: 1,
+        unitCount: 5,
+        createdAt: '2026-08-01T16:00:00.000Z',
+        requestedFor: { self: true as const },
+      },
+      replay: false,
+      viaWithdraw: false,
+    },
+    viewerLabel: 'Branden Vincent-Walker',
+    viewerEmail: 'branden@cvwest.org',
     onClose: vi.fn(),
     onConfirm: vi.fn(),
     onViewOrder: vi.fn(),
@@ -102,6 +140,8 @@ describe('ReviewModal success stage', () => {
 
   it('renders the action for a PICKUP order too (owner decision D1) — with the PICKUP button copy', () => {
     renderSuccess({
+      // The placed order decides the method (phone ordering PO-2).
+      submitted: { ...PLACED, order: { ...PLACED.order, fulfillmentType: 'pickup', deliveryCharterId: null } },
       summary: {
         warehouseName: 'DC4',
         method: 'pickup',
@@ -228,7 +268,7 @@ describe('ReviewModal accessibility', () => {
       destination: null,
       deliveryRecipients: TEST_ROUTING,
       submitting: false,
-      submitted: { id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 },
+      submitted: PLACED,
       onClose: vi.fn(),
       onConfirm: vi.fn(),
       onViewOrder: vi.fn(),
@@ -316,7 +356,7 @@ describe('ReviewModal accessibility', () => {
       <ReviewModal
         {...baseProps}
         stage="success"
-        submitted={{ id: 'b3f1c2d4-1111-2222-3333-444455556666', orderNumber: 49, unitCount: 5 }}
+        submitted={PLACED}
         onClose={() => {}}
       />,
     );

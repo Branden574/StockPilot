@@ -18,8 +18,9 @@ const adminHandle: { client: unknown } = { client: null };
 // so an order line on it could never be picked. Every order picker leaves it
 // out, but create() and addLines() never read the flag: a crafted payload or an
 // old saved cart could put one on an order (found 2026-09-27 while designing
-// kits on the New order page; production had no such item). The server now
-// refuses it by name. The database line guard is the next migration's job.
+// kits on the New order page; production had no such item). addLines refuses
+// it by name; since phone ordering PO-2 create() leaves it to
+// place_order_request (order_items_orderable, 0391).
 
 const WH = 'aaaaaaaa-0000-0000-0000-000000000001';
 const KIT_STOCK = {
@@ -47,38 +48,62 @@ const REFUSAL =
   "New Hire Bundle (kit) is a pre-assembled kit and can't be put on an order. Order the kit's items instead.";
 
 describe('OrderRequestsService: a kit pre-assembled stock is never ordered', () => {
-  it('reads is_bundle with the other line checks', async () => {
+  it('reads is_bundle with the other line checks (addLines)', async () => {
     const stub = makeSupabaseStub({
+      'order_requests.select': {
+        data: {
+          id: 'order-1',
+          status: 'approved',
+          warehouse_id: WH,
+          requester_user_id: 'requester-1',
+          pick_slip_generated_at: null,
+          order_number: 12,
+        },
+        error: null,
+      },
       'inventory_items.select': { data: [KIT_STOCK], error: null },
+      'order_request_lines.select': { data: [], error: null },
     });
     await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: KIT_STOCK.id, quantity: 1 }] } as never)
+      .addLines('order-1', [{ itemId: KIT_STOCK.id, quantity: 1 }])
       .catch(() => undefined);
     const columns = stub.chainArgsAll.get('inventory_items.select')?.[0]?.[0]?.[0];
     expect(String(columns).split(',').map((c) => c.trim())).toContain('is_bundle');
   });
 
-  it('create REFUSES a kit-stock line, naming it, before any write', async () => {
+  // create(): kit stock is place_order_request's check (order_items_orderable
+  // 'kit_stock', 0391; pgTAP R10), recorded and passed on as final.
+  it('create leaves the kit-stock check to the database and passes its recorded refusal on', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: [KIT_STOCK], error: null },
+      'rpc:place_order_request': {
+        data: { outcome: 'refused', replay: true, refusal: { reason: 'item_not_orderable', detail: { [KIT_STOCK.id]: 'kit_stock' } } },
+        error: null,
+      },
     });
     const err = await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: KIT_STOCK.id, quantity: 1 }] } as never)
+      .create({
+        body: {
+          idempotencyKey: 'eeeeeeee-0000-4000-8000-000000000001',
+          placerUserId: 'dddddddd-0000-4000-8000-000000000001',
+          warehouseId: WH,
+          fulfillmentType: 'pickup',
+          deliveryCharterId: null,
+          onBehalfOf: null,
+          notes: null,
+          neededByLocal: null,
+          lines: [{ itemId: KIT_STOCK.id, quantity: 1 }],
+        },
+        surface: 'app',
+      })
       .catch((e: unknown) => e);
     expect((err as { code: string }).code).toBe('validation_error');
-    expect((err as Error).message).toBe(REFUSAL);
-    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('create_order_request');
-  });
-
-  it('create lets an ordinary item through to the write', async () => {
-    const stub = makeSupabaseStub({
-      'inventory_items.select': { data: [{ ...KIT_STOCK, name: 'Backpack', is_bundle: false }], error: null },
-      'rpc:create_order_request': { data: null, error: { message: 'sentinel-create' } },
+    expect((err as { details: unknown }).details).toEqual({
+      reason: 'item_not_orderable',
+      settled: true,
+      replay: true,
+      items: { [KIT_STOCK.id]: 'kit_stock' },
     });
-    const err = await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: KIT_STOCK.id, quantity: 1 }] } as never)
-      .catch((e: unknown) => e);
-    expect((err as { internalDetail?: string }).internalDetail).toBe('sentinel-create');
+    expect(stub.fromCalls).not.toContain('inventory_items');
   });
 
   it('addLines REFUSES kit stock on an open order, before any write', async () => {

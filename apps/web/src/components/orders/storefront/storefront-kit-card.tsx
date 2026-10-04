@@ -8,6 +8,18 @@
 import { ChevronDown, ChevronLeft, ChevronRight, Layers, Minus, Plus } from 'lucide-react';
 import * as React from 'react';
 
+import {
+  CART_ALL_STOCK_IN_CART_COPY,
+  KIT_ADD_COPY,
+  KIT_DETAILS_COPY,
+  KIT_LINES_NOTE_COPY,
+  kitLimitedByCopy,
+  KITS_ROW_SUB_COPY,
+  KITS_TITLE_COPY,
+  kitsAvailableCopy,
+  kitsLoadFailedCopy,
+} from '@stockpilot/core';
+
 import type { CartKitShares, CatalogItem } from '../v2/types';
 
 import { QtyField, SfPhoto } from './storefront-cards';
@@ -35,9 +47,9 @@ export interface KitCardProps {
   onSetKits: (kit: KitOffer, target: number) => void;
 }
 
-/** "1 kit available" / "60 kits available". */
+/** "1 kit available" / "60 kits available" (core's words). */
 export function kitsAvailableLabel(kits: number): string {
-  return `${kits} ${kits === 1 ? 'kit' : 'kits'} available`;
+  return kitsAvailableCopy(kits);
 }
 
 /**
@@ -111,11 +123,11 @@ export const KitCard = React.memo(function KitCard({
         type="button"
         className={out ? 'sf-add oos' : 'sf-add'}
         disabled={out || full}
-        title={full ? 'All available stock is in your cart' : undefined}
+        title={full ? CART_ALL_STOCK_IN_CART_COPY : undefined}
         onClick={() => onSetKits(kit, 1)}
         aria-label={`Add kit: ${kit.name}`}
       >
-        <Plus size={13} /> Add kit
+        <Plus size={13} /> {KIT_ADD_COPY}
       </button>
     );
   } else {
@@ -141,7 +153,7 @@ export const KitCard = React.memo(function KitCard({
           type="button"
           onClick={() => onSetKits(kit, inCart + 1)}
           disabled={atMax}
-          title={atMax ? 'All available stock is in your cart' : 'One kit more'}
+          title={atMax ? CART_ALL_STOCK_IN_CART_COPY : 'One kit more'}
           aria-label={`One kit more: ${kit.name}`}
         >
           <Plus size={13} />
@@ -187,7 +199,7 @@ export const KitCard = React.memo(function KitCard({
           aria-controls={open ? detailsId : undefined}
           onClick={() => setOpen((v) => !v)}
         >
-          Details <ChevronDown size={12} aria-hidden />
+          {KIT_DETAILS_COPY} <ChevronDown size={12} aria-hidden />
         </button>
         {open && (
           <div className="sf-kit-details" id={detailsId}>
@@ -214,13 +226,13 @@ export const KitCard = React.memo(function KitCard({
             </ul>
             {!out && count > 1 && availability.limiting && (
               <p className="lim">
-                Limited by {nameOf(availability.limiting.component)} (
-                {availability.limiting.available})
+                {kitLimitedByCopy(
+                  nameOf(availability.limiting.component),
+                  availability.limiting.available,
+                )}
               </p>
             )}
-            <p className="note">
-              Each item goes into your cart as its own line, which you can change or remove.
-            </p>
+            <p className="note">{KIT_LINES_NOTE_COPY}</p>
           </div>
         )}
         <div className="sf-card-ctl">{control}</div>
@@ -272,13 +284,12 @@ export class KitsErrorBoundary extends React.Component<
 export function KitsUnavailable() {
   return (
     <p className="sf-kits-error" role="status">
-      Kits could not be loaded. You can still add their items one by one, or reload the page to
-      try again.
+      {kitsLoadFailedCopy('web')}
     </p>
   );
 }
 
-const KITS_ROW_SUB = 'Add every item of a kit to your cart in one step';
+const KITS_ROW_SUB = KITS_ROW_SUB_COPY;
 
 /**
  * A control that keyboard focus reaches inside the strip is scrolled fully
@@ -372,7 +383,7 @@ export function KitsRowSkeleton() {
           only the heading shows, as a bar. */}
       <div className="sf-sec-head sf-kits-sk-head" aria-hidden>
         <h3 className="sf-sk">
-          <Layers size={15} /> Kits
+          <Layers size={15} /> {KITS_TITLE_COPY}
         </h3>
         <span className="ct">1</span>
         <span className="sub">{KITS_ROW_SUB}</span>
@@ -411,10 +422,10 @@ export function KitsRow({
     if (el) el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: 'smooth' });
   };
   return (
-    <section className="sf-kits" aria-label="Kits">
+    <section className="sf-kits" aria-label={KITS_TITLE_COPY}>
       <div className="sf-sec-head">
         <h3>
-          <Layers size={15} /> Kits
+          <Layers size={15} /> {KITS_TITLE_COPY}
         </h3>
         <span className="ct">{result.kits.length}</span>
         <span className="sub">{KITS_ROW_SUB}</span>

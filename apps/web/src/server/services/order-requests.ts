@@ -30,6 +30,10 @@ import {
   NEEDED_BY_RELOAD_COPY,
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
+  ORDER_MODULE_DISABLED_COPY,
+  ORDER_NEEDED_BY_INVALID_TIME_COPY,
+  ORDER_PERMISSION_COPY,
+  ORDER_TIMEZONE_UNREADABLE_COPY,
   neededByChangedCopy,
   neededByInvalidTimeCopy,
   normalizeNeededByReason,
@@ -37,6 +41,7 @@ import {
   orderScheduleEventDetails,
   parseHoldOrderStockResult,
   parseNeededByRevisionResult,
+  parseOrderCreateRequest,
   parseWallClock,
   partialActionMovedOnCopy,
   resolveOrgTimezone,
@@ -52,6 +57,9 @@ import {
   type NeededByRevisionOutcome,
   type NeededByRevisionResult,
   type NeededBySchedule,
+  type OrderPlaceAnswer,
+  type OrderSubmissionStatus,
+  type OrderSummary,
 } from '@stockpilot/core';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
@@ -77,6 +85,13 @@ import {
   type ServiceContext,
 } from './context';
 import { defer } from './lib/defer';
+import {
+  orderRecordedRefusalError,
+  orderSubmissionRpcError,
+  orderSubmissionWithdrawnError,
+  orderSummaryFromRpc,
+  submissionStatusFromRpc,
+} from './order-submission';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
@@ -340,44 +355,21 @@ export interface OrderRequestDetail {
   pickSlipStale: boolean;
 }
 
-export interface CreateOrderRequestInput {
-  warehouseId: string;
-  notes?: string | null;
-  /** Structured "needed by" datetime (ISO) — drives the auto-created
-   *  schedule event at approval. Replaces burying dates in notes. */
-  neededBy?: string | null;
-  fulfillmentType: 'pickup' | 'delivery';
-  requesterPhone?: string | null;
-  deliveryCharterId?: string | null;
-  pickupLocationNotes?: string | null;
+/**
+ * OrderRequestsService.create's input (phone ordering PO-2). `body` is the
+ * create body as the client sent it (core orderCreateRequestSchema(), read in
+ * create()); `surface` is where it came from (recorded on the submission and
+ * the audit entry).
+ */
+export interface PlaceOrderInput {
+  body: unknown;
+  surface: 'web' | 'app';
   /**
-   * Manager-only: when set, the row is recorded as if a public-style
-   * external requester filed it — `requester_user_id` stays null and
-   * the name/email columns carry the on-behalf identity. The email
-   * pipeline keys off `requester_user_id IS NULL`, so this path
-   * automatically gets the external-recipient track-link emails.
-   *
-   * `source` stays `'internal'` either way; this is still a manager-
-   * initiated order, just routed to a different recipient.
+   * The web action's legacy branch only (one release, for tabs opened before
+   * the deploy): the needed-by such a tab sent as an instant, passed through
+   * unconverted. The body's neededByLocal is then null.
    */
-  onBehalfOf?: {
-    name: string;
-    email: string;
-  } | null;
-  lines: Array<{
-    itemId: string;
-    quantity: number;
-    notes?: string | null;
-  }>;
-  /**
-   * Which kits (bundles) the New order page used to fill the cart, and how many
-   * of each, as the browser counted them. AUDIT ONLY: written into the
-   * order_request.created entry and nothing else. The lines are what the order
-   * is; approvers, pickers, emails and the pick slip see only them, and the
-   * order timeline never shows this to members (order-timeline.tsx surfaces
-   * known keys only).
-   */
-  kits?: Array<{ bundleId: string; count: number }>;
+  legacyNeededBy?: string | null;
 }
 
 /**
@@ -1514,185 +1506,210 @@ export class OrderRequestsService {
     );
   }
 
-  async create(input: CreateOrderRequestInput): Promise<OrderRequestRow> {
-    assertModuleEnabled(this.ctx, 'orders');
+  /**
+   * Place an order request: the one create path, for the web action and the
+   * phone's POST /api/v1/orders alike (phone ordering PO-2, migration 0391).
+   *
+   * Order: the Orders module, orders:request (with the MFA step-up), the body
+   * read with core's schema (`.strict()`, core's words), the needed-by wall
+   * clock converted to an instant in the ORGANIZATION's zone (a failed zone
+   * read is refused before the call: converting in a guessed zone would store
+   * a wrong instant), then place_order_request. The body's placerUserId is
+   * passed through unchanged, never replaced by the session's: the database
+   * compares it with auth.uid() before it looks at the key, so a pending send
+   * another account left on a shared browser is never placed under this one.
+   *
+   * The database decides the rest under the key's lock, and answers a resend
+   * from the record before any rule that changes with time: a replay returns
+   * the first order, a recorded refusal is thrown as a final refusal
+   * (details.settled), a withdrawn key is submission_withdrawn. The tail (the
+   * audit entry with the surface and the kits, the "received" email, the
+   * order.created event) runs only for a NEW order, never for a replay; the
+   * in-app "New order request" notification is the insert trigger's.
+   */
+  async create(input: PlaceOrderInput): Promise<OrderPlaceAnswer> {
+    if (!isModuleEnabled(this.ctx, 'orders')) {
+      throw new ServiceError('module_disabled', ORDER_MODULE_DISABLED_COPY, { reason: 'module_disabled' });
+    }
+    // Refused in core's words with a reason the screens switch on, not the
+    // generic "Missing permission". The MFA step-up stays assertPermission's,
+    // which words it for the step-up prompt (reason aal2_required or
+    // mfa_required); it runs first, as everywhere.
+    if (!(this.ctx.mfaRequired && !this.ctx.mfaSatisfied) && !can(this.ctx, 'orders:request')) {
+      throw new ServiceError('forbidden', ORDER_PERMISSION_COPY, { reason: 'permission' });
+    }
     assertPermission(this.ctx, 'orders:request');
-    // Gate by warehouse access too — `orders:request` is org-wide, but a
-    // requester restricted to warehouse A shouldn't be able to file a
-    // request against warehouse B. The public-link path doesn't reach
-    // this method (the public route builds rows via the admin client),
-    // so this check is safe to apply unconditionally here.
-    await assertWarehouseAccess(input.warehouseId, 'read', this.ctx);
-    if (input.lines.length === 0) {
-      throw new ServiceError('validation_error', 'A request needs at least one line');
+
+    const parsed = parseOrderCreateRequest(input.body);
+    if (!parsed.ok) {
+      const { reason, field, message } = parsed.refusal;
+      throw new ServiceError('validation_error', message, { reason, ...(field ? { field } : {}) });
+    }
+    const body = parsed.value;
+
+    let neededBy: string | null = null;
+    if (body.neededByLocal !== null) {
+      const timeZone = await this.readOrgTimeZoneForOrder();
+      const ms = wallClockToInstant(body.neededByLocal, timeZone);
+      if (ms === null) {
+        throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
+          reason: 'needed_by_invalid_time',
+        });
+      }
+      neededBy = new Date(ms).toISOString();
+    } else if (input.legacyNeededBy) {
+      const ms = Date.parse(input.legacyNeededBy);
+      if (!Number.isFinite(ms)) {
+        throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
+          reason: 'needed_by_invalid_time',
+        });
+      }
+      neededBy = new Date(ms).toISOString();
     }
 
-    // Validate every item belongs to the chosen warehouse. (The unit-cost
-    // snapshot is stamped from the item by tg_order_request_lines_guard, 0363.)
-    // Batched: a request's lines have no cap, and a failed batch throws (a
-    // missing item would otherwise read as "not in this warehouse").
-    const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
-    const items = await this.readOrderItems(itemIds);
-    const itemMap = new Map<
-      string,
-      {
-        name: string;
-        warehouse_id: string | null;
-        awaiting: boolean;
-        rental: boolean;
-        kitStock: boolean;
-      }
-    >();
-    for (const row of items) {
-      itemMap.set(row.id, {
-        name: row.name,
-        warehouse_id: row.warehouse_id,
-        awaiting: row.awaiting_first_receipt === true,
-        rental: row.is_rental === true,
-        kitStock: row.is_bundle === true,
-      });
-    }
-    for (const line of input.lines) {
-      const it = itemMap.get(line.itemId);
-      if (!it) throw new ServiceError('validation_error', `Item ${line.itemId} not found`);
-      if (it.warehouse_id !== input.warehouseId) {
-        throw new ServiceError('validation_error', 'Every line must be at the chosen warehouse');
-      }
-      // Expected-items guard (mig 0277): an item auto-created from an
-      // inbound PO that has never received stock is NOT orderable. The
-      // pickers/catalogs already exclude flagged items — this is the
-      // authoritative server-side gate a crafted payload can't skip.
-      if (it.awaiting) {
-        throw new ServiceError(
-          'validation_error',
-          `This item hasn't been received yet: ${it.name}. It can be ordered once its first stock arrives.`,
-        );
-      }
-      if (it.rental) throw rentalItemNotOrderable(it.name);
-      if (it.kitStock) throw kitStockNotOrderable(it.name);
-    }
-
-    // Defense-in-depth — the FK + CHECK constraint already enforce that
-    // the (warehouse_id, charter_id) pair is one this warehouse services,
-    // but a friendlier error here saves the user from a generic 23-error.
-    // Mirrors the inventory.ts charter pairing check.
-    if (input.deliveryCharterId) {
-      // A failed read is not "no such pair": it used to tell the requester the
-      // site was not serviced when the database simply did not answer.
-      const { data: pair, error: pairErr } = await this.ctx.supabase
-        .from('warehouse_charters')
-        .select('charter_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', input.warehouseId)
-        .eq('charter_id', input.deliveryCharterId)
-        .maybeSingle();
-      if (pairErr) throw new ServiceError('internal_error', pairErr.message);
-      if (!pair) {
-        throw new ServiceError(
-          'validation_error',
-          'That site is not serviced by the chosen warehouse.',
-        );
-      }
-    }
-
-    // One line per item: duplicates are summed and keep the first non-null
-    // note, the same collapse the public route applies (dedupedLines in
-    // api/v1/public/order-requests). approve_order_request compares an item's
-    // TOTAL across lines anyway (0365); collapsing here keeps the pick slip
-    // to one row per item.
-    const byItem = new Map<string, { quantity: number; notes: string | null }>();
-    for (const l of input.lines) {
-      const prev = byItem.get(l.itemId);
-      byItem.set(l.itemId, {
-        quantity: (prev?.quantity ?? 0) + (Number(l.quantity) || 0),
-        notes: prev?.notes ?? l.notes ?? null,
-      });
-    }
-    const pLines = Array.from(byItem.entries()).map(([itemId, v]) => ({
-      item_id: itemId,
-      quantity: v.quantity,
-      notes: v.notes,
-    }));
-
-    // Header and lines in ONE transaction (create_order_request, 0365). It used
-    // to be two inserts and a delete-based "rollback", which left a line-less
-    // order behind whenever the delete failed too. SECURITY INVOKER, so RLS
-    // applies exactly as it did to the direct inserts; source and status are
-    // fixed by the function ('internal', 'pending_approval'), and
-    // unit_cost_at_request is stamped by the line guard (0363), so neither is sent.
-    const { data: created, error: createErr } = await this.ctx.supabase.rpc(
-      'create_order_request',
-      {
-        p_header: {
-          organization_id: this.ctx.organizationId,
-          warehouse_id: input.warehouseId,
-          // When `onBehalfOf` is set, treat the row as public-style for
-          // email purposes: requester_user_id stays null, the name+email
-          // columns carry the on-behalf identity, and the email pipeline
-          // (which keys off `requester_user_id IS NULL`) routes the
-          // confirmation / status emails to that external address.
-          // `source` remains 'internal' — this is still a manager-
-          // initiated order.
-          requester_user_id: input.onBehalfOf ? null : this.ctx.userId,
-          requester_name: input.onBehalfOf?.name ?? null,
-          requester_email: input.onBehalfOf?.email ?? null,
-          notes: input.notes ?? null,
-          needed_by: input.neededBy ?? null,
-          fulfillment_type: input.fulfillmentType,
-          requester_phone: input.requesterPhone ?? null,
-          delivery_charter_id: input.deliveryCharterId ?? null,
-          pickup_location_notes: input.pickupLocationNotes ?? null,
-        },
-        p_lines: pLines,
+    const { data, error } = await this.ctx.supabase.rpc('place_order_request', {
+      p_request: {
+        organization_id: this.ctx.organizationId,
+        placer_user_id: body.placerUserId,
+        surface: input.surface,
+        warehouse_id: body.warehouseId,
+        fulfillment_type: body.fulfillmentType,
+        delivery_charter_id: body.deliveryCharterId,
+        on_behalf_name: body.onBehalfOf?.name ?? null,
+        on_behalf_email: body.onBehalfOf?.email ?? null,
+        notes: body.notes,
+        needed_by: neededBy,
+        lines: body.lines.map((l) => ({ item_id: l.itemId, quantity: l.quantity })),
       },
-    );
-    if (createErr) {
-      // Before the code checks: the guards' 42501 / 23514 carry a sentence for
-      // the requester (an item deleted or received-state changed since the
-      // pre-read above, say), not a permission or server fault.
-      const guard = orderGuardRefusal(createErr);
-      if (guard) throw guard;
-      if (createErr.code === '22023') {
-        throw new ServiceError('validation_error', createErr.message);
-      }
-      if (createErr.code === '42501') {
-        throw new ServiceError('forbidden', 'You are not allowed to create this request.');
-      }
-      throw new ServiceError('internal_error', createErr.message);
-    }
-    if (
-      !created ||
-      typeof created !== 'object' ||
-      Array.isArray(created) ||
-      typeof (created as { id?: unknown }).id !== 'string'
-    ) {
-      throw new ServiceError('internal_error', 'create_order_request returned no order row');
-    }
-
-    const row = created as OrderRequestRow;
-    await audit(
-      {
-        event: 'order_request.created',
-        entityType: 'order_request',
-        entityId: row.id,
-        after: {
-          lineCount: pLines.length,
-          warehouseId: input.warehouseId,
-          ...(input.kits && input.kits.length > 0 ? { kits: input.kits } : {}),
-        },
-      },
-      this.ctx,
-    );
-    defer(() => this.notifyEmail(row, 'submitted'));
-    // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
-    // the org has no endpoints; cron backstops delivery).
-    void dispatchEvent(this.ctx.organizationId, 'order.created', {
-      id: row.id,
-      orderNumber: formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase(),
-      requester: (row as { requester_name?: string | null }).requester_name ?? null,
-      lineCount: pLines.length,
+      p_key: body.idempotencyKey,
     });
-    return row;
+    if (error) throw orderSubmissionRpcError('place_order_request', error);
+
+    const answer = (data && typeof data === 'object' && !Array.isArray(data) ? data : {}) as Record<
+      string,
+      unknown
+    >;
+    if (answer.outcome === 'withdrawn') throw orderSubmissionWithdrawnError();
+    if (answer.outcome === 'refused') {
+      throw orderRecordedRefusalError(
+        answer.refusal as { reason?: unknown; detail?: unknown } | null,
+        answer.replay === true,
+      );
+    }
+    if (answer.outcome !== 'placed' || typeof answer.replay !== 'boolean') {
+      throw new ServiceError('internal_error', 'place_order_request returned an unknown answer', {
+        reason: 'failed',
+      });
+    }
+    let order: OrderSummary;
+    try {
+      order = orderSummaryFromRpc(answer.order);
+    } catch (e) {
+      throw new ServiceError(
+        'internal_error',
+        `place_order_request returned an unreadable order: ${e instanceof Error ? e.message : String(e)}`,
+        { reason: 'failed' },
+      );
+    }
+    const replay = answer.replay;
+
+    if (!replay) {
+      await audit(
+        {
+          event: 'order_request.created',
+          entityType: 'order_request',
+          entityId: order.id,
+          after: {
+            lineCount: order.lineCount,
+            warehouseId: order.warehouseId,
+            surface: input.surface,
+            ...(body.kits && body.kits.length > 0 ? { kits: body.kits } : {}),
+          },
+        },
+        this.ctx,
+      );
+      // The email needs the whole row; it is read after the answer, as tail
+      // work (the answer itself carries only the summary).
+      const orderId = order.id;
+      defer(async () => {
+        const { data: row } = await this.ctx.supabase
+          .from('order_requests')
+          .select('*')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('id', orderId)
+          .maybeSingle();
+        if (row) await this.notifyEmail(row as OrderRequestRow, 'submitted');
+      });
+      // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
+      // the org has no endpoints; cron backstops delivery).
+      defer(() =>
+        dispatchEvent(this.ctx.organizationId, 'order.created', {
+          id: order.id,
+          orderNumber: formatOrderNumber(order.orderNumber) ?? order.id.slice(0, 8).toUpperCase(),
+          requester: order.requestedFor.self ? null : order.requestedFor.name,
+          lineCount: order.lineCount,
+        }),
+      );
+    }
+    return { organizationId: this.ctx.organizationId, replay, order };
+  }
+
+  /**
+   * The organization's zone for a needed-by. A member can always read their
+   * own organization's row; a failed or empty read is refused as
+   * timezone_unreadable (retryable), never converted in a guessed zone.
+   */
+  private async readOrgTimeZoneForOrder(): Promise<string> {
+    const { data, error } = await this.ctx.supabase
+      .from('organizations')
+      .select('timezone')
+      .eq('id', this.ctx.organizationId)
+      .maybeSingle();
+    if (error || !data) {
+      if (error) {
+        void reportSrvError(new Error(error.message), {
+          tag: 'orders.place_timezone',
+          organizationId: this.ctx.organizationId,
+        });
+      }
+      throw new ServiceError('conflict', ORDER_TIMEZONE_UNREADABLE_COPY, {
+        reason: 'timezone_unreadable',
+        retryable: true,
+      });
+    }
+    return resolveOrgTimezone((data as { timezone: string | null }).timezone);
+  }
+
+  /**
+   * What happened to the caller's own submission key: none, placed (with the
+   * order), refused (with the recorded refusal) or withdrawn. A read, no
+   * lock: `none` means only that nothing has committed under the key yet,
+   * never "not placed". Membership only (no module, permission or MFA gate:
+   * settling your own key never depends on them; the function checks it).
+   */
+  async submissionStatus(key: string): Promise<OrderSubmissionStatus> {
+    const { data, error } = await this.ctx.supabase.rpc('order_submission_status', {
+      p_org: this.ctx.organizationId,
+      p_key: key,
+    });
+    if (error) throw orderSubmissionRpcError('order_submission_status', error);
+    return submissionStatusFromRpc(this.ctx.organizationId, data);
+  }
+
+  /**
+   * "Don't send it": settle the caller's own key for good, under the same
+   * lock a placement takes, so the answer is final: withdrawn (the key can
+   * never place), or the outcome already recorded (placed with the order,
+   * refused). Membership only.
+   */
+  async withdrawSubmission(key: string, surface: 'web' | 'app'): Promise<OrderSubmissionStatus> {
+    const { data, error } = await this.ctx.supabase.rpc('withdraw_order_submission', {
+      p_org: this.ctx.organizationId,
+      p_key: key,
+      p_surface: surface,
+    });
+    if (error) throw orderSubmissionRpcError('withdraw_order_submission', error);
+    return submissionStatusFromRpc(this.ctx.organizationId, data);
   }
 
   /**

@@ -20,6 +20,8 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const createOrderRequestAction = vi.fn();
 vi.mock('@/server/actions/order-requests', () => ({
   createOrderRequestAction: (input: unknown) => createOrderRequestAction(input),
+  getOrderSubmissionAction: vi.fn(),
+  withdrawOrderSubmissionAction: vi.fn(),
 }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 vi.mock('@/components/perf/perf-useful', () => ({ usePerfUseful: () => {} }));
@@ -70,7 +72,7 @@ vi.mock('./storefront-overlays', () => ({
   ReviewModal: ({ stage, onConfirm }: { stage: null | 'review' | 'success'; onConfirm: () => void }) =>
     stage === 'review' ? (
       <button type="button" onClick={onConfirm}>
-        Confirm &amp; submit
+        Submit order request
       </button>
     ) : null,
 }));
@@ -169,6 +171,9 @@ async function openPage(
         viewerEmail="lillian@example.test"
         orgTimezone="America/Los_Angeles"
         deliveryRecipients={null}
+        viewerUserId="user-lillian"
+        organizationId="org-l4l"
+        canApproveOrders={false}
       />,
     );
   });
@@ -191,7 +196,29 @@ describe('OrdersStorefront: kits', () => {
   beforeEach(() => {
     localStorage.clear();
     createOrderRequestAction.mockReset();
-    createOrderRequestAction.mockResolvedValue({ ok: true, data: { id: 'order-1', orderNumber: 9 } });
+    createOrderRequestAction.mockResolvedValue({
+      ok: true,
+      data: {
+        organizationId: 'org-l4l',
+        result: {
+          replay: false,
+          order: {
+            id: 'order-1',
+            orderNumber: 9,
+            orderLabel: 'SO-000009',
+            status: 'pending_approval',
+            warehouseId: DC4,
+            fulfillmentType: 'pickup',
+            deliveryCharterId: null,
+            neededBy: null,
+            lineCount: 4,
+            unitCount: 4,
+            createdAt: '2026-10-04T10:00:00+00:00',
+            requestedFor: { self: true },
+          },
+        },
+      },
+    });
   });
   afterEach(() => localStorage.clear());
 
@@ -225,8 +252,8 @@ describe('OrdersStorefront: kits', () => {
     await openPage({ status: 'ok', kits: [NEW_HIRE] });
     fireEvent.click(within(kitsRow()).getByRole('button', { name: 'Add kit: New Hire Bundle' }));
     fireEvent.click(screen.getByText('Add L4L - New Hire - Coffee mug'));
+    fireEvent.click(screen.getByRole('button', { name: /review order/i }));
     fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
-    fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
     await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1));
     expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
       lines: [
@@ -380,10 +407,10 @@ describe('OrdersStorefront: kits', () => {
   it('Submit never waits for the kits: with the kits read still pending the order goes at once, with no kit note', async () => {
     await openPage(pending());
     fireEvent.click(screen.getByText('Add L4L - New Hire - Coffee mug'));
-    fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
+    fireEvent.click(screen.getByRole('button', { name: /review order/i }));
     // The review step draws a moment later here: the Kits row is still
     // suspended, and every render of the page re-suspends it.
-    fireEvent.click(await screen.findByRole('button', { name: /confirm & submit/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /submit order request/i }));
     await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1), { timeout: 1000 });
     expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
       lines: [{ itemId: MUG.id, quantity: 1 }],
@@ -400,8 +427,8 @@ describe('OrdersStorefront: kits', () => {
     await openPage(broken);
     expect(screen.getByText(/Kits could not be loaded/)).toBeTruthy();
     fireEvent.click(screen.getByText('Add L4L - New Hire - Coffee mug'));
+    fireEvent.click(screen.getByRole('button', { name: /review order/i }));
     fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
-    fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
     await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1), { timeout: 1000 });
     expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({ kits: [] });
     await act(async () => {

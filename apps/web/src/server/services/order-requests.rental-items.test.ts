@@ -17,7 +17,8 @@ const adminHandle: { client: unknown } = { client: null };
 // order. Every order picker leaves them out, but create() and addLines()
 // accepted any item id a client sent. The New rental page shared its saved
 // cart with the Orders page (2026-09-24), so a rental line could reach an
-// order without the requester seeing it. The server now refuses it by name.
+// order without the requester seeing it. addLines refuses it by name; since
+// phone ordering PO-2 create() leaves it to place_order_request (0391).
 
 const WH = 'aaaaaaaa-0000-0000-0000-000000000001';
 const RENTAL = {
@@ -41,48 +42,66 @@ function svc(stub: ReturnType<typeof makeSupabaseStub>) {
 }
 
 describe('OrderRequestsService — rental items are never ordered', () => {
-  it('reads is_rental with the other line checks', async () => {
+  it('reads is_rental with the other line checks (addLines)', async () => {
     const stub = makeSupabaseStub({
+      'order_requests.select': {
+        data: {
+          id: 'order-1',
+          status: 'approved',
+          warehouse_id: WH,
+          requester_user_id: 'requester-1',
+          pick_slip_generated_at: null,
+          order_number: 12,
+        },
+        error: null,
+      },
       'inventory_items.select': { data: [RENTAL], error: null },
+      'order_request_lines.select': { data: [], error: null },
     });
     await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: RENTAL.id, quantity: 1 }] } as never)
+      .addLines('order-1', [{ itemId: RENTAL.id, quantity: 1 }])
       .catch(() => undefined);
     // First inventory_items query, first method (`select`), its column list.
     const columns = stub.chainArgsAll.get('inventory_items.select')?.[0]?.[0]?.[0];
     expect(String(columns).split(',').map((c) => c.trim())).toContain('is_rental');
   });
 
-  it('create REFUSES a rental line, naming the item, before any write', async () => {
+  // create(): the rental check is place_order_request's (order_items_orderable,
+  // 0391; pgTAP R10). The service reads no item and passes the recorded
+  // refusal on as final, naming the item by id; the screens name it from the
+  // person's own cart (core orderItemRefusalCopy: "... is a rental item").
+  it('create leaves the rental check to the database and passes its recorded refusal on', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: [RENTAL], error: null },
+      'rpc:place_order_request': {
+        data: { outcome: 'refused', replay: false, refusal: { reason: 'item_not_orderable', detail: { [RENTAL.id]: 'rental' } } },
+        error: null,
+      },
     });
     const err = await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: RENTAL.id, quantity: 1 }] } as never)
+      .create({
+        body: {
+          idempotencyKey: 'eeeeeeee-0000-4000-8000-000000000001',
+          placerUserId: 'dddddddd-0000-4000-8000-000000000001',
+          warehouseId: WH,
+          fulfillmentType: 'pickup',
+          deliveryCharterId: null,
+          onBehalfOf: null,
+          notes: null,
+          neededByLocal: null,
+          lines: [{ itemId: RENTAL.id, quantity: 1 }],
+        },
+        surface: 'web',
+      })
       .catch((e: unknown) => e);
-
     expect((err as { code: string }).code).toBe('validation_error');
-    expect((err as Error).message).toBe(
-      'MacBook Pro 14" is a rental item. Check it out from Rentals instead of ordering it.',
-    );
-    // No write of any kind: create_order_request is the only writer.
-    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('create_order_request');
-    expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
-  });
-
-  it('create lets a non-rental line through to the write', async () => {
-    const stub = makeSupabaseStub({
-      'inventory_items.select': { data: [{ ...RENTAL, name: 'Widget', is_rental: false }], error: null },
-      // Sentinel: reaching create_order_request proves the line checks passed.
-      'rpc:create_order_request': { data: null, error: { message: 'sentinel-create' } },
+    expect((err as { details: unknown }).details).toEqual({
+      reason: 'item_not_orderable',
+      settled: true,
+      replay: false,
+      items: { [RENTAL.id]: 'rental' },
     });
-    const err = await svc(stub)
-      .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: RENTAL.id, quantity: 1 }] } as never)
-      .catch((e: unknown) => e);
-
-    expect((err as { code: string }).code).toBe('internal_error');
-    expect((err as { internalDetail?: string }).internalDetail).toBe('sentinel-create');
-    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['create_order_request']);
+    expect(stub.fromCalls).not.toContain('inventory_items');
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['place_order_request']);
   });
 
   it('addLines REFUSES a rental item on an open order, before any write', async () => {

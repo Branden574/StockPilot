@@ -22,6 +22,16 @@ import {
 import Image from 'next/image';
 import * as React from 'react';
 
+import {
+  CART_ALL_STOCK_IN_CART_COPY,
+  FREQUENTLY_ORDERED_SUBTITLE_COPY,
+  FREQUENTLY_ORDERED_TITLE_COPY,
+  frequentlyOrderedTagCopy,
+  STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY,
+  STOREFRONT_NOTHING_MATCHES_HINT_COPY,
+  storefrontNothingMatchesCopy,
+} from '@stockpilot/core';
+
 import type { CatalogItem } from '../v2/types';
 
 import {
@@ -45,7 +55,7 @@ export interface CardCallbacks {
  * Item-ownership charter chip — the site/charter this stock is EARMARKED for
  * (inventory_items.charter_id → charterName/charterCode). This is what tells a
  * requester "what site this thing is for." Distinct from the ORDER's
- * delivery-site charter (that's shown separately as "Deliver to"). Renders
+ * delivery-site charter (that's shown separately, under Deliver to). Renders
  * nothing for generic/shared stock (charterName null). Shared by the catalog
  * tiles, cart lines, and review lines so the label is identical everywhere.
  */
@@ -246,7 +256,7 @@ export function SfAddControl({ item, qty, onAdd, onDec, onSetQty }: AddControlPr
         type="button"
         onClick={() => onAdd(item.id)}
         disabled={atMax}
-        title={atMax ? 'All available stock is in your cart' : 'Increase'}
+        title={atMax ? CART_ALL_STOCK_IN_CART_COPY : 'Increase'}
         aria-label="Increase"
       >
         <Plus size={13} />
@@ -450,12 +460,12 @@ export function FreqCarousel({
   if (!loading && entries.length === 0) return null;
 
   return (
-    <section className="sf-feat" aria-label="Frequently ordered">
+    <section className="sf-feat" aria-label={FREQUENTLY_ORDERED_TITLE_COPY}>
       <div className="sf-sec-head">
         <h3>
-          <Sparkles size={15} /> Frequently ordered
+          <Sparkles size={15} /> {FREQUENTLY_ORDERED_TITLE_COPY}
         </h3>
-        <span className="sub">Based on your last 30 days</span>
+        <span className="sub">{FREQUENTLY_ORDERED_SUBTITLE_COPY}</span>
         <span className="spacer" />
         <div className="sf-arrows">
           <button type="button" onClick={() => nudge(-1)} aria-label="Scroll back">
@@ -487,9 +497,7 @@ export function FreqCarousel({
                     <div className="sf-ph-box">
                       <SfPhoto item={item} />
                     </div>
-                    <span className="sf-feat-rank">
-                      #{i + 1} · {count}×/mo
-                    </span>
+                    <span className="sf-feat-rank">{frequentlyOrderedTagCopy(i + 1, count)}</span>
                     <button
                       type="button"
                       className="sf-qv"
@@ -569,10 +577,10 @@ export function EmptyResults({
       <div className="big">
         <Search size={24} />
       </div>
-      <h4>Nothing matches{query ? ` “${query}”` : ' those filters'}</h4>
-      <p>Try a different name, SKU or category — or clear your filters.</p>
+      <h4>{storefrontNothingMatchesCopy(query)}</h4>
+      <p>{STOREFRONT_NOTHING_MATCHES_HINT_COPY}</p>
       <button type="button" className="sf-btn-ghost" onClick={onClear}>
-        Clear search &amp; filters
+        {STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY}
       </button>
     </div>
   );

@@ -2,19 +2,15 @@
  * The phone's success-screen email and the web's are the same message
  * (phone ordering PO-1, plan 3.7).
  *
- * The web success overlay (ReviewModal, success stage) hands
- * DeliveryRequestAction an input built from the cart: the setup, the lines,
- * the notes and the cart's needed-by WALL CLOCK. The phone will build its
- * input with core's deliveryRequestInputFromSubmission from the placed order
- * (the stored needed-by INSTANT) and the submission. This test renders the
- * REAL overlay, captures the input it passes, and checks it against core's
- * for the same submission: field by field (the needed-by naming the same
- * instant), and as the prepared draft, byte for byte.
- *
- * The needed-by agrees when the browser's zone is the organization's (L4L
- * today). The test runs in whatever zone the machine has, so it takes that
- * zone as the organization's and converts the wall clock in it, as the
- * server will.
+ * Since PO-2 the web success overlay (ReviewModal, success stage) builds its
+ * DeliveryRequestAction input with core's deliveryRequestInputFromSubmission
+ * from the PLACED order (its real method and its stored needed-by INSTANT)
+ * and the submission, as the phone will. This test renders the REAL overlay,
+ * captures the input it passes, and checks it against core's for the same
+ * submission: field by field, and as the prepared draft, byte for byte. It
+ * also pins that the overlay reads the order's instant, never the cart's
+ * wall clock (a browser in another zone than the organization would mail a
+ * different time).
  */
 import { render } from '@testing-library/react';
 import type * as React from 'react';
@@ -111,6 +107,21 @@ function renderBoth(sub: Submission) {
   const destination = sub.method === 'delivery' ? SITE : null;
   const order = { id: 'b3f1c2d4-1111-4222-8333-444455556666', orderNumber: 49 };
   const unitCount = sub.lines.reduce((s, l) => s + l.quantity, 0);
+  const at = sub.neededBy ? wallClockToInstant(sub.neededBy, ZONE) : null;
+  const summary: OrderSummary = {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    orderLabel: 'SO-000049',
+    status: 'pending_approval',
+    warehouseId: POLO.warehouseId,
+    fulfillmentType: sub.method,
+    deliveryCharterId: destination?.id ?? null,
+    neededBy: at === null ? null : new Date(at).toISOString(),
+    lineCount: sub.lines.length,
+    unitCount,
+    createdAt: '2026-10-03T16:00:00.000Z',
+    requestedFor: sub.onBehalfOf ? { self: false, ...sub.onBehalfOf } : { self: true },
+  };
   const props: React.ComponentProps<typeof ReviewModal> = {
     stage: 'success',
     lines: sub.lines,
@@ -128,7 +139,9 @@ function renderBoth(sub: Submission) {
     destination,
     deliveryRecipients: ROUTING,
     submitting: false,
-    submitted: { id: order.id, orderNumber: order.orderNumber, unitCount },
+    submitted: { order: summary, replay: false, viaWithdraw: false },
+    viewerLabel,
+    viewerEmail,
     onClose: vi.fn(),
     onConfirm: vi.fn(),
     onViewOrder: vi.fn(),
@@ -138,21 +151,6 @@ function renderBoth(sub: Submission) {
   expect(captured).toHaveLength(1);
   const web = captured[0]!;
 
-  const at = sub.neededBy ? wallClockToInstant(sub.neededBy, ZONE) : null;
-  const summary: OrderSummary = {
-    id: order.id,
-    orderNumber: order.orderNumber,
-    orderLabel: 'SO-000049',
-    status: 'pending_approval',
-    warehouseId: POLO.warehouseId,
-    fulfillmentType: sub.method,
-    deliveryCharterId: destination?.id ?? null,
-    neededBy: at === null ? null : new Date(at).toISOString(),
-    lineCount: sub.lines.length,
-    unitCount,
-    createdAt: '2026-10-03T16:00:00.000Z',
-    requestedFor: sub.onBehalfOf ? { self: false, ...sub.onBehalfOf } : { self: true },
-  };
   const recipients = brandDeliveryRecipients(ROUTING);
   const phone = deliveryRequestInputFromSubmission(
     summary,
@@ -245,5 +243,58 @@ describe('the success email: core deliveryRequestInputFromSubmission matches the
       lines: [{ itemId: PLANNER.id, quantity: 12 }],
     });
     expectSameMessage(web, phone);
+  });
+});
+
+describe("the overlay reads the PLACED order, not the cart", () => {
+  it('the needed-by is the order instant even when the cart wall clock says otherwise', () => {
+    captured.length = 0;
+    const itemMap = new Map([[POLO.id, POLO]]);
+    const summary: OrderSummary = {
+      id: 'b3f1c2d4-1111-4222-8333-444455556666',
+      orderNumber: 49,
+      orderLabel: 'SO-000049',
+      status: 'pending_approval',
+      warehouseId: POLO.warehouseId,
+      fulfillmentType: 'pickup',
+      deliveryCharterId: null,
+      neededBy: '2026-10-05T17:00:00.000Z',
+      lineCount: 1,
+      unitCount: 1,
+      createdAt: '2026-10-03T16:00:00.000Z',
+      requestedFor: { self: true },
+    };
+    render(
+      <ReviewModal
+        stage="success"
+        lines={[{ itemId: POLO.id, quantity: 1 }]}
+        itemMap={itemMap}
+        notes=""
+        summary={{
+          warehouseName: 'DC4',
+          method: 'delivery',
+          deliverTo: SITE.name,
+          requestedFor: 'Branden',
+          requesterEmail: 'branden@example.org',
+          orgTimezone: 'America/Los_Angeles',
+        }}
+        neededBy="2026-10-05T03:00"
+        destination={SITE}
+        deliveryRecipients={ROUTING}
+        submitting={false}
+        submitted={{ order: summary, replay: false, viaWithdraw: false }}
+        viewerLabel="Branden"
+        viewerEmail="branden@example.org"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onViewOrder={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    const web = captured[0]!;
+    expect(web.input.neededByLocal).toBe('2026-10-05T17:00:00.000Z');
+    // The order is a pickup, whatever the setup bar shows: no destination.
+    expect(web.input.fulfillmentType).toBe('pickup');
+    expect(web.input.destination).toBeNull();
   });
 });

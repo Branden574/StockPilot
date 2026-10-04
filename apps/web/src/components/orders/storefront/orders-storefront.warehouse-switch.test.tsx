@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ORDER_DRAFT_PREFIX } from '../v2/cart-context';
+import { orderDraftPrefixFor } from '../v2/cart-context';
 import type { CartState, CatalogItem, StorefrontCharter } from '../v2/types';
 
 // ═══ A WAREHOUSE SWITCH GIVES THAT WAREHOUSE ITS OWN CART ═══
@@ -27,6 +27,8 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const createOrderRequestAction = vi.fn();
 vi.mock('@/server/actions/order-requests', () => ({
   createOrderRequestAction: (input: unknown) => createOrderRequestAction(input),
+  getOrderSubmissionAction: vi.fn(),
+  withdrawOrderSubmissionAction: vi.fn(),
 }));
 
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
@@ -59,15 +61,20 @@ vi.mock('./storefront-overlays', () => ({
     stage,
     onConfirm,
     onDone,
+    refusalText,
   }: {
     stage: null | 'review' | 'success';
     onConfirm: () => void;
     onDone: () => void;
+    refusalText?: string | null;
   }) =>
     stage === 'review' ? (
-      <button type="button" onClick={onConfirm}>
-        Confirm &amp; submit
-      </button>
+      <>
+        {refusalText ? <p role="alert">{refusalText}</p> : null}
+        <button type="button" onClick={onConfirm}>
+          Submit order request
+        </button>
+      </>
     ) : stage === 'success' ? (
       <button type="button" onClick={onDone}>
         Done
@@ -75,12 +82,12 @@ vi.mock('./storefront-overlays', () => ({
     ) : null,
 }));
 
-import { toast } from 'sonner';
-
 import { OrdersStorefront, type StorefrontCatalogData } from './orders-storefront';
 
 const MAIN = 'wh-main';
 const ANNEX = 'wh-annex';
+const USER = 'user-qa-manager';
+const ORG = 'org-qa';
 
 function item(id: string, name: string, warehouseId: string): CatalogItem {
   return {
@@ -145,6 +152,9 @@ function page(warehouseId: string) {
       viewerEmail="manager@example.test"
       orgTimezone="America/Los_Angeles"
       deliveryRecipients={null}
+      viewerUserId={USER}
+      organizationId={ORG}
+      canApproveOrders
     />
   );
 }
@@ -159,7 +169,7 @@ async function openPage(warehouseId: string) {
 
 /** What the page's warehouse control does, then what Next does with the push. */
 async function switchWarehouse(view: ReturnType<typeof render>, name: string, id: string) {
-  fireEvent.click(screen.getByText('Warehouse'));
+  fireEvent.click(screen.getByText('Ship from'));
   fireEvent.click(within(screen.getByRole('dialog')).getByText(name));
   expect(push).toHaveBeenLastCalledWith(`/dashboard/orders/new?warehouseId=${id}`);
   await act(async () => {
@@ -195,12 +205,12 @@ const deliverTo = () =>
   screen.getByText('Deliver to').parentElement!.querySelector('.vl')!.textContent!.trim();
 
 function submitAndConfirm() {
+  fireEvent.click(screen.getByRole('button', { name: /review order/i }));
   fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
-  fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
 }
 
 const savedDraft = (warehouseId: string) => {
-  const raw = localStorage.getItem(`${ORDER_DRAFT_PREFIX}${warehouseId}`);
+  const raw = localStorage.getItem(`${orderDraftPrefixFor(USER)}${warehouseId}`);
   return raw ? (JSON.parse(raw) as { warehouseId: string; lines: unknown[] }) : null;
 };
 
@@ -208,11 +218,29 @@ describe('OrdersStorefront — switching warehouse', () => {
   beforeEach(() => {
     localStorage.clear();
     push.mockReset();
-    vi.mocked(toast.error).mockReset();
     createOrderRequestAction.mockReset();
     createOrderRequestAction.mockResolvedValue({
       ok: true,
-      data: { id: 'order-1', orderNumber: 7 },
+      data: {
+        organizationId: ORG,
+        result: {
+          replay: false,
+          order: {
+            id: 'order-1',
+            orderNumber: 7,
+            orderLabel: 'SO-000007',
+            status: 'pending_approval',
+            warehouseId: ANNEX,
+            fulfillmentType: 'pickup',
+            deliveryCharterId: null,
+            neededBy: null,
+            lineCount: 1,
+            unitCount: 1,
+            createdAt: '2026-10-04T10:00:00+00:00',
+            requestedFor: { self: true },
+          },
+        },
+      },
     });
   });
   afterEach(() => {
@@ -255,8 +283,7 @@ describe('OrdersStorefront — switching warehouse', () => {
     fireEvent.click(screen.getByText('Add HDMI Cable'));
     await pastSaveDebounce();
 
-    fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
-    fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
+    submitAndConfirm();
 
     await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1));
     expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
@@ -332,14 +359,15 @@ describe('OrdersStorefront — switching warehouse', () => {
       lines: [{ itemId: 'chromebook', quantity: 1 }],
       kits: {},
     };
-    localStorage.setItem(`${ORDER_DRAFT_PREFIX}${MAIN}`, JSON.stringify(stale));
+    localStorage.setItem(`${orderDraftPrefixFor(USER)}${MAIN}`, JSON.stringify(stale));
 
     await openPage(MAIN);
     expect(cartLines()).toEqual(['Chromebook']);
-    expect(deliverTo()).toBe('Choose a site…');
+    expect(deliverTo()).toBe('Choose a site');
 
     submitAndConfirm();
-    expect(toast.error).toHaveBeenCalledWith('Select a delivery site in the setup bar above.');
+    // Said in the review, before anything is sent (no key is minted for it).
+    expect(screen.getByRole('alert').textContent).toBe('Choose a delivery site.');
     expect(createOrderRequestAction).not.toHaveBeenCalled();
 
     chooseSite('Main Campus');
