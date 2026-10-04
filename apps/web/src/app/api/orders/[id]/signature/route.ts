@@ -8,6 +8,9 @@ import { isHandOverEntitled, readOrderSecrets } from '@/server/lib/order-secrets
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** A customer's signature is never kept by a shared or browser cache (review finding 7). */
+const NO_STORE = { 'cache-control': 'private, no-store' } as const;
+
 /**
  * Lazily returns the captured signature (data-URL PNG) for one order. The
  * order-detail page used to serialize this base64 blob into the RSC flight
@@ -65,7 +68,7 @@ export async function GET(
   // not spend the shared export budget or trip the abuse alert).
   const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
   if (limited) return limited;
-  if (!row) return NextResponse.json({ signatureDataUrl: null });
+  if (!row) return NextResponse.json({ signatureDataUrl: null }, { headers: NO_STORE });
 
   // Side table first (an order of this organization: the row above was read
   // with the caller's own client, scoped to ctx.organizationId). A failed side
@@ -76,7 +79,8 @@ export async function GET(
   } catch {
     side = { ok: false };
   }
-  return NextResponse.json({
-    signatureDataUrl: (side.ok ? side.secrets?.signatureDataUrl : null) ?? row.signature_data_url ?? null,
-  });
+  return NextResponse.json(
+    { signatureDataUrl: (side.ok ? side.secrets?.signatureDataUrl : null) ?? row.signature_data_url ?? null },
+    { headers: NO_STORE },
+  );
 }

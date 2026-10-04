@@ -98,6 +98,19 @@ describe('GET /api/orders/[id]/signature', () => {
     expect(body.signatureDataUrl).toBe(SIGNATURE);
   });
 
+  it('review 7: the image (a customer signature) is never stored by a cache, nor is an empty answer', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx({ role: 'manager' }));
+    const res = await GET(buildRequest(), PARAMS);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    // No order row (another org's id): the empty answer is private too.
+    const empty = makeSupabaseStub({ 'order_requests.select': { data: null, error: null } });
+    vi.mocked(withApiContext).mockResolvedValueOnce({ ...buildCtx({ role: 'manager' }), supabase: empty.client as never });
+    const res2 = await GET(buildRequest(), PARAMS);
+    expect(res2.status).toBe(200);
+    expect(res2.headers.get('cache-control')).toBe('private, no-store');
+  });
+
   it('403s for a member who is neither an approver nor the assigned driver (PII gate)', async () => {
     // A staff/viewer role passes order_requests_select (member-level RLS) but
     // must NOT be able to harvest the signature PNG. This is the finding.
