@@ -132,6 +132,16 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
   const [filter, setFilter] = React.useState<StorefrontFilter>(EMPTY_FILTER);
+  // The search box is uncontrolled (a busy JS thread never drops a keystroke
+  // from it), and the rows follow a deferred copy of what is typed, so typing
+  // stays ahead of the filtering.
+  const searchRef = React.useRef<TextInput | null>(null);
+  const deferredSearch = React.useDeferredValue(filter.search);
+  const shownFilter = React.useMemo(() => ({ ...filter, search: deferredSearch }), [filter, deferredSearch]);
+  const clearAll = React.useCallback(() => {
+    searchRef.current?.clear();
+    setFilter(EMPTY_FILTER);
+  }, []);
   const [sheet, setSheet] = React.useState<OpenSheet>(null);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -227,7 +237,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
 
   const rows: StorefrontRow[] = React.useMemo(() => {
     if (!view) return [];
-    if (target === null && !filterActive(filter)) {
+    if (target === null && !filterActive(shownFilter)) {
       return homeRows(view, {
         frequentTitle: FREQUENTLY_ORDERED_TITLE_COPY,
         frequentSubtitle: FREQUENTLY_ORDERED_SUBTITLE_COPY,
@@ -238,8 +248,8 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         nothingOrderable: STOREFRONT_NOTHING_ORDERABLE_COPY,
       });
     }
-    return matchingRows(view, target ?? { kind: 'all' }, filter);
-  }, [view, target, filter]);
+    return matchingRows(view, target ?? { kind: 'all' }, shownFilter);
+  }, [view, target, shownFilter]);
 
   const locked = snap?.locked ?? false;
   const photos = snap?.photos;
@@ -320,17 +330,17 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           return (
             <View style={{ gap: 8, paddingTop: 12 }}>
               <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
-                {storefrontNothingMatchesCopy(filter.search.trim())}
+                {storefrontNothingMatchesCopy(shownFilter.search.trim())}
               </Body>
               <Body size={13} color={c.ink3}>
                 {STOREFRONT_NOTHING_MATCHES_HINT_COPY}
               </Body>
-              <SmallAction label={STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY} onPress={() => setFilter(EMPTY_FILTER)} />
+              <SmallAction label={STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY} onPress={clearAll} />
             </View>
           );
       }
     },
-    [c, qtyMap, photos, notOrderable, locked, cartKits, itemMap, onOpen, onAdd, onInc, onDec, onQuantity, onPhotoError, onKit, onKitDetails, router, filter.search],
+    [c, qtyMap, photos, notOrderable, locked, cartKits, itemMap, onOpen, onAdd, onInc, onDec, onQuantity, onPhotoError, onKit, onKitDetails, router, shownFilter.search, clearAll],
   );
 
   const leave = () => {
@@ -459,7 +469,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <TextInput
-          value={filter.search}
+          ref={searchRef}
           onChangeText={(text) => setFilter((f) => ({ ...f, search: text }))}
           placeholder={STOREFRONT_SEARCH_PLACEHOLDER_COPY}
           placeholderTextColor={c.ink4}
@@ -667,7 +677,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           sort={filter.sort}
           sortOptions={sortOptions}
           availability={filter.availability}
-          counts={availabilityCounts(view, target ?? { kind: 'all' }, filter.search)}
+          counts={availabilityCounts(view, target ?? { kind: 'all' }, shownFilter.search)}
           onSort={(sort) => setFilter((f) => ({ ...f, sort }))}
           onToggle={(s) => setFilter((f) => toggleAvailability(f, s))}
           onClose={() => setSheet(null)}

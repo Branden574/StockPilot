@@ -211,6 +211,12 @@ describe('the list: build #23’s settings, never FlashList, never a ScrollView 
     expect(catalog).toMatch(/\{title\}\s*<\/Display>\s*\{searchBar\}/);
     const searchInput = catalog.slice(catalog.lastIndexOf('<TextInput', search), search + 200);
     expect(searchInput).not.toMatch(/autoFocus/);
+    // Uncontrolled (no value=): a busy JS thread never drops a keystroke; the
+    // rows follow a deferred copy of what is typed.
+    expect(searchInput).not.toMatch(/\bvalue=/);
+    expect(searchInput).toContain('ref={searchRef}');
+    expect(catalog).toContain('const deferredSearch = React.useDeferredValue(filter.search);');
+    expect(catalog).toContain("return matchingRows(view, target ?? { kind: 'all' }, shownFilter);");
   });
 });
 
