@@ -6,7 +6,9 @@ import {
   EMPTY_FILTER,
   HOME_SECTION_ROWS,
   activeFilterCount,
+  availabilityCounts,
   browseHref,
+  browseTitle,
   browseTargetFromParams,
   filterActive,
   homeRows,
@@ -172,5 +174,23 @@ describe('filters and targets', () => {
       expect(browseTargetFromParams(query)).toEqual(t);
     }
     expect(browseTargetFromParams({})).toEqual({ kind: 'all' });
+  });
+});
+
+describe('the Sort & filter counts and the browse titles', () => {
+  it('counts each availability over what is searched, in the view', () => {
+    expect(availabilityCounts(view(), { kind: 'all' }, '')).toEqual({ ok: 10, low: 1, out: 1 });
+    expect(availabilityCounts(view(), { kind: 'category', category: 'c2' }, '')).toEqual({ ok: 0, low: 0, out: 1 });
+    expect(availabilityCounts(view(), { kind: 'all' }, 'pencil')).toEqual({ ok: 8, low: 0, out: 0 });
+    expect(availabilityCounts(view(), { kind: 'frequent' }, '').ok + availabilityCounts(view(), { kind: 'frequent' }, '').low).toBe(8);
+  });
+
+  it('titles: the category’s name, or the section’s', () => {
+    const words = { frequent: 'Frequently ordered', kits: 'Kits', all: 'All items' };
+    expect(browseTitle({ kind: 'category', category: 'c1' }, view().aisles, words)).toBe('Paper');
+    expect(browseTitle({ kind: 'category', category: 'uncategorized' }, view().aisles, words)).toBe('Uncategorized');
+    expect(browseTitle({ kind: 'category', category: 'gone' }, view().aisles, words)).toBe('All items');
+    expect(browseTitle({ kind: 'kits' }, [], words)).toBe('Kits');
+    expect(browseTitle({ kind: 'frequent' }, [], words)).toBe('Frequently ordered');
   });
 });

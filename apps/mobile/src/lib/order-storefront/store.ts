@@ -286,7 +286,7 @@ export function createDraftWriter(opts: {
   let disposed = false;
   let chain: Promise<void> = Promise.resolve();
 
-  const enqueue = (read: () => string | null, strict: boolean): Promise<void> => {
+  const queueWrite = (read: () => string | null, strict: boolean): Promise<void> => {
     const run = chain.then(async () => {
       if (disposed || opts.epoch() !== startEpoch) {
         if (strict) throw new OrderDraftWriteRefused();
@@ -311,12 +311,12 @@ export function createDraftWriter(opts: {
       cancel();
       timer = setTimer(() => {
         timer = null;
-        void enqueue(read, false).catch(() => undefined);
+        void queueWrite(read, false).catch(() => undefined);
       }, opts.debounceMs ?? ORDER_DRAFT_SAVE_DEBOUNCE_MS);
     },
     writeNow(read) {
       cancel();
-      return enqueue(read, true);
+      return queueWrite(read, true);
     },
     cancel,
     dispose() {

@@ -11,7 +11,7 @@ import {
 
 import { api } from '../api';
 import { createOrderStorefrontApi } from './api';
-import { createSubmitEngine, type SubmitEngine } from './submit';
+import { createSubmitEngine, showUnconfirmedPanel, type SubmitEngine } from './submit';
 
 /**
  * PLACING ONCE FROM THE PHONE (plan 3.4), driven through the REAL api() (only
@@ -430,5 +430,18 @@ describe('a locked cart refuses an add (core refuseAddWhileLocked)', () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(phase(e)).toBe('sending');
     expect(e.refuseChange()).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+  });
+});
+
+describe('when the unconfirmed panel shows', () => {
+  const pending: PendingOrderSubmission = { key: KEY, body: BODY, state: 'possibly_sent', sends: 1, firstSentAt: 'x' };
+  const last = { final: false as const, why: 'no_answer' as const, reason: null, details: null };
+  it('once a send is unanswered, or while a resend or a withdraw is out; never for the first send', () => {
+    expect(showUnconfirmedPanel({ phase: 'open' })).toBe(false);
+    expect(showUnconfirmedPanel({ phase: 'sending', pending })).toBe(false);
+    expect(showUnconfirmedPanel({ phase: 'sending', pending: { ...pending, sends: 2 } })).toBe(true);
+    expect(showUnconfirmedPanel({ phase: 'unconfirmed', pending, last })).toBe(true);
+    expect(showUnconfirmedPanel({ phase: 'withdrawing', pending, last })).toBe(true);
+    expect(showUnconfirmedPanel({ phase: 'withdrawn' })).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ import {
   stockChangedNotice,
   storefrontNeededByZone,
   submitBlockedBy,
+  wallClockIso,
 } from './checkout';
 
 const USER = '22222222-2222-4222-8222-222222222222';
@@ -200,5 +201,13 @@ describe('the needed-by', () => {
   it('the notes counter shows from 1,800 characters', () => {
     expect(showNotesCounter('x'.repeat(1799))).toBe(false);
     expect(showNotesCounter('x'.repeat(1800))).toBe(true);
+  });
+});
+
+describe('the picker’s opening value', () => {
+  it('a wall clock’s instant in the organization’s zone', () => {
+    expect(wallClockIso('2026-10-05T10:00', 'America/Los_Angeles')).toBe('2026-10-05T17:00:00.000Z');
+    expect(wallClockIso('', 'America/Los_Angeles')).toBeNull();
+    expect(wallClockIso('nope', 'America/Los_Angeles')).toBeNull();
   });
 });

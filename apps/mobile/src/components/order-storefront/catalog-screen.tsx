@@ -204,19 +204,24 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
 
   const qtyMap = React.useMemo(() => buildQtyMap(snap?.cart?.lines ?? []), [snap?.cart?.lines]);
   const answer = snap?.catalog.answer ?? null;
+  const prepared = snap?.prepared;
+  const catalogItemMap = snap?.itemMap;
+  const kits = snap?.kits ?? null;
+  const kitsEnabled = snap?.setup.status === 'ready' && snap.setup.answer.kitsEnabled;
+  // Rebuilt only when the catalog itself changes, never on a cart change.
   const view: CatalogView | null = React.useMemo(
     () =>
-      snap && answer
+      prepared && catalogItemMap && answer
         ? {
-            prepared: snap.prepared,
-            itemMap: snap.itemMap,
+            prepared,
+            itemMap: catalogItemMap,
             aisles: answer.aisles,
             frequent: answer.frequentlyOrdered.status === 'ok' ? answer.frequentlyOrdered.items : null,
-            kits: snap.kits,
-            kitsEnabled: snap.setup.status === 'ready' && snap.setup.answer.kitsEnabled,
+            kits,
+            kitsEnabled,
           }
         : null,
-    [snap, answer],
+    [prepared, catalogItemMap, answer, kits, kitsEnabled],
   );
 
   const rows: StorefrontRow[] = React.useMemo(() => {

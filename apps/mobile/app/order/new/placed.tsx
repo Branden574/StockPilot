@@ -213,7 +213,9 @@ export default function OrderPlaced() {
               label={SUCCESS_PLACE_ANOTHER_COPY}
               onPress={() => {
                 session.finishPlaced();
-                router.replace('/order/new' as Href);
+                // Back to the storefront already under this screen (or a new
+                // one after a cold start), never a second copy of it.
+                router.dismissTo('/order/new' as Href);
               }}
             />
             <SmallAction label={SUCCESS_DONE_COPY} variant="ghost" onPress={leaveToOrders} />

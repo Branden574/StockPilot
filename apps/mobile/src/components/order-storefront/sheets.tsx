@@ -170,7 +170,7 @@ export function QuickViewSheet({
           recyclingKey={item.id}
           onError={onPhotoError}
           contentFit="contain"
-          style={{ width: '100%', height: 200, borderRadius: 10, backgroundColor: c.paper2 }}
+          style={{ alignSelf: 'stretch', height: 200, borderRadius: 10, backgroundColor: c.paper2 }}
         />
       ) : null}
       {facts.map(([label, value]) => (

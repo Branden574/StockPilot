@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { rewriteWebPath } from './web-path-rewrite';
@@ -226,5 +229,29 @@ describe('locations deep links', () => {
 
   it('the stockpilot:// form of the link resolves the same way', () => {
     expect(rewriteWebPath(`stockpilot:///dashboard/locations/${ID}`)).toBe(`/location/${ID}`);
+  });
+});
+
+// Phone ordering PO-4: the web storefront's path (and the web's "Start an
+// order" links) open the native storefront, never home and never the order
+// screen with id "new" (audit D9). The cold-start shim is pinned beside it.
+describe('/dashboard/orders/new opens the phone storefront', () => {
+  it('with or without a query, above every other orders rule', () => {
+    expect(rewriteWebPath('/dashboard/orders/new')).toBe('/order/new');
+    expect(rewriteWebPath('/dashboard/orders/new?warehouse=w1&prefill=1')).toBe('/order/new');
+    expect(rewriteWebPath('/dashboard/orders/11111111-1111-4111-8111-111111111111')).toBe(
+      '/order/11111111-1111-4111-8111-111111111111',
+    );
+    expect(rewriteWebPath('/dashboard/orders')).toBe('/orders');
+    expect(rewriteWebPath('/dashboard/orders/newer')).toBe('/');
+  });
+
+  it('a cold start reaches the static shim, which redirects to the storefront', () => {
+    const shim = path.join(__dirname, '../../app/dashboard/orders/new.tsx');
+    expect(existsSync(shim)).toBe(true);
+    expect(readFileSync(shim, 'utf8')).toMatch(/<Redirect href=\{'\/order\/new' as Href\} \/>/);
+    // The static storefront route exists beside order/[id], so /order/new is
+    // never the order screen with id "new".
+    expect(existsSync(path.join(__dirname, '../../app/order/new/index.tsx'))).toBe(true);
   });
 });

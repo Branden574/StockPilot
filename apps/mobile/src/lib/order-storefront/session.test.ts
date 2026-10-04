@@ -404,3 +404,33 @@ describe('checkout', () => {
     expect(api.catalog).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('quantities, kits and the server’s clock', () => {
+  const KIT = { bundleId: 'b1', name: 'Starter', sku: null, components: [{ anchorItemId: A, itemIds: [A], perKit: 4 }] };
+
+  it('a typed quantity is clamped to what is available; 0 removes the line', async () => {
+    await session.open(scope);
+    session.setQuantity(A, 99);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 10 }]);
+    session.setQuantity(A, 0);
+    expect(snap().cart?.lines).toEqual([]);
+  });
+
+  it('a kit is all or nothing, in core’s words when it does not fit', async () => {
+    api.catalog.mockImplementation(async (_s, wh: string) => ({ ...catalogAnswer(wh, 10), kits: { status: 'ok', kits: [KIT] } }));
+    await session.open(scope);
+    expect(session.changeKit('b1', 2)).toBeNull();
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 8 }]);
+    expect(snap().cart?.kits).toEqual({ b1: { [A]: 8 } });
+    expect(session.changeKit('b1', 3)).toBe('Not enough Planner for that many kits. Nothing was added.');
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 8 }]);
+    expect(session.changeKit('b1', 0)).toBeNull();
+    expect(snap().cart?.lines).toEqual([]);
+  });
+
+  it('the needed-by picker’s now is the server’s clock', async () => {
+    api.storefront.mockResolvedValueOnce({ ...storefrontAnswer(), serverNow: new Date(now + 90_000).toISOString() });
+    await session.open(scope);
+    expect(snap().serverSkewMs).toBe(90_000);
+  });
+});
