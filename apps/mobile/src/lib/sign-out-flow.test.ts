@@ -349,3 +349,119 @@ describe('auth-context wiring', () => {
     }
   });
 });
+
+// Phone ordering PO-4 (plan 3.6): an order request sent but not confirmed is
+// settled by its key, which the sign-out removes with the account's drafts.
+describe('runSignOutFlow — order requests sent but not confirmed', () => {
+  function withOrders(
+    o: { before: number; afterSettle: number; afterWithdraw?: number; placed?: string[] },
+    state: Partial<Harness['state']> = {},
+  ) {
+    const h = harness(state);
+    let stage: 'before' | 'settled' | 'withdrawn' = 'before';
+    const orders = {
+      count: vi.fn(async () => {
+        h.log.push('orders:count');
+        return stage === 'before' ? o.before : stage === 'settled' ? o.afterSettle : (o.afterWithdraw ?? 0);
+      }),
+      settle: vi.fn(async () => {
+        h.log.push('orders:settle');
+        stage = 'settled';
+      }),
+      withdraw: vi.fn(async () => {
+        h.log.push('orders:withdraw');
+        stage = 'withdrawn';
+        return { placed: o.placed ?? [] };
+      }),
+      hold: vi.fn(async () => {
+        h.log.push('orders:hold');
+      }),
+      report: vi.fn(async (r: { placed: string[]; unanswered: number }) => {
+        h.log.push(`orders:report:${r.placed.join(',')}:${r.unanswered}`);
+      }),
+    };
+    h.deps.orderSubmissions = orders;
+    return { h, orders };
+  }
+
+  it('none: the sequence is exactly as before', async () => {
+    const { h, orders } = withOrders({ before: 0, afterSettle: 0 });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(orders.settle).not.toHaveBeenCalled();
+    expect(orders.hold).not.toHaveBeenCalled();
+    expect(h.deps.confirmUnsynced).not.toHaveBeenCalled();
+  });
+
+  it('online: their status is read first (never a send); settled ones ask nothing', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 0 });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(orders.settle).toHaveBeenCalledTimes(1);
+    expect(h.deps.drain).not.toHaveBeenCalled();
+    expect(h.deps.confirmUnsynced).not.toHaveBeenCalled();
+    expect(orders.hold).not.toHaveBeenCalled();
+  });
+
+  it('still unknown: the prompt says so; Stay changes nothing', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 1 }, { choice: 'stay' });
+    expect(await runSignOutFlow(h.deps)).toBe('stayed');
+    expect(h.deps.confirmUnsynced).toHaveBeenCalledWith(0, { canDiscard: false, unconfirmedOrders: 1 });
+    expect(orders.hold).not.toHaveBeenCalled();
+    expect(h.deps.signOut).not.toHaveBeenCalled();
+  });
+
+  it('Sign out: a marker is kept BEFORE the session goes, never a withdraw', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 1 }, { choice: 'sign-out' });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(orders.withdraw).not.toHaveBeenCalled();
+    expect(h.log.indexOf('orders:hold')).toBeLessThan(h.log.indexOf('signOut:global'));
+  });
+
+  it('Don’t send it and sign out: withdraws first, reports what was already placed, holds only what stayed unknown', async () => {
+    const { h, orders } = withOrders({ before: 2, afterSettle: 2, afterWithdraw: 0, placed: ['SO-000123'] }, { choice: 'withdraw-orders' });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.log).toContain('orders:report:SO-000123:0');
+    expect(orders.hold).not.toHaveBeenCalled();
+    expect(h.log.indexOf('orders:withdraw')).toBeLessThan(h.log.indexOf('signOut:global'));
+  });
+
+  it('a withdraw that could not reach the server: reported, and held like Sign out', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 1, afterWithdraw: 1 }, { choice: 'withdraw-orders' });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.log).toContain('orders:report::1');
+    expect(orders.hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('offline: no status read, the question is asked, and the marker is kept on Sign out', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 1 }, { online: false });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(orders.settle).not.toHaveBeenCalled();
+    expect(orders.hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('with queued changes too: both drains run, Discard only for the outbox', async () => {
+    const { h, orders } = withOrders({ before: 1, afterSettle: 1 }, { unsynced: 2, afterDrain: 2, choice: 'discard' });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.deps.drain).toHaveBeenCalledTimes(1);
+    expect(orders.settle).toHaveBeenCalledTimes(1);
+    expect(h.deps.confirmUnsynced).toHaveBeenCalledWith(2, { canDiscard: true, unconfirmedOrders: 1 });
+    expect(h.deps.discardUnsynced).toHaveBeenCalledTimes(1);
+    expect(orders.hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('the prompt: core’s words, and Don’t send it and sign out beside Stay and Sign out', () => {
+    const p = unsyncedPrompt(0, false, 1);
+    expect(p.title).toBe('Sign out?');
+    expect(p.message).toBe(
+      '1 order request was sent but not confirmed. If you sign out, its cart is cleared from this phone. Sign back in here to find out whether it was placed.',
+    );
+    expect(p.buttons.map((b) => [b.choice, b.label])).toEqual([
+      ['stay', 'Stay signed in'],
+      ['withdraw-orders', "Don't send it and sign out"],
+      ['sign-out', 'Sign out'],
+    ]);
+    const both = unsyncedPrompt(2, true, 2);
+    expect(both.title).toBe('2 changes have not synced');
+    expect(both.message).toContain('2 order requests were sent but not confirmed.');
+    expect(both.buttons.map((b) => b.choice)).toEqual(['stay', 'withdraw-orders', 'sign-out', 'discard']);
+  });
+});

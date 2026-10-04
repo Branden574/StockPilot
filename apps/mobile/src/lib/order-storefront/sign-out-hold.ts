@@ -1,10 +1,14 @@
 import {
+  SIGN_OUT_WITHDRAW_UNANSWERED_COPY,
   classifyOrderSettleResult,
   formatOrderNumber,
+  orderAlreadyPlacedCopy,
   orderCallResultForOrganization,
   type OrderCallResult,
   type PendingOrderSubmission,
 } from '@stockpilot/core';
+
+import { ORDER_DRAFT_PREFIX, unsettledSubmissions } from './store';
 
 /**
  * SIGNING OUT WITH AN ORDER REQUEST THAT ISN'T CONFIRMED (phone ordering PO-4,
@@ -134,4 +138,143 @@ export function holdCheckFrom(result: OrderCallResult, orgId: string): HoldCheck
     return { outcome: 'placed', label: outcome.order.orderLabel ?? formatOrderNumber(outcome.order.orderNumber) };
   }
   return { outcome: 'settled' };
+}
+
+// ── The sign-out's half (sign-out-flow.ts SignOutOrderSubmissions) ──────────
+
+/** The storage these read and write (AsyncStorage in the app). */
+export interface HoldStore {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
+  getAllKeys(): Promise<readonly string[]>;
+  multiGet(keys: readonly string[]): Promise<readonly (readonly [string, string | null])[]>;
+}
+
+export interface HoldCalls {
+  status(scope: { orgId: string; userId: string }, key: string): Promise<OrderCallResult>;
+  withdraw(scope: { orgId: string; userId: string }, key: string): Promise<OrderCallResult>;
+}
+
+async function deviceSends(store: HoldStore, userId: string) {
+  const prefix = `${ORDER_DRAFT_PREFIX}${userId}.`;
+  const keys = (await store.getAllKeys()).filter((k) => k.startsWith(prefix));
+  const entries = keys.length > 0 ? await store.multiGet(keys) : [];
+  return unsettledSubmissions(entries, userId, null);
+}
+
+/**
+ * The sign-out flow's order-request steps for one account. Reads only (status)
+ * unless the person chose "Don't send it" (withdraw). A key found settled
+ * during this sign-out is not counted again; the drafts themselves go with
+ * the account's storage once the session ends.
+ */
+export function createSignOutOrderSubmissions(deps: {
+  userId: string;
+  store: HoldStore;
+  calls: HoldCalls;
+  /** Tell the person (an alert in the app). */
+  say(message: string): Promise<void>;
+}) {
+  const settled = new Set<string>();
+  const live = async () =>
+    (await deviceSends(deps.store, deps.userId)).filter((s) => !settled.has(`${s.orgId}.${s.pending.key}`));
+  const scopeOf = (orgId: string) => ({ orgId, userId: deps.userId });
+  return {
+    async count() {
+      return (await live()).length;
+    },
+    async settle() {
+      for (const s of await live()) {
+        const check = holdCheckFrom(await deps.calls.status(scopeOf(s.orgId), s.pending.key), s.orgId);
+        if (check.outcome !== 'unknown') settled.add(`${s.orgId}.${s.pending.key}`);
+      }
+    },
+    async withdraw() {
+      const placed: string[] = [];
+      for (const s of await live()) {
+        const check = holdCheckFrom(await deps.calls.withdraw(scopeOf(s.orgId), s.pending.key), s.orgId);
+        if (check.outcome === 'unknown') continue;
+        settled.add(`${s.orgId}.${s.pending.key}`);
+        if (check.outcome === 'placed') placed.push(check.label ?? '');
+      }
+      return { placed };
+    },
+    async hold() {
+      const adds = (await live()).map((s) => holdFor(s));
+      if (adds.length === 0) return;
+      const key = orderHoldKey(deps.userId);
+      const merged = mergeHolds(parseHolds(await deps.store.getItem(key)), adds);
+      const raw = serializeHolds(merged);
+      if (raw !== null) await deps.store.setItem(key, raw);
+    },
+    async report(result: { placed: string[]; unanswered: number }) {
+      const lines = result.placed.map((label) =>
+        orderAlreadyPlacedCopy({ orderNumber: null, orderLabel: label === '' ? null : label }),
+      );
+      if (result.unanswered > 0) lines.push(SIGN_OUT_WITHDRAW_UNANSWERED_COPY);
+      if (lines.length > 0) await deps.say(lines.join(' '));
+    },
+  };
+}
+
+// ── The next sign-in's half ─────────────────────────────────────────────────
+
+export interface HeldCheckResult {
+  /** Orders the held keys turned out to have placed ("SO-000123", or null). */
+  placed: (string | null)[];
+  /** Still not known: offer "Don't send it" and "See my orders". */
+  unknown: OrderSubmissionHold[];
+}
+
+/**
+ * At sign-in (and on foreground while any are held): read each held key's
+ * status. Placed is said, refused and withdrawn clear the marker, anything
+ * else keeps it. A key still live in this device's drafts (a sign-out that
+ * did not end the session) is left to the storefront. Never sends.
+ */
+export async function checkHeldSubmissions(deps: {
+  userId: string;
+  store: HoldStore;
+  calls: HoldCalls;
+}): Promise<HeldCheckResult> {
+  const key = orderHoldKey(deps.userId);
+  const holds = parseHolds(await deps.store.getItem(key));
+  if (holds.length === 0) return { placed: [], unknown: [] };
+  const onDevice = new Set((await deviceSends(deps.store, deps.userId)).map((s) => `${s.orgId}.${s.pending.key}`));
+  const kept: OrderSubmissionHold[] = [];
+  const placed: (string | null)[] = [];
+  const unknown: OrderSubmissionHold[] = [];
+  for (const h of holds) {
+    if (onDevice.has(`${h.orgId}.${h.key}`)) {
+      kept.push(h);
+      continue;
+    }
+    const check = holdCheckFrom(await deps.calls.status({ orgId: h.orgId, userId: deps.userId }, h.key), h.orgId);
+    if (check.outcome === 'placed') placed.push(check.label);
+    else if (check.outcome === 'unknown') {
+      kept.push(h);
+      unknown.push(h);
+    }
+  }
+  const raw = serializeHolds(kept);
+  if (raw === null) await deps.store.removeItem(key);
+  else if (kept.length !== holds.length) await deps.store.setItem(key, raw);
+  return { placed, unknown };
+}
+
+/** "Don't send it" for a held key: withdraw it (its answer is final). */
+export async function withdrawHeldSubmission(
+  deps: { userId: string; store: HoldStore; calls: HoldCalls },
+  hold: OrderSubmissionHold,
+): Promise<HoldCheck> {
+  const check = holdCheckFrom(await deps.calls.withdraw({ orgId: hold.orgId, userId: deps.userId }, hold.key), hold.orgId);
+  if (check.outcome !== 'unknown') {
+    const key = orderHoldKey(deps.userId);
+    const rest = parseHolds(await deps.store.getItem(key)).filter((h) => !(h.key === hold.key && h.orgId === hold.orgId));
+    const raw = serializeHolds(rest);
+    if (raw === null) await deps.store.removeItem(key);
+    else await deps.store.setItem(key, raw);
+  }
+  return check;
 }

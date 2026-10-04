@@ -1,17 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { PendingOrderSubmission } from '@stockpilot/core';
+import { initialCartState, type OrderCallResult, type PendingOrderSubmission } from '@stockpilot/core';
 
 import { accountScopedStorageKeys } from '../account-eviction';
 import {
   ORDER_HOLD_PREFIX,
+  checkHeldSubmissions,
+  createSignOutOrderSubmissions,
   holdCheckFrom,
   holdFor,
   mergeHolds,
   orderHoldKey,
   parseHolds,
   serializeHolds,
+  withdrawHeldSubmission,
+  type HoldStore,
 } from './sign-out-hold';
+import { orderDraftKey, serializeOrderDraft } from './store';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const USER = '22222222-2222-4222-8222-222222222222';
@@ -108,5 +113,158 @@ describe('checking a held key at the next sign-in (a read, never a send)', () =>
     expect(
       holdCheckFrom({ ok: true, status: 200, body: { organizationId: '99999999-9999-4999-8999-999999999999', outcome: 'placed', order } }, ORG),
     ).toEqual({ outcome: 'unknown' });
+  });
+});
+
+// ── The sign-out's and the next sign-in's halves ────────────────────────────
+
+function memory(): HoldStore & { data: Map<string, string> } {
+  const data = new Map<string, string>();
+  return {
+    data,
+    getItem: async (k) => data.get(k) ?? null,
+    setItem: async (k, v) => {
+      data.set(k, v);
+    },
+    removeItem: async (k) => {
+      data.delete(k);
+    },
+    getAllKeys: async () => [...data.keys()],
+    multiGet: async (keys) => keys.map((k) => [k, data.get(k) ?? null] as const),
+  };
+}
+
+const ORDER = {
+  id: 'o1',
+  orderNumber: 123,
+  orderLabel: 'SO-000123',
+  status: 'pending_approval',
+  warehouseId: WH,
+  fulfillmentType: 'pickup',
+  deliveryCharterId: null,
+  neededBy: null,
+  lineCount: 1,
+  unitCount: 1,
+  createdAt: 'x',
+  requestedFor: { self: true },
+};
+const answer = (body: unknown): OrderCallResult => ({ ok: true, status: 200, body });
+
+function withPendingDraft() {
+  const store = memory();
+  const scope = { userId: USER, orgId: ORG, warehouseId: WH };
+  store.data.set(
+    orderDraftKey(scope),
+    serializeOrderDraft(scope, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: PENDING }, new Date()),
+  );
+  return store;
+}
+
+describe('the sign-out’s order-request steps', () => {
+  it('counts this account’s unsettled sends on the device; a status read that settles one stops counting it', async () => {
+    const store = withPendingDraft();
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'withdrawn' })), withdraw: vi.fn() };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say: vi.fn() });
+    expect(await s.count()).toBe(1);
+    await s.settle();
+    expect(calls.status).toHaveBeenCalledWith({ orgId: ORG, userId: USER }, KEY);
+    expect(calls.withdraw).not.toHaveBeenCalled();
+    expect(await s.count()).toBe(0);
+  });
+
+  it('status none keeps it counted; Sign out writes ONE marker outside the account’s keys', async () => {
+    const store = withPendingDraft();
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'none' })), withdraw: vi.fn() };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say: vi.fn() });
+    await s.settle();
+    expect(await s.count()).toBe(1);
+    await s.hold();
+    await s.hold();
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })]);
+  });
+
+  it('Don’t send it: withdraws; an order already placed is reported in core’s words', async () => {
+    const store = withPendingDraft();
+    const say = vi.fn(async () => undefined);
+    const calls = { status: vi.fn(), withdraw: vi.fn(async () => answer({ organizationId: ORG, outcome: 'placed', order: ORDER })) };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say });
+    const r = await s.withdraw();
+    expect(calls.withdraw).toHaveBeenCalledWith({ orgId: ORG, userId: USER }, KEY);
+    expect(r).toEqual({ placed: ['SO-000123'] });
+    expect(await s.count()).toBe(0);
+    await s.report({ placed: r.placed, unanswered: 0 });
+    expect(say).toHaveBeenCalledWith('It had already been placed: SO-000123.');
+  });
+
+  it('a withdraw with no answer stays counted, and the report says it will be checked at sign-in', async () => {
+    const store = withPendingDraft();
+    const say = vi.fn(async () => undefined);
+    const calls = { status: vi.fn(), withdraw: vi.fn(async (): Promise<OrderCallResult> => ({ ok: false, error: new Error('offline') })) };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say });
+    expect(await s.withdraw()).toEqual({ placed: [] });
+    expect(await s.count()).toBe(1);
+    await s.report({ placed: [], unanswered: 1 });
+    expect(say).toHaveBeenCalledWith(
+      "It couldn't be checked just now. Sign back in here to find out whether it was placed.",
+    );
+  });
+
+  it('nothing to say, nothing said', async () => {
+    const say = vi.fn(async () => undefined);
+    const s = createSignOutOrderSubmissions({ userId: USER, store: memory(), calls: { status: vi.fn(), withdraw: vi.fn() }, say });
+    await s.report({ placed: [], unanswered: 0 });
+    expect(say).not.toHaveBeenCalled();
+  });
+});
+
+describe('the next sign-in', () => {
+  function held() {
+    const store = memory();
+    store.data.set(orderHoldKey(USER), serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!);
+    return store;
+  }
+
+  it('placed: said, and the marker cleared', async () => {
+    const store = held();
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'placed', order: ORDER })), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: ['SO-000123'], unknown: [] });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+    expect(calls.withdraw).not.toHaveBeenCalled();
+  });
+
+  it('withdrawn or refused: cleared without a word', async () => {
+    const store = held();
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'withdrawn' })), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+  });
+
+  it('still none: kept, and offered; Don’t send it settles it', async () => {
+    const store = held();
+    const calls = {
+      status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'none' })),
+      withdraw: vi.fn(async () => answer({ organizationId: ORG, outcome: 'withdrawn' })),
+    };
+    const r = await checkHeldSubmissions({ userId: USER, store, calls });
+    expect(r.unknown).toHaveLength(1);
+    expect(store.data.has(orderHoldKey(USER))).toBe(true);
+    expect(await withdrawHeldSubmission({ userId: USER, store, calls }, r.unknown[0]!)).toEqual({ outcome: 'settled' });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+  });
+
+  it('another account’s marker is never read', async () => {
+    const store = held();
+    const calls = { status: vi.fn(), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: '77777777-7777-4777-8777-777777777777', store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(calls.status).not.toHaveBeenCalled();
+  });
+
+  it('a key still live in this device’s drafts is left to the storefront', async () => {
+    const store = withPendingDraft();
+    store.data.set(orderHoldKey(USER), serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!);
+    const calls = { status: vi.fn(), withdraw: vi.fn() };
+    expect(await checkHeldSubmissions({ userId: USER, store, calls })).toEqual({ placed: [], unknown: [] });
+    expect(calls.status).not.toHaveBeenCalled();
+    expect(store.data.has(orderHoldKey(USER))).toBe(true);
   });
 });
