@@ -28,100 +28,6 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'approval-follows-permission-2026-10',
-    revision: 1,
-    // Security slice D (migration 0390, sec-orders plan section 5; owner
-    // decision O4, default yes; O3 default: marking in transit needs
-    // orders:approve). Held as a DRAFT until 0390 is pushed and verified, the
-    // web deploy (assignment and in transit through the new database calls,
-    // on-behalf ordering and the cancel window by the permission) is live, and
-    // the phone update (the order screen's actions by the permission) is
-    // published (owner rule: publish once phones have the update). The
-    // follow-up that publishes it sets the real publishedAt and re-reads these
-    // words against what shipped. At the top, above the other drafts, dated
-    // after every release; the publishing follow-up keeps it the newest.
-    //
-    // Who is told: members of organizations with Orders on. The first entry
-    // goes to staff who hold orders:approve, the people it describes (owners,
-    // admins and managers hold it by default and gain nothing; it links to
-    // the orders list, which reads that permission). Not viewers: the app
-    // refuses every write for a viewer (assertWarehouseAccess), so neither
-    // app offers a viewer approving or moving orders even with the
-    // permission (the web panel's `approves`, the phone's orderManagerActions
-    // isViewerRole); production had 0 viewers holding it on 2026-10-04. The
-    // second entry goes to owners, admins and managers (a manager whose
-    // orders:approve was removed no longer holds it, so the permission cannot
-    // address them); the third to every member, since any member can be a
-    // delivery's driver.
-    //
-    // What still goes by role after 0390, and the words say so: finishing or
-    // releasing picking someone else claimed (complete_picking,
-    // partial_pick_line, release_picking). confirm_physical_signature also
-    // still admits a manager by role (or the assigned driver), but neither
-    // app offers a manager without orders:approve a hand-over step unless
-    // they are the driver (the web page's showActionsPanel needs canApprove
-    // or the driver at those statuses; the phone's section audience), so the
-    // words promise no paper signature and say neither app offers one; the
-    // server side is follow-up 4 (sec-orders plan section 10). Cancel: the
-    // web app offers it on any open order (CancelOrderButton); the mobile app
-    // only on a backordered order. The removed manager's own-order cancel
-    // "while it waits for approval" is the apps' rule (OrderRequestsService
-    // .cancel, M7); cancel_order_request lets a requester cancel at any open
-    // status (review finding 3, recorded as a follow-up).
-    status: 'draft',
-    title: 'Approving orders follows the approve permission',
-    summary:
-      'Approving orders and moving them toward pickup or delivery now follow the "Approve / fulfill orders" permission in both apps and on the server. A staff member who was given it sees Approve, Deny and the next steps in the mobile app after the latest update. A manager who had it removed can no longer approve, deny, cancel other people\'s orders or move an order toward pickup or delivery; finishing or releasing picking that someone else claimed still follows the manager role.',
-    publishedAt: '2026-10-12T17:00:00Z',
-    audience: { modules: ['orders'] },
-    entries: [
-      {
-        id: 'approve-permission-granted',
-        category: 'fixed',
-        area: 'Orders',
-        title: 'Given the approve permission, you can approve in the mobile app too',
-        whatChanged:
-          'If an admin gave you the "Approve / fulfill orders" permission, the order screen in the mobile app now shows Approve and Deny (and Approve partial when stock is short), the steps that move an order toward pickup or delivery, Reopen picking, and Resume, Close and Cancel for a backordered order, as managers see them. In the web app you can now also order on someone else\'s behalf, assign who picks an order, reopen picking, and cancel an order you placed yourself after it was approved.',
-        whyItMatters:
-          'The mobile app showed these only to owners, admins and managers, so a staff member who was given the permission could act on an order only from the web app, and some steps were missing there too.',
-        howItAffectsYou:
-          'You can approve orders and move them along from either app. You can cancel other people\'s orders from the web app; the mobile app offers Cancel on a backordered order. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
-        whatToDo:
-          'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
-        link: { href: '/dashboard/orders', label: 'View orders' },
-        audience: { roles: ['staff'], anyPermission: ['orders:approve'], modules: ['orders'] },
-      },
-      {
-        id: 'approve-permission-removed',
-        category: 'fixed',
-        area: 'Orders',
-        title: 'Removing the approve permission from a manager now applies on the server too',
-        whatChanged:
-          'When an admin removes the "Approve / fulfill orders" permission from a manager, that manager can no longer approve or deny orders, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order toward pickup or delivery, in the web app, the mobile app or on the server. Neither app offers them Collect signature or Physical signature unless they are the order\'s driver. Finishing or releasing picking that someone else claimed still follows the manager role for now.',
-        whyItMatters:
-          'The mobile app kept showing these buttons to a manager without the permission and then refused them, and the rules behind the apps still let any manager through.',
-        howItAffectsYou:
-          'Nothing changes for a manager who keeps the permission, which managers have by default. A manager without it can still cancel an order they placed while it waits for approval.',
-        whatToDo: 'No action needed.',
-        audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
-      },
-      {
-        id: 'delivery-driver-actions',
-        category: 'improved',
-        area: 'Orders',
-        title: 'Assigned drivers see their delivery steps in the mobile app',
-        whatChanged:
-          'If you are the assigned driver of a delivery, the order screen in the mobile app now shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, so a driver without it no longer sees Mark in transit in either app.',
-        whyItMatters:
-          'The mobile app showed these steps only to owners, admins and managers. A driver without the approve permission could press Mark in transit in the web app and was told the order status had changed.',
-        howItAffectsYou:
-          'A driver who has the approve permission still marks their delivery in transit. A driver without it asks someone who has it.',
-        whatToDo:
-          'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
-      },
-    ],
-  },
-  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
@@ -129,10 +35,10 @@ export const RELEASES: Release[] = [
     // verified, the web deploy is READY and the production smoke test that
     // writes nothing has passed (phone-orders plan 10.1 step 8); the
     // follow-up that publishes it (plan PO-5) sets the real publishedAt and
-    // re-reads these words against what shipped. Sits below the slice D draft
-    // (which must stay dated after every release) and above the slice B
-    // draft, dated between them; the publishing follow-up keeps the order
-    // newest first.
+    // re-reads these words against what shipped. A draft sits above the
+    // newest published release: slice D's release and slice B's two are
+    // published below it, and it is dated after them; the publishing
+    // follow-up keeps the order newest first.
     //
     // What a person can see, on the web only (the phone storefront is PO-4,
     // with its own entry): the New order page's lost-answer panel (Check and
@@ -205,36 +111,173 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'approval-follows-permission-2026-10',
+    revision: 1,
+    // Security slice D (migration 0390, pushed 2026-10-04 05:32:44Z;
+    // sec-orders plan section 5; owner decision O4, default yes; O3 default:
+    // marking in transit needs orders:approve; #314, dcdb7ae8). Held as a
+    // draft until 0390 was pushed and verified, the web deploy (web build
+    // 3e9201bd1661, built 05:34:06Z: assignment and in transit through
+    // assign_order_delivery and mark_order_in_transit, on-behalf ordering and
+    // the cancel window by the permission), the phone update that shows the
+    // order screen's actions by the permission (OTA group 5b19a88a, iOS update
+    // 01a10569, published 05:36Z, launched on phones) and the Demo Co
+    // production walk (SO-000018 approved, picked, packed, staged, given a
+    // driver through assign_order_delivery, marked in transit through
+    // mark_order_in_transit and cancelled; the published phone bundle showed
+    // an admin Approve and Deny on a pending order) were done. Demo Co has no
+    // staff member, so the granted, revoked and viewer cases were proven
+    // locally. Published after them, the newest release, a minute after
+    // slice B's timeline release; the PO-2 draft sits above it.
+    //
+    // Its words were re-read against what shipped. Old phone bundles still show
+    // these actions by role (and confirm_physical_signature still admits a
+    // manager by role), so what the mobile app offers is said "after the latest
+    // update". The granted entry no longer says "as managers see them": Assign
+    // delivery also needs orders:assign_delivery ("Assign deliveries", which
+    // staff do not hold by default), and a paper signature a manager or the
+    // driver. Every one of these actions asks write access to the order's
+    // warehouse (requireWarehouseAccess), and since slice B so does handing the
+    // order over below manager rank, the assigned driver excepted
+    // (handOverAllowed: the web's Collect signature link, the warehouse slip,
+    // the sign route's member path), so the granted entry says so; cancelling
+    // asks no warehouse access. The removed entry adds ordering on someone
+    // else's behalf (the New order page and createOrderRequestAction asked the
+    // manager role until 0390), and its why says the web app itself let such a
+    // manager assign a picker (core availableOrderActions offered
+    // reassign_picker by role) and order on someone's behalf.
+    //
+    // The two whys, as the code before 0390 (9147755d) did it. The phone's
+    // MANAGER ACTIONS section showed by role (hasPipelineActions: isManager),
+    // while it already offered a granted staff member Hold available stock
+    // (shouldOfferHoldStock, canApproveOrders), the needed-by Change
+    // (canOfferNeededByChange) and claim and pick (viewerCanPick: items:update,
+    // a staff default). A manager whose orders:approve was removed was refused
+    // Approve, Deny, the slips, staging, reopen, resume and close by the
+    // service (assertPermission orders:approve), but not Assign delivery
+    // (assignDelivery asked only orders:assign_delivery, a manager default, and
+    // the update policy admitted a manager by role) or Mark in transit
+    // (markInTransit asked the driver or a manager by role), so the removed
+    // entry's why names those two and never says the phone refused them all.
+    //
+    // Who is told: members of organizations with Orders on. The first entry
+    // goes to staff who hold orders:approve, the people it describes (owners,
+    // admins and managers hold it by default and gain nothing; it links to
+    // the orders list, which reads that permission). Not viewers: the app
+    // refuses every write for a viewer (assertWarehouseAccess), so neither
+    // app offers a viewer approving or moving orders even with the
+    // permission (the web panel's `approves`, the phone's orderManagerActions
+    // isViewerRole); production had 0 viewers holding it on 2026-10-04. The
+    // second entry goes to owners, admins and managers (a manager whose
+    // orders:approve was removed no longer holds it, so the permission cannot
+    // address them); the third to every member, since any member can be a
+    // delivery's driver.
+    //
+    // What still goes by role after 0390, and the words say so: finishing or
+    // releasing picking someone else claimed (complete_picking,
+    // partial_pick_line, release_picking). confirm_physical_signature also
+    // still admits a manager by role (or the assigned driver), but neither
+    // the web app nor the updated phone offers a manager without
+    // orders:approve a hand-over step unless they are the driver (the web
+    // panel's `approves || isDriverHere`; the phone's section audience), so
+    // the words promise no paper signature; the server side is follow-up 4
+    // (sec-orders plan section 10). Cancel: the web app offers it on any open
+    // order (CancelOrderButton); the mobile app only on a backordered order.
+    // The removed manager's own-order cancel "while it waits for approval" is
+    // the apps' rule (OrderRequestsService.cancel, M7); cancel_order_request
+    // lets a requester cancel at any open status (review finding 3, recorded
+    // as a follow-up).
+    status: 'published',
+    title: 'Approving orders follows the approve permission',
+    summary:
+      'Approving orders and moving them toward pickup or delivery now follow the "Approve / fulfill orders" permission on the web, in the mobile app after the latest update, and on the server. A staff member who was given it sees Approve, Deny and the next steps in the mobile app. A manager who had it removed can no longer approve, deny, cancel other people\'s orders or move an order toward pickup or delivery; finishing or releasing picking that someone else claimed still follows the manager role.',
+    publishedAt: '2026-10-04T12:25:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'approve-permission-granted',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Given the approve permission, you can approve in the mobile app too',
+        whatChanged:
+          'If an admin gave you the "Approve / fulfill orders" permission, the order screen in the mobile app, after the latest update, shows Approve and Deny (and Approve partial when stock is short), the steps that move an order toward pickup or delivery, Reopen picking, and Resume, Close and Cancel for a backordered order. Assign delivery also needs the "Assign deliveries" permission. In the web app you can now also order on someone else\'s behalf, assign who picks an order, reopen picking, and cancel an order you placed yourself after it was approved.',
+        whyItMatters:
+          "The mobile app already let a staff member who was given the permission hold available stock, change an order's needed-by date, and claim and pick orders. But it showed Approve, Deny and the next steps only to owners, admins and managers. The web app also left out some of the steps above.",
+        howItAffectsYou:
+          'You can approve orders and move them along from either app, for orders in the warehouses you have access to. Collect signature and Print warehouse slip now follow the same rule, unless you are the order\'s driver. You can cancel other people\'s orders from the web app; the mobile app offers Cancel on a backordered order. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
+        whatToDo:
+          'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { roles: ['staff'], anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'approve-permission-removed',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Removing the approve permission from a manager now applies on the server too',
+        whatChanged:
+          'A manager whose "Approve / fulfill orders" permission was removed can no longer approve or deny orders, order on someone else\'s behalf, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order toward pickup or delivery, in either app or on the server. Neither the web app nor the mobile app, after the latest update, offers them Collect signature or Physical signature unless they are the order\'s driver. Finishing or releasing picking that someone else claimed still follows the manager role for now.',
+        whyItMatters:
+          "Before this change, the mobile app showed Approve, Deny and the next steps to every manager by role. A manager without the permission could still assign a driver or mark a delivery in transit there, and assign a picker or order on someone else's behalf in the web app, because the server let a manager through by role.",
+        howItAffectsYou:
+          'Nothing changes for a manager who keeps the permission, which managers have by default. A manager without it can still cancel an order they placed while it waits for approval.',
+        whatToDo: 'No action needed.',
+        audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
+      },
+      {
+        id: 'delivery-driver-actions',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Assigned drivers see their delivery steps in the mobile app',
+        whatChanged:
+          'If you are the assigned driver of a delivery, the order screen in the mobile app, after the latest update, shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, so a driver without it is not offered Mark in transit in either app.',
+        whyItMatters:
+          'The mobile app showed these steps only to owners, admins and managers. A driver without the approve permission could press Mark in transit in the web app and was told the order status had changed.',
+        howItAffectsYou:
+          'A driver who has the approve permission still marks their delivery in transit. A driver without it asks someone who has it.',
+        whatToDo:
+          'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
     id: 'order-signature-timeline-2026-10',
     revision: 1,
-    // Order secrets, slice B (migration 0389). Held as a DRAFT until 0389 is
-    // pushed and verified, the web deploy is READY, the phone's update is
-    // published and on phones (feedback_whats_new_publish_timing), and the
-    // Demo Co walk is done (plan 4.9 R8-R9). The follow-up that publishes it
-    // sets the real publishedAt and re-reads these words against what
-    // shipped. At the top of the list, above the account deletion draft
-    // (0388, pushed before 0389, so published first), and dated after every
-    // release below it (drafts go above the newest published release, newest
-    // first); the publishing follow-up sets the real date and keeps it the
-    // newest.
+    // Order secrets, slice B (migration 0389, pushed 2026-10-04 04:23:52Z;
+    // #313, 9147755d). Held as a draft until 0389 was pushed and verified, the
+    // web deploy (web build 98b64dc87a91, built 04:25:13Z), the phone's update
+    // (OTA group f0a24abc, iOS update 01a1052b, published 04:27Z, launched on
+    // phones) and the Demo Co production walk (69 checks passed: SO-000007's
+    // packing slips minted through generate_order_packing_slips, its warehouse
+    // slip's QR and the panel's link carried the raw token, a digest posted
+    // with no session got the one 404, and it was cancelled unsigned; the
+    // published phone bundle opened View signature on SO-000002 for an admin)
+    // were done. Published after them, a minute before slice D's release and
+    // a minute after the signature image release below it.
     //
     // What a person can see: every digital hand-over now writes
     // order.signature_collected, which the order timeline labels "Signature
-    // collected" (order-timeline.tsx). The words promise no collector's name:
-    // only the signed-in member path (the phone's Collect signature) records
-    // one; the link path (the web panel, a printed QR, the phone's scan tab)
-    // records none, which the timeline shows as Public. The phone's View signature reads the
-    // image through the web's gated route (orders:approve or the assigned
-    // driver), so anyone else sees the signer's name and time without it, as
-    // on the web. Everything else in the slice is invisible on purpose (the
-    // token is stored hashed; links, QRs and installed phones keep working).
-    // Addressed to approvers where Orders is on: they read order timelines
-    // and collect signatures.
-    status: 'draft',
-    title: "A customer's digital signature shows on the order's timeline",
-    summary: "A customer's digital signature now shows on the order's timeline.",
-    publishedAt: '2026-10-11T17:05:00Z',
-    audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+    // collected" (order-timeline.tsx). Nothing was signed in production, so
+    // the line was proven by the local E2E (B-NOTES: the link path and the
+    // member path each put Signature collected on the timeline). The words
+    // promise no collector's name: only the signed-in member path (the
+    // phone's Collect signature) records one; the link path (the web panel, a
+    // printed QR, the phone's scan tab) records none, which the timeline
+    // shows as Public. No entry is added for an order signed before 0389.
+    //
+    // Who is told: the timeline reads audit_logs through the viewer's own
+    // client, whose policy asks activity_logs:read ("View audit log"), so
+    // anyone else sees "No events yet." The release was addressed to
+    // orders:approve as a draft; a staff member granted it does not hold
+    // activity_logs:read by default, so it now goes to the people who see the
+    // timeline, where Orders is on. The phone's View signature change, which
+    // every member can see, is its own release (order-signature-image-2026-10).
+    status: 'published',
+    title: "A digital signature now adds Signature collected to the order's timeline",
+    summary:
+      "On the web, the order's timeline now shows Signature collected when a customer signs for an order on the signature page or on the mobile app's signature pad.",
+    publishedAt: '2026-10-04T12:24:00Z',
+    audience: { anyPermission: ['activity_logs:read'], modules: ['orders'] },
     entries: [
       {
         id: 'order-timeline-signature-collected',
@@ -242,13 +285,57 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Signature collected is on the order timeline',
         whatChanged:
-          "When a customer signs for an order on the signature page or on the mobile app's signature pad, the order's timeline now shows Signature collected. In the mobile app, View signature shows the captured image to the people who see it on the web: order approvers and the order's delivery driver.",
+          "When a customer signs for an order on the signature page or on the mobile app's signature pad, the order's timeline on the web now shows Signature collected.",
         whyItMatters:
           'A paper signature left an entry on the timeline, but a digital one left none, so the timeline did not show when the order was handed over.',
         howItAffectsYou:
-          'Nothing changes in how you collect a signature. Anyone else who opens View signature in the mobile app sees who signed and when, without the image.',
-        whatToDo:
-          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+          'Nothing changes in how you collect a signature. Signatures collected before this change are not added to the timeline.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'order-signature-image-2026-10',
+    revision: 1,
+    // Shipped in slice B (#313, 9147755d); its phone part is the over-the-air
+    // update (OTA group f0a24abc, published 2026-10-04 04:27Z). Published in
+    // the same change as the timeline release and dated a minute before it,
+    // so it sits directly below it. The order screen's View signature used to
+    // select signature_data_url straight from order_requests, which every
+    // member reads, so anyone who opened a signed order saw the image. It now
+    // asks GET /api/v1/orders/<id>/signature (order-signature-image.ts), the
+    // web panel's route, whose gate is isHandOverEntitled: the effective
+    // orders:approve or the order's assigned driver. Anyone else gets 403 and
+    // the dialog's empty state, the signer's name and time, as for a paper
+    // signature (no image). On the web, View signature sits in the actions
+    // panel, which a completed order shows to orders:approve holders only.
+    // Old bundles still read the row (the column holds the image until slice
+    // C), so the change is said "after the latest update". The production
+    // walk opened View signature on the published bundle as an admin (image
+    // shown, through the route); the refusal for anyone else is proven by
+    // order-signature-image.test.ts and the route's tests.
+    //
+    // For every member where Orders is on: anyone can open a signed order in
+    // the mobile app.
+    status: 'published',
+    title: 'Only approvers and the driver see a signature image in the mobile app',
+    summary:
+      'In the mobile app, after the latest update, View signature on an order shows the customer\'s signature image only to people with the "Approve / fulfill orders" permission and to the order\'s assigned driver. Anyone else sees who signed and when, without the image.',
+    publishedAt: '2026-10-04T12:23:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-signature-image-mobile',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Only approvers and the driver see a signature image in the mobile app',
+        whatChanged:
+          'In the mobile app, after the latest update, View signature on an order shows the customer\'s signature image only to people with the "Approve / fulfill orders" permission and to the order\'s assigned driver. Anyone else sees who signed and when, without the image.',
+        whyItMatters:
+          "A customer's signature is personal information. In the mobile app, anyone who could open the order could see it, while the web app shows it only to people with that permission.",
+        howItAffectsYou:
+          "If you have that permission, or you are the order's assigned driver, nothing changes for you. Otherwise View signature shows the signer's name and the time, as it does for a paper signature.",
+        whatToDo: 'No action needed.',
       },
     ],
   },
