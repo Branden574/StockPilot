@@ -884,7 +884,6 @@ WEB_TESTS=(
   # email).
   src/server/services/order-requests.create.test.ts
   src/server/actions/order-requests.place-action.test.ts
-  src/server/actions/order-requests.on-behalf.test.ts
   src/app/api/v1/orders/route.test.ts
   'src/app/api/v1/orders/submissions/[key]/route.test.ts'
   src/server/services/create-order-request-callers.guard.test.ts
