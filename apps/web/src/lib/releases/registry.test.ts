@@ -17,6 +17,7 @@ import {
   EXCEPTION_EVIDENCE_NOTE_MAX,
   EXCEPTION_RULES,
   HOLD_AVAILABLE_STOCK_LABEL,
+  isDeletedRequester,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
@@ -578,8 +579,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // needed-by time's, the draft POs count's, Book Order Totals', the report
     // scope fix's, the small fixes', F2-3's, the Sports fields', the count
     // difference words', Book Order Totals by charter's, F2-4's, F2-5's, the
-    // count confirm's and the session-ended fix's after it).
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // count confirm's, the session-ended fix's and the two account deletion
+    // releases after it).
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -752,9 +754,9 @@ describe('F2-1 (order readiness) is published', () => {
     // wording, F2-2's, the needed-by time's, the draft POs count's, Book Order
     // Totals', the report scope fix's, the small fixes', F2-3's, the Sports
     // fields', the count difference words', Book Order Totals by charter's,
-    // F2-4's, F2-5's, the count confirm's and the session-ended fix's
-    // releases were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // F2-4's, F2-5's, the count confirm's, the session-ended fix's and the
+    // two account deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1012,9 +1014,10 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // The notice offers the newest unread release: the needed-by time's, the
     // draft POs count's, Book Order Totals', the report scope fix's, the small
     // fixes', F2-3's, the Sports fields', the count difference words', Book
-    // Order Totals by charter's, F2-4's, F2-5's, the count confirm's and the
-    // session-ended fix's releases were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // Order Totals by charter's, F2-4's, F2-5's, the count confirm's, the
+    // session-ended fix's and the two account deletion releases were published
+    // after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1279,9 +1282,9 @@ describe('Book Order Totals is published', () => {
     // The notice offers the newest unread release; the report scope fix's,
     // the small fixes', F2-3's, the Sports fields', the count difference
     // words', Book Order Totals by charter's, F2-4's, F2-5's, the count
-    // confirm's and the session-ended fix's releases were published after
-    // this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // confirm's, the session-ended fix's and the two account deletion
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1386,9 +1389,9 @@ describe('the report scope release is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the small fixes', F2-3's,
     // the Sports fields', the count difference words', Book Order Totals by
-    // charter's, F2-4's, F2-5's, the count confirm's and the session-ended
-    // fix's releases were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // charter's, F2-4's, F2-5's, the count confirm's, the session-ended fix's
+    // and the two account deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1449,9 +1452,9 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the Sports fields', the
     // count difference words', Book Order Totals by charter's, F2-4's, F2-5's,
-    // the count confirm's and the session-ended fix's were published after
-    // this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // the count confirm's, the session-ended fix's and the two account
+    // deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1569,11 +1572,16 @@ describe('the ended-session fix on exceptions is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The newest published release: the notice offers it.
-    expect(list.latestUnread?.id).toBe(ID);
+    // The notice offers the newest unread release: the two account deletion
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first:
-    // this one, the count confirm's and F2-5's.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+    // once the newer releases are read, this one, the count confirm's and
+    // F2-5's.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toEqual([
       ID,
       'count-confirm-2026-10',
       'order-shortfall-po-2026-10',
@@ -1587,11 +1595,9 @@ describe('the ended-session fix on exceptions is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-04T00:00:00Z'));
   });
 
-  it('is the newest release, at the top (pinned by id), directly above the count confirm, with no draft left below it', () => {
+  it('is dated after every release below it (pinned by id), directly above the count confirm; releases above it were published later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    // No draft is left; a later draft goes above it.
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -1687,8 +1693,8 @@ describe('count differences release 2 (confirm this count) is published', () => 
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the session-ended fix's
-    // was published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // and the two account deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-5's and F2-4's.
     const newer = Object.fromEntries(
@@ -1989,13 +1995,17 @@ describe('approval follows the permission is held as a draft', () => {
 
 /**
  * Account deletion for people who placed orders (migration 0388, security
- * slice A2) is held as a DRAFT until 0388 is pushed and verified, the web
- * deploy is live and phones have the update that names the requester
- * "Deleted user". Pinned by id, never by index. The follow-up that publishes
- * it sets 'published' and the real publishedAt, re-reads its words against
- * what shipped, and flips the first pin here.
+ * slice A2) was held as a DRAFT until 0388 was pushed and verified
+ * (2026-10-03 20:26:18Z), the web deploy (web build 399eedb47aa2), the phone
+ * update that names the requester "Deleted user" (OTA group 4a060cce,
+ * published 23:24Z, launched on phones with no failures) and the Demo Co
+ * production walk (the web and the phone refused the RESTRICT-blocked demo
+ * account with the blocked sentence and changed nothing) were done. Pinned by
+ * id, never by index. This follow-up publishes it, with the refusal announced
+ * on its own directly below it (account-deletion-refused-2026-10). The slice
+ * B draft sits above it.
  */
-describe('account deletion for people who placed orders is held as a draft', () => {
+describe('account deletion for people who placed orders is published', () => {
   const ID = 'account-deletion-orders-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
   const everyone: ReleaseViewer = {
@@ -2003,40 +2013,51 @@ describe('account deletion for people who placed orders is held as a draft', () 
     permissions: [...PERMISSIONS],
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
-  const published = (): Release => ({ ...release(), status: 'published' });
 
-  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+  it('is published after 0388, the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.releases.map((r) => r.id)).not.toContain(ID);
-    expect(list.latestUnread?.id).not.toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The newest published release: the notice offers it.
+    expect(list.latestUnread?.id).toBe(ID);
+    // An old phone build lists at most three unread releases, newest first:
+    // this one, the refusal's and the session-ended fix's.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      ID,
+      'account-deletion-refused-2026-10',
+      'exceptions-session-ended-2026-10',
+    ]);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the phone update was published
+    // (2026-10-03 23:24Z) and the walk ended (23:45Z): never the draft's
+    // placeholder date.
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-03T23:45:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-05T00:00:00Z'));
   });
 
-  it('sits above every published release (drafts go at the top), directly above the newest one', () => {
+  it('is the newest release (pinned by id): only drafts sit above it, the refusal directly below it, dated after every release below it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
+    // Drafts go above the newest published release, newest first; none is
+    // left below it.
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    expect(RELEASES.slice(at + 1).every((r) => r.status !== 'draft')).toBe(true);
-    expect(RELEASES[at + 1]?.id).toBe('exceptions-session-ended-2026-10');
-  });
-
-  it('is dated after every published release, so publishing it makes it newer than all of them', () => {
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
+    expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    const others = RELEASES.filter((r) => r.id !== ID && r.status === 'published');
-    const list = buildReleaseList([published(), ...others], everyone, [], null);
-    expect(list.latestUnread?.id).toBe(ID);
+    expect(RELEASES[at + 1]?.id).toBe('account-deletion-refused-2026-10');
+    expect(RELEASES[at + 2]?.id).toBe('exceptions-session-ended-2026-10');
   });
 
-  it('is a fix to Account for everyone, with no link, and every reader is told once it is published', () => {
+  it('is a fix to Account for everyone, with no link, and every reader is told', () => {
     expect(release().audience).toBeUndefined();
     expect(release().entries.map((e) => e.id)).toEqual(['account-deletion-orders']);
     const [entry] = release().entries;
@@ -2045,31 +2066,210 @@ describe('account deletion for people who placed orders is held as a draft', () 
     expect(entry!.link).toBeUndefined();
     expect(entry!.audience).toBeUndefined();
     for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
-      const seen = visibleReleases([published()], { role, permissions: [], enabledModules: [] });
+      const seen = visibleReleases([release()], { role, permissions: [], enabledModules: [] });
       expect(seen.map((r) => r.id), role).toEqual([ID]);
     }
   });
 
-  it('says what shipped: the label, the kept records, and nothing it does not do', () => {
+  // Publish claim check 2026-10-04, against the merged code (562d1f0c) and
+  // the Demo Co production walk.
+  it('says orders no longer stop a deletion, never that every deletion now works, and where the label shows', () => {
     const r = release();
     const [entry] = r.entries;
-    const text = [
-      r.title,
-      r.summary,
-      entry!.whatChanged,
-      entry!.whyItMatters,
-      entry!.howItAffectsYou,
-      entry!.whatToDo,
-    ].join(' ');
-    // The label the web and the phone render (core DELETED_REQUESTER_LABEL).
-    expect(r.summary).toContain(`“${DELETED_REQUESTER_LABEL}” as the requester`);
-    expect(entry!.whatChanged).toContain(
-      `“${DELETED_REQUESTER_LABEL}” as the requester on the web and the phone`,
+    const all = readerText(r).join(' ');
+    // Records the organization keeps (received stock, imported POs, schedule
+    // entries, returns) still refuse a deletion until slice A3, with the
+    // blocked sentence (walk W2 and W3), so nothing says deleting now works:
+    // orders no longer stop it. Old phones show only the title and the
+    // summary, so both say it that way.
+    expect(r.title).toBe('Orders you placed no longer stop you deleting your account');
+    expect(entry!.title).toBe(r.title);
+    expect(r.summary).toMatch(
+      /^Orders you placed no longer stop you deleting your account from Settings, on the web or in the mobile app\. /,
     );
-    // A blocked account is told, and nothing changes.
-    expect(entry!.whatChanged).toContain('the app now says so and changes nothing');
+    expect(entry!.whatChanged).toMatch(
+      /^Deleting your account from Settings no longer fails because you placed orders\. /,
+    );
+    expect(all).not.toMatch(/works when you have placed orders|It now works|no longer fails for people who placed orders/);
+    expect(entry!.howItAffectsYou).toContain(
+      'Other records your organization keeps, such as received stock, can still stop a deletion; the app then says so and changes nothing.',
+    );
+    // Before 0388 an order with no email on the row refused its requester's
+    // deletion (order_requests_identity_chk), which is nearly every order
+    // placed in the app; "could" because a row that held an email did not.
+    expect(entry!.whyItMatters).toBe(
+      'Until now, an order you had placed could stop you deleting your account from Settings, because each order had to name who placed it.',
+    );
+    // The label the web and the phone render (core DELETED_REQUESTER_LABEL),
+    // read from the row: no requester id and no email (core
+    // isDeletedRequester). An order that recorded the person's name or email
+    // keeps showing it (legacy internal rows and portal rows), so never "your
+    // orders show Deleted user" without that.
+    expect(DELETED_REQUESTER_LABEL).toBe('Deleted user');
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: null })).toBe(true);
+    expect(isDeletedRequester({ requesterUserId: null, requesterEmail: 'former@example.org' })).toBe(false);
+    expect(r.summary).toContain(
+      `they show “${DELETED_REQUESTER_LABEL}” as the requester, unless an order recorded your name or email.`,
+    );
+    expect(entry!.whatChanged).toContain(`show “${DELETED_REQUESTER_LABEL}” as the requester.`);
+    expect(entry!.whatChanged).toContain('An order that recorded your name or email keeps showing it.');
+    // Where it shows on the web (#312: the list, the order page and print
+    // through requesterDisplay, the pick page and the pick slip PDF through
+    // detailRequesterName, CSV and PDF exports through orderExportCells), and
+    // on the phone's two screens, which need the update (OTA group 4a060cce):
+    // old bundles say "External requester".
+    expect(entry!.whatChanged).toContain(
+      'On the web, the orders list, the order page and its print view, the pick slip and the Orders export show',
+    );
+    expect(entry!.whatChanged).toContain(
+      'In the mobile app, after the latest update, the orders list and the order screen show it too.',
+    );
+    expect(r.summary).toContain('On the web, and in the mobile app after the latest update, they show');
+    // Nothing about the person is copied onto an order (the 0388 trigger
+    // writes only requester_deleted_at; pgTAP D14), and open orders keep their
+    // status and can still be approved or cancelled (pgTAP D15).
+    expect(entry!.howItAffectsYou).toMatch(
+      /^Your name and email are not copied onto your orders when you delete your account\. /,
+    );
+    expect(entry!.howItAffectsYou).toContain('Open orders stay open, and your organization can still approve or cancel them.');
+    // What a refusal says is its own release (it needs no phone update).
+    expect(all).not.toMatch(/Account deleted|Please try again|general error|could say the account was deleted/);
+    // The phone's label is an over-the-air update: it loads when the app is
+    // opened again, with no prompt.
+    expect(entry!.whatToDo).toBe(
+      'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
+    expect(all).not.toMatch(/offers the new version|update the app|App Store/i);
+    expect(all).not.toMatch(/\bbooks?\b|%|guarantee|instantly|email(ed)? you|notif|verified/i);
+  });
+});
+
+/**
+ * A refused account deletion says why (security slice A2, #312, 562d1f0c),
+ * live with web build 399eedb47aa2. The web self-delete and the phone's POST
+ * /api/v1/account/delete now ask account_deletion_check (0388) first: an
+ * account linked to records the organization keeps is told
+ * ACCOUNT_DELETE_BLOCKED_COPY and nothing is written, where the web used to
+ * say "try again" and the phone route answered 200. The phone shows the
+ * route's message for any refusal, so every installed phone has it without an
+ * update; the Demo Co walk saw it on both. Published with the account deletion
+ * release, dated a minute before it, directly below it.
+ */
+describe('a refused account deletion says why, and is published with the account deletion release', () => {
+  const ID = 'account-deletion-refused-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is published after the web deploy and the Demo Co walk, so every feed carries it', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The notice offers the newest unread release: the account deletion
+    // release was published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
+    // An old phone build lists at most three unread releases, newest first:
+    // once the newer release is read, this one, the session-ended fix's and
+    // the count confirm's.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toEqual([
+      ID,
+      'exceptions-session-ended-2026-10',
+      'count-confirm-2026-10',
+    ]);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the walk ended (2026-10-03 23:45Z).
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-03T23:45:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-05T00:00:00Z'));
+  });
+
+  it('sits directly below the account deletion release and above the session-ended fix (pinned by id), dated between them', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThan(0);
+    expect(RELEASES[at - 1]?.id).toBe('account-deletion-orders-2026-10');
+    expect(RELEASES[at + 1]?.id).toBe('exceptions-session-ended-2026-10');
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is a fix to Account for everyone, with no link, and every reader is told', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual(['account-deletion-refused']);
+    const [entry] = release().entries;
+    expect(entry!.category).toBe('fixed');
+    expect(entry!.area).toBe('Account');
+    expect(entry!.link).toBeUndefined();
+    expect(entry!.audience).toBeUndefined();
+    for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
+      const seen = visibleReleases([release()], { role, permissions: [], enabledModules: [] });
+      expect(seen.map((r) => r.id), role).toEqual([ID]);
+    }
+  });
+
+  // Publish claim check 2026-10-04, against the merged code (562d1f0c) and
+  // the Demo Co production walk (W2 on the web, W3 on the phone).
+  it("says what the web and the phone now say, in the product's own words, and that the phone needs no update", () => {
+    const r = release();
+    const [entry] = r.entries;
+    const all = readerText(r).join(' ');
+    // The sentence the web toast and the phone alert showed in the walk.
+    const BLOCKED =
+      "Your account can't be deleted from the app because it is linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries. Nothing was changed. Contact StockPilot support to have it removed.";
+    const copy = readFileSync(resolve(__dirname, '../../server/lib/account-deletion.ts'), 'utf8');
+    expect(copy).toContain(`"${BLOCKED}"`);
+    // Both surfaces answer a records refusal with it, and the phone route no
+    // longer answers success for a delete that did not happen.
+    const route = readFileSync(resolve(__dirname, '../../app/api/v1/account/delete/route.ts'), 'utf8');
+    expect(route).toContain("{ error: 'account_linked_records', message: ACCOUNT_DELETE_BLOCKED_COPY }");
+    expect(route).toContain("{ error: 'internal_error', message: ACCOUNT_DELETE_SIGNED_OUT_COPY }");
+    const action = readFileSync(resolve(__dirname, '../../server/actions/profile.ts'), 'utf8');
+    expect(action).toContain(
+      "return err('conflict', ACCOUNT_DELETE_BLOCKED_COPY, { reason: 'account_linked_records' });",
+    );
+    // Old phones show only the title and the summary: it stands alone and
+    // names both platforms.
+    expect(r.summary).toBe(
+      "On the web and in the mobile app, if your account can't be deleted because it is linked to records your organization keeps, such as received stock, Delete my account now says so. Nothing is changed and you stay signed in. The mobile app no longer says an account was deleted when it was not.",
+    );
+    // The entry gives the sentence's parts, each in its words.
+    for (const part of [
+      "can't be deleted from the app",
+      'linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries',
+      'Contact StockPilot support to have it removed.',
+    ]) {
+      expect(BLOCKED, part).toContain(part);
+    }
+    expect(entry!.whatChanged).toBe(
+      "If your account is linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries, Delete my account now says it can't be deleted from the app, that nothing was changed, and to contact StockPilot support to have it removed. You stay signed in. The web and the mobile app say the same.",
+    );
+    // Before: the web wrote a tombstone and an audit row, then answered this
+    // after the refused delete; the phone route answered 200, so the phone
+    // signed out and said "Account deleted" while the account stayed.
+    expect(entry!.whyItMatters).toBe(
+      'Before, the web said “Your account could not be deleted right now. Please try again.” Trying again failed the same way. The mobile app could say “Account deleted” and sign you out while the account was still there.',
+    );
+    expect(entry!.howItAffectsYou).toBe(
+      'This happens only to an account linked to such records. The account, your access and those records stay as they were.',
+    );
+    // The phone shows the route's message for any refusal (settings.tsx
+    // performDelete, unchanged by A2), so no update is needed.
     expect(entry!.whatToDo).toBe('No action needed.');
-    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|instantly|email(ed)? you|notif/i);
+    expect(all).not.toMatch(/latest update|close the app|open it again|update the app|App Store/i);
+    expect(all).not.toMatch(/\bbooks?\b|%|guarantee|we (?:emailed|notified)|support (?:was|has been) (?:told|contacted)|ticket/i);
   });
 });
 
@@ -2098,9 +2298,10 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The notice offers the newest unread release: the count confirm's and
-    // the session-ended fix's were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // The notice offers the newest unread release: the count confirm's, the
+    // session-ended fix's and the two account deletion releases were
+    // published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-4's and Book Order Totals
     // by charter's.
@@ -2260,8 +2461,9 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-5's, the count
-    // confirm's and the session-ended fix's were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // confirm's, the session-ended fix's and the two account deletion
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -2376,9 +2578,9 @@ describe('the small-fixes release is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-3's, the Sports
     // fields', the count difference words', Book Order Totals by charter's,
-    // F2-4's, F2-5's, the count confirm's and the session-ended fix's were
-    // published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // F2-4's, F2-5's, the count confirm's, the session-ended fix's and the
+    // two account deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2577,8 +2779,9 @@ describe('Book Order Totals by charter and dates is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-4's, F2-5's, the count
-    // confirm's and the session-ended fix's were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // confirm's, the session-ended fix's and the two account deletion
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2704,9 +2907,9 @@ describe('count differences say what clears them (release 1) is published', () =
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: Book Order Totals by
-    // charter's, F2-4's, F2-5's, the count confirm's and the session-ended
-    // fix's were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // charter's, F2-4's, F2-5's, the count confirm's, the session-ended fix's
+    // and the two account deletion releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2833,8 +3036,9 @@ describe('the Sports required details release is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the count difference
     // words', Book Order Totals by charter's, F2-4's, F2-5's, the count
-    // confirm's and the session-ended fix's were published after this one.
-    expect(list.latestUnread?.id).toBe('exceptions-session-ended-2026-10');
+    // confirm's, the session-ended fix's and the two account deletion
+    // releases were published after this one.
+    expect(list.latestUnread?.id).toBe('account-deletion-orders-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2952,11 +3156,11 @@ describe('order secrets slice B (a digital signature on the order timeline) is h
     }
   });
 
-  it('keeps every release: it sits above the account deletion draft (0388, published first), dated after every release below it', () => {
+  it('keeps every release: it sits above the account deletion release (0388, published first), dated after every release below it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     const a2 = RELEASES.findIndex((r) => r.id === 'account-deletion-orders-2026-10');
     expect(a2).toBeGreaterThan(at);
-    expect(RELEASES[a2]?.status).toBe('draft');
+    expect(RELEASES[a2]?.status).toBe('published');
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
