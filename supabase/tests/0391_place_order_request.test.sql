@@ -339,7 +339,7 @@ select is(
   'withdraw_order_submission=v/false/{"search_path=public, pg_temp",lock_timeout=5s}/true/false/false/false/postgres',
   'G4: the six functions are SECURITY INVOKER (RLS and create_order_request''s policies apply), search_path pinned, lock_timeout 5s on the two writers, the reads STABLE; EXECUTE to authenticated only (not service_role, which has no auth.uid(), not anon, not PUBLIC); owned by postgres');
 select is(
-  (select string_agg(n.nspname || '.' || p.proname, ',' order by 1) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  (select string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname, p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname in ('public', 'storage', 'graphql_public', 'ledger', 'extensions')
       and p.prosrc ~* '(set_config|set\s+(local\s+)?)[^;]*stockpilot\.order_submit'),
   'public.place_order_request,public.withdraw_order_submission',
