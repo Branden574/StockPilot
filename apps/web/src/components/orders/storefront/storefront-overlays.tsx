@@ -264,13 +264,16 @@ interface ReviewModalProps {
   viewerEmail?: string | null;
   /**
    * The submission key is not settled (sending, unconfirmed, withdrawing):
-   * the review shows the unconfirmed panel instead of Submit, and cannot be
-   * closed (the cart is locked until it settles).
+   * the review cannot be closed (the cart is locked until it settles).
    */
   unsettled?: boolean;
-  /** The unconfirmed panel's sentence (core orderUnconfirmedCopy), or null. */
+  /** The unconfirmed panel's sentence (core orderUnconfirmedCopy), or null.
+   *  The panel and its buttons show while this is set (unconfirmed,
+   *  withdrawing, or a resend that is out); during the first send the review
+   *  keeps its own Submit button, waiting. */
   panelText?: string | null;
-  /** "Check and finish" is offered (a body this build can send again). */
+  /** "Check and finish" is shown (a body this build can send again); it
+   *  waits, disabled, while a send or a withdraw is out. */
   canResend?: boolean;
   /** A refusal, said inline as an alert (core orderRefusalCopy), or null. */
   refusalText?: string | null;
@@ -564,10 +567,10 @@ export function ReviewModal({
                   {noticeText}
                 </div>
               )}
-              {unsettled && (
+              {panelText && (
                 <div className="sf-rev-unconfirmed" role="alert" aria-busy={submitting}>
                   <div className="k">{ORDER_UNCONFIRMED_TITLE_COPY}</div>
-                  {panelText && <p>{panelText}</p>}
+                  <p>{panelText}</p>
                 </div>
               )}
             </div>
@@ -576,7 +579,7 @@ export function ReviewModal({
                 {lineCount} line {lineCount === 1 ? 'item' : 'items'} · {unitCount}{' '}
                 {unitCount === 1 ? 'unit' : 'units'}
               </span>
-              {unsettled ? (
+              {panelText ? (
                 <>
                   <Link className="sf-btn-ghost" href="/dashboard/orders">
                     {ORDER_SEE_MY_ORDERS_COPY}

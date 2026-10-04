@@ -239,8 +239,12 @@ describe('the first send', () => {
       submit();
     });
     expect(createOrderRequestAction).toHaveBeenCalledTimes(1);
-    // While it is out the dialog cannot be closed.
+    // While it is out the dialog cannot be closed, and the first send keeps
+    // its own Submit button, waiting: nothing says "not confirmed" yet.
     expect(within(dialog()).getByRole('button', { name: 'Close review' })).toBeDisabled();
+    expect(within(dialog()).getByRole('button', { name: /submit order request/i })).toBeDisabled();
+    expect(within(dialog()).queryByText(ORDER_UNCONFIRMED_TITLE_COPY)).toBeNull();
+    expect(within(dialog()).queryByRole('button', { name: ORDER_CHECK_AND_FINISH_COPY })).toBeNull();
     await act(async () => out.resolve(placedAnswer()));
   });
 });
@@ -288,6 +292,23 @@ describe('a lost answer', () => {
     expect(sendsAtCall).toBe(2);
     expect(await screen.findByText('This order request was already placed.')).toBeInTheDocument();
     expect(pendingRecord()).toBeNull();
+  });
+
+  it('while Check and finish is out the panel stays, every button waiting', async () => {
+    await lose();
+    const out = deferred<unknown>();
+    createOrderRequestAction.mockReturnValueOnce(out.promise);
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: ORDER_CHECK_AND_FINISH_COPY }));
+    });
+    const d = dialog();
+    expect(within(d).getByText(ORDER_UNCONFIRMED_TITLE_COPY)).toBeInTheDocument();
+    expect(within(d).getByText(ORDER_UNCONFIRMED_BODY_COPY)).toBeInTheDocument();
+    expect(within(d).getByRole('button', { name: ORDER_CHECK_AND_FINISH_COPY })).toBeDisabled();
+    expect(within(d).getByRole('button', { name: ORDER_DONT_SEND_COPY })).toBeDisabled();
+    expect(within(d).getByRole('button', { name: 'Close review' })).toBeDisabled();
+    await act(async () => out.resolve(placedAnswer(true)));
+    expect(createOrderRequestAction).toHaveBeenCalledTimes(2);
   });
 
   it('a reload restores the lock at once and reads the status; none never unlocks', async () => {

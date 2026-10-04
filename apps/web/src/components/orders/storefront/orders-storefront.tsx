@@ -41,6 +41,7 @@ import {
   orderSubmissionLocked,
   orderUnconfirmedCopy,
   orderRefusalCopy,
+  ORDER_UNCONFIRMED_BODY_COPY,
   ORDER_WITHDRAWN_COPY,
   STOREFRONT_CHOOSE_SITE_COPY,
   STOREFRONT_DELIVER_TO_COPY,
@@ -1171,10 +1172,14 @@ function StorefrontCatalog({
       (sub.phase === 'unconfirmed' || sub.phase === 'withdrawing' || sub.phase === 'sending') &&
       sub.pending.bodyUnreadable === true,
   };
+  // The panel shows once a send is unconfirmed, while it is withdrawn, and
+  // while a resend is out (its buttons wait); the first send keeps Submit.
   const panelText =
     sub.phase === 'unconfirmed' || sub.phase === 'withdrawing'
       ? orderUnconfirmedCopy(sub.last, wordsCtx)
-      : null;
+      : sub.phase === 'sending' && sub.pending.sends > 1
+        ? ORDER_UNCONFIRMED_BODY_COPY
+        : null;
   const refusalText =
     submission.deviceError ??
     preflightError ??
@@ -1579,7 +1584,7 @@ function StorefrontCatalog({
         viewerEmail={viewerEmail}
         unsettled={orderSubmissionLocked(sub)}
         panelText={panelText}
-        canResend={sub.phase === 'unconfirmed' && sub.pending.bodyUnreadable !== true}
+        canResend={panelText !== null && !wordsCtx.bodyUnreadable}
         refusalText={refusalText}
         noticeText={noticeText}
         canApproveOrders={canApproveOrders}
