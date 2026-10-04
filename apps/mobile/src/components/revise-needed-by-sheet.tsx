@@ -12,9 +12,6 @@ import {
   TextInput,
   useWindowDimensions,
   View,
-  type LayoutChangeEvent,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -30,19 +27,13 @@ import {
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
-import { Body, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
+import { NeededByPicker } from '@/components/needed-by-picker';
+import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
   NEEDED_BY_CANCEL_LABEL,
   NEEDED_BY_CLOSE_LABEL,
-  NEEDED_BY_DAY_EYEBROW,
-  NEEDED_BY_OTHER_A11Y,
-  NEEDED_BY_OTHER_HINT,
-  NEEDED_BY_OTHER_PLACEHOLDER,
-  NEEDED_BY_OTHER_TIME_LABEL,
-  NEEDED_BY_TIME_EYEBROW,
   initialNeededByDraft,
-  neededByDayRowScroll,
   neededByDraftView,
   neededBySpokenUpdate,
   readOrderNeededBy,
@@ -177,9 +168,6 @@ export function ReviseNeededBySheet({
     closed,
   };
   const view = neededByDraftView(draft, { ...viewContext, now });
-  // The day row holds 21 chips and a phone shows about five: the selected day
-  // is scrolled into it on open and whenever the selection moves.
-  const [attachDayRow, dayRow] = useDayRowReveal(view.selectedDayKey);
 
   // VoiceOver hears the preview in the org's zone, or why there is none, when
   // the chosen time changes: a chip, Other time as it is typed (debounced), or
@@ -246,44 +234,6 @@ export function ReviseNeededBySheet({
     if (result.closed) setClosed(true);
     if (result.current !== undefined || result.closed) onRefresh();
   }
-
-  const chip = (
-    key: string,
-    selected: boolean,
-    onPress: () => void,
-    accessibilityLabel: string,
-    lines: string[],
-    onLayout?: (e: LayoutChangeEvent) => void,
-  ) => (
-    <Pressable
-      key={key}
-      onPress={onPress}
-      disabled={busy}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      accessibilityState={{ selected, disabled: busy }}
-      style={[
-        styles.chip,
-        {
-          borderColor: selected ? c.ink : c.hair,
-          backgroundColor: selected ? c.ink : 'transparent',
-          opacity: busy ? 0.5 : 1,
-        },
-      ]}
-      onLayout={onLayout}
-    >
-      {lines.map((line, i) => (
-        <Mono
-          key={i}
-          size={i === 0 ? 12.5 : 11}
-          color={selected ? c.paper : i === 0 ? c.ink : c.ink3}
-          maxFontSizeMultiplier={CHIP_CAP}
-        >
-          {line}
-        </Mono>
-      ))}
-    </Pressable>
-  );
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={requestClose}>
@@ -403,101 +353,21 @@ export function ReviseNeededBySheet({
                 </Body>
               </View>
 
-              <View style={{ gap: 8 }}>
-                <Eyebrow>{NEEDED_BY_DAY_EYEBROW}</Eyebrow>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                  ref={attachDayRow}
-                  onLayout={dayRow.rowLaid}
-                  onScroll={dayRow.scrolled}
-                  scrollEventThrottle={16}
-                  contentContainerStyle={{ gap: 8, paddingRight: 8 }}
-                >
-                  {view.days.map((d) =>
-                    chip(
-                      d.key,
-                      view.selectedDayKey === d.key,
-                      () => pickDay(d.key),
-                      d.accessibilityLabel,
-                      [d.label, d.dateLabel],
-                      (e) => dayRow.chipLaid(d.key, e),
-                    ),
-                  )}
-                </ScrollView>
-              </View>
-
-              <View style={{ gap: 8 }}>
-                <Eyebrow>{NEEDED_BY_TIME_EYEBROW}</Eyebrow>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                  {view.slots.map((s) =>
-                    chip(
-                      s.time,
-                      !draft.other && draft.slot === s.time,
-                      () => update({ slot: s.time, other: false }),
-                      s.label,
-                      [s.label],
-                    ),
-                  )}
-                  {chip(
-                    'other',
-                    draft.other,
-                    () => {
-                      update({ other: true });
-                      setFocusOther(true);
-                    },
-                    NEEDED_BY_OTHER_TIME_LABEL,
-                    [NEEDED_BY_OTHER_TIME_LABEL],
-                  )}
-                </View>
-                {view.noSlotsNote ? (
-                  <Body size={12.5} color={c.ink3}>
-                    {view.noSlotsNote}
-                  </Body>
-                ) : null}
-                {draft.other ? (
-                  <View style={{ gap: 6 }}>
-                    <TextInput
-                      value={draft.otherText}
-                      onChangeText={(t) => update({ otherText: t })}
-                      placeholder={NEEDED_BY_OTHER_PLACEHOLDER}
-                      placeholderTextColor={c.ink4}
-                      autoFocus={focusOther}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      returnKeyType="done"
-                      editable={!busy}
-                      accessibilityLabel={NEEDED_BY_OTHER_A11Y}
-                      accessibilityHint={NEEDED_BY_OTHER_HINT}
-                      maxFontSizeMultiplier={INPUT_CAP}
-                      style={[
-                        styles.input,
-                        { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink },
-                      ]}
-                    />
-                  </View>
-                ) : null}
-              </View>
-
-              {/* The preview in the org's zone (core's words), or why there is
-                  none yet. */}
-              {view.preview ? (
-                <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
-                  {view.preview}
-                </Body>
-              ) : view.timeProblem ? (
-                <Body
-                  size={12.5}
-                  color={
-                    (draft.slot && !draft.other) || (draft.other && draft.otherText.trim() !== '')
-                      ? ACCENT.warn
-                      : c.ink3
-                  }
-                >
-                  {view.timeProblem}
-                </Body>
-              ) : null}
+              {/* The day chips, the slots, Other time and the preview: the
+                  picker the storefront's checkout shares (needed-by-picker.tsx). */}
+              <NeededByPicker
+                view={view}
+                draft={draft}
+                busy={busy}
+                focusOther={focusOther}
+                onPickDay={pickDay}
+                onPickSlot={(time) => update({ slot: time, other: false })}
+                onPickOther={() => {
+                  update({ other: true });
+                  setFocusOther(true);
+                }}
+                onOtherText={(t) => update({ otherText: t })}
+              />
 
               <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
                 <FieldLabel>{NEEDED_BY_REASON_LABEL}</FieldLabel>
@@ -583,73 +453,6 @@ export function ReviseNeededBySheet({
   );
 }
 
-/** Where the day row's chips sit (x and width in its content), its scroll
- *  offset and its visible width, as measured. */
-type DayRowGeometry = { chips: Map<string, { x: number; w: number }>; offset: number; width: number };
-
-/**
- * THE SELECTED DAY, SCROLLED INTO THE DAY ROW (iPhone 17 walk, 2026-09-30: an
- * order needed a week out opened with its day chip off the right edge while
- * its time chip showed selected below it). The row reports its width and its
- * scroll offset, each day chip where it sits; once the selected chip and the
- * row are measured (the sheet opening), and whenever the selected day moves,
- * the row is scrolled so that chip shows whole (neededByDayRowScroll). Like
- * lib/use-sheet-keyboard.ts, the row and its geometry live in a closure made
- * once per opening, read in handlers and effects only, never while rendering.
- */
-function useDayRowReveal(selectedDayKey: string | null) {
-  const [reveal] = React.useState(() => {
-    let row: ScrollView | null = null;
-    let selected: string | null = null;
-    const geometry: DayRowGeometry = { chips: new Map(), offset: 0, width: 0 };
-    return {
-      attach: (node: ScrollView | null) => {
-        row = node;
-      },
-      select: (key: string | null) => {
-        selected = key;
-        revealDay(row, geometry, key);
-      },
-      handlers: {
-        chipLaid: (key: string, e: LayoutChangeEvent) => {
-          geometry.chips.set(key, { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width });
-          if (key === selected) revealDay(row, geometry, key);
-        },
-        rowLaid: (e: LayoutChangeEvent) => {
-          geometry.width = e.nativeEvent.layout.width;
-          revealDay(row, geometry, selected);
-        },
-        scrolled: (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-          geometry.offset = e.nativeEvent.contentOffset.x;
-        },
-      },
-    };
-  });
-  React.useEffect(() => {
-    reveal.select(selectedDayKey);
-  }, [reveal, selectedDayKey]);
-  return [reveal.attach, reveal.handlers] as const;
-}
-
-/**
- * Scrolls the day row so the chip for `key` shows whole (neededByDayRowScroll),
- * once it and the row are measured; nothing when it already shows.
- */
-function revealDay(row: ScrollView | null, geometry: DayRowGeometry, key: string | null) {
-  if (!row || !key) return;
-  const chip = geometry.chips.get(key);
-  if (!chip) return;
-  const x = neededByDayRowScroll({
-    chipX: chip.x,
-    chipWidth: chip.w,
-    offset: geometry.offset,
-    viewport: geometry.width,
-  });
-  if (x === null) return;
-  geometry.offset = x;
-  row.scrollTo({ x, animated: false });
-}
-
 /** The wall clock, read in event handlers and the tick only (never while
  *  rendering: the view is computed from the `now` held in state). */
 function readClock(): number {
@@ -663,24 +466,14 @@ const SPOKEN_DEBOUNCE_MS = 600;
 /** The title stops at the display ceiling, like every sheet's title, so at
  *  AX5 it does not take the screen the chips and fields need. */
 const TITLE_CAP = capTo(16, TYPE_CEILING.display);
-/** Button and chip labels are chrome: they stop growing at the control
- *  ceiling, and the control grows with them (minHeight). */
+/** Button labels are chrome: they stop growing at the control ceiling, and
+ *  the control grows with them (minHeight). The chips' cap lives with them
+ *  in needed-by-picker.tsx. */
 const ACTION_CAP = capTo(13, TYPE_CEILING.control);
-const CHIP_CAP = capTo(12.5, TYPE_CEILING.control);
 /** Typed text stops at the input ceiling (a bordered box). */
 const INPUT_CAP = capTo(15, TYPE_CEILING.input);
 
 const styles = StyleSheet.create({
-  chip: {
-    minHeight: MIN_TAP,
-    minWidth: MIN_TAP,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   input: {
     minHeight: MIN_TAP,
     borderWidth: 1,
