@@ -37,6 +37,7 @@ import {
   keepShortfallSelection,
   parseShortfallChangedDetail,
   readShortfallSupplierRows,
+  randomRequestUuid,
   READINESS_NEEDS_CONNECTION_COPY,
   readinessCheckedAtCopy,
   SHORTFALL_PO_BUTTON_ACCESSIBILITY_LABEL,
@@ -338,16 +339,12 @@ export function adoptShortfallRefusal(
 
 // ── The idempotency key ─────────────────────────────────────────────────────
 
-/** A fresh key for one request (a replay identity, not a secret). */
+/** A fresh key for one request (a replay identity, not a secret). The uuid
+ *  is core's generator (randomRequestUuid, the one mintOrderSubmissionKey
+ *  uses), with its fallbacks for a runtime without crypto.randomUUID; this
+ *  file had its own copy of them until phone ordering PO-4. */
 export function mintShortfallKey(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID) return `shortfall-${c.randomUUID()}`;
-  const hex = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const r = (Math.random() * 16) | 0;
-    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-  return `shortfall-${hex}`;
+  return `shortfall-${randomRequestUuid()}`;
 }
 
 // ── Drafting ────────────────────────────────────────────────────────────────

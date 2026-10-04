@@ -16,6 +16,7 @@ import {
   isRecountSkipReason,
   isRecountUnavailableReason,
   parseRecountOutcome,
+  randomRequestUuid,
   recountOutcome,
   recountOutcomeCopy,
   VARIANCE_DESTINATION_PENDING_COPY,
@@ -638,16 +639,13 @@ export function clientEventIdFor(
   return last && last.action === action && last.note === note ? last.id : newClientEventId();
 }
 
-/** A fresh idempotency key for one act submission. */
+/** A fresh idempotency key for one act submission: core's generator
+ *  (randomRequestUuid, the one mintOrderSubmissionKey uses), with its
+ *  fallbacks for a runtime without crypto.randomUUID. A replay identity, not
+ *  a secret. This file had its own copy of the fallback until phone ordering
+ *  PO-4. */
 export function newClientEventId(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID) return c.randomUUID();
-  // Replay identity, not a secret: Math.random is enough.
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
-    const r = (Math.random() * 16) | 0;
-    const v = ch === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  return randomRequestUuid();
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
