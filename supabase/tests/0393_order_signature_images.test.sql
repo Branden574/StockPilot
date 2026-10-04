@@ -40,7 +40,7 @@
 --   I2 the capture trigger leaves the image on the row        -> C1, C2
 --   I3 the capture trigger SECURITY DEFINER                  -> P1
 --   I4 the move nulls the rows before the byte check          -> X3 (no raise: the check is gone)
---   I5 the updated_at trigger left enabled during the move    -> R2 (other_columns_changed), D3
+--   I5 the updated_at trigger left enabled during the move    -> R2 (other_columns_changed raises; nothing applied)
 --
 -- Roles: fixtures as the test superuser; attempts through pg_temp.attempt
 -- (undone) or pg_temp.call_as (kept). begin/rollback. Namespace 03930000.
