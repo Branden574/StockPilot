@@ -330,8 +330,11 @@ describe('the cart, the lock and the send', () => {
     expect(flat(checkout)).toContain("patch: method === 'pickup' ? { fulfillmentType: 'pickup', charterId: null } : { fulfillmentType: 'delivery' },");
   });
 
-  it('For is offered only to someone who may order on behalf (the server’s canOrderOnBehalf: orders:approve)', () => {
-    expect(checkout).toMatch(/\{ready\.viewer\.canOrderOnBehalf \|\| cart\.onBehalfOf !== null \? \(\s*<SetupRow\s+label=\{STOREFRONT_FOR_COPY\}/);
+  it('For follows the server’s canOrderOnBehalf (orders:approve) through the tested view; a kept cart for someone else says so and a tap sets Myself (F2)', () => {
+    expect(checkout).toContain('const forRow = forRowView({ canOrderOnBehalf: ready.viewer.canOrderOnBehalf, onBehalfOf: cart.onBehalfOf, lockHint });');
+    expect(checkout).toMatch(/\{forRow\.shown \? \(\s*<SetupRow\s+label=\{STOREFRONT_FOR_COPY\}\s+value=\{requesterRowValue\(cart\.onBehalfOf\)\}\s+detail=\{forRow\.detail\}\s+disabled=\{locked\}\s+hint=\{forRow\.hint\}/);
+    expect(flat(checkout)).toContain("if (forRow.tap === 'choose') { setSheet({ kind: 'for' }); return; } if (session.dispatch({ type: 'set-setup', patch: { onBehalfOf: null } }) === null) { AccessibilityInfo.announceForAccessibility(STOREFRONT_FOR_NOW_MYSELF_COPY); }");
+    expect(checkout).not.toMatch(/ready\.viewer\.canOrderOnBehalf \?/);
   });
 
   it('the needed-by picker is the one F2-4 uses, in the organization’s zone, with the server’s now', () => {

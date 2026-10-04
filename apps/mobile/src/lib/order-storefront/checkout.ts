@@ -6,7 +6,9 @@ import {
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
   SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
+  SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
+  STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
   availableOf,
   cartLineAtMaxCopy,
   cartLineOverCopy,
@@ -82,6 +84,11 @@ export function submitBlockedBy(input: {
   unorderable: ReadonlySet<string>;
   /** The delivery site still exists in the sites answer (or sites failed). */
   siteKnown: boolean;
+  /** The storefront answer shown says this person may order for someone
+   *  else (the effective orders:approve, slice D). A cart saved for someone
+   *  else is checked against it before every Submit: the server would
+   *  refuse it, and that refusal is final and spends the key. */
+  canOrderOnBehalf: boolean;
 }): string | null {
   const { cart } = input;
   if (input.offline) return ORDER_NEEDS_CONNECTION_COPY;
@@ -89,11 +96,43 @@ export function submitBlockedBy(input: {
   if (cart.fulfillmentType === 'delivery' && (cart.charterId === null || !input.siteKnown)) {
     return SUBMIT_NO_SITE_COPY;
   }
+  if (cart.onBehalfOf && !input.canOrderOnBehalf) return SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY;
   if (cart.onBehalfOf && (!cart.onBehalfOf.name.trim() || !cart.onBehalfOf.email.trim())) {
     return SUBMIT_ON_BEHALF_INCOMPLETE_COPY;
   }
   if (cart.lines.some((l) => input.unorderable.has(l.itemId))) return SUBMIT_REMOVE_UNORDERABLE_COPY;
   return null;
+}
+
+/** Checkout's For row. Offered to someone who may order on behalf (the
+ *  storefront answer's canOrderOnBehalf, the effective orders:approve). For
+ *  a cart kept for someone else by a person who no longer may, it is still
+ *  shown, saying so in a visible line (Submit's reason), and a tap sets it
+ *  to Myself instead of opening the people sheet. */
+export interface ForRowView {
+  shown: boolean;
+  /** The visible line under the row, or null. */
+  detail: string | null;
+  hint: string | undefined;
+  /** What a tap does. */
+  tap: 'choose' | 'set-myself';
+}
+export function forRowView(input: {
+  canOrderOnBehalf: boolean;
+  onBehalfOf: CartState['onBehalfOf'];
+  /** The lock's hint while the cart is locked. */
+  lockHint?: string;
+}): ForRowView {
+  if (input.canOrderOnBehalf) {
+    return { shown: true, detail: null, hint: input.lockHint, tap: 'choose' };
+  }
+  if (input.onBehalfOf === null) return { shown: false, detail: null, hint: undefined, tap: 'choose' };
+  return {
+    shown: true,
+    detail: SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
+    hint: input.lockHint ?? STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
+    tap: 'set-myself',
+  };
 }
 
 /** The lines the server refused as not orderable (item_not_orderable), from

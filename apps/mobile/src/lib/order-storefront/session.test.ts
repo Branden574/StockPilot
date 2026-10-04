@@ -6,6 +6,7 @@ import {
   ORDER_PHONE_TURNED_OFF_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
+  SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
   initialCartState,
   type OrderCallResult,
@@ -578,5 +579,49 @@ describe('an answer that lands after a workspace switch (desk check F1)', () => 
     expect(parseStoredOrderDraft(store.data.get(keyA2) ?? null, { userId: USER, orgId: ORG, warehouseId: WH2 })?.cart.lines).toEqual([
       { itemId: A, quantity: 1 },
     ]);
+  });
+});
+
+describe('a restored cart for someone else (desk check F2, slice D: on behalf follows the effective orders:approve)', () => {
+  const forBee = {
+    ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }),
+    lines: [{ itemId: A, quantity: 2 }],
+    onBehalfOf: { name: 'Bee Person', email: 'bee@x.org' },
+  };
+
+  it('is re-checked against the storefront answer shown: Submit says why and sends nothing until it is for Myself', async () => {
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: forBee, submission: null }, new Date()));
+    await session.open(scope);
+    expect(snap().cart?.onBehalfOf).toEqual(forBee.onBehalfOf);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: null } });
+    expect(session.submitBlockedBy(false)).toBeNull();
+  });
+
+  it('someone who holds orders:approve in the answer may send it as it is', async () => {
+    api.storefront.mockResolvedValueOnce({
+      ...storefrontAnswer(),
+      viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true },
+    });
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: forBee, submission: null }, new Date()));
+    await session.open(scope);
+    expect(session.submitBlockedBy(false)).toBeNull();
+    await session.submit(false);
+    expect(api.place.mock.calls[0]?.[1]).toMatchObject({ onBehalfOf: { name: 'Bee Person', email: 'bee@x.org' } });
+  });
+
+  it('an approve permission revoked since the last read blocks Submit after a refresh', async () => {
+    api.storefront.mockResolvedValueOnce({
+      ...storefrontAnswer(),
+      viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true },
+    });
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: { name: 'Bee Person', email: 'bee@x.org' } } });
+    expect(session.submitBlockedBy(false)).toBeNull();
+    await session.refresh();
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
   });
 });

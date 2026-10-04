@@ -67,6 +67,11 @@ describe('the templated sentences', () => {
     );
   });
 
+  it('the on-behalf sentence starts with the server refusal’s words (slice D)', async () => {
+    const { ORDER_ON_BEHALF_NOT_PERMITTED_COPY } = await import('../place-order');
+    expect(phone.SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY.startsWith(ORDER_ON_BEHALF_NOT_PERMITTED_COPY)).toBe(true);
+  });
+
   it('no name here repeats a name copy.ts already exports', () => {
     for (const name of Object.keys(phone)) expect(Object.keys(copy)).not.toContain(name);
   });

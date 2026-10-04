@@ -25,7 +25,6 @@ import {
   CHECKOUT_DELIVERY_COPY,
   CHECKOUT_PICKUP_COPY,
   ORDER_NOTES_MAX,
-  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
   ORDER_WITHDRAWN_COPY,
   REVIEW_SUBMIT_COPY,
   REVIEW_SUBTITLE_COPY,
@@ -34,6 +33,7 @@ import {
   STOREFRONT_CHOOSE_SITE_COPY,
   STOREFRONT_DELIVER_TO_COPY,
   STOREFRONT_FOR_COPY,
+  STOREFRONT_FOR_NOW_MYSELF_COPY,
   STOREFRONT_PICKUP_OR_DELIVERY_COPY,
   STOREFRONT_SHIP_FROM_COPY,
   checkoutNotesCounterCopy,
@@ -50,6 +50,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
 import { quantityAnnouncement, submittedAnnouncement } from '@/lib/order-storefront/a11y';
 import {
+  forRowView,
   itemNameFrom,
   neededByRowValue,
   showNotesCounter,
@@ -149,6 +150,10 @@ export default function Checkout() {
   const firstSendOut = snap.submission.state.phase === 'sending' && snap.submission.state.pending.sends === 1;
   const notesLength = Array.from(cart.notes).length;
   const quantityItem = sheet?.kind === 'quantity' ? snap.itemMap.get(sheet.itemId) : undefined;
+  // For follows the answer shown (canOrderOnBehalf, the effective
+  // orders:approve): a cart kept for someone else by a person who no longer
+  // may is said in a visible line, Submit waits, and a tap sets Myself.
+  const forRow = forRowView({ canOrderOnBehalf: ready.viewer.canOrderOnBehalf, onBehalfOf: cart.onBehalfOf, lockHint });
 
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
@@ -209,20 +214,22 @@ export default function Checkout() {
             />
 
             <SetupRow label={STOREFRONT_SHIP_FROM_COPY} value={warehouse?.name ?? '—'} />
-            {/* Also shown when a restored cart is for someone else and this
-                person can no longer order on behalf, so they can choose
-                Myself (the server would refuse it). */}
-            {ready.viewer.canOrderOnBehalf || cart.onBehalfOf !== null ? (
+            {forRow.shown ? (
               <SetupRow
                 label={STOREFRONT_FOR_COPY}
                 value={requesterRowValue(cart.onBehalfOf)}
+                detail={forRow.detail}
                 disabled={locked}
-                hint={lockHint ?? (ready.viewer.canOrderOnBehalf ? undefined : ORDER_ON_BEHALF_NOT_PERMITTED_COPY)}
-                onPress={() =>
-                  ready.viewer.canOrderOnBehalf
-                    ? setSheet({ kind: 'for' })
-                    : void session.dispatch({ type: 'set-setup', patch: { onBehalfOf: null } })
-                }
+                hint={forRow.hint}
+                onPress={() => {
+                  if (forRow.tap === 'choose') {
+                    setSheet({ kind: 'for' });
+                    return;
+                  }
+                  if (session.dispatch({ type: 'set-setup', patch: { onBehalfOf: null } }) === null) {
+                    AccessibilityInfo.announceForAccessibility(STOREFRONT_FOR_NOW_MYSELF_COPY);
+                  }
+                }}
               />
             ) : null}
 

@@ -116,6 +116,16 @@ export const CHECKOUT_NEEDED_BY_ZONE_UNREADABLE_COPY =
 export function checkoutNeededByZoneUnknownCopy(zone: string): string {
   return `This phone can't show times in ${zone}, so a needed-by date can't be chosen here. You can still place the order.`;
 }
+/** A cart for someone else, kept by someone who can no longer order on
+ *  behalf (the effective orders:approve, slice D): why Submit can't be
+ *  pressed, and the line under For. It starts with place-order.ts's
+ *  ORDER_ON_BEHALF_NOT_PERMITTED_COPY (the server's refusal). */
+export const SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY =
+  'Only someone who can approve orders can order for someone else. Tap For to order it for yourself instead.';
+/** The For row's hint then: what a tap does. */
+export const STOREFRONT_FOR_SET_MYSELF_HINT_COPY = 'Orders it for yourself instead.';
+/** Said when that tap has set it. */
+export const STOREFRONT_FOR_NOW_MYSELF_COPY = 'This order request is now for you.';
 /** Manager notes' counter, shown from 1,800 characters: "1,850 / 2,000". */
 export function checkoutNotesCounterCopy(length: number, max: number): string {
   return `${groupThousands(length)} / ${groupThousands(max)}`;

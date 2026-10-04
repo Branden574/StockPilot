@@ -7,7 +7,10 @@ import {
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
   SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
+  SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
+  STOREFRONT_CART_LOCKED_COPY,
+  STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
   checkoutNeededByZoneUnknownCopy,
   initialCartState,
   parseOrderCreateRequest,
@@ -26,6 +29,7 @@ import {
   showNotesCounter,
   stockChangedNotice,
   storefrontNeededByZone,
+  forRowView,
   submitBlockedBy,
   wallClockIso,
 } from './checkout';
@@ -109,12 +113,14 @@ describe('the body Submit sends (core’s create body, as the web builds it)', (
 });
 
 describe('why Submit cannot be pressed (core’s words, in this order)', () => {
-  const ok = { offline: false, unorderable: new Set<string>(), siteKnown: true };
+  const ok = { offline: false, unorderable: new Set<string>(), siteKnown: true, canOrderOnBehalf: true };
   it.each([
     ['offline', { cart: base(), ...ok, offline: true }, ORDER_NEEDS_CONNECTION_COPY],
     ['no lines', { cart: base({ lines: [] }), ...ok }, SUBMIT_NO_LINES_COPY],
     ['delivery, no site', { cart: base({ fulfillmentType: 'delivery' }), ...ok }, SUBMIT_NO_SITE_COPY],
     ['delivery, a site no longer listed', { cart: base({ fulfillmentType: 'delivery', charterId: SITE }), ...ok, siteKnown: false }, SUBMIT_NO_SITE_COPY],
+    ['on behalf, without the approve permission (slice D)', { cart: base({ onBehalfOf: { name: 'Bee', email: 'bee@x.org' } }), ...ok, canOrderOnBehalf: false }, SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY],
+    ['for myself, without the approve permission', { cart: base(), ...ok, canOrderOnBehalf: false }, null],
     ['on behalf, no email', { cart: base({ onBehalfOf: { name: 'M', email: ' ' } }), ...ok }, SUBMIT_ON_BEHALF_INCOMPLETE_COPY],
     ['a line that can’t be ordered', { cart: base(), ...ok, unorderable: new Set([A]) }, SUBMIT_REMOVE_UNORDERABLE_COPY],
     ['ready', { cart: base(), ...ok }, null],
@@ -123,7 +129,7 @@ describe('why Submit cannot be pressed (core’s words, in this order)', () => {
   });
 
   it('more than available does NOT block (approval is the stock check, as on the web)', () => {
-    expect(submitBlockedBy({ cart: base({ lines: [{ itemId: A, quantity: 999 }] }), offline: false, unorderable: new Set(), siteKnown: true })).toBeNull();
+    expect(submitBlockedBy({ cart: base({ lines: [{ itemId: A, quantity: 999 }] }), offline: false, unorderable: new Set(), siteKnown: true, canOrderOnBehalf: false })).toBeNull();
   });
 });
 
@@ -209,5 +215,24 @@ describe('the picker’s opening value', () => {
     expect(wallClockIso('2026-10-05T10:00', 'America/Los_Angeles')).toBe('2026-10-05T17:00:00.000Z');
     expect(wallClockIso('', 'America/Los_Angeles')).toBeNull();
     expect(wallClockIso('nope', 'America/Los_Angeles')).toBeNull();
+  });
+});
+
+describe('checkout’s For row (desk check F2)', () => {
+  const bee = { name: 'Bee', email: 'bee@x.org' };
+  it('someone who may order on behalf chooses from the sheet', () => {
+    expect(forRowView({ canOrderOnBehalf: true, onBehalfOf: null })).toEqual({ shown: true, detail: null, hint: undefined, tap: 'choose' });
+    expect(forRowView({ canOrderOnBehalf: true, onBehalfOf: bee, lockHint: STOREFRONT_CART_LOCKED_COPY }).hint).toBe(STOREFRONT_CART_LOCKED_COPY);
+  });
+  it('hidden for someone who may not, with nothing kept for someone else', () => {
+    expect(forRowView({ canOrderOnBehalf: false, onBehalfOf: null }).shown).toBe(false);
+  });
+  it('a kept cart for someone else, held by someone who may not: says so visibly, and a tap sets Myself', () => {
+    expect(forRowView({ canOrderOnBehalf: false, onBehalfOf: bee })).toEqual({
+      shown: true,
+      detail: SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
+      hint: STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
+      tap: 'set-myself',
+    });
   });
 });

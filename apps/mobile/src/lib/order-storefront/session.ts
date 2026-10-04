@@ -770,7 +770,15 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         sites === undefined ||
         sites.status === 'error' ||
         sites.sites.some((x) => x.id === cart!.charterId);
-      return submitBlockedBy({ cart, offline, unorderable: snapshot.notOrderable, siteKnown });
+      return submitBlockedBy({
+        cart,
+        offline,
+        unorderable: snapshot.notOrderable,
+        siteKnown,
+        // The answer shown (read on every open and refresh): never a value
+        // kept from an earlier read.
+        canOrderOnBehalf: setup.status === 'ready' && setup.answer.viewer.canOrderOnBehalf,
+      });
     },
 
     async submit(offline) {
