@@ -891,3 +891,47 @@ describe('a restored needed-by already past is refused before Submit (desk check
     expect(session.submitBlockedBy(false)).toBe(NEEDED_BY_IN_PAST_COPY);
   });
 });
+
+describe('a live key the session could not read is never overwritten (desk check F1, compare-and-set)', () => {
+  const K1 = '55555555-5555-4555-8555-555555555556';
+  const pendingK1: PendingOrderSubmission = {
+    key: K1,
+    state: 'possibly_sent',
+    sends: 1,
+    firstSentAt: '2026-10-04T11:00:00.000Z',
+    body: { idempotencyKey: K1, placerUserId: USER, warehouseId: WH, fulfillmentType: 'pickup', deliveryCharterId: null, onBehalfOf: null, notes: null, neededByLocal: null, lines: [{ itemId: A, quantity: 4 }] },
+  };
+  const slotKey = () => parseStoredOrderDraft(store.data.get(draftKey)!, { userId: USER, orgId: ORG, warehouseId: WH })?.submission?.key;
+
+  beforeEach(() => {
+    const cart = { ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }), lines: [{ itemId: A, quantity: 4 }] };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart, submission: pendingK1 }, new Date()));
+    // The first read of this draft fails (a storage error): the storefront
+    // opens with an empty cart and no lock, not knowing K1 is there.
+    const read = store.getItem.bind(store);
+    let failed = false;
+    store.getItem = async (k: string) => {
+      if (k === draftKey && !failed) {
+        failed = true;
+        throw new Error('storage read failed');
+      }
+      return read(k);
+    };
+  });
+
+  it('a cart change saved later leaves K1’s record (its cart, its key) in place', async () => {
+    await session.open(scope);
+    expect(snap().locked).toBe(false);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    await flushSaves();
+    expect(slotKey()).toBe(K1);
+  });
+
+  it('Submit cannot put a new key over K1: nothing is sent and K1’s record stays', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    expect(slotKey()).toBe(K1);
+  });
+});
