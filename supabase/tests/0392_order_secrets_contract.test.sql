@@ -17,7 +17,15 @@
 --    skipped, or undone; an off-format track token; a side return token that
 --    differs from the column; a link token in another order's side row; a
 --    shipments column changed, or a shipments row skipped; a signature token
---    moved after steps 1 and 2; a 0389 digest or another side token moved.
+--    moved after steps 1 and 2; a 0389 digest or another side token moved;
+--    (test stage) a side copy that stops verifying after the hash; a dead
+--    order that turns live without a side token; a token that appears on an
+--    order; a link row that never lands; a return or a track token changed
+--    in the side table after the null-out. Every one of the data block's 27
+--    raise sites is covered: 25 by a planted mismatch here, and the two that
+--    cannot be planted without editing the block (the classification count,
+--    which is a tautology, and the trigger-state check) by the mutation
+--    driver (sec-orders/mutate-0392.py D10, D11).
 --    X0: after all of them the fixtures are byte for byte as before.
 -- D. The data steps on fixtures covering every shape: live raw tokens at
 --    each of the four live statuses (one expired, one in a second
@@ -81,7 +89,7 @@
 
 begin;
 
-select plan(69);
+select plan(75);
 
 \set orgA   '\'03920000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03920000-0000-0000-0000-00000000000b\''
@@ -330,6 +338,25 @@ begin
   end if;
   return v_state || ':' || v_msg;
 end $$;
+-- The same, returning '<sqlstate>:<message>:<detail>' (several checks share
+-- a message and differ in their detail).
+create function pg_temp.try_move_d(p_prep text) returns text language plpgsql as $$
+declare v_state text; v_msg text; v_detail text;
+begin
+  begin
+    if p_prep is not null then
+      execute p_prep;
+    end if;
+    execute pg_temp.mig('0392', '$c392_move$');
+    raise exception using errcode = 'XX392', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_detail = pg_exception_detail;
+  end;
+  if v_state = 'XX392' then
+    return 'ok';
+  end if;
+  return v_state || ':' || v_msg || ':' || coalesce(v_detail, '');
+end $$;
 -- Every fixture order and shipment, every column, as the superuser.
 create function pg_temp.fixture_state() returns text language sql stable as $$
   select md5(coalesce((select string_agg(to_jsonb(o)::text, E'\n' order by o.id)
@@ -351,6 +378,9 @@ begin
     return null;
   elsif tg_argv[0] = 'null_return' then
     new.return_token := null;
+  elsif tg_argv[0] = 'skip_link' and new.signature_token is null
+        and (new.return_token is not null or new.public_track_token is not null) then
+    return null;
   end if;
   return new;
 end $$;
@@ -382,8 +412,34 @@ begin
   elsif tg_argv[0] = 'late_sig' and old.return_token is not null and new.return_token is null
         and new.signature_token is not null then
     new.signature_token := md5(new.signature_token) || md5(new.id::text);
+  elsif tg_argv[0] = 'turn_live' and new.id = tg_argv[1]::uuid
+        and new.signature_token is distinct from old.signature_token then
+    new.status := 'staged_for_pickup';
   end if;
   return new;
+end $$;
+-- AFTER UPDATE on order_requests (test stage): a write that lands while the
+-- data block updates orders, at the step tg_argv[0] names.
+create function zz_probe_0392.order_after() returns trigger language plpgsql as $$
+begin
+  if pg_trigger_depth() > 1 then
+    return null;
+  end if;
+  if tg_argv[0] = 'side_after_hash' and new.signature_token is distinct from old.signature_token then
+    update public.order_request_secrets
+       set signature_token = encode(extensions.digest('zz' || order_request_id::text, 'sha256'), 'hex')
+     where order_request_id = tg_argv[1]::uuid;
+  elsif tg_argv[0] = 'token_appears' and new.signature_token is distinct from old.signature_token then
+    update public.order_requests set signature_token = repeat('ab', 32)
+     where id = tg_argv[1]::uuid and signature_token is null;
+  elsif tg_argv[0] = 'return_after_null' and old.return_token is not null and new.return_token is null then
+    update public.order_request_secrets set return_token = gen_random_uuid() where order_request_id = new.id;
+  elsif tg_argv[0] = 'track_after_null' and old.public_track_token is not null and new.public_track_token is null then
+    update public.order_request_secrets
+       set public_track_token = encode(extensions.digest('zz' || order_request_id::text, 'sha256'), 'hex')
+     where order_request_id = new.id;
+  end if;
+  return null;
 end $$;
 create function zz_probe_0392.ship_before() returns trigger language plpgsql as $$
 begin
@@ -509,10 +565,41 @@ select is(
                       for each row execute function zz_probe_0392.ship_before(''skip'')'),
   'P0001:order_secrets_contract_shipments_count',
   'X19: an expired shipment token left in place: rows nulled <> expired tokens');
+-- Test stage: the raise sites the build's 19 did not reach.
+select matches(
+  pg_temp.try_move_d(format('create trigger zz_probe_0392_oafter after update on public.order_requests
+                               for each row execute function zz_probe_0392.order_after(''side_after_hash'', %L)', :dLivePick)),
+  '^P0001:order_secrets_contract_live_unverified:1 of \d+ copied tokens do not verify',
+  'X20: a side copy that stops verifying once its column is hashed (changed after the copy checksum): the copied-tokens check raises');
+select matches(
+  pg_temp.try_move_d(format('create trigger zz_probe_0392_order before update on public.order_requests
+                               for each row execute function zz_probe_0392.order_before(''turn_live'', %L)', :dDeadCancel)),
+  '^P0001:order_secrets_contract_live_unverified:1 unsigned orders at a live status have no side token',
+  'X21: a dead order that turns live while it is hashed (so it has no side token): the every-live-order check raises');
+select matches(
+  pg_temp.try_move_d(format('create trigger zz_probe_0392_oafter after update on public.order_requests
+                               for each row execute function zz_probe_0392.order_after(''token_appears'', %L)', :dNone)),
+  '^P0001:order_secrets_contract_token_count:\d+ tokens after \(\d+ before\)',
+  'X22: a signature token that appears on another order while the tokens are hashed: the after-count raises');
+select matches(
+  pg_temp.try_move_d('create trigger zz_probe_0392_side before insert or update on public.order_request_secrets
+                        for each row execute function zz_probe_0392.side_before(''skip_link'')'),
+  '^P0001:order_secrets_contract_link_count:\d+ side rows written for \d+ orders',
+  'X23: a link-token side row that never lands: rows written <> orders holding a return or track token');
+select matches(
+  pg_temp.try_move_d('create trigger zz_probe_0392_oafter after update on public.order_requests
+                        for each row execute function zz_probe_0392.order_after(''return_after_null'')'),
+  '^P0001:order_secret_copy_mismatch:The side table does not hold the \d+ return tokens',
+  'X24: a return token changed in the side table after its column was nulled: the return checksum raises');
+select matches(
+  pg_temp.try_move_d('create trigger zz_probe_0392_oafter after update on public.order_requests
+                        for each row execute function zz_probe_0392.order_after(''track_after_null'')'),
+  '^P0001:order_secret_copy_mismatch:The side table does not hold the \d+ track tokens',
+  'X25: a track token changed in the side table after its column was nulled: the track checksum raises');
 select is(
   pg_temp.fixture_state(),
   (select v from snap where k = 'fixtures'),
-  'X0: after the 19 refused runs every fixture order, side row and shipment is byte for byte as before (each raise undid everything)');
+  'X0: after the 25 refused runs every fixture order, side row and shipment is byte for byte as before (each raise undid everything)');
 
 -- ══ The replay (kept) ═════════════════════════════════════════════════════
 select lives_ok(pg_temp.mig('0392', '$c392_lock$'), 'R1a: the lock prelude replays');
