@@ -798,7 +798,23 @@ application structure.
   answer helper or `orders-phone-catalog.ts`.
   `apps/web/src/server/services/order-storefront.test.ts` covers the perimeter
   (a foreign, a hidden and an archived warehouse each refused before any
-  shared read) and the trimmed, price-free item.
+  shared read; an id in capitals read as the stored lower-case id) and the
+  trimmed, price-free item.
+- **Accepted, not enforced (same as the web)**: the photo map is signed once
+  per organization and warehouse with the admin client, and every caller at
+  that warehouse receives the same URL strings, each valid for 30 days from
+  signing (`ORDER_PHOTO_URL_TTL_SECONDS`). The answer is filtered to the
+  caller's own catalog, so a caller receives only photos of items they may
+  see, but a viewer whose category grant or assignment is later removed keeps
+  working URLs for the photos already received until they expire. The web
+  storefront's thumbnail map behaves the same way (a 30-day sign the browser
+  receives in the page payload), so the phone shows nobody anything new. The
+  signer cannot be pointed at another organization's object: image row paths
+  are held by 0381 (`item_image_row_path_ok` in the insert and update checks)
+  and 0323 (`item_images_storage_path_safe`, `item_images_thumb_path_safe`).
+  If removal must bite sooner, shorten the TTL of both maps together
+  (`ORDER_PHOTO_URL_TTL_SECONDS` and the web loader's
+  `THUMB_SIGNED_URL_TTL_SEC`).
 
 ---
 
