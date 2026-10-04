@@ -177,6 +177,31 @@ describe('link path: the raw token of a 0389 mint, no session', () => {
   });
 });
 
+describe('the audit row\'s IP fits audit_logs.ip (inet)', () => {
+  // Off Vercel the rate-limit helper answers "unknown", which the inet column
+  // refuses (22P02): the row, and the timeline's Signature collected, was
+  // lost (local E2E, 2026-10-03).
+  it('no forwarding header: ip is null, never a word', async () => {
+    await POST(request(RAW));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBeNull();
+  });
+
+  it('the first x-forwarded-for hop, as every other audit row takes it', async () => {
+    await POST(request(RAW, { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' }));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBe('203.0.113.7');
+  });
+
+  it('x-real-ip when there is no x-forwarded-for; an IPv6 literal is kept', async () => {
+    await POST(request(RAW, { 'x-real-ip': '2001:db8::5' }));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBe('2001:db8::5');
+  });
+
+  it('anything that is not an IP literal is dropped to null', async () => {
+    await POST(request(RAW, { 'x-forwarded-for': 'unknown', 'x-real-ip': 'proxy.local' }));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBeNull();
+  });
+});
+
 describe('legacy raw column (minted before 0389, until slice C)', () => {
   it('no side row: accepted as a link with no session, audited via legacy_link', async () => {
     world.column = LEGACY;
