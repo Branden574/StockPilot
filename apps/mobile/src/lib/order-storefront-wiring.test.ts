@@ -325,7 +325,7 @@ describe('the cart, the lock and the send', () => {
   });
 
   it('For is offered only to someone who may order on behalf (the server’s canOrderOnBehalf: orders:approve)', () => {
-    expect(checkout).toMatch(/\{ready\.viewer\.canOrderOnBehalf \? \(\s*<SetupRow\s+label=\{STOREFRONT_FOR_COPY\}/);
+    expect(checkout).toMatch(/\{ready\.viewer\.canOrderOnBehalf \|\| cart\.onBehalfOf !== null \? \(\s*<SetupRow\s+label=\{STOREFRONT_FOR_COPY\}/);
   });
 
   it('the needed-by picker is the one F2-4 uses, in the organization’s zone, with the server’s now', () => {

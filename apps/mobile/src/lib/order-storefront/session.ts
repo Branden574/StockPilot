@@ -403,7 +403,21 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     engine = next;
   }
 
-  async function loadWarehouse(id: string) {
+  /**
+   * With no storefront to show (the kill switch, an old server, a refusal or
+   * no answer), a cart locked by a send that is not settled must still settle
+   * (plan 3.1: create and settle stay up): its draft is restored, which reads
+   * the key's status on its own, and the unconfirmed panel is offered. No
+   * catalog or photo is read.
+   */
+  async function restoreLockedOnly() {
+    if (warehouseId !== null) return;
+    await refreshLocked();
+    const id = lockedWarehouseIds[0];
+    if (id) await loadWarehouse(id, { reads: false });
+  }
+
+  async function loadWarehouse(id: string, opts: { reads: boolean } = { reads: true }) {
     const s = scope;
     if (!s) return;
     const gen = ++warehouseGen;
@@ -450,7 +464,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       .setItem(orderPrefsKey(s), serializeOrderPrefs({ lastWarehouseId: id }))
       .catch(() => undefined);
 
-    await Promise.all([readCatalog(gen), readPhotos(gen, false)]);
+    if (opts.reads) await Promise.all([readCatalog(gen), readPhotos(gen, false)]);
   }
 
   let catalogRead: { gen: number; promise: Promise<ReadonlyMap<string, StorefrontItem> | null> } | null = null;
@@ -523,6 +537,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       if (!answer.enabled) {
         setup = { status: 'off', message: answer.message };
         publish();
+        await restoreLockedOnly();
         return;
       }
       setup = { status: 'ready', answer };
@@ -567,6 +582,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
             ? { status: 'refused', message: failure.message }
             : { status: 'failed', message: failure.message };
       publish();
+      await restoreLockedOnly();
     }
   }
 

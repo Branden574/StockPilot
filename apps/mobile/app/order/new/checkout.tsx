@@ -25,6 +25,7 @@ import {
   CHECKOUT_DELIVERY_COPY,
   CHECKOUT_PICKUP_COPY,
   ORDER_NOTES_MAX,
+  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
   ORDER_WITHDRAWN_COPY,
   REVIEW_SUBMIT_COPY,
   REVIEW_SUBTITLE_COPY,
@@ -208,13 +209,20 @@ export default function Checkout() {
             />
 
             <SetupRow label={STOREFRONT_SHIP_FROM_COPY} value={warehouse?.name ?? '—'} />
-            {ready.viewer.canOrderOnBehalf ? (
+            {/* Also shown when a restored cart is for someone else and this
+                person can no longer order on behalf, so they can choose
+                Myself (the server would refuse it). */}
+            {ready.viewer.canOrderOnBehalf || cart.onBehalfOf !== null ? (
               <SetupRow
                 label={STOREFRONT_FOR_COPY}
                 value={requesterRowValue(cart.onBehalfOf)}
                 disabled={locked}
-                hint={lockHint}
-                onPress={() => setSheet({ kind: 'for' })}
+                hint={lockHint ?? (ready.viewer.canOrderOnBehalf ? undefined : ORDER_ON_BEHALF_NOT_PERMITTED_COPY)}
+                onPress={() =>
+                  ready.viewer.canOrderOnBehalf
+                    ? setSheet({ kind: 'for' })
+                    : void session.dispatch({ type: 'set-setup', patch: { onBehalfOf: null } })
+                }
               />
             ) : null}
 

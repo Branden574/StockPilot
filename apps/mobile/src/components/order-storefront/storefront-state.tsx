@@ -13,7 +13,8 @@ import { useTheme } from '@/lib/use-theme';
  * kill switch or an old server ("Placing orders from the app is turned off
  * right now. Use the web." / "...isn't available right now..."), a refusal
  * (signed out, no permission, the module off) or a read that failed (pull
- * down to read it again). Core's words; nothing to submit is offered.
+ * down to read it again). Core's words; nothing to submit is offered, but
+ * a send that is not settled still gets its unconfirmed panel.
  */
 export function StorefrontState({
   topBar,
@@ -21,12 +22,16 @@ export function StorefrontState({
   setup,
   refreshing,
   onRefresh,
+  panel,
 }: {
   topBar: React.ReactNode;
   title: string;
   setup: Exclude<SetupState, { status: 'ready' }> | { status: 'loading' };
   refreshing: boolean;
   onRefresh: () => void;
+  /** A send not settled still settles with no storefront (the unconfirmed
+   *  panel: the kill switch keeps create and settle up). */
+  panel?: React.ReactNode;
 }) {
   const { c } = useTheme();
   return (
@@ -41,6 +46,7 @@ export function StorefrontState({
         <Display size={30} accessibilityRole="header">
           {title}
         </Display>
+        {panel ?? null}
         {setup.status === 'loading' ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 24 }} />
         ) : (

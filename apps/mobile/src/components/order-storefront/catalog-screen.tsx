@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, SlidersHorizontal } from 'lucide-react-native'
 import * as React from 'react';
 import {
   AccessibilityInfo,
+  ActivityIndicator,
   FlatList,
   Platform,
   Pressable,
@@ -369,6 +370,20 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         setup={snap && snap.setup.status !== 'ready' ? snap.setup : { status: 'loading' }}
         refreshing={refreshing}
         onRefresh={() => void refresh()}
+        panel={
+          snap ? (
+            <UnconfirmedPanel
+              state={snap.submission.state}
+              busy={snap.submission.busy}
+              offline={offline}
+              warehouseName={null}
+              itemName={() => null}
+              onCheckAndFinish={() => void session.checkAndFinish()}
+              onDontSend={() => void session.dontSend()}
+              onSeeOrders={() => router.push('/orders' as Href)}
+            />
+          ) : null
+        }
       />
     );
   }
@@ -421,6 +436,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           {storefrontUpdatedAtCopy(clockLabel(snap.catalog.readAt))}
         </Mono>
       ) : null}
+      {snap.catalog.status === 'loading' && !answer ? <ActivityIndicator color={c.ink} /> : null}
       {snap.catalog.message ? (
         <Body size={13} color={ACCENT.warn}>
           {snap.catalog.message}

@@ -350,6 +350,19 @@ describe('a relaunch with a send not settled', () => {
     expect(snap().placed?.body).toEqual(pending.body);
   });
 
+  it('with the kill switch on, the locked send is still restored and settles (create and settle stay up); nothing else is read', async () => {
+    api.storefront.mockResolvedValueOnce({ organizationId: ORG, enabled: false, message: ORDER_PHONE_TURNED_OFF_COPY, serverNow: 'x' });
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: pending }, new Date()));
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'placed', order: SUMMARY } });
+    await session.open(scope);
+    expect(snap().setup.status).toBe('off');
+    expect(snap().warehouseId).toBe(WH);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('placed'));
+    expect(api.catalog).not.toHaveBeenCalled();
+    expect(api.photos).not.toHaveBeenCalled();
+    expect(api.place).not.toHaveBeenCalled();
+  });
+
   it('Don’t send it settles it, and the cart unlocks', async () => {
     store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: pending }, new Date()));
     await session.open(scope);
