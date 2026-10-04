@@ -1025,7 +1025,11 @@ select is(
   'revise_order_needed_by(uuid,timestamp with time zone,timestamp with time zone,text,text)|dd11c6a10d4ec6fe3543e86680130347|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077|false|{search_path=public}|postgres\n'
   'tg_purchase_order_items_guard()|8c335327b4bd0337fbb9d608ef15dc34|false|{search_path=public}|postgres\n'
   'tg_purchase_orders_guard()|6f47ee97dbbace6e1249aa20eda48c96|false|{search_path=public}|postgres',
   'Z1: the frozen functions (fulfilment, holds, readiness facts and PO visibility, the needed-by revision, the PO draft save and number, receiving, the order and PO guards, the read helpers) are the text, SECURITY DEFINER, search_path and owner F2-5 was proven against');

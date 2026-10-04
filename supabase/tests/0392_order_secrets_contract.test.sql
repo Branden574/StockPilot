@@ -21,11 +21,16 @@
 --    (test stage) a side copy that stops verifying after the hash; a dead
 --    order that turns live without a side token; a token that appears on an
 --    order; a link row that never lands; a return or a track token changed
---    in the side table after the null-out. Every one of the data block's 27
---    raise sites is covered: 25 by a planted mismatch here, and the two that
---    cannot be planted without editing the block (the classification count,
---    which is a tautology, and the trigger-state check) by the mutation
---    driver (sec-orders/mutate-0392.py D10, D11).
+--    in the side table after the null-out; (review stage) a live 0389 digest
+--    that lost its side token (it cannot be told from a raw token); one track
+--    token in two orders' columns; an error the block does not foresee (a
+--    NOT VALID check), which aborts with its SQLSTATE and constraint name and
+--    never prints a token. Every one of the data block's 29 check sites is
+--    covered: 27 by a planted mismatch here, and the two that cannot be
+--    planted without editing the block (the classification count, which is a
+--    tautology, and the trigger-state check) by the mutation driver
+--    (sec-orders/mutate-0392.py D10, D11); the unforeseen-error wrapper by
+--    X28 and D20.
 --    X0: after all of them the fixtures are byte for byte as before.
 -- D. The data steps on fixtures covering every shape: live raw tokens at
 --    each of the four live statuses (one expired, one in a second
@@ -59,7 +64,10 @@
 --    approver who stamped every edge, and a driver still succeeds through
 --    the restated guard (the FK actions run as the table owner, even when the
 --    deleting session is authenticated), nulls exactly their columns, and
---    changes nothing else on the order.
+--    changes nothing else on the order. (Review stage) the admin client
+--    (service_role) may neither insert an order carrying a return token, a
+--    track token or an image, nor put a return or track token on a row; a
+--    value already on a row may stay or be cleared.
 -- P. Posture: the guard's body, INVOKER, search_path, owner, no EXECUTE, its
 --    trigger, its errcodes (42501 only) and hints, comments; authenticated's
 --    UPDATE columns are exactly the ten; the frozen bodies keep their md5.
@@ -82,6 +90,12 @@
 --   M14 the lock prelude takes ACCESS EXCLUSIVE                             -> R1
 --   M15 the shipments step without disabling its updated_at trigger        -> R2 (shipments_changed), D8
 --   M16 the guard keyed on the JWT role instead of current_user             -> G21 (the FK action carries the deleting session's JWT)
+--   (review stage; driver keys D18-D20, G11, G12)
+--   M17 the live-orphan refusal dropped                                     -> X26
+--   M18 the duplicate-track precheck dropped                                -> X27
+--   M19 the unexpected-error wrapper re-raises every error as is           -> X28
+--   M20 the guard without the link-token rule                               -> G24a, 0387 AL7
+--   M21 the insert guard without the admin-client secret rule               -> G23
 --
 -- Roles: fixtures as the test superuser. Attempts run through pg_temp.attempt
 -- (always undone) or pg_temp.call_as (kept), the 0387 helpers. begin/rollback:
@@ -89,7 +103,7 @@
 
 begin;
 
-select plan(75);
+select plan(81);
 
 \set orgA   '\'03920000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03920000-0000-0000-0000-00000000000b\''
@@ -596,10 +610,34 @@ select matches(
                         for each row execute function zz_probe_0392.order_after(''track_after_null'')'),
   '^P0001:order_secret_copy_mismatch:The side table does not hold the \d+ track tokens',
   'X25: a track token changed in the side table after its column was nulled: the track checksum raises');
+-- Review stage: three more refusals.
+select is(
+  pg_temp.try_move(format($q$update public.order_requests set signature_token = %L where id = %L;
+                             insert into public.order_request_secrets (order_request_id, organization_id, public_track_token)
+                             values (%L, %L, %L)$q$,
+                          pg_temp.sha(pg_temp.k('T1')), :dLivePick, :dLivePick, :orgA, repeat('e1', 32))),
+  'P0001:order_secrets_contract_live_orphan',
+  'X26: a live order whose column is a 0389 digest that lost its side token (its side row holds only a track token) is refused: copying it would make the member-readable digest a session-free link and stop the printed QR (it cannot be told from a raw token)');
+select is(
+  (select split_part(r, ':', 1) || ':' || split_part(r, ':', 2) || '|'
+          || exists (select 1 from k where position(k.v in r) > 0)::text
+     from (select pg_temp.try_move_d(format('update public.order_requests set public_track_token = %L where id = %L',
+                                            pg_temp.k('K2'), :dBoth)) as r) x),
+  'P0001:order_secrets_contract_link_collision|false',
+  'X27: one track token held by two orders'' columns is refused before step 3 writes, with counts only (the side table''s unique index would stop the insert with the raw token in its error detail)');
+select is(
+  (select split_part(r, ':', 1) || ':' || split_part(r, ':', 2) || '|'
+          || (r ~ '23514') || '|' || (r ~ 'zz_probe_0392_chk') || '|'
+          || exists (select 1 from k where position(k.v in r) > 0)::text
+     from (select pg_temp.try_move_d(
+             'alter table public.order_requests add constraint zz_probe_0392_chk
+                check (return_token is null or signature_token = ''x'') not valid') as r) x),
+  'P0001:order_secrets_contract_unexpected_error|true|true|false',
+  'X28: an error the block does not foresee (a NOT VALID check that a row breaks once its token is hashed; production holds one NOT VALID check) aborts with its SQLSTATE and constraint name only: the row the error would print (raw return and track tokens, the image) never reaches the output or the log');
 select is(
   pg_temp.fixture_state(),
   (select v from snap where k = 'fixtures'),
-  'X0: after the 25 refused runs every fixture order, side row and shipment is byte for byte as before (each raise undid everything)');
+  'X0: after the 28 refused runs every fixture order, side row and shipment is byte for byte as before (each raise undid everything)');
 
 -- ══ The replay (kept) ═════════════════════════════════════════════════════
 select lives_ok(pg_temp.mig('0392', '$c392_lock$'), 'R1a: the lock prelude replays');
@@ -870,6 +908,41 @@ select is(
   'ok:1',
   'G17: the guard holds the API roles only: service_role (the admin client) is not held to the stamp rules');
 
+-- Review stage: the order row never carries a link token or an image again,
+-- for the admin client too (postgres, the order RPCs' and FK actions' owner,
+-- is not held: its writers are pinned DEFINER bodies, 0387 AL9c/AL9d).
+select is(
+  (select string_agg(c.n || '=' || pg_temp.attempt('service_role', null,
+             format('insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, %I)
+                     values (gen_random_uuid(), %L, %L, %L, %L, %L, %L, %s)',
+                    c.col, :orgA, :whA, 'pending_approval', 'internal', :req, 'pickup', c.val)), ' / ' order by c.n)
+     from (values (1, 'return_token', 'gen_random_uuid()'), (2, 'public_track_token', quote_literal(repeat('e3', 32))),
+                  (3, 'signature_data_url', quote_literal('data:image/png;base64,AAAA'))) c(n, col, val))
+  || ' / 4=' ||
+  pg_temp.attempt('service_role', null,
+    format('insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, internal_notes)
+            values (gen_random_uuid(), %L, %L, %L, %L, %L, %L, %L)', :orgA, :whA, 'pending_approval', 'internal', :req, 'pickup', 'plain')),
+  '1=42501:secret_through_side_table_only:order_secret_through_side_table_only / '
+  '2=42501:secret_through_side_table_only:order_secret_through_side_table_only / '
+  '3=42501:secret_through_side_table_only:order_secret_through_side_table_only / 4=ok:1',
+  'G23: an admin-client INSERT carrying a return token, a track token or a signature image on the order row is refused (they live in order_request_secrets); the same insert without one goes through');
+select is(
+  pg_temp.attempt('service_role', null, format('update public.order_requests set return_token = gen_random_uuid() where id = %L', :dNone))
+  || ' / ' ||
+  pg_temp.attempt('service_role', null, format('update public.order_requests set public_track_token = %L where id = %L', repeat('e4', 32), :dNone)),
+  '42501:secret_through_side_table_only:order_secret_through_side_table_only / 42501:secret_through_side_table_only:order_secret_through_side_table_only',
+  'G24a: an admin-client UPDATE that puts a return or a track token on the order row is refused (the pre-0389 return-prompt mint shape)');
+select is(
+  pg_temp.attempt('service_role', null, format($q$update public.order_requests set internal_notes = 'kept' where id = %L$q$, :gApproved),
+                  format('update public.order_requests set return_token = %L, public_track_token = %L where id = %L',
+                         '03920000-0000-4000-8000-0000000000f9', repeat('e5', 32), :gApproved))
+  || ' / ' ||
+  pg_temp.attempt('service_role', null, format('update public.order_requests set return_token = null, public_track_token = null where id = %L', :gApproved),
+                  format('update public.order_requests set return_token = %L, public_track_token = %L where id = %L',
+                         '03920000-0000-4000-8000-0000000000f9', repeat('e5', 32), :gApproved)),
+  'ok:1 / ok:1',
+  'G24b: a value already on the row (planted here as postgres: only rows from before 0392 held one) may stay through another write, or be cleared');
+
 -- The order RPCs still make what the user client no longer may.
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select 1 from public.generate_order_packing_slips(%L)', :gPickComp), null,
@@ -955,7 +1028,7 @@ select is(
           || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || '|' || has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|'
           || coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a)::text, 'false')
      from pg_proc p where p.oid = to_regprocedure('public.tg_order_requests_workflow_guard()')),
-  'd8831cdcd8413340d536f553fa480f79|false|{search_path=public}|postgres|false|false|false',
+  '55bceafc13d599f8d77d6a4180c28140|false|{search_path=public}|postgres|false|false|false',
   'P1: the guard is 0392''s body, SECURITY INVOKER, search_path pinned, owned by postgres, not executable by PUBLIC, anon or authenticated');
 select is(
   (select t.tgtype::text || '|' || t.tgenabled::text || '|' || t.tgfoid::regproc::text
@@ -973,8 +1046,8 @@ select is(
   || '/' ||
   (select (p.prosrc !~* '40001|40p01|serialization_failure|deadlock_detected')::text
      from pg_proc p where p.oid = 'public.tg_order_requests_workflow_guard()'::regprocedure),
-  '42501/approval_through_rpc_only,column_through_rpc_only,stage_fulfillment_mismatch,stamp_by_caller_only,stamp_through_edge_only,status_through_rpc_only/true',
-  'P3: the guard raises 42501 only, with its six hints, never 40001 or 40P01');
+  '42501/approval_through_rpc_only,column_through_rpc_only,secret_through_side_table_only,stage_fulfillment_mismatch,stamp_by_caller_only,stamp_through_edge_only,status_through_rpc_only/true',
+  'P3: the guard raises 42501 only, with its seven hints, never 40001 or 40P01');
 select is(
   (select string_agg(a.attname, ',' order by a.attname)
      from pg_attribute a
@@ -1015,8 +1088,8 @@ select is(
   'order_return_token_ensure(uuid)|bb1b6bd6103c3e2289c93bc914c91aeb\n'
   'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892',
-  'P7: 0392 changes no function body but the guard: the hand-over, the clears, the mint, the return-token mint, the delivery RPCs, the transition trigger and the insert guard keep their md5');
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077',
+  'P7: 0392 changes no function body but the two guards: the hand-over, the clears, the mint, the return-token mint, the delivery RPCs and the transition trigger keep their md5; the insert guard is 0392''s (0365 plus the admin-client secret rule, G23)');
 select is(
   (pg_temp.mig('0392', '$c392_move$') !~* '40001|40p01|serialization_failure|deadlock_detected')::text || '/'
   || (pg_temp.mig('0392', '$c392_move$') !~* 'raise\s+(notice|info|log|warning|debug)')::text || '/'

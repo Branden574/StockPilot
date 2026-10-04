@@ -398,12 +398,16 @@ select is(
                   format($q$insert into public.order_requests
                               (organization_id, warehouse_id, status, source, requester_user_id, requester_email, requester_name,
                                requester_org_label, notes, fulfillment_type, requester_phone, delivery_charter_id, pickup_location_notes,
-                               confirmation_token_hash, confirmation_token_expires_at, public_track_token)
+                               confirmation_token_hash, confirmation_token_expires_at)
                             values (%L, %L, 'pending_confirmation', 'public_link', null, '0388-pub2@test.local', 'Pub Two',
                                     'Some School', null, 'pickup', null, null, null,
-                                    repeat('c', 64), now() + interval '1 day', repeat('b', 64))$q$, :orgA, :whA)),
+                                    repeat('c', 64), now() + interval '1 day')$q$, :orgA, :whA)),
+  -- Re-pinned by 0392 (was the same insert with public_track_token on the
+  -- row): the public submit writes its track token to order_request_secrets
+  -- since 0389 (api/v1/public/order-requests/route.ts), and 0392's insert
+  -- guard refuses one on the row for the admin client (0392 suite G23).
   'ok:1',
-  'N8c: the public link''s insert shape (tokens, requester_org_label) still inserts as service_role');
+  'N8c: the public link''s insert shape (the confirmation token, requester_org_label; the track token goes to order_request_secrets) still inserts as service_role');
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.order_requests

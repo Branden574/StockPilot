@@ -47,7 +47,14 @@
 --          on their own edge, with *_by the caller (auth.uid()) and *_at the
 --          database's clock; denied_reason only on the deny; staged_for_pickup
 --          only for a pickup order and staged_for_delivery only for a delivery
---          order (the service checks all of this; the database did not).
+--          order (the service checks all of this; the database did not);
+--        - (review) the row never takes a return or track token again, for
+--          the admin client (service_role) as for the API roles.
+--      tg_order_requests_insert_guard is restated too (the 0365 body plus one
+--      rule): the admin client may not insert an order carrying a return
+--      token, a track token or a signature image. postgres (the order RPCs,
+--      FK actions, migrations) is held by neither rule: its writers are the
+--      pinned DEFINER bodies (0387 AL9c/AL9d).
 --   8. Hygiene: the 9 expired signature tokens of the removed shipments
 --      feature are nulled, with shipments.updated_at kept (critique K12).
 --
@@ -91,7 +98,10 @@
 -- applied) on any difference:
 --   - every signature token is 64 lowercase hex (else nothing is touched);
 --   - digests + raw = every token; no live raw token already belongs to
---     another order's side row; the rows copied = the live raw set, and the
+--     another order's side row; no live raw token sits on an order whose side
+--     row holds no signature token (a 0389 digest that lost its side token
+--     looks exactly like a raw token: copying it would turn the digest every
+--     member could read into a session-free link); the rows copied = the live raw set, and the
 --     side copies equal the column values (checksum over id and value);
 --   - the rows hashed = the raw set, and every hashed column equals
 --     sha256(its old value) (checksum computed before the write); the copied
@@ -99,7 +109,8 @@
 --     other side token is unchanged; afterwards every unsigned order at a
 --     live status with a token has column = sha256(its side token);
 --   - every track token is 64 hex; no side return or track token differs
---     from a non-null column, and none belongs to another order; the rows
+--     from a non-null column, and none belongs to another order; no track
+--     token is held by two orders' columns; the rows
 --     copied = the orders holding one; every column value is present and
 --     equal in the side table BEFORE any column is nulled; the rows nulled =
 --     the same set; afterwards no column token remains and the side table's
@@ -116,6 +127,10 @@
 -- disabled, inside that block and only around the writes. The 0387 guard is
 -- never disabled: the block runs as postgres, which it lets through. No
 -- token value is ever raised, logged or returned: errors carry counts only.
+-- Any error the checks do not foresee (a constraint error prints the whole
+-- row in its detail; production holds one NOT VALID check) is re-raised as
+-- order_secrets_contract_unexpected_error with its SQLSTATE and object names
+-- only.
 -- Expected at the 2026-10-04 census: step 1 copies 2 (the two signable L4L
 -- orders), step 2 hashes 81, step 3 copies 78 orders (48 return and 49 track
 -- tokens) and nulls the same 78, step 8 nulls 9 shipments.
@@ -168,11 +183,14 @@
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
 -- The push: P0001 (a data check, message order_secrets_contract_* or
--- order_secret_copy_mismatch, counts in the detail) or 55P03 (busy), each
--- with nothing applied. The guard: 42501 only, hints approval_through_rpc_only,
--- status_through_rpc_only, column_through_rpc_only, stamp_through_edge_only,
--- stamp_by_caller_only and stage_fulfillment_mismatch. Never 40001 or 40P01
--- (PostgREST retries those forever).
+-- order_secret_copy_mismatch, counts in the detail; anything unforeseen as
+-- order_secrets_contract_unexpected_error with its SQLSTATE and object names)
+-- or 55P03 (busy), each with nothing applied. The guard: 42501 only, hints
+-- approval_through_rpc_only, status_through_rpc_only, column_through_rpc_only,
+-- stamp_through_edge_only, stamp_by_caller_only, stage_fulfillment_mismatch
+-- and secret_through_side_table_only; the insert guard adds
+-- secret_through_side_table_only (42501). Never 40001 or 40P01 (PostgREST
+-- retries those forever).
 
 set lock_timeout = '900ms';
 
@@ -231,6 +249,11 @@ declare
   v_ship_before   text;
   v_ship_after    text;
   v_sig_after     text;
+  v_e_state       text;
+  v_e_msg         text;
+  v_e_table       text;
+  v_e_column      text;
+  v_e_constraint  text;
 begin
   -- Every column the steps do not own, on every order row, updated_at and
   -- signature_data_url included.
@@ -301,6 +324,23 @@ begin
     raise exception 'order_secrets_contract_token_collision'
       using errcode = 'P0001',
             detail  = format('%s live raw tokens already belong to another order''s side row; nothing was changed.', v_bad);
+  end if;
+  -- A 0389 digest whose side token is gone cannot be told from a raw token
+  -- (both 64 hex). Copied as raw, the digest every member could read would
+  -- become a session-free link and the printed QR would stop working. A live
+  -- raw token on an order that already has a side row without a signature
+  -- token is such an orphan, or a pre-deploy tab's mint on an order the
+  -- public submit gave a side row; neither can arise once B's 12-hour window
+  -- has closed (R0d counts both before the push). Refuse it.
+  select count(*) into v_bad
+    from public.order_requests o
+    join public.order_request_secrets s on s.order_request_id = o.id
+   where o.id = any (v_live_ids)
+     and s.signature_token is null;
+  if v_bad > 0 then
+    raise exception 'order_secrets_contract_live_orphan'
+      using errcode = 'P0001',
+            detail  = format('%s live tokens that no side token hashes to sit on an order whose side row holds no signature token (possibly a 0389 digest that lost its side token); nothing was changed.', v_bad);
   end if;
   -- order_requests_signature_token_idx is unique: a digest that equals
   -- another order's column would stop step 2 half way. Refuse it up front.
@@ -468,6 +508,20 @@ begin
       using errcode = 'P0001',
             detail  = format('%s return or track tokens already belong to another order''s side row.', v_bad);
   end if;
+  -- The track column has no unique index (the return column has one): a
+  -- track token held by two orders would stop the side insert on its unique
+  -- key. Refuse it here, with a count.
+  select count(*) into v_bad
+    from (select o.public_track_token
+            from public.order_requests o
+           where o.public_track_token is not null
+           group by o.public_track_token
+          having count(*) > 1) d;
+  if v_bad > 0 then
+    raise exception 'order_secrets_contract_link_collision'
+      using errcode = 'P0001',
+            detail  = format('%s track tokens are held by more than one order.', v_bad);
+  end if;
 
   select coalesce(array_agg(o.id order by o.id), '{}'::uuid[])
     into v_link_ids
@@ -622,6 +676,27 @@ begin
       using errcode = 'P0001',
             detail  = format('%s updated_at triggers are not enabled again.', v_bad);
   end if;
+exception
+  -- Busy (lock_timeout): its message names no value; nothing was applied.
+  when lock_not_available then
+    raise;
+  -- Anything else: the block's own checks pass through as they are (counts
+  -- only). Any other error (a constraint the prechecks did not foresee, such
+  -- as a NOT VALID check a row breaks when it is rewritten) would print the
+  -- whole row in its detail, raw link tokens and the image included, to the
+  -- push output and the database log: it is re-raised with its SQLSTATE and
+  -- object names only. Everything the block did is undone either way.
+  when others then
+    get stacked diagnostics v_e_state = returned_sqlstate, v_e_msg = message_text,
+                            v_e_table = table_name, v_e_column = column_name, v_e_constraint = constraint_name;
+    if v_e_state = 'P0001' and v_e_msg ~ '^order_secret(s_contract_[a-z_]+|_copy_mismatch)$' then
+      raise;
+    end if;
+    raise exception 'order_secrets_contract_unexpected_error'
+      using errcode = 'P0001',
+            detail  = format('SQLSTATE %s (table %s, column %s, constraint %s); nothing was changed. The message and detail are withheld: they can carry a token.',
+                             v_e_state, coalesce(nullif(v_e_table, ''), '-'), coalesce(nullif(v_e_column, ''), '-'),
+                             coalesce(nullif(v_e_constraint, ''), '-'));
 end $c392_move$;
 
 -- ═══ 5 and 6. The write side: the order RPCs alone (slices C and E) ═══════
@@ -652,6 +727,21 @@ begin
   -- DEFINER trigger always sees postgres and would never enforce. Never key
   -- this on auth.uid() or JWT claims: a DEFINER body and a cascade still carry
   -- the caller's JWT (0359).
+  --
+  -- 0392: the return and track tokens live in order_request_secrets, so the
+  -- member-readable row never takes one again: held for the admin client
+  -- (service_role) too. postgres is not held: the order RPCs and FK actions
+  -- run as it, and its writers are pinned DEFINER bodies. A value already on
+  -- a row may stay through another write or be cleared.
+  if current_user in ('authenticated', 'anon', 'service_role')
+     and ((new.return_token is not null and new.return_token is distinct from old.return_token)
+          or (new.public_track_token is not null and new.public_track_token is distinct from old.public_track_token)) then
+    raise exception 'order_secret_through_side_table_only'
+      using errcode = '42501',
+            hint    = 'secret_through_side_table_only',
+            detail  = 'An order''s return and track tokens live in order_request_secrets since 0392; the order row never carries one.';
+  end if;
+
   if current_user not in ('authenticated', 'anon') then
     return new;
   end if;
@@ -761,9 +851,65 @@ comment on function public.tg_order_requests_workflow_guard() is
   'changes denied_reason only on the deny, the pick-slip and staging stamps only on their own edge with '
   '*_by the caller (*_at is set to now()), and stages a pickup order only for pickup and a delivery '
   'order only for delivery. The order RPCs (SECURITY DEFINER), the admin client and FK actions are not '
-  'API roles and pass.';
+  'API roles and pass those rules. Neither an API role nor the admin client (service_role) may put a '
+  'return or track token on the row (they live in order_request_secrets since 0392).';
 
 revoke all on function public.tg_order_requests_workflow_guard() from public, anon, authenticated;
+
+-- ═══ The insert guard, restated (0365 + one rule): no secret on a new row ═
+-- The 0365 body, unchanged for the API roles, plus: the admin client
+-- (service_role) may not insert an order carrying a return token, a track
+-- token or a signature image (they live in order_request_secrets; the public
+-- submit has written its track token there since 0389). postgres is not
+-- held (DEFINER bodies, migrations), as before.
+create or replace function public.tg_order_requests_insert_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  if current_user not in ('authenticated', 'anon') then
+    if current_user = 'service_role'
+       and num_nonnulls(new.return_token, new.public_track_token, new.signature_data_url) > 0 then
+      raise exception 'order_secret_through_side_table_only'
+        using errcode = '42501',
+              hint    = 'secret_through_side_table_only',
+              detail  = 'An order''s return and track tokens and its signature image live in order_request_secrets since 0392; a new order row never carries one.';
+    end if;
+    return new;
+  end if;
+  if new.status is distinct from 'pending_approval' then
+    raise exception 'A new order request starts pending approval.'
+      using errcode = '42501';
+  end if;
+  if num_nonnulls(
+       new.approved_by, new.approved_at, new.denied_reason, new.packaging_at, new.ready_at,
+       new.delivered_at, new.cancelled_at, new.cancelled_by, new.confirmation_token_hash,
+       new.confirmation_token_expires_at, new.assigned_picker_id, new.pick_slip_generated_at,
+       new.pick_slip_generated_by, new.picking_completed_at, new.picking_completed_by,
+       new.packing_slip_generated_at, new.packing_slip_generated_by, new.staged_at, new.staged_by,
+       new.assigned_delivery_user_id, new.assigned_delivery_by, new.assigned_delivery_at,
+       new.in_transit_at, new.in_transit_by, new.signature_token, new.signature_token_expires_at,
+       new.signed_by_name, new.signed_by_email, new.signature_data_url, new.signed_at,
+       new.completed_at, new.completed_by, new.return_token, new.picking_claimed_at,
+       new.picking_claimed_by, new.signature_method, new.return_prompt_sent_at,
+       new.public_track_token, new.customer_id) > 0 then
+    raise exception 'A new order request cannot carry approval, picking, delivery or signature details.'
+      using errcode = '42501';
+  end if;
+  new.created_at := now();
+  return new;
+end;
+$$;
+
+comment on function public.tg_order_requests_insert_guard() is
+  'BEFORE INSERT guard (0365, restated by 0392): an API-role order request starts pending approval with '
+  'every workflow column empty and a database creation time; the admin client (service_role) may not '
+  'insert an order carrying a return token, a track token or a signature image (order_request_secrets '
+  'holds them since 0392).';
+
+revoke all on function public.tg_order_requests_insert_guard() from public, anon, authenticated;
 
 -- ═══ The order columns say what they now hold ═════════════════════════════
 comment on column public.order_requests.signature_token is

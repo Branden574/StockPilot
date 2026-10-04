@@ -579,11 +579,16 @@ select is(
   -- clears this suite cares about are untouched.
   'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892\n'
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077\n'
   -- Re-pinned by 0392 (was 59481b7651dca818a2266a39868db4f0, 0387's body):
   -- slices C and E restate the guard (four edges, the nine RPC-owned
-  -- columns, the item 14 stamp rules); 0392 suite G proves it.
-  'tg_order_requests_workflow_guard()|d8831cdcd8413340d536f553fa480f79',
+  -- columns, the item 14 stamp rules, and no return or track token on the
+  -- row for the admin client either); 0392 suite G proves it.
+  'tg_order_requests_workflow_guard()|55bceafc13d599f8d77d6a4180c28140',
   'P3: the frozen bodies keep their md5 (confirm_order_signature 8afdbb68, the clears as 0390 left them, the transition trigger, the insert guard, the 0387 guard)');
 select is(
   (select string_agg(column_name, ',' order by column_name)

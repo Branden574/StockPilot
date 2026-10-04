@@ -642,8 +642,12 @@ select is(
 select is(
   pg_temp.attempt('service_role', null,
                   format('update public.order_requests set return_token = gen_random_uuid() where id = %L and return_token is null returning return_token', :oRet)),
-  'ok:1',
-  'AL7: the return prompt''s guarded token mint (admin client, service_role) still writes return_token');
+  -- Re-pinned by 0392 (was ok:1): the return prompt mints through
+  -- order_return_token_ensure into order_request_secrets since 0389
+  -- (server/email/return-prompt.ts); 0392's guard refuses this pre-0389
+  -- column write for the admin client (0392 suite G24a).
+  '42501:secret_through_side_table_only:order_secret_through_side_table_only',
+  'AL7: the pre-0389 return-prompt mint shape (admin client, service_role, a return token written to the order row) is refused since 0392: the token lives in order_request_secrets');
 select is(
   pg_temp.attempt('service_role', null,
                   format('update public.order_requests set return_prompt_sent_at = now() where id = %L and return_prompt_sent_at is null returning id', :oRet)),
@@ -773,8 +777,9 @@ select is(
      from pg_proc p where p.oid = to_regprocedure('public.tg_order_requests_workflow_guard()')),
   -- Re-pinned by 0392 (was 59481b7651dca818a2266a39868db4f0, 0387's body):
   -- 0392 restates the guard with four edges, the nine RPC-owned columns and
-  -- the item 14 stamp rules (0392 suite G); posture unchanged.
-  'd8831cdcd8413340d536f553fa480f79|false|{search_path=public}|postgres|false|false|false',
+  -- the item 14 stamp rules, and refuses a return or track token on the row
+  -- for the API roles and the admin client (0392 suite G); posture unchanged.
+  '55bceafc13d599f8d77d6a4180c28140|false|{search_path=public}|postgres|false|false|false',
   'AL10a: the guard is 0392''s restated body, SECURITY INVOKER (a DEFINER trigger would always see postgres), search_path pinned, owned by postgres, and not executable by PUBLIC, anon or authenticated');
 select is(
   (select t.tgtype::text || '|' || t.tgenabled::text || '|' || t.tgfoid::regproc::text
@@ -817,8 +822,12 @@ select is(
   -- each gate and nothing else (0390 R1, R2); both still SECURITY DEFINER.
   E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true\n'
   'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false',
-  'AL10f: approve_order_request and approve_partial are 0390''s bodies and the insert guard is unchanged (0387 edits no body; 0390 removes one gate term from each approval body)');
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077|false',
+  'AL10f: approve_order_request and approve_partial are 0390''s bodies and the insert guard is 0392''s (0387 edits no body; 0390 removes one gate term from each approval body; 0392 adds the admin-client secret rule to the insert guard)');
 
 select is(
   pg_temp.attempt('authenticated', :mgr, format($q$update public.order_requests set status = 'approved' where id = %L$q$, :oL11)),
