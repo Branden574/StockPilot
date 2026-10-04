@@ -18,10 +18,16 @@
 -- 1. Two writers shared order_requests_update with the approve rule, so they
 --    move to SECURITY DEFINER functions with their own gates first, and the
 --    policy can become approve-only without breaking them:
---      assign_order_delivery(p_id, p_driver): orders:assign_delivery, write
---        access to the order's warehouse, status staged_for_delivery, and a
---        driver who is an accepted member of the order's organization (the
---        rules OrderRequestsService.assignDelivery already checks).
+--      assign_order_delivery(p_id, p_driver): orders:assign_delivery AND
+--        orders:approve, write access to the order's warehouse, status
+--        staged_for_delivery, and a driver who is an accepted member of the
+--        order's organization. Both permissions, because that is what
+--        assigning took before 0390 once the role term is gone: the app asked
+--        orders:assign_delivery and the update policy asked a manager or
+--        orders:approve. Without orders:approve here, a member holding only
+--        orders:assign_delivery (whom the policy refused) would gain the
+--        action, and a manager whose orders:approve was revoked could make
+--        themself the driver and then hand the order over as the driver.
 --      mark_order_in_transit(p_id): write access, a delivery order, status
 --        staged_for_delivery read under the row lock (compare-and-set), a
 --        driver assigned, and orders:approve. Owner decision O3, default:
@@ -61,6 +67,15 @@
 -- staff member granted orders:approve keeps what the database already let
 -- them do.
 --
+-- WHAT STILL GOES BY ROLE (unchanged here, on purpose): finishing or
+-- releasing picking that someone else claimed (complete_picking,
+-- partial_pick_line, release_picking: a manager by role overrides the
+-- picker), recording a paper signature (confirm_physical_signature: a
+-- manager by role or the assigned driver), order attachments, and the
+-- shortfall purchase-order drafter (a manager by role with
+-- purchase_orders:manage). A manager whose orders:approve is revoked keeps
+-- those.
+--
 -- LOCKS. The functions, grants and comments take no table lock. ALTER POLICY
 -- takes ACCESS EXCLUSIVE on its table, held until the file commits, and no
 -- order of the two tables is safe by itself: partial_pick_line locks a line
@@ -75,13 +90,17 @@
 -- takes every table lock the three statements need in one prelude, all
 -- NOWAIT: it never waits for a table lock, so it is never part of a wait
 -- cycle. If any session holds one of those tables at that instant (a short
--- request, or Realtime's poll of realtime.subscription), the file fails at
--- once with 55P03, applies nothing, and is re-run: retry is the remedy (the
--- 0373 pattern). The locks are held from the prelude to commit, a few
--- milliseconds, during which sign-ins, storage and realtime requests and
--- order reads wait. The policies are altered lines first (the order that
--- also avoids the partial_pick_line cycle by itself). lock_timeout 900ms,
--- below deadlock_timeout (1s), bounds any other wait the file could meet.
+-- request, or Realtime's poll of realtime.subscription), that attempt fails
+-- at once with 55P03; its subtransaction rolls back, which releases every
+-- lock the attempt took, and the prelude tries again after a short pause
+-- holding no table lock, up to 40 attempts (about 2 to 6 seconds in all).
+-- Only if every attempt meets a busy table does the file fail with 55P03,
+-- apply nothing, and need a re-run (the 0373 pattern). The locks are held
+-- from the successful attempt to commit, a few milliseconds, during which
+-- sign-ins, storage and realtime requests and order reads wait. The
+-- policies are altered lines first (the order that also avoids the
+-- partial_pick_line cycle by itself). lock_timeout 900ms, below
+-- deadlock_timeout (1s), bounds any other wait the file could meet.
 -- Push off-peak.
 --
 -- ERRORS: 42501, P0001, P0002 and 55P03 only. No function here raises 40001
@@ -129,6 +148,14 @@ begin
     raise exception 'forbidden' using errcode = '42501', hint = 'orders_assign_delivery';
   end if;
 
+  -- Gate 5: orders:approve, which the update policy asked of every
+  -- assignment before 0390 (with the role term gone). A member holding only
+  -- orders:assign_delivery stays refused, and a manager whose orders:approve
+  -- was revoked cannot make themself the driver.
+  if not public.has_permission(v_org, 'orders:approve') then
+    raise exception 'forbidden' using errcode = '42501', hint = 'orders_approve';
+  end if;
+
   -- The order row, locked: two assignments serialize and the last one wins.
   select * into v_row
     from public.order_requests o
@@ -138,7 +165,7 @@ begin
     raise exception 'order_request_not_found' using errcode = 'P0002';
   end if;
 
-  -- Gate 5: write access to the order's warehouse.
+  -- Gate 6: write access to the order's warehouse.
   if not public.user_can_access_inventory(v_uid, v_row.warehouse_id, null, 'write') then
     raise exception 'forbidden' using errcode = '42501', hint = 'warehouse_write';
   end if;
@@ -259,7 +286,8 @@ comment on function public.assign_order_delivery(uuid, uuid) is
   'row. Gates in its body: signed in (42501), member of the order''s org (P0002 '
   'order_request_not_found, the same for a missing order), the orders module '
   '(P0001 module_disabled), orders:assign_delivery (42501, hint '
-  'orders_assign_delivery), write access to the order''s warehouse (42501, hint '
+  'orders_assign_delivery), orders:approve (42501, hint orders_approve: what '
+  'the update policy asked before 0390), write access to the order''s warehouse (42501, hint '
   'warehouse_write), status staged_for_delivery (P0001 delivery_not_assignable, '
   'hint not_staged_for_delivery, detail = the status), and a driver who is an '
   'accepted member of the order''s org (P0001 driver_not_member). Locks the '
@@ -1664,6 +1692,12 @@ comment on function public.revise_order_needed_by(uuid, timestamptz, timestamptz
 --     supautils #228). Taken here first, ONLY the parent of a partitioned
 --     table (realtime.messages) as supautils does, and only those that exist
 --     (supautils skips a missing one).
+-- Each attempt is a subtransaction (BEGIN ... EXCEPTION): a busy table fails
+-- it at once, the rollback releases whatever it had taken, and the next
+-- attempt starts after a pause of 50 to 150 ms holding no table lock. After
+-- the 40th busy attempt the 55P03 is raised as it is (never 40001/40P01) and
+-- nothing in the file is applied. A successful attempt's locks pass to the
+-- file's transaction and are kept to commit.
 -- No statement after this block takes a new table lock, so the file never
 -- waits while holding one: scripts/db-concurrency/0390_migration_lock_footprint.sh.
 do $lock$
@@ -1671,19 +1705,31 @@ declare
   v_grants text := nullif(current_setting('supautils.policy_grants', true), '');
   v_name   text;
   v_rel    regclass;
+  v_try    integer := 0;
 begin
-  lock table only public.inventory_items in access share mode nowait;
-  lock table only public.order_request_lines, public.order_requests in access exclusive mode nowait;
-  if v_grants is not null then
-    for v_name in
-      select jsonb_array_elements_text(coalesce(v_grants::jsonb -> current_user::text, '[]'::jsonb))
-    loop
-      v_rel := to_regclass(v_name);
-      if v_rel is not null then
-        execute format('lock table only %s in access exclusive mode nowait', v_rel);
+  loop
+    v_try := v_try + 1;
+    begin
+      lock table only public.inventory_items in access share mode nowait;
+      lock table only public.order_request_lines, public.order_requests in access exclusive mode nowait;
+      if v_grants is not null then
+        for v_name in
+          select jsonb_array_elements_text(coalesce(v_grants::jsonb -> current_user::text, '[]'::jsonb))
+        loop
+          v_rel := to_regclass(v_name);
+          if v_rel is not null then
+            execute format('lock table only %s in access exclusive mode nowait', v_rel);
+          end if;
+        end loop;
       end if;
-    end loop;
-  end if;
+      exit;
+    exception when lock_not_available then
+      if v_try >= 40 then
+        raise;
+      end if;
+    end;
+    perform pg_sleep(0.05 + random() * 0.1);
+  end loop;
 end $lock$;
 
 alter policy order_request_lines_insert on public.order_request_lines

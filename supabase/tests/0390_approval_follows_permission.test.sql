@@ -8,7 +8,8 @@
 --   own     owner                     mgr     manager, no override
 --   mgrNo   manager, orders:approve revoked (user override false)
 --   mgrNoAD manager, orders:assign_delivery revoked
---   stfAp   staff granted orders:approve, assigned to the warehouse
+--   stfAp   staff granted orders:approve and orders:assign_delivery,
+--           assigned to the warehouse
 --   stfAD   staff granted orders:assign_delivery, assigned to the warehouse
 --   stfNoWh staff granted both, assigned to no warehouse (no write access)
 --   stf     staff, no grant, assigned (also the staff delivery driver)
@@ -17,10 +18,14 @@
 --   outZ    a manager of another organization
 --
 -- R.  Exactly one edit per body: md5(prosrc) is 0390's, and putting the role
---     term back gives production's pre-0390 body exactly (R1-R10).
+--     term back gives production's pre-0390 body exactly (R1-R10); the same
+--     on the whole definition (pg_get_functiondef), so the header did not
+--     change either (R11).
 -- P.  Posture of the ten unchanged (DEFINER, SET clauses, owner, EXECUTE),
---     and the three function comments that described the old rule now say
---     what 0390 enforces.
+--     the three function comments that described the old rule now say what
+--     0390 enforces, and the header attributes spelled out (P3: volatility,
+--     strictness, cost, rows, parallel, leakproof, arguments with defaults,
+--     result).
 -- C.  Each approval-class function, per persona (every call undone): the
 --     revoked manager and staff without the grant are refused, the granted
 --     staff member, the manager and the owner are answered. The two tests
@@ -30,14 +35,18 @@
 --     revoked manager), an on-behalf insert and a line on another member's
 --     order (42501, row level security) are refused for the revoked manager
 --     and answered for the granted staff member.
--- E.  assign_order_delivery: holders answered (the revoked-approve manager
---     who keeps orders:assign_delivery too: the update policy alone would now
---     refuse them, plan 6.6 trap 1); a revoked holder, staff without the
---     grant and a viewer refused (orders_assign_delivery); no warehouse write
---     (warehouse_write); a non-member, an invited and a null driver
---     (driver_not_member); the wrong status (not_staged_for_delivery); a
---     foreign or missing order (P0002); anon (no EXECUTE); the module off;
---     the last of two kept calls wins.
+-- E.  assign_order_delivery: orders:assign_delivery AND orders:approve (what
+--     assigning took before 0390 once the role term is gone: the app asked
+--     the first, the update policy a manager or the second). Holders of both
+--     answered (a manager, staff granted both, the owner); a revoked holder of
+--     assign_delivery, staff without it and a viewer refused
+--     (orders_assign_delivery); the manager whose orders:approve is revoked
+--     and staff holding only orders:assign_delivery refused (orders_approve);
+--     no warehouse write (warehouse_write); a non-member, an invited and a
+--     null driver (driver_not_member); the wrong status
+--     (not_staged_for_delivery); a foreign or missing order (P0002); anon (no
+--     EXECUTE); the module off; the last of two kept calls wins; and the
+--     revoked manager cannot make themself the driver by either road (E9).
 -- F.  mark_order_in_transit: an approver who is not the driver, the owner,
 --     the granted staff member and the granted staff driver are answered; a
 --     staff driver without orders:approve and the revoked manager (driver or
@@ -65,6 +74,10 @@
 --   M8  insert policy keeps has_org_role in the on-behalf branch           -> B2 (mgrNo), H2, H3
 --   M9  lines policy keeps has_org_role                                    -> B3 (mgrNo), H2, H3
 --   M10 assign_order_delivery EXECUTE left to service_role                -> G1
+--   M11-M15 (the row lock, and the role term kept in cancel, hold, readiness
+--       and revise) are in sec-orders/mutate-0390.py with their targets.
+--   M16 assign_order_delivery without the orders:approve gate              -> E2 (mgrNo, stfAD), E9
+--   M17 a header change in one body (order_readiness_facts VOLATILE)       -> R11, P3
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt (always undone) or pg_temp.call_as (kept), which switch role
@@ -74,7 +87,7 @@
 
 begin;
 
-select plan(51);
+select plan(54);
 
 \set orgA    '\'03900000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03900000-0000-0000-0000-00000000000b\''
@@ -162,6 +175,7 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   (:orgA, :mgrNo,   'orders:approve',         false),
   (:orgA, :mgrNoAD, 'orders:assign_delivery', false),
   (:orgA, :stfAp,   'orders:approve',         true),
+  (:orgA, :stfAp,   'orders:assign_delivery', true),
   (:orgA, :stfAD,   'orders:assign_delivery', true),
   (:orgA, :stfNoWh, 'orders:approve',         true),
   (:orgA, :stfNoWh, 'orders:assign_delivery', true);
@@ -360,6 +374,58 @@ select is(
      from pg_proc p where p.oid = to_regprocedure('public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text)')),
   'dd11c6a10d4ec6fe3543e86680130347|c2ce20a076301c95b2b9ef968db1b206',
   'R10: revise_order_needed_by has 0390''s body (md5 dd11c6a1), and putting the role term back gives production''s pre-0390 body exactly (c2ce20a0): the gate is the only change');
+select is(
+  (select string_agg(d.fn || '=' || d.m, E'\n' order by d.fn) from (
+  select 'approve_order_request' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.approve_order_request(uuid)')
+  union all
+  select 'approve_partial' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.approve_partial(uuid)')
+  union all
+  select 'assign_picking' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.assign_picking(uuid, uuid)')
+  union all
+  select 'cancel_order_request' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n                  or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')
+  union all
+  select 'close_partial' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.close_partial(uuid)')
+  union all
+  select 'hold_order_stock' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_org, ''orders:approve'')',
+                                  E'public.has_org_role(v_org, ''manager'')\n          or public.has_permission(v_org, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.hold_order_stock(uuid)')
+  union all
+  select 'order_readiness_facts' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_org, ''orders:approve'')',
+                                  E'public.has_org_role(v_org, ''manager'')\n                 or public.has_permission(v_org, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.order_readiness_facts(uuid)')
+  union all
+  select 'reopen_picking' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')
+  union all
+  select 'resume_fulfillment' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_req.organization_id, ''orders:approve'')',
+                                  E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.resume_fulfillment(uuid)')
+  union all
+  select 'revise_order_needed_by' as fn, md5(replace(pg_get_functiondef(p.oid), 'public.has_permission(v_org, ''orders:approve'')',
+                                  E'public.has_org_role(v_org, ''manager'')\n          or public.has_permission(v_org, ''orders:approve'')')) as m
+    from pg_proc p where p.oid = to_regprocedure('public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text)')) d),
+  E'approve_order_request=a133a783f3d4c2257e9979cb5ec90683\n'
+  'approve_partial=76cf3cf8d6f10908f3e63e66cffbf8fc\n'
+  'assign_picking=87c2d7c6289af3e12179ddc8c13ce4c1\n'
+  'cancel_order_request=60198cff2d40c936d4d1cd11e050de14\n'
+  'close_partial=eca9e0f511b63c157f278adf05f34955\n'
+  'hold_order_stock=8f40b4baabd79973458d1759be5da4dd\n'
+  'order_readiness_facts=faea50d0129c265a99b2660b42998abc\n'
+  'reopen_picking=53b3b2e29c611896d4a99987c0983c18\n'
+  'resume_fulfillment=6cd0f43bc073c47555bbc12268c20415\n'
+  'revise_order_needed_by=63ebe4a959306bc59edf61f39f68739b',
+  'R11: for each of the ten, putting the role term back into the whole definition (pg_get_functiondef) gives production''s pre-0390 definition exactly: arguments and defaults, result, volatility, strictness, cost, parallel, leakproof, SECURITY DEFINER and SET clauses are unchanged, not only the body');
 
 -- ══ P. The ten keep their posture; three comments say what 0390 enforces ══
 select is(
@@ -392,6 +458,21 @@ select is(
     where n.nspname = 'public' and p.proname in ('approve_order_request', 'hold_order_stock', 'revise_order_needed_by')),
   'approve_order_request=true/false, hold_order_stock=true/false, revise_order_needed_by=true/false',
   'P2: the three function comments that stated "manager or orders:approve" now state 0390''s rule');
+select is(
+  (select string_agg(p.proname || '|' || p.provolatile::text || '|' || p.proisstrict::text || '|' || p.procost::text || '|' || p.prorows::text || '|' || p.proparallel::text || '|' || p.proleakproof::text || '|' || pg_get_function_arguments(p.oid) || '|' || pg_get_function_result(p.oid), E'\n' order by p.proname)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname in ('approve_order_request', 'approve_partial', 'assign_picking', 'cancel_order_request', 'close_partial', 'hold_order_stock', 'order_readiness_facts', 'reopen_picking', 'resume_fulfillment', 'revise_order_needed_by')),
+  E'approve_order_request|v|false|100|0|u|false|p_id uuid|order_requests\n'
+  'approve_partial|v|false|100|0|u|false|p_id uuid|order_requests\n'
+  'assign_picking|v|false|100|0|u|false|p_order_id uuid, p_user_id uuid|order_requests\n'
+  'cancel_order_request|v|false|100|0|u|false|p_id uuid, p_reason text DEFAULT NULL::text|order_requests\n'
+  'close_partial|v|false|100|0|u|false|p_id uuid|order_requests\n'
+  'hold_order_stock|v|false|100|0|u|false|p_order_id uuid|jsonb\n'
+  'order_readiness_facts|s|false|100|0|u|false|p_order_id uuid|jsonb\n'
+  'reopen_picking|v|false|100|0|u|false|p_id uuid, p_reason text|order_requests\n'
+  'resume_fulfillment|v|false|100|0|u|false|p_id uuid|order_requests\n'
+  'revise_order_needed_by|v|false|100|0|u|false|p_id uuid, p_needed_by timestamp with time zone, p_expected_needed_by timestamp with time zone, p_reason text, p_event_details text|jsonb',
+  'P3: the ten keep their volatility (order_readiness_facts STABLE, the rest VOLATILE), not STRICT, cost 100, rows 0, PARALLEL UNSAFE, not LEAKPROOF, and their arguments with defaults and result type (production, read 2026-10-03)');
 
 -- ══ The fixture is what the matrices assume ═══════════════════════════════
 select is(
@@ -472,17 +553,18 @@ select is(
 
 -- ══ E. assign_order_delivery ══════════════════════════════════════════════
 select is(
-  pg_temp.each(array['mgr', 'mgrNo', 'stfAD', 'own'], format('select public.assign_order_delivery(%L, %L)', :oStg, :stf),
+  pg_temp.each(array['mgr', 'stfAp', 'own'], format('select public.assign_order_delivery(%L, %L)', :oStg, :stf),
                format($q$select (assigned_delivery_user_id = %L)::text || '/' || (assigned_delivery_by = current_setting('request.jwt.claim.sub')::uuid)::text
                                || '/' || (assigned_delivery_at is not null)::text
                           from public.order_requests where id = %L$q$, :stf, :oStg)),
-  'mgr=ok:1:true/true/true, mgrNo=ok:1:true/true/true, stfAD=ok:1:true/true/true, own=ok:1:true/true/true',
-  'E1: holders of orders:assign_delivery assign the driver and are recorded as the assigner: a manager, the manager whose orders:approve is revoked (the update policy alone would now refuse them), staff granted it, the owner');
+  'mgr=ok:1:true/true/true, stfAp=ok:1:true/true/true, own=ok:1:true/true/true',
+  'E1: holders of orders:assign_delivery and orders:approve assign the driver and are recorded as the assigner: a manager, staff granted both, the owner');
 select is(
-  pg_temp.each(array['mgrNoAD', 'stf', 'vwr', 'stfNoWh'], format('select public.assign_order_delivery(%L, %L)', :oStg, :stf)),
+  pg_temp.each(array['mgrNoAD', 'stf', 'vwr', 'mgrNo', 'stfAD', 'stfNoWh'], format('select public.assign_order_delivery(%L, %L)', :oStg, :stf)),
   'mgrNoAD=42501:orders_assign_delivery:forbidden, stf=42501:orders_assign_delivery:forbidden, '
-  'vwr=42501:orders_assign_delivery:forbidden, stfNoWh=42501:warehouse_write:forbidden',
-  'E2: refused: the manager whose orders:assign_delivery is revoked, staff without it and a viewer (hint orders_assign_delivery); staff granted it with no write access to the warehouse (hint warehouse_write)');
+  'vwr=42501:orders_assign_delivery:forbidden, mgrNo=42501:orders_approve:forbidden, '
+  'stfAD=42501:orders_approve:forbidden, stfNoWh=42501:warehouse_write:forbidden',
+  'E2: refused: the manager whose orders:assign_delivery is revoked, staff without it and a viewer (hint orders_assign_delivery); the manager whose orders:approve is revoked and staff holding only orders:assign_delivery (hint orders_approve: the update policy refused both before 0390); staff granted both with no write access to the warehouse (hint warehouse_write)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select public.assign_order_delivery(%L, %L)', :oStg, :outZ)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('select public.assign_order_delivery(%L, %L)', :oStg, :pend)) || ' / '
@@ -513,6 +595,13 @@ select is(
                      format('select assigned_delivery_user_id::text from public.order_requests where id = %L', :oStgA)),
   :stf || ' / ' || :stfAp || '|' || :stfAp,
   'E8: a reassignment replaces the driver: the last call wins (today''s behaviour), and the function returns the row');
+select is(
+  pg_temp.attempt('authenticated', :mgrNo, format('select public.assign_order_delivery(%L, %L)', :oStg, :mgrNo)) || ' / '
+  || pg_temp.attempt('authenticated', :mgrNo,
+       format('update public.order_requests set assigned_delivery_user_id = %L, assigned_delivery_by = %L, assigned_delivery_at = now() where id = %L',
+              :mgrNo, :mgrNo, :oStg)),
+  '42501:orders_approve:forbidden / ok:0',
+  'E9: the manager whose orders:approve is revoked cannot make themself the driver (and then hand the order over as the driver): the function refuses (orders_approve) and a raw update matches no row (the update policy)');
 
 -- ══ F. mark_order_in_transit ══════════════════════════════════════════════
 select is(
@@ -587,9 +676,10 @@ select is(
   (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by n.nspname, p.proname), '')
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname in ('public', 'ledger', 'private')
-      and p.prosrc ~ $re$has_org_role\([^)]*'manager'\)\s+or\s+(public\.)?has_permission\([^)]*'orders:approve'\)$re$),
+      and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ~ $re$has_org_role\([^)]*'manager'\)$re$
+      and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ~ $re$has_permission\([^)]*'orders:approve'\)$re$),
   '',
-  'H1: no function in public, ledger or private keeps the "manager by role, or orders:approve" gate (a new one fails here)');
+  'H1: no function in public, ledger or private names both has_org_role(..., ''manager'') and has_permission(..., ''orders:approve'') in its code (comments left out), in any order or shape: the "manager by role, or orders:approve" gate is gone and a new one fails here (before 0390 exactly the ten matched)');
 select is(
   (select coalesce(string_agg(tablename || '.' || policyname, ',' order by tablename, policyname), '')
      from pg_policies

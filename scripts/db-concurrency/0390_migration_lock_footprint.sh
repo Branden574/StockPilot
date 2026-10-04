@@ -9,7 +9,9 @@
 # by itself (partial_pick_line locks a line, then its order; cancel and the
 # signature lock the order, then its lines), so the file takes every lock in
 # one NOWAIT prelude (`do $lock$ ... end $lock$;`) and never waits holding
-# one. This proves:
+# one. A busy table fails one attempt; the attempt's subtransaction rolls back
+# (releasing what it took) and the prelude retries after a pause, up to 40
+# times, holding no table lock in between. This proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
 #       catalogs (the functions, grants and comments lock nothing).
@@ -21,12 +23,18 @@
 #       (so the file can never wait while holding one).
 #   2.  The hold, from the prelude to the end of the file, is under 100 ms.
 #   3.  A reader with an open transaction on order_requests, on
-#       order_request_lines (a row lock) or on auth.users makes the file fail
-#       55P03 at once (NOWAIT, well under 500 ms), writing nothing.
+#       order_request_lines (a row lock) or on auth.users, held longer than
+#       the retries last: the file retries, holds NO table lock whenever it is
+#       paused between attempts (sampled from pg_locks), and fails 55P03 after
+#       its bounded retries (40 attempts), writing nothing.
+#   3b. The same reader held only 0.6 s: the file retries past it and runs to
+#       the end (the retry turns a busy instant into a clean apply).
 #   4.  The cancel shape (order row locked, then its lines) and 5. the
 #       partial-pick shape (a line locked, then its order), each with the
-#       first lock held when the file starts: the file fails 55P03 at once and
-#       the order write completes with no error (no 40P01).
+#       first lock held when the file starts: the order write completes with
+#       no error (no 40P01), and the file, which never waits holding a lock,
+#       either runs to the end once the write commits or fails 55P03; never
+#       40P01.
 #   6.  While the file holds its locks (an artificial 1 s), a new order reader
 #       and a new auth.users reader wait only for the hold, then read.
 #   7.  CONTROL, the hazard the prelude removes: the same file with the prelude
@@ -181,29 +189,66 @@ else
   fi
 fi
 
-# ── 3. An open transaction on a table the prelude needs: 55P03 at once ────
-run_behind() { # run_behind <label> <holder sql>
-  local label="$1" holder="$2" app="0390-lock-holder-$1"
-  printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(2);\ncommit;\n" "$app" "$holder" \
+# ── 3. An open transaction on a table the prelude needs ─────────────────
+# The file's session is named so its locks can be sampled while it pauses
+# between attempts (wait_event PgSleep inside the prelude).
+LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep')::text || '|'
+       || count(l.relation) filter (where a.wait_event = 'PgSleep')::text
+  from pg_stat_activity a
+  left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
+   and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                       where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
+ where a.application_name like '0390-lock-file-%'"
+run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0390-lock-holder-$1"
+  printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "begin;"; cat "$MIG"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err"
+  { echo "set application_name = '0390-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+    | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
+  local mp=$!
+  # Sample the file's locks while it runs: whenever it is paused between
+  # attempts it must hold no table lock outside the catalogs.
+  local samples=0 sleeping=0 held=0 r
+  while kill -0 "$mp" 2> /dev/null; do
+    r="$(q "$LOCKS_OF_SLEEPING_FILE")"
+    samples=$((samples + 1))
+    sleeping=$((sleeping + ${r%%|*}))
+    held=$((held + ${r##*|}))
+    sleep 0.05
+  done
+  wait "$mp"
   rc=$?
   t1="$(now_ms)"
-  if [ $rc -ne 0 ] && grep -q '55P03' "$TMP/3-$label.m.err" && [ $((t1 - t0)) -lt 500 ]; then
-    ok "3 $label: the file failed 55P03 after $((t1 - t0)) ms (NOWAIT) and wrote nothing"
+  if [ "$held" -ne 0 ]; then
+    bad "3 $label: while paused between attempts the file held $held table lock(s)"
+  elif [ "$expect" = "fail" ] && [ "$sleeping" -lt 1 ]; then
+    bad "3 $label: never saw the file pause between attempts ($samples samples)"
+  fi
+  if [ "$expect" = "fail" ]; then
+    if [ $rc -ne 0 ] && grep -q '55P03' "$TMP/3-$label.m.err" && ! grep -qE '40P01|40001' "$TMP/3-$label.m.err" \
+       && [ $((t1 - t0)) -ge 1500 ] && [ $((t1 - t0)) -lt 10000 ]; then
+      ok "3 $label: the file retried for $((t1 - t0)) ms holding no table lock while paused ($sleeping paused samples, 0 locks), then failed 55P03 and wrote nothing"
+    else
+      bad "3 $label: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/3-$label.m.err" | cut -c1-300)"
+    fi
   else
-    bad "3 $label: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/3-$label.m.err" | cut -c1-300)"
+    if [ $rc -eq 0 ] && ! grep -qE '55P03|40P01|40001' "$TMP/3-$label.m.err"; then
+      ok "3 $label: the holder let go after ${secs} s and the file retried past it, ran to the end after $((t1 - t0)) ms ($sleeping paused samples, 0 locks while paused; rolled back)"
+    else
+      bad "3 $label: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/3-$label.m.err" | cut -c1-300)"
+    fi
   fi
   # The next case must meet its own holder only.
   wait "$hp"
 }
-run_behind order-reader "select count(*) from public.order_requests;"
-run_behind line-lock "select 1 from public.order_request_lines where id = '$LINE' for update;"
-run_behind auth-reader "select count(*) from auth.users;"
+run_behind order-reader "select count(*) from public.order_requests;" 9 fail
+run_behind line-lock "select 1 from public.order_request_lines where id = '$LINE' for update;" 9 fail
+run_behind auth-reader "select count(*) from auth.users;" 9 fail
+run_behind 3b-short-order-reader "select count(*) from public.order_requests;" 0.6 apply
 
 # ── 4 and 5. The two deadlock shapes, each already holding its first lock ─
 shape() { # shape <label> <first lock sql> <second step sql>
@@ -218,8 +263,12 @@ shape() { # shape <label> <first lock sql> <second step sql>
   rc=$?
   t1="$(now_ms)"
   wait "$sp"
-  if [ $rc -ne 0 ] && grep -q '55P03' "$TMP/$label.m.err" && [ $((t1 - t0)) -lt 500 ]; then
-    ok "$label: the file failed 55P03 after $((t1 - t0)) ms"
+  if grep -qE '40P01|40001|deadlock' "$TMP/$label.m.err"; then
+    bad "$label: the file: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/$label.m.err" | cut -c1-300)"
+  elif [ $rc -eq 0 ]; then
+    ok "$label: the file retried until the order write committed, then ran to the end after $((t1 - t0)) ms (rolled back), no 40P01"
+  elif grep -q '55P03' "$TMP/$label.m.err"; then
+    ok "$label: the file failed 55P03 after $((t1 - t0)) ms, no 40P01"
   else
     bad "$label: the file: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/$label.m.err" | cut -c1-300)"
   fi
