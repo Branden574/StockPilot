@@ -138,7 +138,10 @@ export async function GET(
   //      the submit flow hands out link-token track URLs, so a link token
   //      must keep authorizing the read exactly like the legacy org token.
   const tokenHash = sha256Hex(token);
-  let authorized = trackToken !== null && token === trackToken;
+  // Whether the caller holds the request's OWN credential (not a catalog or
+  // link token many people share): only then is the return link handed out.
+  const byOwnTrackToken = trackToken !== null && token === trackToken;
+  let authorized = byOwnTrackToken;
   if (!authorized) {
     const { data: orgMatch } = await admin
       .from('organizations')
@@ -235,12 +238,16 @@ export async function GET(
   // also treats as returnable — with at least one fulfilled unit, a
   // return_token was minted (0156 — happens on completion when the returns
   // module is on), AND the org still has the module enabled (the portal 404s
-  // without it — never render a dead link). Safe to expose here: the caller
-  // already proved the token+id+email triad, i.e. this is the requester's own
-  // order, and the return_token is exactly the credential the
-  // /returns/request/[token] portal hands that requester.
+  // without it — never render a dead link). Only for a read authorized by the
+  // request's OWN track token (what the status emails embed): the return
+  // token files a return as the requester, while a catalog or link token is
+  // shared by everyone the link reached and the order id and requester email
+  // are known to every member. A read by a catalog or link token still shows
+  // the order, with no return link; the requester also gets the link by email
+  // (the return prompt). Review finding 4 (0389 had kept 0330's rule).
   let returnPath: string | null = null;
   if (
+    byOwnTrackToken &&
     (h.status === 'completed' || h.status === 'delivered') &&
     returnToken &&
     lines.some((l) => l.quantityFulfilled > 0)
