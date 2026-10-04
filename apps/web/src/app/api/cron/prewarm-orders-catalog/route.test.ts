@@ -319,4 +319,3 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     );
   });
 });
-
