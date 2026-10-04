@@ -157,7 +157,7 @@ export default async function NewOrderPage({
       kitsPromise={kitsPromise}
       kitsEnabled={kitsEnabled}
       chartersForWarehouse={chartersForWarehouse}
-      viewerRole={ctx.role}
+      canActOnBehalf={can(ctx, 'orders:approve')}
       viewerName={ctx.fullName}
       viewerEmail={ctx.email}
       orgTimezone={orgTimezone}

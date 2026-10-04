@@ -63,8 +63,9 @@
 --         SECURITY INVOKER function updates order_requests (UPDATE or
 --         MERGE); every SECURITY DEFINER updater is pinned by
 --         schema-qualified name and owner (15, all public, all owned by
---         postgres; 16 since 0389 added generate_order_packing_slips), and
---         so is every SECURITY DEFINER function that inserts,
+--         postgres; 16 since 0389 added generate_order_packing_slips, 18
+--         since 0390 added assign_order_delivery and mark_order_in_transit),
+--         and so is every SECURITY DEFINER function that inserts,
 --         merges or deletes order rows (AL9d: today only the expired
 --         confirmation cleanup), whether or not an API role holds EXECUTE: a
 --         trigger function fires without EXECUTE, and a DEFINER body runs as
@@ -75,7 +76,7 @@
 --    AL10 posture: the guard (body md5, INVOKER, search_path, owner, no
 --         EXECUTE for PUBLIC, anon or authenticated), its trigger, the order
 --         of the BEFORE UPDATE triggers, the trigger census, the comments, and
---         the approval bodies' md5 pins unchanged;
+--         the approval bodies' md5 pins (re-pinned by 0390);
 --    AL11 an illegal edge (completed -> approved) still reports
 --         invalid_status_transition (the transition trigger sorts first).
 --
@@ -716,19 +717,24 @@ select is(
   (select coalesce(string_agg(w.fn || ':' || w.owner, ',' order by w.fn collate "C"), '')
      from writer_census w
     where w.prosecdef),
-  'public.approve_order_request:postgres,public.approve_partial:postgres,public.assign_picking:postgres,'
-  'public.cancel_order_request:postgres,public.claim_picking:postgres,public.close_partial:postgres,'
+  -- Re-pinned by 0390 (was 0389's 16, without assign_order_delivery and
+  -- mark_order_in_transit): slice D adds both on purpose, reviewed for their
+  -- own gates (orders:assign_delivery / orders:approve, warehouse write,
+  -- status under the row lock; 0390 suite E and F). Neither assigns an
+  -- approval column (AL9a) and both are DEFINER (AL9b).
+  'public.approve_order_request:postgres,public.approve_partial:postgres,public.assign_order_delivery:postgres,'
+  'public.assign_picking:postgres,public.cancel_order_request:postgres,public.claim_picking:postgres,public.close_partial:postgres,'
   'public.complete_picking:postgres,public.confirm_order_signature:postgres,public.confirm_physical_signature:postgres,'
   'public.confirm_public_order_request:postgres,public.generate_order_packing_slips:postgres,'
-  'public.partial_pick_line:postgres,public.release_picking:postgres,'
+  'public.mark_order_in_transit:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
   'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres',
-  -- Re-pinned by 0389 (was the 15 above without generate_order_packing_slips):
+  -- Re-pinned by 0389 (was the 15 without generate_order_packing_slips):
   -- the packing-slip mint moved off the user client into a DEFINER body that
   -- gates in itself (signed in, member, orders module, orders:approve,
   -- warehouse write) and writes only picking_complete/packing_slip_generated
   -- -> packing_slip_generated, an edge the guard allows API roles anyway;
   -- 0389_order_secrets_expand.test.sql G1-G8 prove its gates.
-  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 16, owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
+  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 18 (0389 added the packing-slip mint; 0390 added the delivery assignment and the in-transit mark), owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
 select is(
   (select coalesce(string_agg(f.fn || ':' || f.owner, ',' order by f.fn collate "C"), '')
      from fn_scope f
@@ -780,10 +786,13 @@ select is(
   (select string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef::text, E'\n' order by p.oid::regprocedure::text collate "C")
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname in ('approve_order_request', 'approve_partial', 'tg_order_requests_insert_guard')),
-  E'approve_order_request(uuid)|96e5f7c8b4cdd6b7e4ffcc994c9ed642|true\n'
-  'approve_partial(uuid)|64bb847ffc8681adeed4b881c1b6a4ab|true\n'
+  -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642 and
+  -- 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from
+  -- each gate and nothing else (0390 R1, R2); both still SECURITY DEFINER.
+  E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true\n'
+  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false',
-  'AL10f: approve_order_request, approve_partial and the insert guard are unchanged (0387 edits no body; the 0377/0378/0383/0385 pins hold)');
+  'AL10f: approve_order_request and approve_partial are 0390''s bodies and the insert guard is unchanged (0387 edits no body; 0390 removes one gate term from each approval body)');
 
 select is(
   pg_temp.attempt('authenticated', :mgr, format($q$update public.order_requests set status = 'approved' where id = %L$q$, :oL11)),

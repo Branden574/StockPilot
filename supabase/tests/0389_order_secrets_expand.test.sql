@@ -573,11 +573,15 @@ select is(
   E'_validate_order_request_status_transition()|dee8cd4782ec83abdb31a2b48fcd4ef2\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13\n'
   'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67\n'
-  'reopen_picking(uuid,text)|a7fabd5fb3d07467135006b56581e46c\n'
-  'resume_fulfillment(uuid)|e0f2ae5d7d3564cdad3b36ba4cf5aa8c\n'
+  -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c and
+  -- e0f2ae5d7d3564cdad3b36ba4cf5aa8c): slice D removes the manager-by-role
+  -- term from each gate and nothing else (0390 R8, R9, R11); the secret
+  -- clears this suite cares about are untouched.
+  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
+  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892\n'
   'tg_order_requests_workflow_guard()|59481b7651dca818a2266a39868db4f0',
-  'P3: the frozen bodies keep their md5 (confirm_order_signature 8afdbb68, the clears, the transition trigger, the insert guard, the 0387 guard)');
+  'P3: the frozen bodies keep their md5 (confirm_order_signature 8afdbb68, the clears as 0390 left them, the transition trigger, the insert guard, the 0387 guard)');
 select is(
   (select string_agg(column_name, ',' order by column_name)
      from information_schema.column_privileges

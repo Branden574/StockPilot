@@ -1167,11 +1167,19 @@ select is(
       ('ledger', 'apply_level_delta_for'), ('ledger', 'adjust_stock'), ('ledger', 'transfer_stock'),
       ('public', 'tg_order_requests_insert_guard'), ('public', 'tg_order_request_lines_guard'),
       ('public', 'caller_can_read_item'), ('public', 'location_holdings_visible'))),
-  E'approve_order_request(uuid)|96e5f7c8b4cdd6b7e4ffcc994c9ed642|true|{search_path=public}|postgres\n'
-  'approve_partial(uuid)|64bb847ffc8681adeed4b881c1b6a4ab|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true|{search_path=public}|postgres\n'
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
-  'cancel_order_request(uuid,text)|7a2302dec888970054738b0dad420fd3|true|{"search_path=public, extensions"}|postgres\n'
-  'close_partial(uuid)|2d873a049a5584df7d3a168fb2b45e34|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'cancel_order_request(uuid,text)|47cabcd1fe4f52fb7b2b6b6b64b68da1|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
   'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67|true|{search_path=public}|postgres\n'
@@ -1184,8 +1192,12 @@ select is(
   'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
   'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|efc01e2e0ea98531c92c7db27f17695c|false|{search_path=public}|postgres\n'
-  'reopen_picking(uuid,text)|a7fabd5fb3d07467135006b56581e46c|true|{"search_path=public, extensions"}|postgres\n'
-  'resume_fulfillment(uuid)|e0f2ae5d7d3564cdad3b36ba4cf5aa8c|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres',

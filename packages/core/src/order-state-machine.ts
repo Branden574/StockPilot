@@ -219,6 +219,20 @@ export interface AvailableActionsInput {
    * to pick. Optional; defaults to false (resume hidden until restocked).
    */
   hasFulfillableStock?: boolean;
+  /**
+   * The viewer's EFFECTIVE orders:approve (can(ctx, 'orders:approve')), since
+   * security slice D (migration 0390): the database decides every
+   * approval-class action by that permission alone, so a staff member granted
+   * it may cancel, reassign the picker, reopen picking, assign the driver,
+   * mark in transit, resume and close, and a manager whose orders:approve was
+   * revoked may not. When given, those actions follow it; marking in transit
+   * then needs it outright (owner decision O3, default: an assigned driver
+   * without it is refused). The picker override (pick directly, complete or
+   * release someone else's claim) stays a manager-by-role rule, as
+   * complete_picking and release_picking still decide it in the database.
+   * Optional: omitted, every rule falls back to manager rank, as before.
+   */
+  canApproveOrders?: boolean;
 }
 
 const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
@@ -230,15 +244,20 @@ const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
  */
 export function availableOrderActions(input: AvailableActionsInput): OrderAction[] {
   const isManagerOrAbove = MANAGER_OR_ABOVE.includes(input.viewerRole);
+  // Approval-class actions: the effective permission when the caller passes
+  // it (0390), manager rank otherwise.
+  const approver = input.canApproveOrders ?? isManagerOrAbove;
   const isAssignedDriver =
     input.assignedDeliveryUserId !== null &&
     input.assignedDeliveryUserId === input.viewerUserId;
+  const mayMarkInTransit =
+    input.canApproveOrders === undefined ? isAssignedDriver || isManagerOrAbove : input.canApproveOrders;
 
   const actions: OrderAction[] = [];
 
   switch (input.status) {
     case 'pending_confirmation':
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'pending_approval':
       actions.push('approve', 'deny');
@@ -246,11 +265,11 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       // backorder the rest). Full "approve" stays and still enforces the
       // must-have-stock rule server-side.
       if (input.isShortStock) actions.push('approve_partial');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'approved':
       actions.push('generate_pick_slip');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'pick_slip_generated':
     case 'picking_in_progress': {
@@ -267,48 +286,57 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       // defaults to true so non-picking callers are unaffected.
       if (input.viewerCanPick === false) break;
       if (isManagerOrAbove) {
-        // Full control: pick directly (override), assign/reassign, complete.
-        actions.push('open_digital_pick', 'mark_picking_complete', 'reassign_picker', 'cancel');
+        // Full control: pick directly (override), complete (manager rank, as
+        // complete_picking decides it); assign/reassign and cancel (an
+        // approver, as assign_picking and cancel_order_request decide them).
+        actions.push('open_digital_pick', 'mark_picking_complete');
+        if (approver) actions.push('reassign_picker', 'cancel');
         if (!isUnassigned) actions.push('release_picking');
-      } else if (isAssignedPicker) {
-        // The claimant: pick + complete + hand back their own claim.
-        actions.push('open_digital_pick', 'mark_picking_complete', 'release_picking');
-      } else if (isUnassigned) {
-        // Unclaimed: a staffer can claim it (claim-before-pick).
-        actions.push('claim_picking');
+      } else {
+        if (isAssignedPicker) {
+          // The claimant: pick + complete + hand back their own claim.
+          actions.push('open_digital_pick', 'mark_picking_complete', 'release_picking');
+        } else if (isUnassigned) {
+          // Unclaimed: a staffer can claim it (claim-before-pick).
+          actions.push('claim_picking');
+        }
+        // else: assigned to someone else + non-admin → view/print only.
+        // A staff member granted orders:approve may still assign the picker
+        // and cancel (0390).
+        if (approver) actions.push('reassign_picker', 'cancel');
       }
-      // else: assigned to someone else + non-admin → view/print only.
       break;
     }
     case 'picking_complete':
       actions.push('generate_packing_slips');
-      if (isManagerOrAbove) actions.push('reopen_picking', 'cancel');
+      if (approver) actions.push('reopen_picking', 'cancel');
       break;
     case 'packing_slip_generated':
       actions.push('print_customer_slip', 'print_warehouse_slip');
       if (input.fulfillmentType === 'pickup') actions.push('mark_staged_pickup');
       else actions.push('mark_staged_delivery');
-      if (isManagerOrAbove) actions.push('reopen_picking', 'cancel');
+      if (approver) actions.push('reopen_picking', 'cancel');
       break;
     case 'staged_for_pickup':
       actions.push('collect_signature', 'print_warehouse_slip');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'staged_for_delivery':
-      if (isManagerOrAbove) actions.push('assign_delivery');
-      if (input.hasAssignedDelivery && (isAssignedDriver || isManagerOrAbove)) {
+      if (approver) actions.push('assign_delivery');
+      if (input.hasAssignedDelivery && mayMarkInTransit) {
         actions.push('mark_in_transit');
       }
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'in_transit':
       actions.push('collect_signature');
-      if (isManagerOrAbove) actions.push('cancel');
+      if (approver) actions.push('cancel');
       break;
     case 'backordered':
-      // Rest state after a partial hand-over. Manager+ can resume (only when
-      // there's stock to pick), close it out keeping what shipped, or cancel.
-      if (isManagerOrAbove) {
+      // Rest state after a partial hand-over. An approver can resume (only
+      // when there's stock to pick), close it out keeping what shipped, or
+      // cancel.
+      if (approver) {
         if (input.hasFulfillableStock) actions.push('resume_fulfillment');
         actions.push('close_partial', 'cancel');
       }

@@ -124,9 +124,14 @@ select is(
       and p.proname in ('approve_order_request','approve_partial','close_partial',
                         'resume_fulfillment','reopen_picking','assign_picking',
                         'cancel_order_request')
-      and p.prosrc ~ 'has_org_role'),
-  7,
-  '0348/2: ... and all seven RETAIN the has_org_role term, so manager-by-role is unchanged');
+      and p.prosrc ~ $re$has_org_role\([^)]*'manager'\)\s+or\s+public\.has_permission$re$),
+  -- Changed on purpose by 0390 (was: count of the seven whose body names
+  -- has_org_role = 7, "all seven RETAIN the has_org_role term"). 0390 removed
+  -- the manager-by-role term from every gate, so has_permission alone decides;
+  -- six bodies still name has_org_role in their 0348 comment, so the check
+  -- now reads the gate itself.
+  0,
+  '0348/2: ... and since 0390 none of the seven keeps the has_org_role manager term in its gate: has_permission alone decides');
 
 -- ── 2. STAFF with no grant is still refused (the floor must not drop) ──────
 set local "request.jwt.claim.sub" to :u_stf;
@@ -192,7 +197,9 @@ select throws_ok(
 set local "request.jwt.claim.sub" to :u_mgr;
 select lives_ok(
   format($$select public.approve_order_request(%L)$$, :o_mgr),
-  '0348/16: a manager with NO grant of any kind still approves (the retained has_org_role term)');
+  -- Message changed by 0390 (was "the retained has_org_role term"): a manager
+  -- holds orders:approve by role default, which has_permission reads.
+  '0348/16: a manager with NO override of any kind still approves (orders:approve by role default)');
 select is((select status from public.order_requests where id = :o_mgr), 'approved',
   '0348/17: ... and that approval landed');
 

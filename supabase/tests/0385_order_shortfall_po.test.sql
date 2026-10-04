@@ -981,19 +981,31 @@ select is(
       ('public', 'po_status_for_line_write'), ('public', 'po_status_in_org'), ('public', 'po_line_items_not_orderable'),
       ('public', '_po_approval_threshold'), ('public', 'po_over_approval_threshold'), ('public', 'order_request_in_org'))),
   E'_po_approval_threshold(uuid)|1aa85f6413087b2e57d6b5581f7d291e|true|{search_path=public}|postgres\n'
-  'approve_order_request(uuid)|96e5f7c8b4cdd6b7e4ffcc994c9ed642|true|{search_path=public}|postgres\n'
-  'approve_partial(uuid)|64bb847ffc8681adeed4b881c1b6a4ab|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true|{search_path=public}|postgres\n'
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
-  'cancel_order_request(uuid,text)|7a2302dec888970054738b0dad420fd3|true|{"search_path=public, extensions"}|postgres\n'
-  'close_partial(uuid)|2d873a049a5584df7d3a168fb2b45e34|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'cancel_order_request(uuid,text)|47cabcd1fe4f52fb7b2b6b6b64b68da1|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
   'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67|true|{search_path=public}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
-  'hold_order_stock(uuid)|c38fe9b12af77fdaa2d372f4fd324a43|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
+  -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'hold_order_stock(uuid)|3b0691d604823164daaa7f248616f00f|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
   'location_holdings_visible(uuid)|fb5dc7aa7d0acd81e7752f0b163a9002|false|{search_path=public}|postgres\n'
   'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
-  'order_readiness_facts(uuid)|5ac332d439117e498096fc9b1098cf04|true|{"search_path=public, pg_temp"}|postgres\n'
+  -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
   'order_request_in_org(uuid,uuid)|4d88c3f9eef0c34cece9d2d5bdd46b5f|true|{search_path=public}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
   'po_line_items_not_orderable(uuid,uuid[])|dd3565f51edcc9b84e2b00b853ba8c2a|true|{"search_path=public, pg_temp"}|postgres\n'
@@ -1002,9 +1014,15 @@ select is(
   'po_status_in_org(uuid,uuid)|9087d7c2caffb59d4eb4e9eb51a9b400|true|{search_path=public}|postgres\n'
   'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|efc01e2e0ea98531c92c7db27f17695c|false|{search_path=public}|postgres\n'
   'purchase_order_visible(uuid)|0f26ab9fb9e7f74d966de79d4e354163|false|{search_path=public}|postgres\n'
-  'reopen_picking(uuid,text)|a7fabd5fb3d07467135006b56581e46c|true|{"search_path=public, extensions"}|postgres\n'
-  'resume_fulfillment(uuid)|e0f2ae5d7d3564cdad3b36ba4cf5aa8c|true|{search_path=public}|postgres\n'
-  'revise_order_needed_by(uuid,timestamp with time zone,timestamp with time zone,text,text)|c2ce20a076301c95b2b9ef968db1b206|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
+  -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was c2ce20a076301c95b2b9ef968db1b206): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'revise_order_needed_by(uuid,timestamp with time zone,timestamp with time zone,text,text)|dd11c6a10d4ec6fe3543e86680130347|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres\n'
@@ -1068,7 +1086,13 @@ select is(
   -- proven against still holds. Computed on the local stack after 0388.
   '0384 column grants (order_requests, schedule_events)|963d3a00efec2f702ff628845abd4056|217\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
-  'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8\n'
+  -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
+  -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
+  -- manager term; every other term and both schedule_events policies are
+  -- unchanged. Computed from production's policy text minus that term with
+  -- the local authenticated role's OID (16444, the OID that reproduces the
+  -- old pin from the same text); verify on the stack.
+  'order_requests + schedule_events policies|bff8a9854b1856ae3fefe1a3dcf702a8|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
   'purchase_orders + purchase_order_items + idempotency_keys policies|4d66c95449ef3c5127f8d19974023c70|6',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');

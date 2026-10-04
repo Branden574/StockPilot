@@ -21,6 +21,7 @@ import {
   ORDER_LINE_HIDDEN_ITEM_NAME,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
+  PERMISSION_META,
   PERMISSIONS,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
@@ -1837,6 +1838,152 @@ describe('count differences release 2 (confirm this count) is published', () => 
     expect(r.summary).toContain('Acknowledging still leaves it open.');
     expect(all).toContain('stock on record');
     expect(all).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate|undo/i);
+  });
+});
+
+/**
+ * Approval follows the permission (migration 0390, security slice D) is held
+ * as a DRAFT until 0390 is pushed and verified, the web deploy is live and the
+ * phone update that shows the order screen's actions by the permission is
+ * published. Pinned by id, never by index. The follow-up that publishes it
+ * sets 'published' and the real publishedAt, re-reads its words against what
+ * shipped, and flips the first pin here.
+ */
+describe('approval follows the permission is held as a draft', () => {
+  const ID = 'approval-follows-permission-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+  const LABEL = PERMISSION_META['orders:approve'].label;
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top, above every published release, and is dated after every release', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const others = RELEASES.filter((r) => r.id !== ID && r.status === 'published');
+    expect(buildReleaseList([published(), ...others], everyone, [], null).latestUnread?.id).toBe(ID);
+  });
+
+  it('tells each reader what changes for them once it is published', () => {
+    const r = published();
+    expect(r.audience).toEqual({ modules: ['orders'] });
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'approve-permission-granted',
+      'approve-permission-removed',
+      'delivery-driver-actions',
+    ]);
+    const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([r], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    // A staff member granted orders:approve: their entry and the drivers' one.
+    expect(entriesFor('staff', ['orders:request', 'orders:approve'])).toEqual([
+      'approve-permission-granted',
+      'delivery-driver-actions',
+    ]);
+    // A manager whose orders:approve was removed: theirs and the drivers'.
+    expect(entriesFor('manager', ['orders:request', 'orders:assign_delivery'])).toEqual([
+      'approve-permission-removed',
+      'delivery-driver-actions',
+    ]);
+    // A manager by role default, and the owner, read the managers' and the
+    // drivers' entries: the granted entry describes staff only.
+    expect(entriesFor('manager', ['orders:request', 'orders:approve', 'orders:assign_delivery'])).toEqual([
+      'approve-permission-removed',
+      'delivery-driver-actions',
+    ]);
+    expect(entriesFor('owner', [...PERMISSIONS])).toEqual(['approve-permission-removed', 'delivery-driver-actions']);
+    // A viewer granted orders:approve is NOT told the granted entry (slice D
+    // review, findings 1 and 10): the app refuses every write for a viewer,
+    // so neither app offers them approving or moving orders.
+    expect(entriesFor('viewer', ['orders:request', 'orders:approve'])).toEqual(['delivery-driver-actions']);
+    // Staff without the grant (a possible driver) read the drivers' entry only.
+    expect(entriesFor('staff', ['orders:request'])).toEqual(['delivery-driver-actions']);
+    // Nobody hears about it with Orders off.
+    expect(entriesFor('owner', [...PERMISSIONS], [])).toEqual([]);
+    // The one link goes to the orders list, which reads orders:approve.
+    const [granted, removed, driver] = r.entries;
+    expect(granted!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    expect(granted!.audience).toEqual({ roles: ['staff'], anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(removed!.link).toBeUndefined();
+    expect(removed!.audience).toEqual({ roles: ['owner', 'admin', 'manager'], modules: ['orders'] });
+    expect(driver!.link).toBeUndefined();
+    expect(driver!.audience).toBeUndefined();
+  });
+
+  it("names the permission as the settings show it, says what changes for the granted and the removed, and claims nothing else", () => {
+    const r = release();
+    const [granted, removed, driver] = r.entries;
+    const all = readerText(r).join(' ');
+    expect(LABEL).toBe('Approve / fulfill orders');
+    expect(r.summary).toContain(`"${LABEL}"`);
+    expect(granted!.whatChanged).toContain(`"${LABEL}"`);
+    expect(removed!.whatChanged).toContain(`"${LABEL}"`);
+    expect(driver!.whatChanged).toContain(`"${LABEL}"`);
+    // Old phones show only the title and the summary: both changes are in it.
+    expect(r.summary).toContain('A staff member who was given it sees Approve, Deny');
+    expect(r.summary).toContain(
+      "A manager who had it removed can no longer approve, deny, cancel other people's orders or move an order toward pickup or delivery",
+    );
+    // What still goes by role in the apps is named, never "everywhere" or
+    // "anywhere" (complete_picking / release_picking). The paper signature is
+    // not promised (slice D review, finding 9): confirm_physical_signature
+    // still admits a manager by role, but neither app offers a manager
+    // without the permission a hand-over step unless they are the driver.
+    expect(r.summary).toContain('finishing or releasing picking that someone else claimed still follows the manager role');
+    expect(removed!.whatChanged).toContain(
+      'Finishing or releasing picking that someone else claimed still follows the manager role for now.',
+    );
+    expect(removed!.whatChanged).toContain(
+      "Neither app offers them Collect signature or Physical signature unless they are the order's driver.",
+    );
+    expect(all).not.toMatch(/paper signature/i);
+    expect(all).not.toMatch(/everywhere|anywhere/i);
+    // The granted staff member: the phone's buttons, on-behalf, the picker and
+    // reopen on the web, their own cancel, and other people's orders.
+    expect(granted!.whatChanged).toContain('the order screen in the mobile app now shows Approve and Deny');
+    expect(granted!.whatChanged).toContain("order on someone else's behalf");
+    expect(granted!.whatChanged).toContain('assign who picks an order, reopen picking');
+    // Cancel: the web app for any open order; the mobile app offers Cancel
+    // only on a backordered order (slice D review, finding 8).
+    expect(granted!.howItAffectsYou).toContain('You can approve orders and move them along from either app.');
+    expect(granted!.howItAffectsYou).toContain(
+      "You can cancel other people's orders from the web app; the mobile app offers Cancel on a backordered order.",
+    );
+    expect(all).not.toContain("cancel other people's orders from either app");
+    expect(granted!.howItAffectsYou).toContain('Alerts about new orders waiting for approval still go to owners, admins and managers.');
+    // The removed manager keeps the requester's own-order cancel, and loses assigning.
+    expect(removed!.howItAffectsYou).toContain(
+      'A manager without it can still cancel an order they placed while it waits for approval.',
+    );
+    expect(removed!.whatChanged).toContain('assign a picker or a driver');
+    // Owner decision O3, default: the in-transit rule, in the service's words.
+    expect(driver!.whatChanged).toContain('Marking a delivery in transit needs the');
+    expect(driver!.whatChanged).toContain('no longer sees Mark in transit in either app');
+    // The phone part is an over-the-air update.
+    expect(granted!.whatToDo).toBe(
+      'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
+    expect(all).not.toMatch(/offers the new version|update the app|App Store/i);
+    expect(all).not.toMatch(/\bbooks?\b|%|guarantee|instantly|always|notif|email/i);
   });
 });
 

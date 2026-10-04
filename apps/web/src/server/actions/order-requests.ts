@@ -9,13 +9,14 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import {
+  can,
   err,
   formatWallClock,
   HOLD_FAILED_COPY,
-  isManagerOrAbove,
   NEEDED_BY_FAILED_COPY,
   NEEDED_BY_SUGGESTION_REASON,
   ok,
+  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
   parseWallClock,
   wallClockToInstant,
   type ActionResult,
@@ -119,13 +120,17 @@ export async function createOrderRequestAction(
     return err('validation_error', 'Delivery orders need a site.');
   }
   try {
-    // Gate `onBehalfOf` to manager+. The service itself doesn't know
-    // who's calling; building the ServiceContext here gives us the
-    // caller's role before we even touch the DB.
+    // Gate `onBehalfOf` to the effective orders:approve permission: the
+    // order_requests_insert policy's on-behalf branch, which since 0390 has no
+    // manager-by-role exception (a manager whose orders:approve was revoked is
+    // refused there, a staff member granted it is let through). The service
+    // itself doesn't know who's calling; building the ServiceContext here gives
+    // us the caller's permissions before we even touch the DB. The words are
+    // core's, shared with the phone's order flow.
     if (parsed.data.onBehalfOf) {
       const ctx = await withContext();
-      if (!isManagerOrAbove(ctx.role)) {
-        return err('forbidden', 'Only managers can create orders on behalf of others.');
+      if (!can(ctx, 'orders:approve')) {
+        return err('forbidden', ORDER_ON_BEHALF_NOT_PERMITTED_COPY);
       }
     }
     const svc = await OrderRequestsService.forCurrentUser();

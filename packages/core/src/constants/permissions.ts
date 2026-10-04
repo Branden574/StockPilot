@@ -366,8 +366,25 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   suppresses the matrix's "Grant rolling out" badge) and got "Only
   //   managers can approve requests". Migration 0348 gives all seven
   //   `has_org_role('manager') OR has_permission(org,'orders:approve')`, so the
-  //   claim this comment makes is now true for it. Before adding a permission
-  //   to this set, check the RPCs the feature calls, not just its table RLS.
+  //   claim this comment makes is now true for it. Migration 0390 removes the
+  //   has_org_role term from those seven, hold_order_stock,
+  //   revise_order_needed_by, order_readiness_facts and the three order
+  //   policies, and assign_order_delivery / mark_order_in_transit ask
+  //   orders:approve too, so a REVOKE is effective in the database for every
+  //   approval-class action: approve, deny, approve partial, cancel other
+  //   people's orders, hold stock, change needed-by, pick slip, packing slips,
+  //   stage, assign the picker or the driver, mark in transit, reopen, resume
+  //   and close. Still decided by manager ROLE in the database, so a manager
+  //   whose orders:approve is removed keeps them there: finishing or
+  //   releasing picking someone else claimed (complete_picking,
+  //   partial_pick_line, release_picking; both apps still offer it by role),
+  //   recording a paper signature (confirm_physical_signature: a manager or
+  //   the assigned driver; neither app offers it to such a manager unless
+  //   they are the driver, follow-up 4), order attachments and the shortfall
+  //   PO drafter. Neither app offers a viewer an approval-class action even
+  //   with the grant: the app refuses every write for a viewer
+  //   (assertWarehouseAccess). Before adding a permission to this set, check
+  //   the RPCs the feature calls, not just its table RLS.
   'purchase_orders:manage',
   'items:create',
   'items:update',

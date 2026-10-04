@@ -15,7 +15,6 @@ import {
   holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isDeletedRequester,
-  isManagerOrAbove,
   isNeededByWithinReach,
   lineOwedUnits,
   NEEDED_BY_BUSY_COPY,
@@ -520,6 +519,80 @@ function holdStockError(error: {
  *  its public message. */
 function holdFailureCause(e: unknown): unknown {
   return e instanceof ServiceError && e.internalDetail ? new Error(e.internalDetail) : e;
+}
+
+/** Who may mark a delivery in transit since 0390: anyone holding orders:approve
+ *  (owner decision O3, default). An assigned driver without it is refused, as
+ *  the database's update policy already refused them before 0390. */
+export const IN_TRANSIT_NOT_APPROVER_COPY =
+  'Only someone who can approve orders can mark a delivery in transit.';
+const DELIVERY_NO_WAREHOUSE_ACCESS_COPY = "You don't have write access to this order's warehouse.";
+const DELIVERY_BUSY_COPY = 'Someone else is changing this order right now. Try again.';
+
+/**
+ * assign_order_delivery's and mark_order_in_transit's refusals (0390) as
+ * ServiceErrors, in the words assignDelivery and markInTransit already used
+ * for the same cases. Matched on the functions' own messages (every `raise`
+ * in 0390) and, for their 42501s, the code and hint. lock_timeout (55P03, 5 s
+ * on the order row) and the role's statement_timeout (57014) are "busy, try
+ * again"; the functions never raise 40001/40P01. Anything else (a revoked
+ * grant, a network fault) is internal_error, whose public message is generic.
+ */
+function deliveryWriteError(
+  error: {
+    message?: string | null;
+    code?: string | null;
+    hint?: string | null;
+  },
+  action: 'assign' | 'in_transit',
+): ServiceError {
+  const msg = error.message ?? '';
+  if (msg === 'order_request_not_found') return new ServiceError('not_found', 'Order not found');
+  if (msg === 'module_disabled') {
+    return new ServiceError('module_disabled', 'Module not enabled for this organization: orders');
+  }
+  if (error.code === '42501' && msg === 'unauthenticated') {
+    return new ServiceError('unauthenticated', 'Sign in again to change this order.');
+  }
+  if (error.code === '42501' && msg === 'forbidden') {
+    if (error.hint === 'warehouse_write') {
+      return new ServiceError('forbidden', DELIVERY_NO_WAREHOUSE_ACCESS_COPY);
+    }
+    if (error.hint === 'orders_assign_delivery') {
+      return new ServiceError('forbidden', 'Missing permission: orders:assign_delivery');
+    }
+    if (error.hint === 'orders_approve') {
+      return new ServiceError(
+        'forbidden',
+        action === 'assign' ? 'Missing permission: orders:approve' : IN_TRANSIT_NOT_APPROVER_COPY,
+      );
+    }
+  }
+  if (msg === 'delivery_not_assignable') {
+    return new ServiceError(
+      'validation_error',
+      'Delivery can only be assigned to staged-for-delivery orders.',
+    );
+  }
+  if (msg === 'driver_not_member') {
+    return new ServiceError(
+      'validation_error',
+      'That user is not an active member of this organization.',
+    );
+  }
+  if (msg === 'not_a_delivery') {
+    return new ServiceError('validation_error', 'Only delivery orders can be marked in transit.');
+  }
+  if (msg === 'no_driver') {
+    return new ServiceError('validation_error', 'Assign a driver before marking in transit.');
+  }
+  if (msg === 'order_status_changed') {
+    return new ServiceError('conflict', 'Order status changed — refresh and try again.');
+  }
+  if (error.code === '55P03' || error.code === '57014') {
+    return new ServiceError('conflict', DELIVERY_BUSY_COPY);
+  }
+  return new ServiceError('internal_error', `${error.code ?? 'no code'}: ${msg || 'no message'}`);
 }
 
 /** assertWarehouseAccess's refusal (ForbiddenError, lib/auth/warehouse). Read
@@ -2589,12 +2662,16 @@ export class OrderRequestsService {
     // for forbidden callers before any round trip.
     assertPermission(this.ctx, 'orders:request');
     // M7: requesters can only self-cancel a request that is still
-    // pending approval. Once managers have approved (and stock has
-    // been reserved) or moved it into packing-slip/staged, a self-serve
-    // cancel could orphan downstream work — managers must take that
-    // path explicitly. Managers themselves are unaffected: the RPC's
-    // own role check still permits any non-terminal cancel.
-    if (this.ctx.role !== 'owner' && this.ctx.role !== 'admin' && this.ctx.role !== 'manager') {
+    // pending approval. Once it has been approved (and stock has been
+    // reserved) or moved into packing-slip/staged, a self-serve cancel could
+    // orphan downstream work — an approver must take that path explicitly.
+    // Approvers are unaffected: cancel_order_request lets anyone holding
+    // orders:approve cancel any open order. Since 0390 "approver" is the
+    // effective orders:approve permission on both sides (the database had no
+    // manager-by-role exception left to mirror), so a manager whose
+    // orders:approve was revoked gets the requester's rule, and a staff member
+    // granted it does not.
+    if (!can(this.ctx, 'orders:approve')) {
       const { data: row, error: rowErr } = await this.ctx.supabase
         .from('order_requests')
         .select('status, requester_user_id')
@@ -2616,7 +2693,7 @@ export class OrderRequestsService {
         if (status !== 'pending_approval') {
           throw new ServiceError(
             'validation_error',
-            'You can only cancel your own request while it is still pending approval. Ask a manager to cancel approved or in-progress requests.',
+            'You can only cancel your own request while it is still pending approval. Ask someone who approves orders to cancel approved or in-progress requests.',
           );
         }
       }
@@ -2719,8 +2796,9 @@ export class OrderRequestsService {
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
+      // 0390: the database asks orders:approve alone, as assertPermission did.
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only managers can approve requests');
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
       // 0365: an order with no lines would approve into an empty pick slip.
@@ -3239,8 +3317,9 @@ export class OrderRequestsService {
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
+      // 0390: the database asks orders:approve alone, as assertPermission did.
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only managers can approve requests');
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       // Core's words, the ones the approve-partial dialog (web) and sheet
       // (phone) show when they see the order move on before Confirm: the same
       // state reads the same whichever side notices it first (F2-3 walk D1).
@@ -3464,7 +3543,7 @@ export class OrderRequestsService {
           'No stock is available yet to fulfill the backordered items. Top up the short items first.',
         );
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only a manager can resume fulfillment.');
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       // Core's words, as approvePartial's (the resume sheet and dialog say
       // them when the order moves on under the preview).
       if (msg.includes('invalid_status_transition'))
@@ -3521,7 +3600,7 @@ export class OrderRequestsService {
           "This order has been signed for and can't be reopened.",
         );
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only a manager can reopen picking.');
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError(
           'validation_error',
@@ -3566,7 +3645,7 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only a manager can close a backordered order.');
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError(
           'validation_error',
@@ -3788,14 +3867,17 @@ export class OrderRequestsService {
   }
 
   /**
-   * Manager+ only: assign OR reassign the picker to a specific member. Pushes an
-   * assignment notification to the new picker (mirrors delivery assignment).
+   * Assign OR reassign the picker to a specific member (orders:approve, checked
+   * by assign_picking since 0390 with no manager-by-role exception, plus write
+   * access to the order's warehouse). Pushes an assignment notification to the
+   * new picker (mirrors delivery assignment).
    */
   async assignPicking(id: string, pickerUserId: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // Authorization (manager+) is enforced inside the RPC; keep the module gate
-    // here. A blanket permission assert would wrongly block a manager who lacks
-    // a specific granular permission but is manager-by-role.
+    // Authorization (orders:approve, has_permission alone since 0390) is
+    // enforced inside the RPC; keep the module and warehouse gates here. No
+    // assertPermission: it would add the MFA step-up, which this action has
+    // never had.
     await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('assign_picking', {
       p_order_id: id,
@@ -3816,7 +3898,9 @@ export class OrderRequestsService {
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
-        throw new ServiceError('forbidden', 'Only a manager can assign or reassign the picker.');
+        // 0390: orders:approve (has_permission alone) plus write access to the
+        // order's warehouse, which requireWarehouseAccess checked above.
+        throw new ServiceError('forbidden', 'Missing permission: orders:approve');
       throw new ServiceError('internal_error', 'Could not assign the picker.');
     }
     const row = data as OrderRequestRow;
@@ -4031,6 +4115,16 @@ export class OrderRequestsService {
   async assignDelivery(id: string, deliveryUserId: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:assign_delivery');
+    // And orders:approve (0390): before 0390 the write also needed the order
+    // update policy (a manager by role or orders:approve); with the role term
+    // gone that is orders:approve, which assign_order_delivery now asks too.
+    // A manager whose orders:approve was revoked therefore cannot make
+    // themself the driver and hand the order over as the driver. Both web and
+    // phone already offered Assign delivery to approvers only. can(), not
+    // assertPermission: no new MFA step-up on an action that never had one.
+    if (!can(this.ctx, 'orders:approve')) {
+      throw new ServiceError('forbidden', 'Missing permission: orders:approve');
+    }
     await this.requireWarehouseAccess(id, 'write');
 
     // Defense-in-depth: assignee must be an active org member.
@@ -4062,18 +4156,21 @@ export class OrderRequestsService {
       );
     }
 
-    const { data: updated, error } = await this.ctx.supabase
-      .from('order_requests')
-      .update({
-        assigned_delivery_user_id: deliveryUserId,
-        assigned_delivery_by: this.ctx.userId,
-        assigned_delivery_at: new Date().toISOString(),
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // The write goes through assign_order_delivery (0390, SECURITY DEFINER):
+    // since 0390 the order update policy admits orders:approve holders only,
+    // so the delivery stamps are no longer written through the user client.
+    // The function re-checks every gate above (both permissions, write
+    // access, staged_for_delivery under the order's row lock) and stamps
+    // assigned_delivery_by itself. Its driver rule is stricter than the read
+    // above: a member as is_org_member counts one (accepted, no expired
+    // impersonation, not disabled); a driver it refuses comes back as
+    // driver_not_member, worded as the read's own refusal.
+    const { data: updated, error } = await this.ctx.supabase.rpc('assign_order_delivery', {
+      p_id: id,
+      p_driver: deliveryUserId,
+    });
+    if (error) throw deliveryWriteError(error, 'assign');
+    if (!updated) throw new ServiceError('internal_error', 'assign_order_delivery returned no row');
     await audit(
       {
         event: 'order.delivery_assigned',
@@ -4109,13 +4206,14 @@ export class OrderRequestsService {
 
   async markInTransit(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // Authorization is "assigned driver OR manager+", enforced by the
-    // per-user/role check below (after the row loads). We must NOT gate on
-    // orders:approve up front: a staff member assigned as the delivery driver
-    // legitimately lacks that permission, and a blanket assert here blocked
-    // them from ever marking their OWN delivery in transit — the exact mobile
-    // workflow this is for (audit 2026-06-09). requireWarehouseAccess('write')
-    // + the assigned-driver/manager check below remain the real gates.
+    // Authorization: orders:approve (the effective permission), checked below
+    // after the row loads so the validation messages come first, and again by
+    // mark_order_in_transit. This used to read "the assigned driver OR a
+    // manager", but the database never let a driver without orders:approve
+    // through (the update policy admitted managers and approvers only, so a
+    // staff driver got 0 rows and "Order status changed"; production: no order
+    // has ever had a staff driver). 0390 keeps that rule (owner decision O3,
+    // default) and says so instead. requireWarehouseAccess('write') stays.
     await this.requireWarehouseAccess(id, 'write');
 
     const { data: row } = await this.ctx.supabase
@@ -4140,37 +4238,27 @@ export class OrderRequestsService {
       throw new ServiceError('validation_error', 'Assign a driver before marking in transit.');
     }
 
-    // The action layer permits assigned-driver OR manager+. Check role
-    // here only if the caller is NOT the assigned driver.
-    if (r.assigned_delivery_user_id !== this.ctx.userId) {
-      if (!isManagerOrAbove(this.ctx.role)) {
-        throw new ServiceError(
-          'forbidden',
-          'Only the assigned driver or a manager can mark in transit.',
-        );
-      }
+    // Owner decision O3 (default): orders:approve, the assigned driver
+    // included. On the owner's yes, an assigned driver passes too (here and in
+    // mark_order_in_transit).
+    if (!can(this.ctx, 'orders:approve')) {
+      throw new ServiceError('forbidden', IN_TRANSIT_NOT_APPROVER_COPY);
     }
 
-    // Compare-and-set (SP-069). The driver's phone retrying a timed-out
-    // mark_in_transit, or a second manager clicking within the same second,
-    // used to write in_transit twice: two "on its way" emails to the
-    // requester, two order.in_transit deliveries to every webhook endpoint,
-    // and in_transit_at re-stamped to the later time. Nothing downstream
-    // dedupes (integration_deliveries has no at-most-once key, and the email
-    // has no sent marker), so the refusal has to happen here.
-    const { data: updated, error } = await this.ctx.supabase
-      .from('order_requests')
-      .update({
-        status: 'in_transit',
-        in_transit_at: new Date().toISOString(),
-        in_transit_by: this.ctx.userId,
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .eq('status', 'staged_for_delivery')
-      .select('*')
-      .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Compare-and-set (SP-069), now under the order's row lock inside
+    // mark_order_in_transit (0390, SECURITY DEFINER). The driver's phone
+    // retrying a timed-out mark_in_transit, or a second approver clicking
+    // within the same second, used to write in_transit twice: two "on its way"
+    // emails to the requester, two order.in_transit deliveries to every
+    // webhook endpoint, and in_transit_at re-stamped to the later time.
+    // Nothing downstream dedupes (integration_deliveries has no at-most-once
+    // key, and the email has no sent marker), so the function refuses a
+    // second mark (order_status_changed -> the conflict below) before any of
+    // it happens.
+    const { data: updated, error } = await this.ctx.supabase.rpc('mark_order_in_transit', {
+      p_id: id,
+    });
+    if (error) throw deliveryWriteError(error, 'in_transit');
     if (!updated)
       throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     const finalRow = updated as OrderRequestRow;

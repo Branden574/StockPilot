@@ -520,6 +520,27 @@ PGTAP_TESTS=(
   # row lock, numbering) are scripts/db-concurrency/0388_requester_delete_race.sh;
   # the lock footprint is scripts/db-concurrency/0388_migration_lock_footprint.sh.
   supabase/tests/0388_order_number_and_requester_deletion.test.sql
+  # Approval follows the permission (0390, security slice D): the ten
+  # approval-class order functions and the three order policies decide with
+  # has_permission(orders:approve) alone, so a manager whose orders:approve is
+  # revoked is refused (approve, partial, close, resume, reopen, assign picker,
+  # cancel someone else's order, hold, needed-by, other pending demand, a raw
+  # notes update, an on-behalf order, a line on another member's order) and a
+  # staff member granted it is answered. Each body changed by exactly one edit
+  # (put the role term back and it is production's pre-0390 body), and so did
+  # each whole definition (the header is unchanged too). The two writers that
+  # shared the update policy are SECURITY DEFINER functions with their own
+  # gates: assign_order_delivery (orders:assign_delivery AND orders:approve,
+  # warehouse write, staged, a member driver: a revoked manager cannot make
+  # themself the driver) and mark_order_in_transit (warehouse write, a
+  # delivery, staged under the row lock, a driver, orders:approve: owner
+  # decision O3 refuses a staff driver without it). Census: no function or
+  # policy keeps the role-or-permission gate. The two-session proofs are
+  # scripts/db-concurrency/0390_delivery_rpc_race.sh; the lock footprint (one
+  # NOWAIT prelude, including the auth, storage and realtime tables supautils
+  # 3.4.0 locks on policy changes) is
+  # scripts/db-concurrency/0390_migration_lock_footprint.sh.
+  supabase/tests/0390_approval_follows_permission.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -833,6 +854,23 @@ WEB_TESTS=(
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
   src/server/actions/platform-admin.remove-org.test.ts
+  # Approval follows the permission (0390): the app asks the effective
+  # orders:approve where the database does. Delivery assignment and the
+  # in-transit mark write through their SECURITY DEFINER functions (no
+  # user-client UPDATE of the order left), with every refusal mapped by hint;
+  # assignment asks orders:approve as well as orders:assign_delivery; a staff
+  # driver without orders:approve is refused in true words (owner decision
+  # O3, default); the requester self-cancel window follows the permission,
+  # not the role; on-behalf ordering is refused for a revoked manager and
+  # allowed for granted staff, and the New order page computes that on the
+  # server. The order panel offers Reassign picker, Reopen picking and Mark
+  # in transit by the permission (the picker override stays manager rank),
+  # and Assign delivery only with orders:assign_delivery as well.
+  src/server/services/order-requests.approve-permission.test.ts
+  src/server/actions/order-requests.on-behalf.test.ts
+  src/components/orders/storefront/storefront-on-behalf.guard.test.ts
+  src/components/orders/manager-actions-panel.test.tsx
+  src/components/orders/manager-actions-panel.assign-delivery.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -908,6 +946,14 @@ MOBILE_TESTS=(
   # (approvers and the assigned driver); both never throw.
   src/lib/scan-signature-departure.test.ts
   src/lib/order-signature-image.test.ts
+
+  # Approval follows the permission (0390): the order screen's actions follow
+  # the rule the server applies to each (the effective orders:approve for
+  # approval-class actions, orders:assign_delivery for the driver, a manager
+  # or the driver for a paper signature), as the web page does: a granted
+  # staff member sees Approve, a revoked manager does not, a staff driver
+  # never sees Mark in transit (owner decision O3, default).
+  src/lib/order-manager-actions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -922,6 +968,11 @@ CORE_TESTS=(
   # uploads, books cover) against 0381's database parser, read from the
   # newest migration that defines public.item_image_path_item_id.
   src/inventory/item-photo-path.test.ts
+  # Approval follows the permission (0390): the shared order state machine
+  # (web panel and phone) takes the effective orders:approve; given it, the
+  # approval-class actions follow it and the picker override stays manager
+  # rank, as the database decides each.
+  src/order-state-machine.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

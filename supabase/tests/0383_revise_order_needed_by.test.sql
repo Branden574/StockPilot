@@ -152,8 +152,8 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   (:orgA, :stfApX, 'orders:approve', true),
   (:orgA, :vwrAp,  'orders:approve', true),
   (:orgA, :dis,    'orders:approve', true),
-  -- A manager whose orders:approve was revoked still approves (0348 keeps the
-  -- has_org_role term), so they may still change the date.
+  -- A manager whose orders:approve was revoked: before 0390 the has_org_role
+  -- term let them change the date; since 0390 they are refused (G12).
   (:orgA, :mgrNo,  'orders:approve', false);
 
 -- Orders. Every open one has a needed-by 3 days out, except ordNull (none).
@@ -299,13 +299,16 @@ select ok(
 select ok(
   (select p.prosrc ~ 'auth\.uid\(\)' and p.prosrc ~ 'is_org_member\(v_org\)'
           and p.prosrc ~ $re$module_enabled\(v_org, 'orders'\)$re$
-          and p.prosrc ~ $re$has_org_role\(v_org, 'manager'\)$re$
+          -- Changed on purpose by 0390 (was: the body names has_org_role(v_org,
+          -- 'manager'), the 0348 manager-or-approve gate): the role term is
+          -- gone and orders:approve alone decides (0390 R6/R10, C9/C10).
+          and p.prosrc !~ $re$has_org_role\(v_org, 'manager'\)$re$
           and p.prosrc ~ $re$has_permission\(v_org, 'orders:approve'\)$re$
           and p.prosrc ~ $re$user_can_access_inventory\(v_uid, v_wh, null, 'write'\)$re$
           and p.prosrc ~ 'where o\.id = p_id\s+for update;'
           and p.prosrc !~ '40001|40P01'
      from pg_proc p where p.oid = 'public.revise_order_needed_by(uuid, timestamptz, timestamptz, text, text)'::regprocedure),
-  'G2: its gates are in its own body (signed in, member, the orders module, the 0348 approve gate, warehouse write), it locks the order FOR UPDATE, and it never raises 40001/40P01');
+  'G2: its gates are in its own body (signed in, member, the orders module, the approve gate (orders:approve alone since 0390), warehouse write), it locks the order FOR UPDATE, and it never raises 40001/40P01');
 select is(
   (select array_agg(distinct m[1] order by m[1])
      from pg_proc p, regexp_matches(p.prosrc, $re$errcode\s*=\s*'([^']+)'$re$, 'g') m
@@ -413,12 +416,14 @@ insert into fx select 'own', pg_temp.err(pg_temp.rev(:ordGate, $$date_trunc('min
 reset role;
 select is(
   (select string_agg(who || '=' || r, ', ' order by who) from fx),
-  'adm=no error, mgr=no error, mgrNo=no error, mgrX=no error, own=no error',
-  'G12: a manager, a manager whose orders:approve was revoked (the 0348 has_org_role term), a manager whose only assignment row is another warehouse (managers write every warehouse), an admin and the owner are answered');
+  -- Changed on purpose by 0390 (was mgrNo=no error): the revoked manager is
+  -- refused now that has_permission alone decides.
+  'adm=no error, mgr=no error, mgrNo=42501:orders_approve:forbidden, mgrX=no error, own=no error',
+  'G12: a manager, a manager whose only assignment row is another warehouse (managers write every warehouse), an admin and the owner are answered; a manager whose orders:approve was revoked is refused (42501, hint orders_approve: 0390 removed the 0348 has_org_role term)');
 select is(
   (select needed_by from public.order_requests where id = :ordGate),
   date_trunc('minute', now()) + interval '9 days',
-  'G13: and each of them moved the date in turn (the last one stands)');
+  'G13: and each of them that was answered moved the date in turn (the last one stands)');
 delete from fx;
 
 -- ═══ S. Status ═══════════════════════════════════════════════════════════
@@ -779,22 +784,38 @@ select is(
       ('public', 'save_purchase_order_draft'), ('public', 'next_po_number'), ('public', 'post_receipt_v2'),
       ('public', 'tg_order_requests_insert_guard'), ('public', 'tg_order_request_lines_guard'),
       ('public', 'caller_can_read_item'))),
-  E'approve_order_request(uuid)|96e5f7c8b4cdd6b7e4ffcc994c9ed642|true|{search_path=public}|postgres\n'
-  'approve_partial(uuid)|64bb847ffc8681adeed4b881c1b6a4ab|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 96e5f7c8b4cdd6b7e4ffcc994c9ed642): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 64bb847ffc8681adeed4b881c1b6a4ab): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true|{search_path=public}|postgres\n'
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
-  'cancel_order_request(uuid,text)|7a2302dec888970054738b0dad420fd3|true|{"search_path=public, extensions"}|postgres\n'
-  'close_partial(uuid)|2d873a049a5584df7d3a168fb2b45e34|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'cancel_order_request(uuid,text)|47cabcd1fe4f52fb7b2b6b6b64b68da1|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
   'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67|true|{search_path=public}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
-  'hold_order_stock(uuid)|c38fe9b12af77fdaa2d372f4fd324a43|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
+  -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'hold_order_stock(uuid)|3b0691d604823164daaa7f248616f00f|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
   'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
-  'order_readiness_facts(uuid)|5ac332d439117e498096fc9b1098cf04|true|{"search_path=public, pg_temp"}|postgres\n'
+  -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
   'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|efc01e2e0ea98531c92c7db27f17695c|false|{search_path=public}|postgres\n'
-  'reopen_picking(uuid,text)|a7fabd5fb3d07467135006b56581e46c|true|{"search_path=public, extensions"}|postgres\n'
-  'resume_fulfillment(uuid)|e0f2ae5d7d3564cdad3b36ba4cf5aa8c|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
+  -- gate and nothing else (0390 R-section proves it); posture unchanged.
+  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres',
@@ -834,7 +855,13 @@ select is(
   -- order_request_in_org(order_request_id, organization_id); every earlier
   -- term is kept (0384's pgTAP G8 pins the exact text). F2-4's function
   -- never changes the link, so what it was proven against still holds.
-  'order_requests + schedule_events policies|a85d7406f48ad916cb5fcdb2193fa201|8',
+  -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
+  -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
+  -- manager term; every other term and both schedule_events policies are
+  -- unchanged. Computed from production's policy text minus that term with
+  -- the local authenticated role's OID (16444, the OID that reproduces the
+  -- old pin from the same text); verify on the stack.
+  'order_requests + schedule_events policies|bff8a9854b1856ae3fefe1a3dcf702a8|8',
   'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against (schedule_events as 0384 left them)');
 select ok(
   (select bool_and(has_column_privilege('authenticated', 'public.schedule_events', c, 'UPDATE'))
