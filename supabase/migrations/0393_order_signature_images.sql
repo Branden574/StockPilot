@@ -52,7 +52,10 @@
 -- images (checksum over id, md5 and length of each image), and every side
 -- image of another order is unchanged; every other order_requests column,
 -- updated_at included, is unchanged on every row; the updated_at trigger is
--- enabled again. Only order_requests_set_updated_at is disabled, inside the
+-- enabled again. Any error those checks do not foresee (a constraint error
+-- prints the whole row in its detail) is re-raised as
+-- order_secrets_images_unexpected_error with its SQLSTATE and object names
+-- only. Only order_requests_set_updated_at is disabled, inside the
 -- block and only around the writes; the 0387 guard is never disabled (the
 -- block runs as postgres). Expected at the 2026-10-04 census: 35 images
 -- (all on completed, digitally signed orders; the longest 92,574 characters,
@@ -67,8 +70,9 @@
 -- already excludes. lock_timeout 900ms.
 --
 -- No status changes: no notification, no push. ERRORS: P0001 (a data check,
--- message order_secrets_images_*, counts in the detail) or 55P03, each with
--- nothing applied. The trigger raises nothing of its own. Never 40001 or
+-- message order_secrets_images_*, counts in the detail; anything unforeseen
+-- as order_secrets_images_unexpected_error) or 55P03, each with nothing
+-- applied. The trigger raises nothing of its own. Never 40001 or
 -- 40P01.
 
 set lock_timeout = '900ms';
@@ -109,6 +113,11 @@ declare
   v_sum          text;
   v_n            bigint;
   v_bad          bigint;
+  v_e_state      text;
+  v_e_msg        text;
+  v_e_table      text;
+  v_e_column     text;
+  v_e_constraint text;
 begin
   select md5(coalesce(string_agg(o.id::text || ':' || (to_jsonb(o) - 'signature_data_url')::text,
                                  E'\n' order by o.id), ''))
@@ -234,6 +243,25 @@ begin
       using errcode = 'P0001',
             detail  = 'order_requests_set_updated_at is not enabled again.';
   end if;
+exception
+  -- Busy (lock_timeout): its message names no value; nothing was applied.
+  when lock_not_available then
+    raise;
+  -- The block's own checks pass through (counts only). Any other error (a
+  -- constraint the prechecks did not foresee) would print the whole side row
+  -- in its detail, its tokens and the image included: it is re-raised with
+  -- its SQLSTATE and object names only. Everything the block did is undone.
+  when others then
+    get stacked diagnostics v_e_state = returned_sqlstate, v_e_msg = message_text,
+                            v_e_table = table_name, v_e_column = column_name, v_e_constraint = constraint_name;
+    if v_e_state = 'P0001' and v_e_msg ~ '^order_secrets_images_[a-z_]+$' then
+      raise;
+    end if;
+    raise exception 'order_secrets_images_unexpected_error'
+      using errcode = 'P0001',
+            detail  = format('SQLSTATE %s (table %s, column %s, constraint %s); nothing was changed. The message and detail are withheld: they can carry a token or an image.',
+                             v_e_state, coalesce(nullif(v_e_table, ''), '-'), coalesce(nullif(v_e_column, ''), '-'),
+                             coalesce(nullif(v_e_constraint, ''), '-'));
 end $c393_move$;
 
 create or replace function public.tg_order_requests_signature_image_capture()
