@@ -560,3 +560,12 @@ describe('the success screen never comes back for an order already seen (desk ch
     expect(catalog).not.toContain("if (placedId && focused) router.push('/order/new/placed' as Href);");
   });
 });
+
+describe('the someone-new form refuses first what the server would refuse (desk check F11)', () => {
+  it('Use this person follows the tested check and says why', () => {
+    expect(sheets).toContain('const check = someoneNewCheck(name, email);');
+    expect(sheets).toMatch(/label=\{CHECKOUT_USE_PERSON_COPY\}\s+variant="primary"\s+disabled=\{!check\.canUse\}\s+hint=\{check\.message \?\? undefined\}/);
+    expect(sheets).toMatch(/\{check\.message \? \(\s*<Body size=\{13\} color=\{ACCENT\.crit\}>\s*\{check\.message\}/);
+    expect(sheets).not.toContain("disabled={name.trim() === '' || email.trim() === ''}");
+  });
+});

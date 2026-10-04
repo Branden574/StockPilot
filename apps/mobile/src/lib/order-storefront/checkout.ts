@@ -1,7 +1,9 @@
 import {
   CHECKOUT_NEEDED_BY_ZONE_UNREADABLE_COPY,
   CHECKOUT_NOT_SET_COPY,
+  NEEDED_BY_IN_PAST_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
+  ORDER_ON_BEHALF_INVALID_COPY,
   ORDER_NOTES_MAX,
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
@@ -20,6 +22,7 @@ import {
   checkoutNeededByZoneUnknownCopy,
   checkoutStockChangedCopy,
   fitKitShares,
+  isOrderOnBehalfValid,
   kitsForAudit,
   neededByLabel,
   resolveOrgTimezone,
@@ -93,6 +96,11 @@ export function submitBlockedBy(input: {
    *  else is checked against it before every Submit: the server would
    *  refuse it, and that refusal is final and spends the key. */
   canOrderOnBehalf: boolean;
+  /** The organization's zone and the SERVER's now (ms), to refuse a needed-by
+   *  that is not still to come (the server records `needed_by_past` for
+   *  needed <= now(), final, spending the key). Absent when the zone cannot
+   *  be used on this phone: then the server decides. */
+  neededBy?: { zone: string; now: number };
 }): string | null {
   const { cart } = input;
   if (input.offline) return ORDER_NEEDS_CONNECTION_COPY;
@@ -104,8 +112,24 @@ export function submitBlockedBy(input: {
   if (cart.onBehalfOf && (!cart.onBehalfOf.name.trim() || !cart.onBehalfOf.email.trim())) {
     return SUBMIT_ON_BEHALF_INCOMPLETE_COPY;
   }
+  // What the route would refuse (desk check F11): refused here first.
+  if (cart.onBehalfOf && !isOrderOnBehalfValid(cart.onBehalfOf)) return ORDER_ON_BEHALF_INVALID_COPY;
+  if (input.neededBy && cart.neededBy) {
+    const at = wallClockToInstant(cart.neededBy, input.neededBy.zone);
+    if (at !== null && at <= input.neededBy.now) return NEEDED_BY_IN_PAST_COPY;
+  }
   if (cart.lines.some((l) => input.unorderable.has(l.itemId))) return SUBMIT_REMOVE_UNORDERABLE_COPY;
   return null;
+}
+
+/** The someone-new form's "Use this person": only for a name and email the
+ *  route accepts (core isOrderOnBehalfValid); once both are typed and they
+ *  are not, core's on-behalf words say why (desk check F11). */
+export function someoneNewCheck(name: string, email: string): { canUse: boolean; message: string | null } {
+  if (name.trim() === '' || email.trim() === '') return { canUse: false, message: null };
+  return isOrderOnBehalfValid({ name, email })
+    ? { canUse: true, message: null }
+    : { canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY };
 }
 
 /** Checkout's For row. Offered to someone who may order on behalf (the

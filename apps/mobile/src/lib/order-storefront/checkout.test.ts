@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CHECKOUT_NEEDED_BY_ZONE_UNREADABLE_COPY,
   CHECKOUT_NOT_SET_COPY,
+  NEEDED_BY_IN_PAST_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
+  ORDER_ON_BEHALF_INVALID_COPY,
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
   SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
@@ -35,6 +37,7 @@ import {
   stockChangedNotice,
   storefrontNeededByZone,
   forRowView,
+  someoneNewCheck,
   submitBlockedBy,
   wallClockIso,
 } from './checkout';
@@ -280,5 +283,34 @@ describe('checkout’s For row (desk check F2)', () => {
       hint: STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
       tap: 'set-myself',
     });
+  });
+});
+
+describe('what the server would refuse is refused here first (desk check F11)', () => {
+  const ok = { offline: false, unorderable: new Set<string>(), siteKnown: true, canOrderOnBehalf: true };
+  const ZONE = 'America/Los_Angeles';
+  // 12:00 in Los Angeles (19:00Z) on the server's clock.
+  const NOW = Date.parse('2026-10-04T19:00:00.000Z');
+
+  it('someone to order for with an invalid email or a name past 120 characters: core’s on-behalf words', () => {
+    expect(submitBlockedBy({ ...ok, cart: base({ onBehalfOf: { name: 'Bee', email: 'not an email' } }) })).toBe(ORDER_ON_BEHALF_INVALID_COPY);
+    expect(submitBlockedBy({ ...ok, cart: base({ onBehalfOf: { name: 'x'.repeat(121), email: 'bee@orgb.example' } }) })).toBe(ORDER_ON_BEHALF_INVALID_COPY);
+    expect(submitBlockedBy({ ...ok, cart: base({ onBehalfOf: { name: 'Bee', email: 'bee@orgb.example' } }) })).toBeNull();
+  });
+
+  it('a needed-by at or before the server’s now (a restored draft): pick one still to come', () => {
+    const at = (neededBy: string) => submitBlockedBy({ ...ok, cart: base({ neededBy }), neededBy: { zone: ZONE, now: NOW } });
+    expect(at('2026-10-04T11:59')).toBe(NEEDED_BY_IN_PAST_COPY);
+    expect(at('2026-10-04T12:00')).toBe(NEEDED_BY_IN_PAST_COPY);
+    expect(at('2026-10-04T12:01')).toBeNull();
+    expect(at('')).toBeNull();
+  });
+
+  it('the someone-new form: Use this person only for what the server accepts, saying why once both are typed', () => {
+    expect(someoneNewCheck('', '')).toEqual({ canUse: false, message: null });
+    expect(someoneNewCheck('Bee', '')).toEqual({ canUse: false, message: null });
+    expect(someoneNewCheck('Bee', 'bee@')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
+    expect(someoneNewCheck('x'.repeat(121), 'bee@orgb.example')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
+    expect(someoneNewCheck(' Bee ', ' bee@orgb.example ')).toEqual({ canUse: true, message: null });
   });
 });

@@ -37,6 +37,7 @@ import {
   recheckRestoredCart,
   refusedItemIds,
   stockChangedNotice,
+  storefrontNeededByZone,
   submitBlockedBy,
 } from './checkout';
 import { catalogIsStale, catalogItems, initialShipFrom, photosNeedRefresh } from './setup';
@@ -357,6 +358,14 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       notice = r.notice;
     }
     return before;
+  }
+
+  /** The zone and the server's now a needed-by is checked against, or
+   *  undefined when the zone cannot be used on this phone. */
+  function neededByCheck(): { zone: string; now: number } | undefined {
+    if (setup.status !== 'ready') return undefined;
+    const z = storefrontNeededByZone(setup.answer.orgTimezone);
+    return z.ok ? { zone: z.zone, now: deps.now() + serverSkewMs } : undefined;
   }
 
   function engineLocked(): boolean {
@@ -817,6 +826,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         // The answer shown (read on every open and refresh): never a value
         // kept from an earlier read.
         canOrderOnBehalf: setup.status === 'ready' && setup.answer.viewer.canOrderOnBehalf,
+        // A needed-by already past (a restored draft) is refused here, on
+        // the server's clock in the organization's zone (desk check F11).
+        neededBy: neededByCheck(),
       });
     },
 

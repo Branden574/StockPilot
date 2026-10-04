@@ -92,6 +92,27 @@ function charCount(s: string): number {
   return Array.from(s).length;
 }
 
+function onBehalfNameValid(v: string): boolean {
+  const n = charCount(v.trim());
+  return n >= 1 && n <= ORDER_ON_BEHALF_NAME_MAX;
+}
+
+function onBehalfEmailValid(v: string): boolean {
+  const e = v.trim();
+  return charCount(e) <= ORDER_EMAIL_MAX && EMAIL_RE.test(e);
+}
+
+/**
+ * The person an order is for, by the create schema's own rule (the schema
+ * uses these two checks): a name of 1 to ORDER_ON_BEHALF_NAME_MAX characters
+ * and a valid email, both trimmed. A client refuses with
+ * ORDER_ON_BEHALF_INVALID_COPY before sending what the route would refuse
+ * (phone desk check F11).
+ */
+export function isOrderOnBehalfValid(who: { name: string; email: string }): boolean {
+  return onBehalfNameValid(who.name) && onBehalfEmailValid(who.email);
+}
+
 /**
  * Whether "YYYY-MM-DDTHH:mm" names a real calendar date and time. Zone-free:
  * the server converts it in the organization's zone with core
@@ -286,19 +307,13 @@ function buildOrderCreateRequestSchema() {
             required_error: ORDER_ON_BEHALF_INVALID_COPY,
             invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
           })
-          .refine((v) => {
-            const n = charCount(v.trim());
-            return n >= 1 && n <= ORDER_ON_BEHALF_NAME_MAX;
-          }, ORDER_ON_BEHALF_INVALID_COPY),
+          .refine(onBehalfNameValid, ORDER_ON_BEHALF_INVALID_COPY),
         email: z
           .string({
             required_error: ORDER_ON_BEHALF_INVALID_COPY,
             invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY,
           })
-          .refine((v) => {
-            const e = v.trim();
-            return charCount(e) <= ORDER_EMAIL_MAX && EMAIL_RE.test(e);
-          }, ORDER_ON_BEHALF_INVALID_COPY),
+          .refine(onBehalfEmailValid, ORDER_ON_BEHALF_INVALID_COPY),
       },
       { invalid_type_error: ORDER_ON_BEHALF_INVALID_COPY },
     )

@@ -642,6 +642,40 @@ describe('the on-behalf email: the rule the web applies today', () => {
   });
 });
 
+describe('isOrderOnBehalfValid: the create schema’s own rule, for a client to refuse first (phone desk check F11)', () => {
+  it('accepts what the schema accepts and refuses what it refuses', async () => {
+    const { isOrderOnBehalfValid, ORDER_ON_BEHALF_NAME_MAX: NAME_MAX } = await import('./place-order');
+    const cases: { name: string; email: string }[] = [
+      { name: 'Bee Person', email: 'bee@orgb.example' },
+      { name: '  Bee  ', email: '  bee@orgb.example ' },
+      { name: 'x'.repeat(NAME_MAX), email: 'a@b.co' },
+      { name: 'x'.repeat(NAME_MAX + 1), email: 'a@b.co' },
+      { name: '', email: 'a@b.co' },
+      { name: '   ', email: 'a@b.co' },
+      { name: 'Bee', email: 'not an email' },
+      { name: 'Bee', email: 'bee@orgb' },
+      { name: 'Bee', email: `${'a'.repeat(250)}@b.co` },
+      { name: 'Bee', email: '' },
+    ];
+    for (const who of cases) {
+      const body = {
+        idempotencyKey: '55555555-5555-4555-8555-555555555555',
+        placerUserId: '22222222-2222-4222-8222-222222222222',
+        warehouseId: '33333333-3333-4333-8333-333333333333',
+        fulfillmentType: 'pickup',
+        deliveryCharterId: null,
+        onBehalfOf: who,
+        notes: null,
+        neededByLocal: null,
+        lines: [{ itemId: '44444444-4444-4444-8444-444444444444', quantity: 1 }],
+      };
+      expect(isOrderOnBehalfValid(who), JSON.stringify(who)).toBe(parseOrderCreateRequest(body).ok);
+    }
+    expect(isOrderOnBehalfValid({ name: 'Bee', email: 'bee@orgb.example' })).toBe(true);
+    expect(isOrderOnBehalfValid({ name: 'Bee', email: 'nope' })).toBe(false);
+  });
+});
+
 describe('importing this module runs nothing', () => {
   // Core's index re-exports place-order, so every web page that bundles core
   // and the phone at start-up evaluate its top level. A call there (a zod

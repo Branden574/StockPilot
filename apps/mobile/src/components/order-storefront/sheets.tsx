@@ -62,11 +62,11 @@ import {
   selectNeededByDay,
   type NeededByDraft,
 } from '@/lib/order-needed-by';
-import { wallClockIso } from '@/lib/order-storefront/checkout';
+import { someoneNewCheck, wallClockIso } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
 import { earmarkLabel, matchRequesters, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
 import { pickQtyFieldWidthFor, PICK_QTY_MAX_FONT_SIZE_MULTIPLIER } from '@/lib/pick-qty-field';
-import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { RadioRow, SmallAction } from './controls';
@@ -364,6 +364,8 @@ export function RequesterSheet({
   const [name, setName] = React.useState(current?.name ?? '');
   const [email, setEmail] = React.useState(current?.email ?? '');
   const people = requesters?.status === 'ok' ? matchRequesters(requesters.people, query) : [];
+  // What the route would refuse is refused here first (desk check F11).
+  const check = someoneNewCheck(name, email);
   const inputStyle = [styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }];
   return (
     <StorefrontSheet visible title={STOREFRONT_FOR_COPY} onClose={onClose}>
@@ -432,10 +434,16 @@ export function RequesterSheet({
         maxFontSizeMultiplier={INPUT_CAP}
         style={inputStyle}
       />
+      {check.message ? (
+        <Body size={13} color={ACCENT.crit}>
+          {check.message}
+        </Body>
+      ) : null}
       <SmallAction
         label={CHECKOUT_USE_PERSON_COPY}
         variant="primary"
-        disabled={name.trim() === '' || email.trim() === ''}
+        disabled={!check.canUse}
+        hint={check.message ?? undefined}
         onPress={() => onPick({ name: name.trim(), email: email.trim() })}
       />
     </StorefrontSheet>

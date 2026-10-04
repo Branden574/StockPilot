@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  NEEDED_BY_IN_PAST_COPY,
   ORDER_ADD_WHILE_LOCKED_COPY,
   ORDER_WITHDRAWN_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
@@ -865,5 +866,28 @@ describe('the success screen is shown once per placed order (desk check F10)', (
     const before = snap();
     session.placedShown();
     expect(snap()).toBe(before);
+  });
+});
+
+describe('a restored needed-by already past is refused before Submit (desk check F11)', () => {
+  it('on the server’s clock, in the organization’s zone', async () => {
+    // 04:00 in Los Angeles is 11:00Z, before the server's 12:00Z.
+    const cart = { ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }), lines: [{ itemId: A, quantity: 1 }], neededBy: '2026-10-04T04:00' };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart, submission: null }, new Date()));
+    await session.open(scope);
+    expect(session.submitBlockedBy(false)).toBe(NEEDED_BY_IN_PAST_COPY);
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    session.dispatch({ type: 'set-needed-by', value: '2026-10-05T09:00' });
+    expect(session.submitBlockedBy(false)).toBeNull();
+  });
+
+  it('the phone’s own clock is not the judge: a phone running an hour slow still refuses it', async () => {
+    // The server says 12:00Z; this phone thinks it is 10:30Z.
+    now = Date.parse('2026-10-04T10:30:00.000Z');
+    const cart = { ...initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' as const }), lines: [{ itemId: A, quantity: 1 }], neededBy: '2026-10-04T04:00' };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart, submission: null }, new Date()));
+    await session.open(scope);
+    expect(session.submitBlockedBy(false)).toBe(NEEDED_BY_IN_PAST_COPY);
   });
 });
