@@ -520,6 +520,25 @@ PGTAP_TESTS=(
   # row lock, numbering) are scripts/db-concurrency/0388_requester_delete_race.sh;
   # the lock footprint is scripts/db-concurrency/0388_migration_lock_footprint.sh.
   supabase/tests/0388_order_number_and_requester_deletion.test.sql
+  # Approval follows the permission (0390, security slice D): the ten
+  # approval-class order functions and the three order policies decide with
+  # has_permission(orders:approve) alone, so a manager whose orders:approve is
+  # revoked is refused (approve, partial, close, resume, reopen, assign picker,
+  # cancel someone else's order, hold, needed-by, other pending demand, a raw
+  # notes update, an on-behalf order, a line on another member's order) and a
+  # staff member granted it is answered. Each body changed by exactly one edit
+  # (put the role term back and it is production's pre-0390 body). The two
+  # writers that shared the update policy are SECURITY DEFINER functions with
+  # their own gates: assign_order_delivery (orders:assign_delivery, warehouse
+  # write, staged, a member driver) and mark_order_in_transit (warehouse
+  # write, a delivery, staged under the row lock, a driver, orders:approve:
+  # owner decision O3 refuses a staff driver without it). Census: no function
+  # or policy keeps the role-or-permission gate. The two-session proofs are
+  # scripts/db-concurrency/0390_delivery_rpc_race.sh; the lock footprint (one
+  # NOWAIT prelude, including the auth, storage and realtime tables supautils
+  # 3.4.0 locks on policy changes) is
+  # scripts/db-concurrency/0390_migration_lock_footprint.sh.
+  supabase/tests/0390_approval_follows_permission.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
