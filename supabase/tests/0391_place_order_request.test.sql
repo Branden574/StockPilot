@@ -909,7 +909,10 @@ select is(
   'order_request_top_skus_for_warehouse(uuid,integer,integer)|b06c0674ae4952cf1942649cdd81e81d|false|{search_path=public}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
   'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres\n'
-  'tg_order_requests_workflow_guard()|59481b7651dca818a2266a39868db4f0|false|{search_path=public}|postgres\n'
+  -- 0392 re-pin (was 59481b7651dca818a2266a39868db4f0): slices C and E
+  -- restate the guard; place_order_request inserts and never updates an
+  -- order, so the update guard's new rules do not touch it.
+  'tg_order_requests_workflow_guard()|d8831cdcd8413340d536f553fa480f79|false|{search_path=public}|postgres\n'
   'user_can_access_warehouse(uuid,uuid,text)|76b4170f3d393e8a1f293ca3d4895955|true|{search_path=public}|postgres',
   'Z1: the functions place_order_request relies on are the text (production md5 read at build start), SECURITY mode, search_path and owner this build was proven against');
 select is(

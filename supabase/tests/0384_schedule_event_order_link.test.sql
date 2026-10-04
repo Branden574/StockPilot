@@ -40,9 +40,14 @@
 --    close, both keyed on the link, bringOrderEventInStep's move) and the
 --    approver's revise_order_needed_by (0383, DEFINER) moving the order's
 --    event. Every order write the web makes through the user client, each in
---    the exact shape it sends (assignDelivery, the internal-notes save, deny,
---    the pick slip, the packing slip with its signature token, staging, in
---    transit), by a manager or a staff approver, with the RETURNING it reads.
+--    the exact shape it sends (the internal-notes save, deny, the pick slip,
+--    staging), by a manager or a staff approver, with the RETURNING it reads.
+--    Changed on purpose by 0392 (slices C and E): the three writes that moved
+--    into order RPCs (assignDelivery -> assign_order_delivery, 0390; the
+--    packing slip with its signature token -> generate_order_packing_slips,
+--    0389; in transit -> mark_order_in_transit, 0390) are now refused raw
+--    (KO1, KO5, KO7: 42501, the columns' UPDATE is revoked), and KO5 also
+--    proves the packing slip goes through its RPC.
 -- G. The posture: authenticated may INSERT every schedule_events column but
 --    the two server-owned ones and UPDATE every column but those two, id and
 --    created_at (computed over the table's columns, so a new column forces a
@@ -418,13 +423,18 @@ reset role;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
-select is(pg_temp.val(format($q$with up as (
+-- Changed on purpose by 0392 (slice E; was 'true', "assignDelivery's write
+-- still works"): assignDelivery calls assign_order_delivery since 0390, and
+-- 0392 revokes authenticated's UPDATE on the assigned_delivery_* columns, so
+-- the raw write (which could name a driver who is not a member) is refused.
+select is(pg_temp.err(format($q$with up as (
     update public.order_requests
        set assigned_delivery_user_id = %L, assigned_delivery_by = %L, assigned_delivery_at = now()
      where organization_id = %L and id = %L returning *)
-  select (count(*) = 1 and bool_and(assigned_delivery_user_id = %L) and bool_and(organization_id = %L))::text from up$q$,
-  :stf, :mgr, :orgA, :ordStg, :stf, :orgA)),
-  'true', 'KO1: assignDelivery''s write (a manager names a member as the driver, RETURNING *) still works');
+  select count(*)::text from up$q$,
+  :stf, :mgr, :orgA, :ordStg)),
+  '42501:permission denied for table order_requests',
+  'KO1: the raw delivery assignment (a manager naming the driver) is refused since 0392: assignDelivery goes through assign_order_delivery (0390)');
 select is(pg_temp.val(format($q$with up as (update public.order_requests set internal_notes = 'Gate code 12'
                                               where organization_id = %L and id = %L returning id)
                                 select count(*)::text from up$q$, :orgA, :ordPend)),
@@ -440,20 +450,34 @@ select is(pg_temp.val(format($q$with up as (update public.order_requests
                                 select count(*)::text from up$q$, :stfAp, :orgA, :ordPk)),
   '1', 'KO4: the pick slip (a staff approver) still works');
 set local "request.jwt.claim.sub" to :mgr;
-select is(pg_temp.val(format($q$with up as (update public.order_requests
+-- Changed on purpose by 0392 (slice C; was '1', "the packing slip with its
+-- signature token still works"): generatePackingSlips calls
+-- generate_order_packing_slips since 0389, and 0392 revokes authenticated's
+-- UPDATE on signature_token, its expiry and the packing-slip stamps, so the
+-- raw write (a manager could plant a token of their choosing) is refused.
+-- The RPC moves ordPack on, for KO6.
+select is(pg_temp.err(format($q$with up as (update public.order_requests
                                                set status = 'packing_slip_generated', packing_slip_generated_at = now(), packing_slip_generated_by = %L,
                                                    signature_token = md5('0384'), signature_token_expires_at = now() + interval '30 days'
                                              where organization_id = %L and id = %L returning *)
-                                select count(*)::text from up$q$, :mgr, :orgA, :ordPack)),
-  '1', 'KO5: the packing slip with its signature token (a manager) still works');
+                                select count(*)::text from up$q$, :mgr, :orgA, :ordPack))
+          || ' / ' || pg_temp.val(format('select r.status from public.generate_order_packing_slips(%L) r', :ordPack)),
+  '42501:permission denied for table order_requests / packing_slip_generated',
+  'KO5: the raw packing slip with a signature token is refused since 0392; generate_order_packing_slips (a manager) makes it');
 select is(pg_temp.val(format($q$with up as (update public.order_requests set status = 'staged_for_delivery', staged_at = now(), staged_by = %L
                                              where organization_id = %L and id = %L and status = 'packing_slip_generated' returning *)
                                 select count(*)::text from up$q$, :mgr, :orgA, :ordPack)),
   '1', 'KO6: staging (a manager) still works');
-select is(pg_temp.val(format($q$with up as (update public.order_requests set status = 'in_transit', in_transit_at = now(), in_transit_by = %L
+-- Changed on purpose by 0392 (slice E; was '1', "in transit still works"):
+-- markInTransit calls mark_order_in_transit since 0390, and 0392 revokes
+-- authenticated's UPDATE on in_transit_at and in_transit_by (and the guard
+-- drops the staged_for_delivery -> in_transit edge), so the raw write is
+-- refused.
+select is(pg_temp.err(format($q$with up as (update public.order_requests set status = 'in_transit', in_transit_at = now(), in_transit_by = %L
                                              where organization_id = %L and id = %L and status = 'staged_for_delivery' returning *)
                                 select count(*)::text from up$q$, :mgr, :orgA, :ordStg)),
-  '1', 'KO7: in transit (a manager) still works');
+  '42501:permission denied for table order_requests',
+  'KO7: the raw in-transit mark (a manager) is refused since 0392: markInTransit goes through mark_order_in_transit (0390)');
 reset role;
 
 -- ══ G. The posture ════════════════════════════════════════════════════════
@@ -541,18 +565,26 @@ select is(
 -- adds order_requests.requester_deleted_at, stamped only by its trigger when
 -- the user_profiles FK nulls the requester; authenticated may read it and
 -- may not update it, so it joins this list (sorted by name).
+-- Re-pinned by 0392 (was the list without the nine below): slice C revokes
+-- UPDATE on signature_token, signature_token_expires_at and
+-- packing_slip_generated_at/by (generate_order_packing_slips' since 0389),
+-- slice E on assigned_delivery_user_id/by/at and in_transit_at/by
+-- (assign_order_delivery's and mark_order_in_transit's since 0390). The
+-- user-client writes left (KO2, KO3, KO4, KO6) name none of them.
 select is(
   (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
      from pg_attribute a
     where a.attrelid = 'public.order_requests'::regclass and a.attnum > 0 and not a.attisdropped
       and not has_column_privilege('authenticated', 'public.order_requests', a.attname, 'UPDATE')),
-  'approved_at,approved_by,assigned_picker_id,cancelled_at,cancelled_by,completed_at,completed_by,'
-  'confirmation_token_expires_at,confirmation_token_hash,customer_id,delivered_at,fulfillment_type,id,needed_by,notes,'
-  'order_number,organization_id,packaging_at,picking_claimed_at,picking_claimed_by,picking_completed_at,'
+  'approved_at,approved_by,assigned_delivery_at,assigned_delivery_by,assigned_delivery_user_id,assigned_picker_id,'
+  'cancelled_at,cancelled_by,completed_at,completed_by,'
+  'confirmation_token_expires_at,confirmation_token_hash,customer_id,delivered_at,fulfillment_type,id,in_transit_at,in_transit_by,'
+  'needed_by,notes,order_number,organization_id,packaging_at,packing_slip_generated_at,packing_slip_generated_by,'
+  'picking_claimed_at,picking_claimed_by,picking_completed_at,'
   'picking_completed_by,pickup_location_notes,public_track_token,ready_at,requester_deleted_at,requester_email,requester_name,'
   'requester_org_label,requester_phone,requester_user_id,return_prompt_sent_at,return_token,signature_data_url,'
-  'signature_method,signed_at,signed_by_email,signed_by_name,source,updated_at',
-  'GO1: authenticated may UPDATE every order_requests column but organization_id, the 38 columns 0387 revokes and 0388''s requester_deleted_at (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
+  'signature_method,signature_token,signature_token_expires_at,signed_at,signed_by_email,signed_by_name,source,updated_at',
+  'GO1: authenticated may UPDATE every order_requests column but organization_id, the 38 columns 0387 revokes, 0388''s requester_deleted_at and the 9 0392 revokes (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');
 -- Re-pinned by 0388 (was INSERT=true): 0388 replaces authenticated's
 -- table-level INSERT on order_requests with INSERT on the 13 columns
 -- create_order_request names (an explicit order_number from any member made

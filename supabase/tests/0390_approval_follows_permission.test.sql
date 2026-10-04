@@ -604,8 +604,12 @@ select is(
   || pg_temp.attempt('authenticated', :mgrNo,
        format('update public.order_requests set assigned_delivery_user_id = %L, assigned_delivery_by = %L, assigned_delivery_at = now() where id = %L',
               :mgrNo, :mgrNo, :oStg)),
-  '42501:orders_approve:forbidden / ok:0',
-  'E9: the manager whose orders:approve is revoked cannot make themself the driver (and then hand the order over as the driver): the function refuses (orders_approve) and a raw update matches no row (the update policy)');
+  -- Re-pinned by 0392 (slice E; was '... / ok:0', the update policy matching
+  -- no row): 0392 revokes authenticated's UPDATE on the assigned_delivery_*
+  -- columns, so the raw update is refused by the privilege before any row is
+  -- read, for every caller.
+  '42501:orders_approve:forbidden / 42501:-:permission denied for table order_requests',
+  'E9: the manager whose orders:approve is revoked cannot make themself the driver (and then hand the order over as the driver): the function refuses (orders_approve) and a raw update is refused (0392: no UPDATE on the delivery columns)');
 -- E10 (slice D review, finding 4): the driver counts as a member exactly as
 -- is_org_member counts the caller (0310): accepted, no expired impersonation,
 -- not disabled. Each prep runs as the superuser inside the undone attempt.

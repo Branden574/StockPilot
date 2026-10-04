@@ -605,6 +605,24 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0389_mint_race.sh; the lock footprint is
   # scripts/db-concurrency/0389_migration_lock_footprint.sh.
   supabase/tests/0389_order_secrets_expand.test.sql
+  # Order secrets, contract (0392, slices C and E, plan item 14): the data
+  # block, replayed from the statements the CLI recorded, hashes every raw
+  # signature token in place and copies only the live ones to the side table,
+  # leaves 0389 digests alone, moves return and track tokens with the same
+  # value and nulls the columns, nulls the removed shipments' expired tokens,
+  # and changes no other column (updated_at included); every one of its
+  # abort-on-mismatch checks is proven to raise on a planted mismatch, with
+  # nothing applied. The lock prelude takes EXCLUSIVE (never ACCESS
+  # EXCLUSIVE) first. authenticated loses UPDATE on the signature token, its
+  # expiry, the packing-slip, delivery-assignment and in-transit columns (a
+  # raw PATCH can no longer plant a token or name a driver); the restated
+  # guard allows four edges, holds those nine columns behind their revokes,
+  # stamps the pick slip and the staging only on their own edge with the
+  # caller's id at the database's clock, stages pickup and delivery orders
+  # only their own way, and writes a denial reason only with the denial. The
+  # two-session proofs are scripts/db-concurrency/0392_secrets_contract_race.sh;
+  # the lock footprint is scripts/db-concurrency/0392_migration_lock_footprint.sh.
+  supabase/tests/0392_order_secrets_contract.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -819,10 +837,12 @@ WEB_TESTS=(
   src/app/api/reports/inventory-snapshot/pdf/route.test.tsx
   src/app/api/reports/item-cost-history/xlsx/route.test.ts
 
-  # Order secrets, expand (0389). Who may complete a hand-over through the
-  # sign route: a raw token whose sha256 is the order's column (a printed QR,
-  # the panel's link) or a raw column minted before 0389 with no side token
-  # hashing to it, with no session; the DIGEST every member reads only for a
+  # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
+  # hand-over through the sign route: a raw token whose sha256 is the order's
+  # column (a printed QR, the panel's link; 0392 hashed every older raw
+  # column, so an old QR is one too), with no session; a value equal to the
+  # column is always a digest, never a session-free link; the DIGEST every
+  # member reads only for a
   # signed-in member of the order's organization with effective
   # orders:approve or the assigned driver (installed phones' request shape).
   # Every other refusal is one byte-identical 404, an entitled member whose
@@ -835,8 +855,10 @@ WEB_TESTS=(
   # order page's raw link are held back while an MFA step-up is owed. The
   # signature image route is listed above. GET /api/v1/orders/[id] returns an
   # allow-listed order (no token, signature or internal note). The image
-  # route reads the side table first; return and track tokens are read side
-  # first and written only there; the scan lookup hashes before it matches.
+  # route reads the side table first; return and track tokens are read from
+  # the side table only (0392: an order column value opens no tracker, no
+  # return portal and no email link) and written only there; the scan lookup
+  # hashes before it matches.
   src/server/lib/order-secrets.test.ts
   src/server/lib/sign-page-session.test.ts
   src/app/api/orders/sign/route.member.test.ts
@@ -846,6 +868,8 @@ WEB_TESTS=(
   src/app/api/v1/orders/signature-lookup/route.test.ts
   'src/app/api/v1/public/order-requests/[id]/route.test.ts'
   src/server/services/order-requests.packing-slips.test.ts
+  src/server/services/returns.requester.test.ts
+  src/lib/email/order-requests.test.ts
 
   # Every export route (2026-09-29): the caller's session, permission and
   # request are checked BEFORE the shared export budget, so a refused caller

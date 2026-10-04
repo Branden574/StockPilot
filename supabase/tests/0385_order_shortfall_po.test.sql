@@ -1084,7 +1084,15 @@ select is(
   -- adds requester_deleted_at, which authenticated may only SELECT (one
   -- SELECT row more). F2-5's function inserts no order, so what it was
   -- proven against still holds. Computed on the local stack after 0388.
-  '0384 column grants (order_requests, schedule_events)|963d3a00efec2f702ff628845abd4056|217\n'
+  -- Re-pinned by 0392 (was 963d3a00efec2f702ff628845abd4056|217): 0392
+  -- revokes authenticated's UPDATE on nine order_requests columns (the
+  -- signature token, its expiry and the packing-slip stamps, slice C; the
+  -- delivery assignment and in-transit stamps, slice E): nine UPDATE rows
+  -- fewer. F2-5's function writes none of them. Computed from production's
+  -- own column_privileges rows minus exactly those nine (2026-10-04; the
+  -- local stack gave production's value for every earlier pin); verify on
+  -- the stack.
+  '0384 column grants (order_requests, schedule_events)|17eb8a3457ab0a8d9cffcab1db42d50e|208\n'
   'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
