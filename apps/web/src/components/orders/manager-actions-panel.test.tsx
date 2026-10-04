@@ -919,3 +919,64 @@ describe('ManagerActionsPanel — approval-class buttons follow orders:approve (
     expect(screen.getByRole('button', { name: 'Mark in transit' })).toBeInTheDocument();
   });
 });
+
+describe('ManagerActionsPanel — a viewer is never offered an approval-class action (slice D review, findings 1 and 10)', () => {
+  // The app refuses every write for role viewer (assertWarehouseAccess:
+  // "Read-only auditor cannot perform write operations."), and each of these
+  // actions asks warehouse write first; the sign route hands an order over
+  // for a viewer only as its driver (handOverAllowed). Internal notes ask
+  // read access only, so a viewer granted orders:approve keeps them.
+  const WRITE_BUTTONS = [
+    /^Approve$/, /^Deny$/, /Approve partial/, /Generate pick slip/, /(Assign|Reassign) picker/,
+    /Generate packing slips/, /Reopen picking/, /Mark staged for/, /(Assign|Reassign) delivery/,
+    /Mark in transit/, /Collect signature/, /Physical signature/, /Resume fulfillment/, /Close as delivered-partial/,
+  ];
+  const cases: Array<[PanelProps['status'], Partial<PanelProps>]> = [
+    ['pending_approval', {}],
+    ['approved', {}],
+    ['pick_slip_generated', { assignedPickerId: 'other-picker', viewerCanPick: false }],
+    ['picking_complete', {}],
+    ['packing_slip_generated', { fulfillmentType: 'delivery' }],
+    ['packing_slip_generated', { fulfillmentType: 'pickup' }],
+    ['staged_for_delivery', { fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2' }],
+    ['staged_for_pickup', {}],
+    ['in_transit', { fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2' }],
+    ['backordered', { stockGates: { approvePartial: 'hidden', resume: 'enabled', notice: null, canRetry: false } }],
+  ];
+
+  it('a viewer granted orders:approve and orders:assign_delivery sees no write button at any status, and keeps Internal notes (mutation: drop the viewer rule)', () => {
+    for (const [status, extra] of cases) {
+      const { unmount } = render(
+        <ManagerActionsPanel
+          {...baseProps({ status, canApprove: true, canAssignDelivery: true, viewerRole: 'viewer', ...extra })}
+        />,
+      );
+      for (const name of WRITE_BUTTONS) {
+        expect(screen.queryByRole('button', { name }), `${status}${extra.fulfillmentType ? `/${extra.fulfillmentType}` : ''}: ${name}`).not.toBeInTheDocument();
+      }
+      expect(screen.getByLabelText('Internal notes'), status).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('a viewer who is the assigned driver keeps Collect signature and Physical signature in transit (mutation: viewer rule on the driver too)', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'me', canApprove: false, viewerRole: 'viewer' })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Physical signature/ })).toBeInTheDocument();
+  });
+
+  it('a staff approver keeps every one of them where it was', () => {
+    const { unmount } = render(<ManagerActionsPanel {...baseProps({ status: 'pending_approval', canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByRole('button', { name: /^Approve$/ })).toBeInTheDocument();
+    unmount();
+    const r2 = render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByRole('button', { name: /Generate pick slip/ })).toBeInTheDocument();
+    r2.unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2', canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+  });
+});

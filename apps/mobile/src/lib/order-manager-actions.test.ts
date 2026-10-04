@@ -20,6 +20,7 @@ const base: OrderManagerActionsInput = {
   isAssignedDriver: false,
   hasAssignedDriver: false,
   machineOffersReopen: false,
+  isViewerRole: false,
 };
 const manager = { ...base, canApproveOrders: true, canAssignDelivery: true, isManagerByRole: true, machineOffersReopen: true };
 const grantedStaff = { ...base, canApproveOrders: true };
@@ -92,6 +93,33 @@ describe('orderManagerActions: the assigned driver (owner decision O3, default)'
   });
 });
 
+describe('orderManagerActions: a viewer is never offered an approval-class action (slice D review, findings 1 and 10)', () => {
+  // The app refuses every write for role viewer (assertWarehouseAccess:
+  // "Read-only auditor cannot perform write operations."), and each of these
+  // actions asks warehouse write first; the sign route never hands an order
+  // over for a viewer who is not the driver (handOverAllowed). Before 0390
+  // the phone showed the section by role, so no viewer saw it.
+  const grantedViewer = { ...base, canApproveOrders: true, canAssignDelivery: true, machineOffersReopen: true, isViewerRole: true };
+
+  it('a viewer granted orders:approve sees no section at any status (mutation: drop the viewer rule)', () => {
+    for (const status of ['pending_approval', 'approved', 'picking_complete', 'packing_slip_generated', 'staged_for_delivery', 'staged_for_pickup', 'in_transit', 'backordered']) {
+      const a = at(grantedViewer, status, { hasAssignedDriver: true, fulfillmentType: status === 'staged_for_pickup' ? 'pickup' : 'delivery' });
+      expect(a.showSection, status).toBe(false);
+      expect(Object.entries(a).filter(([, v]) => v === true).map(([k]) => k), status).toEqual([]);
+    }
+  });
+
+  it('a viewer who is the assigned driver keeps the driver\'s own steps, never Mark in transit (mutation: viewer rule on the driver too)', () => {
+    const driver = { ...grantedViewer, isAssignedDriver: true, hasAssignedDriver: true };
+    expect(at(driver, 'staged_for_delivery')).toMatchObject({ showSection: false, markInTransit: false, assignDelivery: false });
+    expect(at(driver, 'in_transit')).toMatchObject({ showSection: true, digitalSignature: true, physicalSignature: true, markInTransit: false, backorderedActions: false });
+  });
+
+  it('staff are unaffected by the viewer rule', () => {
+    expect(at({ ...grantedStaff, isViewerRole: false }, 'pending_approval').approve).toBe(true);
+  });
+});
+
 describe('orderManagerActions: Physical signature is a manager by role or the driver', () => {
   it('a granted staff approver sees Collect signature but not Physical signature (confirm_physical_signature refuses them)', () => {
     expect(at(grantedStaff, 'in_transit')).toMatchObject({ digitalSignature: true, physicalSignature: false });
@@ -124,6 +152,10 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toContain('const hasPipelineActions = managerActions.showSection;');
     expect(SCREEN).not.toMatch(/const hasPipelineActions =\s*isManager/);
     expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
+  });
+
+  it('the screen tells the helper when the viewer is a viewer (mutation: drop or invert it)', () => {
+    expect(SCREEN).toMatch(/machineOffersReopen: canReopenPicking,\s*isViewerRole: role === 'viewer',\s*\}\);/);
   });
 
   it('both calls to the shared machine pass the effective permission, so reopen follows orders:approve, as the web panel does (mutation: drop either)', () => {

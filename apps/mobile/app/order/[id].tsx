@@ -1872,8 +1872,9 @@ export default function OrderDetail() {
   // the rule the server applies to that action (the effective orders:approve
   // for approval-class actions, orders:assign_delivery for the driver, a
   // manager or the driver for a paper signature), as the web page's
-  // showActionsPanel does; no longer role rank. The picking phase keeps its
-  // own section below. Old bundles still show these by role.
+  // showActionsPanel does; no longer role rank. Never an approval-class
+  // action for a viewer: the app refuses every write for one. The picking
+  // phase keeps its own section below. Old bundles still show these by role.
   const managerActions = orderManagerActions({
     status: st,
     fulfillmentType: ft,
@@ -1883,6 +1884,7 @@ export default function OrderDetail() {
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
     machineOffersReopen: canReopenPicking,
+    isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
   const pickerLabel =

@@ -241,6 +241,18 @@ export function ManagerActionsPanel({
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [rechecking, startRecheck] = React.useTransition();
 
+  // Approval-class actions (approve, deny, the pick slip, packing slips,
+  // staging, the picker and the driver, in transit, reopen, resume, close,
+  // and handing the order over as an approver) all ask warehouse write, which
+  // the app never gives a viewer (assertWarehouseAccess: "Read-only auditor
+  // cannot perform write operations."; the sign route's handOverAllowed
+  // refuses a viewer who is not the driver). So a viewer granted
+  // orders:approve is offered none of them, as on the phone
+  // (orderManagerActions isViewerRole). canApprove alone still decides
+  // Internal notes, which ask read access only.
+  const approves = canApprove && viewerRole !== 'viewer';
+  const isDriverHere = assignedDeliveryUserId !== null && assignedDeliveryUserId === viewerUserId;
+
   // Single source of truth for which picking affordances THIS viewer gets.
   // Never branch on status/role for picking here — read the shared machine.
   const actions = availableOrderActions({
@@ -257,15 +269,16 @@ export function ManagerActionsPanel({
     // 0390: Reassign picker and Reopen picking follow the effective
     // orders:approve, as assign_picking and reopen_picking decide them (a
     // granted staff member is offered both, a manager whose orders:approve
-    // was revoked neither); the picker override stays manager rank.
-    canApproveOrders: canApprove,
+    // was revoked neither); the picker override stays manager rank. Never a
+    // viewer (approves, above).
+    canApproveOrders: approves,
   });
   // The stock notice belongs to the two stock-dependent statuses only.
   const stockNotice =
-    canApprove && (status === 'pending_approval' || status === 'backordered')
+    approves && (status === 'pending_approval' || status === 'backordered')
       ? stockGates.notice
       : null;
-  const shortNotice = canApprove && status === 'pending_approval' ? approveNotice : null;
+  const shortNotice = approves && status === 'pending_approval' ? approveNotice : null;
   const isPickingPhase =
     status === 'pick_slip_generated' || status === 'picking_in_progress';
   const pickingStatus = derivePickingStatus(status, assignedPickerId);
@@ -640,7 +653,7 @@ export function ManagerActionsPanel({
 
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap gap-2">
-          {status === 'pending_approval' && canApprove && (
+          {status === 'pending_approval' && approves && (
             <>
               <NeededBySuggest
                 orderId={orderId}
@@ -679,7 +692,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'approved' && (
+          {status === 'approved' && approves && (
             <Button
               variant="gradient"
               onClick={generatePickSlip}
@@ -785,18 +798,20 @@ export function ManagerActionsPanel({
 
           {status === 'picking_complete' && (
             <>
-              <Button
-                variant="gradient"
-                onClick={generatePackingSlips}
-                disabled={busy !== null}
-              >
-                {busy === 'generate-packing-slips' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Box className="h-3.5 w-3.5" />
-                )}
-                Generate packing slips
-              </Button>
+              {approves && (
+                <Button
+                  variant="gradient"
+                  onClick={generatePackingSlips}
+                  disabled={busy !== null}
+                >
+                  {busy === 'generate-packing-slips' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Box className="h-3.5 w-3.5" />
+                  )}
+                  Generate packing slips
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={printPickSlip}
@@ -845,7 +860,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && (
+          {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && approves && (
             <Button
               variant="default"
               onClick={() => guardDeparture('stage', () => void stagePickup())}
@@ -860,7 +875,7 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && (
+          {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && approves && (
             <Button
               variant="default"
               onClick={() => guardDeparture('stage', () => void stageDelivery())}
@@ -884,7 +899,7 @@ export function ManagerActionsPanel({
 
           {/* assign_order_delivery asks orders:assign_delivery AND
               orders:approve (0390); the phone shows it the same way. */}
-          {status === 'staged_for_delivery' && canApprove && canAssignDelivery && (
+          {status === 'staged_for_delivery' && approves && canAssignDelivery && (
             <AssignDeliveryDialog
               orderId={orderId}
               drivers={drivers}
@@ -902,7 +917,7 @@ export function ManagerActionsPanel({
               orders:approve, the driver included, so an assigned staff
               driver without it is not offered a button the server refuses
               (the phone's order screen hides it the same way). */}
-          {status === 'staged_for_delivery' && assignedDeliveryUserId && canApprove && (
+          {status === 'staged_for_delivery' && assignedDeliveryUserId && approves && (
             <Button
               variant="default"
               onClick={() => guardDeparture('in_transit', () => void markInTransit())}
@@ -917,7 +932,7 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {(status === 'staged_for_pickup' || status === 'in_transit') && (
+          {(status === 'staged_for_pickup' || status === 'in_transit') && (approves || isDriverHere) && (
             <>
               {/* The sign page opens in the "anyway" click itself, so the
                   browser still treats it as the person's own action. With no
@@ -949,7 +964,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'backordered' && canApprove && (
+          {status === 'backordered' && approves && (
             <>
               {stockGates.resume !== 'waiting' ? (
                 <Button

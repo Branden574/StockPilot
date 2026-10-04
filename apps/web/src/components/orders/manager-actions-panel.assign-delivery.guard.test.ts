@@ -28,8 +28,11 @@ describe('Assign delivery follows both permissions on the web', () => {
   });
 
   it('the panel renders the dialog only with both, hidden when the prop is left out', () => {
+    // `approves` is orders:approve for anyone but a viewer (slice D review,
+    // findings 1 and 10): the app refuses every write for a viewer.
+    expect(PANEL).toContain("const approves = canApprove && viewerRole !== 'viewer';");
     expect(PANEL).toContain(
-      "{status === 'staged_for_delivery' && canApprove && canAssignDelivery && (",
+      "{status === 'staged_for_delivery' && approves && canAssignDelivery && (",
     );
     expect(PANEL).toContain('canAssignDelivery = false,');
   });

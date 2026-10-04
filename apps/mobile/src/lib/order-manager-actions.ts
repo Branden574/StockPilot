@@ -39,6 +39,14 @@ export interface OrderManagerActionsInput {
    *  (core availableOrderActions with canApproveOrders, the web panel's own
    *  answer). */
   machineOffersReopen: boolean;
+  /** Role viewer. The app refuses every write for a viewer
+   *  (assertWarehouseAccess: "Read-only auditor cannot perform write
+   *  operations."), and every approval-class action here asks warehouse
+   *  write first, so a viewer granted orders:approve is offered none of them
+   *  (the web panel applies the same rule). A viewer who is the assigned
+   *  driver keeps the driver's own hand-over steps, which ask no warehouse
+   *  write. */
+  isViewerRole: boolean;
 }
 
 export interface OrderManagerActions {
@@ -83,7 +91,10 @@ const DRIVER_STATUSES: ReadonlySet<string> = new Set(['staged_for_delivery', 'in
 export function orderManagerActions(input: OrderManagerActionsInput): OrderManagerActions {
   const st = input.status ?? '';
   const ft = input.fulfillmentType ?? '';
-  const approver = input.canApproveOrders && APPROVER_STATUSES.has(st);
+  // Approval-class actions: the effective orders:approve, never for a viewer
+  // (every one of them asks warehouse write, which the app never gives one).
+  const approves = input.canApproveOrders && !input.isViewerRole;
+  const approver = approves && APPROVER_STATUSES.has(st);
   const driverHere = input.isAssignedDriver && DRIVER_STATUSES.has(st);
   // The web's showActionsPanel audience for these statuses.
   const audience = approver || driverHere;
@@ -111,7 +122,7 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
     // driver included. A staff driver without it is refused by the server, so
     // the button is not offered.
     markInTransit:
-      at('staged_for_delivery') && input.hasAssignedDriver && input.canApproveOrders,
+      at('staged_for_delivery') && input.hasAssignedDriver && approves,
     // The sign route's member path admits an approver or the assigned driver:
     // exactly this section's audience at a hand-over status.
     digitalSignature: audience && handOver,
