@@ -16,6 +16,9 @@
 --    nulled. Every one of the data block's 10 raise sites is covered: 9 by a
 --    planted mismatch here, the trigger-state check (which cannot be planted
 --    without editing the block) by the mutation driver (mutate-0392.py I7).
+--    (Review stage) X10: an error the block does not foresee (a NOT VALID
+--    check) aborts with its SQLSTATE and constraint name and never prints the
+--    side row's tokens or the image.
 --    X0: the fixtures are byte for byte as before.
 -- D. The move: every image lands in the side table byte for byte (an order
 --    with no side row, one whose side row holds link tokens, one whose side
@@ -41,13 +44,14 @@
 --   I3 the capture trigger SECURITY DEFINER                  -> P1
 --   I4 the move nulls the rows before the byte check          -> X3 (no raise: the check is gone)
 --   I5 the updated_at trigger left enabled during the move    -> R2 (other_columns_changed raises; nothing applied)
+--   I9 the unexpected-error wrapper re-raises every error     -> X10 (review stage)
 --
 -- Roles: fixtures as the test superuser; attempts through pg_temp.attempt
 -- (undone) or pg_temp.call_as (kept). begin/rollback. Namespace 03930000.
 
 begin;
 
-select plan(30);
+select plan(31);
 
 \set orgA   '\'03930000-0000-0000-0000-00000000000a\''
 \set mgr    '\'03930000-0000-0000-0000-0000000000a1\''
@@ -343,10 +347,22 @@ select matches(
                         for each row execute function zz_probe_0393.order_after()'),
   '^P0001:order_secrets_images_copy_mismatch:The side table does not hold the \d+ images the rows held',
   'X9: a side image changed after its row was nulled (after the byte check): the image checksum raises');
+-- (The side return token is read first: a subquery on the side table would
+-- keep it open while the probe alters it.)
+insert into snap values ('iDone2_ret', (select s.return_token::text from public.order_request_secrets s where s.order_request_id = :iDone2));
+select is(
+  (select split_part(r, ':', 1) || ':' || split_part(r, ':', 2) || '|'
+          || (r ~ '23514') || '|' || (r ~ 'zz_probe_0393_chk') || '|'
+          || (r ~ 'data:image' or position((select v from snap where k = 'iDone2_ret') in r) > 0)::text
+     from (select pg_temp.try_move_d(
+             'alter table public.order_request_secrets add constraint zz_probe_0393_chk
+                check (signature_data_url is null or return_token is null) not valid') as r) x),
+  'P0001:order_secrets_images_unexpected_error|true|true|false',
+  'X10: (review stage) an error the block does not foresee (a NOT VALID check the side row of an order holding a return token breaks when its image lands) aborts with its SQLSTATE and constraint name only: the side row the error would print (its tokens, the image) never reaches the output or the log');
 select is(
   pg_temp.fixture_state(),
   (select v from snap where k = 'fixtures'),
-  'X0: after the 9 refused runs every fixture order and side row is byte for byte as before');
+  'X0: after the 10 refused runs every fixture order and side row is byte for byte as before');
 
 select lives_ok(pg_temp.mig('0393', '$c393_lock$'), 'R1a: the lock prelude replays');
 select is(
