@@ -46,7 +46,7 @@
 
 import { z } from 'zod';
 
-import { NEEDED_BY_IN_PAST_COPY, NEEDED_BY_OUT_OF_RANGE_COPY } from './needed-by-revision';
+import { NEEDED_BY_IN_PAST_COPY, NEEDED_BY_OUT_OF_RANGE_COPY } from './needed-by-words';
 import { formatOrderNumber } from './order-number';
 
 // ── Caps ────────────────────────────────────────────────────────────────────

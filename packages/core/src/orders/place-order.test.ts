@@ -12,7 +12,7 @@ import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { NEEDED_BY_IN_PAST_COPY, NEEDED_BY_OUT_OF_RANGE_COPY } from './needed-by-revision';
+import { NEEDED_BY_IN_PAST_COPY, NEEDED_BY_OUT_OF_RANGE_COPY } from './needed-by-words';
 import {
   classifyOrderSettleResult,
   classifyOrderSubmitResult,
@@ -670,6 +670,20 @@ describe('importing this module runs nothing', () => {
 
   it.each(['place-order.ts', 'storefront/copy.ts'])('%s has no call at its top level', (rel) => {
     expect(topLevelCalls(rel)).toEqual([]);
+  });
+
+  it("place-order.ts does not pull the needed-by revision dialog into the New order page (review round 1)", () => {
+    // Web chunks include whole modules: importing two sentences from
+    // needed-by-revision.ts shipped the revision dialog's words on the
+    // storefront (2.4 kB raw, 0.9 kB gzip, measured on the production build).
+    // The shared needed-by words live in needed-by-words.ts.
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), 'place-order.ts');
+    const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    const imports = sf.statements
+      .filter(ts.isImportDeclaration)
+      .map((d) => (d.moduleSpecifier as ts.StringLiteral).text);
+    expect(imports).not.toContain('./needed-by-revision');
+    expect(imports).toContain('./needed-by-words');
   });
 
   it('the guard sees a top-level call', () => {

@@ -26,17 +26,13 @@
 
 import type { OrderStatus } from '../order-state-machine';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
-import { zonedParts } from '../time/zoned-wall-clock';
+import { NEEDED_BY_MAX_YEARS_AHEAD, neededByLabel } from './needed-by-words';
 import { formatOrderNumber } from './order-number';
 
 // ── Limits (the function refuses past them too) ─────────────────────────────
 
 /** A reason is required: 1 to 500 characters after trimming. */
 export const NEEDED_BY_REASON_MAX = 500;
-/** A needed-by later than this many years from now is refused
- *  (needed_by_out_of_range): no screen needs one, and the far end of a
- *  timestamp (infinity, year 290000) is past what JavaScript's Date holds. */
-export const NEEDED_BY_MAX_YEARS_AHEAD = 5;
 
 /**
  * Whether a needed-by is within reach: at most NEEDED_BY_MAX_YEARS_AHEAD years
@@ -268,39 +264,6 @@ export type NeededByFailureReason =
 
 // ── Words ───────────────────────────────────────────────────────────────────
 
-/**
- * A needed-by as the screens print it, in the org's zone: "Fri, Oct 3, 2:00
- * PM", with the year when it is not the current year there ("Fri, Jan 8,
- * 2027, 9:00 AM").
- */
-export function neededByLabel(
-  at: string | number | Date,
-  timeZone: string,
-  now: number | Date = Date.now(),
-): string {
-  const zone = resolveOrgTimezone(timeZone);
-  const t = at instanceof Date ? at.getTime() : typeof at === 'number' ? at : Date.parse(at);
-  if (!Number.isFinite(t)) return '—';
-  const sameYear = zonedParts(t, zone).year === zonedParts(now, zone).year;
-  return formatOrgDateTime(
-    t,
-    {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      ...(sameYear ? {} : { year: 'numeric' as const }),
-      hour: 'numeric',
-      minute: '2-digit',
-    },
-    zone,
-  );
-}
-
-/** Under the date field: "Times are in America/Los_Angeles." */
-export function neededByZoneNote(timeZone: string): string {
-  return `Times are in ${resolveOrgTimezone(timeZone)}.`;
-}
-
 /** The preview before saving: "New needed-by: Fri, Oct 3, 2:00 PM". */
 export function neededByPreviewCopy(at: string | number | Date, timeZone: string, now?: number | Date): string {
   return `New needed-by: ${neededByLabel(at, timeZone, now)}`;
@@ -310,8 +273,6 @@ export function neededByPreviewCopy(at: string | number | Date, timeZone: string
 export const NEEDED_BY_REVISED_TIMELINE_LABEL = 'Needed-by date changed';
 
 export const NEEDED_BY_REASON_REQUIRED_COPY = `Say why the date is changing (up to ${NEEDED_BY_REASON_MAX} characters).`;
-export const NEEDED_BY_IN_PAST_COPY = 'Pick a needed-by date and time that is still to come.';
-export const NEEDED_BY_OUT_OF_RANGE_COPY = `Pick a needed-by date within the next ${NEEDED_BY_MAX_YEARS_AHEAD} years.`;
 export const NEEDED_BY_CLOSED_COPY =
   "This order is closed (completed, denied, cancelled or not yet confirmed), so its needed-by date can't change.";
 export const NEEDED_BY_NOT_APPROVER_COPY = 'Changing the needed-by date needs permission to approve orders.';
