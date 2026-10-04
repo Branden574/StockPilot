@@ -912,6 +912,30 @@ WEB_TESTS=(
   src/components/orders/storefront/storefront-on-behalf.guard.test.ts
   src/components/orders/manager-actions-panel.test.tsx
   src/components/orders/manager-actions-panel.assign-delivery.guard.test.ts
+  # The phone storefront's reads (phone ordering PO-3, INV-E4). Bearer-safe:
+  # every per-caller read is ctx.supabase, driven as a viewer with category
+  # grants and a charter-scoped assignment while the cookie client and the
+  # request-cached module read throw, and no route, service or loader of the
+  # slice names a cookie-session helper. The warehouse perimeter (the caller's
+  # own warehouses) comes before any shared admin-client read, so a foreign, a
+  # hidden or an archived warehouse is refused and never reaches the sites
+  # loader; the gates (Orders module, MFA step-up, orders:request) come before
+  # any read; the item is built without its price; recent requesters are read
+  # only for an orders:approve holder; the photo map is filtered to the
+  # caller's own catalog and signed in calls of at most 1,000 paths, never
+  # cached photo-less; the kill switch covers these reads only, never placing
+  # or settling an order; the loaders' caller parameters use the caller's
+  # client and modules and the cookie path's key is unchanged.
+  src/app/api/v1/orders/storefront/bearer-safe.guard.test.ts
+  src/app/api/v1/orders/storefront/route.test.ts
+  src/app/api/v1/orders/storefront/kill-switch.test.ts
+  src/app/api/v1/orders/catalog/route.test.ts
+  src/app/api/v1/orders/catalog/photos/route.test.ts
+  src/server/services/order-storefront.test.ts
+  src/server/loaders/orders-phone-catalog.test.ts
+  src/server/loaders/orders-new-catalog.test.ts
+  src/server/loaders/orders-kits.test.ts
+  src/server/loaders/orders-frequently-ordered.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
