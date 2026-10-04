@@ -98,7 +98,8 @@
 -- ── LOCK FOOTPRINT OF THIS FILE ────────────────────────────────────────────
 -- The push runs this file as one transaction. The table's two foreign keys
 -- add RI triggers to organizations and order_requests (SHARE ROW EXCLUSIVE on
--- both, to commit). On this platform CREATE POLICY and COMMENT ON POLICY run
+-- both, to commit); creating the SQL-language functions reads inventory_items
+-- and order_request_lines (ACCESS SHARE). On this platform CREATE POLICY and COMMENT ON POLICY run
 -- by postgres also take ACCESS EXCLUSIVE, to commit, on every table
 -- supautils.policy_grants lists for the role (supautils 3.4.0 in image
 -- 17.6.1.166; 0390's prelude has the evidence): auth, storage and realtime
@@ -134,6 +135,10 @@ begin
     v_try := v_try + 1;
     begin
       lock table only public.organizations, public.order_requests in share row exclusive mode nowait;
+      -- Read when the SQL-language functions below are created (their bodies
+      -- are checked then): ACCESS SHARE, which only a schema change conflicts
+      -- with, taken here so no later statement can wait.
+      lock table only public.inventory_items, public.order_request_lines in access share mode nowait;
       if v_grants is not null then
         for v_name in
           select jsonb_array_elements_text(coalesce(v_grants::jsonb -> current_user::text, '[]'::jsonb))
