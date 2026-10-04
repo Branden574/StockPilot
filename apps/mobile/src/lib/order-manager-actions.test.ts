@@ -126,6 +126,12 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
   });
 
+  it('both calls to the shared machine pass the effective permission, so reopen follows orders:approve, as the web panel does (mutation: drop either)', () => {
+    const calls = SCREEN.split('availableOrderActions({').slice(1).map((c) => c.slice(0, c.indexOf('})')));
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call).toContain('canApproveOrders: rpApprove,');
+  });
+
   it('each button reads its own gate', () => {
     for (const gate of [
       'managerActions.approve ?',

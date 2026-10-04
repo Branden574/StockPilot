@@ -248,6 +248,11 @@ export function ManagerActionsPanel({
     viewerCanPick,
     // Offered (enabled, or disabled with the reason) unless the gates hide it.
     isShortStock: stockGates.approvePartial !== 'hidden',
+    // 0390: Reassign picker and Reopen picking follow the effective
+    // orders:approve, as assign_picking and reopen_picking decide them (a
+    // granted staff member is offered both, a manager whose orders:approve
+    // was revoked neither); the picker override stays manager rank.
+    canApproveOrders: canApprove,
   });
   // The stock notice belongs to the two stock-dependent statuses only.
   const stockNotice =
@@ -885,7 +890,11 @@ export function ManagerActionsPanel({
             />
           )}
 
-          {status === 'staged_for_delivery' && assignedDeliveryUserId && (
+          {/* Owner decision O3 (default, 0390): marking in transit needs
+              orders:approve, the driver included, so an assigned staff
+              driver without it is not offered a button the server refuses
+              (the phone's order screen hides it the same way). */}
+          {status === 'staged_for_delivery' && assignedDeliveryUserId && canApprove && (
             <Button
               variant="default"
               onClick={() => guardDeparture('in_transit', () => void markInTransit())}

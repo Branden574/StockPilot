@@ -538,11 +538,14 @@ const DELIVERY_BUSY_COPY = 'Someone else is changing this order right now. Try a
  * again"; the functions never raise 40001/40P01. Anything else (a revoked
  * grant, a network fault) is internal_error, whose public message is generic.
  */
-function deliveryWriteError(error: {
-  message?: string | null;
-  code?: string | null;
-  hint?: string | null;
-}): ServiceError {
+function deliveryWriteError(
+  error: {
+    message?: string | null;
+    code?: string | null;
+    hint?: string | null;
+  },
+  action: 'assign' | 'in_transit',
+): ServiceError {
   const msg = error.message ?? '';
   if (msg === 'order_request_not_found') return new ServiceError('not_found', 'Order not found');
   if (msg === 'module_disabled') {
@@ -559,7 +562,10 @@ function deliveryWriteError(error: {
       return new ServiceError('forbidden', 'Missing permission: orders:assign_delivery');
     }
     if (error.hint === 'orders_approve') {
-      return new ServiceError('forbidden', IN_TRANSIT_NOT_APPROVER_COPY);
+      return new ServiceError(
+        'forbidden',
+        action === 'assign' ? 'Missing permission: orders:approve' : IN_TRANSIT_NOT_APPROVER_COPY,
+      );
     }
   }
   if (msg === 'delivery_not_assignable') {
@@ -4109,6 +4115,16 @@ export class OrderRequestsService {
   async assignDelivery(id: string, deliveryUserId: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:assign_delivery');
+    // And orders:approve (0390): before 0390 the write also needed the order
+    // update policy (a manager by role or orders:approve); with the role term
+    // gone that is orders:approve, which assign_order_delivery now asks too.
+    // A manager whose orders:approve was revoked therefore cannot make
+    // themself the driver and hand the order over as the driver. Both web and
+    // phone already offered Assign delivery to approvers only. can(), not
+    // assertPermission: no new MFA step-up on an action that never had one.
+    if (!can(this.ctx, 'orders:approve')) {
+      throw new ServiceError('forbidden', 'Missing permission: orders:approve');
+    }
     await this.requireWarehouseAccess(id, 'write');
 
     // Defense-in-depth: assignee must be an active org member.
@@ -4142,15 +4158,15 @@ export class OrderRequestsService {
 
     // The write goes through assign_order_delivery (0390, SECURITY DEFINER):
     // since 0390 the order update policy admits orders:approve holders only,
-    // and this action's permission is orders:assign_delivery. The function
-    // re-checks every gate above under the order's row lock (the permission,
-    // write access, staged_for_delivery, an accepted member as the driver) and
-    // stamps assigned_delivery_by itself.
+    // so the delivery stamps are no longer written through the user client.
+    // The function re-checks every gate above (both permissions, write
+    // access, staged_for_delivery under the order's row lock, an accepted
+    // member as the driver) and stamps assigned_delivery_by itself.
     const { data: updated, error } = await this.ctx.supabase.rpc('assign_order_delivery', {
       p_id: id,
       p_driver: deliveryUserId,
     });
-    if (error) throw deliveryWriteError(error);
+    if (error) throw deliveryWriteError(error, 'assign');
     if (!updated) throw new ServiceError('internal_error', 'assign_order_delivery returned no row');
     await audit(
       {
@@ -4239,7 +4255,7 @@ export class OrderRequestsService {
     const { data: updated, error } = await this.ctx.supabase.rpc('mark_order_in_transit', {
       p_id: id,
     });
-    if (error) throw deliveryWriteError(error);
+    if (error) throw deliveryWriteError(error, 'in_transit');
     if (!updated)
       throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     const finalRow = updated as OrderRequestRow;

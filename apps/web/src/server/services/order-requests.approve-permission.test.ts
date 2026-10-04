@@ -21,9 +21,12 @@ import { dispatchEvent } from './integration-events';
  *
  * - assignDelivery and markInTransit write through the two new SECURITY
  *   DEFINER functions (assign_order_delivery, mark_order_in_transit), because
- *   the order update policy now admits orders:approve holders only and
- *   assignDelivery's permission is orders:assign_delivery. No user-client
- *   UPDATE of order_requests is left in either.
+ *   the order update policy now admits orders:approve holders only. No
+ *   user-client UPDATE of order_requests is left in either.
+ * - assignDelivery asks orders:assign_delivery AND orders:approve: before
+ *   0390 the write also needed the update policy (a manager by role or
+ *   orders:approve), so with the role term gone a manager whose
+ *   orders:approve was revoked can no longer assign, themself included.
  * - markInTransit asks orders:approve (owner decision O3, default): an
  *   assigned staff driver without it is refused in words that are true, where
  *   it used to read "the assigned driver or a manager" and then fail in the
@@ -90,10 +93,30 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
     );
   });
 
-  it('a manager whose orders:approve was revoked still assigns (they keep orders:assign_delivery)', async () => {
-    const stub = assignStub({ data: { id: 'ord-1', assigned_delivery_user_id: 'drv-2' }, error: null });
-    await svc(stub, { permissions: ['orders:assign_delivery', 'orders:request'] }).assignDelivery('ord-1', 'drv-2');
-    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['assign_order_delivery']);
+  it('refuses a manager whose orders:approve was revoked (they keep orders:assign_delivery), themself as the driver included, before any database call', async () => {
+    for (const driver of ['drv-2', 'mgr-1']) {
+      const stub = assignStub({ data: { id: 'ord-1', assigned_delivery_user_id: driver }, error: null });
+      await expect(
+        svc(stub, { permissions: ['orders:assign_delivery', 'orders:request'] }).assignDelivery('ord-1', driver),
+      ).rejects.toMatchObject({ code: 'forbidden', message: 'Missing permission: orders:approve' });
+      expect(stub.rpcCalls).toHaveLength(0);
+      expect(stub.chains.get('order_requests.update')).toBeUndefined();
+    }
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('refuses staff holding orders:assign_delivery without orders:approve, and lets staff granted both assign', async () => {
+    const refused = assignStub({ data: null, error: null });
+    await expect(
+      svc(refused, { role: 'staff', permissions: ['orders:assign_delivery', 'orders:request'] }).assignDelivery('ord-1', 'drv-2'),
+    ).rejects.toMatchObject({ code: 'forbidden', message: 'Missing permission: orders:approve' });
+    expect(refused.rpcCalls).toHaveLength(0);
+    const allowed = assignStub({ data: { id: 'ord-1', assigned_delivery_user_id: 'drv-2' }, error: null });
+    await svc(allowed, {
+      role: 'staff',
+      permissions: ['orders:approve', 'orders:assign_delivery', 'orders:request'],
+    }).assignDelivery('ord-1', 'drv-2');
+    expect(allowed.rpcCalls.map((c) => c.name)).toEqual(['assign_order_delivery']);
   });
 
   it('refuses without orders:assign_delivery before any database call', async () => {
@@ -106,6 +129,7 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
 
   it.each([
     [{ code: '42501', message: 'forbidden', hint: 'orders_assign_delivery' }, 'forbidden', 'Missing permission: orders:assign_delivery'],
+    [{ code: '42501', message: 'forbidden', hint: 'orders_approve' }, 'forbidden', 'Missing permission: orders:approve'],
     [{ code: '42501', message: 'forbidden', hint: 'warehouse_write' }, 'forbidden', "You don't have write access to this order's warehouse."],
     [{ code: 'P0001', message: 'delivery_not_assignable', hint: 'not_staged_for_delivery' }, 'validation_error', 'Delivery can only be assigned to staged-for-delivery orders.'],
     [{ code: 'P0001', message: 'driver_not_member', hint: 'driver_not_member' }, 'validation_error', 'That user is not an active member of this organization.'],

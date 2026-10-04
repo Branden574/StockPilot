@@ -36,7 +36,8 @@ export interface OrderManagerActionsInput {
   /** The order has a delivery driver at all. */
   hasAssignedDriver: boolean;
   /** The shared order state machine offers reopen_picking to this viewer
-   *  (core availableOrderActions, the web panel's own answer). */
+   *  (core availableOrderActions with canApproveOrders, the web panel's own
+   *  answer). */
   machineOffersReopen: boolean;
 }
 
@@ -99,7 +100,7 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
     stageForPickup: approver && st === 'packing_slip_generated' && ft === 'pickup',
     stageForDelivery: approver && st === 'packing_slip_generated' && ft === 'delivery',
     // reopen_picking asks orders:approve; the shared machine decides the
-    // statuses (and, on both platforms, still a manager by role).
+    // statuses and, given canApproveOrders, the same permission (0390).
     reopenPicking:
       approver &&
       (st === 'picking_complete' || st === 'packing_slip_generated') &&

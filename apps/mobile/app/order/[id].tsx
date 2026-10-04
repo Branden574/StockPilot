@@ -1838,6 +1838,8 @@ export default function OrderDetail() {
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
           viewerCanPick,
+          // 0390: approval-class actions follow the effective permission.
+          canApproveOrders: rpApprove,
         })
       : [];
   const canClaimPick = pickActions.includes('claim_picking');
@@ -1861,6 +1863,9 @@ export default function OrderDetail() {
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
           viewerCanPick,
+          // 0390: reopen_picking asks orders:approve, so a granted staff
+          // member is offered it and a revoked manager is not (as on the web).
+          canApproveOrders: rpApprove,
         }).includes('reopen_picking')
       : false;
   // Slice D (0390): the MANAGER ACTIONS section and each button in it follow

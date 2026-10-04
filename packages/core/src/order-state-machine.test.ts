@@ -438,3 +438,81 @@ describe('reopen picking (manager override)', () => {
     expect(actions).not.toContain('reopen_picking');
   });
 });
+
+/**
+ * Security slice D (migration 0390): the database decides approval-class
+ * actions by the effective orders:approve alone. With canApproveOrders the
+ * machine follows it; without it, every rule stays manager rank (old callers
+ * and old phone bundles unchanged).
+ */
+describe('approval-class actions follow canApproveOrders (0390)', () => {
+  const at = (
+    status: Parameters<typeof availableOrderActions>[0]['status'],
+    viewerRole: Parameters<typeof availableOrderActions>[0]['viewerRole'],
+    canApproveOrders: boolean | undefined,
+    extra: Partial<Parameters<typeof availableOrderActions>[0]> = {},
+  ) =>
+    availableOrderActions({
+      status,
+      viewerRole,
+      viewerUserId: 'u1',
+      assignedPickerId: null,
+      assignedDeliveryUserId: null,
+      hasAssignedDelivery: false,
+      isShortStock: false,
+      hasFulfillableStock: true,
+      fulfillmentType: 'delivery',
+      ...(canApproveOrders === undefined ? {} : { canApproveOrders }),
+      ...extra,
+    });
+
+  it('omitted, nothing changes: a manager keeps every action and staff none of them', () => {
+    expect(at('picking_complete', 'manager', undefined)).toEqual(['generate_packing_slips', 'reopen_picking', 'cancel']);
+    expect(at('picking_complete', 'staff', undefined)).toEqual(['generate_packing_slips']);
+    expect(at('pick_slip_generated', 'manager', undefined, { assignedPickerId: 'p9' })).toEqual([
+      'print_pick_slip', 'open_digital_pick', 'mark_picking_complete', 'reassign_picker', 'cancel', 'release_picking',
+    ]);
+    expect(at('staged_for_delivery', 'staff', undefined, { hasAssignedDelivery: true, assignedDeliveryUserId: 'u1' })).toEqual([
+      'mark_in_transit',
+    ]);
+  });
+
+  it('a manager whose orders:approve was revoked loses reopen, reassign picker, cancel, assign, in transit, resume and close, and keeps the picker override', () => {
+    expect(at('picking_complete', 'manager', false)).toEqual(['generate_packing_slips']);
+    expect(at('packing_slip_generated', 'manager', false)).toEqual([
+      'print_customer_slip', 'print_warehouse_slip', 'mark_staged_delivery',
+    ]);
+    expect(at('pick_slip_generated', 'manager', false, { assignedPickerId: 'p9' })).toEqual([
+      'print_pick_slip', 'open_digital_pick', 'mark_picking_complete', 'release_picking',
+    ]);
+    expect(at('staged_for_delivery', 'manager', false, { hasAssignedDelivery: true, assignedDeliveryUserId: 'u1' })).toEqual([]);
+    expect(at('backordered', 'manager', false)).toEqual(['view_signature', 'view_final_packing_slip']);
+    expect(at('pending_approval', 'manager', false)).not.toContain('cancel');
+  });
+
+  it('a staff member granted orders:approve gains them, without the picker override', () => {
+    expect(at('picking_complete', 'staff', true)).toEqual(['generate_packing_slips', 'reopen_picking', 'cancel']);
+    expect(at('pick_slip_generated', 'staff', true)).toEqual(['print_pick_slip', 'claim_picking', 'reassign_picker', 'cancel']);
+    expect(at('pick_slip_generated', 'staff', true, { assignedPickerId: 'p9' })).toEqual([
+      'print_pick_slip', 'reassign_picker', 'cancel',
+    ]);
+    expect(at('staged_for_delivery', 'staff', true, { hasAssignedDelivery: true, assignedDeliveryUserId: 'p9' })).toEqual([
+      'assign_delivery', 'mark_in_transit', 'cancel',
+    ]);
+    expect(at('backordered', 'staff', true)).toEqual([
+      'resume_fulfillment', 'close_partial', 'cancel', 'view_signature', 'view_final_packing_slip',
+    ]);
+  });
+
+  it('marking in transit follows the permission outright (owner decision O3, default): an assigned staff driver without it is not offered it', () => {
+    expect(at('staged_for_delivery', 'staff', false, { hasAssignedDelivery: true, assignedDeliveryUserId: 'u1' })).toEqual([]);
+    expect(at('staged_for_delivery', 'staff', true, { hasAssignedDelivery: true, assignedDeliveryUserId: 'u1' })).toContain(
+      'mark_in_transit',
+    );
+    expect(at('staged_for_delivery', 'owner', true, { hasAssignedDelivery: false })).not.toContain('mark_in_transit');
+  });
+
+  it('a viewer who cannot pick still gets view and print only, whatever the permission', () => {
+    expect(at('pick_slip_generated', 'staff', true, { viewerCanPick: false })).toEqual(['print_pick_slip']);
+  });
+});

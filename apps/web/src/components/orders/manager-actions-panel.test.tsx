@@ -854,3 +854,52 @@ describe('ManagerActionsPanel — the needed-by chip hydrates in any zone', () =
     expect(container.textContent).toContain('Needed by Mon, Sep 28, 2:00 PM');
   });
 });
+
+/**
+ * Security slice D (migration 0390): the panel offers what the server accepts.
+ * Reassign picker and Reopen picking follow the effective orders:approve (as
+ * assign_picking and reopen_picking decide them); the picker override stays
+ * manager rank (complete_picking, release_picking); Mark in transit needs
+ * orders:approve, the driver included (owner decision O3, default), as the
+ * phone's order screen already did.
+ */
+describe('ManagerActionsPanel — approval-class buttons follow orders:approve (0390)', () => {
+  it('a manager whose orders:approve was revoked: no Reassign picker or Reopen picking, still the picker override', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ canApprove: false, viewerRole: 'manager', assignedPickerId: 'other-picker', assignedPickerName: 'Sam Lee' })}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /(Assign|Reassign) picker/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Mark picking complete')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Release/ })).toBeInTheDocument();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'picking_complete', canApprove: false, viewerRole: 'manager' })} />);
+    expect(screen.queryByRole('button', { name: 'Reopen picking' })).not.toBeInTheDocument();
+  });
+
+  it('a staff member granted orders:approve: Assign picker and Reopen picking, no picker override', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel {...baseProps({ canApprove: true, viewerRole: 'staff', assignedPickerId: 'other-picker' })} />,
+    );
+    expect(screen.getByRole('button', { name: /Reassign picker/ })).toBeInTheDocument();
+    expect(screen.queryByText('Mark picking complete')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Release/ })).not.toBeInTheDocument();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'picking_complete', canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByRole('button', { name: 'Reopen picking' })).toBeInTheDocument();
+  });
+
+  it('an assigned staff driver without orders:approve is not offered Mark in transit; an approver is', () => {
+    const staged = {
+      status: 'staged_for_delivery' as const,
+      fulfillmentType: 'delivery' as const,
+      assignedDeliveryUserId: 'me',
+    };
+    const { unmount } = render(<ManagerActionsPanel {...baseProps({ ...staged, canApprove: false, viewerRole: 'staff' })} />);
+    expect(screen.queryByRole('button', { name: 'Mark in transit' })).not.toBeInTheDocument();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ ...staged, canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByRole('button', { name: 'Mark in transit' })).toBeInTheDocument();
+  });
+});
