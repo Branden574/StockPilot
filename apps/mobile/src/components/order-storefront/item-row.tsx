@@ -16,7 +16,9 @@ import { CachedImage } from '@/components/ui/cached-image';
 import { Body, Mono } from '@/components/ui/text';
 import {
   ITEM_ROW_HINT,
+  addBlockedHint,
   addItemLabel,
+  changeLockedHint,
   decreaseLabel,
   increaseBlockedHint,
   increaseLabel,
@@ -88,6 +90,7 @@ export const ItemRow = React.memo(function ItemRow({
         incLabel={increaseLabel(item.name)}
         countLabel={quantityButtonLabel(item.name, quantity)}
         incHint={increaseBlockedHint(quantity >= available)}
+        lockHint={changeLockedHint(locked)}
         onDec={() => onDec(item.id)}
         onInc={() => onInc(item.id)}
         onCount={() => onQuantity(item.id)}
@@ -97,6 +100,7 @@ export const ItemRow = React.memo(function ItemRow({
         label={STOREFRONT_ADD_COPY}
         accessibilityLabel={addItemLabel(item.name)}
         disabled={locked || out || notOrderable}
+        hint={addBlockedHint({ locked, notOrderable })}
         onPress={() => onAdd(item.id)}
       />
     );
@@ -106,7 +110,7 @@ export const ItemRow = React.memo(function ItemRow({
       <Pressable
         onPress={() => onOpen(item.id)}
         accessibilityRole="button"
-        accessibilityLabel={itemRowLabel(item, quantity, earmark)}
+        accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}
         accessibilityHint={ITEM_ROW_HINT}
         style={({ pressed }) => [styles.main, { opacity: pressed ? 0.8 : 1 }]}
       >

@@ -57,12 +57,15 @@ import {
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import {
+  addBlockedHint,
   addItemLabel,
   addedAnnouncement,
+  changeLockedHint,
   decreaseLabel,
   increaseBlockedHint,
   increaseLabel,
   kitAnnouncement,
+  lineChangeAnnouncement,
   quantityAnnouncement,
   quantityButtonLabel,
 } from '@/lib/order-storefront/a11y';
@@ -562,7 +565,11 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
       onInc={onInc}
       onDec={onDec}
       onQuantity={onQuantity}
-      onRemove={(itemId) => session.dispatch({ type: 'remove', itemId })}
+      onRemove={(itemId) => {
+        if (session.dispatch({ type: 'remove', itemId }) !== null) return;
+        const said = lineChangeAnnouncement(session.getSnapshot(), itemId);
+        if (said) say(said);
+      }}
       onAdd={onAdd}
       onClear={() => session.dispatch({ type: 'clear' })}
     />
@@ -653,6 +660,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
                 incLabel={increaseLabel(sheetItem.name)}
                 countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
                 incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem))}
+                lockHint={changeLockedHint(locked)}
                 onDec={() => onDec(sheetItem.id)}
                 onInc={() => onInc(sheetItem.id)}
                 onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
@@ -663,6 +671,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
                 accessibilityLabel={addItemLabel(sheetItem.name)}
                 variant="primary"
                 disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
+                hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}
                 onPress={() => onAdd(sheetItem.id)}
               />
             )
@@ -678,6 +687,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
             <SmallAction
               label={KIT_ADD_COPY}
               variant="primary"
+              hint={addBlockedHint({ locked, notOrderable: false })}
               disabled={locked || maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap)}
               onPress={() => onKit(sheetKit.bundleId, kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) + 1)}
             />

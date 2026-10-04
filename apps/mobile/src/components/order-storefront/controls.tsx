@@ -64,7 +64,8 @@ export function SmallAction({
 /**
  * The quantity stepper: −, the count (a button that opens the quantity
  * sheet), +. Each part is its own 44 pt named button; + stops at what is
- * available (`atMax`), saying so in its hint.
+ * available (`atMax`), saying so in its hint. While the cart is locked every
+ * part carries the lock's words as its hint (`lockHint`, desk check F7.1).
  */
 export function Stepper({
   quantity,
@@ -75,6 +76,7 @@ export function Stepper({
   incLabel,
   countLabel,
   incHint,
+  lockHint,
   onDec,
   onInc,
   onCount,
@@ -87,6 +89,8 @@ export function Stepper({
   incLabel: string;
   countLabel: string;
   incHint?: string;
+  /** Why the whole stepper is dimmed (the lock), or undefined. */
+  lockHint?: string;
   onDec: () => void;
   onInc: () => void;
   onCount: () => void;
@@ -100,6 +104,7 @@ export function Stepper({
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={decLabel}
+        accessibilityHint={lockHint}
         accessibilityState={{ disabled }}
         style={[styles.stepButton, { opacity: disabled ? 0.4 : 1 }]}
       >
@@ -110,6 +115,7 @@ export function Stepper({
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={countLabel}
+        accessibilityHint={lockHint}
         accessibilityState={{ disabled }}
         style={[styles.count, { minWidth: stepperCountWidth(available) }]}
       >
@@ -122,7 +128,7 @@ export function Stepper({
         disabled={incOff}
         accessibilityRole="button"
         accessibilityLabel={incLabel}
-        accessibilityHint={incHint}
+        accessibilityHint={lockHint ?? incHint}
         accessibilityState={{ disabled: incOff }}
         style={[styles.stepButton, { opacity: incOff ? 0.4 : 1 }]}
       >

@@ -80,6 +80,8 @@ export function storefrontInCartCopy(quantity: number): string {
   return `${quantity} in your cart`;
 }
 export const STOREFRONT_REMOVE_COPY = 'Remove';
+/** Remove's spoken label for an item the catalog shown does not name. */
+export const STOREFRONT_REMOVE_THIS_ITEM_COPY = 'Remove this item';
 /** A line the server or the fresh catalog says can't be ordered from here. */
 export const STOREFRONT_LINE_NOT_ORDERABLE_COPY = "Can't be ordered from here anymore. Remove it.";
 /** A cart line's title while the catalog that names its item is loading or

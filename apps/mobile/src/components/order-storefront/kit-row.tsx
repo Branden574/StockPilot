@@ -14,7 +14,9 @@ import {
 
 import { Body, Mono } from '@/components/ui/text';
 import {
+  addBlockedHint,
   addKitLabel,
+  changeLockedHint,
   decreaseKitLabel,
   increaseBlockedHint,
   increaseKitLabel,
@@ -88,6 +90,7 @@ export const KitRow = React.memo(function KitRow({
             incLabel={increaseKitLabel(kit.name)}
             countLabel={`${kit.name}: ${inCart} in your cart`}
             incHint={increaseBlockedHint(inCart >= maxInCart)}
+            lockHint={changeLockedHint(locked)}
             onDec={() => onChange(kit.bundleId, inCart - 1)}
             onInc={() => onChange(kit.bundleId, inCart + 1)}
             onCount={() => onDetails(kit.bundleId)}
@@ -97,6 +100,7 @@ export const KitRow = React.memo(function KitRow({
             label={KIT_ADD_COPY}
             accessibilityLabel={addKitLabel(kit.name)}
             disabled={locked || out || maxInCart < 1}
+            hint={addBlockedHint({ locked, notOrderable: false })}
             onPress={() => onChange(kit.bundleId, 1)}
           />
         )}

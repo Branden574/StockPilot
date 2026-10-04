@@ -11,6 +11,8 @@ import {
   STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
   STOREFRONT_LINE_DETAILS_PENDING_COPY,
   STOREFRONT_LINE_NOT_LISTED_COPY,
+  STOREFRONT_REMOVE_COPY,
+  STOREFRONT_REMOVE_THIS_ITEM_COPY,
   availableOf,
   cartLineAtMaxCopy,
   cartLineOverCopy,
@@ -181,6 +183,9 @@ export interface CartLineView {
   title: string;
   note: CartLineNote;
   stepper: boolean;
+  /** Remove's spoken label: "Remove Planner", or "Remove this item" for an
+   *  item the catalog shown does not name, never its id (desk check F7.3). */
+  removeLabel: string;
 }
 export function cartLineView(
   line: { itemId: string; quantity: number },
@@ -191,6 +196,7 @@ export function cartLineView(
     title: item ? item.name : unorderable ? STOREFRONT_LINE_NOT_LISTED_COPY : STOREFRONT_LINE_DETAILS_PENDING_COPY,
     note: cartLineNote(line.quantity, item, unorderable),
     stepper: item !== undefined && !unorderable,
+    removeLabel: item ? `${STOREFRONT_REMOVE_COPY} ${item.name}` : STOREFRONT_REMOVE_THIS_ITEM_COPY,
   };
 }
 

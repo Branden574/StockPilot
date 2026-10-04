@@ -38,6 +38,7 @@ import {
   checkoutNotesCounterCopy,
   neededByZoneNote,
   storefrontPickupHintCopy,
+  type CartAction,
 } from '@stockpilot/core';
 
 import { CartPanel } from '@/components/order-storefront/cart-panel';
@@ -46,7 +47,7 @@ import { NeededBySheet, QuantitySheet, RequesterSheet, SiteSheet } from '@/compo
 import { UnconfirmedPanel } from '@/components/order-storefront/unconfirmed-panel';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
-import { quantityAnnouncement, submittedAnnouncement } from '@/lib/order-storefront/a11y';
+import { lineChangeAnnouncement, quantityAnnouncement, submittedAnnouncement } from '@/lib/order-storefront/a11y';
 import {
   forRowView,
   itemNameFrom,
@@ -124,6 +125,14 @@ export default function Checkout() {
   const leave = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/order/new' as Href);
+  };
+
+  // A stepper or Remove in checkout's cart: the change, then what the line is
+  // now, announced (as the catalog does; desk check F7.4).
+  const changeLine = (action: Extract<CartAction, { type: 'inc' | 'dec' | 'remove' }>) => {
+    if (session.dispatch(action) !== null) return;
+    const said = lineChangeAnnouncement(session.getSnapshot(), action.itemId);
+    if (said) AccessibilityInfo.announceForAccessibility(said);
   };
 
   if (!snap || !ready || !snap.cart) {
@@ -204,10 +213,10 @@ export default function Checkout() {
               notOrderable={snap.notOrderable}
               locked={locked}
               usuals={[]}
-              onInc={(itemId) => void session.dispatch({ type: 'inc', itemId })}
-              onDec={(itemId) => void session.dispatch({ type: 'dec', itemId })}
+              onInc={(itemId) => changeLine({ type: 'inc', itemId })}
+              onDec={(itemId) => changeLine({ type: 'dec', itemId })}
               onQuantity={(itemId) => setSheet({ kind: 'quantity', itemId })}
-              onRemove={(itemId) => void session.dispatch({ type: 'remove', itemId })}
+              onRemove={(itemId) => changeLine({ type: 'remove', itemId })}
               onAdd={(itemId) => void session.dispatch({ type: 'add', itemId, quantity: 1 })}
               onClear={() => void session.dispatch({ type: 'clear' })}
             />

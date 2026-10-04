@@ -247,8 +247,8 @@ describe('accessibility and Dynamic Type', () => {
     expect(itemRow).toContain('atMax={quantity >= available}');
   });
 
-  it('a row is one element with its name, availability, earmark and quantity in the cart', () => {
-    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark)}');
+  it('a row is one element with its name, availability, rank, earmark, quantity in the cart and mark', () => {
+    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}');
   });
 
   it('Pickup or Delivery is a radio group to VoiceOver; choices in sheets are radios', () => {
@@ -497,5 +497,46 @@ describe('words that claim nothing untrue (desk check F6)', () => {
   it('the pickup hint and the success line take the warehouse name as it is (core leaves an empty one out)', () => {
     expect(checkout).toContain("{storefrontPickupHintCopy(warehouse?.name ?? '')}");
     expect(placed).toContain('{successReference(placed, warehouseName)}');
+  });
+});
+
+describe('VoiceOver hears why, what and how much (desk check F7)', () => {
+  const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
+  const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
+
+  it('the stepper carries the lock’s hint on all three of its buttons (F7.1)', () => {
+    expect(count(controls, 'accessibilityHint={lockHint}')).toBe(2);
+    expect(controls).toContain('accessibilityHint={lockHint ?? incHint}');
+  });
+
+  it('every dimmed Add, Add kit, stepper, Remove and Clear all says why (F7.1)', () => {
+    expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable })}');
+    expect(itemRow).toContain('lockHint={changeLockedHint(locked)}');
+    expect(kitRow).toContain('hint={addBlockedHint({ locked, notOrderable: false })}');
+    expect(kitRow).toContain('lockHint={changeLockedHint(locked)}');
+    expect(cartPanel).toMatch(/label=\{CART_CLEAR_ALL_COPY\} variant="ghost" disabled=\{locked\} hint=\{changeLockedHint\(locked\)\}/);
+    expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false })}');
+    expect(cartPanel).toContain('lockHint={changeLockedHint(locked)}');
+    expect(cartPanel).toMatch(/accessibilityLabel=\{view\.removeLabel\}\s+variant="ghost"\s+disabled=\{locked\}\s+hint=\{changeLockedHint\(locked\)\}/);
+    expect(catalog).toContain('lockHint={changeLockedHint(locked)}');
+    expect(catalog).toContain('hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}');
+    expect(catalog).toMatch(/label=\{KIT_ADD_COPY\}\s+variant="primary"\s+hint=\{addBlockedHint\(\{ locked, notOrderable: false \}\)\}/);
+  });
+
+  it('the row’s one label carries the rank and the can’t-be-ordered mark (F7.2)', () => {
+    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}');
+  });
+
+  it('Remove never reads a uuid (F7.3)', () => {
+    expect(cartPanel).not.toContain('`${STOREFRONT_REMOVE_COPY} ${name}`');
+    expect(cartPanel).not.toContain('item?.name ?? line.itemId');
+  });
+
+  it('checkout announces each stepper change and Remove from what the cart is now (F7.4)', () => {
+    expect(flat(checkout)).toContain("const changeLine = (action: Extract<CartAction, { type: 'inc' | 'dec' | 'remove' }>) => { if (session.dispatch(action) !== null) return; const said = lineChangeAnnouncement(session.getSnapshot(), action.itemId); if (said) AccessibilityInfo.announceForAccessibility(said); };");
+    expect(checkout).toContain("onInc={(itemId) => changeLine({ type: 'inc', itemId })}");
+    expect(checkout).toContain("onDec={(itemId) => changeLine({ type: 'dec', itemId })}");
+    expect(checkout).toContain("onRemove={(itemId) => changeLine({ type: 'remove', itemId })}");
+    expect(catalog).toMatch(/onRemove=\{\(itemId\) => \{\s*if \(session\.dispatch\(\{ type: 'remove', itemId \}\) !== null\) return;\s*const said = lineChangeAnnouncement\(session\.getSnapshot\(\), itemId\);\s*if \(said\) say\(said\);\s*\}\}/);
   });
 });

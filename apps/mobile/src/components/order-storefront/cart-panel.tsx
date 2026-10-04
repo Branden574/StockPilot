@@ -22,8 +22,10 @@ import {
 
 import { Body, Mono } from '@/components/ui/text';
 import {
+  addBlockedHint,
   addItemLabel,
   cartBarLabel,
+  changeLockedHint,
   decreaseLabel,
   increaseBlockedHint,
   increaseLabel,
@@ -97,6 +99,7 @@ export function CartPanel({
                   label={STOREFRONT_ADD_COPY}
                   accessibilityLabel={addItemLabel(item.name)}
                   disabled={locked || availableOf(item) < 1}
+                  hint={addBlockedHint({ locked, notOrderable: false })}
                   onPress={() => onAdd(item.id)}
                 />
               </View>
@@ -124,11 +127,10 @@ export function CartPanel({
         >
           {`${CART_TITLE_COPY} · ${cartCountsCopy(totals.lines, totals.units)}`}
         </Body>
-        <SmallAction label={CART_CLEAR_ALL_COPY} variant="ghost" disabled={locked} onPress={confirmClear} />
+        <SmallAction label={CART_CLEAR_ALL_COPY} variant="ghost" disabled={locked} hint={changeLockedHint(locked)} onPress={confirmClear} />
       </View>
       {cart.lines.map((line) => {
         const item = itemMap.get(line.itemId);
-        const name = item?.name ?? line.itemId;
         const available = item ? availableOf(item) : 0;
         const unorderable = notOrderable.has(line.itemId);
         // Marked only from a catalog answer (or the server's refusal): while
@@ -159,10 +161,11 @@ export function CartPanel({
                   available={available}
                   atMax={line.quantity >= available}
                   disabled={locked}
-                  decLabel={decreaseLabel(name, line.quantity)}
-                  incLabel={increaseLabel(name)}
-                  countLabel={quantityButtonLabel(name, line.quantity)}
+                  decLabel={decreaseLabel(view.title, line.quantity)}
+                  incLabel={increaseLabel(view.title)}
+                  countLabel={quantityButtonLabel(view.title, line.quantity)}
                   incHint={increaseBlockedHint(line.quantity >= available)}
+                  lockHint={changeLockedHint(locked)}
                   onDec={() => onDec(line.itemId)}
                   onInc={() => onInc(line.itemId)}
                   onCount={() => onQuantity(line.itemId)}
@@ -170,9 +173,10 @@ export function CartPanel({
               ) : null}
               <SmallAction
                 label={STOREFRONT_REMOVE_COPY}
-                accessibilityLabel={`${STOREFRONT_REMOVE_COPY} ${name}`}
+                accessibilityLabel={view.removeLabel}
                 variant="ghost"
                 disabled={locked}
+                hint={changeLockedHint(locked)}
                 onPress={() => onRemove(line.itemId)}
               />
             </View>
