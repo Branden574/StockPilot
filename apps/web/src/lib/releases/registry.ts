@@ -78,37 +78,102 @@ export const RELEASES: Release[] = [
   {
     id: 'account-deletion-orders-2026-10',
     revision: 1,
-    // Account deletion for people who placed orders (migration 0388, security
-    // slice A2, plan section 10 item 16). Held as a DRAFT until 0388 is
-    // pushed and verified, the web deploy (the check before the delete, the
-    // Deleted user label on the list, detail, print and export) and the phone
-    // update that names the requester Deleted user are out (owner rule:
-    // publish once phones have the update). The follow-up that publishes it
-    // sets the real publishedAt and re-reads these words against what
-    // shipped. At the top of the list and dated after every published
-    // release (drafts go above the newest published release, pinned by the
-    // ended-session fix's test); the publishing follow-up sets the real date
-    // and keeps it the newest.
+    // Account deletion for people who placed orders (migration 0388, pushed
+    // 2026-10-03 20:26:18Z; security slice A2, plan section 10 item 16; #312,
+    // 562d1f0c). Held as a draft until 0388 was pushed and verified, the web
+    // deploy (web build 399eedb47aa2, served since 20:27:55Z: the check before
+    // the delete, and Deleted user on the orders list, the order page and its
+    // print view, the pick page, the pick slip PDF and both Orders exports),
+    // the phone update that names the requester Deleted user (OTA group
+    // 4a060cce, iOS update 01a10414, published 23:24Z, launched on phones with
+    // no failures) and the Demo Co production walk (the web and the phone
+    // refused the RESTRICT-blocked demo account with the blocked sentence and
+    // changed nothing) were done. Published after them, at the top of the
+    // published releases; the slice B draft sits above it.
+    //
+    // Its words were re-read against what shipped. Orders no longer stop a
+    // deletion (0388: the FK's SET NULL stamps requester_deleted_at, which
+    // identity_chk accepts), but records the organization keeps (received
+    // stock, imported POs, schedule entries, returns) still refuse it until
+    // slice A3, so never "it now works" alone. (Five closed orders from May
+    // that break the NOT VALID order_requests_delivery_target_chk still
+    // refuse the two accounts they name, both already refused by those keys
+    // with the same sentence; A3 handles them, plan F12.) The label is
+    // inferred from the row (no requester id and no email, core
+    // isDeletedRequester), so an order that recorded the person's name or
+    // email (legacy and portal rows) keeps showing it, and nothing about the
+    // person is copied onto any order. Open orders keep their status; a
+    // manager can still approve or cancel them (pgTAP D15). Old phone bundles
+    // say "External requester" until the update loads, with no prompt, when
+    // the app is opened again. The refusal
+    // itself (the plain sentence, nothing changed, and the phone no longer
+    // saying "Account deleted" when it was not) is announced on its own
+    // (account-deletion-refused-2026-10, below), because it needs no update.
     //
     // For everyone: anyone can delete their own account (Settings, on the
     // web and the phone), and no page is linked.
-    status: 'draft',
-    title: 'Deleting your account works when you have placed orders',
+    status: 'published',
+    title: 'Orders you placed no longer stop you deleting your account',
     summary:
-      'If you had placed an order, deleting your account from Settings failed. It now works, and your orders stay with your organization with “Deleted user” as the requester.',
-    publishedAt: '2026-10-11T17:00:00Z',
+      'Orders you placed no longer stop you deleting your account from Settings, on the web or in the mobile app. The orders stay with your organization. On the web, and in the mobile app after the latest update, they show “Deleted user” as the requester, unless an order recorded your name or email.',
+    publishedAt: '2026-10-04T05:35:00Z',
     entries: [
       {
         id: 'account-deletion-orders',
         category: 'fixed',
         area: 'Account',
-        title: 'Deleting your account works when you have placed orders',
+        title: 'Orders you placed no longer stop you deleting your account',
         whatChanged:
-          'Account deletion no longer fails for people who placed orders. Orders placed by a deleted account show “Deleted user” as the requester on the web and the phone. If an account is linked to records the organization must keep, such as received stock, the app now says so and changes nothing.',
+          'Deleting your account from Settings no longer fails because you placed orders. The orders stay with your organization. On the web, the orders list, the order page and its print view, the pick slip and the Orders export show “Deleted user” as the requester. In the mobile app, after the latest update, the orders list and the order screen show it too. An order that recorded your name or email keeps showing it.',
         whyItMatters:
-          'The delete used to fail with a general error, and on the phone it could say the account was deleted when it was not.',
+          'Until now, an order you had placed could stop you deleting your account from Settings, because each order had to name who placed it.',
         howItAffectsYou:
-          'Nothing changes unless you delete your account or see an order placed by someone who did.',
+          'Your name and email are not copied onto your orders when you delete your account. Open orders stay open, and your organization can still approve or cancel them. Other records your organization keeps, such as received stock, can still stop a deletion; the app then says so and changes nothing.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
+    id: 'account-deletion-refused-2026-10',
+    revision: 1,
+    // Shipped in security slice A2 (#312, 562d1f0c), live with web build
+    // 399eedb47aa2; published in the same change as the account deletion
+    // release and dated a minute before it, so it sits directly below it. The
+    // web self-delete and the phone's POST /api/v1/account/delete now ask
+    // account_deletion_check (0388) first. An account linked to records the
+    // organization keeps (an integrity refusal, SQLSTATE class 23) is told
+    // ACCOUNT_DELETE_BLOCKED_COPY (server/lib/account-deletion.ts) and
+    // nothing is written: no profile tombstone, no audit row, no session
+    // revoke, and the person stays signed in. Before, both wrote the
+    // tombstone and a user.deactivated row first; after the refused delete
+    // the web answered "Your account could not be deleted right now. Please
+    // try again." and the phone route answered 200, so the phone signed out
+    // and said "Account deleted" while the account was still there. The phone
+    // shows the route's message for any answer that is not a success and
+    // stays signed in (settings.tsx performDelete, unchanged by A2), so every
+    // installed phone gets this without an update. The Demo Co production
+    // walk saw the sentence on the web (toast) and on the phone (alert, "Could
+    // not delete account"), signed in after, with nothing changed.
+    //
+    // For everyone, with no link: anyone can try to delete their own account.
+    status: 'published',
+    title: "When your account can't be deleted, the app now says why",
+    summary:
+      "On the web and in the mobile app, if your account can't be deleted because it is linked to records your organization keeps, such as received stock, Delete my account now says so. Nothing is changed and you stay signed in. The mobile app no longer says an account was deleted when it was not.",
+    publishedAt: '2026-10-04T05:34:00Z',
+    entries: [
+      {
+        id: 'account-deletion-refused',
+        category: 'fixed',
+        area: 'Account',
+        title: 'A refused account deletion says why and changes nothing',
+        whatChanged:
+          "If your account is linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries, Delete my account now says it can't be deleted from the app, that nothing was changed, and to contact StockPilot support to have it removed. You stay signed in. The web and the mobile app say the same.",
+        whyItMatters:
+          'Before, the web said “Your account could not be deleted right now. Please try again.” Trying again failed the same way. The mobile app could say “Account deleted” and sign you out while the account was still there.',
+        howItAffectsYou:
+          'This happens only to an account linked to such records. The account, your access and those records stay as they were.',
         whatToDo: 'No action needed.',
       },
     ],
