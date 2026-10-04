@@ -748,4 +748,3 @@ const styles = StyleSheet.create({
   },
   cartColumn: { borderLeftWidth: 1 },
 });
-

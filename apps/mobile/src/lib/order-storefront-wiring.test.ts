@@ -443,4 +443,3 @@ describe('the storefront’s words are core’s', () => {
     }
   });
 });
-
