@@ -3542,3 +3542,72 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(once.howItAffectsYou).toMatch(/start an order with from Items wait/);
   });
 });
+
+/**
+ * Security slice C step 4 (migration 0393, owner decision O1): the stored
+ * signature images leave the order row. Held as a DRAFT until 0393 is pushed
+ * and verified (sec-orders plan 6.8 R9). Pinned by id, never by index. The
+ * follow-up that publishes it sets 'published' and the real publishedAt,
+ * re-reads its words against what shipped, and flips the first pin here.
+ */
+describe('View signature in the mobile app needs the latest update (0393) is held as a draft', () => {
+  const ID = 'order-signature-image-update-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const LABEL = PERMISSION_META['orders:approve'].label;
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release, dated after every published release', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(RELEASES.findIndex((x) => x.id === r.id), r.id).toBeGreaterThan(at);
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is an Orders change for every member where Orders is on, with no link', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual(['order-signature-image-update']);
+    const [entry] = release().entries;
+    expect(entry!.area).toBe('Orders');
+    expect(entry!.link).toBeUndefined();
+    expect(entry!.audience).toBeUndefined();
+    const published: Release = { ...release(), status: 'published' };
+    for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
+      expect(visibleReleases([published], { role, permissions: [], enabledModules: ['orders'] }).map((r) => r.id), role).toEqual([ID]);
+    }
+    expect(visibleReleases([published], { role: 'owner', permissions: [...PERMISSIONS], enabledModules: [] })).toEqual([]);
+  });
+
+  it("says what a person sees, in the app's terms, stands alone for old phones and teaches nothing about storage", () => {
+    const r = release();
+    const [entry] = r.entries;
+    const text = readerText(r).join(' ');
+    expect(r.title).toBe('View signature in the mobile app needs the latest update');
+    expect(entry!.title).toBe(r.title);
+    expect(r.summary).toBe(entry!.whatChanged);
+    expect(r.summary).toContain('who signed and when, without the image');
+    expect(entry!.howItAffectsYou).toContain(`"${LABEL}"`);
+    expect(entry!.howItAffectsYou).toContain("the order's assigned driver");
+    // The image route's gate, which the phone asks since slice B's update.
+    const route = readFileSync(resolve(__dirname, '../../app/api/orders/[id]/signature/route.ts'), 'utf8');
+    expect(route).toContain('if (!isHandOverEntitled(ctx, {');
+    expect(entry!.whatToDo).toMatch(/close the mobile app and open it again/);
+    expect(text).not.toMatch(/\bbooks?\b|token|hash|secret|table|column|database|migration|%|guarantee/i);
+  });
+});

@@ -111,6 +111,52 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'order-signature-image-update-2026-10',
+    revision: 1,
+    // Security slice C step 4 (migration 0393, owner decision O1, default
+    // yes; plan section 6.8 R9). Held as a DRAFT until 0393 is pushed and
+    // verified; the follow-up that publishes it sets the real publishedAt and
+    // re-reads the words against what shipped. Sits among the drafts, below
+    // the phone ordering draft and dated before it (that draft's test pins it
+    // as the newest release), above every published release.
+    //
+    // 0393 moves every stored signature image off the order row into the
+    // service-only order_request_secrets. The mobile app's View signature has
+    // read the image through GET /api/v1/orders/<id>/signature since slice B's
+    // update (order-signature-image.ts); a phone still running an older
+    // bundle read it straight from the row, so after 0393 it shows who signed
+    // and when, without the image, until the update loads (it does on the
+    // next restart). Phones on a native version older than 1.4.0 never get
+    // that update over the air and need the App Store update. The web app is
+    // unchanged (it has always read the image through the route).
+    //
+    // Who is told: every member where Orders is on (anyone can open a signed
+    // order in the mobile app; the image itself is shown only to approvers and
+    // the assigned driver, as slice B's release said).
+    status: 'draft',
+    title: 'View signature in the mobile app needs the latest update',
+    summary:
+      "In the mobile app, View signature on an order shows the customer's signature image only once the app has the latest update. Until then it shows who signed and when, without the image.",
+    publishedAt: '2026-10-11T17:08:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-signature-image-update',
+        category: 'improved',
+        area: 'Orders',
+        title: 'View signature in the mobile app needs the latest update',
+        whatChanged:
+          "In the mobile app, View signature on an order shows the customer's signature image only once the app has the latest update. Until then it shows who signed and when, without the image.",
+        whyItMatters:
+          "A customer's signature is personal information. It is now kept apart from the rest of the order, and the mobile app asks for it the way the web app does.",
+        howItAffectsYou:
+          'If you have the "Approve / fulfill orders" permission, or you are the order\'s assigned driver, the image shows as before once your app has the update. Everyone else sees who signed and when, as before.',
+        whatToDo:
+          'If View signature shows no image, close the mobile app and open it again to load the latest update. If it still shows none, update the app from the App Store.',
+      },
+    ],
+  },
+  {
     id: 'approval-follows-permission-2026-10',
     revision: 1,
     // Security slice D (migration 0390, pushed 2026-10-04 05:32:44Z;
