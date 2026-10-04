@@ -4,6 +4,7 @@ import {
   NEEDED_BY_IN_PAST_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
   ORDER_ON_BEHALF_INVALID_COPY,
+  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
   ORDER_NOTES_MAX,
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
@@ -155,6 +156,11 @@ export function forRowView(input: {
     return { shown: true, detail: null, hint: input.lockHint, tap: 'choose' };
   }
   if (input.onBehalfOf === null) return { shown: false, detail: null, hint: undefined, tap: 'choose' };
+  // The lock dims the row: say the rule, never "Tap For" (it cannot be
+  // tapped until the send is settled), and the lock's hint says why.
+  if (input.lockHint !== undefined) {
+    return { shown: true, detail: ORDER_ON_BEHALF_NOT_PERMITTED_COPY, hint: input.lockHint, tap: 'set-myself' };
+  }
   return {
     shown: true,
     detail: SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,

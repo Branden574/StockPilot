@@ -19,7 +19,7 @@ import {
 
 import { OrderAnswerForAnotherOrganization, type OrderStorefrontApi } from './api';
 import { storefrontOutcome } from './outcome';
-import { createStorefrontSession, type SessionStore, type StorefrontSession } from './session';
+import { STOREFRONT_ANSWER_STALE_MS, createStorefrontSession, type SessionStore, type StorefrontSession } from './session';
 import {
   orderCatalogKey,
   orderDraftKey,
@@ -121,8 +121,9 @@ let session: StorefrontSession;
 const timers = new Map<number, () => void>();
 let timerSeq = 0;
 
-function makeSession() {
+function makeSession(extra: { storefrontStaleMs?: number } = {}) {
   return createStorefrontSession({
+    ...extra,
     api: api as unknown as OrderStorefrontApi,
     store,
     epoch: () => epoch,
@@ -933,5 +934,111 @@ describe('a live key the session could not read is never overwritten (desk check
     await session.submit(false);
     expect(api.place).not.toHaveBeenCalled();
     expect(slotKey()).toBe(K1);
+  });
+});
+
+describe('the storefront answer is read again before Submit (re-check: approve revoked while the app stays open)', () => {
+  const approver = (): OrderStorefrontAnswer => ({
+    ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>),
+    viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true, canApproveOrders: true },
+  });
+  const bee = { name: 'Bee Person', email: 'bee@x.org' };
+
+  /** An approver opens the storefront and builds a cart for someone else;
+   *  from then on the server answers that they may not (approve revoked). */
+  async function openAsApproverThenRevoke() {
+    api.storefront.mockResolvedValueOnce(approver());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: bee } });
+    expect(session.submitBlockedBy(false)).toBeNull();
+    expect(api.storefront).toHaveBeenCalledTimes(1);
+  }
+
+  it('the staleness defaults to 60 s', () => {
+    expect(STOREFRONT_ANSWER_STALE_MS).toBe(60_000);
+  });
+
+  it('checkout opening reads the answer again (however fresh), so a revoke blocks Submit before it is pressed', async () => {
+    await openAsApproverThenRevoke();
+    now += 1_000;
+    await session.openCheckout();
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    // The cart and its warehouse are kept: only the answer changed.
+    expect(snap().warehouseId).toBe(WH);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 1 }]);
+    expect(snap().cart?.onBehalfOf).toEqual(bee);
+  });
+
+  it('a focus reads it again only once it is older than the staleness', async () => {
+    await openAsApproverThenRevoke();
+    now += 30_000;
+    await session.focus();
+    expect(api.storefront).toHaveBeenCalledTimes(1);
+    expect(session.submitBlockedBy(false)).toBeNull();
+    now += 31_000;
+    await session.focus();
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+
+  it('a screen opening again for the same organization counts as a focus (read again once stale, not on every mount)', async () => {
+    await openAsApproverThenRevoke();
+    await session.open(scope);
+    expect(api.storefront).toHaveBeenCalledTimes(1);
+    now += STOREFRONT_ANSWER_STALE_MS + 1;
+    await session.open(scope);
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+
+  it('the staleness is configurable', async () => {
+    session = makeSession({ storefrontStaleMs: 10_000 });
+    await openAsApproverThenRevoke();
+    now += 11_000;
+    await session.focus();
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+
+  it('a read that fails keeps the answer shown, and the next focus tries again', async () => {
+    await openAsApproverThenRevoke();
+    now += STOREFRONT_ANSWER_STALE_MS + 1;
+    api.storefront.mockRejectedValueOnce(new Error('Network request failed'));
+    await session.focus();
+    expect(snap().setup.status).toBe('ready');
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    await session.focus();
+    expect(api.storefront).toHaveBeenCalledTimes(3);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+
+  it('a final refusal for the on-behalf rule reads the answer again: no second key is spent on the same refusal', async () => {
+    await openAsApproverThenRevoke();
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 403, code: 'forbidden', details: { reason: 'on_behalf_not_permitted', settled: true, organizationId: ORG } },
+    });
+    await session.submit(false);
+    expect(snap().submission.state.phase).toBe('refused');
+    await vi.waitFor(() => expect(api.storefront).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY));
+    await session.submit(false);
+    expect(api.place).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refusal for another reason (an item no longer orderable) does not read the answer again', async () => {
+    await openAsApproverThenRevoke();
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 400, code: 'validation_error', details: { reason: 'item_not_orderable', settled: true, items: { [A]: 'archived' }, organizationId: ORG } },
+    });
+    await session.submit(false);
+    expect(snap().submission.state.phase).toBe('refused');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.storefront).toHaveBeenCalledTimes(1);
   });
 });

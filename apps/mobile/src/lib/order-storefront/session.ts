@@ -74,7 +74,10 @@ import { createSubmitEngine, type SubmitEngine, type SubmitEngineSnapshot } from
  * and the account epoch (runtime.ts), and the screens read it with
  * useSyncExternalStore.
  *
- * What it holds: the storefront answer (read once on open), Ship from, the
+ * What it holds: the storefront answer (read on open, again when checkout
+ * opens, and on a focus once it is older than STOREFRONT_ANSWER_STALE_MS, so
+ * a permission changed while the app stays open is followed before Submit),
+ * Ship from, the
  * catalog of that warehouse (shown from the device at once, then read
  * fresh), its photo map, the cart and the submission engine of that
  * warehouse (each warehouse keeps its own cart, saved under its own key).
@@ -115,6 +118,9 @@ export interface SessionDeps {
   mintKey?: () => string;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  /** How old the storefront answer may get before a focus reads it again
+   *  (default STOREFRONT_ANSWER_STALE_MS). */
+  storefrontStaleMs?: number;
 }
 
 export interface SessionScope {
@@ -211,6 +217,17 @@ const NO_MARKS: ReadonlySet<string> = new Set<string>();
  *  photo must not read the map again on every later error. */
 export const PHOTO_RETRY_MS = 5 * 60_000;
 
+/** The storefront answer (who may order on behalf, the warehouses, the kill
+ *  switch) is read again on a focus once it is this old, and always when
+ *  checkout opens: a permission revoked while the app stays open is followed
+ *  before Submit, not only after a pull or a relaunch (PO-4 re-check). */
+export const STOREFRONT_ANSWER_STALE_MS = 60_000;
+
+/** A final refusal for one of these reasons means the answer shown is out of
+ *  date: it is read again at once, so Submit says why before another key is
+ *  spent on the same refusal. */
+const ANSWER_REFUSAL_REASONS: ReadonlySet<string> = new Set(['on_behalf_not_permitted', 'permission', 'module_disabled']);
+
 function sameMembers(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const id of a) if (!b.has(id)) return false;
@@ -225,8 +242,9 @@ export interface StorefrontSession {
   /** Pull to refresh: the storefront, the catalog and the photos. */
   refresh(): Promise<void>;
   /** The screen came into focus, or the app came to the foreground, or the
-   *  connection came back: read what is stale, and the status of a send that
-   *  is not confirmed. Never sends. */
+   *  connection came back: read what is stale (the storefront answer, the
+   *  catalog, the photos), and the status of a send that is not confirmed.
+   *  Never sends. */
   focus(): Promise<void>;
   selectWarehouse(warehouseId: string): Promise<string | null>;
   /** A cart change. Returns core's refusal sentence while locked. */
@@ -236,7 +254,8 @@ export interface StorefrontSession {
   /** A kit to `target` kits in the cart, all or nothing (core
    *  planKitChange); core's words when it does not fit. */
   changeKit(bundleId: string, target: number): string | null;
-  /** Checkout opened: read the catalog again and say what moved. */
+  /** Checkout opened: read the catalog and the storefront answer again, and
+   *  say what moved. */
   openCheckout(): Promise<void>;
   /** Why Submit cannot be pressed (offline: true when not connected). */
   submitBlockedBy(offline: boolean): string | null;
@@ -264,6 +283,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   let warehouseGen = 0;
 
   let setup: SetupState = { status: 'loading' };
+  /** When the storefront last answered (ready, off or refused), null before
+   *  any; a read with no answer leaves it, so the next focus tries again. */
+  let setupReadAt: number | null = null;
+  const storefrontStaleMs = deps.storefrontStaleMs ?? STOREFRONT_ANSWER_STALE_MS;
   let warehouseId: string | null = null;
   let catalog: CatalogState = blankCatalog();
   let items: StorefrontItem[] = [];
@@ -472,6 +495,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
           notice = null;
         } else if (snap.state.phase === 'refused') {
           refusedItems = refusedItemIds(snap.state.details);
+          if (ANSWER_REFUSAL_REASONS.has(snap.state.reason)) void readStorefront(scopeGen);
         }
         // Which warehouses hold a send not settled (Ship from, the banner).
         void refreshLocked().then(publish);
@@ -607,13 +631,31 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     }
   }
 
-  async function readStorefront(gen: number) {
+  let storefrontRead: { gen: number; promise: Promise<void> } | null = null;
+
+  /** One storefront read at a time per scope: a second ask joins it. */
+  function readStorefront(gen: number): Promise<void> {
+    if (storefrontRead && storefrontRead.gen === gen) return storefrontRead.promise;
+    const promise = readStorefrontNow(gen).finally(() => {
+      if (storefrontRead?.promise === promise) storefrontRead = null;
+    });
+    storefrontRead = { gen, promise };
+    return promise;
+  }
+
+  /** The answer shown is older than the staleness (or there is none). */
+  function storefrontStale(): boolean {
+    return setupReadAt === null || deps.now() - setupReadAt >= storefrontStaleMs;
+  }
+
+  async function readStorefrontNow(gen: number) {
     const cs = callScope();
     const s = scope;
     if (!cs || !s) return;
     try {
       const answer = await deps.api.storefront(cs);
       if (gen !== scopeGen) return;
+      setupReadAt = deps.now();
       if (!answer.enabled) {
         setup = { status: 'off', message: answer.message };
         publish();
@@ -655,6 +697,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         publish();
         return;
       }
+      if (failure.kind !== 'failed') setupReadAt = deps.now();
       setup =
         failure.kind === 'turned_off' || failure.kind === 'unavailable'
           ? { status: 'off', message: failure.message }
@@ -680,6 +723,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     writer = null;
     engineKeys = new Set();
     setup = { status: 'loading' };
+    setupReadAt = null;
     warehouseId = null;
     catalog = blankCatalog();
     items = [];
@@ -708,8 +752,12 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     async open(next) {
       const same = scope !== null && scope.userId === next.userId && scope.orgId === next.orgId;
       if (same) {
+        // A screen opening again: read the answer again when it failed, or
+        // once it is stale (never on every mount).
         scope = { ...scope!, activeWarehouseId: next.activeWarehouseId };
-        if (setup.status !== 'ready') await readStorefront(scopeGen);
+        if (setup.status === 'failed' || (setup.status !== 'loading' && storefrontStale())) {
+          await readStorefront(scopeGen);
+        }
         return;
       }
       resetScope(scope !== null && scope.userId === next.userId);
@@ -731,7 +779,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
 
     async focus() {
       if (!scope) return;
-      if (setup.status === 'failed') await readStorefront(scopeGen);
+      if (setup.status === 'failed' || (setup.status !== 'loading' && storefrontStale())) {
+        await readStorefront(scopeGen);
+      }
       if (warehouseId && catalogIsStale(catalog.readAt, deps.now(), catalog.answer?.staleAfterSeconds)) {
         await readCatalog(warehouseGen);
       }
@@ -801,8 +851,11 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     async openCheckout() {
       if (!warehouseId) return;
       const before = itemMap;
-      const result = await readCatalog(warehouseGen);
-      if (!result || !cart || engineLocked()) return;
+      const gen = warehouseGen;
+      // The answer too, however fresh: who may order on behalf is checked
+      // against what the server says now, before Submit (PO-4 re-check).
+      const [result] = await Promise.all([readCatalog(gen), scope ? readStorefront(scopeGen) : Promise.resolve()]);
+      if (!result || !cart || engineLocked() || gen !== warehouseGen) return;
       const n = stockChangedNotice(cart, before, itemMap);
       if (n !== null) {
         notice = n;
@@ -823,8 +876,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         offline,
         unorderable: snapshot.notOrderable,
         siteKnown,
-        // The answer shown (read on every open and refresh): never a value
-        // kept from an earlier read.
+        // The answer shown, read again when checkout opens, on a focus once
+        // stale and after a final refusal for permission: never a value kept
+        // from an earlier read.
         canOrderOnBehalf: setup.status === 'ready' && setup.answer.viewer.canOrderOnBehalf,
         // A needed-by already past (a restored draft) is refused here, on
         // the server's clock in the organization's zone (desk check F11).

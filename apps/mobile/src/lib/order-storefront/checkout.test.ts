@@ -6,6 +6,7 @@ import {
   NEEDED_BY_IN_PAST_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
   ORDER_ON_BEHALF_INVALID_COPY,
+  ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_NO_LINES_COPY,
   SUBMIT_NO_SITE_COPY,
   SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
@@ -283,6 +284,13 @@ describe('checkout’s For row (desk check F2)', () => {
       hint: STOREFRONT_FOR_SET_MYSELF_HINT_COPY,
       tap: 'set-myself',
     });
+  });
+  it('while the lock dims the row: the rule only, never "Tap For" (the row cannot be tapped), and the lock’s hint', () => {
+    const v = forRowView({ canOrderOnBehalf: false, onBehalfOf: bee, lockHint: STOREFRONT_CART_LOCKED_COPY });
+    expect(v.shown).toBe(true);
+    expect(v.detail).toBe(ORDER_ON_BEHALF_NOT_PERMITTED_COPY);
+    expect(v.detail).not.toMatch(/Tap/);
+    expect(v.hint).toBe(STOREFRONT_CART_LOCKED_COPY);
   });
 });
 
