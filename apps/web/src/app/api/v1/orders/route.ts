@@ -31,9 +31,12 @@ export const dynamic = 'force-dynamic';
  *
  * 201 { organizationId, result: { replay: false, order } }   placed now
  * 200 { organizationId, result: { replay: true,  order } }   the key had placed it
- * Refusals { organizationId?, error, message, details: { reason, ... } }, core's
- * words; `details.settled: true` when the refusal is recorded under the key
- * (final: a resend gets the same answer):
+ * Refusals { organizationId?, error, message, details: { reason, ...,
+ * organizationId? } }, core's words; the organization that answered is named
+ * in details too (the phone's ApiError forwards details only, and core
+ * orderCallResultForOrganization drops an answer for another organization);
+ * `details.settled: true` when the refusal is recorded under the key (final:
+ * a resend gets the same answer):
  *   400 validation_error (the body; needed_by_*, site_not_available,
  *       item_not_orderable with details.items, recorded);
  *   401 unauthenticated; 403 forbidden (placer_mismatch, permission,
