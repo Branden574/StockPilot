@@ -12,6 +12,10 @@ import {
   prewarmOrdersNewCatalog,
   type PrewarmPairResult,
 } from '@/server/loaders/orders-new-catalog';
+import {
+  prewarmPhoneThumbMap,
+  type PhoneThumbMapPrewarmResult,
+} from '@/server/loaders/orders-phone-catalog';
 
 import { KNOWN_HOT_ORG_IDS, ORG_SWEEP_CAP, planOrgSweep } from './org-sweep';
 
@@ -32,7 +36,8 @@ const SWEEP_DEADLINE_MS = 50_000;
 
 /**
  * Prewarms the /dashboard/orders/new caches (catalog items + thumb map
- * + charters) AND the Items/Books default-view caches so the first
+ * + charters), the phone storefront's photo map (phone ordering PO-3,
+ * orders-phone-catalog.ts) AND the Items/Books default-view caches so the first
  * human after a deploy lands on warm caches instead of the cold
  * sign-storm path — perf plan P3. Hit by the Vercel cron (every 30
  * min) and the GH Action deploy hook.
@@ -176,6 +181,7 @@ export async function GET(req: Request) {
     // not abort the sweep.
     let skippedForBudget = 0;
     const results: PrewarmPairResult[] = [];
+    const phoneThumbMaps: PhoneThumbMapPrewarmResult[] = [];
     for (const pair of pairs) {
       if (Date.now() > deadlineAt) {
         skippedForBudget += 1;
@@ -189,6 +195,21 @@ export async function GET(req: Request) {
           err,
         );
       }
+      // The phone storefront's photo map for the same pair (phone ordering
+      // PO-3): its own cached loader and key (orders-phone-catalog.ts). The
+      // catalog rows the phone reads are the 'ALL' entries just warmed above.
+      // Never rejects; a failure is reported in its result.
+      if (Date.now() > deadlineAt) {
+        skippedForBudget += 1;
+        continue;
+      }
+      const phone = await prewarmPhoneThumbMap(pair.organization_id, pair.id);
+      if (phone.error) {
+        console.warn(
+          `[prewarm] phone photo map failed for org ${pair.organization_id} wh ${pair.id}: ${phone.error}`,
+        );
+      }
+      phoneThumbMaps.push(phone);
     }
 
     // 3) Items/Books 'all'-variant sweep across EVERY org in
@@ -248,6 +269,7 @@ export async function GET(req: Request) {
       prewarmed: results.length,
       totalMs: Date.now() - startedAt,
       results,
+      phoneThumbMaps,
       inventoryPrewarmed: inventory.length,
       inventory,
       orgSweep: {
