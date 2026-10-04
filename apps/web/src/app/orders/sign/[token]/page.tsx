@@ -2,6 +2,11 @@ import { notFound } from 'next/navigation';
 
 import { SignatureCollector } from '@/components/orders/signature-collector';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveSignatureToken, SIGNATURE_TOKEN_RE } from '@/server/lib/order-secrets';
+import {
+  isActiveOrgMember,
+  verifiedSessionUserIdWithoutRefresh,
+} from '@/server/lib/sign-page-session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,8 +15,6 @@ export const metadata = {
   title: 'Sign for order · StockPilot',
   robots: { index: false, follow: false },
 };
-
-const TOKEN_RE = /^[0-9a-f]{64}$/i;
 
 /**
  * Order summary surfaced to the public signature page. Stays minimal —
@@ -41,23 +44,21 @@ export default async function OrderSignPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  if (!TOKEN_RE.test(token)) notFound();
+  if (!SIGNATURE_TOKEN_RE.test(token)) notFound();
 
   const admin = createAdminClient();
 
-  const { data: orderRow } = await admin
-    .from('order_requests')
-    .select(
-      'id, status, requester_name, requester_email, requester_user_id, ' +
-        'fulfillment_type, warehouse_id, delivery_charter_id, ' +
-        'signature_token_expires_at, signed_at',
-    )
-    .eq('signature_token', token)
-    .maybeSingle();
-
-  if (!orderRow) notFound();
-  const order = orderRow as unknown as {
+  // The same resolution as the POST route (migration 0389,
+  // server/lib/order-secrets): a raw token from a QR or the panel's link
+  // (sha256 of it is the order's column), a raw token minted before 0389
+  // (until slice C), or the DIGEST every member can read. A digest opens the
+  // page only for a signed-in member of the order's organization, verified
+  // locally without refreshing the session (R1: this page cannot persist a
+  // refresh); who may then hand the order over is decided by the POST route
+  // handler. Every refusal is the one not-found an unknown token gets.
+  const match = await resolveSignatureToken<{
     id: string;
+    organization_id: string;
     status: string;
     requester_name: string | null;
     requester_email: string | null;
@@ -67,7 +68,21 @@ export default async function OrderSignPage({
     delivery_charter_id: string | null;
     signature_token_expires_at: string | null;
     signed_at: string | null;
-  };
+  }>(
+    admin,
+    token,
+    'id, organization_id, status, requester_name, requester_email, requester_user_id, ' +
+      'fulfillment_type, warehouse_id, delivery_charter_id, ' +
+      'signature_token_expires_at, signed_at',
+  );
+  if (!match) notFound();
+  if (match.via === 'member') {
+    const userId = await verifiedSessionUserIdWithoutRefresh();
+    if (!userId || !(await isActiveOrgMember(admin, match.order.organization_id, userId))) {
+      notFound();
+    }
+  }
+  const order = match.order;
 
   const expired =
     order.signature_token_expires_at !== null &&

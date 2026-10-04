@@ -551,6 +551,24 @@ PGTAP_TESTS=(
   supabase/tests/0025_notification_writers.test.sql
   supabase/tests/0027_mfa_recovery_codes.test.sql
   supabase/tests/0330_share_token_hash_at_rest.test.sql
+  # Order secrets, expand (0389): a packing slip's signature token is minted
+  # by generate_order_packing_slips (SECURITY DEFINER; gates in its body:
+  # signed in, member, orders module, orders:approve, warehouse write; under
+  # the order row lock, picking complete or a regenerate, unsigned) as 32
+  # random bytes kept only in order_request_secrets, while the order row every
+  # member reads (RLS, realtime, the v1 order route) holds its sha256.
+  # order_request_secrets has RLS on, no policy, no privilege for anon or
+  # authenticated, only the four DML privileges for service_role, is not
+  # published, and cascades with its order. confirm_order_signature (frozen)
+  # completes with the digest and records nothing with the raw token, so a
+  # member who reads the column cannot complete a hand-over through it; a
+  # viewer reads only the digest. order_return_token_ensure is service_role
+  # only, atomic and never rotates (an issued side token or an emailed column
+  # token is kept). The frozen bodies keep their md5. The two-session proofs
+  # (two mints, mint against reopen, a no-lock mint) are
+  # scripts/db-concurrency/0389_mint_race.sh; the lock footprint is
+  # scripts/db-concurrency/0389_migration_lock_footprint.sh.
+  supabase/tests/0389_order_secrets_expand.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -765,6 +783,34 @@ WEB_TESTS=(
   src/app/api/reports/inventory-snapshot/pdf/route.test.tsx
   src/app/api/reports/item-cost-history/xlsx/route.test.ts
 
+  # Order secrets, expand (0389). Who may complete a hand-over through the
+  # sign route: a raw token whose sha256 is the order's column (a printed QR,
+  # the panel's link) or a raw column minted before 0389 with no side token
+  # hashing to it, with no session; the DIGEST every member reads only for a
+  # signed-in member of the order's organization with effective
+  # orders:approve or the assigned driver (installed phones' request shape).
+  # Every other refusal is one byte-identical 404, an entitled member whose
+  # MFA is unsatisfied gets 403, the member path is limited to 60 an hour per
+  # member and never counts against a per-token bucket, and a link counts
+  # against its own (keyed by the token's hash), so no member can use up
+  # another's; every digital hand-over is audited without the token. The sign
+  # page verifies its session locally without refreshing it. The warehouse
+  # slip is for the same people, its QR is never the digest, and it and the
+  # order page's raw link are held back while an MFA step-up is owed. The
+  # signature image route is listed above. GET /api/v1/orders/[id] returns an
+  # allow-listed order (no token, signature or internal note). The image
+  # route reads the side table first; return and track tokens are read side
+  # first and written only there; the scan lookup hashes before it matches.
+  src/server/lib/order-secrets.test.ts
+  src/server/lib/sign-page-session.test.ts
+  src/app/api/orders/sign/route.member.test.ts
+  'src/app/orders/sign/[token]/page.test.tsx'
+  'src/app/api/orders/[id]/packing-slip-warehouse.pdf/route.test.ts'
+  'src/app/api/v1/orders/[id]/route.test.ts'
+  src/app/api/v1/orders/signature-lookup/route.test.ts
+  'src/app/api/v1/public/order-requests/[id]/route.test.ts'
+  src/server/services/order-requests.packing-slips.test.ts
+
   # Every export route (2026-09-29): the caller's session, permission and
   # request are checked BEFORE the shared export budget, so a refused caller
   # never spends it, never writes a security.export_rate_limited audit row and
@@ -855,6 +901,13 @@ MOBILE_TESTS=(
   # build it with the one core builder, and the phone's outputs pass the
   # parser read from the migrations. (packages/core carries the builder half.)
   src/lib/item-photo-path.wiring.test.ts
+
+  # Order secrets (0389): the scan tab's departure check asks the server's
+  # lookup (which hashes the scanned token) instead of matching the order
+  # column, and View signature reads the image through the gated route
+  # (approvers and the assigned driver); both never throw.
+  src/lib/scan-signature-departure.test.ts
+  src/lib/order-signature-image.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

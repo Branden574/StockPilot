@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -13,6 +14,7 @@ import {
   readinessOk,
   visibleItemFacts,
 } from '@/test/order-readiness-facts';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
  * I1 (fix wave 2, security review sibling of C1's cross-org attach fix):
@@ -272,6 +274,17 @@ vi.mock('@/components/exceptions/count-this-item-button', async () => {
 });
 const managerActionsProps = vi.fn();
 
+// Migration 0389: the raw tokens are read through the admin client (order
+// secrets). By default there is no service-role key (createAdminClient
+// throws), which the page renders without; the hand-over tests hand it a stub.
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    if (!adminHolder.client) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    return adminHolder.client;
+  },
+}));
+
 vi.mock('@/server/services/returns', () => ({
   RMAService: { forCurrentUser: vi.fn(async () => ({ returnableLinesForOrder })) },
   // The order page's returns read (fired only on completed / legacy delivered
@@ -371,6 +384,8 @@ async function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  adminHolder.client = null;
+  withContextMock.mockImplementation(async () => ({ organizationId: 'org-1' }));
   orderGet.mockResolvedValue(detailFixture());
   attachmentsList.mockResolvedValue([]);
   returnableLinesForOrder.mockResolvedValue([]);
@@ -398,6 +413,81 @@ describe('orders/[id]: the order read', () => {
     const failure = new ServiceError('internal_error', 'gateway timeout');
     orderGet.mockRejectedValue(failure);
     await expect(renderPage()).rejects.toBe(failure);
+  });
+});
+
+describe('orders/[id]: the Collect signature link (migration 0389)', () => {
+  const RAW = '4d'.repeat(32);
+  const DIGEST = createHash('sha256').update(RAW).digest('hex');
+  let admin: ReturnType<typeof makeSupabaseStub>;
+
+  beforeEach(() => {
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    admin = makeSupabaseStub({
+      'order_request_secrets.select': servedLikePostgrest([{ order_request_id: ORDER_ID, signature_token: RAW }]),
+    });
+    adminHolder.client = admin.client;
+  });
+
+  const panelProps = () => managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  const sideReads = () => admin.fromCalls.filter((t) => t === 'order_request_secrets').length;
+
+  it('an approver at staged for pickup gets the RAW token (its sha256 is the column), never the digest', async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBe(RAW);
+    expect(panelProps()?.handOverMfaMessage).toBeNull();
+  });
+
+  it('F2: an approver who owes an MFA step-up gets no link, the words instead, and the raw token is never read', async () => {
+    withContextMock.mockImplementation(
+      async () => ({ organizationId: 'org-1', mfaRequired: true, mfaSatisfied: false, mfaEnrolled: true }) as never,
+    );
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(panelProps()?.handOverMfaMessage).toBe('Re-authenticate with MFA to collect a signature.');
+    expect(sideReads()).toBe(0);
+  });
+
+  it('F2: a service context that failed holds the link back too (fail closed), with no words', async () => {
+    withContextMock.mockImplementation(async () => {
+      throw new Error('factors unreadable');
+    });
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(panelProps()?.handOverMfaMessage).toBeNull();
+    expect(sideReads()).toBe(0);
+  });
+
+  it("review 1: a staff approver gets the link only for an order in a warehouse they may write to (the mint's rule)", async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }) }));
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(sideReads()).toBe(0);
+
+    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBe(RAW);
+  });
+
+  it('review 1: a failed warehouse access read gives a staff approver no link (fail closed)', async () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'in_transit', signature_token: DIGEST }) }));
+    getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(sideReads()).toBe(0);
+  });
+
+  it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'packing_slip_generated', signature_token: DIGEST }) }));
+    await renderPage();
+    expect(panelProps()?.signatureToken).toBeNull();
+    expect(sideReads()).toBe(0);
   });
 });
 

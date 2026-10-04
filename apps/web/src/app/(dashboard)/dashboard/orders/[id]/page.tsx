@@ -97,7 +97,17 @@ import { canStartCount } from '@/server/services/lib/count-start-preflight';
 import { getWarehouseAccess, roleSeesEveryWarehouse } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import {
+  handOverAllowed,
+  handOverLinkWanted,
+  handOverMfaBlock,
+  handOverMfaPanelMessage,
+  hasCapturedSignature,
+  resolveReturnToken,
+  signatureLinkToken,
+} from '@/server/lib/order-secrets';
 import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
@@ -1019,15 +1029,68 @@ export default async function OrderDetailPage({
     (sum, l) => sum + (Number(l.quantity_fulfilled) || 0),
     0,
   );
-  const requesterReturnPath =
+  const requesterReturnEligible =
     isOwnRequest &&
     !can(ctx, 'returns:manage') &&
     orderIsReturnable &&
     returnsModuleEnabled &&
-    request.return_token &&
-    totalFulfilledForReturns > 0
-      ? `/returns/request/${request.return_token}`
-      : null;
+    totalFulfilledForReturns > 0;
+
+  // ORDER SECRETS (migration 0389). The raw tokens live in
+  // order_request_secrets, which only the admin client reads; the order row
+  // every member reads holds the signature token's sha256 (for tokens minted
+  // since 0389). Read only for the viewer who gets the link:
+  //   - the requester's own return link: the side table first, then the
+  //     legacy column (an older token may already be in their inbox);
+  //   - the panel's "Collect signature" link: only while the order can be
+  //     signed (staged for pickup, in transit) and only for someone who may
+  //     hand it over (orders:approve, with write access to the order's
+  //     warehouse below manager rank, or the assigned driver). The raw token
+  //     when its digest is the column, else a raw column minted before 0389;
+  //     never a digest (the sign page would then ask for a session). Not
+  //     while the viewer owes an MFA step-up (F2): the link completes the
+  //     hand-over with no session, so it follows assertPermission's rule, and
+  //     the panel says what to do instead. The MFA state is the service
+  //     context's (every read above already used it, request-cached, so no
+  //     round trip); a context that failed holds the link back too.
+  const handOverMfaState = await contextStarted.then(
+    (svcCtx) => ({ known: true as const, block: handOverMfaBlock(svcCtx) }),
+    () => ({ known: false as const, block: null }),
+  );
+  const handOverMfa = handOverMfaState.block;
+  // Who may hand it over is the mint's rule too (review finding 1): below
+  // manager rank an approver needs write access to the order's warehouse.
+  // Their access is the read started beside the order read for F2-4
+  // (approverWarehouseAccess: an approver whose role does not decide it),
+  // request-cached, so no round trip of its own; a failed read is no access.
+  const handOverWarehouseAccess =
+    approverWarehouseAccess && !isAssignedDriver ? await approverWarehouseAccess.catch(() => null) : null;
+  const wantsHandOverLink = handOverLinkWanted({
+    showActionsPanel,
+    viewerMayHandOver: handOverAllowed(ctx, request, handOverWarehouseAccess),
+    mfaBlocked: !handOverMfaState.known || handOverMfa !== null,
+    status: request.status,
+    signatureTokenColumn: request.signature_token,
+  });
+  // Without a service-role key (a misconfigured preview) the page renders
+  // with no return link and no hand-over link rather than failing.
+  let secretsAdmin: ReturnType<typeof createAdminClient> | null = null;
+  if (requesterReturnEligible || wantsHandOverLink) {
+    try {
+      secretsAdmin = createAdminClient();
+    } catch {
+      secretsAdmin = null;
+    }
+  }
+  const [requesterReturnToken, handOverLink] = await Promise.all([
+    requesterReturnEligible && secretsAdmin
+      ? resolveReturnToken(secretsAdmin, id, request.return_token)
+      : Promise.resolve(null),
+    wantsHandOverLink && secretsAdmin
+      ? signatureLinkToken(secretsAdmin, id, request.signature_token)
+      : Promise.resolve(null),
+  ]);
+  const requesterReturnPath = requesterReturnToken ? `/returns/request/${requesterReturnToken}` : null;
 
   // Item-level summary for the add-items picker: it labels a pick that would
   // TOP UP an existing line instead of creating one. Summed PER ITEM because an
@@ -1635,8 +1698,9 @@ export default async function OrderDetailPage({
               hasRequesterNote={Boolean(request.notes?.trim())}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
-              signatureToken={request.signature_token}
-              hasSignature={Boolean(request.signature_data_url)}
+              signatureToken={handOverLink?.token ?? null}
+              handOverMfaMessage={handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null}
+              hasSignature={hasCapturedSignature(request)}
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}

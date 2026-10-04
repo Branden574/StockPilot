@@ -10,37 +10,28 @@
  * "Fix the order" opens the order, where the line fixes are; once the order
  * is out for delivery the lines are final and the button is "Go back".
  *
- * The read is an RLS member read in the signed-in organization, by the slip's
- * signature token (the token the QR itself carries, and the one the public
- * sign page's own URL carries; nothing new is disclosed by asking with it).
- * It never blocks the hand-over for want of facts: a slip of another
- * organization, a failed read or no connection opens the pad as before, and
- * the reason goes to the device log. UI only (F2 decision D17): the server
- * stays permissive, because shipping short is the backorder model.
+ * The read goes through POST /api/v1/orders/signature-lookup (migration
+ * 0389), in the signed-in organization (api() sends it). It used to be a
+ * direct member read `.eq('signature_token', <the QR's token>)`, but since
+ * 0389 the order row holds the token's sha256, not the token, so the server
+ * hashes the scanned token and answers the order and its lines (read under
+ * the member's own row level security). It never blocks the hand-over for
+ * want of facts: a slip of another organization (404), a failed read or no
+ * connection opens the pad as before, and the reason goes to the device log.
+ * UI only (F2 decision D17): the server stays permissive, because shipping
+ * short is the backorder model.
  *
- * Pure: no React Native import, and the Supabase client is passed in.
+ * Pure: no React Native import, and the request function is passed in.
  */
 
-import { orderLineItemName, type DepartureRisk } from '@stockpilot/core';
+import { type DepartureRisk } from '@stockpilot/core';
 
 import { orderDepartureRisk, type DepartureOrderLine } from './order-departure';
 
-/** The slice of the Supabase client the read uses. */
-export interface SignatureOrderClient {
-  from(table: string): unknown;
-}
+/** POSTs `body` to the lookup route and resolves its JSON (api() in the app). */
+export type SignatureLookupPost = (path: string, body: { token: string }) => Promise<unknown>;
 
-interface HeaderChain {
-  select(columns: string): HeaderChain;
-  eq(column: string, value: string): HeaderChain;
-  maybeSingle(): PromiseLike<{ data: unknown; error: unknown }>;
-}
-
-interface LinesChain extends PromiseLike<{ data: unknown; error: unknown }> {
-  select(columns: string): LinesChain;
-  eq(column: string, value: string): LinesChain;
-  order(column: string, options: { ascending: boolean }): LinesChain;
-}
+export const SIGNATURE_LOOKUP_PATH = '/api/v1/orders/signature-lookup';
 
 /** The order a scanned packing slip belongs to, as the departure confirm reads it. */
 export interface ScannedSignatureOrder {
@@ -54,54 +45,45 @@ function warn(detail: string): null {
   return null;
 }
 
+function statusOf(e: unknown): number | null {
+  const s = (e as { status?: unknown } | null)?.status;
+  return typeof s === 'number' ? s : null;
+}
+
 /**
- * The order behind a scanned signature token, in `orgId`, with its lines in
- * the order screen's order ((created_at, id)); null when it cannot be read
- * here. Never throws.
+ * The order behind a scanned signature token, in the signed-in organization,
+ * with its lines in the order screen's order ((created_at, id)); null when it
+ * cannot be read here. Never throws.
  */
 export async function readSignatureOrder(
-  client: SignatureOrderClient,
-  orgId: string,
+  post: SignatureLookupPost,
   token: string,
 ): Promise<ScannedSignatureOrder | null> {
+  let answer: unknown;
   try {
-    const head = await (client.from('order_requests') as HeaderChain)
-      .select('id, status')
-      .eq('organization_id', orgId)
-      .eq('signature_token', token)
-      .maybeSingle();
-    if (!head) return warn('no answer');
-    if (head.error) return warn('the order read failed');
-    const h = head.data as { id?: unknown; status?: unknown } | null;
-    // Another organization's slip, or one no longer valid: the pad decides.
-    if (!h) return null;
-    if (typeof h.id !== 'string' || typeof h.status !== 'string')
-      return warn('an unreadable order');
-
-    const res = await (client.from('order_request_lines') as LinesChain)
-      .select(
-        'id, quantity_requested, quantity_fulfilled, quantity_picked, item:inventory_items(name)',
-      )
-      .eq('order_request_id', h.id)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true });
-    if (!res || res.error || !Array.isArray(res.data)) return warn('the lines read failed');
-    const lines = (res.data as Record<string, unknown>[]).map((l) => {
-      const item = Array.isArray(l.item) ? l.item[0] : l.item;
-      return {
-        orderRequestLineId: typeof l.id === 'string' ? l.id : null,
-        // Core's label when the viewer's access hides the item (the order
-        // screen and the web page say the same).
-        name: orderLineItemName((item ?? null) as { name?: string | null } | null),
-        requested: Number(l.quantity_requested) || 0,
-        fulfilled: Number(l.quantity_fulfilled) || 0,
-        picked: Number(l.quantity_picked) || 0,
-      };
-    });
-    return { orderId: h.id, status: h.status, lines };
+    answer = await post(SIGNATURE_LOOKUP_PATH, { token });
   } catch (e) {
+    // Another organization's slip, or one no longer valid: the pad decides.
+    if (statusOf(e) === 404) return null;
     return warn(e instanceof Error ? e.message : String(e));
   }
+  const a = answer as { orderId?: unknown; status?: unknown; lines?: unknown } | null;
+  if (!a || typeof a.orderId !== 'string' || typeof a.status !== 'string' || !Array.isArray(a.lines)) {
+    return warn('an unreadable order');
+  }
+  const lines: DepartureOrderLine[] = [];
+  for (const raw of a.lines as unknown[]) {
+    const l = raw as Record<string, unknown> | null;
+    if (!l || typeof l.name !== 'string') return warn('an unreadable line');
+    lines.push({
+      orderRequestLineId: typeof l.orderRequestLineId === 'string' ? l.orderRequestLineId : null,
+      name: l.name,
+      requested: Number(l.requested) || 0,
+      fulfilled: Number(l.fulfilled) || 0,
+      picked: Number(l.picked) || 0,
+    });
+  }
+  return { orderId: a.orderId, status: a.status, lines };
 }
 
 /**

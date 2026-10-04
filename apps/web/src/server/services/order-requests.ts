@@ -150,11 +150,17 @@ export interface OrderRequestRow {
   assigned_delivery_at: string | null;
   in_transit_at: string | null;
   in_transit_by: string | null;
+  /** sha256 hex of the raw token for every mint since migration 0389 (the raw
+   *  token is in order_request_secrets, admin-only); a token minted earlier is
+   *  still raw here until slice C. Never put this value in a link or a QR:
+   *  server/lib/order-secrets signatureLinkToken picks the right one. */
   signature_token: string | null;
   signature_token_expires_at: string | null;
   signed_by_name: string | null;
   signed_by_email: string | null;
   signature_data_url: string | null;
+  /** 'digital' (confirm_order_signature) or 'physical' (confirm_physical_signature, 0248). */
+  signature_method: string | null;
   signed_at: string | null;
   completed_at: string | null;
   completed_by: string | null;
@@ -605,6 +611,56 @@ function isoOrNull(value: string | null | undefined): string | null {
   if (!value) return null;
   const t = Date.parse(value);
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+/**
+ * generate_order_packing_slips (0389) refusals as the service has always
+ * worded them. The function restates the service's own gates in SQL, so the
+ * permission and warehouse refusals are reached only by a direct call or a
+ * change between the two checks.
+ */
+function packingSlipMintError(error: {
+  message?: string | null;
+  code?: string | null;
+  hint?: string | null;
+}): ServiceError {
+  const msg = error.message ?? '';
+  if (msg === 'packing_slips_not_ready') {
+    return new ServiceError(
+      'validation_error',
+      'Packing slips can only be generated after picking is complete.',
+    );
+  }
+  if (msg === 'order_already_signed') {
+    return new ServiceError(
+      'validation_error',
+      'This order has already been signed and completed. Re-generating packing slips would invalidate the signed record.',
+    );
+  }
+  if (msg === 'order_request_not_found') return new ServiceError('not_found', 'Order not found');
+  if (msg === 'module_disabled') {
+    return new ServiceError('module_disabled', 'Module not enabled for this organization: orders');
+  }
+  if (error.code === '42501' && msg === 'unauthenticated') {
+    return new ServiceError('unauthenticated', 'Sign in again to generate packing slips.');
+  }
+  if (error.code === '42501' && msg === 'forbidden') {
+    return new ServiceError(
+      'forbidden',
+      error.hint === 'warehouse_write'
+        ? 'You do not have write access to this order\'s warehouse.'
+        : 'Missing permission: orders:approve',
+    );
+  }
+  // lock_timeout (5 s) on the order row, or the role's statement_timeout:
+  // someone else is changing the order. Never 40001/40P01 from the function.
+  if (error.code === '55P03' || error.code === '57014') {
+    return new ServiceError('conflict', NEEDED_BY_BUSY_COPY, { reason: 'busy', retryable: true });
+  }
+  return new ServiceError(
+    'internal_error',
+    `generate_order_packing_slips failed: ${error.code ?? 'no code'}: ${msg || 'no message'}`,
+  );
 }
 
 /**
@@ -3815,61 +3871,23 @@ export class OrderRequestsService {
     assertPermission(this.ctx, 'orders:approve');
     await this.requireWarehouseAccess(id, 'write');
 
-    const { data: row, error } = await this.ctx.supabase
-      .from('order_requests')
-      .select('status, signature_token, signed_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
-    if (!row) throw new ServiceError('not_found', 'Order not found');
-
-    // Accept BOTH first-time generation (picking_complete) AND re-
-    // generation (packing_slip_generated). Regenerating mints a new
-    // signature_token, which invalidates any QR already printed.
-    if (
-      (row as { status: OrderRequestStatus }).status !== 'picking_complete' &&
-      (row as { status: OrderRequestStatus }).status !== 'packing_slip_generated'
-    ) {
-      throw new ServiceError(
-        'validation_error',
-        'Packing slips can only be generated after picking is complete.',
-      );
+    // The mint is one SECURITY DEFINER call since migration 0389
+    // (generate_order_packing_slips): under the order's row lock it accepts
+    // BOTH first-time generation (picking_complete) AND re-generation
+    // (packing_slip_generated; a new token voids any QR already printed),
+    // refuses a signed order (re-generating would orphan the signed record:
+    // the signed copy is the audit anchor), and writes the raw token to the
+    // service-only order_request_secrets and only its sha256 to the order
+    // row every member reads. The returned row carries the digest; nothing
+    // here reads the token from it.
+    const { data: updated, error: mintErr } = await this.ctx.supabase.rpc(
+      'generate_order_packing_slips',
+      { p_id: id },
+    );
+    if (mintErr) throw packingSlipMintError(mintErr);
+    if (!updated || (updated as OrderRequestRow).id !== id) {
+      throw new ServiceError('internal_error', 'generate_order_packing_slips returned no order row');
     }
-
-    // Block silent-QR-invalidation: once an order is signed, regenerating
-    // the packing slip would mint a fresh signature_token and orphan the
-    // signed record (the QR on the customer's slip would still point at
-    // the now-stale token). The signed copy is the audit anchor — refuse
-    // to regenerate after the fact.
-    if ((row as { signed_at: string | null }).signed_at !== null) {
-      throw new ServiceError(
-        'validation_error',
-        'This order has already been signed and completed. Re-generating packing slips would invalidate the signed record.',
-      );
-    }
-
-    // 256-bit hex token, distinct from the public-request token
-    // namespace (those live on organizations.public_request_token).
-    const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-    const { data: updated, error: updErr } = await this.ctx.supabase
-      .from('order_requests')
-      .update({
-        status: 'packing_slip_generated',
-        packing_slip_generated_at: new Date().toISOString(),
-        packing_slip_generated_by: this.ctx.userId,
-        signature_token: token,
-        signature_token_expires_at: expiresAt,
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
     await audit(
       { event: 'order.packing_slip_generated', entityType: 'order_request', entityId: id },
       this.ctx,

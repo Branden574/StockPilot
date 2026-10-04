@@ -47,9 +47,12 @@ import { reportError } from '@/lib/error-reporter';
  * fails, the marker deliberately stays set — we prefer a missed email over a
  * duplicate (the same link is reachable from the public tracking page and the
  * requester's order detail, so a lost email is recoverable; a double prompt
- * is just spam). The `return_token` mint is likewise guarded
- * (`.is('return_token', null)`) so a replay never rotates an issued token —
- * links already emailed keep working.
+ * is just spam). The return-token mint never rotates an issued token either:
+ * since migration 0389 it is one call, `order_return_token_ensure` (service
+ * role only), which keeps a token already in `order_request_secrets`, else
+ * moves the token already in `order_requests.return_token` (it may be in an
+ * inbox) unchanged, else mints one, atomically. The raw token is no longer
+ * written to the order row every member reads.
  *
  * BEST-EFFORT: never throws. Callers fire it AFTER the successful transition
  * (audit()/notification pattern) and a failure here must never fail the
@@ -90,7 +93,7 @@ export async function maybeSendReturnPrompt(
     const { data: row, error: rowErr } = await admin
       .from('order_requests')
       .select(
-        'id, organization_id, status, requester_email, requester_name, requester_user_id, order_number, return_token, return_prompt_sent_at',
+        'id, organization_id, status, requester_email, requester_name, requester_user_id, order_number, return_prompt_sent_at',
       )
       .eq('id', orderId)
       .maybeSingle();
@@ -104,7 +107,6 @@ export async function maybeSendReturnPrompt(
       requester_name: string | null;
       requester_user_id: string | null;
       order_number: number | null;
-      return_token: string | null;
       return_prompt_sent_at: string | null;
     };
 
@@ -140,30 +142,16 @@ export async function maybeSendReturnPrompt(
     // EVERY structurally-qualifying completion — BEFORE any email-specific
     // guard — because the token also drives the requester's dashboard
     // "Request a return" link (orders with no requester_email still get one).
-    // Guarded mint: only while still NULL, so a concurrent completion never
-    // rotates a token that may already be in someone's inbox.
-    let token = order.return_token;
-    if (!token) {
-      const minted = crypto.randomUUID();
-      const { data: tokened } = await admin
-        .from('order_requests')
-        .update({ return_token: minted })
-        .eq('id', order.id)
-        .is('return_token', null)
-        .select('return_token')
-        .maybeSingle();
-      if (tokened) {
-        token = (tokened as { return_token: string | null }).return_token ?? minted;
-      } else {
-        // Lost the mint race — another path minted first; read theirs.
-        const { data: reread } = await admin
-          .from('order_requests')
-          .select('return_token')
-          .eq('id', order.id)
-          .maybeSingle();
-        token = (reread as { return_token: string | null } | null)?.return_token ?? null;
-      }
+    // order_return_token_ensure (0389) is atomic and never rotates: two
+    // concurrent completions get the same token, and a token minted before
+    // 0389 (in the order column, perhaps already emailed) is kept as it is.
+    const { data: ensured, error: ensureErr } = await admin.rpc('order_return_token_ensure', {
+      p_order_id: order.id,
+    });
+    if (ensureErr) {
+      return await readFailed(ensureErr, 'orders.return-prompt.token_ensure', orderId);
     }
+    const token = typeof ensured === 'string' && ensured.length > 0 ? ensured : null;
     if (!token) return { sent: false, reason: 'no_token' };
 
     // ── Email-specific guards — from here down we decide only whether the

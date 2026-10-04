@@ -1,18 +1,32 @@
+import { isIP } from 'node:net';
+
 import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { withApiContext } from '@/lib/auth/api-context';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sha256Hex } from '@/lib/token-hash';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
   sendPartialReceiptEmail,
 } from '@/server/lib/order-handover-notify';
+import {
+  LINK_SIGN_LIMIT_PER_HOUR,
+  mayHandOverOrder,
+  MEMBER_SIGN_LIMIT_PER_HOUR,
+  resolveSignatureToken,
+  SIGNATURE_TOKEN_RE,
+  type SignatureTokenVia,
+} from '@/server/lib/order-secrets';
+import { insertAuditRowReported } from '@/server/services/audit';
+import { isModuleEnabled, mfaGateError, type ServiceContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 
@@ -27,7 +41,6 @@ import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const TOKEN_RE = /^[0-9a-f]{64}$/i;
 const DATA_URL_RE = /^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/;
 
 /**
@@ -78,7 +91,7 @@ async function resolveRequesterContact(
 }
 
 const submitSchema = z.object({
-  token: z.string().regex(TOKEN_RE),
+  token: z.string().regex(SIGNATURE_TOKEN_RE),
   signerName: z.string().trim().min(1).max(120),
   signerEmail: z.string().trim().email().max(254),
   signatureDataUrl: z
@@ -87,6 +100,107 @@ const submitSchema = z.object({
     .max(500_000)
     .regex(DATA_URL_RE, 'Invalid signature image'),
 });
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * THE one answer for a token this route will not act on: unknown, cleared,
+ * or a digest presented without an entitled session (no session, another
+ * organization, a viewer, a disabled account). Byte-identical in every case,
+ * so the answer never says which.
+ */
+const NOT_FOUND_BODY = {
+  ok: false,
+  error: { code: 'not_found', message: 'This signature link is invalid or expired.' },
+} as const;
+
+function notFound() {
+  return NextResponse.json(NOT_FOUND_BODY, { status: 404 });
+}
+
+function rateLimited() {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: {
+        code: 'rate_limited',
+        message: 'Too many attempts. Try again in a few minutes.',
+      },
+    },
+    { status: 429 },
+  );
+}
+
+/** The order columns the route reads before the hand-over. */
+const ORDER_COLUMNS =
+  'id, organization_id, warehouse_id, requester_user_id, requester_name, requester_email, ' +
+  'fulfillment_type, assigned_delivery_user_id';
+
+interface SignOrderRow {
+  id: string;
+  organization_id: string;
+  warehouse_id: string | null;
+  requester_user_id: string | null;
+  requester_name: string | null;
+  requester_email: string | null;
+  fulfillment_type: 'pickup' | 'delivery';
+  assigned_delivery_user_id: string | null;
+}
+
+/**
+ * The IP for the hand-over's audit row: the first x-forwarded-for hop, else
+ * x-real-ip, as every other audit row takes it (server/services/audit.ts),
+ * and only when it is an IP literal. audit_logs.ip is inet: a value such as
+ * the rate-limit helper's "unknown" bucket fails the insert (22P02) and the
+ * row, and with it the timeline's "Signature collected", is lost.
+ */
+function auditIp(req: Request): string | null {
+  const raw = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip')?.trim() || null;
+  return raw && isIP(raw) ? raw : null;
+}
+
+/**
+ * Did a browser send this cookie-authenticated post from another origin?
+ * Route handlers get no Origin check from the framework (server actions do),
+ * and the session cookies are SameSite=Lax, which still lets a page on a
+ * sibling subdomain post with them. The browser names where a post came
+ * from: Sec-Fetch-Site (anything but same-origin is refused) and Origin (its
+ * host must be this request's; "null" or an unreadable one is refused). A
+ * bearer caller (the phone) carries no ambient credential and is not judged
+ * here; a client that sends neither header is not a browser a page could
+ * drive. Same shape as /api/v1/me/release-state's isCrossSite.
+ */
+function crossSiteCookiePost(req: Request): boolean {
+  if (req.headers.get('authorization')) return false;
+  const site = req.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin') return true;
+  const origin = req.headers.get('origin');
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== new URL(req.url).host;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The caller's context IN THE ORDER'S ORGANIZATION (bearer or cookie), or
+ * null. The organization header is set to the order's: withApiContext then
+ * verifies an accepted membership there, so a member of several
+ * organizations is judged where the order lives, and anyone else gets null.
+ * A context that cannot be built (an unreadable account status) is also null:
+ * the caller answers the one not-found, never a different status.
+ */
+async function memberContextFor(req: Request, organizationId: string): Promise<ServiceContext | null> {
+  try {
+    const headers = new Headers(req.headers);
+    headers.set('x-organization-id', organizationId);
+    return await withApiContext(new Request(req.url, { method: 'GET', headers }));
+  } catch (e) {
+    void reportError(e, { tag: 'orders.sign.member_context', level: 'warning' });
+    return null;
+  }
+}
 
 export async function POST(req: NextRequest) {
   let body: unknown;
@@ -113,27 +227,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Rate-limit per token. Closed mode: a DB outage denies rather than
-  // unlocks unlimited submissions on a public endpoint.
-  const rl = await checkRateLimit(
-    `order-sign:${parsed.data.token}`,
-    10,
-    60 * 60 * 1000,
-    'closed',
-  );
-  if (!rl.allowed) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: {
-          code: 'rate_limited',
-          message: 'Too many attempts. Try again in a few minutes.',
-        },
-      },
-      { status: 429 },
-    );
-  }
-
   let admin;
   try {
     admin = createAdminClient();
@@ -150,30 +243,94 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { data: row } = await admin
-    .from('order_requests')
-    .select(
-      'id, organization_id, requester_user_id, requester_name, requester_email, fulfillment_type',
-    )
-    .eq('signature_token', parsed.data.token)
-    .maybeSingle();
-  if (!row) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: { code: 'not_found', message: 'This signature link is invalid or expired.' },
-      },
-      { status: 404 },
+  // Which order, and by what right (migration 0389, server/lib/order-secrets):
+  //   link        sha256(presented) is the order's column: the raw token of a
+  //               printed QR or the panel's link. No session needed, as before.
+  //   legacy_link the presented value IS the column and no side token hashes
+  //               to it: a raw token minted before 0389 (until slice C).
+  //   member      the presented value IS the column and is a DIGEST, which
+  //               every member can read. It completes the hand-over only for
+  //               a signed-in member of the order's organization who may hand
+  //               it over today: effective orders:approve (the web panel's
+  //               gate, and the permission the phone's manager rank carries)
+  //               with the mint's warehouse rule below manager rank, or the
+  //               order's assigned driver (mayHandOverOrder); the orders
+  //               module on; a cookie session only from this site. Installed
+  //               phones post the column with their bearer, so they keep
+  //               working unchanged.
+  // Every refusal is the same 404 an unknown token gets.
+  //
+  // The limits are applied AFTER the match, each keyed to whoever can reach
+  // it, so nobody can use up someone else's (desk check F3):
+  //   - a link (link or legacy_link) counts against its token: 10 an hour,
+  //     keyed by sha256(presented). Only a holder of that value (the printed
+  //     QR, the panel's link) can fill it. Closed mode: a DB outage denies
+  //     rather than unlocks unlimited submissions on a public endpoint. The
+  //     key is the hash, never the token: rate_limit_buckets persists its
+  //     keys, and a raw token there is a credential at rest (the 0330
+  //     posture).
+  //   - the member path never touches a per-token bucket. Every member reads
+  //     the digest, so a token-keyed bucket would let a viewer post it ten
+  //     times and lock every installed phone's Collect signature out of that
+  //     order for an hour. An entitled member counts against their OWN
+  //     bucket (60 an hour); a refusal counts against nothing and is the one
+  //     404, so no refusal changes what anyone else gets.
+  const match = await resolveSignatureToken<SignOrderRow>(
+    admin,
+    parsed.data.token,
+    ORDER_COLUMNS,
+  );
+  if (!match) return notFound();
+  const order = match.order;
+  const via: SignatureTokenVia = match.via;
+  let memberUserId: string | null = null;
+  if (via !== 'member') {
+    const rl = await checkRateLimit(
+      `order-sign:${sha256Hex(parsed.data.token)}`,
+      LINK_SIGN_LIMIT_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
     );
+    if (!rl.allowed) return rateLimited();
+  } else {
+    // A cookie session is an ambient credential: only this site's own page
+    // (the sign page's collector) may spend it here (review finding 8).
+    if (crossSiteCookiePost(req)) return notFound();
+    const ctx = await memberContextFor(req, order.organization_id);
+    if (
+      !ctx ||
+      ctx.organizationId !== order.organization_id ||
+      // The orders module off: the mint and the lookup refuse it too (review 9).
+      !isModuleEnabled(ctx, 'orders') ||
+      // The mint's warehouse rule for an approver below manager rank (review 1).
+      !(await mayHandOverOrder(ctx, order))
+    ) {
+      return notFound();
+    }
+    // An entitled member already reads this order, so telling them to step up
+    // discloses nothing (R3); everyone else got the 404 above.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      const gate = mfaGateError(ctx);
+      const reason = (gate.details?.reason as string | undefined) ?? 'aal2_required';
+      return NextResponse.json(
+        {
+          ok: false,
+          error: { code: reason, message: gate.message },
+          message: gate.message,
+          details: { reason },
+        },
+        { status: 403 },
+      );
+    }
+    const memberLimit = await checkRateLimit(
+      `order-sign:member:${ctx.userId}`,
+      MEMBER_SIGN_LIMIT_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    );
+    if (!memberLimit.allowed) return rateLimited();
+    memberUserId = ctx.userId;
   }
-  const order = row as {
-    id: string;
-    organization_id: string;
-    requester_user_id: string | null;
-    requester_name: string | null;
-    requester_email: string | null;
-    fulfillment_type: 'pickup' | 'delivery';
-  };
 
   // Before the hand-over: how much had ALREADY shipped. >0 means a prior batch
   // went out (i.e. this order was resumed from backordered), so a completion now
@@ -192,7 +349,9 @@ export async function POST(req: NextRequest) {
 
   const { data: confirmed, error } = await admin.rpc('confirm_order_signature', {
     p_id: order.id,
-    p_signature_token: parsed.data.token,
+    // The column value (the digest for a link or a member, the raw value for
+    // a legacy link): the frozen body compares the column with it.
+    p_signature_token: match.columnToken,
     p_signer_name: parsed.data.signerName,
     p_signer_email: parsed.data.signerEmail,
     p_signature_data_url: parsed.data.signatureDataUrl,
@@ -225,6 +384,27 @@ export async function POST(req: NextRequest) {
       { status: 409 },
     );
   }
+
+  // Every digital hand-over is on the order's timeline (it was not before
+  // 0389). Who: the member on the member path; nobody signed in on a link.
+  // Never the token. Written before any read below can return early.
+  await insertAuditRowReported({
+    organization_id: order.organization_id,
+    user_id: memberUserId,
+    event: 'order.signature_collected',
+    ip: auditIp(req),
+    user_agent: req.headers.get('user-agent'),
+    metadata: {
+      entity_type: 'order_request',
+      entity_id: order.id,
+      warehouse_id: order.warehouse_id ?? null,
+      before: null,
+      after: null,
+      reason: null,
+      signatureMethod: 'digital',
+      via,
+    },
+  });
 
   // Hand-over decrements on-hand + consumes reservations — bust the
   // storefront catalog so the Place-an-Order avail pills update immediately.

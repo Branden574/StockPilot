@@ -28,6 +28,54 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-signature-timeline-2026-10',
+    revision: 1,
+    // Order secrets, slice B (migration 0389). Held as a DRAFT until 0389 is
+    // pushed and verified, the web deploy is READY, the phone's update is
+    // published and on phones (feedback_whats_new_publish_timing), and the
+    // Demo Co walk is done (plan 4.9 R8-R9). The follow-up that publishes it
+    // sets the real publishedAt and re-reads these words against what
+    // shipped. At the top of the list, above the account deletion draft
+    // (0388, pushed before 0389, so published first), and dated after every
+    // release below it (drafts go above the newest published release, newest
+    // first); the publishing follow-up sets the real date and keeps it the
+    // newest.
+    //
+    // What a person can see: every digital hand-over now writes
+    // order.signature_collected, which the order timeline labels "Signature
+    // collected" (order-timeline.tsx). The words promise no collector's name:
+    // only the signed-in member path (the phone's Collect signature) records
+    // one; the link path (the web panel, a printed QR, the phone's scan tab)
+    // records none, which the timeline shows as Public. The phone's View signature reads the
+    // image through the web's gated route (orders:approve or the assigned
+    // driver), so anyone else sees the signer's name and time without it, as
+    // on the web. Everything else in the slice is invisible on purpose (the
+    // token is stored hashed; links, QRs and installed phones keep working).
+    // Addressed to approvers where Orders is on: they read order timelines
+    // and collect signatures.
+    status: 'draft',
+    title: "A customer's digital signature shows on the order's timeline",
+    summary: "A customer's digital signature now shows on the order's timeline.",
+    publishedAt: '2026-10-11T17:05:00Z',
+    audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-timeline-signature-collected',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Signature collected is on the order timeline',
+        whatChanged:
+          "When a customer signs for an order on the signature page or on the mobile app's signature pad, the order's timeline now shows Signature collected. In the mobile app, View signature shows the captured image to the people who see it on the web: order approvers and the order's delivery driver.",
+        whyItMatters:
+          'A paper signature left an entry on the timeline, but a digital one left none, so the timeline did not show when the order was handed over.',
+        howItAffectsYou:
+          'Nothing changes in how you collect a signature. Anyone else who opens View signature in the mobile app sees who signed and when, without the image.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
     id: 'account-deletion-orders-2026-10',
     revision: 1,
     // Account deletion for people who placed orders (migration 0388, security

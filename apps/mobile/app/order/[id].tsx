@@ -103,6 +103,7 @@ import {
   type ReturnReasonCode,
 } from '@/lib/order-returns';
 import { extractApiErrorMessage } from '@/lib/po-import-approve';
+import { fetchOrderSignatureImage } from '@/lib/order-signature-image';
 import {
   ORDER_OFFLINE_NOTHING_LOADED_COPY,
   orderReadinessAudience,
@@ -1495,17 +1496,11 @@ export default function OrderDetail() {
     setSigLoading(true);
     void (async () => {
       try {
-        const { data } = await supabase
-          .from('order_requests')
-          .select('signature_data_url')
-          .eq('organization_id', orgId)
-          .eq('id', id)
-          .maybeSingle();
-        if (!cancelled) {
-          setSigUrl((data?.signature_data_url as string | null) ?? null);
-        }
-      } catch {
-        /* leave null — modal shows nothing */
+        // Through the gated route (0389), never the order row: an approver
+        // or the assigned driver gets the image; anyone else, and any
+        // failure, gets null and the dialog's name-and-time empty state.
+        const url = await fetchOrderSignatureImage((path) => api(path, { orgId }), id);
+        if (!cancelled) setSigUrl(url);
       } finally {
         if (!cancelled) setSigLoading(false);
       }

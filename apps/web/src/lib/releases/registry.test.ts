@@ -2768,3 +2768,67 @@ describe('the Sports required details release is published', () => {
     expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified/i);
   });
 });
+
+/**
+ * Order secrets, slice B (migration 0389): held as a DRAFT until 0389 is
+ * pushed and verified, the web deploy is READY, the phone's update is on
+ * phones and the Demo Co walk is done (plan 4.9 R9). Pinned by id, never by
+ * index. The follow-up that publishes it sets 'published' and the real
+ * publishedAt, re-reads its words against what shipped, and flips the first
+ * pin here.
+ */
+describe('order secrets slice B (a digital signature on the order timeline) is held as a draft', () => {
+  const ID = 'order-signature-timeline-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release, dated after every published release', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.status !== 'draft')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('keeps every release: it sits above the account deletion draft (0388, published first), dated after every release below it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    const a2 = RELEASES.findIndex((r) => r.id === 'account-deletion-orders-2026-10');
+    expect(a2).toBeGreaterThan(at);
+    expect(RELEASES[a2]?.status).toBe('draft');
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it("says the one line in the timeline's own words, for approvers where Orders is on", () => {
+    const r = release();
+    expect(r.summary).toBe("A customer's digital signature now shows on the order's timeline.");
+    expect(r.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    const text = readerText(r).join(' ');
+    // The order timeline's label for the event (order-timeline.tsx).
+    expect(text).toContain('Signature collected');
+    // The phone's View signature follows the web's audience.
+    expect(text).toContain('order approvers and the order');
+    expect(text).not.toMatch(/\bbooks?\b|token|hash|secret|%/i);
+  });
+
+  it('promises no collector name: the signature page (the web panel, a printed QR) records none (desk check F4)', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/who collected|name of the person|collected by|signed in/i);
+  });
+});

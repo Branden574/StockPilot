@@ -612,3 +612,83 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
     expect(args.html).not.toContain('to Dana "Dee"');
   });
 });
+
+// Migration 0389: the public submit writes the request's own track token to
+// the service-only order_request_secrets (the order row every member reads no
+// longer carries it). The Track link of every later status email reads the
+// side table first, then the legacy column (tokens written before 0389,
+// until slice C), then the catalog token a caller holds in hand.
+describe('sendOrderRequestEmail — the Track link carries the request track token (0389)', () => {
+  const SIDE = 'a'.repeat(64);
+  const COLUMN = 'b'.repeat(64);
+
+  function wireSide(side: string | null, error = false) {
+    const stub = makeSupabaseStub({
+      'public_email_unsubscribes.select.maybeSingle': { data: null, error: null },
+      'order_request_secrets.select': error
+        ? { data: null, error: { message: 'down' } }
+        : { data: side === null ? null : { public_track_token: side }, error: null },
+    });
+    adminHolder.client = stub.client;
+    return stub;
+  }
+
+  function trackLink(): string {
+    const text = sendEmailMock.mock.calls.at(-1)![0].text ?? '';
+    return text.match(/https:\/\/app\.test\/r\/track\?[^\s)]+/)?.[0] ?? '';
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    envState.UNSUBSCRIBE_SECRET = 'sender-test-secret-0123456789abcdef';
+  });
+
+  it('a token written since 0389 (side table only)', async () => {
+    const stub = wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow({ public_track_token: null }),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${SIDE}`);
+    expect(stub.chainArgsAll.get('order_request_secrets.select')?.[0]).toContainEqual([
+      'order_request_id',
+      '99999999-8888-7777-6666-555555555555',
+    ]);
+  });
+
+  it('a token written before 0389 (the order column), also when the side read fails', async () => {
+    wireSide(null);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow({ public_track_token: COLUMN }),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${COLUMN}`);
+    wireSide(null, true);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow({ public_track_token: COLUMN }),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${COLUMN}`);
+  });
+
+  it('a signed-in or portal requester links elsewhere, and the side table is not read', async () => {
+    const stub = wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow({ requester_user_id: 'u-1', source: 'internal' }),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(stub.fromCalls).not.toContain('order_request_secrets');
+  });
+});

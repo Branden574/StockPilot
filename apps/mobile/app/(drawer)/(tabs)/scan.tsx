@@ -397,7 +397,12 @@ export default function Scan() {
     // read here opens the pad as before: never blocked for want of facts.
     const signToken = parseSignToken(data);
     if (signToken) {
-      const scanned = await readSignatureOrder(supabase, orgId, signToken);
+      // Through the server (0389): the order row holds the token's sha256,
+      // so the lookup hashes the scanned token. In the active workspace.
+      const scanned = await readSignatureOrder(
+        (path, body) => api(path, { method: 'POST', body, orgId }),
+        signToken,
+      );
       const risk = scanSignatureDeparture(scanned);
       setBusy(false);
       if (!risk) {

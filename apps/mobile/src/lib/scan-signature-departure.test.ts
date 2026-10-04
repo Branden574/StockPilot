@@ -4,8 +4,9 @@ import { departureConfirmButtons } from './order-departure';
 import {
   readSignatureOrder,
   scanSignatureDeparture,
+  SIGNATURE_LOOKUP_PATH,
   type ScannedSignatureOrder,
-  type SignatureOrderClient,
+  type SignatureLookupPost,
 } from './scan-signature-departure';
 
 // F2-2 review 2026-09-28: a packing slip scanned on the Scan tab opened the
@@ -13,6 +14,12 @@ import {
 // Collect signature and Physical signature show. The scan tab now reads the
 // slip's order and asks first, in the same words; it never blocks the pad for
 // want of facts.
+//
+// Migration 0389: the order row holds the token's sha256, not the token, so
+// the read goes through POST /api/v1/orders/signature-lookup, which hashes the
+// scanned token on the server. It used to be `.eq('signature_token', token)`
+// with the member's own client, which finds nothing for a token minted since
+// 0389 (the departure confirm was then silently skipped).
 
 let warn: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
@@ -20,159 +27,88 @@ beforeEach(() => {
 });
 afterEach(() => warn.mockRestore());
 
-type Answer = { data: unknown; error: unknown };
+const TOKEN = 'f'.repeat(64);
 
-function client(header: () => Promise<Answer>, lines: () => Promise<Answer>) {
-  const seen: string[] = [];
-  const headChain = {
-    select(c: string) {
-      seen.push(`select:${c}`);
-      return headChain;
-    },
-    eq(c: string, v: string) {
-      seen.push(`eq:${c}=${v}`);
-      return headChain;
-    },
-    maybeSingle: header,
-  };
-  const linesChain = {
-    select(c: string) {
-      seen.push(`select:${c}`);
-      return linesChain;
-    },
-    eq(c: string, v: string) {
-      seen.push(`eq:${c}=${v}`);
-      return linesChain;
-    },
-    order(c: string, o: { ascending: boolean }) {
-      seen.push(`order:${c}:${o.ascending ? 'asc' : 'desc'}`);
-      return linesChain;
-    },
-    then<T>(resolve: (v: Answer) => T, reject?: (e: unknown) => T) {
-      return lines().then(resolve, reject);
-    },
-  };
-  const c: SignatureOrderClient & { seen: string[] } = {
-    seen,
-    from(t: string) {
-      seen.push(`from:${t}`);
-      return t === 'order_requests' ? headChain : linesChain;
-    },
-  };
-  return c;
+/** api()'s refusal shape: an Error carrying the HTTP status. */
+function apiError(status: number): Error {
+  return Object.assign(new Error(`Request failed (${status}).`), { status });
 }
 
-const SO100_LINES = [
-  {
-    id: 'l-nb',
-    quantity_requested: 30,
-    quantity_fulfilled: 0,
-    quantity_picked: 30,
-    item: { name: 'Notebook' },
-  },
-  {
-    id: 'l-pen',
-    quantity_requested: 60,
-    quantity_fulfilled: 0,
-    quantity_picked: 0,
-    item: { name: 'L4L - Pen Black & Rose Gold' },
-  },
-];
+function post(answer: () => Promise<unknown>) {
+  const calls: { path: string; body: { token: string } }[] = [];
+  const fn: SignatureLookupPost = async (path, body) => {
+    calls.push({ path, body });
+    return answer();
+  };
+  return { fn, calls };
+}
+
+const SO100 = {
+  orderId: 'o-100',
+  status: 'staged_for_pickup',
+  lines: [
+    { orderRequestLineId: 'l-nb', name: 'Notebook', requested: 30, fulfilled: 0, picked: 30 },
+    {
+      orderRequestLineId: 'l-pen',
+      name: 'L4L - Pen Black & Rose Gold',
+      requested: 60,
+      fulfilled: 0,
+      picked: 0,
+    },
+  ],
+};
 
 describe('readSignatureOrder', () => {
-  it("reads the slip's order in the signed-in organization, then its lines in the order screen's order", async () => {
-    const c = client(
-      async () => ({ data: { id: 'o-100', status: 'staged_for_pickup' }, error: null }),
-      async () => ({ data: SO100_LINES, error: null }),
-    );
-    await expect(readSignatureOrder(c, 'org-1', 'tok-abc')).resolves.toEqual({
-      orderId: 'o-100',
-      status: 'staged_for_pickup',
-      lines: [
-        { orderRequestLineId: 'l-nb', name: 'Notebook', requested: 30, fulfilled: 0, picked: 30 },
-        {
-          orderRequestLineId: 'l-pen',
-          name: 'L4L - Pen Black & Rose Gold',
-          requested: 60,
-          fulfilled: 0,
-          picked: 0,
-        },
-      ],
+  it("asks the server for the slip's order with the scanned token, and answers its lines as the server listed them", async () => {
+    const p = post(async () => SO100);
+    await expect(readSignatureOrder(p.fn, TOKEN)).resolves.toEqual(SO100);
+    expect(p.calls).toEqual([{ path: SIGNATURE_LOOKUP_PATH, body: { token: TOKEN } }]);
+    expect(SIGNATURE_LOOKUP_PATH).toBe('/api/v1/orders/signature-lookup');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('normalises the numbers and a missing line id (null), as the order screen does', async () => {
+    const p = post(async () => ({
+      orderId: 'o',
+      status: 'staged_for_delivery',
+      lines: [{ orderRequestLineId: 7, name: 'Item', requested: '4', fulfilled: null, picked: undefined }],
+    }));
+    const order = await readSignatureOrder(p.fn, TOKEN);
+    expect(order?.lines[0]).toEqual({
+      orderRequestLineId: null,
+      name: 'Item',
+      requested: 4,
+      fulfilled: 0,
+      picked: 0,
     });
-    expect(c.seen).toEqual([
-      'from:order_requests',
-      'select:id, status',
-      'eq:organization_id=org-1',
-      'eq:signature_token=tok-abc',
-      'from:order_request_lines',
-      'select:id, quantity_requested, quantity_fulfilled, quantity_picked, item:inventory_items(name)',
-      'eq:order_request_id=o-100',
-      'order:created_at:asc',
-      'order:id:asc',
-    ]);
   });
 
-  it("a line whose item the viewer cannot read is named in core's words, and a null pick is 0", async () => {
-    const c = client(
-      async () => ({ data: { id: 'o', status: 'staged_for_delivery' }, error: null }),
-      async () => ({
-        data: [
-          {
-            id: 'l',
-            quantity_requested: '4',
-            quantity_fulfilled: null,
-            quantity_picked: null,
-            item: null,
-          },
-        ],
-        error: null,
-      }),
-    );
-    const order = await readSignatureOrder(c, 'org', 'tok');
-    expect(order?.lines[0]).toMatchObject({ requested: 4, fulfilled: 0, picked: 0 });
-    expect(order?.lines[0]!.name).not.toBe('');
+  it("another organization's slip, or one no longer valid (404), is null without a device log line", async () => {
+    const p = post(async () => {
+      throw apiError(404);
+    });
+    expect(await readSignatureOrder(p.fn, TOKEN)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("never throws, and never blocks for want of facts: another org's slip, a failed read, no connection are null", async () => {
-    const ok = async () => ({ data: SO100_LINES, error: null });
-    expect(
-      await readSignatureOrder(
-        client(async () => ({ data: null, error: null }), ok),
-        'o',
-        't',
-      ),
-    ).toBeNull();
-    expect(
-      await readSignatureOrder(
-        client(async () => ({ data: null, error: { message: 'x' } }), ok),
-        'o',
-        't',
-      ),
-    ).toBeNull();
-    expect(
-      await readSignatureOrder(
-        client(
-          async () => ({ data: { id: 'o', status: 'staged_for_pickup' }, error: null }),
-          async () => ({
-            data: null,
-            error: { message: 'boom' },
-          }),
-        ),
-        'o',
-        't',
-      ),
-    ).toBeNull();
-    expect(
-      await readSignatureOrder(
-        client(async () => {
-          throw new Error('Network request failed');
-        }, ok),
-        'o',
-        't',
-      ),
-    ).toBeNull();
-    // A failure is said in the device log, never silent.
-    expect(warn).toHaveBeenCalled();
+  it('never throws, and never blocks for want of facts: a refusal, a server error, no connection or an unreadable answer is null, said in the device log', async () => {
+    for (const answer of [
+      async () => {
+        throw apiError(401);
+      },
+      async () => {
+        throw apiError(500);
+      },
+      async () => {
+        throw new Error('Network request failed');
+      },
+      async () => null,
+      async () => ({ orderId: 'o', status: 'staged_for_pickup' }),
+      async () => ({ orderId: 'o', status: 'staged_for_pickup', lines: [{ requested: 1 }] }),
+    ]) {
+      expect(await readSignatureOrder(post(answer).fn, TOKEN)).toBeNull();
+    }
+    expect(warn).toHaveBeenCalledTimes(6);
   });
 });
 
