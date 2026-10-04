@@ -1904,10 +1904,16 @@ describe('approval follows the permission is held as a draft', () => {
       'approve-permission-removed',
       'delivery-driver-actions',
     ]);
-    // A manager by role default, and the owner, read all three.
+    // A manager by role default, and the owner, read the managers' and the
+    // drivers' entries: the granted entry describes staff and viewers only.
     expect(entriesFor('manager', ['orders:request', 'orders:approve', 'orders:assign_delivery'])).toEqual([
-      'approve-permission-granted',
       'approve-permission-removed',
+      'delivery-driver-actions',
+    ]);
+    expect(entriesFor('owner', [...PERMISSIONS])).toEqual(['approve-permission-removed', 'delivery-driver-actions']);
+    // A viewer granted orders:approve is told too.
+    expect(entriesFor('viewer', ['orders:request', 'orders:approve'])).toEqual([
+      'approve-permission-granted',
       'delivery-driver-actions',
     ]);
     // Staff without the grant (a possible driver) read the drivers' entry only.
@@ -1917,7 +1923,7 @@ describe('approval follows the permission is held as a draft', () => {
     // The one link goes to the orders list, which reads orders:approve.
     const [granted, removed, driver] = r.entries;
     expect(granted!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
-    expect(granted!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(granted!.audience).toEqual({ roles: ['staff', 'viewer'], anyPermission: ['orders:approve'], modules: ['orders'] });
     expect(removed!.link).toBeUndefined();
     expect(removed!.audience).toEqual({ roles: ['owner', 'admin', 'manager'], modules: ['orders'] });
     expect(driver!.link).toBeUndefined();
@@ -1935,14 +1941,29 @@ describe('approval follows the permission is held as a draft', () => {
     expect(driver!.whatChanged).toContain(`"${LABEL}"`);
     // Old phones show only the title and the summary: both changes are in it.
     expect(r.summary).toContain('A staff member who was given it sees Approve, Deny');
-    expect(r.summary).toContain('A manager who had it removed can no longer do these anywhere.');
-    // The granted staff member: the phone's buttons, on-behalf and their own cancel on the web.
+    expect(r.summary).toContain(
+      "A manager who had it removed can no longer approve, deny, cancel other people's orders or move an order along",
+    );
+    // What still goes by role is named, never "everywhere" or "anywhere"
+    // (complete_picking / release_picking and confirm_physical_signature).
+    expect(r.summary).toContain("finishing someone else's picking and recording a paper signature still follow the manager role");
+    expect(removed!.whatChanged).toContain(
+      'Two steps still follow the manager role for now: finishing or releasing picking that someone else claimed, and recording a paper signature.',
+    );
+    expect(all).not.toMatch(/everywhere|anywhere/i);
+    // The granted staff member: the phone's buttons, on-behalf, the picker and
+    // reopen on the web, their own cancel, and other people's orders.
     expect(granted!.whatChanged).toContain('the order screen in the mobile app now shows Approve and Deny');
     expect(granted!.whatChanged).toContain("order on someone else's behalf");
-    // The removed manager keeps the requester's own-order cancel.
+    expect(granted!.whatChanged).toContain('assign who picks an order, reopen picking');
+    expect(granted!.howItAffectsYou).toContain("cancel other people's orders from either app");
+    expect(granted!.howItAffectsYou).toContain('Alerts about new orders waiting for approval still go to owners, admins and managers.');
+    // The removed manager keeps the requester's own-order cancel, and loses assigning.
     expect(removed!.whatChanged).toContain('They can still cancel an order they placed while it waits for approval.');
+    expect(removed!.whatChanged).toContain('assign a picker or a driver');
     // Owner decision O3, default: the in-transit rule, in the service's words.
     expect(driver!.whatChanged).toContain('Marking a delivery in transit needs the');
+    expect(driver!.whatChanged).toContain('no longer sees Mark in transit in either app');
     // The phone part is an over-the-air update.
     expect(granted!.whatToDo).toBe(
       'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',

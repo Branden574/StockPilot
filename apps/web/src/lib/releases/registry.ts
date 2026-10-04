@@ -42,15 +42,22 @@ export const RELEASES: Release[] = [
     // after every release; the publishing follow-up keeps it the newest.
     //
     // Who is told: members of organizations with Orders on. The first entry
-    // goes to whoever holds orders:approve (it links to the orders list,
-    // which reads that permission); the second to owners, admins and managers
-    // (a manager whose orders:approve was removed no longer holds it, so the
-    // permission cannot address them); the third to every member, since any
-    // member can be a delivery's driver.
+    // goes to staff and viewers who hold orders:approve, the people it
+    // describes (owners, admins and managers hold it by default and gain
+    // nothing; it links to the orders list, which reads that permission); the
+    // second to owners, admins and managers (a manager whose orders:approve
+    // was removed no longer holds it, so the permission cannot address them);
+    // the third to every member, since any member can be a delivery's driver.
+    //
+    // What still goes by role after 0390, and the words say so: finishing or
+    // releasing picking someone else claimed (complete_picking,
+    // partial_pick_line, release_picking) and recording a paper signature
+    // (confirm_physical_signature: a manager or the assigned driver). A
+    // manager whose orders:approve was removed keeps those two.
     status: 'draft',
-    title: 'Approving orders follows the approve permission everywhere',
+    title: 'Approving orders follows the approve permission',
     summary:
-      'Who can approve, deny and move orders along is now decided by the "Approve / fulfill orders" permission in the web app, the mobile app and on the server alike. A staff member who was given it sees Approve, Deny and the next order steps in the mobile app after the latest update. A manager who had it removed can no longer do these anywhere. Nothing changes for owners, admins and managers who keep it.',
+      'Approving and moving orders along now follow the "Approve / fulfill orders" permission in both apps and on the server. A staff member who was given it sees Approve, Deny and the next steps in the mobile app after the latest update. A manager who had it removed can no longer approve, deny, cancel other people\'s orders or move an order along; finishing someone else\'s picking and recording a paper signature still follow the manager role.',
     publishedAt: '2026-10-12T17:00:00Z',
     audience: { modules: ['orders'] },
     entries: [
@@ -60,23 +67,23 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Given the approve permission, you can approve in the mobile app too',
         whatChanged:
-          'If an admin gave you the "Approve / fulfill orders" permission, the order screen in the mobile app now shows Approve and Deny (and Approve partial when stock is short) and the steps that move an order toward pickup or delivery, as the web app already did. In the web app you can now also order on someone else\'s behalf, and cancel an approved order you placed yourself.',
+          'If an admin gave you the "Approve / fulfill orders" permission, the order screen in the mobile app now shows Approve and Deny (and Approve partial when stock is short), the steps that move an order toward pickup or delivery, Reopen picking, and Resume, Close and Cancel for a backordered order, as managers see them. In the web app you can now also order on someone else\'s behalf, assign who picks an order, reopen picking, and cancel an order you placed yourself after it was approved.',
         whyItMatters:
-          'The mobile app showed these only to owners, admins and managers, so a staff member who was given the permission could act on an order only from the web app.',
+          'The mobile app showed these only to owners, admins and managers, so a staff member who was given the permission could act on an order only from the web app, and some steps were missing there too.',
         howItAffectsYou:
-          'You can approve and move orders along from either app. What you can do follows the permission, so it changes if an admin changes it.',
+          'You can approve orders, move them along and cancel other people\'s orders from either app. What you can do follows the permission, so it changes if an admin changes it. Alerts about new orders waiting for approval still go to owners, admins and managers.',
         whatToDo:
           'No action needed in the web app. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/orders', label: 'View orders' },
-        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+        audience: { roles: ['staff', 'viewer'], anyPermission: ['orders:approve'], modules: ['orders'] },
       },
       {
         id: 'approve-permission-removed',
         category: 'fixed',
         area: 'Orders',
-        title: 'Removing the approve permission from a manager takes effect everywhere',
+        title: 'Removing the approve permission from a manager now applies on the server too',
         whatChanged:
-          'When an admin removes the "Approve / fulfill orders" permission from a manager, that manager can no longer approve or deny orders, cancel other people\'s orders, hold stock for an order, change its needed-by date or move it along, in the web app, the mobile app or on the server. They can still cancel an order they placed while it waits for approval.',
+          'When an admin removes the "Approve / fulfill orders" permission from a manager, that manager can no longer approve or deny orders, cancel other people\'s orders, hold stock for an order, change its needed-by date, assign a picker or a driver, reopen picking, or move an order to its next step, in the web app, the mobile app or on the server. They can still cancel an order they placed while it waits for approval. Two steps still follow the manager role for now: finishing or releasing picking that someone else claimed, and recording a paper signature.',
         whyItMatters:
           'The mobile app kept showing these buttons to a manager without the permission and then refused them, and the rules behind the apps still let any manager through.',
         howItAffectsYou:
@@ -90,7 +97,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Assigned drivers see their delivery steps in the mobile app',
         whatChanged:
-          'If you are the assigned driver of a delivery, the order screen in the mobile app now shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, and the web app now says so.',
+          'If you are the assigned driver of a delivery, the order screen in the mobile app now shows Collect signature and Physical signature once the delivery is on its way, as the web app does. Marking a delivery in transit needs the "Approve / fulfill orders" permission, so a driver without it no longer sees Mark in transit in either app.',
         whyItMatters:
           'The mobile app showed these steps only to owners, admins and managers. A driver without the approve permission could press Mark in transit in the web app and was told the order status had changed.',
         howItAffectsYou:

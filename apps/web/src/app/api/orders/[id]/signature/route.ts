@@ -58,9 +58,9 @@ export async function GET(
     | null;
 
   // Same gate the page uses to decide whether the actions panel (and therefore
-  // the signature dialog) renders: can(orders:approve) OR the assigned driver.
-  // Reuses the assigned-driver predicate from OrderRequestsService.markInTransit
-  // (assigned_delivery_user_id is non-null AND equals the caller).
+  // the signature dialog) renders: can(orders:approve) OR the assigned driver
+  // (assigned_delivery_user_id is non-null AND equals the caller;
+  // isHandOverEntitled in server/lib/order-secrets).
   if (!isHandOverEntitled(ctx, { assigned_delivery_user_id: row?.assigned_delivery_user_id ?? null })) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }

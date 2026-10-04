@@ -369,8 +369,17 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   //   claim this comment makes is now true for it. Migration 0390 removes the
   //   has_org_role term from those seven, hold_order_stock,
   //   revise_order_needed_by, order_readiness_facts and the three order
-  //   policies, so a REVOKE is fully effective in the database too (a manager
-  //   whose orders:approve is removed is refused everywhere). Before adding a
+  //   policies, and assign_order_delivery / mark_order_in_transit ask
+  //   orders:approve too, so a REVOKE is effective in the database for every
+  //   approval-class action: approve, deny, approve partial, cancel other
+  //   people's orders, hold stock, change needed-by, pick slip, packing slips,
+  //   stage, assign the picker or the driver, mark in transit, reopen, resume
+  //   and close. Still decided by manager ROLE, so a manager whose
+  //   orders:approve is removed keeps them: finishing or releasing picking
+  //   someone else claimed (complete_picking, partial_pick_line,
+  //   release_picking) and recording a paper signature
+  //   (confirm_physical_signature: a manager or the assigned driver), plus
+  //   order attachments and the shortfall PO drafter. Before adding a
   //   permission to this set, check the RPCs the feature calls, not just its
   //   table RLS.
   'purchase_orders:manage',
