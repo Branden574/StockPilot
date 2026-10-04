@@ -69,6 +69,7 @@ export * from './orders/storefront/logic';
 export * from './orders/storefront/kits';
 export * from './orders/storefront/copy';
 export * from './orders/storefront/phone-api';
+export * from './orders/storefront/phone-copy';
 export * from './orders/delivery-request-recipients';
 export * from './orders/delivery-request';
 export * from './orders/delivery-request-input';
