@@ -954,10 +954,14 @@ select is(
     where not t.tgisinternal and c.relnamespace = 'public'::regnamespace
       and c.relname in ('order_requests', 'order_request_lines', 'notifications', 'order_submissions')),
   'notifications:trg_notifications_dispatch_push,order_request_lines:trg_zz_order_request_lines_guard,'
+  -- 0393 re-pin (was the seven without trg_order_requests_signature_image_capture):
+  -- an UPDATE OF signature_data_url, signed_at trigger; place_order_request
+  -- inserts orders and never updates one, so it does not touch this build.
   'order_requests:order_requests_set_updated_at,order_requests:trg_assign_order_request_number,order_requests:trg_order_requests_notify,'
-  'order_requests:trg_order_requests_requester_deleted,order_requests:trg_order_requests_validate_transition,'
+  'order_requests:trg_order_requests_requester_deleted,order_requests:trg_order_requests_signature_image_capture,'
+  'order_requests:trg_order_requests_validate_transition,'
   'order_requests:trg_order_requests_workflow_guard,order_requests:trg_zz_order_requests_insert_guard',
-  'Z4: the triggers on order_requests (7), order_request_lines (1) and notifications (1) are unchanged, and order_submissions has none');
+  'Z4: the triggers on order_requests (8 since 0393), order_request_lines (1) and notifications (1) are as this build knew them, and order_submissions has none');
 
 select * from finish();
 rollback;

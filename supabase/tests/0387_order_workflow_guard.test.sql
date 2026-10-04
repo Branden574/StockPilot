@@ -794,8 +794,12 @@ select is(
   -- Re-pinned by 0388 (was the three without trg_order_requests_requester_deleted):
   -- 0388's marker trigger (UPDATE OF requester_user_id) sorts second; it
   -- only stamps requester_deleted_at and depends on no other trigger.
-  array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_validate_transition',
-        'trg_order_requests_workflow_guard'],
+  -- Re-pinned by 0393 (was the four without trg_order_requests_signature_image_capture):
+  -- 0393's capture trigger (UPDATE OF signature_data_url, signed_at) sorts
+  -- third; it only moves a captured image into order_request_secrets, which
+  -- no later trigger reads, and an API role can name neither column.
+  array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_signature_image_capture',
+        'trg_order_requests_validate_transition', 'trg_order_requests_workflow_guard'],
   'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard');
 select is(
   (select md5(string_agg(t.tgname::text || '|' || t.tgfoid::regproc::text || '|' || t.tgenabled::text || '|' || t.tgtype::text, E'\n' order by t.tgname))
@@ -804,8 +808,12 @@ select is(
   -- Re-pinned by 0388 (was dc435bd583fc39db07353311079239b4|6): plus
   -- trg_order_requests_requester_deleted (tgtype 19). Computed on the local
   -- stack after 0388.
-  'f92aca15c9e9f07893e77259e81cb7e9|7',
-  'AL10d: order_requests carries exactly its five earlier triggers, the guard and 0388''s marker trigger (census e6ea64a2...|5 plus two rows)');
+  -- Re-pinned by 0393 (was f92aca15c9e9f07893e77259e81cb7e9|7): plus
+  -- trg_order_requests_signature_image_capture (tgtype 19). Computed from
+  -- production's seven rows plus that row (2026-10-04, the same value the
+  -- stack gives for the seven); verify on the stack.
+  '983e046079edf1f50e893d76d91b8ddc|8',
+  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0393''s image capture (census e6ea64a2...|5 plus three rows)');
 select is(
   coalesce(obj_description('public.tg_order_requests_workflow_guard()'::regprocedure, 'pg_proc') ~ '0387', false)::text || ','
   || coalesce(col_description('public.order_requests'::regclass,

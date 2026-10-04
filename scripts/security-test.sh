@@ -623,6 +623,17 @@ PGTAP_TESTS=(
   # two-session proofs are scripts/db-concurrency/0392_secrets_contract_race.sh;
   # the lock footprint is scripts/db-concurrency/0392_migration_lock_footprint.sh.
   supabase/tests/0392_order_secrets_contract.test.sql
+  # Order signature images (0393, owner decision O1): the data block, replayed
+  # from the recorded statements, copies every stored image to the side table
+  # byte for byte BEFORE it nulls the row, and each abort check raises on a
+  # planted mismatch with nothing applied; the capture trigger (SECURITY
+  # INVOKER, executable by nobody, BEFORE UPDATE OF signature_data_url,
+  # signed_at) moves an image confirm_order_signature writes before the row
+  # is stored, so no member (a viewer included) reads it, and clears it when
+  # resume_fulfillment resets the hand-over. The two-session proofs are
+  # scripts/db-concurrency/0393_capture_race.sh; the lock footprint is
+  # scripts/db-concurrency/0393_migration_lock_footprint.sh.
+  supabase/tests/0393_order_signature_images.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
