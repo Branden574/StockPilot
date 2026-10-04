@@ -1,14 +1,26 @@
-import { can, formatOrderNumber } from '@stockpilot/core';
-import { type Href, useRouter } from 'expo-router';
-import { ShoppingCart } from 'lucide-react-native';
+import {
+  ORDERS_LIST_OPEN_UNCONFIRMED_COPY,
+  ORDERS_LIST_RETRY_COPY,
+  ORDERS_LIST_UNCONFIRMED_COPY,
+  STOREFRONT_TITLE_COPY,
+  can,
+  formatOrderNumber,
+} from '@stockpilot/core';
+import { type Href, useFocusEffect, useRouter } from 'expo-router';
+import { Plus, ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
+import { SmallAction } from '@/components/order-storefront/controls';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
+import { IconChip } from '@/components/ui/row';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { useEnabledModules } from '@/lib/enabled-modules';
+import { unsettledSendsOnDevice } from '@/lib/order-storefront/services';
+import { orderStatusPill, ordersListEmpty, showPlaceOrder } from '@/lib/orders-list';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -33,16 +45,6 @@ interface OrderRow {
   lineCount: number;
 }
 
-const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
-  pending_approval: { label: 'PENDING', status: 'warn' },
-  approved: { label: 'APPROVED', status: 'ok' },
-  packaging: { label: 'PACKING', status: 'default' },
-  ready_for_delivery: { label: 'READY', status: 'ok' },
-  delivered: { label: 'DELIVERED', status: 'ok' },
-  denied: { label: 'DENIED', status: 'crit' },
-  cancelled: { label: 'CANCELLED', status: 'crit' },
-};
-
 /**
  * Orders list screen. Lives in src/screens (not inline in a route file) so
  * TWO thin routes can render the same component: the drawer destination
@@ -65,10 +67,24 @@ export default function OrdersScreen() {
   // no orders:approve; widens to all only once an approver's set resolves).
   const canApprove = can({ role: role ?? 'staff', permissions }, 'orders:approve');
   const userId = user?.id ?? null;
+  const router = useRouter();
+  const enabledModules = useEnabledModules();
+  // "+" and the empty state's "Place an order" (phone ordering PO-4): the
+  // Orders module on and orders:request (lib/orders-list.ts).
+  const canPlace = showPlaceOrder({
+    role: role ?? null,
+    permissions,
+    ordersModuleEnabled: enabledModules.has('orders'),
+  });
   const [rows, setRows] = React.useState<OrderRow[]>([]);
   const firstRowTargetRef = useTourTarget('orders-first-row');
+  const placeTargetRef = useTourTarget('orders-place-order');
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // The read FAILED (D4): said, with a way to load again, never "No orders yet."
+  const [failed, setFailed] = React.useState(false);
+  // Order requests sent from this phone and not confirmed yet.
+  const [unconfirmed, setUnconfirmed] = React.useState(0);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
@@ -93,9 +109,18 @@ export default function OrdersScreen() {
       )
       .eq('organization_id', orgId);
     if (!canApprove) query = query.eq('requester_user_id', userId!);
-    const { data } = await query
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const [{ data, error }, unsettled] = await Promise.all([
+      query.order('created_at', { ascending: false }).limit(100),
+      userId ? unsettledSendsOnDevice(userId, orgId) : Promise.resolve(0),
+    ]);
+    setUnconfirmed(unsettled);
+    if (error) {
+      // Keep what was shown before; say the read failed when there is none.
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
+    setFailed(false);
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -124,10 +149,13 @@ export default function OrdersScreen() {
     setLoading(false);
   }, [orgId, canApprove, userId]);
 
-  React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the pre-await empty-scope guard (a non-approver with no user id resolves to an empty list, never the full queue); the effect synchronizes with the server
-    void load();
-  }, [load]);
+  // Read on every focus, not only on mount (D5): an order just placed, or
+  // changed on another screen, shows when the person comes back.
+  useFocusEffect(
+    React.useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   async function refresh() {
     setRefreshing(true);
@@ -136,14 +164,35 @@ export default function OrdersScreen() {
   }
 
   const pendingCount = rows.filter((r) => r.status === 'pending_approval').length;
+  const empty = ordersListEmpty(failed && rows.length === 0);
+  const placeAnOrder = () => router.push('/order/new' as Href);
 
   return (
     <DataListScreen
       eyebrow={`ORDERS · ${pendingCount} PENDING`}
       title="Order"
       italic="requests."
-      emptyTitle="No orders yet."
-      emptyBody="When someone requests inventory from one of your warehouses, the request lands here."
+      emptyTitle={empty.title}
+      emptyBody={empty.body}
+      emptyAction={
+        failed && rows.length === 0 ? (
+          <SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} />
+        ) : canPlace ? (
+          <SmallAction label={STOREFRONT_TITLE_COPY} variant="primary" onPress={placeAnOrder} />
+        ) : undefined
+      }
+      header={
+        unconfirmed > 0 ? (
+          <Card padding={12}>
+            <View style={{ gap: 8 }}>
+              <Body size={13.5} accessibilityRole="alert">
+                {ORDERS_LIST_UNCONFIRMED_COPY}
+              </Body>
+              <SmallAction label={ORDERS_LIST_OPEN_UNCONFIRMED_COPY} onPress={placeAnOrder} />
+            </View>
+          </Card>
+        ) : undefined
+      }
       emptyIcon={ShoppingCart}
       data={rows}
       loading={loading}
@@ -159,7 +208,18 @@ export default function OrdersScreen() {
           <OrderCard order={o} />
         )
       }
-      trailing={<MobileTour tour={MOBILE_ORDERS_TOUR} />}
+      trailing={
+        // One trailing slot, shared by the tour and "+" (as Rentals does).
+        // marginRight -3: the chip's 44 pt frame is 3 pt wider each side.
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <MobileTour tour={MOBILE_ORDERS_TOUR} />
+          {canPlace ? (
+            <View ref={placeTargetRef} collapsable={false} style={{ marginRight: -3 }}>
+              <IconChip icon={Plus} onPress={placeAnOrder} accessibilityLabel={STOREFRONT_TITLE_COPY} minTap />
+            </View>
+          ) : null}
+        </View>
+      }
     />
   );
 }
@@ -167,7 +227,7 @@ export default function OrdersScreen() {
 function OrderCard({ order }: { order: OrderRow }) {
   const { c } = useTheme();
   const router = useRouter();
-  const meta = STATUS_META[order.status] ?? { label: order.status.toUpperCase(), status: 'default' as const };
+  const meta = orderStatusPill(order.status);
   const requester = order.requester;
   const when = new Date(order.created_at);
 

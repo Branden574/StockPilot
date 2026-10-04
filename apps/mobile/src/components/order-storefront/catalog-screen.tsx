@@ -1,0 +1,730 @@
+import { type Href, useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { ArrowLeft, ChevronRight, SlidersHorizontal } from 'lucide-react-native';
+import * as React from 'react';
+import {
+  AccessibilityInfo,
+  FlatList,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+  useWindowDimensions,
+  type ListRenderItemInfo,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import {
+  AVAILABILITY_LABELS,
+  CART_CHECK_OUT_COPY,
+  CART_TITLE_COPY,
+  FREQUENTLY_ORDERED_SUBTITLE_COPY,
+  FREQUENTLY_ORDERED_TITLE_COPY,
+  KIT_ADD_COPY,
+  KITS_ROW_SUB_COPY,
+  KITS_TITLE_COPY,
+  STOREFRONT_ADD_COPY,
+  STOREFRONT_ALL_ITEMS_COPY,
+  STOREFRONT_BROWSE_CATEGORIES_COPY,
+  STOREFRONT_CLEAR_FILTERS_COPY,
+  STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY,
+  STOREFRONT_NO_WAREHOUSES_COPY,
+  STOREFRONT_NOTHING_MATCHES_HINT_COPY,
+  STOREFRONT_NOTHING_ORDERABLE_COPY,
+  STOREFRONT_OFFLINE_COPY,
+  STOREFRONT_SEARCH_LABEL_COPY,
+  STOREFRONT_SEARCH_PLACEHOLDER_COPY,
+  STOREFRONT_SHIP_FROM_COPY,
+  STOREFRONT_SHIP_FROM_LOCKED_COPY,
+  STOREFRONT_SORT_AND_FILTER_COPY,
+  STOREFRONT_TITLE_COPY,
+  STOREFRONT_TRUNCATED_COPY,
+  availableOf,
+  buildQtyMap,
+  kitsInCart,
+  kitsLoadFailedCopy,
+  maxKits,
+  storefrontItemCountCopy,
+  storefrontNothingMatchesCopy,
+  storefrontSeeAllCopy,
+  storefrontUpdatedAtCopy,
+  type StorefrontItem,
+} from '@stockpilot/core';
+
+import { IconChip } from '@/components/ui/row';
+import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import {
+  addItemLabel,
+  addedAnnouncement,
+  decreaseLabel,
+  increaseBlockedHint,
+  increaseLabel,
+  kitAnnouncement,
+  quantityAnnouncement,
+  quantityButtonLabel,
+} from '@/lib/order-storefront/a11y';
+import { itemNameFrom } from '@/lib/order-storefront/checkout';
+import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
+import {
+  EMPTY_FILTER,
+  activeFilterCount,
+  aisleCategory,
+  availabilityCounts,
+  browseHref,
+  browseTitle,
+  filterActive,
+  frequentRows,
+  homeRows,
+  matchingRows,
+  phoneSortOptions,
+  storefrontRowKey,
+  toggleAvailability,
+  type BrowseTarget,
+  type CatalogView,
+  type StorefrontFilter,
+  type StorefrontRow,
+} from '@/lib/order-storefront/sections';
+import { clockLabel } from '@/lib/order-storefront/setup';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
+
+import { CartBar, CartPanel } from './cart-panel';
+import { SetupRow, SmallAction, Stepper } from './controls';
+import { ItemRow } from './item-row';
+import { KitRow } from './kit-row';
+import { KitDetailsSheet, QuantitySheet, QuickViewSheet, SortFilterSheet, WarehouseSheet } from './sheets';
+import { StorefrontSheet } from './storefront-sheet';
+import { StorefrontState } from './storefront-state';
+import { UnconfirmedPanel } from './unconfirmed-panel';
+
+type OpenSheet =
+  | { kind: 'cart' }
+  | { kind: 'quantity'; itemId: string }
+  | { kind: 'quick'; itemId: string }
+  | { kind: 'kit'; bundleId: string }
+  | { kind: 'sort' }
+  | { kind: 'warehouse' }
+  | null;
+
+/**
+ * THE STOREFRONT'S CATALOG (phone ordering PO-4): the home (app/order/new)
+ * and a browse view (app/order/new/browse) are this one screen. The home
+ * lists Frequently ordered, Kits and the categories; anything typed in the
+ * pinned search (never focused on open) or any filter lists the matching
+ * items, searched on the phone over every row (lib/order-storefront/
+ * sections.ts). ONE virtualized FlatList with build #23's settings, a
+ * module-scope key extractor, memoized rows with stable id-taking callbacks,
+ * and the quantity passed as a scalar from a Map. On a phone the cart is a
+ * bar at the bottom and a sheet; on an iPad wide enough (and not at an
+ * accessibility text size) it is a 360 pt column (layout.ts).
+ */
+export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
+  useStorefrontScope();
+  const snap = useStorefront();
+  const session = storefrontSession();
+  const offline = useOffline();
+  const router = useRouter();
+  const { c } = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  const layout = storefrontLayout({ width, fontScale });
+  const [filter, setFilter] = React.useState<StorefrontFilter>(EMPTY_FILTER);
+  const [sheet, setSheet] = React.useState<OpenSheet>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void session.focus();
+    }, [session]),
+  );
+
+  // An order this storefront's key turned out to have placed (a status read
+  // on its own, or "Don't send it" finding it placed): the success screen.
+  const focused = useIsFocused();
+  const placedId = snap?.placed?.order.id ?? null;
+  React.useEffect(() => {
+    if (placedId && focused) router.push('/order/new/placed' as Href);
+  }, [placedId, focused, router]);
+
+  // What changed is announced (iOS gives a Text no live region).
+  const refusal = snap?.refusal ?? null;
+  React.useEffect(() => {
+    if (refusal) AccessibilityInfo.announceForAccessibility(refusal);
+  }, [refusal]);
+
+  const say = React.useCallback((message: string) => AccessibilityInfo.announceForAccessibility(message), []);
+
+  // Stable, id-taking callbacks for the memoized rows.
+  const onAdd = React.useCallback(
+    (itemId: string) => {
+      const refused = session.dispatch({ type: 'add', itemId, quantity: 1 });
+      if (refused) return;
+      const s = session.getSnapshot();
+      const name = s.itemMap.get(itemId)?.name ?? '';
+      say(addedAnnouncement(name, s.cart?.lines.find((l) => l.itemId === itemId)?.quantity ?? 1));
+    },
+    [session, say],
+  );
+  const onInc = React.useCallback(
+    (itemId: string) => {
+      const s = session.getSnapshot();
+      const item = s.itemMap.get(itemId);
+      const qty = s.cart?.lines.find((l) => l.itemId === itemId)?.quantity ?? 0;
+      if (!item || qty >= availableOf(item)) return;
+      if (session.dispatch({ type: 'inc', itemId })) return;
+      say(quantityAnnouncement(item.name, qty + 1));
+    },
+    [session, say],
+  );
+  const onDec = React.useCallback(
+    (itemId: string) => {
+      const s = session.getSnapshot();
+      const qty = s.cart?.lines.find((l) => l.itemId === itemId)?.quantity ?? 0;
+      if (session.dispatch({ type: 'dec', itemId })) return;
+      say(quantityAnnouncement(s.itemMap.get(itemId)?.name ?? '', Math.max(0, qty - 1)));
+    },
+    [session, say],
+  );
+  const onQuantity = React.useCallback((itemId: string) => setSheet({ kind: 'quantity', itemId }), []);
+  const onOpen = React.useCallback((itemId: string) => setSheet({ kind: 'quick', itemId }), []);
+  const onPhotoError = React.useCallback(() => session.photoFailed(), [session]);
+  const onKit = React.useCallback(
+    (bundleId: string, next: number) => {
+      const refused = session.changeKit(bundleId, next);
+      if (refused) return;
+      const s = session.getSnapshot();
+      const kit = s.kits?.find((k) => k.bundleId === bundleId);
+      if (kit && s.cart) say(kitAnnouncement(kit.name, kitsInCart(kit, s.cart.kits[bundleId], buildQtyMap(s.cart.lines))));
+    },
+    [session, say],
+  );
+  const onKitDetails = React.useCallback((bundleId: string) => setSheet({ kind: 'kit', bundleId }), []);
+
+  const qtyMap = React.useMemo(() => buildQtyMap(snap?.cart?.lines ?? []), [snap?.cart?.lines]);
+  const answer = snap?.catalog.answer ?? null;
+  const view: CatalogView | null = React.useMemo(
+    () =>
+      snap && answer
+        ? {
+            prepared: snap.prepared,
+            itemMap: snap.itemMap,
+            aisles: answer.aisles,
+            frequent: answer.frequentlyOrdered.status === 'ok' ? answer.frequentlyOrdered.items : null,
+            kits: snap.kits,
+            kitsEnabled: snap.setup.status === 'ready' && snap.setup.answer.kitsEnabled,
+          }
+        : null,
+    [snap, answer],
+  );
+
+  const rows: StorefrontRow[] = React.useMemo(() => {
+    if (!view) return [];
+    if (target === null && !filterActive(filter)) {
+      return homeRows(view, {
+        frequentTitle: FREQUENTLY_ORDERED_TITLE_COPY,
+        frequentSubtitle: FREQUENTLY_ORDERED_SUBTITLE_COPY,
+        kitsTitle: KITS_TITLE_COPY,
+        kitsSubtitle: KITS_ROW_SUB_COPY,
+        kitsFailed: kitsLoadFailedCopy('phone'),
+        categoriesTitle: STOREFRONT_BROWSE_CATEGORIES_COPY,
+        nothingOrderable: STOREFRONT_NOTHING_ORDERABLE_COPY,
+      });
+    }
+    return matchingRows(view, target ?? { kind: 'all' }, filter);
+  }, [view, target, filter]);
+
+  const locked = snap?.locked ?? false;
+  const photos = snap?.photos;
+  const notOrderable = snap?.notOrderable;
+  const cartKits = snap?.cart?.kits;
+  const itemMap = snap?.itemMap;
+
+  const renderRow = React.useCallback(
+    ({ item: row }: ListRenderItemInfo<StorefrontRow>) => {
+      switch (row.kind) {
+        case 'header':
+          return (
+            <View style={{ paddingTop: 10, gap: 2 }}>
+              <Eyebrow accessibilityRole="header">{row.title}</Eyebrow>
+              {row.subtitle ? (
+                <Body size={12.5} color={c.ink3}>
+                  {row.subtitle}
+                </Body>
+              ) : null}
+            </View>
+          );
+        case 'item':
+          return (
+            <ItemRow
+              item={row.item}
+              quantity={qtyMap.get(row.item.id) ?? 0}
+              photoUrl={photos?.[row.item.id] ?? null}
+              rank={row.rank}
+              notOrderable={notOrderable?.has(row.item.id) ?? false}
+              locked={locked}
+              onOpen={onOpen}
+              onAdd={onAdd}
+              onInc={onInc}
+              onDec={onDec}
+              onQuantity={onQuantity}
+              onPhotoError={onPhotoError}
+            />
+          );
+        case 'kit':
+          return itemMap ? (
+            <KitRow
+              kit={row.kit}
+              itemMap={itemMap}
+              inCart={kitsInCart(row.kit, cartKits?.[row.kit.bundleId], qtyMap)}
+              maxInCart={maxKits(row.kit, itemMap, cartKits?.[row.kit.bundleId], qtyMap)}
+              locked={locked}
+              onChange={onKit}
+              onDetails={onKitDetails}
+            />
+          ) : null;
+        case 'category':
+          return (
+            <LinkRow
+              title={row.aisle.name}
+              detail={storefrontItemCountCopy(row.aisle.itemCount)}
+              onPress={() => router.push(browseHref({ kind: 'category', category: aisleCategory(row.aisle) }) as Href)}
+            />
+          );
+        case 'all-items':
+          return (
+            <LinkRow
+              title={STOREFRONT_ALL_ITEMS_COPY}
+              detail={storefrontItemCountCopy(row.count)}
+              onPress={() => router.push(browseHref({ kind: 'all' }) as Href)}
+            />
+          );
+        case 'see-all':
+          return (
+            <LinkRow title={storefrontSeeAllCopy(row.count)} onPress={() => router.push(browseHref(row.target) as Href)} />
+          );
+        case 'note':
+          return (
+            <Body size={13.5} color={c.ink3}>
+              {row.text}
+            </Body>
+          );
+        case 'empty':
+          return (
+            <View style={{ gap: 8, paddingTop: 12 }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+                {storefrontNothingMatchesCopy(filter.search.trim())}
+              </Body>
+              <Body size={13} color={c.ink3}>
+                {STOREFRONT_NOTHING_MATCHES_HINT_COPY}
+              </Body>
+              <SmallAction label={STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY} onPress={() => setFilter(EMPTY_FILTER)} />
+            </View>
+          );
+      }
+    },
+    [c, qtyMap, photos, notOrderable, locked, cartKits, itemMap, onOpen, onAdd, onInc, onDec, onQuantity, onPhotoError, onKit, onKitDetails, router, filter.search],
+  );
+
+  const leave = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/orders' as Href);
+  };
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await session.refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const title =
+    target === null
+      ? STOREFRONT_TITLE_COPY
+      : browseTitle(target, answer?.aisles ?? [], {
+          frequent: FREQUENTLY_ORDERED_TITLE_COPY,
+          kits: KITS_TITLE_COPY,
+          all: STOREFRONT_ALL_ITEMS_COPY,
+        });
+
+  const topBar = (
+    <View style={styles.topbar}>
+      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
+    </View>
+  );
+
+  if (!snap || snap.setup.status !== 'ready') {
+    return (
+      <StorefrontState
+        topBar={topBar}
+        title={STOREFRONT_TITLE_COPY}
+        setup={snap && snap.setup.status !== 'ready' ? snap.setup : { status: 'loading' }}
+        refreshing={refreshing}
+        onRefresh={() => void refresh()}
+      />
+    );
+  }
+
+  const ready = snap.setup.answer;
+  const warehouse = ready.warehouses.find((w) => w.id === snap.warehouseId) ?? null;
+  const cart = snap.cart;
+  const sortOptions = phoneSortOptions(answer?.frequentlyOrdered.status === 'ok');
+  const usuals: StorefrontItem[] = view ? frequentRows(view).slice(0, 3).map((f) => f.item) : [];
+  const itemName = itemNameFrom(snap.itemMap);
+
+  const header = (
+    <View style={{ gap: 12, paddingBottom: 8 }}>
+      {target === null ? (
+        <SetupRow
+          label={STOREFRONT_SHIP_FROM_COPY}
+          value={warehouse?.name ?? '—'}
+          disabled={ready.warehouses.length < 2 && !locked}
+          hint={locked ? STOREFRONT_SHIP_FROM_LOCKED_COPY : undefined}
+          onPress={() => setSheet({ kind: 'warehouse' })}
+        />
+      ) : null}
+      <UnconfirmedPanel
+        state={snap.submission.state}
+        busy={snap.submission.busy}
+        offline={offline}
+        warehouseName={warehouse?.name ?? null}
+        itemName={itemName}
+        onCheckAndFinish={() => void session.checkAndFinish()}
+        onDontSend={() => void session.dontSend()}
+        onSeeOrders={() => router.push('/orders' as Href)}
+      />
+      {snap.refusal ? (
+        <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+          {snap.refusal}
+        </Body>
+      ) : null}
+      {snap.notice ? (
+        <Body size={13.5} color={ACCENT.warn}>
+          {snap.notice}
+        </Body>
+      ) : null}
+      {offline ? (
+        <Body size={13} color={c.ink3}>
+          {STOREFRONT_OFFLINE_COPY}
+        </Body>
+      ) : null}
+      {snap.catalog.readAt !== null && (offline || snap.catalog.fromDevice) ? (
+        <Mono size={11.5} color={c.ink4}>
+          {storefrontUpdatedAtCopy(clockLabel(snap.catalog.readAt))}
+        </Mono>
+      ) : null}
+      {snap.catalog.message ? (
+        <Body size={13} color={ACCENT.warn}>
+          {snap.catalog.message}
+        </Body>
+      ) : null}
+      {answer?.truncated ? (
+        <Body size={13} color={ACCENT.warn}>
+          {STOREFRONT_TRUNCATED_COPY}
+        </Body>
+      ) : null}
+      {ready.warehouses.length === 0 ? (
+        <Body size={14} color={c.ink3}>
+          {STOREFRONT_NO_WAREHOUSES_COPY}
+        </Body>
+      ) : null}
+    </View>
+  );
+
+  const searchBar = (
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <TextInput
+          value={filter.search}
+          onChangeText={(text) => setFilter((f) => ({ ...f, search: text }))}
+          placeholder={STOREFRONT_SEARCH_PLACEHOLDER_COPY}
+          placeholderTextColor={c.ink4}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+          accessibilityLabel={STOREFRONT_SEARCH_LABEL_COPY}
+          maxFontSizeMultiplier={INPUT_CAP}
+          style={[styles.search, { borderColor: c.hair, backgroundColor: c.card, color: c.ink }]}
+        />
+        <Pressable
+          onPress={() => setSheet({ kind: 'sort' })}
+          accessibilityRole="button"
+          accessibilityLabel={
+            activeFilterCount(filter) > 0
+              ? `${STOREFRONT_SORT_AND_FILTER_COPY}, ${activeFilterCount(filter)} on`
+              : STOREFRONT_SORT_AND_FILTER_COPY
+          }
+          style={[styles.filterButton, { borderColor: c.hair, backgroundColor: c.card }]}
+        >
+          <SlidersHorizontal size={18} color={c.ink} strokeWidth={1.5} />
+        </Pressable>
+      </View>
+      {activeFilterCount(filter) > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {[...filter.availability].map((s) => (
+            <SmallAction
+              key={s}
+              label={AVAILABILITY_LABELS[s]}
+              accessibilityLabel={`${AVAILABILITY_LABELS[s]}, remove filter`}
+              onPress={() => setFilter((f) => toggleAvailability(f, s))}
+            />
+          ))}
+          {filter.sort !== EMPTY_FILTER.sort ? (
+            <SmallAction
+              label={sortOptions.find((o) => o.id === filter.sort)?.label ?? ''}
+              onPress={() => setFilter((f) => ({ ...f, sort: EMPTY_FILTER.sort }))}
+            />
+          ) : null}
+          <SmallAction
+            label={STOREFRONT_CLEAR_FILTERS_COPY}
+            variant="ghost"
+            onPress={() => setFilter((f) => ({ ...EMPTY_FILTER, search: f.search }))}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+
+  const list = (
+    <FlatList
+      data={rows}
+      keyExtractor={storefrontRowKey}
+      renderItem={renderRow}
+      ListHeaderComponent={header}
+      initialNumToRender={12}
+      maxToRenderPerBatch={8}
+      windowSize={9}
+      removeClippedSubviews={Platform.OS === 'android'}
+      keyboardDismissMode="on-drag"
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ paddingHorizontal: STOREFRONT_GUTTER, paddingBottom: 24, gap: 10 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={c.ink} />}
+    />
+  );
+
+  const checkOut = () => router.push('/order/new/checkout' as Href);
+  const sheetItem = sheet && (sheet.kind === 'quantity' || sheet.kind === 'quick') ? snap.itemMap.get(sheet.itemId) : undefined;
+  const sheetKit = sheet?.kind === 'kit' ? snap.kits?.find((k) => k.bundleId === sheet.bundleId) : undefined;
+  const cartPanel = cart ? (
+    <CartPanel
+      cart={cart}
+      itemMap={snap.itemMap}
+      notOrderable={snap.notOrderable}
+      locked={locked}
+      usuals={usuals}
+      onInc={onInc}
+      onDec={onDec}
+      onQuantity={onQuantity}
+      onRemove={(itemId) => session.dispatch({ type: 'remove', itemId })}
+      onAdd={onAdd}
+      onClear={() => session.dispatch({ type: 'clear' })}
+    />
+  ) : null;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: c.paper }}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        {topBar}
+        <View style={{ paddingHorizontal: STOREFRONT_GUTTER, paddingBottom: 10, gap: 12 }}>
+          <Display size={30} accessibilityRole="header">
+            {title}
+          </Display>
+          {searchBar}
+        </View>
+      </SafeAreaView>
+      {layout.kind === 'split' ? (
+        <View style={{ flex: 1, flexDirection: 'row' }}>
+          <View style={{ flex: 1, minWidth: 0 }}>{list}</View>
+          <View style={[styles.cartColumn, { width: layout.cartColumnWidth, borderColor: c.hair, backgroundColor: c.card }]}>
+            <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>{cartPanel}</ScrollView>
+            {cart && cart.lines.length > 0 ? (
+              <SafeAreaView edges={['bottom']} style={{ padding: 16 }}>
+                <SmallAction label={CART_CHECK_OUT_COPY} variant="primary" onPress={checkOut} />
+              </SafeAreaView>
+            ) : null}
+          </View>
+        </View>
+      ) : (
+        <>
+          <View style={{ flex: 1 }}>{list}</View>
+          {cart ? (
+            <SafeAreaView edges={['bottom']} style={{ backgroundColor: c.card }}>
+              <CartBar cart={cart} onOpenCart={() => setSheet({ kind: 'cart' })} onCheckOut={checkOut} />
+            </SafeAreaView>
+          ) : null}
+        </>
+      )}
+
+      {sheet?.kind === 'cart' && cartPanel ? (
+        <StorefrontSheet
+          visible
+          title={CART_TITLE_COPY}
+          onClose={() => setSheet(null)}
+          footer={
+            cart && cart.lines.length > 0 ? (
+              <SmallAction
+                label={CART_CHECK_OUT_COPY}
+                variant="primary"
+                onPress={() => {
+                  setSheet(null);
+                  checkOut();
+                }}
+              />
+            ) : null
+          }
+        >
+          {cartPanel}
+        </StorefrontSheet>
+      ) : null}
+      {sheet?.kind === 'quantity' && sheetItem ? (
+        <QuantitySheet
+          item={sheetItem}
+          quantity={qtyMap.get(sheetItem.id) ?? 0}
+          onClose={() => setSheet(null)}
+          onSave={(value) => {
+            const refused = session.setQuantity(sheetItem.id, value);
+            setSheet(null);
+            if (!refused) say(quantityAnnouncement(sheetItem.name, value));
+          }}
+        />
+      ) : null}
+      {sheet?.kind === 'quick' && sheetItem ? (
+        <QuickViewSheet
+          item={sheetItem}
+          photoUrl={snap.photos[sheetItem.id] ?? null}
+          inCart={qtyMap.get(sheetItem.id) ?? 0}
+          onClose={() => setSheet(null)}
+          onPhotoError={onPhotoError}
+          control={
+            (qtyMap.get(sheetItem.id) ?? 0) > 0 ? (
+              <Stepper
+                quantity={qtyMap.get(sheetItem.id) ?? 0}
+                available={availableOf(sheetItem)}
+                atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem)}
+                disabled={locked}
+                decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                incLabel={increaseLabel(sheetItem.name)}
+                countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem))}
+                onDec={() => onDec(sheetItem.id)}
+                onInc={() => onInc(sheetItem.id)}
+                onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
+              />
+            ) : (
+              <SmallAction
+                label={STOREFRONT_ADD_COPY}
+                accessibilityLabel={addItemLabel(sheetItem.name)}
+                variant="primary"
+                disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
+                onPress={() => onAdd(sheetItem.id)}
+              />
+            )
+          }
+        />
+      ) : null}
+      {sheet?.kind === 'kit' && sheetKit ? (
+        <KitDetailsSheet
+          kit={sheetKit}
+          itemMap={snap.itemMap}
+          onClose={() => setSheet(null)}
+          control={
+            <SmallAction
+              label={KIT_ADD_COPY}
+              variant="primary"
+              disabled={locked || maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap)}
+              onPress={() => onKit(sheetKit.bundleId, kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) + 1)}
+            />
+          }
+        />
+      ) : null}
+      {sheet?.kind === 'sort' && view ? (
+        <SortFilterSheet
+          sort={filter.sort}
+          sortOptions={sortOptions}
+          availability={filter.availability}
+          counts={availabilityCounts(view, target ?? { kind: 'all' }, filter.search)}
+          onSort={(sort) => setFilter((f) => ({ ...f, sort }))}
+          onToggle={(s) => setFilter((f) => toggleAvailability(f, s))}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
+      {sheet?.kind === 'warehouse' ? (
+        <WarehouseSheet
+          warehouses={ready.warehouses}
+          current={snap.warehouseId}
+          onClose={() => setSheet(null)}
+          onPick={(id) => {
+            setSheet(null);
+            void session.selectWarehouse(id);
+          }}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** A row that opens a browse view: a category, All items, See all. */
+function LinkRow({ title, detail, onPress }: { title: string; detail?: string; onPress: () => void }) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={detail ? `${title}, ${detail}` : title}
+      style={({ pressed }) => [styles.link, { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 }]}
+    >
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Body size={15} color={c.ink}>
+          {title}
+        </Body>
+        {detail ? (
+          <Mono size={11.5} color={c.ink4}>
+            {detail}
+          </Mono>
+        ) : null}
+      </View>
+      <ChevronRight size={16} color={c.ink4} strokeWidth={1.5} />
+    </Pressable>
+  );
+}
+
+/** The search box stops growing at the input ceiling (a bordered box). */
+const INPUT_CAP = capTo(15, TYPE_CEILING.input);
+
+const styles = StyleSheet.create({
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
+  search: {
+    flex: 1,
+    minHeight: MIN_TAP,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+  },
+  filterButton: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  link: {
+    minHeight: MIN_TAP,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  cartColumn: { borderLeftWidth: 1 },
+});
+

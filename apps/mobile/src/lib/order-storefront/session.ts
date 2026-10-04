@@ -2,11 +2,17 @@ import {
   ORDER_NEEDS_CONNECTION_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
+  buildQtyMap,
   cartReducer,
+  clampQty,
+  availableOf,
+  componentItem,
   initialCartState,
+  kitNotEnoughCopy,
   mintOrderSubmissionKey,
   orderSubmissionLocked,
   pendingOrderSubmissionOf,
+  planKitChange,
   prepareCatalog,
   type CartAction,
   type CartState,
@@ -162,6 +168,10 @@ export interface StorefrontSnapshot {
   placed: PlacedContext | null;
   /** Warehouses of this organization with a send not settled. */
   lockedWarehouseIds: readonly string[];
+  /** The server's clock less this phone's, from the storefront answer's
+   *  serverNow: the needed-by picker's "now" (a phone with a wrong clock
+   *  never offers a past slot). 0 until read. */
+  serverSkewMs: number;
 }
 
 const EMPTY_SUBMISSION: SubmitEngineSnapshot = {
@@ -187,6 +197,11 @@ export interface StorefrontSession {
   selectWarehouse(warehouseId: string): Promise<string | null>;
   /** A cart change. Returns core's refusal sentence while locked. */
   dispatch(action: CartAction): string | null;
+  /** A typed quantity, clamped to what is available (0 removes the line). */
+  setQuantity(itemId: string, value: number): string | null;
+  /** A kit to `target` kits in the cart, all or nothing (core
+   *  planKitChange); core's words when it does not fit. */
+  changeKit(bundleId: string, target: number): string | null;
   /** Checkout opened: read the catalog again and say what moved. */
   openCheckout(): Promise<void>;
   /** Why Submit cannot be pressed (offline: true when not connected). */
@@ -233,6 +248,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   let placed: PlacedContext | null = null;
   let sentBody: OrderCreateRequestInput | null = null;
   let lockedWarehouseIds: string[] = [];
+  let serverSkewMs = 0;
   let snapshot: StorefrontSnapshot = build();
 
   function blankCatalog(): CatalogState {
@@ -272,6 +288,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       refusal,
       placed,
       lockedWarehouseIds,
+      serverSkewMs,
     };
   }
 
@@ -509,6 +526,8 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         return;
       }
       setup = { status: 'ready', answer };
+      const server = Date.parse(answer.serverNow);
+      serverSkewMs = Number.isFinite(server) ? server - deps.now() : 0;
       await refreshLocked();
       if (gen !== scopeGen) return;
       // A locked cart's warehouse is kept even when it is no longer listed:
@@ -575,6 +594,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     placed = null;
     sentBody = null;
     lockedWarehouseIds = [];
+    serverSkewMs = 0;
   }
 
   const session: StorefrontSession = {
@@ -652,6 +672,28 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       saveCart();
       publish();
       return null;
+    },
+
+    setQuantity(itemId, value) {
+      const item = itemMap.get(itemId);
+      const qty = item ? clampQty(value, availableOf(item)) : Math.max(0, Math.floor(value) || 0);
+      return session.dispatch({ type: 'set-qty', itemId, quantity: qty });
+    },
+
+    changeKit(bundleId, target) {
+      if (!cart) return null;
+      const kitsPart = catalog.answer?.kits;
+      const kit = kitsPart?.status === 'ok' ? kitsPart.kits.find((k) => k.bundleId === bundleId) : undefined;
+      if (!kit) return null;
+      const plan = planKitChange(kit, target, itemMap, cart.kits[bundleId], buildQtyMap(cart.lines));
+      if (!plan.ok) {
+        const name = componentItem(plan.short, itemMap)?.name ?? kit.name;
+        refusal = kitNotEnoughCopy(name);
+        publish();
+        return refusal;
+      }
+      if (plan.changes.length === 0) return null;
+      return session.dispatch({ type: 'apply-kit', bundleId, changes: plan.changes });
     },
 
     async openCheckout() {

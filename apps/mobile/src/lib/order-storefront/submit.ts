@@ -260,6 +260,15 @@ export function createSubmitEngine(deps: SubmitEngineDeps): SubmitEngine {
   return engine;
 }
 
+/** Whether the unconfirmed panel shows: a send whose answer did not arrive,
+ *  or a resend or "Don't send it" now out. The FIRST send keeps the Submit
+ *  button, waiting, as on the web (PO-2 review); the panel comes once that
+ *  send is unanswered. */
+export function showUnconfirmedPanel(state: OrderSubmissionState): boolean {
+  if (state.phase === 'unconfirmed' || state.phase === 'withdrawing') return true;
+  return state.phase === 'sending' && state.pending.sends > 1;
+}
+
 function livePending(state: OrderSubmissionState): PendingOrderSubmission | null {
   return state.phase === 'sending' || state.phase === 'withdrawing' || state.phase === 'unconfirmed'
     ? state.pending

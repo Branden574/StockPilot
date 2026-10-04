@@ -38,6 +38,7 @@ export function DataListScreen<T>({
   onRefresh,
   trailing,
   header,
+  emptyAction,
   ItemSeparator,
 }: {
   eyebrow: string;
@@ -56,6 +57,9 @@ export function DataListScreen<T>({
   /** Controls under the title (a view switch, say). Stays put while the list
    *  scrolls and while it loads, so switching never makes it jump. */
   header?: React.ReactNode;
+  /** A control under the empty state's words (the Orders list's "Place an
+   *  order", or "Load again" after a failed read). */
+  emptyAction?: React.ReactNode;
   ItemSeparator?: React.ComponentType<unknown>;
 }) {
   const { c } = useTheme();
@@ -144,6 +148,7 @@ export function DataListScreen<T>({
               <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
                 {emptyBody}
               </Body>
+              {emptyAction ? <View style={{ marginTop: 14 }}>{emptyAction}</View> : null}
             </View>
           }
           renderItem={({ item, index }) => renderItem(item, index)}

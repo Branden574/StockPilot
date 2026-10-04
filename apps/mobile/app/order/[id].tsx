@@ -27,6 +27,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
@@ -136,6 +137,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
+import { focusScrollY, orderScreenFocus } from '@/lib/order-focus';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
   describeHoldError,
@@ -382,7 +384,21 @@ interface RememberedOrder {
 }
 
 export default function OrderDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, focus } = useLocalSearchParams<{ id: string; focus?: string }>();
+  // "Review and approve" from the storefront's success screen (PO-4) opens
+  // this screen at its actions section, once (lib/order-focus.ts).
+  const scrollRef = React.useRef<ScrollView | null>(null);
+  const focusDone = React.useRef(false);
+  const onActionsLayout = React.useCallback(
+    (e: LayoutChangeEvent) => {
+      if (focusDone.current || orderScreenFocus(focus) !== 'actions') return;
+      const y = focusScrollY(e.nativeEvent.layout.y);
+      if (y === null) return;
+      focusDone.current = true;
+      scrollRef.current?.scrollTo({ y, animated: true });
+    },
+    [focus],
+  );
   const router = useRouter();
   const { user } = useAuth();
   const { c, mode } = useTheme();
@@ -2202,6 +2218,7 @@ export default function OrderDetail() {
           style={{ flex: 1 }}
         >
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
@@ -2663,7 +2680,7 @@ export default function OrderDetail() {
           ) : null}
 
           {hasPipelineActions ? (
-            <View style={{ gap: 8 }}>
+            <View style={{ gap: 8 }} onLayout={onActionsLayout}>
               {/* A granted staff member or an assigned driver sees this too
                   (slice D): it is not only a manager's section any more. */}
               <Eyebrow>{isManager ? 'MANAGER ACTIONS' : 'ORDER ACTIONS'}</Eyebrow>

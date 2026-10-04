@@ -223,3 +223,43 @@ export function matchingRows(view: CatalogView, target: BrowseTarget, filter: St
 export function storefrontRowKey(row: StorefrontRow): string {
   return row.key;
 }
+
+/** How many of the view's items each availability filter would keep (the
+ *  Sort & filter sheet's counts), for what is searched now. */
+export function availabilityCounts(
+  view: CatalogView,
+  target: BrowseTarget,
+  search: string,
+): Record<StorefrontItemStatus, number> {
+  const category: CategoryFilter = target.kind === 'category' ? target.category : 'all';
+  const counts: Record<StorefrontItemStatus, number> = { ok: 0, low: 0, out: 0 };
+  const matching = filterPreparedCatalog(view.prepared, { category, search, availability: new Set() });
+  const ids = target.kind === 'frequent' ? new Set(frequentRows(view).map((f) => f.item.id)) : null;
+  const statusById = new Map(view.prepared.items.map((it, i) => [it.id, view.prepared.statuses[i]]));
+  for (const it of matching) {
+    if (ids && !ids.has(it.id)) continue;
+    const s = statusById.get(it.id);
+    if (s) counts[s] += 1;
+  }
+  return counts;
+}
+
+/** A browse view's title: the category's name, or the section's. */
+export function browseTitle(
+  target: BrowseTarget,
+  aisles: readonly AisleSummary[],
+  words: { frequent: string; kits: string; all: string },
+): string {
+  switch (target.kind) {
+    case 'category': {
+      const aisle = aisles.find((a) => aisleCategory(a) === target.category);
+      return aisle?.name ?? words.all;
+    }
+    case 'frequent':
+      return words.frequent;
+    case 'kits':
+      return words.kits;
+    case 'all':
+      return words.all;
+  }
+}

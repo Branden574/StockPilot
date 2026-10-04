@@ -143,6 +143,14 @@ export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {
       body: 'Orders move pending → approved → picking → packing → staged → completed. Tap one to see its lines, status, and history.',
     },
     {
+      // Phone ordering PO-4. The version stays 1 on purpose: the step is
+      // there when someone opens the tour, and What's New announces the
+      // feature, so the tour does not launch again for everyone who finished it.
+      title: 'Place an order',
+      body: 'Tap + to place an order request from your phone: search or browse, add items to your cart, then check out. Someone who approves orders reviews it before stock is reserved.',
+      targetId: 'orders-place-order',
+    },
+    {
       title: 'Claim before you pick',
       body: 'Open an order and press “Claim picking” to lock it to you — that is what prevents two people picking the same order. Digital picking then walks you line by line.',
       targetId: 'orders-first-row',

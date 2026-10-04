@@ -43,6 +43,13 @@ function maintenanceNewTarget(query: string | undefined): string {
 }
 
 const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
+  // Place an order (phone ordering PO-4): the web storefront's path, and the
+  // web's "Start an order" links, open the native storefront. Above every
+  // other orders rule: before it, the path fell through to home (warm) or
+  // reached the order/[id] shim with id "new" (cold; audit D9). The query
+  // (the web's ?warehouse= or a prefill) is dropped. The cold-start shim is
+  // app/dashboard/orders/new.tsx.
+  { re: /\/dashboard\/orders\/new(\?.*)?$/, to: () => '/order/new' },
   { re: new RegExp(`/dashboard/orders/${UUID}`), to: (m) => `/order/${m[1]}` },
   // Staging has a native twin now. It must be matched BEFORE the generic
   // /dashboard/* catch-all (which would dead-end it on home) — and it sits

@@ -141,6 +141,14 @@ export function neededByRowValue(wall: string, zone: string, now?: number): stri
   return at === null ? CHECKOUT_NOT_SET_COPY : neededByLabel(at, zone, now);
 }
 
+/** A wall clock's instant in the zone, as ISO (the picker's opening value),
+ *  or null when it is empty or names no instant there. */
+export function wallClockIso(wall: string, zone: string): string | null {
+  if (!wall) return null;
+  const at = wallClockToInstant(wall, zone);
+  return at === null ? null : new Date(at).toISOString();
+}
+
 export type NeededByZone = { ok: true; zone: string } | { ok: false; message: string };
 
 /**
