@@ -41,6 +41,8 @@ import {
   orderSubmissionLocked,
   orderUnconfirmedCopy,
   orderRefusalCopy,
+  pendingOrderSubmissionOf,
+  refuseAddWhileLocked,
   ORDER_UNCONFIRMED_BODY_COPY,
   ORDER_WITHDRAWN_COPY,
   STOREFRONT_CHOOSE_SITE_COPY,
@@ -64,6 +66,7 @@ import {
   SUBMIT_ON_BEHALF_INCOMPLETE_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
   type OrderCreateRequestInput,
+  type OrderSubmissionState,
   type OrgEmailRoutingRecipientsDto,
 } from '@stockpilot/core';
 
@@ -77,6 +80,7 @@ import {
 } from '../v2/cart-context';
 import { cartStateFromPendingBody, useOrderSubmission, type OrderSubmissionControl } from './order-submission';
 import {
+  hasOrderPrefill,
   partitionPrefillAgainstCatalog,
   takeOrderPrefill,
 } from '@/lib/orders/start-order-prefill';
@@ -866,9 +870,27 @@ function StorefrontCatalog({
   // and gate every id on the resolved catalog — the authority on what is
   // orderable in this warehouse. Skipped ids (out of stock, bundle, rental,
   // wrong warehouse, restricted category) are counted, not silently dropped.
+  //
+  // It also waits for the submission's restore check (submission.ready): a
+  // send left unconfirmed by a reload locks the cart, and a locked cart takes
+  // no adds. While a key is live the selection is refused once in core's
+  // words (refuseAddWhileLocked) and KEPT; it is added once the key settles
+  // and the cart is free (after Done on a placed order). Review round 1.
   const prefillDone = React.useRef(false);
+  const prefillRefused = React.useRef(false);
+  const submissionReady = submission.ready;
+  const liveKey = pendingOrderSubmissionOf(submission.state);
+  const prefillWaits = liveKey !== null || submission.state.phase === 'placed';
   React.useEffect(() => {
-    if (prefillDone.current || !hydrated) return;
+    if (prefillDone.current || !hydrated || !submissionReady) return;
+    if (prefillWaits) {
+      const refusal = refuseAddWhileLocked(liveKey);
+      if (refusal && !prefillRefused.current && hasOrderPrefill(warehouseId)) {
+        prefillRefused.current = true;
+        toast.error(refusal);
+      }
+      return;
+    }
     prefillDone.current = true; // one attempt regardless of outcome
     const prefill = takeOrderPrefill(warehouseId);
     if (!prefill || prefill.itemIds.length === 0) return;
@@ -894,9 +916,10 @@ function StorefrontCatalog({
           : '';
       toast.success(added + left);
     }
-    // Run once when hydration settles; deps are intentionally minimal.
+    // Runs once the cart and the submission are ready and the cart is free;
+    // deps are intentionally minimal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [hydrated, submissionReady, prefillWaits]);
 
   /* --- frequently ordered --- */
   // null until the streamed list arrives. Nothing here waits for it: the sort
@@ -986,8 +1009,23 @@ function StorefrontCatalog({
   // — an inline `() => setReviewStage(null)` here would be a brand-new
   // function every render, forcing the modal's keydown-listener effect to
   // tear down and rebind constantly while it is open.
+  //
+  // Closing after a FINAL refusal or a withdraw means it has been read: its
+  // alert or notice does not come back when the review reopens (the refused
+  // items stay marked in the cart, and Submit still waits for them). A notice
+  // that nothing was saved on the device goes too. Review round 1.
+  const subRef = React.useRef(submission.state);
+  const dismissRef = React.useRef(submission.dismiss);
+  React.useLayoutEffect(() => {
+    subRef.current = submission.state;
+    dismissRef.current = submission.dismiss;
+  });
+  const [readOutcome, setReadOutcome] = React.useState<OrderSubmissionState | null>(null);
   const handleReviewClose = React.useCallback(() => {
     setPreflightError(null);
+    const s = subRef.current;
+    if (s.phase === 'refused' || s.phase === 'withdrawn') setReadOutcome(s);
+    if (s.phase === 'open') dismissRef.current();
     setReviewStage(null);
   }, [setReviewStage]);
 
@@ -1180,11 +1218,14 @@ function StorefrontCatalog({
       : sub.phase === 'sending' && sub.pending.sends > 1
         ? ORDER_UNCONFIRMED_BODY_COPY
         : null;
+  const outcomeUnread = readOutcome !== sub;
   const refusalText =
     submission.deviceError ??
     preflightError ??
-    (sub.phase === 'refused' ? orderRefusalCopy(sub.reason, sub.details, wordsCtx) : null);
-  const noticeText = sub.phase === 'withdrawn' ? ORDER_WITHDRAWN_COPY : null;
+    (sub.phase === 'refused' && outcomeUnread
+      ? orderRefusalCopy(sub.reason, sub.details, wordsCtx)
+      : null);
+  const noticeText = sub.phase === 'withdrawn' && outcomeUnread ? ORDER_WITHDRAWN_COPY : null;
   // Items an item_not_orderable refusal named, marked in the cart by name.
   const refusedItems: ReadonlyMap<string, string> =
     sub.phase === 'refused' && sub.reason === 'item_not_orderable'

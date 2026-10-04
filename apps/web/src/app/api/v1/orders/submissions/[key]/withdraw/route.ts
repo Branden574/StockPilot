@@ -5,6 +5,7 @@ import { ORDER_BODY_UNREADABLE_COPY } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  readPlacerParam,
   submissionError,
   submissionJson,
   submissionRateLimited,
@@ -30,6 +31,11 @@ const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * Sent only on a tap, never on its own. Membership only (no module,
  * permission or MFA gate). 409 busy (retryable) while a placement under the
  * same key is still running. Rate limit order-submission:<user>, 60 a minute.
+ *
+ * Body (optional): `{ placerUserId }`, the phone's pending record's placer.
+ * When it names another account the answer is 403 placer_mismatch before the
+ * function runs, never settled (review round 1). The organization is the
+ * X-Organization-Id the call is sent with.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ key: string }> }) {
   const ctx = await withApiContext(req);
@@ -51,8 +57,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
       },
     );
   }
+  const text = await req.text().catch(() => '');
+  let raw: unknown = {};
+  if (text.trim() !== '') {
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      raw = null;
+    }
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return submissionRefusal(ctx.organizationId, 400, 'validation_error', ORDER_BODY_UNREADABLE_COPY, {
+      reason: 'invalid',
+      field: 'body',
+    });
+  }
+  const placer = readPlacerParam((raw as { placerUserId?: unknown }).placerUserId);
+  if (!placer.ok) {
+    return submissionRefusal(ctx.organizationId, 400, 'validation_error', ORDER_BODY_UNREADABLE_COPY, {
+      reason: 'invalid',
+      field: 'placerUserId',
+    });
+  }
   try {
-    return submissionJson(await new OrderRequestsService(ctx).withdrawSubmission(key, 'app'));
+    return submissionJson(
+      await new OrderRequestsService(ctx).withdrawSubmission(key, 'app', {
+        placerUserId: placer.placerUserId,
+      }),
+    );
   } catch (e) {
     return submissionError(e, ctx.organizationId, 'api.v1.orders.submission_withdraw');
   }

@@ -56,6 +56,17 @@ function revalidateOrdersCatalog() {
  * submission key; needed-by as an instant). Read for ONE release by the
  * legacy branch below, then removed (phone ordering plan, follow-up 9). Such
  * a tab has no retry protection, the same as before the deploy.
+ *
+ * When it can arrive (review round 1, checked in next 16.3.5): a server
+ * action's id is a hash salted with the build's encryption key, which `next
+ * build` keeps in `.next/cache/.rscinfo` for 14 days and reuses while the
+ * build cache is restored (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is not set).
+ * Under Vercel Skew Protection (on, 12 hours) a tab from the previous
+ * deployment is pinned to THAT deployment, so for up to 12 hours an old tab
+ * runs the OLD action, which calls create_order_request directly and writes
+ * no order_submissions row. After that, an old tab reaches this branch only
+ * while the build key is unchanged; otherwise it gets "Failed to find Server
+ * Action" (it was never protected, and nothing is placed).
  */
 const legacyCreateSchema = z.object({
   warehouseId: z.string().uuid(),
@@ -91,13 +102,25 @@ const legacyCreateSchema = z.object({
  *  core's sentence and its details (reason, settled, replay, items...), so
  *  the storefront classifies it exactly as the phone classifies the route's
  *  answer. A fault is core's "couldn't be confirmed" sentence (reported). */
-function orderSubmissionActionError(e: unknown, tag: string): ActionResult<never> {
+function orderSubmissionActionError(
+  e: unknown,
+  tag: string,
+  organizationId: string | null,
+): ActionResult<never> {
+  // The organization that answered, on every refusal it made (none before the
+  // session was read), so a tab left in another workspace drops it (core
+  // orderCallResultForOrganization; review round 1).
+  const answeredBy = organizationId ? { organizationId } : {};
   if (e instanceof ServiceError && e.code !== 'internal_error') {
-    return err(e.code, e.message, e.details);
+    return err(e.code, e.message, { ...(e.details ?? {}), ...answeredBy });
   }
   void reportError(e instanceof ServiceError && e.internalDetail ? new Error(e.internalDetail) : e, { tag });
-  return err('internal_error', ORDER_FAULT_COPY, { reason: 'failed' });
+  return err('internal_error', ORDER_FAULT_COPY, { reason: 'failed', ...answeredBy });
 }
+
+/** The organization a New order page was opened in (core's create body does
+ *  not carry it: the phone names it in X-Organization-Id). */
+const pageOrganizationSchema = z.object({ organizationId: z.string().trim().min(1).max(100) });
 
 /**
  * Place an order request from the New order page (phone ordering PO-2). The
@@ -112,19 +135,39 @@ function orderSubmissionActionError(e: unknown, tag: string): ActionResult<never
  * recorded under the key. revalidatePath('/dashboard/orders') stays; the
  * storefront catalog is NOT revalidated (placing reserves nothing).
  *
+ * `page` names the organization the page was opened in. The account's
+ * organization is its default one, which a workspace switch in another tab
+ * changes for every open tab, so a send from a tab left in another
+ * organization is refused organization_changed before any key work (never
+ * recorded, never settled), and every refusal names the organization that
+ * answered (review round 1).
+ *
  * LEGACY BRANCH (one release): a body without a key comes from a tab opened
- * before the deploy. It gets a server-minted key and the session as placer,
- * and its needed-by instant passes through unconverted. No pending record
- * exists for it, so it has no retry protection, as before.
+ * before the deploy (see legacyCreateSchema for when one can arrive). It gets
+ * a server-minted key and the session as placer, and its needed-by instant
+ * passes through unconverted. No pending record exists for it, so it has no
+ * retry protection, as before; it names no organization.
  */
 export async function createOrderRequestAction(
   input: OrderCreateRequestInput | z.input<typeof legacyCreateSchema>,
+  page?: z.input<typeof pageOrganizationSchema>,
 ): Promise<ActionResult<{ organizationId: string; result: { replay: boolean; order: OrderSummary } }>> {
+  let organizationId: string | null = null;
   try {
+    const keyed = !!input && typeof input === 'object' && 'idempotencyKey' in input;
+    const scope = keyed ? pageOrganizationSchema.safeParse(page) : null;
+    if (scope && !scope.success) {
+      return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'organizationId' });
+    }
     const svc = await OrderRequestsService.forCurrentUser();
+    organizationId = svc.organizationId;
     let answer: OrderPlaceAnswer;
-    if (input && typeof input === 'object' && 'idempotencyKey' in input) {
-      answer = await svc.create({ body: input, surface: 'web' });
+    if (keyed && scope?.success) {
+      answer = await svc.create({
+        body: input,
+        surface: 'web',
+        expectedOrganizationId: scope.data.organizationId,
+      });
     } else {
       const legacy = legacyCreateSchema.safeParse(input);
       if (!legacy.success) {
@@ -152,14 +195,27 @@ export async function createOrderRequestAction(
     revalidatePath('/dashboard/orders');
     return ok({ organizationId: answer.organizationId, result: { replay: answer.replay, order: answer.order } });
   } catch (e) {
-    return orderSubmissionActionError(e, 'actions.orders.create');
+    return orderSubmissionActionError(e, 'actions.orders.create', organizationId);
   }
 }
 
+/** A settle call names the key, the organization the page was opened in and
+ *  the account that sent the key (the pending record's placer): a tab left in
+ *  another workspace or under another account is refused before the function
+ *  runs, never settled (review round 1). */
 const submissionKeySchema = z.object({
   warehouseId: z.string().uuid(),
   key: z.string().uuid(),
+  organizationId: z.string().trim().min(1).max(100),
+  placerUserId: z.string().uuid(),
 });
+
+/** A settle call's input that does not read: the first field it names. */
+function submissionKeyRefusal(error: z.ZodError): ActionResult<never> {
+  const first = error.issues[0]?.path[0];
+  const field = first === 'organizationId' || first === 'placerUserId' || first === 'warehouseId' ? first : 'idempotencyKey';
+  return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field });
+}
 
 /**
  * What happened to the caller's own submission key (the New order page's
@@ -170,14 +226,15 @@ export async function getOrderSubmissionAction(
   input: z.input<typeof submissionKeySchema>,
 ): Promise<ActionResult<OrderSubmissionStatus>> {
   const parsed = submissionKeySchema.safeParse(input);
-  if (!parsed.success) {
-    return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'idempotencyKey' });
-  }
+  if (!parsed.success) return submissionKeyRefusal(parsed.error);
+  let organizationId: string | null = null;
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    return ok(await svc.submissionStatus(parsed.data.key));
+    organizationId = svc.organizationId;
+    const { key, organizationId: pageOrganizationId, placerUserId } = parsed.data;
+    return ok(await svc.submissionStatus(key, { organizationId: pageOrganizationId, placerUserId }));
   } catch (e) {
-    return orderSubmissionActionError(e, 'actions.orders.submission_status');
+    return orderSubmissionActionError(e, 'actions.orders.submission_status', organizationId);
   }
 }
 
@@ -190,14 +247,17 @@ export async function withdrawOrderSubmissionAction(
   input: z.input<typeof submissionKeySchema>,
 ): Promise<ActionResult<OrderSubmissionStatus>> {
   const parsed = submissionKeySchema.safeParse(input);
-  if (!parsed.success) {
-    return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'idempotencyKey' });
-  }
+  if (!parsed.success) return submissionKeyRefusal(parsed.error);
+  let organizationId: string | null = null;
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    return ok(await svc.withdrawSubmission(parsed.data.key, 'web'));
+    organizationId = svc.organizationId;
+    const { key, organizationId: pageOrganizationId, placerUserId } = parsed.data;
+    return ok(
+      await svc.withdrawSubmission(key, 'web', { organizationId: pageOrganizationId, placerUserId }),
+    );
   } catch (e) {
-    return orderSubmissionActionError(e, 'actions.orders.submission_withdraw');
+    return orderSubmissionActionError(e, 'actions.orders.submission_withdraw', organizationId);
   }
 }
 

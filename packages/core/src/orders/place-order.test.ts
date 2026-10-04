@@ -21,8 +21,14 @@ import {
   OrderAnswerShapeError,
   orderAlreadyPlacedCopy,
   orderCallResultFromAction,
+  orderCallResultForOrganization,
   orderSubmissionCanResend,
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_ORGANIZATION_CHANGED_COPY,
+  ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+  ORDER_PAGE_OUT_OF_DATE_COPY,
+  ORDER_PAGE_OUT_OF_DATE_FINAL_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
   ORDER_EMAIL_MAX,
   ORDER_NOTES_MAX,
   ORDER_REFUSED_FINAL_COPY,
@@ -1308,6 +1314,101 @@ describe('classifyOrderSettleResult: a status read or a withdraw', () => {
   });
 });
 
+describe('orderCallResultForOrganization: an answer for another organization is never final', () => {
+  const OTHER_ORG = 'ffffffff-0000-4000-8000-000000000009';
+
+  it('a success that names this organization passes unchanged, in any case', () => {
+    const ok = answered(201, placeAnswer(false));
+    expect(orderCallResultForOrganization(ok, ORG)).toBe(ok);
+    expect(orderCallResultForOrganization(ok, ORG.toUpperCase())).toBe(ok);
+  });
+
+  it('a success that names another organization, or none, is no answer: the key stays live', () => {
+    for (const b of [{ ...placeAnswer(false), organizationId: OTHER_ORG }, { result: placeAnswer(false).result }, null]) {
+      const r = orderCallResultForOrganization(answered(201, b), ORG);
+      expect(classifyOrderSubmitResult(r, { sends: 1 })).toMatchObject({ final: false, why: 'no_answer' });
+      expect(classifyOrderSettleResult(r)).toMatchObject({ final: false, why: 'no_answer' });
+    }
+  });
+
+  it('a refusal RECORDED in another organization (a resend after a workspace switch) never settles this key', () => {
+    // The reviewers' case: the first send's answer was lost, the workspace was
+    // switched elsewhere, and the resend was recorded as refused in the other
+    // organization, settled there.
+    const recordedThere = refused(404, 'not_found', {
+      reason: 'warehouse_not_available',
+      settled: true,
+      replay: false,
+      organizationId: OTHER_ORG,
+    });
+    const r = orderCallResultForOrganization(recordedThere, ORG);
+    expect(classifyOrderSubmitResult(r, { sends: 2 })).toMatchObject({
+      final: false,
+      why: 'refused',
+      reason: 'organization_changed',
+    });
+    expect(classifyOrderSettleResult(r)).toMatchObject({
+      final: false,
+      why: 'refused',
+      reason: 'organization_changed',
+    });
+    // On the ONLY send nothing reached this organization: final, never recorded here.
+    expect(classifyOrderSubmitResult(r, { sends: 1 })).toMatchObject({
+      final: true,
+      outcome: 'refused',
+      reason: 'organization_changed',
+      recorded: false,
+    });
+  });
+
+  it('a status or withdraw answer for another organization never settles this key', () => {
+    for (const b of [
+      { organizationId: OTHER_ORG, outcome: 'withdrawn' },
+      { organizationId: OTHER_ORG, outcome: 'refused', refusal: { reason: 'permission', detail: null } },
+      { organizationId: OTHER_ORG, outcome: 'placed', order: summary() },
+    ]) {
+      expect(classifyOrderSettleResult(orderCallResultForOrganization(answered(200, b), ORG))).toMatchObject({
+        final: false,
+      });
+    }
+  });
+
+  it("the server's own organization_changed refusal is never final on a resend or a settle call", () => {
+    const r = orderCallResultForOrganization(
+      refused(409, 'conflict', { reason: 'organization_changed', organizationId: OTHER_ORG }),
+      ORG,
+    );
+    expect(classifyOrderSubmitResult(r, { sends: 3 })).toMatchObject({ final: false, reason: 'organization_changed' });
+    expect(classifyOrderSettleResult(r)).toMatchObject({ final: false, reason: 'organization_changed' });
+  });
+
+  it('a refusal that names this organization, or no organization, is classified as it is', () => {
+    const here = refused(404, 'not_found', {
+      reason: 'warehouse_not_available',
+      settled: true,
+      organizationId: ORG.toUpperCase(),
+    });
+    expect(orderCallResultForOrganization(here, ORG)).toBe(here);
+    expect(classifyOrderSubmitResult(orderCallResultForOrganization(here, ORG), { sends: 2 })).toMatchObject({
+      final: true,
+      outcome: 'refused',
+      recorded: true,
+    });
+    const unnamed = refused(401, 'unauthenticated');
+    expect(orderCallResultForOrganization(unnamed, ORG)).toBe(unnamed);
+    const lostCall = thrown(new Error('The request timed out.'));
+    expect(orderCallResultForOrganization(lostCall, ORG)).toBe(lostCall);
+  });
+
+  it('a fault answered by another organization stays a fault (its outcome is unknown)', () => {
+    const r = orderCallResultForOrganization(
+      refused(500, 'internal_error', { reason: 'failed', organizationId: OTHER_ORG }),
+      ORG,
+    );
+    expect(classifyOrderSubmitResult(r, { sends: 1 })).toMatchObject({ final: false, why: 'server_fault' });
+  });
+});
+
 // ── The state machine ───────────────────────────────────────────────────────
 
 const AT = '2026-10-03T16:00:00.000Z';
@@ -1825,6 +1926,34 @@ describe('the words', () => {
     expect(orderRefusalCopy('aal2_required', null, { ...ctx, surface: 'web' })).toMatch(
       /authenticator app/,
     );
+  });
+
+  it('a workspace switch, another account and an out-of-date page each say how to finish (review round 1)', () => {
+    const last = (reason: string) => ({ final: false as const, why: 'refused' as const, reason, details: d({ reason }) });
+    // Final (the only send, nothing placed): what happened and what to do, never Check and finish.
+    expect(orderRefusalCopy('organization_changed', null, ctx)).toBe(ORDER_ORGANIZATION_CHANGED_COPY);
+    expect(orderRefusalCopy('page_out_of_date', null, ctx)).toBe(ORDER_PAGE_OUT_OF_DATE_FINAL_COPY);
+    // The key is live: the panel says what settles it, alone (Check and finish
+    // and Don't send it answer the same until then, so no suffix offers them).
+    for (const surfaceCtx of [ctx, { ...ctx, surface: 'web' as const }, { ...ctx, bodyUnreadable: true }]) {
+      expect(orderUnconfirmedCopy(last('organization_changed'), surfaceCtx)).toBe(
+        ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+      );
+      expect(orderUnconfirmedCopy(last('placer_mismatch'), surfaceCtx)).toBe(
+        ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+      );
+      expect(orderUnconfirmedCopy(last('page_out_of_date'), surfaceCtx)).toBe(ORDER_PAGE_OUT_OF_DATE_COPY);
+    }
+    for (const text of [
+      ORDER_ORGANIZATION_CHANGED_COPY,
+      ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+      ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+      ORDER_PAGE_OUT_OF_DATE_COPY,
+      ORDER_PAGE_OUT_OF_DATE_FINAL_COPY,
+    ]) {
+      expect(text).not.toMatch(/try again/i);
+      expect(text).not.toMatch(/Check and finish/);
+    }
   });
 
   it('names refused items from the cart, never from the server', () => {

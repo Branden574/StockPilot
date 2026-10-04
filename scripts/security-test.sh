@@ -881,13 +881,17 @@ WEB_TESTS=(
   # pending send under the signed-in account only: a shared browser's next
   # person never sees, reads or sends it (judge X-1), and the cart draft is
   # per account too (a legacy draft is adopted without its on-behalf name and
-  # email).
+  # email). Review round 1: every call names the page's organization and the
+  # settle calls the account that sent the key, refused before any key work
+  # when they differ; an answer for another organization never settles a key;
+  # the pending slot is compare-and-set across tabs.
   src/server/services/order-requests.create.test.ts
   src/server/actions/order-requests.place-action.test.ts
   src/app/api/v1/orders/route.test.ts
   'src/app/api/v1/orders/submissions/[key]/route.test.ts'
   src/server/services/create-order-request-callers.guard.test.ts
   src/components/orders/storefront/order-submission.test.ts
+  src/components/orders/storefront/order-submission.hook.test.tsx
   src/components/orders/storefront/orders-storefront.submit-once.test.tsx
   src/components/orders/v2/cart-context.drafts.test.tsx
   src/server/actions/platform-admin.remove-org.test.ts

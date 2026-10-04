@@ -32,7 +32,10 @@ import {
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   ORDER_MODULE_DISABLED_COPY,
   ORDER_NEEDED_BY_INVALID_TIME_COPY,
+  ORDER_ORGANIZATION_CHANGED_COPY,
+  ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
   ORDER_PERMISSION_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
   ORDER_TIMEZONE_UNREADABLE_COPY,
   neededByChangedCopy,
   neededByInvalidTimeCopy,
@@ -86,6 +89,7 @@ import {
 } from './context';
 import { defer } from './lib/defer';
 import {
+  orderOrganizationChangedError,
   orderRecordedRefusalError,
   orderSubmissionRpcError,
   orderSubmissionWithdrawnError,
@@ -370,6 +374,25 @@ export interface PlaceOrderInput {
    * unconverted. The body's neededByLocal is then null.
    */
   legacyNeededBy?: string | null;
+  /**
+   * The organization the page was opened in (the web action passes it; a
+   * route answers for the X-Organization-Id it was sent, so it passes none).
+   * The web's organization is the account's default one, which a workspace
+   * switch in another tab changes for every open tab: a resend from a tab
+   * left in another organization is refused organization_changed BEFORE any
+   * gate or key work, never recorded under this organization (review round 1).
+   */
+  expectedOrganizationId?: string;
+}
+
+/** Who a status read or a withdraw was sent for: the organization the page
+ *  was opened in and the account that sent the key. Each, when given, must
+ *  be the session's, or the call is refused before the function runs (never
+ *  settled): a tab left open in another workspace or under another account
+ *  never settles a key it does not hold (review round 1). */
+export interface OrderSubmissionScope {
+  organizationId?: string;
+  placerUserId?: string;
 }
 
 /**
@@ -1528,6 +1551,14 @@ export class OrderRequestsService {
    * in-app "New order request" notification is the insert trigger's.
    */
   async create(input: PlaceOrderInput): Promise<OrderPlaceAnswer> {
+    // First: every gate below is this organization's, so none of them speaks
+    // for a page opened in another one.
+    if (
+      input.expectedOrganizationId !== undefined &&
+      !this.isOwnOrganization(input.expectedOrganizationId)
+    ) {
+      throw orderOrganizationChangedError(ORDER_ORGANIZATION_CHANGED_COPY);
+    }
     if (!isModuleEnabled(this.ctx, 'orders')) {
       throw new ServiceError('module_disabled', ORDER_MODULE_DISABLED_COPY, { reason: 'module_disabled' });
     }
@@ -1680,6 +1711,32 @@ export class OrderRequestsService {
     return resolveOrgTimezone((data as { timezone: string | null }).timezone);
   }
 
+  /** The organization this service answers for (the web action and the
+   *  routes stamp it on every refusal they return, so a client drops an
+   *  answer for a workspace it has left). */
+  get organizationId(): string {
+    return this.ctx.organizationId;
+  }
+
+  private isOwnOrganization(organizationId: string): boolean {
+    return organizationId.toLowerCase() === this.ctx.organizationId.toLowerCase();
+  }
+
+  /** OrderSubmissionScope's check: the organization first, then the account. */
+  private assertSubmissionScope(scope: OrderSubmissionScope): void {
+    if (scope.organizationId !== undefined && !this.isOwnOrganization(scope.organizationId)) {
+      throw orderOrganizationChangedError(ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY);
+    }
+    if (
+      scope.placerUserId !== undefined &&
+      scope.placerUserId.toLowerCase() !== this.ctx.userId.toLowerCase()
+    ) {
+      throw new ServiceError('forbidden', ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY, {
+        reason: 'placer_mismatch',
+      });
+    }
+  }
+
   /**
    * What happened to the caller's own submission key: none, placed (with the
    * order), refused (with the recorded refusal) or withdrawn. A read, no
@@ -1687,7 +1744,11 @@ export class OrderRequestsService {
    * never "not placed". Membership only (no module, permission or MFA gate:
    * settling your own key never depends on them; the function checks it).
    */
-  async submissionStatus(key: string): Promise<OrderSubmissionStatus> {
+  async submissionStatus(
+    key: string,
+    scope: OrderSubmissionScope = {},
+  ): Promise<OrderSubmissionStatus> {
+    this.assertSubmissionScope(scope);
     const { data, error } = await this.ctx.supabase.rpc('order_submission_status', {
       p_org: this.ctx.organizationId,
       p_key: key,
@@ -1702,7 +1763,12 @@ export class OrderRequestsService {
    * never place), or the outcome already recorded (placed with the order,
    * refused). Membership only.
    */
-  async withdrawSubmission(key: string, surface: 'web' | 'app'): Promise<OrderSubmissionStatus> {
+  async withdrawSubmission(
+    key: string,
+    surface: 'web' | 'app',
+    scope: OrderSubmissionScope = {},
+  ): Promise<OrderSubmissionStatus> {
+    this.assertSubmissionScope(scope);
     const { data, error } = await this.ctx.supabase.rpc('withdraw_order_submission', {
       p_org: this.ctx.organizationId,
       p_key: key,

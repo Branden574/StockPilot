@@ -8,8 +8,11 @@ import {
   ORDER_MODULE_DISABLED_COPY,
   ORDER_NEEDED_BY_INVALID_TIME_COPY,
   ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
+  ORDER_ORGANIZATION_CHANGED_COPY,
+  ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
   ORDER_PERMISSION_COPY,
   ORDER_PLACER_MISMATCH_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
   ORDER_REFUSED_FINAL_COPY,
   ORDER_SIGN_IN_COPY,
   ORDER_SITE_INACTIVE_COPY,
@@ -724,5 +727,78 @@ describe('submissionStatus and withdrawSubmission: membership only', () => {
       'rpc:order_submission_status': { data: { outcome: 'odd' }, error: null },
     });
     expect((await refusal(svc(stub2).submissionStatus(KEY))).code).toBe('internal_error');
+  });
+});
+
+describe('the organization and the account a call was sent from (review round 1)', () => {
+  const OTHER_ORG = 'org-other';
+  const OTHER_USER = 'dddddddd-0000-4000-8000-000000000009';
+
+  it('create: a page sent from another organization is refused organization_changed before ANY gate, read or call', async () => {
+    const stub = stubWith(placed());
+    // Even with the module off here: every gate is this organization's, so
+    // none of them speaks for the page's.
+    const e = await refusal(
+      svc(stub, { enabledModules: new Set<ModuleId>([]) }).create({
+        body: body(),
+        surface: 'web',
+        expectedOrganizationId: OTHER_ORG,
+      }),
+    );
+    expect([e.code, e.message, e.details]).toEqual([
+      'conflict',
+      ORDER_ORGANIZATION_CHANGED_COPY,
+      { reason: 'organization_changed' },
+    ]);
+    expect(e.details?.settled).toBeUndefined();
+    expect(stub.rpcCalls).toEqual([]);
+    expect(stub.fromCalls).toEqual([]);
+    await flushTail();
+    expectNoTail();
+  });
+
+  it('create: the same organization (any case) places as before', async () => {
+    const stub = stubWith(placed());
+    const answer = await svc(stub).create({
+      body: body(),
+      surface: 'web',
+      expectedOrganizationId: ORG.toUpperCase(),
+    });
+    expect(answer.replay).toBe(false);
+    expect(rpcArgs(stub)?.p_key).toBe(KEY);
+  });
+
+  it.each([
+    ['submissionStatus', (s: OrderRequestsService, scope: Record<string, string>) => s.submissionStatus(KEY, scope)],
+    ['withdrawSubmission', (s: OrderRequestsService, scope: Record<string, string>) => s.withdrawSubmission(KEY, 'web', scope)],
+  ] as const)('%s: another organization is organization_changed, another account placer_mismatch, never settled, nothing called', async (_label, call) => {
+    const stub = makeSupabaseStub({
+      'rpc:order_submission_status': { data: { outcome: 'withdrawn' }, error: null },
+      'rpc:withdraw_order_submission': { data: { outcome: 'withdrawn' }, error: null },
+    });
+    const s = svc(stub);
+    const org = await refusal(call(s, { organizationId: OTHER_ORG, placerUserId: USER }));
+    expect([org.code, org.message, org.details]).toEqual([
+      'conflict',
+      ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+      { reason: 'organization_changed' },
+    ]);
+    const placer = await refusal(call(s, { organizationId: ORG, placerUserId: OTHER_USER }));
+    expect([placer.code, placer.message, placer.details]).toEqual([
+      'forbidden',
+      ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+      { reason: 'placer_mismatch' },
+    ]);
+    // The organization is checked first: both wrong answers organization_changed.
+    const both = await refusal(call(s, { organizationId: OTHER_ORG, placerUserId: OTHER_USER }));
+    expect(both.details).toEqual({ reason: 'organization_changed' });
+    expect(stub.rpcCalls).toEqual([]);
+    // Both right (any case): the function is called as before.
+    await call(s, { organizationId: ORG.toUpperCase(), placerUserId: USER.toUpperCase() });
+    expect(stub.rpcCalls).toHaveLength(1);
+  });
+
+  it('the service names the organization it answers for (the transports stamp it on refusals)', () => {
+    expect(svc(makeSupabaseStub({})).organizationId).toBe(ORG);
   });
 });

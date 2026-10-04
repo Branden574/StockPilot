@@ -800,6 +800,56 @@ export function orderCallResultFromAction(
 }
 
 /**
+ * An answer as the surface that sent the call for `organizationId` must read
+ * it (review round 1). Apply it to EVERY create, status and withdraw answer
+ * before classifying (the web hook does; the phone must too).
+ *
+ * The web's organization is the account's default one, which a workspace
+ * switch in another tab or on another computer changes for every open tab;
+ * the phone names its organization in a header, but a switch can still land
+ * between a send and its resend. An answer for another organization says
+ * nothing about this organization's key:
+ *   - a success that does not name this organization is no answer (the key
+ *     stays live; an order it names belongs to the other organization);
+ *   - a refusal (4xx) that names another organization in `details` becomes
+ *     an `organization_changed` refusal that is never recorded here: on the
+ *     only send it is final (that send never reached this organization), on a
+ *     resend or a settle call it keeps the key live, even when the other
+ *     organization recorded it as settled;
+ *   - a fault, a refusal that names this organization or none, and a lost
+ *     call are classified as they are.
+ * The servers refuse a mismatch themselves before any key work (the web
+ * action compares the page's organization; the routes answer for the
+ * X-Organization-Id they are sent); this is the client's half.
+ */
+export function orderCallResultForOrganization(
+  result: OrderCallResult,
+  organizationId: string,
+): OrderCallResult {
+  const wanted = organizationId.toLowerCase();
+  const isThis = (v: unknown) => typeof v === 'string' && v.toLowerCase() === wanted;
+  if (result.ok) {
+    if (isRecord(result.body) && isThis(result.body.organizationId)) return result;
+    return { ok: false, error: new Error('The answer was for another organization.') };
+  }
+  const e = apiErrorOf(result.error);
+  if (!e || e.status < 400 || e.status >= 500 || !isRecord(e.details)) return result;
+  const named = e.details.organizationId;
+  if (named === undefined || named === null || isThis(named)) return result;
+  return {
+    ok: false,
+    error: {
+      status: 409,
+      code: 'conflict',
+      details: {
+        reason: 'organization_changed',
+        ...(typeof named === 'string' ? { organizationId: named } : {}),
+      },
+    },
+  };
+}
+
+/**
  * A shape refusal the DATABASE raised (M1 step 3: 22023 with hint
  * `order_invalid` and a field in its detail, `delivery_needs_site`,
  * `idempotency_key_required` or `idempotency_key_invalid`) as core's reason,
@@ -1287,6 +1337,27 @@ export const ORDER_NEEDS_CONNECTION_COPY = 'Needs a connection.';
 export const ORDER_ADD_WHILE_LOCKED_COPY =
   "This cart has an order request that isn't confirmed yet. Check and finish it, or choose Don't send it, before adding items.";
 
+/** The only send was answered for another organization (the account's
+ *  workspace was switched in another tab or window): nothing was placed. */
+export const ORDER_ORGANIZATION_CHANGED_COPY =
+  "You switched to another organization in another tab or window, so it wasn't sent. Switch back to send it, or reload the page.";
+/** A resend, a status read or a withdraw was answered for another
+ *  organization: the key may have placed the order in the one it was sent
+ *  from, and only that organization can settle it. */
+export const ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY =
+  'You switched to another organization in another tab or window. Switch back to the organization this order request was sent from to finish it.';
+/** A resend, a status read or a withdraw from a page another account's
+ *  session now answers for (a shared browser, a tab left open). */
+export const ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY =
+  "You're signed in as a different account than the one that sent this order request. Sign in as that account to finish it.";
+/** The web page is older than the server it calls (its server action is
+ *  gone after a deploy), so the call never ran. The key stays live. */
+export const ORDER_PAGE_OUT_OF_DATE_COPY =
+  'StockPilot was updated since this page was opened. Reload the page to finish your order request.';
+/** The same, on the only send: nothing ran, so nothing was placed. */
+export const ORDER_PAGE_OUT_OF_DATE_FINAL_COPY =
+  "StockPilot was updated since this page was opened, so it wasn't sent. Reload the page, then submit it again.";
+
 export const ORDER_MODULE_DISABLED_COPY = 'Ordering is turned off for your organization.';
 export const ORDER_PERMISSION_COPY = "Your account can't place orders. Ask an admin.";
 export const ORDER_WAREHOUSE_NOT_AVAILABLE_COPY =
@@ -1436,6 +1507,8 @@ export function orderRefusalCopy(
   ctx: OrderWordsContext,
 ): string {
   if (reason === 'timezone_unreadable') return ORDER_TIMEZONE_UNREADABLE_FINAL_COPY;
+  if (reason === 'organization_changed') return ORDER_ORGANIZATION_CHANGED_COPY;
+  if (reason === 'page_out_of_date') return ORDER_PAGE_OUT_OF_DATE_FINAL_COPY;
   return refusalCauseCopy(reason, details, ctx) ?? ORDER_REFUSED_FINAL_COPY;
 }
 
@@ -1443,6 +1516,14 @@ export function orderRefusalCopy(
 export function orderUnconfirmedCopy(last: NotFinal, ctx: OrderWordsContext): string {
   const signIn =
     last.why === 'refused' && (last.reason === 'unauthenticated' || last.reason === 'not_member');
+  // Refused for the session or the page, not the order: Check and finish and
+  // Don't send it get the same answer until it is put right, so the sentence
+  // says what puts it right and offers neither.
+  if (last.why === 'refused') {
+    if (last.reason === 'organization_changed') return ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY;
+    if (last.reason === 'placer_mismatch') return ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY;
+    if (last.reason === 'page_out_of_date') return ORDER_PAGE_OUT_OF_DATE_COPY;
+  }
   if (ctx.bodyUnreadable) {
     if (signIn) return ORDER_SIGN_IN_COPY;
     if (last.why === 'refused' && last.reason === 'aal2_required' && ctx.surface === 'phone')

@@ -561,7 +561,15 @@ actually fire.
   to be executable by `authenticated` and could then be called with any
   outcome); `place_order_request` comparing the body's placer with
   `auth.uid()` before it looks at the key (a pending send left in a shared
-  browser is never placed under another account).
+  browser is never placed under another account). In the app (review round
+  1): the New order page names its organization on every call and the
+  account that sent the key on the status read and the withdraw, and
+  `OrderRequestsService` refuses a mismatch (`organization_changed`,
+  `placer_mismatch`) before any function runs, never settled, so a tab left
+  in another workspace or under another account never settles a key it does
+  not hold; every refusal names the organization that answered, and core
+  `orderCallResultForOrganization` never lets an answer for another
+  organization settle a key.
 - **Tested at**: [`0391_place_order_request.test.sql`](../../supabase/tests/0391_place_order_request.test.sql)
   G1-G6 (grants, the two policies' text, the keys, the six functions' posture,
   the flag census, no dynamic SQL), I1-I3 (a direct insert of each outcome
@@ -569,7 +577,9 @@ actually fire.
   own rows), N1 (placer mismatch refused before the key) and D1-D3 (deletes);
   the 0359 census tests 17, 18 and 73 keep covering the new functions;
   `scripts/db-concurrency/0391_place_order_races.sh` proves the lock across
-  two sessions.
+  two sessions; `order-requests.create.test.ts`, `order-requests.place-action.test.ts`,
+  the two route tests, `order-submission.hook.test.tsx` and core
+  `place-order.test.ts` cover the app's organization and account checks.
 
 ---
 

@@ -24,6 +24,21 @@
  * also checks the body's placer), so on a shared browser the next person
  * never sees, nor sends, another person's pending order. The body carries
  * the placer, and the database refuses it under any other account.
+ *
+ * ═══ ONE LIVE KEY PER SLOT, ONE WORKSPACE, ONE ACCOUNT (review round 1) ═══
+ *
+ * The slot is compare-and-set: a live key's record is written only into an
+ * empty slot or over its own, and a settled key removes only its own record.
+ * A second tab that presses Submit while the slot holds a live key of this
+ * account does not mint another key: it takes that key, locks and reads its
+ * status, exactly as a reload would. Every call names the page's
+ * organization (the account's organization is its default one, which a
+ * switch in another tab changes for every open tab), and the status read and
+ * the withdraw name the account that sent the key; the server refuses a
+ * mismatch before any key work, and core orderCallResultForOrganization drops
+ * any answer for another organization, so neither ever settles this key. A
+ * call whose server action is gone (the page is older than a deploy) never
+ * ran: the key stays live and the page says to reload.
  */
 
 import * as React from 'react';
@@ -31,6 +46,7 @@ import * as React from 'react';
 import {
   ORDER_DEVICE_SAVE_FAILED_COPY,
   ORDER_SUBMISSION_OPEN,
+  orderCallResultForOrganization,
   orderCallResultFromAction,
   orderSubmissionLocked,
   orderSubmissionReducer,
@@ -156,15 +172,38 @@ function storage(): Storage | null {
   }
 }
 
-/** An answer for another organization (the browser switched workspace while
- *  it was out) is no answer: the key stays live. */
-function forThisOrganization(result: OrderCallResult, organizationId: string): OrderCallResult {
-  if (!result.ok) return result;
-  const body = result.body as { organizationId?: unknown } | null;
-  if (!body || typeof body !== 'object' || body.organizationId !== organizationId) {
-    return { ok: false, error: new Error('answer for another organization') };
+/** The key a stored record holds when it is a live record of this account,
+ *  else null (a pure read: nothing is removed). */
+function storedLiveKey(store: Storage, key: string, userId: string): string | null {
+  let raw: string | null;
+  try {
+    raw = store.getItem(key);
+  } catch {
+    return null;
   }
-  return result;
+  if (raw === null) return null;
+  try {
+    return parsePendingOrderSubmission(JSON.parse(raw), userId)?.key ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A call that threw. A server action the server no longer has (the page was
+ * built by an older deploy: Next's UnrecognizedActionError, "Failed to find
+ * Server Action") never ran, so it is a refusal before any key work, never
+ * settled; core words it as "reload the page". Anything else is no answer.
+ */
+export function orderCallResultFromThrown(error: unknown): OrderCallResult {
+  if (
+    error instanceof Error &&
+    (error.name === 'UnrecognizedActionError' ||
+      /was not found on the server|Failed to find Server Action/i.test(error.message))
+  ) {
+    return { ok: false, error: { status: 409, code: 'conflict', details: { reason: 'page_out_of_date' } } };
+  }
+  return { ok: false, error };
 }
 
 export interface UseOrderSubmissionArgs {
@@ -184,13 +223,18 @@ export interface OrderSubmissionControl {
   busy: boolean;
   /** The record could not be written, so nothing was sent. */
   deviceError: string | null;
+  /** The restore check has run (a pending record found on load is already
+   *  restored and the cart locked): what adds to the cart from outside it,
+   *  the Start an order prefill, waits for this. */
+  ready: boolean;
   /** The first press of Submit, with a freshly minted key in the body. */
   send: (body: OrderCreateRequestInput) => void;
   /** "Check and finish". */
   resend: () => void;
   /** "Don't send it". */
   withdraw: () => void;
-  /** The success screen, the refusal or the withdrawn notice is done with. */
+  /** The success screen, the refusal, the withdrawn notice or the
+   *  couldn't-save notice is done with. */
   dismiss: () => void;
 }
 
@@ -209,6 +253,7 @@ export function useOrderSubmission({
   const inFlight = React.useRef(false);
   const [busy, setBusy] = React.useState(false);
   const [deviceError, setDeviceError] = React.useState<string | null>(null);
+  const [ready, setReady] = React.useState(false);
   const key = orderPendingKey(userId, organizationId, warehouseId);
   // The latest onRestore, for the restore effect (kept current after each
   // render, never read while rendering).
@@ -218,25 +263,39 @@ export function useOrderSubmission({
   });
 
   /** Persist what `next` needs on the device, then commit it. False when the
-   *  write failed (nothing committed). */
+   *  write failed (nothing committed).
+   *
+   *  Compare-and-set on the slot: a live key's record is written only into an
+   *  empty slot or over its own record (another tab's live key is never
+   *  overwritten: false, nothing sent), and a settled key removes the record
+   *  only while it is still its own (another tab's live key is never
+   *  removed). An instance unmounted with a call out commits the same way. */
   const commit = React.useCallback(
     (next: OrderSubmissionState): boolean => {
       const store = storage();
+      const record = pendingOrderSubmissionOf(next);
+      const ownKey = pendingOrderSubmissionOf(stateRef.current)?.key ?? null;
       try {
         if (!store) throw new Error('no storage');
-        writePendingRecord(store, key, pendingOrderSubmissionOf(next));
+        const held = storedLiveKey(store, key, userId);
+        if (record !== null) {
+          if (held !== null && held !== record.key) return false;
+          writePendingRecord(store, key, record);
+        } else if (ownKey !== null && (held === ownKey || held === null)) {
+          writePendingRecord(store, key, null);
+        }
       } catch {
         // A final outcome whose record cannot be removed still commits: the
         // stale record names a settled key, which the next status read
         // settles again. A live key whose record cannot be written does not.
-        if (pendingOrderSubmissionOf(next) !== null) return false;
+        if (record !== null) return false;
       }
       stateRef.current = next;
       setState(next);
       setLocked(orderSubmissionLocked(next));
       return true;
     },
-    [key, setLocked],
+    [key, setLocked, userId],
   );
 
   const apply = React.useCallback(
@@ -251,9 +310,9 @@ export function useOrderSubmission({
     ) => {
       let result: OrderCallResult;
       try {
-        result = forThisOrganization(await call(), organizationId);
+        result = orderCallResultForOrganization(await call(), organizationId);
       } catch (error) {
-        result = { ok: false, error };
+        result = orderCallResultFromThrown(error);
       }
       apply(done(result));
       inFlight.current = false;
@@ -264,8 +323,41 @@ export function useOrderSubmission({
 
   const callCreate = React.useCallback(
     async (body: OrderCreateRequestInput) =>
-      orderCallResultFromAction(await createOrderRequestAction(body), actionStatusForCode),
-    [],
+      orderCallResultFromAction(
+        await createOrderRequestAction(body, { organizationId }),
+        actionStatusForCode,
+      ),
+    [organizationId],
+  );
+
+  // A pending record found on the device (on load, or by a Submit in a
+  // second tab while another tab's key is live): lock at once, show the sent
+  // body, and read the key's status (which only settles it when it reports a
+  // final outcome). Never sends the order.
+  const adopt = React.useCallback(
+    (record: PendingOrderSubmission): boolean => {
+      const next = orderSubmissionReducer(stateRef.current, { type: 'restore', pending: record });
+      if (next === stateRef.current || !commit(next)) return false;
+      if (!record.bodyUnreadable) onRestoreRef.current(record.body);
+      if (inFlight.current) return true;
+      inFlight.current = true;
+      setBusy(true);
+      void run(
+        async () =>
+          orderCallResultFromAction(
+            await getOrderSubmissionAction({
+              warehouseId,
+              key: record.key,
+              organizationId,
+              placerUserId: userId,
+            }),
+            actionStatusForCode,
+          ),
+        (result) => ({ type: 'status-result', result }),
+      );
+      return true;
+    },
+    [commit, run, warehouseId, organizationId, userId],
   );
 
   const send = React.useCallback(
@@ -279,6 +371,17 @@ export function useOrderSubmission({
         current.phase === 'placed'
       ) {
         current = orderSubmissionReducer(current, { type: 'dismiss' });
+      }
+      // Another tab of this account holds a live key for this cart: never
+      // mint a second one over it. Take that key instead (locked, its panel,
+      // its status read), as a reload would.
+      const store = current.phase === 'open' ? storage() : null;
+      const live = store ? readPendingRecord(store, key, userId) : null;
+      if (live && live.key !== body.idempotencyKey) {
+        inFlight.current = false;
+        if (current !== stateRef.current) commit(current);
+        adopt(live);
+        return;
       }
       const next = orderSubmissionReducer(current, {
         type: 'send',
@@ -298,7 +401,7 @@ export function useOrderSubmission({
         (result) => ({ type: 'send-result', result }),
       );
     },
-    [callCreate, commit, run],
+    [adopt, callCreate, commit, key, run, userId],
   );
 
   const resend = React.useCallback(() => {
@@ -334,42 +437,34 @@ export function useOrderSubmission({
     void run(
       async () =>
         orderCallResultFromAction(
-          await withdrawOrderSubmissionAction({ warehouseId, key: pendingKey }),
+          await withdrawOrderSubmissionAction({
+            warehouseId,
+            key: pendingKey,
+            organizationId,
+            placerUserId: userId,
+          }),
           actionStatusForCode,
         ),
       (result) => ({ type: 'withdraw-result', result }),
     );
-  }, [commit, run, warehouseId]);
+  }, [commit, run, warehouseId, organizationId, userId]);
 
   const dismiss = React.useCallback(() => {
+    setDeviceError(null);
     apply({ type: 'dismiss' });
   }, [apply]);
 
-  // A pending record found on load: lock at once, show the sent body, and
-  // read the key's status (which only settles it when it reports a final
-  // outcome). Once per mount, after the cart's own draft is restored.
+  // A pending record found on load is adopted (adopt above). Once per mount,
+  // after the cart's own draft is restored; `ready` then says the check ran.
   const restored = React.useRef(false);
   React.useEffect(() => {
     if (!hydrated || restored.current) return;
     restored.current = true;
     const store = storage();
     const record = store ? readPendingRecord(store, key, userId) : null;
-    if (!record) return;
-    const next = orderSubmissionReducer(stateRef.current, { type: 'restore', pending: record });
-    if (next === stateRef.current || !commit(next)) return;
-    if (!record.bodyUnreadable) onRestoreRef.current(record.body);
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    void run(
-      async () =>
-        orderCallResultFromAction(
-          await getOrderSubmissionAction({ warehouseId, key: record.key }),
-          actionStatusForCode,
-        ),
-      (result) => ({ type: 'status-result', result }),
-    );
-  }, [hydrated, key, userId, warehouseId, commit, run]);
+    if (record) adopt(record);
+    setReady(true);
+  }, [hydrated, key, userId, adopt]);
 
-  return { state, busy, deviceError, send, resend, withdraw, dismiss };
+  return { state, busy, deviceError, ready, send, resend, withdraw, dismiss };
 }

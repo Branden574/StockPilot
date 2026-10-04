@@ -2,11 +2,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { toast } from 'sonner';
+
 import {
+  NEEDED_BY_IN_PAST_COPY,
   neededByLabel,
   neededByZoneNote,
   ORDER_CHECK_AND_FINISH_COPY,
+  ORDER_ADD_WHILE_LOCKED_COPY,
   ORDER_DONT_SEND_COPY,
+  ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
   ORDER_REFUSED_RESEND_SUFFIX_COPY,
   ORDER_SEE_MY_ORDERS_COPY,
   ORDER_UNCONFIRMED_BODY_COPY,
@@ -40,9 +46,9 @@ const createOrderRequestAction = vi.fn();
 const getOrderSubmissionAction = vi.fn();
 const withdrawOrderSubmissionAction = vi.fn();
 vi.mock('@/server/actions/order-requests', () => ({
-  createOrderRequestAction: (input: unknown) => createOrderRequestAction(input),
-  getOrderSubmissionAction: (input: unknown) => getOrderSubmissionAction(input),
-  withdrawOrderSubmissionAction: (input: unknown) => withdrawOrderSubmissionAction(input),
+  createOrderRequestAction: (...args: unknown[]) => createOrderRequestAction(...args),
+  getOrderSubmissionAction: (...args: unknown[]) => getOrderSubmissionAction(...args),
+  withdrawOrderSubmissionAction: (...args: unknown[]) => withdrawOrderSubmissionAction(...args),
 }));
 
 vi.mock('./storefront-cards', async (importOriginal) => {
@@ -207,6 +213,8 @@ describe('the first send', () => {
 
     expect(createOrderRequestAction).toHaveBeenCalledTimes(1);
     const body = createOrderRequestAction.mock.calls[0]![0] as Record<string, unknown>;
+    // The page names its organization (review round 1).
+    expect(createOrderRequestAction.mock.calls[0]![1]).toEqual({ organizationId: ORG });
     expect(body).toMatchObject({
       placerUserId: USER_A,
       warehouseId: WH,
@@ -321,7 +329,12 @@ describe('a lost answer', () => {
     cleanup();
     await openPage();
     await waitFor(() =>
-      expect(getOrderSubmissionAction).toHaveBeenCalledWith({ warehouseId: WH, key }),
+      expect(getOrderSubmissionAction).toHaveBeenCalledWith({
+        warehouseId: WH,
+        key,
+        organizationId: ORG,
+        placerUserId: USER_A,
+      }),
     );
     expect(within(dialog()).getByText(ORDER_UNCONFIRMED_TITLE_COPY)).toBeInTheDocument();
     // The locked cart shows exactly what was sent.
@@ -350,7 +363,12 @@ describe('a lost answer', () => {
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: ORDER_DONT_SEND_COPY }));
     });
-    expect(withdrawOrderSubmissionAction).toHaveBeenCalledWith({ warehouseId: WH, key });
+    expect(withdrawOrderSubmissionAction).toHaveBeenCalledWith({
+      warehouseId: WH,
+      key,
+      organizationId: ORG,
+      placerUserId: USER_A,
+    });
     // Out: still locked, every button waits.
     expect(screen.getByRole('button', { name: 'Remove Chromebook from cart' })).toBeDisabled();
     expect(within(dialog()).getByRole('button', { name: ORDER_DONT_SEND_COPY })).toBeDisabled();
@@ -489,5 +507,167 @@ describe('a shared browser (judge X-1)', () => {
     expect(screen.queryByText(ORDER_UNCONFIRMED_TITLE_COPY)).toBeNull();
     expect(getOrderSubmissionAction).not.toHaveBeenCalled();
     expect(localStorage.getItem(pendingKey(USER_B))).toBeNull();
+  });
+});
+
+describe('review round 1', () => {
+  async function lose() {
+    await openPage();
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    createOrderRequestAction.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    review();
+    await act(async () => submit());
+  }
+
+  it('a resend answered with a refusal recorded in ANOTHER organization keeps the cart locked and the record, and says to switch back', async () => {
+    await lose();
+    createOrderRequestAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'not_found',
+        message: 'x',
+        details: {
+          reason: 'warehouse_not_available',
+          settled: true,
+          replay: false,
+          organizationId: '0a000000-0000-4000-8000-000000000099',
+        },
+      },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: ORDER_CHECK_AND_FINISH_COPY }));
+    });
+    expect(within(dialog()).getByText(ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove Chromebook from cart' })).toBeDisabled();
+    expect(pendingRecord()).toMatchObject({ sends: 2 });
+  });
+
+  it("Don't send it from a tab another account now answers for stays locked, keeps the record and says whose it is", async () => {
+    await lose();
+    withdrawOrderSubmissionAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'forbidden', message: 'x', details: { reason: 'placer_mismatch', organizationId: ORG } },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: ORDER_DONT_SEND_COPY }));
+    });
+    expect(within(dialog()).getByText(ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY)).toBeInTheDocument();
+    expect(within(dialog()).queryByText(ORDER_WITHDRAWN_COPY)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Chromebook from cart' })).toBeDisabled();
+    expect(pendingRecord()).not.toBeNull();
+  });
+
+  it('closing the review after a refusal clears the alert on reopen; the refused item stays marked and blocked', async () => {
+    await openPage();
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    fireEvent.click(screen.getByText('Add HDMI Cable'));
+    createOrderRequestAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'x',
+        details: { reason: 'item_not_orderable', settled: true, replay: false, items: { [CABLE]: 'archived' } },
+      },
+    });
+    review();
+    await act(async () => submit());
+    expect(within(dialog()).getByRole('alert')).toBeInTheDocument();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close review' }));
+    review();
+    expect(within(dialog()).queryByRole('alert')).toBeNull();
+    // The cart still marks the item, and Submit still waits for it.
+    expect(screen.getByText('This item was archived.')).toBeInTheDocument();
+    await act(async () => submit());
+    expect(within(dialog()).getByRole('alert').textContent).toContain("Remove the items that can't be ordered.");
+    expect(createOrderRequestAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('a corrected needed-by: the old refusal is gone when the review reopens', async () => {
+    await openPage();
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    createOrderRequestAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'validation_error', message: 'x', details: { reason: 'needed_by_past', settled: true, replay: false } },
+    });
+    review();
+    await act(async () => submit());
+    expect(within(dialog()).getByRole('alert').textContent).toContain(NEEDED_BY_IN_PAST_COPY);
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close review' }));
+    review();
+    expect(within(dialog()).queryByText(NEEDED_BY_IN_PAST_COPY)).toBeNull();
+  });
+
+  it("closing after Don't send it clears the notice on reopen", async () => {
+    await lose();
+    withdrawOrderSubmissionAction.mockResolvedValueOnce({
+      ok: true,
+      data: { organizationId: ORG, outcome: 'withdrawn' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: ORDER_DONT_SEND_COPY }));
+    });
+    expect(within(dialog()).getByText(ORDER_WITHDRAWN_COPY)).toBeInTheDocument();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close review' }));
+    review();
+    expect(within(dialog()).queryByText(ORDER_WITHDRAWN_COPY)).toBeNull();
+  });
+
+  it('with no pending send the Start an order selection is added at once, once', async () => {
+    sessionStorage.setItem('sp:order-prefill:v1', JSON.stringify({ warehouseId: WH, itemIds: [CABLE] }));
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    await openPage();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Added 1 item to your cart.'));
+    expect(screen.getByRole('button', { name: 'Remove HDMI Cable from cart' })).toBeEnabled();
+    expect(sessionStorage.getItem('sp:order-prefill:v1')).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('the Start an order selection waits while a restored send has the cart locked: refused in core words, kept, then added once the key settles', async () => {
+    const key = 'eeeeeeee-0000-4000-8000-000000000042';
+    localStorage.setItem(
+      pendingKey(),
+      JSON.stringify({
+        key,
+        state: 'possibly_sent',
+        sends: 1,
+        firstSentAt: '2026-10-04T10:00:00Z',
+        body: {
+          idempotencyKey: key,
+          placerUserId: USER_A,
+          warehouseId: WH,
+          fulfillmentType: 'pickup',
+          deliveryCharterId: null,
+          onBehalfOf: null,
+          notes: null,
+          neededByLocal: null,
+          lines: [{ itemId: CHROME, quantity: 1 }],
+        },
+      }),
+    );
+    sessionStorage.setItem('sp:order-prefill:v1', JSON.stringify({ warehouseId: WH, itemIds: [CABLE] }));
+    getOrderSubmissionAction.mockResolvedValueOnce({ ok: true, data: { organizationId: ORG, outcome: 'none' } });
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
+    await openPage();
+    await waitFor(() => expect(getOrderSubmissionAction).toHaveBeenCalled());
+    expect(toast.error).toHaveBeenCalledWith(ORDER_ADD_WHILE_LOCKED_COPY);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('sp:order-prefill:v1')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove HDMI Cable from cart' })).toBeNull();
+    // Don't send it settles the key: the selection is added now, once.
+    withdrawOrderSubmissionAction.mockResolvedValueOnce({
+      ok: true,
+      data: { organizationId: ORG, outcome: 'withdrawn' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: ORDER_DONT_SEND_COPY }));
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Added 1 item to your cart.'));
+    expect(screen.getByRole('button', { name: 'Remove HDMI Cable from cart' })).toBeEnabled();
+    expect(sessionStorage.getItem('sp:order-prefill:v1')).toBeNull();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    sessionStorage.clear();
   });
 });

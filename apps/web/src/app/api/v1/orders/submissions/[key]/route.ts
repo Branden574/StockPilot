@@ -5,6 +5,7 @@ import { ORDER_BODY_UNREADABLE_COPY } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  readPlacerParam,
   submissionError,
   submissionJson,
   submissionRateLimited,
@@ -31,6 +32,11 @@ const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * settles an unknown send). Membership only: no module, permission or MFA
  * gate, so a person whose module or permission was removed can still find out
  * what happened. Rate limit order-submission:<user>, 60 a minute.
+ *
+ * `?placerUserId=<uuid>` (optional; the phone sends its pending record's
+ * placer): when it names another account the answer is 403 placer_mismatch
+ * before the function runs, never settled (review round 1). The organization
+ * is the X-Organization-Id the call is sent with.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ key: string }> }) {
   const ctx = await withApiContext(req);
@@ -52,8 +58,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ key:
       },
     );
   }
+  const placer = readPlacerParam(req.nextUrl.searchParams.get('placerUserId') ?? undefined);
+  if (!placer.ok) {
+    return submissionRefusal(ctx.organizationId, 400, 'validation_error', ORDER_BODY_UNREADABLE_COPY, {
+      reason: 'invalid',
+      field: 'placerUserId',
+    });
+  }
   try {
-    return submissionJson(await new OrderRequestsService(ctx).submissionStatus(key));
+    return submissionJson(
+      await new OrderRequestsService(ctx).submissionStatus(key, {
+        placerUserId: placer.placerUserId,
+      }),
+    );
   } catch (e) {
     return submissionError(e, ctx.organizationId, 'api.v1.orders.submission_status');
   }

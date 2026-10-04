@@ -173,6 +173,14 @@ export function orderRecordedRefusalError(
   }
 }
 
+/** The call was sent from a page opened in another organization than the
+ *  session's (a workspace switch in another tab): refused before any gate or
+ *  key work, so it is never settled. `message` is the create's or the settle
+ *  calls' sentence; clients word it from the reason (core). */
+export function orderOrganizationChangedError(message: string): ServiceError {
+  return refusal('conflict', message, { reason: 'organization_changed' });
+}
+
 /** The key was withdrawn ("Don't send it"): it can never place. Final. */
 export function orderSubmissionWithdrawnError(): ServiceError {
   return refusal('conflict', ORDER_WITHDRAWN_COPY, {

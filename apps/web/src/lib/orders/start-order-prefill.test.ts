@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  hasOrderPrefill,
   ORDER_PREFILL_KEY,
   partitionPrefillAgainstCatalog,
   resolveStartOrder,
@@ -114,6 +115,18 @@ describe('sessionStorage handoff', () => {
     expect(takeOrderPrefill('wh1')).toBeNull(); // mismatch
     expect(store.has(ORDER_PREFILL_KEY)).toBe(true); // still there
     expect(takeOrderPrefill('wh2')).toEqual({ warehouseId: 'wh2', itemIds: ['x'] });
+  });
+
+  it('hasOrderPrefill reads without clearing, for the matching warehouse only (review round 1)', () => {
+    expect(hasOrderPrefill('wh1')).toBe(false);
+    writeOrderPrefill({ warehouseId: 'wh1', itemIds: ['a'] });
+    expect(hasOrderPrefill('wh1')).toBe(true);
+    expect(hasOrderPrefill('wh2')).toBe(false);
+    expect(store.has(ORDER_PREFILL_KEY)).toBe(true);
+    writeOrderPrefill({ warehouseId: 'wh1', itemIds: [] });
+    expect(hasOrderPrefill('wh1')).toBe(false);
+    store.set(ORDER_PREFILL_KEY, '{not json');
+    expect(hasOrderPrefill('wh1')).toBe(false);
   });
 
   it('clears a corrupt blob and returns null', () => {

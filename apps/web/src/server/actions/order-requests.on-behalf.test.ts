@@ -88,13 +88,13 @@ beforeEach(() => {
 describe('createOrderRequestAction: on behalf of someone else follows orders:approve', () => {
   it("a manager whose orders:approve was revoked: the database records on_behalf_not_permitted, answered final in core's words", async () => {
     const stub = arrange('manager', REFUSED, ['orders:request', 'orders:assign_delivery']);
-    const res = await createOrderRequestAction(onBehalf);
+    const res = await createOrderRequestAction(onBehalf, { organizationId: 'org-test' });
     expect(res).toEqual({
       ok: false,
       error: {
         code: 'forbidden',
         message: ORDER_ON_BEHALF_NOT_PERMITTED_COPY,
-        details: { reason: 'on_behalf_not_permitted', settled: true, replay: false },
+        details: { reason: 'on_behalf_not_permitted', settled: true, replay: false, organizationId: 'org-test' },
       },
     });
     // One call: the database decides (place_order_request step 7, pgTAP R5),
@@ -108,7 +108,7 @@ describe('createOrderRequestAction: on behalf of someone else follows orders:app
 
   it("a staff member granted orders:approve places an order on someone else's behalf", async () => {
     arrange('staff', { outcome: 'placed', replay: false, order: ORDER }, ['orders:request', 'orders:approve']);
-    const res = await createOrderRequestAction(onBehalf);
+    const res = await createOrderRequestAction(onBehalf, { organizationId: 'org-test' });
     expect(res).toMatchObject({
       ok: true,
       data: {
@@ -122,7 +122,7 @@ describe('createOrderRequestAction: on behalf of someone else follows orders:app
 
   it('plain staff are refused by the database too (no role-rank shortcut in the app)', async () => {
     const staff = arrange('staff', REFUSED);
-    expect(await createOrderRequestAction(onBehalf)).toMatchObject({
+    expect(await createOrderRequestAction(onBehalf, { organizationId: 'org-test' })).toMatchObject({
       ok: false,
       error: { code: 'forbidden', details: { reason: 'on_behalf_not_permitted' } },
     });

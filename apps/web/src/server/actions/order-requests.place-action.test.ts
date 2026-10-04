@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ORDER_BODY_UNREADABLE_COPY, ORDER_FAULT_COPY, type ModuleId } from '@stockpilot/core';
+import {
+  ORDER_BODY_UNREADABLE_COPY,
+  ORDER_FAULT_COPY,
+  ORDER_ORGANIZATION_CHANGED_COPY,
+  ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+  type ModuleId,
+} from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
 import { withContext } from '@/server/services/context';
@@ -117,7 +124,7 @@ describe('createOrderRequestAction', () => {
         error: null,
       },
     });
-    const res = await createOrderRequestAction(BODY);
+    const res = await createOrderRequestAction(BODY, { organizationId: ORG });
     expect(res).toMatchObject({
       ok: true,
       data: {
@@ -142,25 +149,68 @@ describe('createOrderRequestAction', () => {
         error: null,
       },
     });
-    const res = await createOrderRequestAction(BODY);
+    const res = await createOrderRequestAction(BODY, { organizationId: ORG });
     expect(res).toMatchObject({
       ok: false,
       error: {
         code: 'not_found',
-        details: { reason: 'warehouse_not_available', settled: true, replay: true },
+        details: {
+          reason: 'warehouse_not_available',
+          settled: true,
+          replay: true,
+          // The organization that answered, so a tab left in another one
+          // never takes it as its own (review round 1).
+          organizationId: ORG,
+        },
       },
     });
   });
 
   it("a fault is core's couldn't-be-confirmed sentence with reason 'failed', and is reported", async () => {
     arrange({ 'rpc:place_order_request': { data: null, error: { message: 'fetch failed' } } });
-    const res = await createOrderRequestAction(BODY);
+    const res = await createOrderRequestAction(BODY, { organizationId: ORG });
     expect(res).toEqual({
       ok: false,
-      error: { code: 'internal_error', message: ORDER_FAULT_COPY, details: { reason: 'failed' } },
+      error: {
+        code: 'internal_error',
+        message: ORDER_FAULT_COPY,
+        details: { reason: 'failed', organizationId: ORG },
+      },
     });
     expect(reportError).toHaveBeenCalledTimes(1);
     expect(vi.mocked(reportError).mock.calls[0]?.[1]).toEqual({ tag: 'actions.orders.create' });
+  });
+
+  it('a page opened in another organization (a workspace switch elsewhere) is refused organization_changed, never settled, nothing called', async () => {
+    const stub = arrange({
+      'rpc:place_order_request': {
+        data: { outcome: 'refused', replay: false, refusal: { reason: 'warehouse_not_available', detail: null } },
+        error: null,
+      },
+    });
+    const res = await createOrderRequestAction(BODY, { organizationId: 'org-q' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: ORDER_ORGANIZATION_CHANGED_COPY,
+        details: { reason: 'organization_changed', organizationId: ORG },
+      },
+    });
+    expect(stub.rpcCalls).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it('a keyed body that does not name its organization is refused, nothing called', async () => {
+    const stub = arrange({});
+    for (const scope of [undefined, {}, { organizationId: '' }] as const) {
+      const res = await createOrderRequestAction(BODY, scope as never);
+      expect(res).toMatchObject({
+        ok: false,
+        error: { code: 'validation_error', details: { reason: 'invalid', field: 'organizationId' } },
+      });
+    }
+    expect(stub.rpcCalls).toEqual([]);
   });
 
   it('the LEGACY branch (no key): a server-minted key, the session as placer, the instant passed through', async () => {
@@ -232,7 +282,7 @@ describe('the settle actions', () => {
     const stub = arrange({
       'rpc:order_submission_status': { data: { outcome: 'none' }, error: null },
     });
-    const res = await getOrderSubmissionAction({ warehouseId: WH, key: KEY });
+    const res = await getOrderSubmissionAction({ warehouseId: WH, key: KEY, organizationId: ORG, placerUserId: USER });
     expect(res).toEqual({ ok: true, data: { organizationId: ORG, outcome: 'none' } });
     expect(stub.rpcCalls).toEqual([
       { name: 'order_submission_status', args: { p_org: ORG, p_key: KEY } },
@@ -243,7 +293,7 @@ describe('the settle actions', () => {
     const stub = arrange({
       'rpc:withdraw_order_submission': { data: { outcome: 'placed', order: SUMMARY }, error: null },
     });
-    const res = await withdrawOrderSubmissionAction({ warehouseId: WH, key: KEY });
+    const res = await withdrawOrderSubmissionAction({ warehouseId: WH, key: KEY, organizationId: ORG, placerUserId: USER });
     expect(res).toMatchObject({
       ok: true,
       data: { organizationId: ORG, outcome: 'placed', order: { id: SUMMARY.id } },
@@ -256,11 +306,60 @@ describe('the settle actions', () => {
   it('a key that is not a uuid is refused before anything is called', async () => {
     const stub = arrange({});
     for (const action of [getOrderSubmissionAction, withdrawOrderSubmissionAction]) {
-      const res = await action({ warehouseId: WH, key: 'shortfall-1' });
+      const res = await action({ warehouseId: WH, key: 'shortfall-1', organizationId: ORG, placerUserId: USER });
       expect(res).toMatchObject({
         ok: false,
         error: { code: 'validation_error', details: { field: 'idempotencyKey' } },
       });
+    }
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('a tab left in another organization or under another account settles nothing: refused before the function, never settled (review round 1)', async () => {
+    const stub = arrange({
+      'rpc:order_submission_status': { data: { outcome: 'withdrawn' }, error: null },
+      'rpc:withdraw_order_submission': { data: { outcome: 'withdrawn' }, error: null },
+    });
+    for (const action of [getOrderSubmissionAction, withdrawOrderSubmissionAction]) {
+      const org = await action({ warehouseId: WH, key: KEY, organizationId: 'org-q', placerUserId: USER });
+      expect(org).toEqual({
+        ok: false,
+        error: {
+          code: 'conflict',
+          message: ORDER_ORGANIZATION_CHANGED_UNCONFIRMED_COPY,
+          details: { reason: 'organization_changed', organizationId: ORG },
+        },
+      });
+      const placer = await action({
+        warehouseId: WH,
+        key: KEY,
+        organizationId: ORG,
+        placerUserId: 'eeeeeeee-0000-4000-8000-0000000000bb',
+      });
+      expect(placer).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+          details: { reason: 'placer_mismatch', organizationId: ORG },
+        },
+      });
+    }
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('a settle call that does not name its organization and account is refused, nothing called', async () => {
+    const stub = arrange({});
+    for (const action of [getOrderSubmissionAction, withdrawOrderSubmissionAction]) {
+      for (const input of [
+        { warehouseId: WH, key: KEY },
+        { warehouseId: WH, key: KEY, organizationId: ORG },
+        { warehouseId: WH, key: KEY, placerUserId: USER },
+        { warehouseId: WH, key: KEY, organizationId: ORG, placerUserId: 'not-a-uuid' },
+      ]) {
+        const res = await action(input as never);
+        expect(res).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+      }
     }
     expect(stub.rpcCalls).toEqual([]);
   });
@@ -272,7 +371,7 @@ describe('the settle actions', () => {
         error: { message: 'lock timeout', code: '55P03' },
       },
     });
-    const res = await withdrawOrderSubmissionAction({ warehouseId: WH, key: KEY });
+    const res = await withdrawOrderSubmissionAction({ warehouseId: WH, key: KEY, organizationId: ORG, placerUserId: USER });
     expect(res).toMatchObject({
       ok: false,
       error: { code: 'conflict', details: { reason: 'busy', retryable: true } },

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 import {
+  ORDER_RATE_LIMITED_COPY,
   classifyOrderSubmitResult,
   ORDER_BUSY_COPY,
   ORDER_FAULT_COPY,
@@ -175,7 +176,7 @@ describe('POST /api/v1/orders', () => {
     expect(a).toEqual(b);
     expect(bearer.rpcCalls).toEqual(cookie.rpcCalls);
     const web = setup();
-    const viaAction = await createOrderRequestAction(BODY as never);
+    const viaAction = await createOrderRequestAction(BODY as never, { organizationId: ORG });
     expect(viaAction).toEqual({ ok: true, data: a });
     const surfaces = [bearer, web].map(
       (s) => (s.rpcCalls[0]?.args as { p_request: { surface: string } }).p_request.surface,
@@ -207,6 +208,12 @@ describe('POST /api/v1/orders', () => {
     expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
     expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith(`order-create:${USER}`, 20, 60_000);
     expect(stub.rpcCalls).toEqual([]);
+    // Core's words: a 429 on a resend is an unknown outcome, so it points at
+    // Check and finish, never "try again" (review round 1).
+    const json = (await res.json()) as { message: string; details: unknown };
+    expect(json.message).toBe(ORDER_RATE_LIMITED_COPY);
+    expect(json.message).not.toMatch(/try again/i);
+    expect(json.details).toEqual({ reason: 'rate_limited', organizationId: ORG });
   });
 
   it("400 for a body core refuses, in core's words with the reason, before anything is read", async () => {
@@ -237,7 +244,9 @@ describe('POST /api/v1/orders', () => {
       const res = await POST(req(bad));
       expect(res.status, JSON.stringify(details)).toBe(400);
       const json = (await res.json()) as { details: unknown; organizationId: string };
-      expect(json.details).toEqual(details);
+      // Every refusal names the organization that answered, in details too
+      // (the phone's ApiError forwards details only; review round 1).
+      expect(json.details).toEqual({ ...details, organizationId: ORG });
       expect(json.organizationId).toBe(ORG);
     }
     expect(stub.rpcCalls).toEqual([]);
@@ -326,20 +335,31 @@ describe('POST /api/v1/orders', () => {
     const res = await POST(req(BODY));
     expect(res.status).toBe(status);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
-    expect(await res.json()).toEqual({ organizationId: ORG, error, message, details });
+    expect(await res.json()).toEqual({
+      organizationId: ORG,
+      error,
+      message,
+      details: { ...details, organizationId: ORG },
+    });
   });
 
   it('the body is read before the service gates (plan 3.3): a bad body is 400 even with Orders off', async () => {
     const stub = setup(undefined, { modules: [] });
     const res = await POST(req({ ...BODY, lines: [{ itemId: ITEM, quantity: 0 }] }));
-    expect([res.status, (await res.json()).details]).toEqual([400, { reason: 'invalid', field: 'quantity' }]);
+    expect([res.status, (await res.json()).details]).toEqual([
+      400,
+      { reason: 'invalid', field: 'quantity', organizationId: ORG },
+    ]);
     expect(stub.rpcCalls).toEqual([]);
   });
 
   it('the service gates answer 403 with their reasons (module, permission), nothing called', async () => {
     const off = setup(undefined, { modules: [] });
     let res = await POST(req(BODY));
-    expect([res.status, (await res.json()).details]).toEqual([403, { reason: 'module_disabled' }]);
+    expect([res.status, (await res.json()).details]).toEqual([
+      403,
+      { reason: 'module_disabled', organizationId: ORG },
+    ]);
     expect(off.rpcCalls).toEqual([]);
     const noPerm = setup(undefined, { permissions: ['inventory:read'] });
     res = await POST(req(BODY));
@@ -347,7 +367,7 @@ describe('POST /api/v1/orders', () => {
     expect([res.status, json.message, json.details]).toEqual([
       403,
       ORDER_PERMISSION_COPY,
-      { reason: 'permission' },
+      { reason: 'permission', organizationId: ORG },
     ]);
     expect(noPerm.rpcCalls).toEqual([]);
   });

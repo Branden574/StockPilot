@@ -5,6 +5,8 @@ import {
   classifyOrderSettleResult,
   ORDER_BUSY_COPY,
   ORDER_FAULT_COPY,
+  ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+  ORDER_RATE_LIMITED_COPY,
   ORDER_SIGN_IN_COPY,
   type ModuleId,
 } from '@stockpilot/core';
@@ -62,20 +64,24 @@ function setup(
   return stub;
 }
 
-const get = (key = KEY) =>
+const get = (key = KEY, query = '') =>
   GET(
-    new NextRequest(`http://localhost/api/v1/orders/submissions/${key}`, {
+    new NextRequest(`http://localhost/api/v1/orders/submissions/${key}${query}`, {
       headers: { authorization: 'Bearer t' },
     }),
     {
       params: Promise.resolve({ key }),
     },
   );
-const withdraw = (key = KEY) =>
+const withdraw = (key = KEY, body?: string) =>
   WITHDRAW(
     new NextRequest(`http://localhost/api/v1/orders/submissions/${key}/withdraw`, {
       method: 'POST',
-      headers: { authorization: 'Bearer t' },
+      headers: {
+        authorization: 'Bearer t',
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body } : {}),
     }),
     { params: Promise.resolve({ key }) },
   );
@@ -158,7 +164,11 @@ describe('GET /api/v1/orders/submissions/{key}', () => {
     );
     const bad = await get('shortfall-1');
     expect(bad.status).toBe(400);
-    expect((await bad.json()).details).toEqual({ reason: 'invalid', field: 'idempotencyKey' });
+    expect((await bad.json()).details).toEqual({
+      reason: 'invalid',
+      field: 'idempotencyKey',
+      organizationId: ORG,
+    });
     expect(stub.rpcCalls).toEqual([]);
   });
 
@@ -176,7 +186,7 @@ describe('GET /api/v1/orders/submissions/{key}', () => {
         organizationId: ORG,
         error: 'forbidden',
         message: ORDER_SIGN_IN_COPY,
-        details: { reason: 'not_member' },
+        details: { reason: 'not_member', organizationId: ORG },
       },
     ]);
     setup({ 'rpc:order_submission_status': { data: null, error: { message: 'fetch failed' } } });
@@ -187,7 +197,7 @@ describe('GET /api/v1/orders/submissions/{key}', () => {
         organizationId: ORG,
         error: 'internal_error',
         message: ORDER_FAULT_COPY,
-        details: { reason: 'failed' },
+        details: { reason: 'failed', organizationId: ORG },
       },
     ]);
   });
@@ -245,7 +255,7 @@ describe('POST /api/v1/orders/submissions/{key}/withdraw', () => {
         organizationId: ORG,
         error: 'conflict',
         message: ORDER_BUSY_COPY,
-        details: { reason: 'busy', retryable: true },
+        details: { reason: 'busy', retryable: true, organizationId: ORG },
       },
     ]);
     expect(
@@ -260,5 +270,76 @@ describe('POST /api/v1/orders/submissions/{key}/withdraw', () => {
     const stub = setup({});
     expect((await withdraw('nope')).status).toBe(400);
     expect(stub.rpcCalls).toEqual([]);
+  });
+});
+
+describe('the account a settle call was sent for (review round 1)', () => {
+  const OTHER = 'eeeeeeee-0000-4000-8000-0000000000bb';
+  const answers = {
+    'rpc:order_submission_status': { data: { outcome: 'withdrawn' }, error: null },
+    'rpc:withdraw_order_submission': { data: { outcome: 'withdrawn' }, error: null },
+  };
+
+  it('GET with another account as placerUserId is 403 placer_mismatch, never settled, nothing called', async () => {
+    const stub = setup(answers);
+    const res = await get(KEY, `?placerUserId=${OTHER}`);
+    const json = await res.json();
+    expect([res.status, json.error, json.message, json.details]).toEqual([
+      403,
+      'forbidden',
+      ORDER_PLACER_MISMATCH_UNCONFIRMED_COPY,
+      { reason: 'placer_mismatch', organizationId: ORG },
+    ]);
+    expect(stub.rpcCalls).toEqual([]);
+    expect(
+      classifyOrderSettleResult({ ok: false, error: { status: 403, code: json.error, details: json.details } }),
+    ).toMatchObject({ final: false, reason: 'placer_mismatch' });
+  });
+
+  it('POST withdraw with another account as placerUserId is 403 placer_mismatch, nothing called', async () => {
+    const stub = setup(answers);
+    const res = await withdraw(KEY, JSON.stringify({ placerUserId: OTHER }));
+    expect([res.status, (await res.json()).details]).toEqual([
+      403,
+      { reason: 'placer_mismatch', organizationId: ORG },
+    ]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('a placerUserId that is not a uuid, or a body that is not JSON, is 400 before anything is called', async () => {
+    const stub = setup(answers);
+    let res = await get(KEY, '?placerUserId=nope');
+    expect([res.status, (await res.json()).details]).toEqual([
+      400,
+      { reason: 'invalid', field: 'placerUserId', organizationId: ORG },
+    ]);
+    res = await withdraw(KEY, JSON.stringify({ placerUserId: 'nope' }));
+    expect([res.status, (await res.json()).details]).toEqual([
+      400,
+      { reason: 'invalid', field: 'placerUserId', organizationId: ORG },
+    ]);
+    res = await withdraw(KEY, 'not json');
+    expect([res.status, (await res.json()).details]).toEqual([
+      400,
+      { reason: 'invalid', field: 'body', organizationId: ORG },
+    ]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('the signed-in account (any case), or none named, is answered as before', async () => {
+    const stub = setup(answers);
+    expect((await get(KEY, `?placerUserId=${USER.toUpperCase()}`)).status).toBe(200);
+    expect((await withdraw(KEY, JSON.stringify({ placerUserId: USER }))).status).toBe(200);
+    expect((await withdraw(KEY, '')).status).toBe(200);
+    expect((await withdraw(KEY)).status).toBe(200);
+    expect(stub.rpcCalls).toHaveLength(4);
+  });
+
+  it("429 says core's words and names the organization", async () => {
+    setup(answers);
+    vi.mocked(checkRateLimit).mockResolvedValueOnce({ allowed: false, resetAt: Date.now() + 1000 } as never);
+    const json = await (await get()).json();
+    expect(json.message).toBe(ORDER_RATE_LIMITED_COPY);
+    expect(json.details).toEqual({ reason: 'rate_limited', organizationId: ORG });
   });
 });

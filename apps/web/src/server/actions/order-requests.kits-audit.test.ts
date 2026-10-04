@@ -98,7 +98,7 @@ beforeEach(() => {
 describe('createOrderRequestAction: kits are recorded in the audit entry only', () => {
   it('writes the kits and their counts into order_request.created (with the surface)', async () => {
     const stub = arrange();
-    const res = await createOrderRequestAction(body({ kits: [{ bundleId: BUNDLE, count: 3 }] }));
+    const res = await createOrderRequestAction(body({ kits: [{ bundleId: BUNDLE, count: 3 }] }), { organizationId: 'org-test' });
     expect(res.ok).toBe(true);
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -119,12 +119,12 @@ describe('createOrderRequestAction: kits are recorded in the audit entry only', 
 
   it('an order without kits (and an older page that sends none) records no kits key', async () => {
     arrange();
-    await createOrderRequestAction(body());
+    await createOrderRequestAction(body(), { organizationId: 'org-test' });
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ after: { lineCount: 2, warehouseId: WH, surface: 'web' } }),
       expect.anything(),
     );
-    await createOrderRequestAction(body({ kits: [] }));
+    await createOrderRequestAction(body({ kits: [] }), { organizationId: 'org-test' });
     expect(audit).toHaveBeenLastCalledWith(
       expect.objectContaining({ after: { lineCount: 2, warehouseId: WH, surface: 'web' } }),
       expect.anything(),
@@ -138,7 +138,7 @@ describe('createOrderRequestAction: kits are recorded in the audit entry only', 
       [{ bundleId: BUNDLE, count: 0 }],
       [{ bundleId: BUNDLE, count: 1.5 }],
     ]) {
-      const res = await createOrderRequestAction(body({ kits }));
+      const res = await createOrderRequestAction(body({ kits }), { organizationId: 'org-test' });
       expect(res).toMatchObject({ ok: false, error: { code: 'validation_error', details: { reason: 'invalid', field: 'kits' } } });
     }
     expect(stub.rpcCalls).toEqual([]);
