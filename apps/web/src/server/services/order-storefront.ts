@@ -31,8 +31,9 @@ import { readFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordere
 import { loadOrderKits } from '@/server/loaders/orders-kits';
 import {
   CATALOG_ROW_CEILING,
-  loadCatalogItems,
+  loadCatalogItemsCached,
   loadChartersForWarehouse,
+  resolveCatalogScopeKey,
 } from '@/server/loaders/orders-new-catalog';
 import { loadPhoneThumbMapCached } from '@/server/loaders/orders-phone-catalog';
 import {
@@ -65,7 +66,10 @@ import {
  *
  * THE WAREHOUSE PERIMETER comes before any admin-client read: the caller's
  * non-archived warehouses, read with their own client (warehouses_select), and
- * a warehouse id not in that list is refused as warehouse_not_available.
+ * a warehouse id not in that list is refused as warehouse_not_available. The
+ * id is compared in its stored, lower-case form (a phone may send capitals).
+ * Only the caller's own scope read (their client, their helpers) starts
+ * alongside it; every shared read waits for it.
  * assertWarehouseAccess alone is not enough (it returns early for full-access
  * roles), and the sites loader reads with the admin client by warehouse only,
  * so a foreign id would answer another organization's site names and
@@ -75,12 +79,27 @@ import {
  * cost); the phone's item is built field by field and never spread from it.
  */
 
-/** ORDERS_PHONE_STOREFRONT=off (any case, spaces ignored) turns the phone's
+/**
+ * The values of ORDERS_PHONE_STOREFRONT that turn the phone's storefront reads
+ * off (any case, spaces ignored). `off` is the documented one; the others are
+ * how a person in a hurry writes it during an incident, and a switch that
+ * silently stays on for `false` would fail exactly then.
+ */
+const PHONE_STOREFRONT_OFF_VALUES: ReadonlySet<string> = new Set([
+  'off',
+  'false',
+  '0',
+  'no',
+  'disabled',
+]);
+
+/** ORDERS_PHONE_STOREFRONT=off (or false, 0, no, disabled) turns the phone's
  *  storefront reads off; anything else, or nothing, leaves them on. Read on
  *  every call; changing it needs a redeploy, which is still faster than an
  *  over-the-air update and its adoption. */
 export function phoneStorefrontEnabled(): boolean {
-  return (process.env.ORDERS_PHONE_STOREFRONT ?? '').trim().toLowerCase() !== 'off';
+  const value = (process.env.ORDERS_PHONE_STOREFRONT ?? '').trim().toLowerCase();
+  return !PHONE_STOREFRONT_OFF_VALUES.has(value);
 }
 
 /** The answer when the switch is off (the catalog and photo routes). */
@@ -230,12 +249,14 @@ export class OrderStorefrontService {
   }
 
   /**
-   * The perimeter: `warehouseId` must be one of the caller's warehouses, read
-   * with their own client. Anything else (another organization's, one their
-   * assignments hide, an archived one, not an id at all) is the same refusal,
-   * before any admin-client read.
+   * The warehouse id the request names, in the form the database stores it
+   * (lower case), or the refusal when it names none. A UUID is the same id in
+   * any case, and the phone may send capitals (Swift's UUID prints them, and
+   * withApiContext compares X-Organization-Id without case for that reason).
+   * Everything downstream compares warehouse ids as text (the perimeter, the
+   * scope key, the kits), so the id is made canonical once, here.
    */
-  private async perimeter(warehouseId: string | null): Promise<string> {
+  private requestedWarehouse(warehouseId: string | null): string {
     if (!warehouseId) {
       throw new ServiceError('validation_error', ORDER_WAREHOUSE_NOT_AVAILABLE_COPY, {
         reason: 'invalid',
@@ -243,9 +264,21 @@ export class OrderStorefrontService {
       });
     }
     if (!UUID_RE.test(warehouseId)) throw this.warehouseNotAvailable();
+    return warehouseId.toLowerCase();
+  }
+
+  /**
+   * The perimeter: `warehouseId` (canonical, from requestedWarehouse) must be
+   * one of the caller's warehouses, read with their own client. Anything else
+   * (another organization's, one their assignments hide, an archived one) is
+   * the same refusal, before any admin-client read. Answers the id as the
+   * caller's own list holds it.
+   */
+  private async perimeter(warehouseId: string): Promise<string> {
     const warehouses = await this.readWarehouses();
-    if (!warehouses.some((w) => w.id === warehouseId)) throw this.warehouseNotAvailable();
-    return warehouseId;
+    const hit = warehouses.find((w) => w.id === warehouseId);
+    if (!hit) throw this.warehouseNotAvailable();
+    return hit.id;
   }
 
   private warehouseNotAvailable(): ServiceError {
@@ -254,10 +287,32 @@ export class OrderStorefrontService {
     });
   }
 
-  /** The caller's catalog at a warehouse inside the perimeter: the scope key
-   *  from their own client, the rows from the shared 60 s cache. */
-  private loadCallerCatalog(warehouseId: string): Promise<CatalogItem[]> {
-    return loadCatalogItems(this.ctx, warehouseId, this.ctx.supabase);
+  /**
+   * The warehouse the request names, through the perimeter, and the caller's
+   * catalog there: the scope key from their own client, the rows from the
+   * shared 60 s cache (what loadCatalogItems does, in two steps).
+   *
+   * The scope key STARTS WITH the perimeter read instead of after it: it is
+   * the caller's own five helper reads through ctx.supabase (none takes the
+   * warehouse id; the id only picks from their answers), so it reads nothing
+   * the caller could not, and a staff member or viewer saves a round trip.
+   * Every shared read (the cached rows here; sites, kits and photos in the
+   * callers) still waits for the perimeter. A refused warehouse leaves the
+   * scope read to finish on its own, its failure swallowed, never unhandled.
+   */
+  private async scopedCatalog(
+    warehouseIdParam: string | null,
+  ): Promise<{ warehouseId: string; catalog: Promise<CatalogItem[]> }> {
+    const requested = this.requestedWarehouse(warehouseIdParam);
+    const scopeKey = resolveCatalogScopeKey(this.ctx, requested, this.ctx.supabase);
+    scopeKey.catch(() => {});
+    const warehouseId = await this.perimeter(requested);
+    return {
+      warehouseId,
+      catalog: scopeKey.then((key) =>
+        loadCatalogItemsCached(this.ctx.organizationId, warehouseId, key),
+      ),
+    };
   }
 
   /** GET /api/v1/orders/storefront. */
@@ -359,12 +414,11 @@ export class OrderStorefrontService {
   /** GET /api/v1/orders/catalog?warehouseId=. */
   async catalog(warehouseIdParam: string | null): Promise<OrderCatalogAnswer> {
     this.gateWithSwitch();
-    const warehouseId = await this.perimeter(warehouseIdParam);
+    const { warehouseId, catalog: catalogPromise } = await this.scopedCatalog(warehouseIdParam);
 
     // Everything starts at once; only the catalog is awaited first. Each
     // optional part is wrapped so it can never reject (no unhandled rejection
     // when the catalog fails first).
-    const catalogPromise = this.loadCallerCatalog(warehouseId);
     // Kits and Frequently ordered match against the caller's own catalog, so
     // neither can name an item the caller is not given.
     const forParts = catalogPromise.then((items) => ({ items }));
@@ -437,9 +491,9 @@ export class OrderStorefrontService {
    *  warehouse's (cached); only the caller's catalog ids leave the server. */
   async photos(warehouseIdParam: string | null): Promise<OrderCatalogPhotosAnswer> {
     this.gateWithSwitch();
-    const warehouseId = await this.perimeter(warehouseIdParam);
+    const { warehouseId, catalog } = await this.scopedCatalog(warehouseIdParam);
     const [items, map] = await Promise.all([
-      this.loadCallerCatalog(warehouseId),
+      catalog,
       loadPhoneThumbMapCached(this.ctx.organizationId, warehouseId),
     ]);
     const photos: Record<string, string> = {};

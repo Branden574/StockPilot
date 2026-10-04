@@ -15,20 +15,27 @@ import {
 import type { CatalogItem } from '@/components/orders/v2/types';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
-const { loadCatalogItemsMock, chartersMock, kitsMock, frequentMock, photoMapMock } = vi.hoisted(
-  () => ({
-    loadCatalogItemsMock: vi.fn(),
-    chartersMock: vi.fn(),
-    kitsMock: vi.fn(),
-    frequentMock: vi.fn(),
-    photoMapMock: vi.fn(),
-  }),
-);
+const {
+  resolveScopeKeyMock,
+  catalogCachedMock,
+  chartersMock,
+  kitsMock,
+  frequentMock,
+  photoMapMock,
+} = vi.hoisted(() => ({
+  resolveScopeKeyMock: vi.fn(),
+  catalogCachedMock: vi.fn(),
+  chartersMock: vi.fn(),
+  kitsMock: vi.fn(),
+  frequentMock: vi.fn(),
+  photoMapMock: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
   CATALOG_ROW_CEILING: 10_000,
-  loadCatalogItems: loadCatalogItemsMock,
+  resolveCatalogScopeKey: resolveScopeKeyMock,
+  loadCatalogItemsCached: catalogCachedMock,
   loadChartersForWarehouse: chartersMock,
 }));
 vi.mock('@/server/loaders/orders-kits', () => ({ loadOrderKits: kitsMock }));
@@ -149,7 +156,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  loadCatalogItemsMock.mockResolvedValue(CATALOG);
+  resolveScopeKeyMock.mockResolvedValue('ALL');
+  catalogCachedMock.mockResolvedValue(CATALOG);
   chartersMock.mockResolvedValue([
     { id: CHARTER, name: 'North', code: 'N', address: { line1: '1 Main St', city: 'Fresno' } },
   ]);
@@ -185,7 +193,8 @@ describe('the gates come first, in core words, before anything is read', () => {
       expect(stub.fromCalls).toEqual([]);
       expect(stub.rpcCalls).toEqual([]);
     }
-    expect(loadCatalogItemsMock).not.toHaveBeenCalled();
+    expect(resolveScopeKeyMock).not.toHaveBeenCalled();
+    expect(catalogCachedMock).not.toHaveBeenCalled();
     expect(chartersMock).not.toHaveBeenCalled();
     expect(photoMapMock).not.toHaveBeenCalled();
   });
@@ -216,10 +225,24 @@ describe('the kill switch (ORDERS_PHONE_STOREFRONT=off) covers the three reads',
       });
       expect(stub.fromCalls).toEqual([]);
     }
-    expect(loadCatalogItemsMock).not.toHaveBeenCalled();
+    expect(resolveScopeKeyMock).not.toHaveBeenCalled();
+    expect(catalogCachedMock).not.toHaveBeenCalled();
   });
 
-  it.each(['', 'on', 'true', 'disabled'])('any other value (%j) leaves them on', async (value) => {
+  it.each(['false', '0', 'no', 'disabled', ' FALSE ', 'Disabled'])(
+    'the usual ways of writing off (%j) turn them off too: an incident is no time for a spelling rule',
+    async (value) => {
+      vi.stubEnv('ORDERS_PHONE_STOREFRONT', value);
+      const { stub, service } = ctxFor();
+      await expect(service.storefront()).resolves.toMatchObject({ enabled: false });
+      await expect(ctxFor().service.catalog(WH)).rejects.toMatchObject({
+        details: { reason: 'turned_off' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+    },
+  );
+
+  it.each(['', 'on', 'true', '1', 'yes', 'offline'])('any other value (%j) leaves them on', async (value) => {
     vi.stubEnv('ORDERS_PHONE_STOREFRONT', value);
     const { service } = ctxFor();
     await expect(service.storefront()).resolves.toMatchObject({ enabled: true });
@@ -380,7 +403,9 @@ describe('the warehouse perimeter (catalog and photos)', () => {
         details: { reason: 'warehouse_not_available' },
       });
     }
-    expect(loadCatalogItemsMock).not.toHaveBeenCalled();
+    // The caller's own scope read may have started alongside the perimeter
+    // (their client only); nothing shared is read.
+    expect(catalogCachedMock).not.toHaveBeenCalled();
     expect(chartersMock).not.toHaveBeenCalled();
     expect(kitsMock).not.toHaveBeenCalled();
     expect(frequentMock).not.toHaveBeenCalled();
@@ -394,13 +419,103 @@ describe('the warehouse perimeter (catalog and photos)', () => {
       details: { reason: 'invalid', field: 'warehouseId' },
     });
   });
+
+  it('an id in capitals (how Swift prints a UUID) is the same warehouse, answered and read in its stored form', async () => {
+    const upper = WH.toUpperCase();
+    expect(upper).not.toBe(WH);
+    for (const call of ['catalog', 'photos'] as const) {
+      const { ctx, service } = ctxFor({ role: 'viewer' });
+      const out = await service[call](upper);
+      expect(out.warehouseId).toBe(WH);
+      // Every read downstream gets the stored (lower case) id: the scope key
+      // and the kits compare warehouse ids as text.
+      expect(resolveScopeKeyMock).toHaveBeenLastCalledWith(ctx, WH, ctx.supabase);
+      expect(catalogCachedMock).toHaveBeenLastCalledWith(ORG, WH, 'ALL');
+    }
+    expect(chartersMock).toHaveBeenCalledWith(WH);
+    expect(kitsMock.mock.calls[0]![1]).toBe(WH);
+    expect(frequentMock.mock.calls[0]![0]).toBe(WH);
+    expect(photoMapMock).toHaveBeenCalledWith(ORG, WH);
+  });
+});
+
+/** A caller-client query that answers only once `gate` opens. */
+function heldUntil<T extends object>(gate: Promise<void>, chain: T): T {
+  const handler: ProxyHandler<T> = {
+    get(target, prop) {
+      const value = (target as Record<PropertyKey, unknown>)[prop];
+      if (prop === 'then') {
+        return (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
+          gate.then(() => (value as (r: unknown, j: unknown) => void).call(target, resolve, reject), reject);
+      }
+      return typeof value === 'function'
+        ? (...args: unknown[]) => new Proxy((value as (...a: unknown[]) => T).apply(target, args), handler)
+        : value;
+    },
+  };
+  return new Proxy(chain, handler);
+}
+
+describe('the scope key starts with the perimeter; every shared read waits for it', () => {
+  it.each(['catalog', 'photos'] as const)('%s: the caller-scoped key does not wait a round trip', async (call) => {
+    const { ctx, service } = ctxFor({ role: 'viewer' });
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => (open = r));
+    const from = ctx.supabase.from.bind(ctx.supabase);
+    (ctx.supabase as { from: unknown }).from = (table: string) =>
+      table === 'warehouses' ? heldUntil(gate, from(table) as object) : from(table);
+
+    const answer = service[call](WH);
+    await new Promise((r) => setImmediate(r));
+    // The perimeter has not answered: the caller's own scope read is already
+    // under way (their client, their helpers, no admin read) ...
+    expect(resolveScopeKeyMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
+    // ... and nothing shared has been read.
+    expect(catalogCachedMock).not.toHaveBeenCalled();
+    expect(chartersMock).not.toHaveBeenCalled();
+    expect(kitsMock).not.toHaveBeenCalled();
+    expect(frequentMock).not.toHaveBeenCalled();
+    expect(photoMapMock).not.toHaveBeenCalled();
+
+    open();
+    await expect(answer).resolves.toMatchObject({ warehouseId: WH });
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
+  });
+
+  it('a refused warehouse whose scope read also failed is the refusal, with no stray rejection', async () => {
+    const stray = vi.fn();
+    process.on('unhandledRejection', stray);
+    try {
+      resolveScopeKeyMock.mockRejectedValue(new Error('[orders-new] catalog scope: x failed'));
+      for (const call of ['catalog', 'photos'] as const) {
+        await expect(ctxFor({ role: 'viewer' }).service[call](WH_FOREIGN)).rejects.toMatchObject({
+          details: { reason: 'warehouse_not_available' },
+        });
+      }
+      await new Promise((r) => setTimeout(r, 10));
+      expect(stray).not.toHaveBeenCalled();
+      expect(catalogCachedMock).not.toHaveBeenCalled();
+      expect(chartersMock).not.toHaveBeenCalled();
+      expect(photoMapMock).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', stray);
+    }
+  });
+
+  it("a failed scope read inside the perimeter is the catalog's fault", async () => {
+    resolveScopeKeyMock.mockRejectedValue(new Error('[orders-new] catalog scope: x failed'));
+    await expect(ctxFor({ role: 'viewer' }).service.catalog(WH)).rejects.toThrow(/catalog scope/);
+    await expect(ctxFor({ role: 'viewer' }).service.photos(WH)).rejects.toThrow(/catalog scope/);
+    expect(catalogCachedMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET catalog', () => {
   it("the caller's own catalog, trimmed: no price, no photo, names in aisles and charters", async () => {
     const { ctx, service } = ctxFor({ role: 'viewer' });
     const out = await service.catalog(WH);
-    expect(loadCatalogItemsMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
+    expect(resolveScopeKeyMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
     expect(out).toEqual({
       organizationId: ORG,
       warehouseId: WH,
@@ -433,7 +548,7 @@ describe('GET catalog', () => {
   });
 
   it('truncated at the 10,000-row ceiling', async () => {
-    loadCatalogItemsMock.mockResolvedValue(Array.from({ length: 10_000 }, (_, i) => item(`i${i}`)));
+    catalogCachedMock.mockResolvedValue(Array.from({ length: 10_000 }, (_, i) => item(`i${i}`)));
     const out = await ctxFor().service.catalog(WH);
     expect(out.truncated).toBe(true);
     expect(out.items).toHaveLength(10_000);
@@ -462,7 +577,7 @@ describe('GET catalog', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     hang();
     let releaseCatalog: (v: CatalogItem[]) => void = () => {};
-    loadCatalogItemsMock.mockReturnValue(new Promise((r) => (releaseCatalog = r)));
+    catalogCachedMock.mockReturnValue(new Promise((r) => (releaseCatalog = r)));
     const answer = ctxFor().service.catalog(WH);
     // The clock only starts once the catalog is in: a slow catalog does not
     // eat the parts' time.
@@ -491,7 +606,7 @@ describe('GET catalog', () => {
     expect(out.kits).toEqual({ status: 'error' });
     expect(out.frequentlyOrdered).toEqual({ status: 'error' });
 
-    loadCatalogItemsMock.mockRejectedValue(new Error('[orders-new] catalog items read failed: x'));
+    catalogCachedMock.mockRejectedValue(new Error('[orders-new] catalog items read failed: x'));
     await expect(ctxFor().service.catalog(WH)).rejects.toThrow(/catalog items read failed/);
   });
 });
@@ -501,7 +616,8 @@ describe('GET catalog/photos', () => {
     const { ctx, service } = ctxFor();
     const out = await service.photos(WH);
     expect(photoMapMock).toHaveBeenCalledWith(ORG, WH);
-    expect(loadCatalogItemsMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
+    expect(resolveScopeKeyMock).toHaveBeenCalledWith(ctx, WH, ctx.supabase);
+    expect(catalogCachedMock).toHaveBeenCalledWith(ORG, WH, 'ALL');
     expect(out).toEqual({
       organizationId: ORG,
       warehouseId: WH,

@@ -14,7 +14,11 @@ import {
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { loadCatalogItems, loadChartersForWarehouse } from '@/server/loaders/orders-new-catalog';
+import {
+  loadCatalogItemsCached,
+  loadChartersForWarehouse,
+  resolveCatalogScopeKey,
+} from '@/server/loaders/orders-new-catalog';
 import { loadOrderKits } from '@/server/loaders/orders-kits';
 import { readFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import { SF_ORG, SF_WH, SF_WH_FOREIGN, sfContext, sfItem } from '@/test/order-storefront-route-fixture';
@@ -25,7 +29,8 @@ vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
   CATALOG_ROW_CEILING: 10_000,
-  loadCatalogItems: vi.fn(),
+  resolveCatalogScopeKey: vi.fn(),
+  loadCatalogItemsCached: vi.fn(),
   loadChartersForWarehouse: vi.fn(),
 }));
 vi.mock('@/server/loaders/orders-kits', () => ({ loadOrderKits: vi.fn() }));
@@ -50,7 +55,8 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, resetAt: 0 } as never);
-  vi.mocked(loadCatalogItems).mockResolvedValue([sfItem('i1', { price: 77.5 })]);
+  vi.mocked(resolveCatalogScopeKey).mockResolvedValue('ALL');
+  vi.mocked(loadCatalogItemsCached).mockResolvedValue([sfItem('i1', { price: 77.5 })]);
   vi.mocked(loadChartersForWarehouse).mockResolvedValue([]);
   vi.mocked(loadOrderKits).mockResolvedValue({ status: 'ok', kits: [] });
   vi.mocked(readFrequentlyOrdered).mockResolvedValue({ status: 'ok', entries: [] });
@@ -79,7 +85,8 @@ describe('GET /api/v1/orders/catalog', () => {
     expect(res.headers.get('retry-after')).toBe('5');
     expect(body).toMatchObject({ organizationId: SF_ORG, message: ORDER_STOREFRONT_RATE_LIMITED_COPY });
     expect(stub.fromCalls).toEqual([]);
-    expect(loadCatalogItems).not.toHaveBeenCalled();
+    expect(resolveCatalogScopeKey).not.toHaveBeenCalled();
+    expect(loadCatalogItemsCached).not.toHaveBeenCalled();
   });
 
   it('module and permission gates: 403 before any read', async () => {
@@ -98,7 +105,8 @@ describe('GET /api/v1/orders/catalog', () => {
       });
       expect(stub.fromCalls).toEqual([]);
     }
-    expect(loadCatalogItems).not.toHaveBeenCalled();
+    expect(resolveCatalogScopeKey).not.toHaveBeenCalled();
+    expect(loadCatalogItemsCached).not.toHaveBeenCalled();
   });
 
   it('a foreign warehouse: 404 warehouse_not_available, and the sites loader never runs', async () => {
@@ -112,7 +120,7 @@ describe('GET /api/v1/orders/catalog', () => {
       details: { reason: 'warehouse_not_available', organizationId: SF_ORG },
     });
     expect(loadChartersForWarehouse).not.toHaveBeenCalled();
-    expect(loadCatalogItems).not.toHaveBeenCalled();
+    expect(loadCatalogItemsCached).not.toHaveBeenCalled();
   });
 
   it('no warehouse id: 400 validation_error', async () => {
@@ -157,11 +165,12 @@ describe('GET /api/v1/orders/catalog', () => {
       message: ORDER_PHONE_TURNED_OFF_COPY,
       details: { reason: 'turned_off', organizationId: SF_ORG },
     });
-    expect(loadCatalogItems).not.toHaveBeenCalled();
+    expect(resolveCatalogScopeKey).not.toHaveBeenCalled();
+    expect(loadCatalogItemsCached).not.toHaveBeenCalled();
   });
 
   it('a failed catalog: 500 with the read-failed sentence, reported under api.v1.orders.catalog', async () => {
-    vi.mocked(loadCatalogItems).mockRejectedValue(new Error('[orders-new] catalog items read failed: x'));
+    vi.mocked(loadCatalogItemsCached).mockRejectedValue(new Error('[orders-new] catalog items read failed: x'));
     const { ctx } = sfContext();
     const { res, body } = await call(ctx);
     expect(res.status).toBe(500);

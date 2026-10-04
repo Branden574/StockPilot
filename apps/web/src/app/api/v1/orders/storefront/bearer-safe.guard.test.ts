@@ -371,6 +371,27 @@ describe('Security invariant: the phone storefront reads never use the cookie cl
     expect(cookieClientMock).not.toHaveBeenCalled();
   });
 
+  it('an id in capitals (how Swift prints a UUID): the same rows, kit and photos, under the stored id', async () => {
+    // The scope key and the kits compare warehouse ids as text, so a capital
+    // id that got past the perimeter would have scoped this viewer to nothing.
+    const upper = WH.toUpperCase();
+    asCaller('viewer');
+    const catalog = await get(GET_CATALOG, `/api/v1/orders/catalog?warehouseId=${upper}`);
+    expect(catalog.status).toBe(200);
+    expect(catalog.body.warehouseId).toBe(WH);
+    expect(catalog.body.items.map((i: { id: string }) => i.id).sort()).toEqual([...VISIBLE].sort());
+    expect(catalog.body.kits).toEqual({
+      status: 'ok',
+      kits: [expect.objectContaining({ bundleId: BUNDLE })],
+    });
+    asCaller('viewer');
+    const photos = await get(GET_PHOTOS, `/api/v1/orders/catalog/photos?warehouseId=${upper}`);
+    expect(photos.status).toBe(200);
+    expect(photos.body.warehouseId).toBe(WH);
+    expect(Object.keys(photos.body.photos).sort()).toEqual([...VISIBLE].sort());
+    expect(cookieClientMock).not.toHaveBeenCalled();
+  });
+
   it('control: a manager sees every orderable row and asks no scope helper', async () => {
     const caller = asCaller('manager');
     const { body } = await get(GET_CATALOG, `/api/v1/orders/catalog?warehouseId=${WH}`);

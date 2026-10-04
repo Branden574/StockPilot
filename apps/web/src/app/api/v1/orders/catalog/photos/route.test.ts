@@ -11,7 +11,7 @@ import {
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { loadCatalogItems } from '@/server/loaders/orders-new-catalog';
+import { loadCatalogItemsCached, resolveCatalogScopeKey } from '@/server/loaders/orders-new-catalog';
 import { loadPhoneThumbMapCached } from '@/server/loaders/orders-phone-catalog';
 import { SF_ORG, SF_WH, SF_WH_FOREIGN, sfContext, sfItem } from '@/test/order-storefront-route-fixture';
 
@@ -21,7 +21,8 @@ vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
   CATALOG_ROW_CEILING: 10_000,
-  loadCatalogItems: vi.fn(),
+  resolveCatalogScopeKey: vi.fn(),
+  loadCatalogItemsCached: vi.fn(),
   loadChartersForWarehouse: vi.fn(),
 }));
 vi.mock('@/server/loaders/orders-kits', () => ({ loadOrderKits: vi.fn() }));
@@ -39,7 +40,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
   vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, resetAt: 0 } as never);
-  vi.mocked(loadCatalogItems).mockResolvedValue([sfItem('mine')]);
+  vi.mocked(resolveCatalogScopeKey).mockResolvedValue('ALL');
+  vi.mocked(loadCatalogItemsCached).mockResolvedValue([sfItem('mine')]);
   vi.mocked(loadPhoneThumbMapCached).mockResolvedValue({
     signedAt: '2026-10-04T00:00:00.000Z',
     photos: { mine: 'https://signed/mine', hidden: 'https://signed/hidden' },
@@ -85,6 +87,7 @@ describe('GET /api/v1/orders/catalog/photos', () => {
     expect(res.status).toBe(404);
     expect(body.message).toBe(ORDER_WAREHOUSE_NOT_AVAILABLE_COPY);
     expect(loadPhoneThumbMapCached).not.toHaveBeenCalled();
+    expect(loadCatalogItemsCached).not.toHaveBeenCalled();
   });
 
   it('the kill switch: 503 turned_off', async () => {
