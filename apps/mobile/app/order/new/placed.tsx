@@ -223,7 +223,7 @@ export default function OrderPlaced() {
           <Mono size={13} color={c.ink}>
             {successReference(placed, warehouseName)}
           </Mono>
-          <Mono size={11.5} color={c.ink4} upper tracking={0.12}>
+          <Mono size={11.5} color={c.ink3} upper tracking={0.12}>
             {orderStatusLabel(order.status)}
           </Mono>
           {successSentences(placed).map((line) => (
@@ -264,24 +264,24 @@ export default function OrderPlaced() {
                 variant="ghost"
                 onPress={() => setPreviewOpen((v) => !v)}
               />
-              <Mono size={10.5} color={c.ink4}>
+              <Mono size={10.5} color={c.ink3}>
                 {recipientsHelperText(prepared.draft)}
               </Mono>
-              <Mono size={10.5} color={c.ink4}>
+              <Mono size={10.5} color={c.ink3}>
                 {HONESTY_NOTICE}
               </Mono>
               {shouldShowCondensedNotice(prepared) ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Mono size={10.5} color={c.ink3}>
                   {condensedNoticeText(prepared.draft)}
                 </Mono>
               ) : null}
               {!prepared.linkFits ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Mono size={10.5} color={c.ink3}>
                   {OVERSIZED_MESSAGE}
                 </Mono>
               ) : null}
               {shouldWarnDuplicateDrafts(draftCount) ? (
-                <Mono size={10.5} color={c.ink4}>
+                <Mono size={10.5} color={c.ink3}>
                   {DUPLICATE_WARNING}
                 </Mono>
               ) : null}
@@ -297,7 +297,7 @@ export default function OrderPlaced() {
               ) : null}
               {previewOpen ? (
                 <View style={[styles.preview, { borderColor: c.hair, backgroundColor: c.card }]}>
-                  <Mono size={11} color={c.ink4} upper tracking={0.12}>
+                  <Mono size={11} color={c.ink3} upper tracking={0.12}>
                     {SUCCESS_EMAIL_SUBJECT_LABEL_COPY}
                   </Mono>
                   <Body size={14} color={c.ink}>

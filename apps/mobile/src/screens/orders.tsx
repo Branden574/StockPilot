@@ -26,7 +26,7 @@ import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourTarget } from '@/lib/tour-targets';
@@ -55,6 +55,7 @@ interface OrderRow {
  * navigator — the drawer rendering is unchanged.
  */
 export default function OrdersScreen() {
+  const { c } = useTheme();
   const { orgId } = useOrg();
   const { user } = useAuth();
   const { role } = useRole();
@@ -188,7 +189,7 @@ export default function OrdersScreen() {
             {/* A read again that failed keeps the rows shown and says so
                 (PO-4 review). */}
             {reloadNote ? (
-              <Body size={13} color={ACCENT.warn} accessibilityRole="alert">
+              <Body size={13} color={c.warnText} accessibilityRole="alert">
                 {reloadNote}
               </Body>
             ) : null}

@@ -25,6 +25,11 @@ interface Palette {
   ink4: string;
   ink5: string;
   hair: string;
+  /** Warning words (PO-4 review): ACCENT.warn is 3.2-3.6:1 on the light
+   *  surfaces, below WCAG AA's 4.5:1 for small text. */
+  warnText: string;
+  /** Refusal words: ACCENT.crit is 3.0-3.3:1 on the dark surfaces. */
+  critText: string;
 }
 
 const LIGHT: Palette = {
@@ -37,6 +42,8 @@ const LIGHT: Palette = {
   ink4: '#8b8c83',
   ink5: '#b5b5ac',
   hair: '#e7e5dd',
+  warnText: '#8a5a12',
+  critText: '#b03a3a',
 };
 
 const DARK: Palette = {
@@ -49,6 +56,8 @@ const DARK: Palette = {
   ink4: '#6b6a63',
   ink5: '#42423d',
   hair: '#1f201b',
+  warnText: '#d29a3c',
+  critText: '#e06c6c',
 };
 
 export const ACCENT = {

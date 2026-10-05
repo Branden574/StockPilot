@@ -27,7 +27,7 @@ import {
 } from '@/lib/order-storefront/a11y';
 import { itemRowStacked } from '@/lib/order-storefront/layout';
 import { earmarkLabel } from '@/lib/order-storefront/setup';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -134,11 +134,11 @@ export const ItemRow = React.memo(function ItemRow({
           <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
             {item.name}
           </Body>
-          <Mono size={11.5} color={out ? ACCENT.crit : status === 'low' ? ACCENT.warn : c.ink4}>
+          <Mono size={11.5} color={out ? c.critText : status === 'low' ? c.warnText : c.ink3}>
             {[item.sku, availabilityLabel(status, available, 'long')].filter(Boolean).join(' · ')}
           </Mono>
           {rank ? (
-            <Mono size={11} color={c.ink4}>
+            <Mono size={11} color={c.ink3}>
               {frequentlyOrderedTagCopy(rank.place, rank.orders)}
             </Mono>
           ) : null}
@@ -150,7 +150,7 @@ export const ItemRow = React.memo(function ItemRow({
             </View>
           ) : null}
           {notOrderable ? (
-            <Body size={12.5} color={ACCENT.crit}>
+            <Body size={12.5} color={c.critText}>
               {refusal ?? STOREFRONT_LINE_NOT_ORDERABLE_COPY}
             </Body>
           ) : null}

@@ -271,7 +271,7 @@ describe('accessibility and Dynamic Type', () => {
     expect(checkout).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName, warehouseName: warehouse?.name ?? null }) : null;');
     expect(catalog).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName: outcomeItemName, warehouseName: outcomeWarehouse }) : null;');
     for (const src of [checkout, catalog, state]) {
-      expect(src).toMatch(/\{outcome \? \(\s*<Body size=\{1[34](\.5)?\} color=\{outcome\.tone === 'calm' \? c\.ink : ACCENT\.crit\} accessibilityRole="alert">\s*\{outcome\.text\}/);
+      expect(src).toMatch(/\{outcome \? \(\s*<Body size=\{1[34](\.5)?\} color=\{outcome\.tone === 'calm' \? c\.ink : c\.critText\} accessibilityRole="alert">\s*\{outcome\.text\}/);
     }
     for (const src of [checkout, catalog]) {
       expect(src).toContain('if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);');
@@ -580,7 +580,7 @@ describe('the someone-new form refuses first what the server would refuse (desk 
     expect(sheets).toContain('const check = someoneNewCheck(name, email);');
     // The hint always says why it is dimmed (PO-4 review).
     expect(sheets).toMatch(/label=\{CHECKOUT_USE_PERSON_COPY\}\s+variant="primary"\s+disabled=\{!check\.canUse\}\s+hint=\{check\.hint\}/);
-    expect(sheets).toMatch(/\{check\.message \? \(\s*<Body size=\{13\} color=\{ACCENT\.crit\}>\s*\{check\.message\}/);
+    expect(sheets).toMatch(/\{check\.message \? \(\s*<Body size=\{13\} color=\{c\.critText\}>\s*\{check\.message\}/);
     expect(sheets).not.toContain("disabled={name.trim() === '' || email.trim() === ''}");
   });
 });
@@ -888,7 +888,7 @@ describe('dimmed controls say why, and what can be tapped looks it (PO-4 review)
   const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
   it('(a) an out-of-stock usual says so on screen and in its hint', () => {
     expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false, out: availableOf(item) < 1 })}');
-    expect(cartPanel).toMatch(/availableOf\(item\) < 1 \? \(\s*<Mono size=\{11\.5\} color=\{ACCENT\.crit\}>\s*\{AVAILABILITY_LABELS\.out\}/);
+    expect(cartPanel).toMatch(/availableOf\(item\) < 1 \? \(\s*<Mono size=\{11\.5\} color=\{c\.critText\}>\s*\{AVAILABILITY_LABELS\.out\}/);
     expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable, out })}');
   });
   it('(b) Ship from with one warehouse is a row, not a dimmed button', () => {
@@ -920,6 +920,20 @@ describe('the Orders list says when a read again failed over the rows shown (PO-
   it('the tested note, above the list', () => {
     const orders = codeOnly(read('src/screens/orders.tsx'));
     expect(orders).toContain('const reloadNote = ordersListReloadNote(failed, rows.length);');
-    expect(orders).toMatch(/\{reloadNote \? \(\s*<Body size=\{13\} color=\{ACCENT\.warn\} accessibilityRole="alert">\s*\{reloadNote\}/);
+    expect(orders).toMatch(/\{reloadNote \? \(\s*<Body size=\{13\} color=\{c\.warnText\} accessibilityRole="alert">\s*\{reloadNote\}/);
+  });
+});
+
+// PO-4 review: storefront text in ink4, ACCENT.warn or ACCENT.crit (below AA
+// in a mode). Mutation caught: any of them back as a text colour.
+describe('storefront text uses colours that meet AA (PO-4 review)', () => {
+  it('no Body or Mono in the storefront is coloured ink4, ACCENT.warn or ACCENT.crit', () => {
+    for (const file of [...STOREFRONT_FILES.filter((f) => !f.endsWith('needed-by-picker.tsx'))]) {
+      const src = codeOnly(readFileSync(file, 'utf8'));
+      for (const m of src.matchAll(/<(Body|Mono)\b[^>]*>/g)) {
+        expect(m[0], `${path.relative(ROOT, file)}: ${m[0].slice(0, 80)}`).not.toMatch(/c\.ink4|ACCENT\.warn|ACCENT\.crit/);
+      }
+    }
+    expect(controls).not.toContain("variant === 'destructive' ? ACCENT.crit");
   });
 });

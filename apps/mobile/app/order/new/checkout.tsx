@@ -63,7 +63,7 @@ import { createNotesDraft, type NotesDraft } from '@/lib/order-storefront/notes-
 import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -280,12 +280,12 @@ export default function Checkout() {
               onSeeOrders={() => router.push('/orders' as Href)}
             />
             {outcome ? (
-              <Body size={14} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+              <Body size={14} color={outcome.tone === 'calm' ? c.ink : c.critText} accessibilityRole="alert">
                 {outcome.text}
               </Body>
             ) : null}
             {snap.notice ? (
-              <Body size={13.5} color={ACCENT.warn} accessibilityRole="alert">
+              <Body size={13.5} color={c.warnText} accessibilityRole="alert">
                 {snap.notice}
               </Body>
             ) : null}

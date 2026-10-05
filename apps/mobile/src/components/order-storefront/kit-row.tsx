@@ -25,7 +25,7 @@ import {
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
 import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -82,11 +82,11 @@ export const KitRow = React.memo(function KitRow({
         <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
           {kit.name}
         </Body>
-        <Mono size={11.5} color={out ? ACCENT.crit : c.ink4}>
+        <Mono size={11.5} color={out ? c.critText : c.ink3}>
           {kitsAvailableCopy(avail.kits)}
         </Mono>
         {limiting && avail.limiting ? (
-          <Mono size={11} color={c.ink4}>
+          <Mono size={11} color={c.ink3}>
             {kitLimitedByCopy(limiting.name, avail.limiting.available)}
           </Mono>
         ) : null}

@@ -34,7 +34,7 @@ import {
 } from '@/lib/order-storefront/a11y';
 import { cartLineView, checkoutTotals } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction, Stepper } from './controls';
@@ -91,7 +91,7 @@ export function CartPanel({
         </Body>
         {usuals.length > 0 ? (
           <View style={{ gap: 8 }}>
-            <Mono size={11} color={c.ink4} upper tracking={0.12}>
+            <Mono size={11} color={c.ink3} upper tracking={0.12}>
               {CART_SUGGESTIONS_LABEL_COPY}
             </Mono>
             {usuals.map((item) => (
@@ -103,7 +103,7 @@ export function CartPanel({
                   {/* A usual that is out of stock says so, beside its dimmed
                       Add (PO-4 review). */}
                   {availableOf(item) < 1 ? (
-                    <Mono size={11.5} color={ACCENT.crit}>
+                    <Mono size={11.5} color={c.critText}>
                       {AVAILABILITY_LABELS.out}
                     </Mono>
                   ) : null}
@@ -157,12 +157,12 @@ export function CartPanel({
                 {view.title}
               </Body>
               {item?.sku ? (
-                <Mono size={11} color={c.ink4}>
+                <Mono size={11} color={c.ink3}>
                   {item.sku}
                 </Mono>
               ) : null}
               {note ? (
-                <Body size={12.5} color={note.kind === 'at_max' ? c.ink3 : ACCENT.crit}>
+                <Body size={12.5} color={note.kind === 'at_max' ? c.ink3 : c.critText}>
                   {note.kind === 'not_orderable' ? STOREFRONT_LINE_NOT_ORDERABLE_COPY : note.message}
                 </Body>
               ) : null}

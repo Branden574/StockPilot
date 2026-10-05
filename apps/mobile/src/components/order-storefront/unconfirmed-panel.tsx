@@ -17,7 +17,7 @@ import { Card } from '@/components/ui/card';
 import { createPanelAnnouncer } from '@/lib/order-storefront/a11y';
 import { showUnconfirmedPanel } from '@/lib/order-storefront/submit';
 import { Body } from '@/components/ui/text';
-import { ACCENT, FONT } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction } from './controls';
@@ -78,7 +78,7 @@ export function UnconfirmedPanel({
   return (
     <Card padding={14}>
       <View style={{ gap: 10 }}>
-        <Body size={15.5} color={ACCENT.warn} accessibilityRole="header" style={{ fontFamily: FONT.display }}>
+        <Body size={15.5} color={c.warnText} accessibilityRole="header" style={{ fontFamily: FONT.display }}>
           {ORDER_UNCONFIRMED_TITLE_COPY}
         </Body>
         {message ? (

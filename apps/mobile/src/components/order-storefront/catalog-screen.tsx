@@ -101,7 +101,7 @@ import {
 } from '@/lib/order-storefront/sections';
 import { clockLabel } from '@/lib/order-storefront/setup';
 import { placedOnStorefrontFocus } from '@/lib/order-storefront/success';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import { CartBar, CartPanel } from './cart-panel';
@@ -472,12 +472,12 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         onSeeOrders={() => router.push('/orders' as Href)}
       />
       {outcome ? (
-        <Body size={13.5} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+        <Body size={13.5} color={outcome.tone === 'calm' ? c.ink : c.critText} accessibilityRole="alert">
           {outcome.text}
         </Body>
       ) : null}
       {snap.notice ? (
-        <Body size={13.5} color={ACCENT.warn} accessibilityRole="alert">
+        <Body size={13.5} color={c.warnText} accessibilityRole="alert">
           {snap.notice}
         </Body>
       ) : null}
@@ -487,18 +487,18 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         </Body>
       ) : null}
       {snap.catalog.readAt !== null && (offline || snap.catalog.fromDevice) ? (
-        <Mono size={11.5} color={c.ink4}>
+        <Mono size={11.5} color={c.ink3}>
           {storefrontUpdatedAtCopy(clockLabel(snap.catalog.readAt))}
         </Mono>
       ) : null}
       {snap.catalog.status === 'loading' && !answer ? <ActivityIndicator color={c.ink} /> : null}
       {snap.catalog.message ? (
-        <Body size={13} color={ACCENT.warn}>
+        <Body size={13} color={c.warnText}>
           {snap.catalog.message}
         </Body>
       ) : null}
       {answer?.truncated ? (
-        <Body size={13} color={ACCENT.warn}>
+        <Body size={13} color={c.warnText}>
           {STOREFRONT_TRUNCATED_COPY}
         </Body>
       ) : null}
@@ -781,7 +781,7 @@ function LinkRow({ title, detail, onPress }: { title: string; detail?: string; o
           {title}
         </Body>
         {detail ? (
-          <Mono size={11.5} color={c.ink4}>
+          <Mono size={11.5} color={c.ink3}>
             {detail}
           </Mono>
         ) : null}

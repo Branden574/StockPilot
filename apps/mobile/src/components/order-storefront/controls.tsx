@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { Body, Mono } from '@/components/ui/text';
 import { MIN_TAP, stepperCountWidth } from '@/lib/order-storefront/layout';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -35,7 +35,7 @@ export function SmallAction({
   const { c } = useTheme();
   const off = disabled || busy;
   const bg = variant === 'primary' ? c.ink : variant === 'outline' ? c.card : 'transparent';
-  const fg = variant === 'primary' ? c.paper : variant === 'destructive' ? ACCENT.crit : c.ink;
+  const fg = variant === 'primary' ? c.paper : variant === 'destructive' ? c.critText : c.ink;
   return (
     <Pressable
       onPress={off ? undefined : onPress}
@@ -255,7 +255,7 @@ export function SetupRow({
         accessibilityLabel={`${label}: ${value}${detail ? `, ${detail}` : ''}`}
         style={[styles.setup, { borderColor: c.hair, backgroundColor: c.card }]}
       >
-        <Mono size={11} color={c.ink4} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
+        <Mono size={11} color={c.ink3} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
           {label}
         </Mono>
         <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
@@ -284,7 +284,7 @@ export function SetupRow({
       ]}
     >
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <Mono size={11} color={c.ink4} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
+        <Mono size={11} color={c.ink3} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
           {label}
         </Mono>
         <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>

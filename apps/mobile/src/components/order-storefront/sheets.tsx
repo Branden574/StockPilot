@@ -71,7 +71,7 @@ import {
   siteLabel,
 } from '@/lib/order-storefront/setup';
 import { pickQtyFieldWidthFor, PICK_QTY_MAX_FONT_SIZE_MULTIPLIER } from '@/lib/pick-qty-field';
-import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
@@ -181,7 +181,7 @@ export function QuickViewSheet({
       ) : null}
       {facts.map(([label, value]) => (
         <View key={label} accessible accessibilityLabel={`${label}: ${value}`} style={{ gap: 2 }}>
-          <Mono size={11} color={c.ink4} upper tracking={0.12}>
+          <Mono size={11} color={c.ink3} upper tracking={0.12}>
             {label}
           </Mono>
           <Body size={15} color={c.ink}>
@@ -214,7 +214,7 @@ export function KitDetailsSheet({
   const { c } = useTheme();
   return (
     <StorefrontSheet visible title={kit.name} onClose={onClose}>
-      <Mono size={11} color={c.ink4} upper tracking={0.12}>
+      <Mono size={11} color={c.ink3} upper tracking={0.12}>
         {KIT_EACH_KIT_HOLDS_COPY}
       </Mono>
       {kit.components.map((comp) => {
@@ -261,7 +261,7 @@ export function SortFilterSheet({
       onClose={onClose}
       footer={<SmallAction label={STOREFRONT_SHOW_RESULTS_COPY} variant="primary" onPress={onClose} />}
     >
-      <Mono size={11} color={c.ink4} upper tracking={0.12}>
+      <Mono size={11} color={c.ink3} upper tracking={0.12}>
         {STOREFRONT_SORT_LABEL_COPY}
       </Mono>
       <View accessibilityRole="radiogroup" accessibilityLabel={STOREFRONT_SORT_LABEL_COPY} style={{ gap: 8 }}>
@@ -269,7 +269,7 @@ export function SortFilterSheet({
           <RadioRow key={o.id} label={o.label} checked={sort === o.id} onPress={() => onSort(o.id)} />
         ))}
       </View>
-      <Mono size={11} color={c.ink4} upper tracking={0.12}>
+      <Mono size={11} color={c.ink3} upper tracking={0.12}>
         {STOREFRONT_AVAILABILITY_LABEL_COPY}
       </Mono>
       <View style={{ gap: 8 }}>
@@ -395,7 +395,7 @@ export function RequesterSheet({
         // email was typed, and the part showing took no tap (simulator walk D6).
         <>
           {check.message ? (
-            <Body size={13} color={ACCENT.crit}>
+            <Body size={13} color={c.critText}>
               {check.message}
             </Body>
           ) : null}
@@ -410,7 +410,7 @@ export function RequesterSheet({
       }
     >
       <RadioRow label={STOREFRONT_MYSELF_COPY} checked={current === null} onPress={() => onPick(null)} />
-      <Mono size={11} color={c.ink4} upper tracking={0.12}>
+      <Mono size={11} color={c.ink3} upper tracking={0.12}>
         {CHECKOUT_RECENT_COPY}
       </Mono>
       {requesters?.status === 'error' ? (
@@ -448,7 +448,7 @@ export function RequesterSheet({
         </>
       )}
       <View onLayout={kb.onNoteBlockLayout} style={{ gap: 12 }}>
-        <Mono size={11} color={c.ink4} upper tracking={0.12}>
+        <Mono size={11} color={c.ink3} upper tracking={0.12}>
           {STOREFRONT_SOMEONE_NEW_COPY}
         </Mono>
         <FieldLabel>{CHECKOUT_NAME_LABEL_COPY}</FieldLabel>

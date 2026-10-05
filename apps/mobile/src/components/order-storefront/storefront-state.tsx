@@ -6,7 +6,6 @@ import { Body, Display } from '@/components/ui/text';
 import type { StorefrontOutcome } from '@/lib/order-storefront/outcome';
 import type { SetupState } from '@/lib/order-storefront/session';
 import { STOREFRONT_GUTTER } from '@/lib/order-storefront/layout';
-import { ACCENT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -54,14 +53,14 @@ export function StorefrontState({
         </Display>
         {panel ?? null}
         {outcome ? (
-          <Body size={14} color={outcome.tone === 'calm' ? c.ink : ACCENT.crit} accessibilityRole="alert">
+          <Body size={14} color={outcome.tone === 'calm' ? c.ink : c.critText} accessibilityRole="alert">
             {outcome.text}
           </Body>
         ) : null}
         {setup.status === 'loading' ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 24 }} />
         ) : (
-          <Body size={15} color={setup.status === 'failed' ? ACCENT.warn : c.ink} accessibilityRole="alert">
+          <Body size={15} color={setup.status === 'failed' ? c.warnText : c.ink} accessibilityRole="alert">
             {setup.message}
           </Body>
         )}
