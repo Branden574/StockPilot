@@ -124,6 +124,22 @@ interface SummaryLineItem {
   qty: number;
 }
 
+/**
+ * What an approval actually held (0395, L86): approve_partial holds only what
+ * is free, so an approved order can be partly held. Per item, the units still
+ * owed (requested minus fulfilled) against the order's active holds. Read for
+ * the approved email only; null when the holds could not be read, and the
+ * email then says neither "every unit" nor "part".
+ */
+interface HeldSummary {
+  /** Units still owed across the order. */
+  owedUnits: number;
+  /** Units held for it, never more than owed per item. */
+  heldUnits: number;
+  /** Some item is held for less than the order owes for it. */
+  partly: boolean;
+}
+
 interface SummaryData {
   lineCount: number;
   unitCount: number;
@@ -135,6 +151,8 @@ interface SummaryData {
   /** Resolved approver profile (approved_by), for "by {approver}" + Contact approver. */
   approverName: string | null;
   approverEmail: string | null;
+  /** The approved email's held picture (see HeldSummary); null otherwise. */
+  held: HeldSummary | null;
 }
 
 const DEGRADED_SUMMARY: SummaryData = {
@@ -146,9 +164,66 @@ const DEGRADED_SUMMARY: SummaryData = {
   items: [],
   approverName: null,
   approverEmail: null,
+  held: null,
 };
 
-async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
+/**
+ * Which of the approved email's four wordings applies (0395, L86): the holds
+ * could not be read, every unit is held, part is held, or nothing is held
+ * (approve_partial approves even when nothing is free; the database's
+ * notification then says "Nothing is held yet; your order is waiting for
+ * stock.").
+ */
+export type HeldState = 'unknown' | 'all' | 'part' | 'none';
+
+export function heldState(held: HeldSummary | null): HeldState {
+  if (held === null) return 'unknown';
+  if (!held.partly) return 'all';
+  return held.heldUnits > 0 ? 'part' : 'none';
+}
+
+/**
+ * The subject line, from the registry, for both the sent email and the HTML
+ * title. 0395 (L86): an approval that held nothing says it is waiting for
+ * stock, not that packing has started.
+ */
+function emailSubject(kind: OrderRequestEmailKind, held: HeldSummary | null, orderId: string): string {
+  if (kind === 'approved' && heldState(held) === 'none') return `${orderId} is approved — waiting for stock`;
+  return esEmailById(REGISTRY_ID_BY_KIND[kind]).subject({ orderId });
+}
+
+/** The approved email's sentence when nothing is held yet (HTML and text). */
+const NOTHING_HELD_YET = 'Nothing is reserved yet; your order is waiting for stock.';
+
+/** HeldSummary from an order's lines and its active holds (pure). */
+export function heldSummary(
+  lines: ReadonlyArray<{ item_id?: string | null; quantity_requested?: number | null; quantity_fulfilled?: number | null }>,
+  holds: ReadonlyArray<{ item_id?: string | null; quantity?: number | null }>,
+): HeldSummary {
+  const owed = new Map<string, number>();
+  for (const l of lines) {
+    const key = String(l.item_id ?? '');
+    const left = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+    owed.set(key, (owed.get(key) ?? 0) + left);
+  }
+  const held = new Map<string, number>();
+  for (const h of holds) {
+    const key = String(h.item_id ?? '');
+    held.set(key, (held.get(key) ?? 0) + (Number(h.quantity) || 0));
+  }
+  let owedUnits = 0;
+  let heldUnits = 0;
+  let partly = false;
+  for (const [item, units] of owed) {
+    const h = Math.min(units, held.get(item) ?? 0);
+    owedUnits += units;
+    heldUnits += h;
+    if (h < units) partly = true;
+  }
+  return { owedUnits, heldUnits, partly };
+}
+
+async function fetchSummary(row: OrderRequestRow, kind: OrderRequestEmailKind): Promise<SummaryData> {
   let admin: ReturnType<typeof createAdminClient> | null = null;
   try {
     admin = createAdminClient();
@@ -159,11 +234,11 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
     return DEGRADED_SUMMARY;
   }
 
-  const [linesRes, whRes, charterRes, approverRes] = await Promise.all([
+  const [linesRes, whRes, charterRes, approverRes, holdsRes] = await Promise.all([
     admin
       .from('order_request_lines')
       .select(
-        'quantity_picked, quantity_requested, item:inventory_items!item_id(name, sku)',
+        'item_id, quantity_picked, quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)',
       )
       .eq('order_request_id', row.id),
     admin
@@ -185,12 +260,22 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
           .eq('id', row.approved_by)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // The approved email says whether every unit is held (0395, L86).
+    kind === 'approved'
+      ? admin
+          .from('stock_reservations')
+          .select('item_id, quantity')
+          .eq('order_request_id', row.id)
+          .is('released_at', null)
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   type ItemRef = { name?: string | null; sku?: string | null };
   type LineRow = {
+    item_id?: string | null;
     quantity_picked: number | null;
     quantity_requested: number | null;
+    quantity_fulfilled?: number | null;
     item: ItemRef | ItemRef[] | null;
   };
   const lines = (linesRes.data ?? []) as LineRow[];
@@ -243,6 +328,11 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
     items,
     approverName: approver?.full_name ?? null,
     approverEmail: approver?.email ?? null,
+    // Unknown (null) when either read failed: never claim every unit, or part.
+    held:
+      kind === 'approved' && !linesRes.error && !holdsRes.error
+        ? heldSummary(lines, (holdsRes.data ?? []) as Array<{ item_id?: string | null; quantity?: number | null }>)
+        : null,
   };
 }
 
@@ -459,15 +549,33 @@ function buildView(a: TemplateArgs): OrderEmailView {
   const lines = a.summary.lineCount;
 
   // The order number the app shows (L91); WO- only when there is none.
-  const subject = def.subject({ orderId: displayId });
+  // emailSubject: the approval that held nothing has its own subject.
+  const subject = emailSubject(a.kind, a.summary.held, displayId);
   const preheader = (() => {
     switch (a.kind) {
       case 'confirm_request':
         return def.preheader({ warehouse: wh, window: '24 hours' });
       case 'submitted':
         return def.preheader({ submittedAt: submittedOn, warehouse: wh });
-      case 'approved':
-        return def.preheader({ units, lines, shipDate, warehouse: wh });
+      case 'approved': {
+        // 0395 (L86): the registry preheader says "Reserved N units across M
+        // lines. Ships <date> from <warehouse>." only when every unit is held.
+        // Part held: how many of how many, and that the rest waits (every
+        // line was counted, and the date is the approval's, not a shipment's;
+        // small fixes slice 2 review). Nothing held: says so. Holds not read:
+        // claims no reservation at all.
+        const held = a.summary.held;
+        switch (heldState(held)) {
+          case 'none':
+            return `Approved. ${NOTHING_HELD_YET}`;
+          case 'part':
+            return `Reserved ${held!.heldUnits} of ${held!.owedUnits} units. The rest is waiting for stock.`;
+          case 'unknown':
+            return `Approved. ${units} units across ${lines} lines from ${wh}.`;
+          case 'all':
+            return def.preheader({ units, lines, shipDate, warehouse: wh });
+        }
+      }
       case 'denied':
         return def.preheader({
           reasonSummary: a.reasonText
@@ -554,6 +662,26 @@ function strongHtml(s: string): string {
   return `<strong style="font-weight:600;color:${ES_LIGHT.ink}">${s}</strong>`;
 }
 
+/**
+ * The approved email's opening sentence (0395, L86), for both renderers:
+ * every unit held, part held, nothing held yet, or (the holds could not be
+ * read) neither claim. `greet` is hi(...) already escaped for the renderer it
+ * is used in; the numbers are plain integers.
+ */
+function approvedProse(greet: string, held: HeldSummary | null): string {
+  const next = 'You’ll get another note the moment it leaves the dock.';
+  switch (heldState(held)) {
+    case 'unknown':
+      return `${greet}your request is approved. ${next}`;
+    case 'none':
+      return `${greet}your request is approved. ${NOTHING_HELD_YET} ${next}`;
+    case 'part':
+      return `${greet}we’ve reserved ${held!.heldUnits} of ${held!.owedUnits} units on this request; the rest is waiting for stock. ${next}`;
+    case 'all':
+      return `${greet}we’ve reserved every unit on this request. ${next}`;
+  }
+}
+
 /** "Hi Jane — …" / "Hi — …" (missing-name fallback per the design prompt). */
 function hi(firstName: string, escaped: boolean): string {
   const name = escaped ? escapeHtml(firstName) : firstName;
@@ -571,9 +699,18 @@ interface KindBody {
 function orderGrid(
   a: TemplateArgs,
   v: OrderEmailView,
-  opts: { reserved?: boolean; approvedSpan?: boolean } = {},
+  opts: {
+    reserved?: boolean;
+    approvedSpan?: boolean;
+    heldOf?: { held: number; owed: number };
+    /** Under a Reserved cell, "Ships from <warehouse>" instead of "Ships
+     *  <date>": the date is the approval's, so only a fully held order may
+     *  read as shipping on it (small fixes slice 2 review). */
+    noShipDate?: boolean;
+  } = {},
 ): string {
-  const contents = `${v.units} units <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
+  const units = opts.heldOf ? `${opts.heldOf.held} of ${opts.heldOf.owed} units` : `${v.units} units`;
+  const contents = `${units} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
   const rows: [DetailCell, DetailCell][] = [
     [
       {
@@ -590,9 +727,10 @@ function orderGrid(
       {
         label: opts.reserved ? 'Reserved' : 'Contents',
         valueHtml: contents,
-        subHtml: opts.reserved
-          ? `Ships ${escapeHtml(v.shipDate)}`
-          : `Ships from ${escapeHtml(v.wh)}`,
+        subHtml:
+          opts.reserved && !opts.noShipDate
+            ? `Ships ${escapeHtml(v.shipDate)}`
+            : `Ships from ${escapeHtml(v.wh)}`,
         strong: true,
       },
     ],
@@ -765,17 +903,47 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'approved': {
-      const prose = `${hi(v.firstName, true)}we’ve reserved every unit on this request. You’ll get another note the moment it leaves the dock.`;
+      // 0395 (L86): approve_partial holds only what is free, which may be
+      // nothing, so the prose says every unit only when every unit is held,
+      // and nothing is said to be packing when nothing is held.
+      const held = a.summary.held;
+      const state = heldState(held);
+      const prose = approvedProse(hi(v.firstName, true), held);
       return {
         rows: [
-          introSection(v, `${escapeHtml(v.displayId)} is approved.`, 'Packing starts now.', prose),
+          introSection(
+            v,
+            `${escapeHtml(v.displayId)} is approved.`,
+            state === 'none' ? 'It is waiting for stock.' : 'Packing starts now.',
+            prose,
+          ),
           motionSection(
             'settle',
-            'Three cartons settle into a row — your order is reserved and moving to packing',
+            state === 'none'
+              ? 'Three cartons settle into a row — your order is approved and waiting for stock'
+              : state === 'part'
+                ? 'Three cartons settle into a row — part of your order is reserved and moving to packing'
+                : state === 'unknown'
+                  ? 'Three cartons settle into a row — your order is approved'
+                  : 'Three cartons settle into a row — your order is reserved and moving to packing',
           ),
           section(PAD_TIMELINE, orderTimeline({ steps: stagePath(1), tone: 'ok' })),
           ...(showGrid
-            ? [section(PAD_BLOCK, orderGrid(a, v, { reserved: true, approvedSpan: true }))]
+            ? [
+                section(
+                  PAD_BLOCK,
+                  orderGrid(a, v, {
+                    // Nothing held, or the holds not read: the cell reads
+                    // Contents, not "Reserved 8 units".
+                    reserved: state === 'all' || state === 'part',
+                    approvedSpan: true,
+                    // Part held: "3 of 5 units", and no ship date promised.
+                    ...(state === 'part' && held
+                      ? { heldOf: { held: held.heldUnits, owed: held.owedUnits }, noShipDate: true }
+                      : {}),
+                  }),
+                ),
+              ]
             : []),
           ctaSection(v.def.cta, a.trackUrl, { withLinkFallback: true }),
         ],
@@ -1074,11 +1242,18 @@ function renderHtml(a: TemplateArgs): string {
 function renderText(a: TemplateArgs): string {
   const v = buildView(a);
   const greet = hi(v.firstName, false);
+  // 0395 (L86): an approval that held nothing is waiting for stock, as the
+  // HTML says: nothing is packing and no ship date is promised. Nor is one
+  // promised when only part is held or the holds could not be read (the date
+  // is the approval's; small fixes slice 2 review), as the HTML's grid.
+  const approvedState = a.kind === 'approved' ? heldState(a.summary.held) : null;
+  const nothingHeld = approvedState === 'none';
+  const promisesShipDate = approvedState === null || approvedState === 'all';
 
   const heads: Record<OrderRequestEmailKind, [string, string]> = {
     confirm_request: [`One tap sends ${v.displayId}.`, 'The warehouse hasn’t seen it yet.'],
     submitted: [`${v.displayId} received.`, 'We’re on it.'],
-    approved: [`${v.displayId} is approved.`, 'Packing starts now.'],
+    approved: [`${v.displayId} is approved.`, nothingHeld ? 'It is waiting for stock.' : 'Packing starts now.'],
     denied: [`${v.displayId} wasn’t approved.`, 'Here’s exactly why.'],
     in_transit: [`${v.displayId} is on the way.`, `Estimated ${v.eta}.`],
     completed: [`${v.displayId} was delivered.`, 'Signed, received, done.'],
@@ -1091,7 +1266,7 @@ function renderText(a: TemplateArgs): string {
       ? `${greet}you drafted this request for pickup from ${v.wh}. Confirm it and the warehouse gets to work. Until then, nothing is reserved and nothing ships.`
       : `${greet}you drafted this request for ${v.dest}. Confirm it and ${v.wh} gets to work. Until then, nothing is reserved and nothing ships.`,
     submitted: `${greet}your request landed at ${v.wh} on ${v.submittedOn}. Next step: a quick approval, usually within one business day.`,
-    approved: `${greet}we’ve reserved every unit on this request. You’ll get another note the moment it leaves the dock.`,
+    approved: approvedProse(greet, a.summary.held),
     denied: `${greet}your request didn’t clear approval this time. Nothing was reserved or shipped. The reason is below, unedited.`,
     in_transit: `${greet}your order left ${v.wh} at ${v.dispatchedAt} and is headed to ${v.dest}.`,
     completed: `${greet}the full order arrived at ${v.dest} and was signed for by ${v.signer} at ${v.signedAt}. Thanks for routing it through StockPilot.`,
@@ -1122,7 +1297,15 @@ function renderText(a: TemplateArgs): string {
     lines.push('— Order summary —');
     lines.push(`Order: ${v.displayId}${v.displayId !== v.woId ? ` (${v.woId})` : ''}`);
     lines.push(`Contents: ${v.units} units across ${v.lines} lines`);
-    if (a.summary.shipDate) lines.push(`Ships: ${a.summary.shipDate}`);
+    if (a.kind === 'approved') {
+      const state = heldState(a.summary.held);
+      if (state === 'part' && a.summary.held) {
+        lines.push(`Reserved: ${a.summary.held.heldUnits} of ${a.summary.held.owedUnits} units`);
+      } else if (state === 'none') {
+        lines.push('Reserved: nothing yet (waiting for stock)');
+      }
+    }
+    if (a.summary.shipDate && promisesShipDate) lines.push(`Ships: ${a.summary.shipDate}`);
     if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
     if (a.summary.shipTo) lines.push(`${v.isPickup ? 'Pickup' : 'To'}: ${a.summary.shipTo}`);
     if (a.kind === 'approved' && v.approvedAt) {
@@ -1244,7 +1427,7 @@ export async function sendOrderRequestEmail(
     }
   }
 
-  const summary = await fetchSummary(request);
+  const summary = await fetchSummary(request, kind);
 
   const trackUrl =
     kind === 'confirm_request' && confirmationToken
@@ -1282,10 +1465,12 @@ export async function sendOrderRequestEmail(
   // Subject: the registry builder fed the order number the app shows
   // (SO-000049), with the `WO-` + 8-char handle only as the fallback for an
   // order without one (L91). Same string as the HTML title (buildView).
-  const subject = def.subject({
-    orderId:
-      formatOrderNumber(request.order_number) ?? `WO-${request.id.slice(0, 8).toUpperCase()}`,
-  });
+  // emailSubject: the approval that held nothing has its own subject.
+  const subject = emailSubject(
+    kind,
+    summary.held,
+    formatOrderNumber(request.order_number) ?? `WO-${request.id.slice(0, 8).toUpperCase()}`,
+  );
 
   // Gmail clips past ~102KB and hides the unsubscribe footer — refuse to
   // send an over-budget render (tests keep this from ever firing).

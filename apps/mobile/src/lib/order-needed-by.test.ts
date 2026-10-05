@@ -14,6 +14,7 @@ import {
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   NeededByResultShapeError,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   READINESS_NEEDS_CONNECTION_COPY,
   neededByChangedCopy,
   neededByCurrentCopy,
@@ -186,7 +187,7 @@ describe('opening the sheet', () => {
   const WH = 'wh-1';
 
   it('opens in the org zone for a manager', () => {
-    expect(neededBySheetOpening({ rawZone: ` ${LA} `, scope: manager, warehouseId: WH })).toEqual({
+    expect(neededBySheetOpening({ rawZone: ` ${LA} `, scope: manager, warehouseId: WH, isViewer: false })).toEqual({
       ok: true,
       timeZone: LA,
     });
@@ -194,7 +195,7 @@ describe('opening the sheet', () => {
 
   it("refuses when the zone could not be read (core's words), never a guessed zone", () => {
     for (const rawZone of [null, undefined, '', '   ']) {
-      expect(neededBySheetOpening({ rawZone, scope: manager, warehouseId: WH })).toEqual({
+      expect(neededBySheetOpening({ rawZone, scope: manager, warehouseId: WH, isViewer: false })).toEqual({
         ok: false,
         title: NEEDED_BY_CANNOT_OPEN_TITLE,
         message: NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
@@ -203,7 +204,7 @@ describe('opening the sheet', () => {
   });
 
   it('refuses a zone this engine cannot show (the server would convert in another)', () => {
-    expect(neededBySheetOpening({ rawZone: 'Mars/Olympus_Mons', scope: manager, warehouseId: WH })).toEqual({
+    expect(neededBySheetOpening({ rawZone: 'Mars/Olympus_Mons', scope: manager, warehouseId: WH, isViewer: false })).toEqual({
       ok: false,
       title: NEEDED_BY_CANNOT_OPEN_TITLE,
       message: neededByZoneUnknownCopy('Mars/Olympus_Mons'),
@@ -211,21 +212,31 @@ describe('opening the sheet', () => {
   });
 
   it("staff open it only for a warehouse they are assigned to; a viewer never (the function's warehouse_write gate)", () => {
-    expect(neededBySheetOpening({ rawZone: LA, scope: { writableIds: [WH], unreadable: false }, warehouseId: WH }).ok).toBe(true);
+    expect(
+      neededBySheetOpening({ rawZone: LA, scope: { writableIds: [WH], unreadable: false }, warehouseId: WH, isViewer: false }).ok,
+    ).toBe(true);
+    // Small fixes slice 2 review: staff outside the order's warehouse read the
+    // sentence every order action says (the server's too), not the date's
+    // own "needs write access"; a viewer, who works there read-only, keeps it.
     for (const scope of [
       { writableIds: ['wh-2'], unreadable: false },
       { writableIds: [], unreadable: false },
     ]) {
-      expect(neededBySheetOpening({ rawZone: LA, scope, warehouseId: WH })).toEqual({
+      expect(neededBySheetOpening({ rawZone: LA, scope, warehouseId: WH, isViewer: false })).toEqual({
         ok: false,
         title: NEEDED_BY_CANNOT_OPEN_TITLE,
-        message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
+        message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
       });
     }
+    expect(
+      neededBySheetOpening({ rawZone: LA, scope: { writableIds: [], unreadable: false }, warehouseId: WH, isViewer: true }),
+    ).toEqual({ ok: false, title: NEEDED_BY_CANNOT_OPEN_TITLE, message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY });
   });
 
   it('an unreadable assignment list is not a refusal: the server decides, in the sheet', () => {
-    expect(neededBySheetOpening({ rawZone: LA, scope: { writableIds: [], unreadable: true }, warehouseId: WH }).ok).toBe(true);
+    expect(
+      neededBySheetOpening({ rawZone: LA, scope: { writableIds: [], unreadable: true }, warehouseId: WH, isViewer: false }).ok,
+    ).toBe(true);
   });
 });
 

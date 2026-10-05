@@ -159,8 +159,11 @@ describe('the order screen: the needed-by card and Change', () => {
   // needed-by re-formatted through a Date (it would drop the microseconds some
   // rows carry and every save would be refused as stale).
   it('opening reads the zone and warehouse access together, refuses in core words, and starts from the needed-by exactly as read', () => {
+    // Re-pinned by the small fixes slice 2 review (was: no isViewer): staff
+    // outside the order's warehouse read the sentence every order action
+    // says; a viewer keeps the date's own (neededBySheetOpening's isViewer).
     expect(bodyOf(screen, SCREEN_FILE, 'openNeededBySheet')).toBe(
-      "{ if (!order || !orgId || offline || acting !== null) return; setActing('needed-by'); try { const [rawZone, scope] = await Promise.all([ order.orgTimezone ?? readOrgTimeZone(supabase, orgId), readDestinationWarehouseScope(supabase, { role, organizationId: orgId, userId }) ]); const opening = neededBySheetOpening({ rawZone, scope, warehouseId: order.warehouseId }); if (!opening.ok) { Alert.alert(opening.title, opening.message); return; } setNeededBySheet({ orderId: order.id, orderLabel: order.orderNumber ? formatOrderNumber(order.orderNumber) : null, timeZone: opening.timeZone, startNeededBy: order.neededBy, orderStatus: order.status }); } finally { setActing(null); } }",
+      "{ if (!order || !orgId || offline || acting !== null) return; setActing('needed-by'); try { const [rawZone, scope] = await Promise.all([ order.orgTimezone ?? readOrgTimeZone(supabase, orgId), readDestinationWarehouseScope(supabase, { role, organizationId: orgId, userId }) ]); const opening = neededBySheetOpening({ rawZone, scope, warehouseId: order.warehouseId, isViewer: role === 'viewer' }); if (!opening.ok) { Alert.alert(opening.title, opening.message); return; } setNeededBySheet({ orderId: order.id, orderLabel: order.orderNumber ? formatOrderNumber(order.orderNumber) : null, timeZone: opening.timeZone, startNeededBy: order.neededBy, orderStatus: order.status }); } finally { setActing(null); } }",
     );
   });
 

@@ -15,9 +15,13 @@ import {
   holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isDeletedRequester,
+  isManagerOrAbove,
   isNeededByWithinReach,
   lineOwedUnits,
   NEEDED_BY_BUSY_COPY,
+  ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_MODULE_OFF_COPY,
@@ -65,7 +69,7 @@ import {
   type OrderSummary,
 } from '@stockpilot/core';
 
-import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
@@ -88,6 +92,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { defer } from './lib/defer';
 import {
   orderOrganizationChangedError,
@@ -445,10 +450,11 @@ function rentalItemNotOrderable(name: string): ServiceError {
  * A kit's pre-assembled stock (inventory_items.is_bundle) is a container built
  * and handed out through Bundles, not stock an order can pick: picking draws
  * placed stock and assembled kits sit in Staging. Every order picker already
- * leaves it out; this is the server's own refusal, so a crafted payload or an
- * old saved cart cannot put one on an order. The database line guard
- * (tg_order_request_lines_guard, 0365) does not refuse it yet: that belongs in
- * the next migration.
+ * leaves it out; this is the server's own refusal, in words, so a crafted
+ * payload or an old saved cart cannot put one on an order. The database
+ * refuses it too: place_order_request (0391) when an order is placed, and
+ * since 0395 (L11) the order_request_lines insert policy on a member's own
+ * client, which addLines writes through.
  */
 function kitStockNotOrderable(name: string): ServiceError {
   return new ServiceError(
@@ -616,6 +622,12 @@ function deliveryWriteError(
  *  by name so the service does not depend on that class at runtime. */
 function isWarehouseForbidden(e: unknown): boolean {
   return e instanceof Error && e.name === 'ForbiddenError';
+}
+
+/** That refusal came from a failed read of the caller's own access (the
+ *  ForbiddenError's accessUnreadable), not from where they work. */
+function isWarehouseAccessUnreadable(e: unknown): boolean {
+  return isWarehouseForbidden(e) && (e as { accessUnreadable?: unknown }).accessUnreadable === true;
 }
 
 const HOLD_FAILURE_REASONS: ReadonlySet<string> = new Set<HoldFailureReason>([
@@ -1844,8 +1856,10 @@ export class OrderRequestsService {
     if (!isRequester && !can(this.ctx, 'orders:approve')) {
       throw new ServiceError('forbidden', copy.forbidden);
     }
-    // Same warehouse gate create() applies.
-    await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+    // Same warehouse gate create() applies, refused in the words every order
+    // action uses (small fixes slice 2 review: this answered "User does not
+    // have read access to warehouse <uuid>.").
+    await this.assertOrderWarehouseAccess(h.warehouse_id, 'read');
     return h;
   }
 
@@ -2083,11 +2097,20 @@ export class OrderRequestsService {
     }
     assertPermission(this.ctx, 'orders:approve');
     try {
-      if (warehouseId) await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+      if (warehouseId) await this.assertOrderWarehouseAccess(warehouseId, 'write');
       else await this.requireWarehouseAccess(id, 'write');
     } catch (e) {
       if (isWarehouseForbidden(e)) {
-        throw new ServiceError('forbidden', HOLD_NO_WAREHOUSE_ACCESS_COPY, { reason: 'forbidden' });
+        // Outside the order's warehouse: the sentence every order action says
+        // (small fixes slice 2 review). A viewer works there read-only, so
+        // they keep the hold's own "needs write access" sentence. A failed
+        // access read is not a ForbiddenError here: it passes through as the
+        // retryable answer.
+        throw new ServiceError(
+          'forbidden',
+          this.ctx.role === 'viewer' ? HOLD_NO_WAREHOUSE_ACCESS_COPY : ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
+          { reason: 'forbidden' },
+        );
       }
       throw e;
     }
@@ -2750,8 +2773,10 @@ export class OrderRequestsService {
     // pending approval. Once it has been approved (and stock has been
     // reserved) or moved into packing-slip/staged, a self-serve cancel could
     // orphan downstream work — an approver must take that path explicitly.
-    // Approvers are unaffected: cancel_order_request lets anyone holding
-    // orders:approve cancel any open order. Since 0390 "approver" is the
+    // Approvers are unaffected by the window: cancel_order_request lets anyone
+    // holding orders:approve cancel any open order, and the service also asks
+    // an approver below manager rank for write access to the order's
+    // warehouse (the else-branch below). Since 0390 "approver" is the
     // effective orders:approve permission on both sides (the database had no
     // manager-by-role exception left to mirror), so a manager whose
     // orders:approve was revoked gets the requester's rule, and a staff member
@@ -2776,12 +2801,42 @@ export class OrderRequestsService {
       ) {
         const status = (row as { status: OrderRequestStatus }).status;
         if (status !== 'pending_approval') {
-          throw new ServiceError(
-            'validation_error',
-            'You can only cancel your own request while it is still pending approval. Ask someone who approves orders to cancel approved or in-progress requests.',
-          );
+          // 0395: the same answer cancel_order_request's own refusal maps to
+          // (hint requester_pending_only, below): 403 forbidden with the core
+          // sentence, so the refusal reads the same whichever layer answers.
+          throw new ServiceError('forbidden', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
         }
       }
+    } else if (!isManagerOrAbove(this.ctx.role)) {
+      // An approver's cancel asks write access to the order's warehouse, as
+      // approve, deny, the pick slip, picking, staging, delivery and notes all
+      // do (requireWarehouseAccess 'write'). It did not (small fixes slice 2
+      // review): a staff member who approves orders in warehouse A could
+      // cancel a warehouse B order from the order page, releasing its holds
+      // or restocking its picked batch, on the page where every other action
+      // already refused. cancel_order_request itself does not check the
+      // warehouse yet (security slice E). Owners, admins and managers work in
+      // every warehouse by role (isManagerOrAbove, roleSeesEveryWarehouse's
+      // rule in lib/auth/warehouse), so nothing is read for them.
+      //
+      // The person who placed the order still cancels it while it waits for
+      // approval with no warehouse check: that is the requester's cancel (the
+      // rule above, which a viewer may use), whatever else they may do.
+      const { data: row, error: rowErr } = await this.ctx.supabase
+        .from('order_requests')
+        .select('status, requester_user_id, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .maybeSingle();
+      // Never decided on a read that did not happen.
+      if (rowErr) throw new ServiceError('internal_error', rowErr.message);
+      if (row) {
+        const r = row as { status: OrderRequestStatus; requester_user_id: string | null; warehouse_id: string };
+        const ownPending = r.requester_user_id === this.ctx.userId && r.status === 'pending_approval';
+        if (!ownPending) await this.assertOrderWarehouseAccess(r.warehouse_id, 'write');
+      }
+      // No row: not found or not visible. The function answers it, as it does
+      // for the requester's path above.
     }
     // I2: NB — the *public-link* cancel path (anonymous external
     // requester) does NOT pass through this service. There is no
@@ -2794,6 +2849,13 @@ export class OrderRequestsService {
       p_reason: reason ?? null,
     });
     if (error) {
+      // 0395: the function now refuses a requester's cancel past pending
+      // approval itself (42501 forbidden, hint requester_pending_only). The
+      // read above normally stops it first; this is the status changing in
+      // between, or that read and the function disagreeing. Checked before
+      // the 'forbidden' arm, which would call it someone else's order.
+      const guard = dbGuardRefusal(error);
+      if (guard) throw guard;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
@@ -3279,11 +3341,19 @@ export class OrderRequestsService {
       | null;
     if (!order) throw neededByRefusal('not_found', NEEDED_BY_NOT_FOUND_COPY, 'not_found');
     try {
-      await assertWarehouseAccess(order.warehouse_id, 'write', this.ctx, accessRead);
+      await this.assertOrderWarehouseAccess(order.warehouse_id, 'write', accessRead);
     } catch (e) {
       if (isWarehouseForbidden(e)) {
-        throw neededByRefusal('forbidden', NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY, 'forbidden');
+        // As Hold (small fixes slice 2 review): the one sentence for an order
+        // outside the caller's warehouses; a viewer keeps the date's own.
+        throw neededByRefusal(
+          'forbidden',
+          this.ctx.role === 'viewer' ? NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY : ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
+          'forbidden',
+        );
       }
+      // A failed access read arrives already as the date's retryable shape
+      // (conflict, reason 'failed', retryable): see assertOrderWarehouseAccess.
       throw e;
     }
     // A member can always read their own org's row; a failed or empty read is
@@ -4442,12 +4512,15 @@ export class OrderRequestsService {
   async setInternalNotes(id: string, notes: string | null): Promise<void> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
-    // C3: 'read' is enough for editing internal notes — the RLS UPDATE
-    // policy further restricts writes to manager+, and we already
-    // gated on `orders:approve`. A warehouse-scoped manager who can
-    // READ a warehouse should be able to annotate its requests even
-    // without write privileges on the warehouse itself.
-    await this.requireWarehouseAccess(id, 'read');
+    // 'write', as every other user-client write to the order (0395, L129a):
+    // order_requests_update now requires write access to the order's
+    // warehouse (user_can_access_warehouse 'write'), so this gate says the
+    // same thing the policy enforces. Owners, admins and
+    // managers write every warehouse and staff write exactly the warehouses
+    // they read, so the only member this moves is a viewer granted
+    // orders:approve, who now gets the read-only refusal instead of a notes
+    // save the database would match to no row (production 2026-10-05: none).
+    await this.requireWarehouseAccess(id, 'write');
     // Row-proof (bug-pattern #2): without `.select().maybeSingle()` a 0-row
     // update — RLS miss, or the order deleted mid-request — returns HTTP 204
     // with error === null and the UI happily shows notes that were never
@@ -4482,8 +4555,50 @@ export class OrderRequestsService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Order request not found');
     const warehouseId = (data as { warehouse_id: string }).warehouse_id;
-    await assertWarehouseAccess(warehouseId, op, this.ctx);
+    await this.assertOrderWarehouseAccess(warehouseId, op);
     return warehouseId;
+  }
+
+  /**
+   * assertWarehouseAccess on an order's warehouse, refused in the words every
+   * order action uses (L129a, 0395: the order update policy refuses the same
+   * caller, so a raw write matches no row; small fixes slice 2 review):
+   *
+   *   - outside the warehouse: a ForbiddenError with core
+   *     ORDER_WAREHOUSE_WRITE_REFUSED_COPY, never the warehouse's id. Still a
+   *     ForbiddenError, so every route answers 403, and Hold and the needed-by
+   *     date re-word it in their own error shapes;
+   *   - the caller's own access could not be read (staff or viewer: the
+   *     ForbiddenError's accessUnreadable): a retryable conflict with
+   *     ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, which claims no scope. Its
+   *     details are { reason: 'failed', retryable: true }, the shape the
+   *     needed-by date and a hold top-up already read as "try again";
+   *   - a viewer writing: the app's read-only refusal, unchanged (they work in
+   *     the warehouse, read-only, so "you don't work in" would be false).
+   *
+   * `started` is getWarehouseAccess for this ctx, begun by a caller that
+   * reads it beside other reads (reviseNeededBy), as assertWarehouseAccess
+   * takes it.
+   */
+  private async assertOrderWarehouseAccess(
+    warehouseId: string,
+    op: 'read' | 'write',
+    started?: Promise<WarehouseAccess>,
+  ): Promise<void> {
+    try {
+      if (started) await assertWarehouseAccess(warehouseId, op, this.ctx, started);
+      else await assertWarehouseAccess(warehouseId, op, this.ctx);
+    } catch (e) {
+      if (!isWarehouseForbidden(e)) throw e;
+      if (op === 'write' && this.ctx.role === 'viewer') throw e;
+      if (isWarehouseAccessUnreadable(e)) {
+        throw new ServiceError('conflict', ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, {
+          reason: 'failed',
+          retryable: true,
+        });
+      }
+      throw new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
+    }
   }
 
   // ── Public link admin ───────────────────────────────────────────

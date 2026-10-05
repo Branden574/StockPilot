@@ -1088,11 +1088,15 @@ select is(
   E'_validate_order_request_status_transition()|dee8cd4782ec83abdb31a2b48fcd4ef2\n'
   'assign_order_delivery(uuid,uuid)|3bd4ed4b94ab65777457512f88eaa033\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13\n'
-  'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67\n'
+  -- Re-pinned by 0395 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
+  -- requires a member with Orders on (0395 R3); the hand-over accounting is unchanged.
+  'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c\n'
   'generate_order_packing_slips(uuid)|76aa4e4375745a86180c5118e2be0300\n'
   'mark_order_in_transit(uuid)|c81e72528cb5899e9ed1f9ca2928f88f\n'
   'order_return_token_ensure(uuid)|bb1b6bd6103c3e2289c93bc914c91aeb\n'
-  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
+  -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
+  -- (0395 R2); the draw reversal and the holds it restores are unchanged.
+  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
   'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077',
   'P7: 0392 changes no function body but the two guards: the hand-over, the clears, the mint, the return-token mint, the delivery RPCs and the transition trigger keep their md5; the insert guard is 0392''s (0365 plus the admin-client secret rule, G23)');

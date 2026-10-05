@@ -230,3 +230,23 @@ describe('OrderTimeline — a viewer who cannot see activity (L89)', () => {
     expect(screen.getByText('No events yet.')).toBeInTheDocument();
   });
 });
+
+// Small fixes slice 2 review: approve_partial records order_request.approved
+// too, and may have reserved only part of the order, or nothing at all. The
+// line under every approval said "Stock reserved — ...", so a partial approval
+// that reserved nothing read as reserved to anyone reading the timeline.
+describe('OrderTimeline — an approval claims no reservation', () => {
+  it('says the order was approved, not that stock was reserved', async () => {
+    await renderTimeline([
+      {
+        id: 'ap',
+        event: 'order_request.approved',
+        created_at: '2026-10-05T17:00:00Z',
+        user_id: 'u1',
+        metadata: { entity_type: 'order_request', entity_id: 'order-1' },
+      },
+    ]);
+    expect(screen.getByText('Approved — the order entered the fulfillment pipeline.')).toBeInTheDocument();
+    expect(screen.queryByText(/Stock reserved/)).not.toBeInTheDocument();
+  });
+});

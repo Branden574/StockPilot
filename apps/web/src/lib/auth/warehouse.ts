@@ -265,9 +265,13 @@ export async function assertWarehouseAccess(
 
   const allowed = op === 'write' ? access.writableIds : access.readableIds;
   if (!allowed.includes(warehouseId)) {
-    throw new ForbiddenError(
-      `User does not have ${op} access to warehouse ${warehouseId}.`,
-    );
+    // `accessUnreadable`: the refusal comes from a failed read of the caller's
+    // own access (accessWhenUnreadable), not from their real scope, so a
+    // caller can say it could not be checked instead of naming a scope. Still
+    // a refusal either way.
+    throw new ForbiddenError(`User does not have ${op} access to warehouse ${warehouseId}.`, {
+      accessUnreadable: access.unreadable === true,
+    });
   }
 }
 
@@ -294,8 +298,18 @@ export async function forcedWarehouseId(ctx?: WarehouseCtxLike): Promise<string 
 
 export class ForbiddenError extends Error {
   readonly code = 'forbidden' as const;
-  constructor(message = 'Forbidden') {
+  /**
+   * True only when assertWarehouseAccess refused because the caller's own
+   * warehouse access could not be read (getWarehouseAccess's `unreadable`
+   * answer), not because of where they work. Every caller still treats it as
+   * a refusal; the order service words it "couldn't be checked ... Try again"
+   * (small fixes slice 2 review), since "a warehouse you don't work in" would
+   * be false for someone acting in their own.
+   */
+  readonly accessUnreadable: boolean;
+  constructor(message = 'Forbidden', opts: { accessUnreadable?: boolean } = {}) {
     super(message);
     this.name = 'ForbiddenError';
+    this.accessUnreadable = opts.accessUnreadable === true;
   }
 }

@@ -10,6 +10,7 @@ import {
   HOLD_NOT_APPLICABLE_COPY,
   HOLD_NOT_APPROVER_COPY,
   HOLD_ORDER_NOT_FOUND_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   type ModuleId,
   type Role,
 } from '@stockpilot/core';
@@ -50,7 +51,7 @@ function req(body: unknown) {
   });
 }
 
-function asCaller(rpc: QueryResult, opts: { role?: Role; modules?: ModuleId[] } = {}) {
+function asCaller(rpc: QueryResult, opts: { role?: Role; modules?: ModuleId[]; permissions?: string[] } = {}) {
   const stub = makeSupabaseStub({
     'order_requests.select': { data: { warehouse_id: 'wh-1' }, error: null },
     'rpc:hold_order_stock': rpc,
@@ -61,6 +62,7 @@ function asCaller(rpc: QueryResult, opts: { role?: Role; modules?: ModuleId[] } 
       userId: 'u1',
       organizationId: 'o1',
       enabledModules: new Set<ModuleId>(opts.modules ?? ['orders']),
+      ...(opts.permissions ? { permissions: new Set(opts.permissions) } : {}),
     }) as never,
   );
   return stub;
@@ -131,14 +133,25 @@ describe('POST /api/v1/orders/[id]/transition — hold_stock', () => {
     expect(off.rpcCalls).toEqual([]);
   });
 
-  it('no write access to the warehouse: 403 with the hold sentence, never a 500', async () => {
+  it('no write access to the warehouse: 403 with the one warehouse sentence, never a 500', async () => {
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(new ForbiddenError('User does not have write access to warehouse wh-1.'));
     const stub = asCaller({ data: {}, error: null });
     const res = await POST(req({ action: 'hold_stock' }), { params });
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'forbidden', message: HOLD_NO_WAREHOUSE_ACCESS_COPY });
+    // Re-pinned by the small fixes slice 2 review (was HOLD_NO_WAREHOUSE_ACCESS_COPY):
+    // outside the order's warehouse, Hold says what every order action says.
+    expect(await res.json()).toEqual({ error: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
     expect(stub.rpcCalls).toEqual([]);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a viewer granted orders:approve keeps the hold sentence: they work there, read-only', async () => {
+    vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(new ForbiddenError('Read-only auditor cannot perform write operations.'));
+    const stub = asCaller({ data: {}, error: null }, { role: 'viewer', permissions: ['orders:approve', 'orders:request'] });
+    const res = await POST(req({ action: 'hold_stock' }), { params });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: HOLD_NO_WAREHOUSE_ACCESS_COPY });
+    expect(stub.rpcCalls).toEqual([]);
   });
 });
 
@@ -148,9 +161,10 @@ describe('POST /api/v1/orders/[id]/transition — a warehouse refusal is 403 for
     asCaller({ data: null, error: null });
     const res = await POST(req({ action: 'approve' }), { params });
     expect(res.status).toBe(403);
+    // Test stage (L129a walk): the plain sentence, never the warehouse id.
     expect(await res.json()).toEqual({
       error: 'forbidden',
-      message: 'User does not have write access to warehouse wh-1.',
+      message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
     });
     expect(reportError).not.toHaveBeenCalled();
   });

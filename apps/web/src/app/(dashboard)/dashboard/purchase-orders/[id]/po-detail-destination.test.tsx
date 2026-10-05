@@ -74,7 +74,11 @@ vi.mock('@/components/po/po-attachments-panel', () => ({
   PoFileActions: () => null,
   PoAttachmentsList: () => null,
 }));
-vi.mock('@/components/po/receipt-history', () => ({ ReceiptHistory: () => null }));
+vi.mock('@/components/po/receipt-history', () => ({
+  ReceiptHistory: ({ canReverse }: { canReverse: boolean }) => (
+    <div data-testid="receipt-history" data-can-reverse={String(canReverse)} />
+  ),
+}));
 vi.mock('@/components/po/po-status-badge', () => ({ PoStatusBadge: () => null }));
 vi.mock('@/components/po/po-access-denied', () => ({ PoAccessDenied: () => null }));
 vi.mock('@/components/items/item-thumb', () => ({ ItemThumb: () => null }));
@@ -225,5 +229,56 @@ describe('PO detail page — a staging destination is still receivable', () => {
     const { queryByTestId } = await renderPage();
     expect(queryByTestId('set-destination')).not.toBeNull();
     expect(queryByTestId('receive-dialog')).toBeNull();
+  });
+});
+
+/**
+ * Small fixes slice 2 review: receiving asks stock:adjust (ReceivingService
+ * postReceipt and reverseReceipt assert it; since 0395 the database's receipt
+ * functions refuse a direct call without it too), but this page offered
+ * "Receive items" to everyone who can read purchase orders (viewers by
+ * default: 9 in production, plus the one staff member with stock:adjust
+ * revoked) and "Reverse" to every manager, and each was refused with "Missing
+ * permission: stock:adjust". The phone's PO screen had the same gap.
+ */
+describe('PO detail page — receiving follows stock:adjust', () => {
+  const RECEIVE_NOTE = 'Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it.';
+  async function asCaller(role: string, permissions: Set<string> | null) {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+      permissions,
+    } as never);
+  }
+
+  it('a viewer reads the PO but is not offered Receive items, and is told why', async () => {
+    await asCaller('viewer', null);
+    const { queryByTestId, getByText, queryByText } = await renderPage();
+    expect(queryByTestId('receive-dialog')).toBeNull();
+    expect(getByText(RECEIVE_NOTE)).toBeTruthy();
+    expect(queryByText(/Use “Receive items”/)).toBeNull();
+  });
+
+  it('staff whose stock:adjust was revoked: the same', async () => {
+    await asCaller('staff', new Set(['purchase_orders:read', 'items:read']));
+    const { queryByTestId, getByText } = await renderPage();
+    expect(queryByTestId('receive-dialog')).toBeNull();
+    expect(getByText(RECEIVE_NOTE)).toBeTruthy();
+  });
+
+  it('a manager whose stock:adjust was revoked is not offered Reverse', async () => {
+    await asCaller('manager', new Set(['purchase_orders:read', 'purchase_orders:manage', 'items:read']));
+    const { getByTestId, queryByTestId } = await renderPage();
+    expect(getByTestId('receipt-history').getAttribute('data-can-reverse')).toBe('false');
+    expect(queryByTestId('receive-dialog')).toBeNull();
+  });
+
+  it('the owner keeps Receive items and Reverse, with no note', async () => {
+    const { getByTestId, queryByTestId, queryByText } = await renderPage();
+    expect(queryByTestId('receive-dialog')).not.toBeNull();
+    expect(getByTestId('receipt-history').getAttribute('data-can-reverse')).toBe('true');
+    expect(queryByText(RECEIVE_NOTE)).toBeNull();
   });
 });

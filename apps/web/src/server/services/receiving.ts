@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { reportError } from '@/lib/error-reporter';
 import { audit, auditMany } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { dispatchEvent } from './integration-events';
 import {
   fetchAllRowsByIds,
@@ -264,6 +265,10 @@ export class ReceivingService {
       p_notes: input.notes ?? null,
     });
     if (error) {
+      // 0395: post_receipt_v2 refuses a caller without stock:adjust itself
+      // (42501 forbidden, hint permission), as assertPermission above does.
+      const guard = dbGuardRefusal(error, 'receipt_post');
+      if (guard) throw guard;
       // A line accepting a kit's pre-assembled stock (0366): kits are built
       // from their components, so receiving one would add kits with no
       // component drawn. Matched on the hint, which is exact; the message is
@@ -583,6 +588,10 @@ export class ReceivingService {
       p_reason: input.reason,
     });
     if (error) {
+      // 0395: reverse_receipt refuses a caller without stock:adjust itself
+      // (42501 forbidden, hint permission); before the 'forbidden' arm.
+      const guard = dbGuardRefusal(error, 'receipt_reverse');
+      if (guard) throw guard;
       if (error.message.includes('receipt_already_reversed')) {
         throw new ServiceError('conflict', 'This receipt has already been reversed.');
       }

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId, Role } from '@stockpilot/core';
+import { ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY, type ModuleId, type Role } from '@stockpilot/core';
 
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn() }));
@@ -234,7 +235,10 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
   };
   function cancelStub(status: string, requester = 'u1') {
     return makeSupabaseStub({
-      'order_requests.select.maybeSingle': { data: { status, requester_user_id: requester }, error: null },
+      'order_requests.select.maybeSingle': {
+        data: { status, requester_user_id: requester, warehouse_id: 'wh-1' },
+        error: null,
+      },
       ...OK_RPC,
     });
   }
@@ -243,7 +247,7 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
     const approved = cancelStub('approved');
     await expect(
       svc(approved, { userId: 'u1', permissions: ['orders:assign_delivery', 'orders:request'] }).cancel('ord-1', null),
-    ).rejects.toMatchObject({ code: 'validation_error' });
+    ).rejects.toMatchObject({ code: 'forbidden' });
     expect(approved.rpcCalls).toHaveLength(0);
 
     const pending = cancelStub('pending_approval');
@@ -255,7 +259,12 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
     const stub = cancelStub('approved');
     await svc(stub, { role: 'staff', userId: 'u1', permissions: ['orders:approve', 'orders:request'] }).cancel('ord-1', null);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
-    expect(stub.chains.get('order_requests.select')).toBeUndefined();
+    // Re-pinned by the small fixes slice 2 review (was: no order read at all):
+    // below manager rank, an approver's cancel asks write access to the
+    // order's warehouse, as every other approver action does, so the order is
+    // read for its warehouse (order-requests.warehouse-words.test.ts has the
+    // refusals). The requester window is still not applied.
+    expect(assertWarehouseAccess).toHaveBeenCalledWith('wh-1', 'write', expect.anything());
   });
 
   it('a manager by role default skips the window, and staff without the grant keep it', async () => {
@@ -265,9 +274,10 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
 
     const staff = cancelStub('approved');
     await expect(svc(staff, { role: 'staff', userId: 'u1' }).cancel('ord-1', null)).rejects.toMatchObject({
-      code: 'validation_error',
-      message:
-        'You can only cancel your own request while it is still pending approval. Ask someone who approves orders to cancel approved or in-progress requests.',
+      // 0395: the sentence moved to core and the code is 403, both shared
+      // with the function's own refusal (hint requester_pending_only).
+      code: 'forbidden',
+      message: ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
     });
   });
 });

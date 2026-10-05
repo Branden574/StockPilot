@@ -250,8 +250,9 @@ export function ManagerActionsPanel({
   // cannot perform write operations."; the sign route's handOverAllowed
   // refuses a viewer who is not the driver). So a viewer granted
   // orders:approve is offered none of them, as on the phone
-  // (orderManagerActions isViewerRole). canApprove alone still decides
-  // Internal notes, which ask read access only.
+  // (orderManagerActions isViewerRole). Internal notes too: since 0395 (L129a)
+  // setInternalNotes asks warehouse write, as the order update policy does,
+  // so every save by a viewer would be refused (small fixes slice 2 review).
   const approves = canApprove && viewerRole !== 'viewer';
   const isDriverHere = assignedDeliveryUserId !== null && assignedDeliveryUserId === viewerUserId;
   // confirm_physical_signature (0248) admits a manager by role or the assigned
@@ -1047,7 +1048,7 @@ export function ManagerActionsPanel({
           </p>
         )}
 
-        {canApprove && (
+        {approves && (
           <div className="space-y-1.5 pt-2">
             <Label htmlFor="internal-notes" className="text-xs">
               Internal notes

@@ -161,7 +161,13 @@ select throws_ok(
 --    IS NULL is preserved).
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Changed on purpose by 0395 (L15): an item that holds stock can no longer be
+-- soft-deleted, so this models a row deleted before 0395 (production keeps 11
+-- such items, left as history: owner decision Q4) by switching the guard off
+-- for this one statement.
+alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set deleted_at = now() where id = :i1;
+alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock;
 
 select lives_ok(
   $$ insert into public.inventory_items

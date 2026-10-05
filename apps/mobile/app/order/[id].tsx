@@ -992,7 +992,12 @@ export default function OrderDetail() {
         order.orgTimezone ?? readOrgTimeZone(supabase, orgId),
         readDestinationWarehouseScope(supabase, { role, organizationId: orgId, userId }),
       ]);
-      const opening = neededBySheetOpening({ rawZone, scope, warehouseId: order.warehouseId });
+      const opening = neededBySheetOpening({
+        rawZone,
+        scope,
+        warehouseId: order.warehouseId,
+        isViewer: role === 'viewer',
+      });
       if (!opening.ok) {
         Alert.alert(opening.title, opening.message);
         return;

@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
@@ -32,6 +33,13 @@ import {
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
+  // The order service refuses a change outside the caller's warehouses with
+  // assertWarehouseAccess's ForbiddenError (every route answers it 403), not a
+  // ServiceError. It is a refusal with a sentence for people, never a fault:
+  // as 'internal_error' the Approve partial and Resume dialog said "Try again"
+  // (small fixes slice 2 review). The cycle-count and attachment actions
+  // already answer it this way.
+  if (error instanceof ForbiddenError) return err('forbidden', error.message);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }
 

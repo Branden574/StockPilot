@@ -67,7 +67,7 @@
 
 begin;
 
-select plan(41);
+select plan(42);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -202,6 +202,19 @@ insert into _sec_inv_public_bucket_allow (id, why) values
 -- finding to be defended, never a default.
 create temporary table _sec_inv_path_check_gap (relname text, attname text, why text not null,
   primary key (relname, attname));
+
+-- ── The writer detector allowlists E and F are audited with (0395, L19) ────
+--
+-- An allowlisted entry must never write. Until 0395 the detector was
+-- \m(insert\s+into|update\s+public\.|delete\s+from)\M, which missed MERGE INTO,
+-- UPDATE ONLY, an unqualified UPDATE and a quoted "public". It is now 0387's
+-- writer forms, for any table: INSERT INTO, MERGE INTO [ONLY], DELETE FROM
+-- [ONLY], and UPDATE [ONLY] [schema-qualified or quoted] <table> [alias] SET
+-- (the SET keeps "for update of" and "on update cascade" out). INV-26, INV-30
+-- and INV-31 read this one row, and INV-30b plants a probe per form.
+create temporary table _sec_inv_writer_re (re text not null);
+insert into _sec_inv_writer_re (re) values
+  ($re$\m(insert\s+into|merge\s+into|delete\s+from)\M|\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(\s+(as\s+)?"?[a-z_][a-z0-9_$]*"?)?\s+set\M$re$);
 
 -- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
 --       WITHOUT an authorization token in their own body (0371) ──────────────
@@ -802,7 +815,7 @@ select is(
        or exists (
       select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
-         and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M')),
+         and p.prosrc ~* (select re from _sec_inv_writer_re))),
   0,
   'INV-26: allowlist E has no stale entry and no entry whose body writes'
 );
@@ -957,12 +970,34 @@ select is(
         or exists (
           select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
-             and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M'))),
+             and p.prosrc ~* (select re from _sec_inv_writer_re)))),
   2,
   'INV-30 control: the allowlist-E audit still catches both a stale entry and an entry whose body writes'
 );
 
 delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
+
+-- INV-30b. MUTATION CONTROL for the writer detector itself (0395, L19): one
+-- probe per writer form must match, and the read-only shapes that share a
+-- keyword must not. A detector that lost a form would let an allowlisted
+-- predicate grow that write unnoticed.
+select is(
+  (select string_agg(v.form || '=' || (v.src ~* (select re from _sec_inv_writer_re))::text, ', ' order by v.n)
+     from (values
+       (1, 'insert into',          $s$insert into public.t (a) values (1);$s$),
+       (2, 'merge into',           $s$merge into public.t x using (select 1 as a) s on x.a = s.a when matched then delete;$s$),
+       (3, 'merge into only',      $s$merge into only t x using (select 1 as a) s on x.a = s.a when not matched then insert (a) values (s.a);$s$),
+       (4, 'update public',        $s$update public.t set a = 1;$s$),
+       (5, 'update only',          $s$update only public.t set a = 1;$s$),
+       (6, 'update unqualified',   $s$update t set a = 1 where a = 2;$s$),
+       (7, 'update quoted alias',  $s$update "public"."t" as x set a = 1;$s$),
+       (8, 'delete from only',     $s$delete from only public.t where a = 1;$s$),
+       (9, 'read: for update of',  $s$select a from public.t x where a = 1 for update of x;$s$),
+       (10, 'read: on update',     $s$select 1 where 'on update cascade' is not null;$s$)) v(n, form, src)),
+  'insert into=true, merge into=true, merge into only=true, update public=true, update only=true, '
+  'update unqualified=true, update quoted alias=true, delete from only=true, read: for update of=false, read: on update=false',
+  'INV-30b control: the writer detector INV-26, INV-30 and INV-31 share catches every write form (INSERT, MERGE [ONLY], UPDATE [ONLY], unqualified or quoted, DELETE FROM [ONLY]) and no read'
+);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -998,7 +1033,7 @@ select is(
          or exists (
               select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef
-                 and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M')) v),
+                 and p.prosrc ~* (select re from _sec_inv_writer_re))) v),
   '',
   'INV-31: every authenticated-EXECUTE SECURITY DEFINER function in ledger gates in its body or is an allowlisted read-only predicate'
 );

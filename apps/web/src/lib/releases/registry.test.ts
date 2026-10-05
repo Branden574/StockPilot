@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   DELETED_USER_LABEL,
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
+  dbPermissionRefusedCopy,
   describeShortPickLines,
   EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
@@ -24,6 +25,7 @@ import {
   isDeletedRequester,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderCancelOffer,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
@@ -3551,10 +3553,14 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(at).toBe(2);
     expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
     expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
+    // and this one): the partial-approval draft (small fixes slice 2) sits
+    // right below this one and is dated earlier.
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       ID,
+      'order-partial-approval-held-2026-10',
     ]);
     for (const id of [
       'small-fixes-2026-10',
@@ -3568,7 +3574,8 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(i, id).toBeGreaterThan(at);
       expect(RELEASES[i]?.status, id).toBe('published');
     }
-    expect(RELEASES[at + 1]?.id).toBe('small-fixes-2026-10');
+    expect(RELEASES[at + 1]?.id).toBe('order-partial-approval-held-2026-10');
+    expect(RELEASES[at + 2]?.id).toBe('small-fixes-2026-10');
     const above = new Set([ID, 'weekly-digest-and-fixes-2026-10', 'items-list-first-paint-2026-10']);
     for (const r of RELEASES.filter((x) => !above.has(x.id))) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -3676,13 +3683,16 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // (slice 1, 2026-10-05; was: the newest published release, with only
     // drafts above it): the drafts stay at the top, newest first, and the
     // small fixes, published, sit between them and this one.
+    // Re-pinned by 0395 (was: without it): the partial-approval draft (small
+    // fixes slice 2) sits below PO-2's draft, above the small fixes.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
       'small-fixes-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'draft', 'published']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4335,16 +4345,18 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest and PO-2 drafts sit above it, phone ordering's below it", () => {
+  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest, PO-2 and partial-approval drafts sit above it, phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
     // first-paint (#328), weekly digest fixes' (#326) and PO-2's stay at the
-    // top, dated later.
+    // top, dated later. Re-pinned by 0395 (was: those three): the
+    // partial-approval draft (small fixes slice 2) sits below PO-2's.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
     ]);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
@@ -4647,7 +4659,12 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(e.whatChanged).not.toMatch(/no longer shows the note field/);
     expect(e.howItAffectsYou).toBe('Tap Receive anyway to post the receipt as entered.');
     const screen = readFileSync(resolve(__dirname, '../../../../mobile/app/po/[id].tsx'), 'utf8');
-    expect(screen).toContain('!reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);');
+    // Re-pinned by 0395 (small fixes slice 2; was: !reviewOnly): receiving
+    // also needs stock:adjust now, so the screen is read-only for a draft or
+    // for someone who cannot receive, and the note field still shows only on
+    // a PO with something left to receive.
+    expect(screen).toContain('const readOnly = reviewOnly || !canReceive;');
+    expect(screen).toContain('!readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);');
     const receive = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/po-receive.ts'), 'utf8');
     expect(receive).toContain("export const OVER_RECEIPT_CONFIRM_LABEL = 'Receive anyway';");
   });
@@ -4788,5 +4805,211 @@ describe('the Items first-paint release', () => {
     expect(text).toContain('No items match your filters');
     expect(text).toContain('Auto-archived only');
     expect(text).toContain('No items yet');
+  });
+});
+
+/**
+ * Small fixes slice 2 (migration 0395, L86): a partly approved order's
+ * notification and approval email say what is held. Held as a DRAFT until
+ * 0395 is pushed and the web deploy with the email variant is live (the push
+ * text comes from the database: no phone update). Pinned by id, never by
+ * index. The publishing follow-up sets 'published' and the real publishedAt,
+ * re-reads the words against what shipped, and flips the first pin here.
+ */
+describe('a partly approved order says what is held (small fixes slice 2) is held as a draft', () => {
+  const ID = 'order-partial-approval-held-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release, dated after every published release and before the drafts above it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  // Test stage (local walk): the order service's refusal outside the caller's
+  // warehouses now reads in plain words (it named the warehouse's id). Review
+  // (2026-10-05): only someone who works in SOME warehouses can meet it, and
+  // that is staff (owners, admins and managers work in every warehouse by
+  // role, so 7 people in production were told about a refusal they can never
+  // see). Staff meet it as approvers (orders:approve) and as pickers
+  // (items:update: Claim, Release and Complete picking on the phone), so the
+  // entry is theirs.
+  // Review (2026-10-05): the slice also stops offering receiving (web Receive
+  // items, phone Scan / quantities / Post receipt, web Reverse) to readers
+  // without stock:adjust, and the phone's Transfer to a manager without
+  // stock:transfer, so the release covers the slice and each entry carries
+  // its own audience (as the slice 1 release does): no release-level
+  // audience, and a reader sees the release only when an entry is theirs.
+  it('tells each entry to who can see it: requesters, staff who approve or pick, and readers of purchase orders', () => {
+    const r = release();
+    expect(r.audience).toBeUndefined();
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'order-partial-approval-held',
+      'order-other-warehouse-words',
+      'receiving-follows-permission',
+      'app-order-item-refusals',
+    ]);
+    for (const entry of r.entries) {
+      expect(entry.category, entry.id).toBe('fixed');
+      expect(entry.link, entry.id).toBeUndefined();
+    }
+    expect(r.entries.map((e) => e.area)).toEqual(['Orders', 'Orders', 'Receiving', 'Orders']);
+    expect(r.entries[3]!.audience).toEqual({ anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] });
+    expect(r.entries[0]!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    expect(r.entries[1]!.audience).toEqual({
+      roles: ['staff'],
+      anyPermission: ['orders:approve', 'items:update'],
+      modules: ['orders'],
+    });
+    expect(r.entries[2]!.audience).toEqual({ anyPermission: ['purchase_orders:read'], modules: ['receiving'] });
+    const published: Release = { ...r, status: 'published' };
+    const idsFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(idsFor('viewer', ['orders:request'])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
+    expect(idsFor('staff', ['orders:request', 'orders:approve'])).toEqual([
+      'order-partial-approval-held',
+      'order-other-warehouse-words',
+      'app-order-item-refusals',
+    ]);
+    expect(idsFor('staff', ['orders:request', 'items:update'])).toHaveLength(3);
+    expect(idsFor('staff', ['members:read'])).toEqual([]);
+    // Owners, admins and managers with Orders on: never a warehouse refusal
+    // their role cannot meet.
+    expect(idsFor('owner', [...PERMISSIONS])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
+    expect(idsFor('admin', [...PERMISSIONS])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
+    expect(idsFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toEqual([
+      'order-partial-approval-held',
+      'app-order-item-refusals',
+    ]);
+    expect(idsFor('owner', [...PERMISSIONS], [])).toEqual([]);
+    // Receiving: anyone who reads purchase orders where Receiving is on (a
+    // viewer reads them by default), with or without Orders.
+    expect(idsFor('viewer', ['orders:request', 'purchase_orders:read'], ['orders', 'purchase_orders', 'receiving'])).toEqual([
+      'order-partial-approval-held',
+      'receiving-follows-permission',
+      'app-order-item-refusals',
+    ]);
+    expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders', 'receiving'])).toEqual(['receiving-follows-permission']);
+    expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders'])).toEqual([]);
+  });
+
+  // Review-fix walk (iPhone simulator): the phone's add-items and edit-line
+  // sheets read every server refusal as "no answer" (they parsed a message
+  // shape api() stopped throwing on 2026-07-31), so they said they did not hear
+  // back and hid the server's reason. Told to everyone who can change an
+  // order's items in the app: the person who placed it, or an approver.
+  it("says the app now shows why a change to an order's items was refused, and quotes what it said before", () => {
+    const entry = release().entries.find((e) => e.id === 'app-order-item-refusals')!;
+    const sheet = readFileSync(resolve(__dirname, '../../../../mobile/src/components/edit-order-line.ts'), 'utf8');
+    expect(sheet).toContain("'We did not hear back from the server, so this change may already have been applied. '");
+    expect(entry.whyItMatters).toContain('it did not hear back from the server');
+    expect(entry.whatChanged).toMatch(/mobile app/);
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|ApiError|status code|403|409/i);
+  });
+
+  it("says receiving follows the permission it needs, in the server's words, and that nothing changes in who can receive", () => {
+    const entry = release().entries.find((e) => e.id === 'receiving-follows-permission')!;
+    expect(entry.whatChanged).toContain(`"${dbPermissionRefusedCopy('receipt_post')}"`);
+    for (const word of ['Receive items', 'Post receipt', 'Scan', 'Reverse', 'Transfer', 'Adjust on-hand', 'Transfer stock']) {
+      expect(entry.whatChanged, word).toContain(word);
+    }
+    expect(entry.howItAffectsYou).toContain('Nothing changes in who can receive');
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|stock:adjust|database/i);
+  });
+
+  it('quotes the warehouse refusal as the order service says it, names the actions, and says Cancel now follows it', () => {
+    const entry = release().entries.find((e) => e.id === 'order-other-warehouse-words')!;
+    expect(entry.whatChanged).toContain(`"${ORDER_WAREHOUSE_WRITE_REFUSED_COPY}"`);
+    const svc = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
+    expect(svc).toContain('throw new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);');
+    // Every change the service refuses outside the warehouse, by what a person
+    // presses: the approver's steps, Cancel, items, Hold and the date, and on
+    // the phone the picking steps (the web offers those only in the
+    // warehouse).
+    for (const word of ['Approve', 'Deny', 'Cancel', 'notes', 'pick slip', 'staging', 'items', 'Hold available stock', 'needed-by date', 'Claim', 'Release']) {
+      expect(entry.whatChanged, word).toContain(word);
+    }
+    // Cancel is the one rule that changed: an approver's cancel now asks the
+    // warehouse, as approving does; the person who placed an order still
+    // cancels it while it waits for approval.
+    expect(entry.howItAffectsYou).toMatch(/Cancel/);
+    expect(entry.howItAffectsYou).toContain('while it waits for approval');
+    expect(entry.howItAffectsYou).not.toContain('Nothing changes in who can do what');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|uuid|database|policy|works there/i);
+    // The phone's needed-by check and its item sheets say it only after the
+    // update (44cad980, 5719842d), so the entry says to load it.
+    expect(entry.whatToDo).toBe(
+      'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
+  });
+
+  it('quotes the notification word for word and the email as it reads, and claims nothing else', () => {
+    const r = release();
+    const entry = r.entries[0]!;
+    const text = readerText(r).join(' ');
+    // The sentence _notify_order_request_changes writes (0395), quoted exactly.
+    // Found by name: the migration's number is fixed only when it is pushed.
+    const dir = resolve(__dirname, '../../../../../supabase/migrations');
+    const file = readdirSync(dir).filter((f) => f.endsWith('_order_stock_guards.sql'));
+    expect(file).toHaveLength(1);
+    const migration = readFileSync(resolve(dir, file[0]!), 'utf8');
+    // Review (2026-10-05): one verb for the requester. A full approval has
+    // always said "Stock has been reserved." and the email says "reserved",
+    // so the two new sentences say "reserved" too (they said "held", the
+    // approver's word).
+    expect(migration).toContain("v_body := 'Part of your order is reserved; the rest is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Part of your order is reserved; the rest is waiting for stock."');
+    // An approval that held nothing has its own sentence, quoted exactly too.
+    expect(migration).toContain("v_body := 'Nothing is reserved yet; your order is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Nothing is reserved yet; your order is waiting for stock."');
+    expect(migration).toContain("v_body := 'Stock has been reserved.';");
+    expect(migration).not.toMatch(/v_body := '[^']*\bheld\b/);
+    // The email's count, as the email prints it ("6 of 8 units"), and its
+    // nothing-held sentence: the notification's own words.
+    expect(entry.whatChanged).toContain('for example 6 of 8');
+    const email = readFileSync(resolve(__dirname, '../email/order-requests.ts'), 'utf8');
+    expect(email).toContain("'Nothing is reserved yet; your order is waiting for stock.'");
+    expect(entry.whatChanged).toContain('or that nothing is reserved yet');
+    // What the requester reads uses one verb: the What's New says "reserved".
+    expect(text).not.toMatch(/\bheld\b/);
+    expect(text).not.toMatch(/\bbook\b|filled automatically|as soon as stock arrives/i);
+    expect(entry.whatToDo).toBe('No action needed.');
+  });
+
+  // Review (2026-10-05): "because the rest is not in stock yet" was wrong when
+  // units are on the shelf but held for other orders (approve_partial holds
+  // what is FREE), and "the order page shows where each item stands" is true
+  // only for approvers, pickers and buyers: a requester's order page shows one
+  // sentence (readinessAudience 'requester'), and the entry is told to every
+  // requester.
+  it('claims no cause it cannot know and nothing the requester\'s order page does not show', () => {
+    const entry = release().entries[0]!;
+    expect(entry.whatChanged).toContain("because the rest isn't available yet");
+    expect(entry.whatChanged).not.toMatch(/not in stock/i);
+    expect(entry.howItAffectsYou).not.toMatch(/order page|where each item stands/i);
+    expect(entry.howItAffectsYou).toContain('The rest stays on your order.');
   });
 });

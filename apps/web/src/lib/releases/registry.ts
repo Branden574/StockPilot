@@ -253,6 +253,132 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'order-partial-approval-held-2026-10',
+    revision: 1,
+    // Small fixes slice 2 (migration 0395, L86): a partly approved order's
+    // notification (in the app and as a push) and approval email say what is
+    // reserved, or that nothing is reserved yet, instead of "every unit is
+    // reserved" (review, 2026-10-05: "reserved", the requester's word in the
+    // full approval's notification and in the email; the sentences said
+    // "held", the approver's word). Held as a DRAFT until 0395 is pushed, the
+    // web deploy is live and phones report launching the OTA that carries
+    // the phone half (Post receipt, Transfer and the needed-by sentence; the
+    // push text comes from the database); the follow-up that publishes it
+    // sets the real publishedAt and re-reads these words against what
+    // shipped. The database refusing what the app already refused is not
+    // visible to anyone using the app as intended, so it has no entry.
+    //
+    // Review (2026-10-05): the slice's review fixes are visible too (the one
+    // sentence for an order in another warehouse, Cancel following it, and
+    // receiving offered only to readers with stock:adjust), so the release
+    // covers the slice and, as the slice 1 release does, each entry carries
+    // its own audience and the release none: a reader sees the release only
+    // when an entry is theirs. It sits below the Items first-paint, weekly
+    // digest and phone ordering PO-2 drafts, dated before them, and above the
+    // small fixes (slice 1) release, published 2026-10-05, dated after every
+    // published release (it can ship before or after those drafts; the
+    // publishing follow-up keeps the order newest first).
+    status: 'draft',
+    title: 'Clearer order approvals and refusals, and receiving for those who can',
+    summary:
+      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. An order in a warehouse you don't work in says so in plain words, and receiving is offered only to people who can receive stock.",
+    publishedAt: '2026-10-10T17:10:00Z',
+    entries: [
+      {
+        id: 'order-partial-approval-held',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'A partly approved order says what is reserved',
+        // Review (2026-10-05): approve_partial reserves what is FREE, so "not
+        // in stock yet" was wrong when the rest is on the shelf but reserved
+        // for other orders; and a requester's order page shows one sentence,
+        // not where each item stands (that is the approver's, picker's and
+        // buyer's view), while this entry is told to every requester.
+        whatChanged:
+          'When your order request is approved but only part of it can be reserved, because the rest isn\'t available yet, the notification now says "Part of your order is reserved; the rest is waiting for stock." When none of it can be reserved yet, it says "Nothing is reserved yet; your order is waiting for stock." The approval email says how many units are reserved, for example 6 of 8, and that the rest is waiting for stock, or that nothing is reserved yet. When every unit is reserved, both still say so.',
+        whyItMatters:
+          'Both used to say every unit was reserved even when only part was, so you could expect the whole order when only part of it was set aside for you.',
+        howItAffectsYou: 'Nothing changes in how orders are approved or picked. The rest stays on your order.',
+        whatToDo: 'No action needed.',
+        // The requester receives both messages: anyone who can place an
+        // order request (Orders on, orders:request, every role by default).
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        // Test stage (local walk): an approver assigned to some warehouses
+        // who pressed Approve, Deny or Save notes on another warehouse's order
+        // read "User does not have write access to warehouse <id>." The order
+        // service now answers with core ORDER_WAREHOUSE_WRITE_REFUSED_COPY for
+        // every change it refuses outside the caller's warehouses (review,
+        // 2026-10-05: line edits too, and Hold and the needed-by date say the
+        // same sentence; an approver's Cancel now asks the warehouse, which it
+        // never did). Who can meet it: staff, the only role that works in
+        // SOME warehouses (owners, admins and managers work in every one by
+        // role), as approvers or as pickers (items:update: the phone offers
+        // Claim and Release with no warehouse check).
+        id: 'order-other-warehouse-words',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Plain words for an order in another warehouse',
+        whatChanged:
+          'If you work in only some of your organization\'s warehouses and open an order from another one, every change to it now says "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask a manager.": Approve, Deny, Cancel, notes, the pick slip, staging, adding or changing items, Hold available stock and the needed-by date. In the mobile app, so do Claim and Release picking.',
+        whyItMatters:
+          'The old messages named the warehouse by a long internal code, or said only that write access was needed, and none said who could help. Cancel did not check the warehouse at all.',
+        howItAffectsYou:
+          'If you approve orders, Cancel now follows the same rule as Approve: you can cancel an order only in a warehouse you work in. An order you placed yourself can still be cancelled while it waits for approval.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { roles: ['staff'], anyPermission: ['orders:approve', 'items:update'], modules: ['orders'] },
+      },
+      {
+        // Review (2026-10-05): receiving asks stock:adjust (the receipt
+        // service, and since 0395 the database), but the web PO page offered
+        // Receive items to everyone who can read purchase orders and Reverse
+        // to every manager by role, and the phone PO screen offered Scan, the
+        // quantities and Post receipt the same way: in production 9 viewers
+        // and 1 staff member without stock:adjust, each refused with "Missing
+        // permission". The phone's Transfer also showed for a manager whose
+        // stock:transfer was revoked (0 in production). Told to everyone who
+        // reads purchase orders where Receiving is on, since that is where the
+        // note appears; Transfer rides along (managers read purchase orders).
+        id: 'receiving-follows-permission',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Receiving shows only to people who can receive',
+        whatChanged:
+          'On a purchase order, Receive items on the web, and Scan, the quantities and Post receipt in the mobile app, now show only if you have the Adjust on-hand permission, which receiving needs. Without it, the purchase order lists what was ordered and received and says "Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it." Reverse on a receipt follows the same permission. In the mobile app, Transfer on an item now follows the Transfer stock permission for managers too.',
+        whyItMatters:
+          'Everyone who could open a purchase order was offered receiving, and the receipt was then refused with "Missing permission".',
+        howItAffectsYou:
+          'Nothing changes in who can receive: only people who could post a receipt see the buttons now.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
+      },
+      {
+        // Review-fix walk (iPhone simulator, 2026-10-05): the app's add-items
+        // and edit-line sheets parsed the HTTP status off the error's text in
+        // a shape api() stopped throwing on 2026-07-31 (typed ApiError), so
+        // every refusal (a quantity below what is already picked, an item not
+        // stocked there, an order in another warehouse) read as no answer:
+        // "We did not hear back from the server ..." and the reason was never
+        // shown. Told to everyone who can change an order's items in the app.
+        id: 'app-order-item-refusals',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The app says why a change to an order’s items was refused',
+        whatChanged:
+          'In the mobile app, when you add items to an order or change or remove a line and the change is refused, the app now shows the reason, for example that units are already picked or that an item is not stocked at that warehouse. A quantity you can fix stays open in the sheet with the reason under it.',
+        whyItMatters:
+          'The app said it did not hear back from the server and that the change might already have been applied, even though the server had answered and nothing had changed.',
+        howItAffectsYou: 'Nothing changes in what you can add or change: only the message is right now.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'small-fixes-2026-10',
     revision: 1,
     // Small fixes slice 1 (followups triage 2026-10-05; #325, 893da840,
@@ -912,8 +1038,9 @@ export const RELEASES: Release[] = [
     // order (CancelOrderButton); the mobile app only on a backordered order.
     // The removed manager's own-order cancel "while it waits for approval" is
     // the apps' rule (OrderRequestsService.cancel, M7); cancel_order_request
-    // lets a requester cancel at any open status (review finding 3, recorded
-    // as a follow-up).
+    // let a requester cancel at any open status (review finding 3, recorded
+    // as a follow-up) until 0395 (small fixes slice 2, N1), which refuses a
+    // requester past pending approval in the database too.
     status: 'published',
     title: 'Approving orders follows the approve permission',
     summary:

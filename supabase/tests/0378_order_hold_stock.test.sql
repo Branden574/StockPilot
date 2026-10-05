@@ -270,7 +270,13 @@ insert into public.order_request_lines
   (:ordCh, :iChY, 10, 0, '2026-09-01 10:00:00+00'),
   (:ordCh, :iChX, 6,  0, '2026-09-01 10:00:01+00');
 -- The deleted and the moved item were fine when their lines were added.
+-- Changed on purpose by 0395 (L15): an item that holds stock can no longer be
+-- soft-deleted, so this models a row deleted before 0395 (production keeps 11
+-- such items, left as history: owner decision Q4) by switching the guard off
+-- for this one statement.
+alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set deleted_at = now() where id = :iDel;
+alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock;
 
 insert into public.rentals (id, organization_id, warehouse_id, borrower_name, expected_return_at, status)
 values (:rentR, :orgA, :whA, 'Borrower 0378', now() + interval '7 days', 'out');
@@ -731,13 +737,18 @@ select is(
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'cancel_order_request(uuid,text)|47cabcd1fe4f52fb7b2b6b6b64b68da1|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
+  -- pending approval, and the restock movements carry the order (0395 R1:
+  -- removing both gives 0390's body exactly); nothing proven here reads either.
+  'cancel_order_request(uuid,text)|535fc49935f15adc8d7dfa78836a06af|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
-  'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0395 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
+  -- requires a member with Orders on (0395 R3); the hand-over accounting is unchanged.
+  'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c|true|{search_path=public}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
   'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)|e78aa783a243eebbda087eb2cbbb9647|false|{search_path=public}|postgres\n'
   'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)|9c3301fedd607398dccc72c7b4cfe371|true|{search_path=public}|postgres\n'
@@ -749,10 +760,15 @@ select is(
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
-  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|efc01e2e0ea98531c92c7db27f17695c|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0395 (was efc01e2e0ea98531c92c7db27f17695c): the wrapper refuses a direct
+  -- call without stock:adjust before raising the flag (0395 R9); its body and
+  -- what a posted receipt writes are unchanged.
+  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|15f5db367d297a58acc1065bae4ffe69|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
+  -- (0395 R2); the draw reversal and the holds it restores are unchanged.
+  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'

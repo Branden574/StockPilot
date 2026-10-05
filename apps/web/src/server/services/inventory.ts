@@ -102,6 +102,7 @@ import {
   reportDegradedRead,
   writeInIdBatches,
 } from './lib/fetch-by-ids';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 import { fetchAllRows } from './lib/paginate';
@@ -6006,7 +6007,9 @@ export class InventoryService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+    // 0395: the database refuses to soft-delete an item with stock on record
+    // or a holding (23514, hint item_holds_stock), for every caller.
+    if (error) throw dbGuardRefusal(error) ?? new ServiceError('internal_error', error.message);
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.soft_delete');
 
     // Movement/Activity P3 Task 1: same rationale as archive() — soft-delete
@@ -6157,6 +6160,12 @@ export class InventoryService {
       ...(drawMode ? { p_mode: drawMode } : {}),
     });
     if (error) {
+      // 0395: adjust_stock refuses a caller without stock:adjust itself (42501
+      // forbidden, hint permission). assertPermission above stops that first,
+      // so this is a permission revoked mid-request; checked before the
+      // 'forbidden' arm below, which reads any other 42501 as a warehouse one.
+      const guard = dbGuardRefusal(error, 'adjust');
+      if (guard) throw guard;
       // 'insufficient_placed_stock' does NOT contain the substring
       // 'insufficient_stock', so it used to fall through to internal_error and
       // reach the user as "Something went wrong". Match the specific class first.
@@ -6434,6 +6443,11 @@ export class InventoryService {
       p_notes: input.notes ?? null,
     });
     if (error) {
+      // 0395: transfer_stock refuses a caller without stock:transfer itself
+      // (42501 forbidden, hint permission); before the 'forbidden' arm below,
+      // which would call it a warehouse refusal.
+      const guard = dbGuardRefusal(error, 'transfer');
+      if (guard) throw guard;
       // EVERY RPC error used to become internal_error, so a permission or state
       // problem surfaced as an HTTP 500 "An internal error occurred" — which the
       // mobile client RETRIES, and which buries real 500s in the logs. Pattern

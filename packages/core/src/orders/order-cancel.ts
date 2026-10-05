@@ -9,6 +9,14 @@
  *     cancel it.
  * A closed order (completed, denied, cancelled) offers no Cancel.
  *
+ * The service also asks an approver below manager rank for write access to
+ * the order's warehouse, as for Approve and Deny (small fixes slice 2 review);
+ * this offer does not know the viewer's warehouses, so an approver outside the
+ * order's warehouse is offered Cancel, like Approve, and refused in the one
+ * sentence (core ORDER_WAREHOUSE_WRITE_REFUSED_COPY). Withholding every
+ * approver action on such an order, on the web and the phone together, is
+ * security slice E's.
+ *
  * 'approver' and 'requester' are which offer it is (the phone words them
  * differently); null offers nothing.
  */

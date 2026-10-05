@@ -32,6 +32,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 
 export type CycleCountStatus = 'in_progress' | 'completed' | 'canceled';
 
@@ -1916,7 +1917,9 @@ export class CycleCountsService {
       // cycle_count_negative_result (v4 0339), cycle_count_location_out_of_org
       // and cycle_count_location_out_of_scope (0342/0343), and
       // cycle_count_line_superseded (0369, with DETAIL superseded_lines=<n>).
-      throw mapPostCycleCountError(error.message, error.details);
+      // 0395: and forbidden with hint permission (the wrapper asks
+      // stock:adjust, as assertPermission above does), mapped first.
+      throw dbGuardRefusal(error, 'count_post') ?? mapPostCycleCountError(error.message, error.details);
     }
     // The RPC has committed the variance adjustments. The Items/Books views
     // must drop their cached quantities here, not in a caller: the phone posts

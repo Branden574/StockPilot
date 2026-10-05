@@ -13,6 +13,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
@@ -811,6 +812,10 @@ export class BundlesService {
       p_notes: notes ?? null,
     });
     if (error) {
+      // 0395: assemble_bundle refuses a caller without bundles:manage itself
+      // (42501 forbidden, hint permission), as assertPermission above does.
+      const guard = dbGuardRefusal(error, 'kit_assemble');
+      if (guard) throw guard;
       const msg = error.message ?? '';
       if (msg.includes('insufficient_stock')) {
         throw new ServiceError(
