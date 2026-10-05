@@ -135,6 +135,14 @@ export type AuditEvent =
   | 'vendor_item_mapping.upserted'
   | 'stock.receipt.posted'
   | 'stock.receipt.reversed'
+  // Receiving checklist (F4-1). A version published or turned off, a run made
+  // on a receipt (not when a start answered an existing run), and a run
+  // completed. Saving progress is not audited: the run keeps its revision.
+  // No migration: audit_logs.event is un-CHECKed text.
+  | 'receiving_checklist.published'
+  | 'receiving_checklist.retired'
+  | 'receiving_check.started'
+  | 'receiving_check.completed'
   | 'purchase_order.created'
   | 'purchase_order.updated'
   | 'purchase_order.status_changed'
