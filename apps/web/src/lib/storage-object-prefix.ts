@@ -194,8 +194,15 @@ async function fetchLeadingWindow(
   if (res.status === 206) {
     const total = totalFromContentRange(res.headers.get('content-range'));
     if (total === null) return null;
-    // The body is the (at most SNIFF_PREFIX_BYTES-long) range itself.
-    const body = new Uint8Array(await res.arrayBuffer());
+    // The body is the (at most SNIFF_PREFIX_BYTES-long) range itself. A body
+    // read that fails (the connection drops mid-body) is null like every
+    // other failure here, never a throw out of this function (L65a).
+    let body: Uint8Array;
+    try {
+      body = new Uint8Array(await res.arrayBuffer());
+    } catch {
+      return null;
+    }
     const prefix = body.byteLength > SNIFF_PREFIX_BYTES ? body.subarray(0, SNIFF_PREFIX_BYTES) : body;
     // A total SMALLER than the bytes we were just handed is self-contradictory
     // (`bytes 0-4095/5` with a 4096-byte body). Trusting it would record a
