@@ -68,6 +68,10 @@ vi.mock('@/server/actions/order-requests', () => ({
   suggestNeededByAction: vi.fn(),
 }));
 
+// Returns RX-2: the replacement's early release from the order page.
+const releaseReplacement = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/returns', () => ({ releaseReturnReplacementAction: releaseReplacement }));
+
 const reopenPicking = vi.mocked(reopenPickingAction);
 
 type PanelProps = React.ComponentProps<typeof ManagerActionsPanel>;
@@ -1043,5 +1047,49 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     r2.unmount();
     render(<ManagerActionsPanel {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+  });
+});
+
+describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () => {
+  const waiting = {
+    returnId: 'rma-1',
+    returnNumber: 'RMA-20261005-ABC123',
+    waitingForReturn: true,
+    canReleaseEarly: true,
+    driverLine: 'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+  };
+
+  it('while the return-first gate holds, the pick slip gives way to the gate words and the early release', async () => {
+    releaseReplacement.mockResolvedValue({ ok: true, data: { answer: { changed: true, notNeeded: false }, workbench: {} } });
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: waiting })} />);
+    expect(screen.queryByRole('button', { name: /Generate pick slip/ })).toBeNull();
+    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
+    expect(releaseReplacement).toHaveBeenCalledWith({ id: 'rma-1', reason: 'Customer is completing an in-person exchange today.' });
+  });
+
+  it('released or received: the pick slip is back; no release without both permissions', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })} />,
+    );
+    expect(screen.getByRole('button', { name: /Generate pick slip/ })).toBeInTheDocument();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, canReleaseEarly: false } })} />);
+    expect(screen.queryByRole('button', { name: /Release before return is received/ })).toBeNull();
+    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+  });
+
+  it('a delivery swap shows the driver the returned item to collect, read-only', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })}
+      />,
+    );
+    expect(screen.getByTestId('collect-returned-item')).toHaveTextContent(
+      'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+    );
   });
 });

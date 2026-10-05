@@ -6,6 +6,19 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  AddReplacement,
+  CancelReplacementDialog,
+  ChangeReplacementDialog,
+  ReleaseEarlyDialog,
+  ReplacementOrderSection,
+  ReplacementSide,
+  reviewDecision,
+  reviewProblem,
+  type AddReplacementState,
+  type ChangeLineInput,
+  type ExchangeReviewState,
+} from '@/components/returns/exchange-panel';
 import { ReturnStatusBadge } from '@/components/returns/return-status-badge';
 import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
 import { Badge } from '@/components/ui/badge';
@@ -24,15 +37,22 @@ import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import {
   buyReturnLabelAction,
   cancelReturnAction,
+  cancelReturnReplacementAction,
+  changeReturnReplacementAction,
   denyReturnAction,
   planReturnDispositionsAction,
+  prepareReturnReplacementAction,
+  releaseReturnReplacementAction,
+  returnExchangeCandidatesAction,
   runReturnStepsAction,
 } from '@/server/actions/returns';
+import type { ReturnWorkbenchExchange } from '@/server/services/returns-exchange-workbench';
 import type { ReturnWorkbench as Workbench, ReturnWorkbenchLine } from '@/server/services/returns-workbench';
 
 import {
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approvalPreviewLines,
   availableReturnActions,
   choiceNeededSentence,
   choiceToDecision,
@@ -43,7 +63,10 @@ import {
   preselectedChoice,
   processLabelFor,
   qtyReturningLabel,
+  returnActionLabel,
   returnLineLabel,
+  replacementShortItems,
+  replacementShortLine,
   RETURN_ACTION_LABELS,
   RETURN_REASON_MAX,
   RETURNS_COPY,
@@ -68,6 +91,22 @@ export interface WorkbenchReturnLabel {
 }
 
 type Mode = 'idle' | 'change_destination';
+
+/** A workbench payload from before RX-2 (or a test) has no exchange half. */
+const NO_EXCHANGE: ReturnWorkbenchExchange = {
+  kind: 'return',
+  status: 'none',
+  statusLabel: 'Return',
+  lines: [],
+  replacement: null,
+  history: [],
+  releasedEarly: false,
+  release: null,
+  counter: false,
+  rail: [],
+  hasApprovedExchange: false,
+  createEnabled: false,
+};
 
 /**
  * The RMA workbench (returns RX-1, graft G3): the header, the RETURNING
@@ -119,13 +158,42 @@ export function ReturnWorkbench({
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
 
+  const ex = wb.exchange ?? NO_EXCHANGE;
+  const hasExchange = ex.kind === 'exchange';
   const actions = availableReturnActions({
     status: r.status,
-    exchangeStatus: 'none',
+    exchangeStatus: ex.status,
+    hasExchange,
+    replacementClass: ex.replacement?.class ?? 'none',
+    hasApprovedExchange: ex.hasApprovedExchange,
     viewerCanManageReturns: wb.viewer.canManageReturns,
     viewerCanApproveOrders: wb.viewer.canApproveOrders,
     itemIsHere,
   });
+
+  // RX-2: the approval's exchange review, "Add a replacement", and the
+  // replacement dialogs.
+  const [reviews, setReviews] = React.useState<Record<string, ExchangeReviewState>>({});
+  const [adds, setAdds] = React.useState<Record<string, AddReplacementState | null>>({});
+  const [shortDetail, setShortDetail] = React.useState<unknown>(null);
+  const [releaseOpen, setReleaseOpen] = React.useState(false);
+  const [cancelReplacementOpen, setCancelReplacementOpen] = React.useState(false);
+  const [changeMode, setChangeMode] = React.useState<'change' | 'issue' | null>(null);
+  const [changeShort, setChangeShort] = React.useState<unknown>(null);
+  const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? { kind: 'as_requested' };
+  const exchangeByReturnLine = new Map(ex.lines.map((x) => [x.returnLineId, x]));
+  const canDecideExchange = r.status === 'requested' && wb.viewer.canManageReturns && wb.viewer.canApproveOrders;
+  const loaderFor = (orderRequestLineId: string) => (q: string) =>
+    returnExchangeCandidatesAction({ id: r.id, line: orderRequestLineId, q });
+  const itemLabelById = (itemId: string): string => {
+    for (const x of ex.lines) {
+      if (x.approvedItemId === itemId && x.approvedItem) return returnLineLabel(x.approvedItem.name ?? 'Item', x.approvedItem.variant);
+      if (x.requestedItemId === itemId && x.requestedItem) return returnLineLabel(x.requestedItem.name ?? 'Item', x.requestedItem.variant);
+    }
+    for (const a of Object.values(adds)) if (a?.itemId === itemId && a.label) return a.label;
+    for (const v of Object.values(reviews)) if (v.kind === 'change' && v.itemId === itemId && v.label) return v.label;
+    return 'Item';
+  };
 
   // A line with no destination answer (the read failed) has nothing chosen:
   // nothing is sent for it (review fix; never a silent Staging).
@@ -145,6 +213,28 @@ export function ReturnWorkbench({
         const c = choiceFor(l);
         return c.needsChoice ? [choiceNeededSentence(lineLabel(l), c.needsChoice)] : [];
       });
+
+  // RX-2: what the exchange review still needs before the approval can go.
+  const exchangeProblems = canDecideExchange
+    ? [
+        ...ex.lines
+          .filter((x) => x.status === 'requested')
+          .map((x) => reviewProblem(x, reviewFor(x.id)))
+          .filter((p): p is string => p !== null),
+        ...Object.values(adds).flatMap((a) => (a && !a.itemId ? [RETURNS_COPY.chooseReplacement] : [])),
+      ]
+    : [];
+
+  function exchangeDecisions(): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const x of ex.lines) if (x.status === 'requested') out.push(reviewDecision(x, reviewFor(x.id)));
+    for (const [returnLineId, a] of Object.entries(adds)) {
+      if (a?.itemId) {
+        out.push({ action: 'add', returnLineId, itemId: a.itemId, quantity: a.quantity, ...(a.reason.trim() ? { reason: a.reason.trim() } : {}) });
+      }
+    }
+    return out;
+  }
 
   function setChoice(lineId: string, next: RestockChoice) {
     setChoices((prev) => ({ ...prev, [lineId]: next }));
@@ -166,6 +256,11 @@ export function ReturnWorkbench({
     adopt(next);
     for (const step of res.data.ran) {
       if (step.outcome === 'refused') {
+        if (step.reason === 'replacement_unavailable') {
+          // The numbers first (D19), then "Approve, replacement on backorder"
+          // or "Change replacement" in the next-step bar.
+          setShortDetail(step.detail ?? []);
+        }
         toast.error(step.message ?? 'This step could not be completed.');
       } else if (step.outcome === 'already') {
         // "Already closed by Dana": the answer's workbench names who acted
@@ -192,10 +287,91 @@ export function ReturnWorkbench({
     router.refresh();
   }
 
-  async function approve() {
-    if (!allOffered) return;
+  async function approve(whenShort: 'refuse' | 'backorder' = 'refuse') {
+    if (!allOffered || exchangeProblems.length > 0) return;
     const lines = unappliedLines.map((l) => choiceToDecision(l.id, choiceFor(l)));
-    await runSteps(['approve'], { approve: { lines }, receiveNow: itemIsHere }, 'approve');
+    const exchange = exchangeDecisions();
+    setShortDetail(null);
+    await runSteps(
+      ['approve'],
+      {
+        approve: { lines, ...(exchange.length > 0 ? { exchange, replacement: { whenShort } } : {}) },
+        receiveNow: itemIsHere,
+      },
+      'approve',
+    );
+  }
+
+  // ── RX-2: the replacement actions ──────────────────────────────────────
+
+  function afterReplacement(res: { ok: true; data: { workbench: unknown } } | { ok: false; error: { message: string } }, done: string) {
+    if (!res.ok) {
+      toast.error(res.error.message);
+      router.refresh();
+      return false;
+    }
+    adopt(res.data.workbench as Workbench);
+    toast.success(done);
+    router.refresh();
+    return true;
+  }
+
+  async function releaseEarly(reason: string) {
+    setBusy('release');
+    const res = await releaseReturnReplacementAction({ id: r.id, reason });
+    setBusy(null);
+    if (res.ok && !res.data.answer.changed) {
+      adopt(res.data.workbench as Workbench);
+      toast.message(res.data.answer.notNeeded ? 'The return was already received.' : 'Already released.');
+      setReleaseOpen(false);
+      return;
+    }
+    if (afterReplacement(res, 'Released for picking.')) setReleaseOpen(false);
+  }
+
+  async function cancelReplacement(reason: string) {
+    setBusy('cancel_replacement');
+    const res = await cancelReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } });
+    setBusy(null);
+    if (afterReplacement(res, 'Replacement cancelled.')) setCancelReplacementOpen(false);
+  }
+
+  async function changeReplacement(body: {
+    lines: Array<{ exchangeLineId: string; itemId: string | null; quantity: number }>;
+    reason: string;
+    whenShort: 'refuse' | 'backorder';
+  }) {
+    setBusy('change_replacement');
+    setChangeShort(null);
+    const res = await changeReturnReplacementAction({
+      id: r.id,
+      body: { expectedRevision: wb.revision, lines: body.lines, reason: body.reason, whenShort: body.whenShort },
+    });
+    setBusy(null);
+    if (!res.ok && res.error.details?.reason === 'replacement_unavailable') {
+      setChangeShort(res.error.details.detail ?? []);
+      toast.error(res.error.message);
+      return;
+    }
+    if (afterReplacement(res, changeMode === 'issue' ? 'New replacement issued.' : 'Replacement changed.')) setChangeMode(null);
+  }
+
+  async function prepareReplacement() {
+    setBusy('prepare');
+    const res = await prepareReturnReplacementAction({ id: r.id });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      router.refresh();
+      return;
+    }
+    adopt(res.data.workbench as Workbench);
+    const refused = res.data.answer.ran.find((s) => s.outcome === 'refused');
+    if (refused) toast.error(refused.message ?? RETURNS_COPY.prepareStopped);
+    else if (res.data.answer.status === 'staged_for_delivery') toast.success(RETURNS_COPY.prepareStagedDelivery);
+    else if (res.data.answer.status === 'staged_for_pickup') toast.success(RETURNS_COPY.prepareStaged);
+    else toast.message(RETURNS_COPY.prepareUnconfirmed);
+    router.refresh();
   }
 
   async function receive() {
@@ -295,8 +471,48 @@ export function ReturnWorkbench({
       case 'change_destination':
         setMode((m) => (m === 'change_destination' ? 'idle' : 'change_destination'));
         return;
+      case 'release_early':
+        setReleaseOpen(true);
+        return;
+      case 'cancel_replacement':
+        setCancelReplacementOpen(true);
+        return;
+      case 'change_replacement':
+        setChangeShort(null);
+        setChangeMode('change');
+        return;
+      case 'issue_replacement':
+        setChangeShort(null);
+        setChangeMode('issue');
+        return;
+      case 'get_replacement_ready':
+        void prepareReplacement();
+        return;
+      case 'open_replacement':
+      case 'hand_over':
+        // The replacement's own page: its signature actions are the one
+        // signature implementation.
+        if (ex.replacement) router.push(`/dashboard/orders/${ex.replacement.orderId}`);
+        return;
     }
   }
+
+  // The lines a change (approved) or a re-issue (cancelled by a replacement
+  // cancel) acts on.
+  const changeLines: ChangeLineInput[] = ex.lines
+    .filter((x) => (changeMode === 'issue' ? x.status === 'cancelled' && x.approvedItemId : x.status === 'approved'))
+    .map((x) => {
+      const rl = wb.lines.find((l) => l.id === x.returnLineId);
+      return {
+        exchangeLineId: x.id,
+        orderRequestLineId: rl?.orderRequestLineId ?? '',
+        returnedLabel: rl ? lineLabel(rl) : 'Item',
+        returnedQty: rl?.quantity ?? x.requestedQuantity,
+        currentItemId: x.approvedItemId ?? x.requestedItemId,
+        currentQuantity: x.approvedQuantity ?? x.requestedQuantity,
+      };
+    });
+  const shortLines = Array.isArray(shortDetail) ? replacementShortItems(shortDetail as Array<Record<string, unknown>>) : [];
 
   const showPickers = r.status === 'requested' || r.status === 'received' || mode === 'change_destination';
   const editable = wb.viewer.canManageReturns && busy === null;
@@ -305,9 +521,11 @@ export function ReturnWorkbench({
       ? processLabelFor(openLines[0]!.restock, choiceFor(openLines[0]!))
       : null;
   const primaryLabel = (a: ReturnAction): string =>
-    a === 'process' && processLabel ? processLabel.button : RETURN_ACTION_LABELS[a];
+    a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, { hasExchange });
   const primaryDisabled = (a: ReturnAction): boolean =>
-    busy !== null || ((a === 'process' || a === 'approve' || a === 'approve_and_receive') && !allOffered);
+    busy !== null ||
+    ((a === 'process' || a === 'approve' || a === 'approve_and_receive') && !allOffered) ||
+    ((a === 'approve' || a === 'approve_and_receive') && exchangeProblems.length > 0);
   const secondaryDisabled = (a: ReturnAction): boolean =>
     busy !== null || (a === 'change_destination' && wb.destinationsUnavailable);
 
@@ -321,7 +539,7 @@ export function ReturnWorkbench({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <h1 className="truncate text-2xl font-semibold tracking-tight">{r.returnNumber ?? 'Return'}</h1>
           <ReturnStatusBadge status={r.status as never} />
-          <Badge variant="outline">{RETURNS_COPY.typeReturn}</Badge>
+          <Badge variant="outline">{hasExchange ? RETURNS_COPY.typeExchange : RETURNS_COPY.typeReturn}</Badge>
           <Badge variant="outline">
             {r.source === 'requester' ? RETURNS_COPY.requestedByRequester : RETURNS_COPY.createdByStaff}
           </Badge>
@@ -366,9 +584,9 @@ export function ReturnWorkbench({
             </span>
           </label>
         ) : null}
-        {!actions.primary && actions.readOnlyReason ? (
-          <p className="text-muted-foreground text-sm">{actions.readOnlyReason}</p>
-        ) : null}
+        {/* Why nothing, or less, is offered (RX-2: the replacement actions
+            need order approval while the return actions stay). */}
+        {actions.readOnlyReason ? <p className="text-muted-foreground text-sm">{actions.readOnlyReason}</p> : null}
         {!actions.primary && !actions.readOnlyReason && actions.secondary.length === 0 ? (
           <p className="text-muted-foreground text-sm">No further steps for this return.</p>
         ) : null}
@@ -379,17 +597,73 @@ export function ReturnWorkbench({
             ))}
           </ul>
         ) : null}
+        {exchangeProblems.length > 0 ? (
+          <ul className="text-destructive basis-full space-y-0.5 text-sm" role="status" aria-label="Before approving the exchange">
+            {[...new Set(exchangeProblems)].map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        ) : null}
+        {shortLines.length > 0 && r.status === 'requested' ? (
+          <div className="basis-full space-y-2" role="alert" aria-label="Not in stock">
+            <ul className="text-destructive space-y-0.5 text-sm">
+              {shortLines.map((sItem) => (
+                <li key={sItem.itemId}>{replacementShortLine(itemLabelById(sItem.itemId), sItem.available, sItem.needed)}</li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => void approve('backorder')} disabled={busy !== null}>
+                {RETURNS_COPY.approveReplacementOnBackorder}
+              </Button>
+              <Button variant="outline" onClick={() => setShortDetail(null)} disabled={busy !== null}>
+                {RETURNS_COPY.changeReplacement}
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </section>
+
+      {hasExchange ? <ReplacementOrderSection exchange={ex} canReadDecisions={wb.viewer.canReadDecisions} /> : null}
 
       {r.status === 'requested' && wb.viewer.canManageReturns ? (
         <section className="bg-card rounded-xl border p-4 text-sm" aria-label="What happens when you approve">
           <h2 className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">What happens when you approve</h2>
           <ul className="mt-2 list-disc space-y-1 pl-5">
-            <li>{RETURNS_COPY.approveNothingMoves}</li>
-            {openLines.map((l) => {
-              const p = processLabelFor(l.restock!, choiceFor(l));
-              return <li key={l.id}>{whenProcessedSentence(p.destination, lineLabel(l))}</li>;
-            })}
+            {approvalPreviewLines({
+              lines: openLines.map((l) => ({
+                returnedLabel: lineLabel(l),
+                destination: processLabelFor(l.restock!, choiceFor(l)).destination,
+              })),
+              exchanges: [
+                ...ex.lines
+                  .filter((x) => x.status === 'requested')
+                  .map((x) => {
+                    const rl = wb.lines.find((l) => l.id === x.returnLineId);
+                    const v = reviewFor(x.id);
+                    const changed = v.kind === 'change';
+                    return {
+                      returnedLabel: rl ? lineLabel(rl) : 'Item',
+                      decision: v.kind === 'decline' ? ('decline' as const) : v.kind === 'change' && !v.itemId ? ('pending' as const) : ('approve' as const),
+                      replacementLabel: changed
+                        ? v.label
+                        : x.requestedItem
+                          ? returnLineLabel(x.requestedItem.name ?? 'Item', x.requestedItem.variant)
+                          : null,
+                      quantity: changed ? v.quantity : x.requestedQuantity,
+                      available: changed ? v.free : x.requestedFree,
+                    };
+                  }),
+                ...Object.entries(adds).flatMap(([lineId, a]) => {
+                  const rl = wb.lines.find((l) => l.id === lineId);
+                  return a?.itemId
+                    ? [{ returnedLabel: rl ? lineLabel(rl) : 'Item', decision: 'add' as const, replacementLabel: a.label, quantity: a.quantity, available: a.free }]
+                    : [];
+                }),
+              ],
+              itemIsHere,
+            }).map((sentence) => (
+              <li key={sentence}>{sentence}</li>
+            ))}
           </ul>
         </section>
       ) : null}
@@ -399,8 +673,12 @@ export function ReturnWorkbench({
         <h2 className="text-muted-foreground font-mono text-[10.5px] uppercase tracking-[0.12em]">{RETURNS_COPY.returning}</h2>
         {wb.lines.map((l) => {
           const name = l.item.name ?? 'Deleted item';
+          const x = exchangeByReturnLine.get(l.id) ?? null;
+          const add = adds[l.id] ?? null;
+          const offerAdd = !x && canDecideExchange && ex.createEnabled;
           return (
-            <article key={l.id} className="bg-card grid grid-cols-[64px_1fr] gap-4 rounded-xl border p-4 sm:grid-cols-[96px_1fr]">
+            <div key={l.id} className={cn('grid gap-3', x || add ? 'md:grid-cols-2' : '')}>
+            <article className="bg-card grid grid-cols-[64px_1fr] gap-4 rounded-xl border p-4 sm:grid-cols-[96px_1fr]">
               <div className="bg-muted relative h-16 w-16 overflow-hidden rounded-lg sm:h-24 sm:w-24">
                 {l.item.thumbUrl || l.item.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element -- signed storage URL, sized box
@@ -435,8 +713,39 @@ export function ReturnWorkbench({
                 {r.status === 'received' && l.restock ? (
                   <p className="text-muted-foreground text-xs">{processingHint(l, choiceFor(l), lineLabel(l))}</p>
                 ) : null}
+                {offerAdd && !add ? (
+                  <AddReplacement
+                    returnedLabel={lineLabel(l)}
+                    returnedQty={l.quantity}
+                    state={null}
+                    onChange={(next) => setAdds((prev) => ({ ...prev, [l.id]: next }))}
+                    load={loaderFor(l.orderRequestLineId)}
+                    disabled={busy !== null}
+                  />
+                ) : null}
               </div>
             </article>
+            {x ? (
+              <ReplacementSide
+                line={x}
+                returnedLabel={lineLabel(l)}
+                returnedQty={l.quantity}
+                review={canDecideExchange && x.status === 'requested' ? reviewFor(x.id) : undefined}
+                onReview={(next) => setReviews((prev) => ({ ...prev, [x.id]: next }))}
+                load={loaderFor(l.orderRequestLineId)}
+                disabled={busy !== null}
+              />
+            ) : add ? (
+              <AddReplacement
+                returnedLabel={lineLabel(l)}
+                returnedQty={l.quantity}
+                state={add}
+                onChange={(next) => setAdds((prev) => ({ ...prev, [l.id]: next }))}
+                load={loaderFor(l.orderRequestLineId)}
+                disabled={busy !== null}
+              />
+            ) : null}
+            </div>
           );
         })}
         {mode === 'change_destination' ? (
@@ -553,10 +862,16 @@ export function ReturnWorkbench({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Cancel this return?</DialogTitle>
-            <DialogDescription>Nothing moves. The return closes as cancelled.</DialogDescription>
+            <DialogDescription>
+              {ex.hasApprovedExchange
+                ? 'The return closes as cancelled. A replacement not yet handed over is cancelled with it.'
+                : 'Nothing moves. The return closes as cancelled.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="return-cancel-reason">{RETURNS_COPY.cancelReasonLabel}</Label>
+            <Label htmlFor="return-cancel-reason">
+              {ex.hasApprovedExchange ? RETURNS_COPY.cancelReturnReasonRequired : RETURNS_COPY.cancelReasonLabel}
+            </Label>
             <Textarea
               id="return-cancel-reason"
               value={cancelReason}
@@ -569,19 +884,53 @@ export function ReturnWorkbench({
             <Button variant="outline" onClick={() => setCancelOpen(false)} disabled={busy === 'cancel'}>
               Keep it
             </Button>
-            <Button variant="destructive" onClick={cancel} disabled={busy === 'cancel'}>
+            <Button
+              variant="destructive"
+              onClick={cancel}
+              disabled={busy === 'cancel' || (ex.hasApprovedExchange && !cancelReason.trim())}
+            >
               {busy === 'cancel' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               {RETURNS_COPY.cancelReturn}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {hasExchange ? (
+        <>
+          <ReleaseEarlyDialog open={releaseOpen} onOpenChange={setReleaseOpen} busy={busy === 'release'} onConfirm={releaseEarly} />
+          <CancelReplacementDialog
+            open={cancelReplacementOpen}
+            onOpenChange={setCancelReplacementOpen}
+            busy={busy === 'cancel_replacement'}
+            drawn={ex.replacement?.class === 'drawn'}
+            inTransit={ex.replacement?.status === 'in_transit'}
+            onConfirm={cancelReplacement}
+          />
+          <ChangeReplacementDialog
+            key={changeMode ?? 'closed'}
+            open={changeMode !== null}
+            onOpenChange={(v) => {
+              if (!v) setChangeMode(null);
+            }}
+            busy={busy === 'change_replacement'}
+            mode={changeMode ?? 'change'}
+            lines={changeLines}
+            loaderFor={loaderFor}
+            shortDetail={changeShort}
+            itemLabel={itemLabelById}
+            onConfirm={changeReplacement}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
 
 function stepKey(a: ReturnAction): string {
-  return a === 'approve_and_receive' ? 'approve' : a;
+  if (a === 'approve_and_receive') return 'approve';
+  if (a === 'get_replacement_ready') return 'prepare';
+  return a;
 }
 
 function initialChoices(lines: ReturnWorkbenchLine[]): Record<string, RestockChoice> {

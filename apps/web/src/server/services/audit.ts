@@ -396,6 +396,10 @@ export type AuditEvent =
   | 'return.replacement_issued'
   | 'return.replacement_cancelled'
   | 'return.replacement_released'
+  // ... and on the replacement order's own trail (its timeline): released
+  // before the return, and the returned item received (the gate opened).
+  | 'order_request.released_early'
+  | 'order_request.return_received'
   // Recurring PO templates — time-based standing orders (Task 3).
   | 'recurring_po_template.created'
   | 'recurring_po_template.updated'

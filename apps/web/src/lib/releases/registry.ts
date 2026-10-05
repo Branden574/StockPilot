@@ -28,6 +28,62 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'returns-exchange-2026-10',
+    revision: 1,
+    // Returns RX-2 (migration 0397: exchanges for staff and the counter, the
+    // linked replacement order, the return-first gate). Held as a DRAFT until
+    // the migration is pushed and verified, the web deploy is READY, the OTA
+    // with the phone's exchange screens is published and launched, and the
+    // Demo Co walk passed (returns plan 10.1); the follow-up that publishes
+    // it (RX-5) sets 'published' and the real publishedAt and re-reads these
+    // words against what shipped. Newest first: it is the only draft, so it
+    // sits at the top, above the public order link release (the newest
+    // published release, 2026-10-06 12:42Z), and is dated after every
+    // release (a placeholder; the publishing follow-up dates and orders it
+    // for real). The words name the screens'
+    // own labels, claim no number nobody measured and never say "book" for a
+    // recorded quantity.
+    // Who is told: anyone who can open Returns; the replacement order's entry
+    // to people who manage returns with Orders on.
+    status: 'draft',
+    title: 'Exchanges on returns',
+    summary:
+      'A return line can now ask for a different size or item. The replacement is a real order with its own SO number, reserved when the exchange is approved and picked once the returned item is in. A manager can release it earlier, with a reason. Everything stays on one RMA, on the web and the phone.',
+    publishedAt: '2026-10-14T17:10:00Z',
+    audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+    entries: [
+      {
+        id: 'returns-exchange',
+        category: 'new',
+        area: 'Returns',
+        title: 'Exchange a returned item for another size or item',
+        whatChanged:
+          'When you create a return, each line can be Return only or Exchange for another size or item. The replacement shows beside the returning item with its other sizes first and what is available. When you approve, choose Approve as requested, Change replacement… or Decline the exchange, return only. You can also Add a replacement to a return-only line.',
+        whyItMatters:
+          'A wrong size used to mean a return and a separate new order typed by hand, with nothing tying the two together.',
+        howItAffectsYou:
+          'Approving creates the replacement order and reserves it. If it is not in stock, the approval shows what is short first; then choose Approve, replacement on backorder or Change replacement. At the counter, switch on The item is here, use Approve and receive, Process return, then Get replacement ready, and hand it over on its order.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-exchange-replacement-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'The replacement order waits for the returned item',
+        whatChanged:
+          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager uses Release replacement before return is received with a reason. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, Issue a new replacement.',
+        whyItMatters: 'Nothing goes out twice: the replacement is picked only once the item it replaces is back, or a manager says so.',
+        howItAffectsYou:
+          'The orders list marks these orders Exchange. Cancelling a replacement that was already picked puts the picked items back in Staging on record. Cancelling the whole return also cancels a replacement not yet handed over.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:manage'], modules: ['returns', 'orders'] },
+      },
+    ],
+  },
+  {
     id: 'public-link-sent-request-2026-10',
     revision: 1,
     // The public order link fix (#336, b362eab2, merged 2026-10-06 06:24:12Z;

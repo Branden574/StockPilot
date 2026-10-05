@@ -551,6 +551,9 @@ export interface ReturnStepResult {
   outcome: ReturnStepOutcome;
   reason?: string;
   message?: string;
+  /** RX-2: a refusal's structured detail (replacement_unavailable's
+   *  [{itemId, needed, available}]: the numbers first, D19). */
+  detail?: unknown;
 }
 
 /** The header facts the side effects need, read once after a change. */
@@ -863,6 +866,18 @@ export class RMAService {
           { event: 'return.received', entityType: 'return', entityId: id, extra: { channel: 'counter' } },
           this.ctx,
         );
+        if (result.replacement) {
+          await audit(
+            {
+              event: 'order_request.return_received',
+              entityType: 'order_request',
+              entityId: result.replacement.orderId,
+              warehouseId: facts.warehouseId,
+              extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, channel: 'counter' },
+            },
+            this.ctx,
+          );
+        }
         void dispatchEvent(this.ctx.organizationId, 'return.received', {
           id,
           returnNumber: facts.returnNumber,
@@ -961,6 +976,7 @@ export class RMAService {
     const answer = await this.transitionAnswer(data, 'received', 'receivedBy', 'receivedAt');
     if (answer.changed) {
       await audit({ event: 'return.received', entityType: 'return', entityId: id, extra: { channel: 'staff' } }, this.ctx);
+      await this.recordReturnReceivedOnReplacement(id, facts);
       void dispatchEvent(this.ctx.organizationId, 'return.received', {
         id,
         returnNumber: facts.returnNumber,
@@ -1194,6 +1210,7 @@ export class RMAService {
           outcome: 'refused',
           reason: typeof e.details?.reason === 'string' ? (e.details.reason as string) : e.code,
           message: e.message,
+          ...(e.code !== 'internal_error' && e.details?.detail !== undefined ? { detail: e.details.detail } : {}),
         });
         break;
       }
@@ -1386,7 +1403,21 @@ export class RMAService {
         },
         this.ctx,
       );
-      if (result.orderId) void broadcastOrderChanged(this.ctx.organizationId, result.orderId);
+      if (result.orderId) {
+        // The replacement order's own timeline names the release.
+        await audit(
+          {
+            event: 'order_request.released_early',
+            entityType: 'order_request',
+            entityId: result.orderId,
+            warehouseId: facts.warehouseId,
+            reason: parsed.value.reason,
+            extra: { replacementForReturnId: id, returnNumber: facts.returnNumber },
+          },
+          this.ctx,
+        );
+        void broadcastOrderChanged(this.ctx.organizationId, result.orderId);
+      }
     }
     return result;
   }
@@ -1557,6 +1588,27 @@ export class RMAService {
       returnNumber: facts.returnNumber,
     });
     void broadcastOrderChanged(this.ctx.organizationId, orderId);
+  }
+
+  /** The returned item arrived: the live replacement's timeline says so (the gate opened). */
+  private async recordReturnReceivedOnReplacement(id: string, facts: ReturnFacts): Promise<void> {
+    try {
+      const live = await this.liveReplacement(id);
+      if (!live) return;
+      await audit(
+        {
+          event: 'order_request.return_received',
+          entityType: 'order_request',
+          entityId: live.id,
+          warehouseId: facts.warehouseId,
+          extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, channel: 'staff' },
+        },
+        this.ctx,
+      );
+      void broadcastOrderChanged(this.ctx.organizationId, live.id);
+    } catch {
+      // A label on the order's timeline: never fails the receipt.
+    }
   }
 
   /** The RMA's live replacement (not cancelled or denied), if any. */

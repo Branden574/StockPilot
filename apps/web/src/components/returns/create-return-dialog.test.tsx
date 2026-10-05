@@ -3,7 +3,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createAction = vi.hoisted(() => vi.fn());
-vi.mock('@/server/actions/returns', () => ({ createReturnFromOrderAction: createAction }));
+const candidatesAction = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/returns', () => ({
+  createReturnFromOrderAction: createAction,
+  orderExchangeCandidatesAction: candidatesAction,
+}));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() } }));
 
@@ -82,5 +86,58 @@ describe('CreateReturnDialog request key', () => {
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(2));
     expect(keyOf(createAction.mock.calls[1]!)).not.toBe(keyOf(createAction.mock.calls[0]!));
+  });
+});
+
+describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
+  const ITEM_L = '44444444-4444-4444-8444-444444444444';
+
+  it('per line: Return only or Exchange; the REPLACEMENT siblings load on the first Exchange and the choice is sent', async () => {
+    candidatesAction.mockResolvedValue({
+      ok: true,
+      data: {
+        orderId: ORDER,
+        orderRequestLineId: LINE,
+        returnedItemId: 'm',
+        groupId: 'g',
+        siblings: [
+          { itemId: ITEM_L, name: 'Walk Shirt', sku: 'WS-L', variantSize: 'L', variantKey: 'l', groupId: 'g', sibling: true, isReturnedItem: false, onHand: 5, held: 1, free: 4 },
+        ],
+        matches: [],
+      },
+    });
+    createAction.mockResolvedValue({ ok: true, data: { id: 'r1', replay: false } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled />);
+    const dialog = openDialog();
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(candidatesAction).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
+    await waitFor(() => expect(candidatesAction).toHaveBeenCalledWith({ orderRequestId: ORDER, line: LINE, q: '' }));
+    fireEvent.click(await within(dialog).findByLabelText(/Walk Shirt, L/));
+    submit(dialog);
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    expect((createAction.mock.calls[0]![0] as { lines: unknown[] }).lines[0]).toMatchObject({
+      orderRequestLineId: LINE,
+      quantity: 3,
+      exchange: { itemId: ITEM_L, quantity: 3 },
+    });
+  });
+
+  it('an Exchange without a chosen replacement is not sent', async () => {
+    candidatesAction.mockResolvedValue({ ok: true, data: { siblings: [], matches: [] } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled />);
+    const dialog = openDialog();
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
+    submit(dialog);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(createAction).not.toHaveBeenCalled();
+  });
+
+  it('with the kill switch off there is no Exchange choice', () => {
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled={false} />);
+    const dialog = openDialog();
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).queryByLabelText('Exchange for another size or item')).toBeNull();
   });
 });

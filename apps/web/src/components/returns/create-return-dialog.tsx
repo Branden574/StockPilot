@@ -25,7 +25,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { createReturnFromOrderAction } from '@/server/actions/returns';
+import { ReplacementPicker } from '@/components/returns/replacement-picker';
+import { createReturnFromOrderAction, orderExchangeCandidatesAction } from '@/server/actions/returns';
 
 import type { ReturnableLine } from '@/server/services/returns';
 
@@ -34,6 +35,12 @@ import { randomRequestUuid, RETURNS_COPY } from '@stockpilot/core';
 interface Props {
   orderId: string;
   lines: ReturnableLine[];
+  /**
+   * Returns RX-2: offer "Exchange for another size or item" per line. False
+   * while the RETURNS_EXCHANGE_CREATE kill switch is off (the server refuses
+   * an exchange then too).
+   */
+  exchangesEnabled?: boolean;
 }
 
 type ReasonCode = 'damaged' | 'wrong_item' | 'end_of_year' | 'overage' | 'other';
@@ -50,9 +57,12 @@ interface LineState {
   selected: boolean;
   quantity: string;
   disposition: 'restock' | 'scrap';
+  /** RX-2: return only, or an exchange for the chosen item. */
+  mode?: 'return' | 'exchange';
+  exchangeItemId?: string | null;
 }
 
-export function CreateReturnDialog({ orderId, lines }: Props) {
+export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }: Props) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -103,6 +113,7 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
           quantity: Number(st.quantity),
           disposition: st.disposition,
           remaining: l.quantityRemaining,
+          exchange: exchangesEnabled && st.mode === 'exchange' ? (st.exchangeItemId ?? null) : undefined,
         };
       });
 
@@ -119,6 +130,10 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
         toast.error(`Quantity exceeds the ${s.remaining} returnable on a line.`);
         return;
       }
+      if (s.exchange === null) {
+        toast.error(RETURNS_COPY.chooseReplacement);
+        return;
+      }
     }
 
     const payload = {
@@ -130,6 +145,9 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
         orderRequestLineId: s.orderRequestLineId,
         quantity: s.quantity,
         disposition: s.disposition,
+        // RX-2: the replacement's quantity is the line's return quantity (the
+        // workbench can change it at approval, never above it).
+        ...(s.exchange ? { exchange: { itemId: s.exchange, quantity: s.quantity } } : {}),
       })),
     };
     keyRef.current ??= randomRequestUuid();
@@ -233,6 +251,48 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
                       </SelectContent>
                     </Select>
                   </div>
+                  {exchangesEnabled && st.selected ? (
+                    <fieldset className="basis-full space-y-2">
+                      <legend className="sr-only">
+                        {RETURNS_COPY.whatWouldYouLikeToDo} {l.itemName ?? 'Item'}
+                      </legend>
+                      <div
+                        role="radiogroup"
+                        aria-label={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.itemName ?? 'Item'}`}
+                        className="flex flex-wrap gap-2"
+                      >
+                        {(
+                          [
+                            ['return', RETURNS_COPY.returnOnly],
+                            ['exchange', RETURNS_COPY.exchangeStaff],
+                          ] as const
+                        ).map(([mode, words]) => (
+                          <label key={mode} className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+                            <input
+                              type="radio"
+                              name={`mode-${l.orderRequestLineId}`}
+                              value={mode}
+                              checked={(st.mode ?? 'return') === mode}
+                              onChange={() => updateLine(l.orderRequestLineId, { mode, exchangeItemId: null })}
+                              className="h-3.5 w-3.5"
+                            />
+                            {words}
+                          </label>
+                        ))}
+                      </div>
+                      {/* Loaded on the first Exchange only (one read per line). */}
+                      {st.mode === 'exchange' ? (
+                        <ReplacementPicker
+                          load={(q) => orderExchangeCandidatesAction({ orderRequestId: orderId, line: l.orderRequestLineId, q })}
+                          needed={Math.max(1, Number(st.quantity) || 1)}
+                          selectedItemId={st.exchangeItemId ?? null}
+                          onSelect={(row) => updateLine(l.orderRequestLineId, { exchangeItemId: row.itemId })}
+                          label={l.itemName ?? 'Item'}
+                          disabled={busy}
+                        />
+                      ) : null}
+                    </fieldset>
+                  ) : null}
                 </div>
               );
             })}

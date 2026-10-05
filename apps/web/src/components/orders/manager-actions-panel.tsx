@@ -67,6 +67,8 @@ import {
   describeDepartureRisk,
   isManagerOrAbove,
   previewPartialFulfilment,
+  RETURNS_COPY,
+  waitingForReturnLine,
   type CompletionConfirmCopy,
   type DepartureAction,
   type DepartureLine,
@@ -79,6 +81,8 @@ import {
 
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
+import { ReleaseEarlyDialog } from '@/components/returns/exchange-panel';
+import { releaseReturnReplacementAction } from '@/server/actions/returns';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -176,6 +180,21 @@ interface Props {
    *  the picking phase offers only view/print (never Claim/Pick/Complete/
    *  Release) to a viewer the backend would reject. */
   viewerCanPick: boolean;
+  /**
+   * Returns RX-2: this order is the live exchange replacement of an RMA.
+   * While its RMA waits for the returned item (the return-first gate),
+   * "Generate pick slip" and "Resume fulfillment" give way to the gate's
+   * words and, for holders of returns:manage and orders:approve, "Release
+   * before return is received". A delivery shows the driver's read-only
+   * "Collect the returned item" line. Null for an ordinary order.
+   */
+  replacement?: {
+    returnId: string;
+    returnNumber: string | null;
+    waitingForReturn: boolean;
+    canReleaseEarly: boolean;
+    driverLine: string | null;
+  } | null;
 }
 
 type BusyKey =
@@ -193,6 +212,7 @@ type BusyKey =
   | 'physical-signature'
   | 'reopen-picking'
   | 'notes'
+  | 'release-early'
   | null;
 
 /** No stock check: nothing to offer, nothing to say. */
@@ -238,9 +258,26 @@ export function ManagerActionsPanel({
   assignedPickerName,
   pickers,
   viewerCanPick,
+  replacement = null,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
+  const [releaseOpen, setReleaseOpen] = React.useState(false);
+  const gated = replacement?.waitingForReturn === true;
+  async function releaseEarly(reason: string) {
+    if (!replacement) return;
+    setBusy('release-early');
+    const res = await releaseReturnReplacementAction({ id: replacement.returnId, reason });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      router.refresh();
+      return;
+    }
+    toast.success(res.data.answer.notNeeded ? 'The return was already received.' : 'Released for picking.');
+    setReleaseOpen(false);
+    router.refresh();
+  }
   const [rechecking, startRecheck] = React.useTransition();
 
   // Approval-class actions (approve, deny, the pick slip, packing slips,
@@ -279,6 +316,10 @@ export function ManagerActionsPanel({
     // was revoked neither); the picker override stays manager rank. Never a
     // viewer (approves, above).
     canApproveOrders: approves,
+    // RX-2: an exchange replacement and its return-first gate.
+    isReplacement: replacement !== null,
+    replacementGate: replacement ? (gated ? 'waiting' : 'open') : null,
+    canReleaseReplacement: replacement?.canReleaseEarly === true && approves,
   });
   // The stock notice belongs to the two stock-dependent statuses only.
   const stockNotice =
@@ -700,7 +741,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'approved' && approves && (
+          {status === 'approved' && approves && !gated && (
             <Button
               variant="gradient"
               onClick={generatePickSlip}
@@ -713,6 +754,23 @@ export function ManagerActionsPanel({
               )}
               Generate pick slip
             </Button>
+          )}
+
+          {/* RX-2: the return-first gate (0397) holds the pick slip of an
+              exchange replacement until the returned item is received. */}
+          {(status === 'approved' || status === 'backordered') && gated && (
+            <>
+              <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
+                <ClipboardList className="h-3.5 w-3.5" />
+                {waitingForReturnLine(replacement?.returnNumber ?? null)}
+              </span>
+              {status === 'approved' && approves && replacement?.canReleaseEarly ? (
+                <Button variant="outline" onClick={() => setReleaseOpen(true)} disabled={busy !== null}>
+                  <Unlock className="h-3.5 w-3.5" />
+                  {RETURNS_COPY.releaseBeforeReturn}
+                </Button>
+              ) : null}
+            </>
           )}
 
           {isPickingPhase && (
@@ -940,6 +998,14 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
+          {/* RX-2: the driver's read-only line for an exchange swap. */}
+          {(status === 'staged_for_delivery' || status === 'in_transit') && replacement?.driverLine ? (
+            <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" data-testid="collect-returned-item">
+              <Truck className="h-3.5 w-3.5" />
+              {replacement.driverLine}
+            </span>
+          ) : null}
+
           {(status === 'staged_for_pickup' || status === 'in_transit') && (approves || isDriverHere) && (
             <>
               {/* The sign page opens in the "anyway" click itself, so the
@@ -976,7 +1042,7 @@ export function ManagerActionsPanel({
 
           {status === 'backordered' && approves && (
             <>
-              {stockGates.resume !== 'waiting' ? (
+              {gated ? null : stockGates.resume !== 'waiting' ? (
                 <Button
                   variant="gradient"
                   onClick={() => openPartial('resume')}
@@ -1196,6 +1262,15 @@ export function ManagerActionsPanel({
 
       {/* Deny-reason dialog. Replaces the old window.prompt() which
           was blocked in iOS Safari webviews and couldn't be styled. */}
+      {replacement ? (
+        <ReleaseEarlyDialog
+          open={releaseOpen}
+          onOpenChange={setReleaseOpen}
+          busy={busy === 'release-early'}
+          onConfirm={(reason) => void releaseEarly(reason)}
+        />
+      ) : null}
+
       <Dialog open={denyOpen} onOpenChange={closeDenyDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>

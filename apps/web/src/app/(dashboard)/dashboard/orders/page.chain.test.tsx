@@ -188,3 +188,45 @@ describe('Orders page: the Waiting for signature filter (L88)', () => {
     expect(view.queryByText('Show all active orders')).toBeNull();
   });
 });
+
+describe('Orders page: the Exchange chip (returns RX-2)', () => {
+  const row = (over: Record<string, unknown>) => ({
+    id: 'o1',
+    orderNumber: 104,
+    status: 'approved',
+    warehouseId: 'w1',
+    warehouseName: 'DC4',
+    requesterUserId: null,
+    requesterEmail: 'pat@example.com',
+    requesterName: 'Pat',
+    requesterOrgLabel: null,
+    requesterDeleted: false,
+    source: 'internal',
+    lineCount: 1,
+    totalQuantity: 1,
+    notes: null,
+    createdAt: '2026-10-05T00:00:00Z',
+    updatedAt: '2026-10-05T00:00:00Z',
+    approvedAt: null,
+    deliveredAt: null,
+    fulfillmentType: 'pickup',
+    assignedPickerId: null,
+    assignedPickerName: null,
+    assignedDeliveryUserId: null,
+    assignedDeliveryUserName: null,
+    ...over,
+  });
+
+  it('a replacement row says Exchange and the gate words; an ordinary row says nothing', async () => {
+    m.list.mockImplementation(() =>
+      logged('list', async () => [
+        row({ id: 'o1', replacementForReturnId: 'rma-1', exchange: { returnId: 'rma-1', returnNumber: 'RMA-1', state: 'Waiting for return' } }),
+        row({ id: 'o2', orderNumber: 105, replacementForReturnId: null, exchange: null }),
+      ]),
+    );
+    const { container } = render(await callPage());
+    const chips = container.querySelectorAll('[data-testid="order-exchange-chip"]');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]!.textContent).toBe('Exchange · Waiting for return');
+  });
+});

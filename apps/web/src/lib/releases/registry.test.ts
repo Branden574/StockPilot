@@ -36,6 +36,7 @@ import {
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   releaseRegistrySchema,
   RETURN_ACTION_LABELS,
+  returnActionLabel,
   returnListFilter,
   RETURNS_COPY,
   stagingReturnedSourceLabel,
@@ -3831,10 +3832,14 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // top, directly above this one.
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: at 1,
     // below the dates fixes draft): dated later still, it sits at the top.
+    // Re-pinned by returns RX-2 (2026-10-11; was: at 2, the public link and
+    // dates fixes releases at 0 and 1): RX-2's draft, dated later, sits at
+    // the top, above both. Claim kept: those two sit directly above this one.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(2);
-    expect(RELEASES[0]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[1]?.id).toBe('dates-fixes-2026-10');
+    expect(at).toBe(3);
+    expect(RELEASES[0]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[1]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[2]?.id).toBe('dates-fixes-2026-10');
     // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
@@ -3850,7 +3855,9 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: the
     // public link draft, the dates fixes draft and this one): all three are
     // published, in the same places, so no draft is left.
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    // Re-pinned by returns RX-2 (2026-10-11; was: no draft): RX-2's draft is
+    // the only one. Claim kept: these three are published.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-exchange-2026-10']);
     for (const id of ['public-link-sent-request-2026-10', 'dates-fixes-2026-10', ID]) {
       expect(RELEASES.find((r) => r.id === id)?.status, id).toBe('published');
     }
@@ -3899,8 +3906,10 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
-    expect(Date.parse(RELEASES[1]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
-    expect(Date.parse(RELEASES[0]!.publishedAt) - Date.parse(RELEASES[1]!.publishedAt)).toBe(60_000);
+    // Re-pinned by returns RX-2 (2026-10-11; was: RELEASES[1] and [0]): the
+    // same two releases, one place lower under RX-2's draft.
+    expect(Date.parse(RELEASES[2]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(Date.parse(RELEASES[1]!.publishedAt) - Date.parse(RELEASES[2]!.publishedAt)).toBe(60_000);
   });
 
   it('is told to whoever can open the New order page, and links there', () => {
@@ -4094,7 +4103,9 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
   // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "...;
   // the drafts and slice 1's small fixes above it are dated later"): no
   // draft is left above it.
-  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published, are dated later', () => {
+  // Re-pinned by returns RX-2 (2026-10-11; was: "the releases above it, all
+  // published, are dated later"): RX-2's draft, dated later, sits at the top.
+  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published but returns RX-2\'s draft at the top, are dated later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
@@ -4115,7 +4126,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // draft dated later, at the top.
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
     // it): a draft dated later still, at the top.
+    // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
@@ -4130,7 +4144,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: draft
     // x3, published x4): the public link, dates fixes and PO-2 releases are
     // published, in the same places, so all seven above it are published.
+    // Re-pinned by returns RX-2 (2026-10-11; was: published x7): RX-2's draft
+    // at the top, then the same seven, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -4759,7 +4776,13 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     const notify = readFileSync(resolve(__dirname, '../../server/services/returns-notify.ts'), 'utf8');
     // Only a requester return, and never after a counter approval or receipt.
     expect(notify).toContain("if (input.source !== 'requester') return false;");
-    expect(notify).toContain("if ((event === 'approved' || event === 'received') && input.channel === 'counter') return false;");
+    // Re-pinned by returns RX-2 (2026-10-05; was one condition naming
+    // approved and received): the counter rule now also keeps the exchange
+    // approval silent, and still covers approved and received.
+    expect(notify).toContain(
+      "event === 'approved' || event === 'received' || event === 'exchange_approved' || event === 'exchange_approved_short';",
+    );
+    expect(notify).toContain("if (counterSilent && input.channel === 'counter') return false;");
     // The five events the words name.
     for (const line of [
       'request_received: RETURNS_COPY.requesterReceivedReturnRequest,',
@@ -4841,7 +4864,12 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // line only, and Process return otherwise.
     const web = readFileSync(resolve(__dirname, '../../components/returns/return-workbench.tsx'), 'utf8');
     expect(web).toContain("r.status === 'received' && openLines.length === 1 && openLines[0]!.restock");
-    expect(web).toContain("a === 'process' && processLabel ? processLabel.button : RETURN_ACTION_LABELS[a];");
+    // Re-pinned by returns RX-2 (2026-10-05; was RETURN_ACTION_LABELS[a]):
+    // core's returnActionLabel words an exchange's approval, and answers
+    // RETURN_ACTION_LABELS for every other action, Process return included.
+    expect(web).toContain("a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, { hasExchange });");
+    expect(returnActionLabel('process', { hasExchange: true })).toBe(RETURN_ACTION_LABELS.process);
+    expect(returnActionLabel('process')).toBe(RETURN_ACTION_LABELS.process);
     const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/returns-view.ts'), 'utf8');
     expect(phone).toContain('if (lines.length === 1) return processLabelFor(lines[0]!.restock!, choiceFor(lines[0]!, choices)).button;');
     expect(phone).toContain('return RETURNS_COPY.processReturn;');
@@ -5011,7 +5039,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // draft dated later, at the top.
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
     // it): a draft dated later still, at the top.
+    // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
@@ -5025,7 +5056,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: draft
     // x3, published x3): the public link, dates fixes and PO-2 releases are
     // published, in the same places, so all six above it are published.
+    // Re-pinned by returns RX-2 (2026-10-11; was: published x6): RX-2's draft
+    // at the top, then the same six, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5394,7 +5428,10 @@ describe('the weekly digest and fixes release', () => {
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
     // dates fixes draft at the top): a draft dated later still, above it
     // (the title no longer counts the drafts).
+    // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
@@ -5406,7 +5443,9 @@ describe('the weekly digest and fixes release', () => {
     // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: draft
     // x3, published x1): the public link, dates fixes and PO-2 releases are
     // published, in the same places, so all four above it are published.
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['published', 'published', 'published', 'published']);
+    // Re-pinned by returns RX-2 (2026-10-11; was: published x4): RX-2's draft
+    // at the top, then the same four, published.
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'published', 'published', 'published', 'published']);
     expect(RELEASES[at - 1]?.id).toBe('order-partial-approval-held-2026-10');
     expect(RELEASES[at + 1]?.id).toBe('items-list-first-paint-2026-10');
     for (const r of RELEASES.slice(0, at)) {
@@ -5639,7 +5678,10 @@ describe('the Items first-paint release', () => {
     // draft dated later, at the top.
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
     // it): a draft dated later still, at the top.
+    // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
@@ -5652,7 +5694,10 @@ describe('the Items first-paint release', () => {
     // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: draft
     // x3, published x2): the public link, dates fixes and PO-2 releases are
     // published, in the same places, so all five above it are published.
+    // Re-pinned by returns RX-2 (2026-10-11; was: published x5): RX-2's draft
+    // at the top, then the same five, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5880,7 +5925,10 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
   it('sits below the public link, dates fixes and PO-2 releases (published later) and directly above the weekly digest release, dated after every release below it and before the ones above it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
+    // Re-pinned by returns RX-2 (2026-10-11; was: without it): RX-2's draft,
+    // dated later, sits at the top, above the three published releases.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
@@ -5889,9 +5937,12 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // release above it a draft, and this one the newest published release):
     // the three above it are published, the public link release the newest,
     // and no draft is left.
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'published')).toBe(true);
+    // Re-pinned by returns RX-2 (2026-10-11; was: every release above it
+    // published, and no draft): RX-2's draft is the only draft, at the top;
+    // claim kept: the three published above it, the public link the newest.
+    expect(RELEASES.slice(1, at).every((r) => r.status === 'published')).toBe(true);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-exchange-2026-10']);
     expect(RELEASES[at + 1]?.id).toBe('weekly-digest-and-fixes-2026-10');
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
@@ -6184,5 +6235,91 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     for (const text of [approval.title, approval.whatChanged, approval.whyItMatters, approval.howItAffectsYou]) {
       expect(text).not.toMatch(/update|mobile app/i);
     }
+  });
+});
+
+/**
+ * Returns RX-2 (migration 0397: exchanges for staff and the counter): held as
+ * a DRAFT until the migration is pushed and verified, the web deploy is
+ * READY, the OTA with the phone's exchange screens is published and launched
+ * and the Demo Co walk passed (returns plan 10.1). Pinned by id. The
+ * follow-up that publishes it (RX-5) sets 'published' and the real
+ * publishedAt, re-reads its words against what shipped, and flips these pins.
+ */
+describe('exchanges on returns (returns RX-2) is held as a draft', () => {
+  const ID = 'returns-exchange-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  // Main's rule (the publishing of 2026-10-05): drafts sit above the newest
+  // published release, newest first. RX-2's is the newest draft, so it is at
+  // the top, dated after every release (RX-1's among them, published).
+  // Re-pinned on rebase (2026-10-06; was: above the weekly digest's, the small
+  // fixes' and PO-2's drafts): slice 1's small fixes are published and small
+  // fixes slice 2's partial-approval draft sits below PO-2's.
+  // Re-pinned on the PR-stage rebase onto 1a483f61 (2026-10-11; was: above
+  // the weekly digest's, PO-2's and small fixes slice 2's drafts): those
+  // three, the dates fixes and the public order link releases are published
+  // (#333, #337, #339), so RX-2's is the only draft, directly above the
+  // public order link release, the newest published one.
+  it('is the only draft, at the top above the public order link release (the newest published), dated after every release', () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([ID]);
+    expect(RELEASES[1]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[1]?.status).toBe('published');
+    const rx1 = RELEASES.findIndex((r) => r.id === 'returns-original-rack-2026-10');
+    expect(RELEASES[rx1]?.status).toBe('published');
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is told to whoever can open Returns; the replacement order to people who manage returns with Orders on', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
+    expect(r.entries.map((e) => e.id)).toEqual(['returns-exchange', 'returns-exchange-replacement-order']);
+    const [exchange, order] = r.entries;
+    expect(exchange!.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
+    expect(order!.audience).toEqual({ anyPermission: ['returns:manage'], modules: ['returns', 'orders'] });
+  });
+
+  it("uses the screens' own words and claims nothing the product does not do", () => {
+    const r = release();
+    const all = readerText(r).join(' ');
+    expect(all).not.toMatch(/\bbooks?\b|verified|inspected|certif|guarantee|%/i);
+    for (const label of [
+      RETURNS_COPY.returnOnly,
+      RETURNS_COPY.exchangeStaff,
+      RETURNS_COPY.approveAsRequested,
+      RETURNS_COPY.changeReplacementEllipsis,
+      RETURNS_COPY.declineExchange,
+      RETURNS_COPY.addReplacement,
+      RETURNS_COPY.approveReplacementOnBackorder,
+      RETURNS_COPY.getReplacementReady,
+      RETURNS_COPY.releaseEarly,
+      RETURNS_COPY.cancelReplacement,
+      RETURNS_COPY.issueNewReplacement,
+      RETURNS_COPY.itemIsHere,
+      RETURNS_COPY.approveAndReceive,
+      RETURNS_COPY.processReturn,
+    ]) {
+      expect(all).toContain(label);
+    }
+    // The requester's own exchange is RX-3: nothing here says a requester can ask.
+    expect(all).not.toMatch(/requesters? can (ask|request)|return link|customer portal/i);
   });
 });

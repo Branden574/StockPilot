@@ -448,7 +448,11 @@ describe('releaseEarly (release_return_replacement_early)', () => {
       p_reason: 'Swap at delivery: the driver collects the returned item.',
     });
     expect(answer).toMatchObject({ changed: true, orderId: REPL_ID, notNeeded: false });
-    expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.replacement_released']);
+    expect(auditMock.mock.calls.map((c) => [(c[0] as { event: string }).event, (c[0] as { entityId: string }).entityId])).toEqual([
+      ['return.replacement_released', RET_ID],
+      // The replacement order's own timeline names the release.
+      ['order_request.released_early', REPL_ID],
+    ]);
     expect(broadcastMock).toHaveBeenCalledWith('org-test', REPL_ID);
   });
 
@@ -538,5 +542,39 @@ describe('cancel with a live replacement (X-2)', () => {
     });
     await svc.cancel(RET_ID, { reason: 'Customer kept it' });
     expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.cancelled']);
+  });
+});
+
+describe('the replacement order\'s timeline learns of the receipt', () => {
+  it('a staff receipt writes return_received on the live replacement', async () => {
+    const { svc } = svcFor({
+      'order_requests.select': orderReads({ live: { id: REPL_ID, status: 'approved', order_number: 104 } }),
+      'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null },
+    });
+    await svc.receive(RET_ID);
+    expect(auditMock.mock.calls.map((c) => [(c[0] as { event: string }).event, (c[0] as { entityId: string }).entityId])).toEqual([
+      ['return.received', RET_ID],
+      ['order_request.return_received', REPL_ID],
+    ]);
+  });
+
+  it('a step refusal carries the short numbers (the steps endpoint answers them)', async () => {
+    const { svc } = svcFor({
+      'rpc:approve_return': rpcError('replacement_unavailable', 'P0001', JSON.stringify([{ itemId: ITEM_L, needed: 1, available: 0 }])),
+    });
+    const out = await svc.runSteps(RET_ID, {
+      steps: ['approve'],
+      expectedRevision: 0,
+      approve: { lines: [{ returnLineId: RLINE_ID, disposition: 'restock' }], exchange: [{ action: 'approve', exchangeLineId: XLINE_ID }] },
+    } as never);
+    expect(out.ran).toEqual([
+      {
+        step: 'approve',
+        outcome: 'refused',
+        reason: 'replacement_unavailable',
+        message: expect.any(String),
+        detail: [{ itemId: ITEM_L, needed: 1, available: 0 }],
+      },
+    ]);
   });
 });

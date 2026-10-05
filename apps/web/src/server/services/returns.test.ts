@@ -435,7 +435,14 @@ describe('runSteps (the steps endpoint)', () => {
     const result = await svc.runSteps(RET_ID, { steps: ['receive', 'process'] } as never);
     expect(result.ran).toEqual([
       { step: 'receive', outcome: 'done' },
-      { step: 'process', outcome: 'refused', reason: 'restock_location_unavailable', message: 'Original rack is no longer available.' },
+      {
+        step: 'process',
+        outcome: 'refused',
+        reason: 'restock_location_unavailable',
+        message: 'Original rack is no longer available.',
+        // RX-2: the refusal's structured detail travels with the step.
+        detail: { rule: 'archived', locationId: 'l' },
+      },
     ]);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['receive_return', 'close_return']);
     expect(workbenchMock).toHaveBeenCalledTimes(1);

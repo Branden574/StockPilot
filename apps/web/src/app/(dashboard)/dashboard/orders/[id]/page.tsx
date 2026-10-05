@@ -17,6 +17,8 @@ import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/retur
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
+import { ReplacementBanner } from '@/components/orders/replacement-banner';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import { NeededByChangeButton, ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
@@ -231,6 +233,11 @@ export default async function OrderDetailPage({
     attachmentsRes.status === 'fulfilled' ? attachmentsRes.value : [];
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
+  // Returns RX-2: an exchange replacement order. Its items come from its RMA
+  // (no Add items, no line edits, no Cancel here: "Change or cancel in
+  // RMA-…"), and the return-first gate words its pick slip.
+  const replacement = detail.replacement ?? null;
+  const isReplacement = Boolean(request.replacement_for_return_id);
 
   // ---- Sync gates (no I/O). Every boolean the Tier-2 batch below needs to
   // decide WHICH round trips to fire is derived here, purely from ctx +
@@ -263,7 +270,7 @@ export default async function OrderDetailPage({
     'cancelled',
   ];
   const canAddLines =
-    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status);
+    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
   // Correcting a line is the same act as adding one — addLines,
   // updateLineQuantity and removeLine all run the SAME
   // loadEditableOrderHeader gate (ship gate + requester-or-approver +
@@ -1187,7 +1194,9 @@ export default async function OrderDetailPage({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {canCreateReturn && <CreateReturnDialog orderId={id} lines={returnableLines} />}
+            {canCreateReturn && (
+              <CreateReturnDialog orderId={id} lines={returnableLines} exchangesEnabled={exchangeCreateEnabled()} />
+            )}
             {requesterReturnPath && (
               <Button asChild variant="outline">
                 <a href={requesterReturnPath}>Request a return</a>
@@ -1218,13 +1227,15 @@ export default async function OrderDetailPage({
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
                 order; and every cancel needs orders:request (desk check F3).
-                core's orderCancelOffer is that rule, shared with the phone. */}
-            {orderCancelOffer({
-              status: request.status,
-              canApprove,
-              isOwnRequest,
-              canRequest: can(ctx, 'orders:request'),
-            }) !== null && (
+                core's orderCancelOffer is that rule, shared with the phone.
+                Returns RX-2: a replacement is cancelled only from its RMA. */}
+            {!isReplacement &&
+              orderCancelOffer({
+                status: request.status,
+                canApprove,
+                isOwnRequest,
+                canRequest: can(ctx, 'orders:request'),
+              }) !== null && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
             <ReportProblemButton
@@ -1235,6 +1246,8 @@ export default async function OrderDetailPage({
           </div>
         </div>
       </div>
+
+      <ReplacementBanner replacement={replacement} fulfillmentType={request.fulfillment_type} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -1655,6 +1668,14 @@ export default async function OrderDetailPage({
                         ))}
                       </ul>
                     )}
+                    {/* RX-2: "Exchange: Large ×1 → SO-000104 (Waiting for returned item)". */}
+                    {r.exchangeLines && r.exchangeLines.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5 text-xs" data-testid="order-return-exchange">
+                        {r.exchangeLines.map((line) => (
+                          <li key={`${r.id}-${line}`}>{line}</li>
+                        ))}
+                      </ul>
+                    )}
                     {r.notes && (
                       <p className="mt-1.5 whitespace-pre-wrap text-sm" data-testid="order-return-notes">
                         {r.notes}
@@ -1725,6 +1746,17 @@ export default async function OrderDetailPage({
               assignedPickerName={assignedPickerName}
               pickers={pickers}
               viewerCanPick={viewerCanPick}
+              replacement={
+                replacement && replacement.live
+                  ? {
+                      returnId: replacement.returnId,
+                      returnNumber: replacement.returnNumber,
+                      waitingForReturn: replacement.waitingForReturn,
+                      canReleaseEarly: replacement.canReleaseEarly,
+                      driverLine: replacement.driverLine,
+                    }
+                  : null
+              }
             />
           )}
 
