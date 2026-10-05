@@ -18,7 +18,6 @@ import {
   SUCCESS_DONE_COPY,
   SUCCESS_EMAIL_COPY_DETAILS_COPY,
   SUCCESS_EMAIL_HIDE_PREVIEW_COPY,
-  SUCCESS_EMAIL_OPENED_COPY,
   SUCCESS_EMAIL_PREVIEW_COPY,
   SUCCESS_EMAIL_SUBJECT_LABEL_COPY,
   SUCCESS_PLACE_ANOTHER_COPY,
@@ -28,6 +27,7 @@ import {
   condensedNoticeText,
   prepareDeliveryRequest,
   successEmailButtonCopy,
+  successEmailOpenedCopy,
 } from '@stockpilot/core';
 
 import { SmallAction } from '@/components/order-storefront/controls';
@@ -41,7 +41,6 @@ import {
   HONESTY_NOTICE,
   OVERSIZED_MESSAGE,
   deliveryComposeTransport,
-  deliverySuccessMessageFor,
   openDeliveryRequestDraft,
   recipientsHelperText,
   shouldConfirmBeforeOpening,
@@ -288,7 +287,7 @@ export default function OrderPlaced() {
               ) : null}
               {openResult?.outcome === 'opened' ? (
                 <Body size={13} color={c.ink} accessibilityRole="alert">
-                  {`${SUCCESS_EMAIL_OPENED_COPY}. ${deliverySuccessMessageFor(openResult.used)}`}
+                  {successEmailOpenedCopy(order.fulfillmentType, openResult.used === 'default-mail')}
                 </Body>
               ) : null}
               {shouldShowBlockedNotice(prepared, openResult) ? (

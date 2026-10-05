@@ -34,6 +34,14 @@ describe('the templated sentences', () => {
     expect(phone.CHECKOUT_NOTES_FULL_COPY).toBe("That's the most a note can hold.");
     expect(phone.successEmailButtonCopy('pickup')).toBe('Email pickup request');
     expect(phone.successEmailButtonCopy('delivery')).toBe('Email delivery request');
+    // PO-4 review: the confirmation names the order's own method (a pickup's
+    // said "delivery request"), and the app that opened the draft.
+    expect(phone.successEmailOpenedCopy('pickup', false)).toBe(
+      'Outlook opened a draft of your pickup request. Review the message and press Send yourself.',
+    );
+    expect(phone.successEmailOpenedCopy('delivery', true)).toBe(
+      'Your email app opened a draft of your delivery request. Review the message and press Send yourself.',
+    );
     expect(phone.signOutUnconfirmedOrdersCopy(1)).toBe('1 order request was sent but not confirmed.');
     expect(phone.signOutUnconfirmedOrdersCopy(2)).toBe('2 order requests were sent but not confirmed.');
     expect(phone.signInHeldPlacedCopy('SO-000123')).toBe('Your order request SO-000123 was placed.');
@@ -99,6 +107,8 @@ describe('the words rules (plan section 6)', () => {
     phone.signOutUnconfirmedOrdersCopy(1),
     phone.signInHeldPlacedCopy('SO-000001'),
     phone.checkoutNotesCounterSpokenCopy(1800, 2000),
+    phone.successEmailOpenedCopy('pickup', false),
+    phone.successEmailOpenedCopy('delivery', true),
   ];
 
   it('has the sentences this guard walks', () => {

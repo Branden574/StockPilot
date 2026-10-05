@@ -186,7 +186,14 @@ export function successEmailButtonCopy(fulfillmentType: 'pickup' | 'delivery'): 
 }
 export const SUCCESS_EMAIL_PREVIEW_COPY = 'Preview';
 export const SUCCESS_EMAIL_HIDE_PREVIEW_COPY = 'Hide preview';
-export const SUCCESS_EMAIL_OPENED_COPY = 'Email draft opened';
+/** After the pickup or delivery request's draft opened (PO-4 review): the
+ *  order's own method (a pickup's said "delivery request"), and the app that
+ *  opened it (naming Outlook when the mail app opened would be untrue). A
+ *  draft: never "sent". */
+export function successEmailOpenedCopy(fulfillmentType: 'pickup' | 'delivery', mailApp: boolean): string {
+  const opener = mailApp ? 'Your email app' : 'Outlook';
+  return `${opener} opened a draft of your ${fulfillmentType} request. Review the message and press Send yourself.`;
+}
 export const SUCCESS_EMAIL_SUBJECT_LABEL_COPY = 'Subject';
 export const SUCCESS_EMAIL_COPY_DETAILS_COPY = 'Copy details';
 

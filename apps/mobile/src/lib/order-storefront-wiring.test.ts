@@ -816,3 +816,14 @@ describe('a blank quantity keeps the quantity (PO-4 review)', () => {
     expect(fn).not.toContain('Number.parseInt(text');
   });
 });
+
+// PO-4 review (walk shot M12-iphone-second-tap-confirm.png): a pickup order's
+// confirmation said "Outlook opened with your delivery request" above a
+// "Pickup Request" preview. Mutation caught: the order screen's
+// delivery-only sentence back.
+describe('the email confirmation names the order’s own method (PO-4 review)', () => {
+  it('core’s words from the order’s method and the app that opened it', () => {
+    expect(placed).toContain("{successEmailOpenedCopy(order.fulfillmentType, openResult.used === 'default-mail')}");
+    expect(placed).not.toContain('deliverySuccessMessageFor');
+  });
+});
