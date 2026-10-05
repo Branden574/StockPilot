@@ -1106,7 +1106,7 @@ select is(
   -- stack.
   '0384 column grants (order_requests, schedule_events)|fa3db41769cc505a531cca8d3d61c409|212\n'
   -- Re-pinned by 0395 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
-  -- process_return_disposition restated (md5 7c7edfe53e60e754e9bd47c76266cb7a,
+  -- process_return_disposition restated (md5 69e46c8163600cb55ae70246ca3a85d3,
   -- header, owner and ACL unchanged; its reverse-replace proof is 0395 A20)
   -- and four SECURITY INVOKER helpers with no API EXECUTE added
   -- (return_line_sources, return_line_plans_original, return_line_restock_legs,
@@ -1117,8 +1117,12 @@ select is(
   -- return_restock_original, and again at the test stage after
   -- return_line_sources' NULL-safe placement test, the same query giving
   -- 817dc7bd|18 and b19b3b42|18 for the earlier bodies; the local stack gives
-  -- the same value).
-  'ledger.*|7b46ad415ad78e972b111da3f9d3a532|18\n'
+  -- the same value). Re-derived once more after the review fixes (the
+  -- restated body's item-warehouse check, md5 69e46c81; return_line_sources'
+  -- in-flight rule and partial cap; return_line_restock_legs' cap): production
+  -- (head 0393, its own 14 rows still 8b442829|14) with the five RX-1 rows
+  -- substituted gives 1c283e93|18, equal to the local stack (2026-10-05).
+  'ledger.*|1c283e932202295a91e5c118f0873689|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are

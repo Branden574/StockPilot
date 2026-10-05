@@ -8,7 +8,7 @@
 -- Personas (org A, plus org Z for foreign checks):
 --   own     owner                   mgr      manager, no override
 --   mgrNo   manager, returns:manage revoked (user override false)
---   stfRm   staff granted returns:manage, assigned to whA (write)
+--   stfRm   staff granted returns:manage, assigned to whA (write only there)
 --   stfRmNoWh  staff granted returns:manage, no warehouse
 --   stfRd   staff granted returns:read only, assigned to whA
 --   stf     staff, no grant, assigned       vwr  viewer, assigned
@@ -55,6 +55,14 @@
 --     organization and lines (F3).
 -- L.  Regression: frozen bodies and triggers, organization deletion, holdings
 --     equal on hand for every item touched, the 0359 flag census.
+-- Review fixes (2026-10-05): an order in flight is never returnable nor a
+-- source (H8, K12); a partial source's cap counts unrecorded returns (J10);
+-- close_return's legs are ledger rows only (F2); the line guard locks the
+-- RMA and takes lines only on the caller's own raw RMA (K13, K14); a Staging
+-- or scrap leg in a warehouse the closer may not write is refused (I8); the
+-- destination read marks what the caller may stock (I9); replays never trust
+-- a stored row (C14, C15, D13); a raw RMA carries no requester and the
+-- server's number (K15).
 --
 -- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0395.py; each must
 -- fail the named lines):
@@ -86,6 +94,21 @@
 --   M26 the requester create lets a missing actor channel through (F10) -> C12
 --   M27 approve_return trusts a key row it did not complete (F11)     -> D12
 --   M28 the create replays an RMA of another organization or order (F11) -> C13
+--   M29 the placement test reads a NULL kind or type bare (test stage)  -> H6
+--   M30 the line guard reads the RMA without FOR SHARE (review)       -> K14, race 9
+--   M31 the API guard skips the order-status check (review)           -> K12
+--   M32 the resolver ignores an order still in flight (review)        -> H8
+--   M33 a partial source is capped at its remaining, not its cap (review) -> J10
+--   M34 close_return's legs count a member's direct movement (review)  -> F2
+--   M35 the line guard skips the own-RMA and no-decision checks (review) -> K13
+--   M36 the restated body skips the item-warehouse check (review)     -> I8
+--   M37 the staff create replays another member's RMA (review)        -> C14
+--   M38 the approval replay answers the stored revision (review)      -> D13
+--   M39 the API guard keeps a raw requester name (review)             -> K15
+--   M40 the destination read ignores the caller's write access (review) -> I9
+--   M41 the token create shares one key space per organization (review) -> C15
+--   M42 the API guard keeps the old tab's own RMA number (review)     -> K15
+--   M43 the requester create replays a staff RMA (review)             -> C14
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -96,7 +119,7 @@
 
 begin;
 
-select plan(114);
+select plan(126);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -124,6 +147,9 @@ select plan(114);
 \set rOther    '\'03950000-0000-0000-0000-000000000c42\''
 \set siteA     '\'03950000-0000-0000-0000-000000000c50\''
 \set rB1       '\'03950000-0000-0000-0000-000000000c51\''
+\set itW2      '\'03950000-0000-0000-0000-000000000e0f\''
+\set lW2       '\'03950000-0000-0000-0000-000000000212\''
+\set kRaw      '\'03950000-0000-0000-0000-000000000904\''
 \set itM       '\'03950000-0000-0000-0000-000000000e01\''
 \set itS       '\'03950000-0000-0000-0000-000000000e02\''
 \set itScr     '\'03950000-0000-0000-0000-000000000e03\''
@@ -255,7 +281,8 @@ insert into public.inventory_items
   (:itP,   :orgA, :whA, '0395-P',   'Walk Shirt Partial',     0, 'active', 'none', null),
   (:itU,   :orgA, :whA, '0395-U',   'Walk Shirt Forged',      0, 'active', 'none', null),
   (:itG,   :orgA, :whA, '0395-G',   'Walk Shirt Two Staging', 0, 'active', 'none', null),
-  (:itW,   :orgA, :whB, '0395-W',   'Walk Shirt Second WH',   2, 'active', 'none', :rB1);
+  (:itW,   :orgA, :whB, '0395-W',   'Walk Shirt Second WH',   2, 'active', 'none', :rB1),
+  (:itW2,  :orgA, :whB, '0395-W2',  'Walk Shirt Second WH 2', 0, 'active', 'none', null);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
   (:itZ, :orgZ, :whZ, '0395-Z', 'Zed shirt', 2, 'active', 'none');
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
@@ -296,6 +323,7 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   (:lB,    :oB,    :itX2,  1, 1),
   (:lB2,   :oB,    :itX,   2, 2),
   (:lW,    :oW,    :itW,   1, 1),
+  (:lW2,   :oW,    :itW2,  1, 1),
   (:lZ,    :oZ,    :itZ,   2, 2);
 
 -- oK: a pick written before draw provenance (via_ledger, no draw).
@@ -603,12 +631,13 @@ select is(
     where (n.nspname = 'ledger' and p.proname in ('return_line_sources', 'return_line_plans_original',
                                                   'return_line_restock_legs', 'return_restock_original'))
        or (n.nspname = 'public' and p.proname in ('_return_exchange_create', '_return_exchange_approve', '_return_exchange_on_deny',
-                                                  '_return_exchange_on_cancel', '_return_normalize_request', '_return_create_core',
-                                                  '_return_plan_lines', 'tg_returns_api_guard', 'tg_return_lines_api_guard',
-                                                  'tg_return_decisions_append_only'))),
+                                                  '_return_exchange_on_cancel', '_return_exchange_replay', '_return_normalize_request',
+                                                  '_return_create_core', '_return_plan_lines', 'tg_returns_api_guard',
+                                                  'tg_return_lines_api_guard', 'tg_return_decisions_append_only'))),
   'ledger.return_line_plans_original:false:false,ledger.return_line_restock_legs:false:false,ledger.return_line_sources:false:false,'
   || 'ledger.return_restock_original:false:false,public._return_create_core:false:false,public._return_exchange_approve:false:false,'
   || 'public._return_exchange_create:false:false,public._return_exchange_on_cancel:false:false,public._return_exchange_on_deny:false:false,'
+  || 'public._return_exchange_replay:false:false,'
   || 'public._return_normalize_request:false:false,public._return_plan_lines:false:false,public.tg_return_decisions_append_only:false:false,'
   || 'public.tg_return_lines_api_guard:false:false,public.tg_returns_api_guard:false:false',
   'A8: every helper, hook and guard is SECURITY INVOKER with no EXECUTE for any API role (X-3)');
@@ -642,7 +671,7 @@ select is(
     where n.nspname in ('public', 'ledger')
       and p.proname in ('return_line_sources', 'return_line_plans_original', 'return_line_restock_legs', 'return_restock_original',
                         '_return_exchange_create', '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
-                        '_return_normalize_request', '_return_create_core', '_return_plan_lines', 'tg_returns_api_guard',
+                        '_return_exchange_replay', '_return_normalize_request', '_return_create_core', '_return_plan_lines', 'tg_returns_api_guard',
                         'tg_return_lines_api_guard', 'tg_return_decisions_append_only', 'create_return_request',
                         'create_requester_return_request', 'approve_return', 'deny_return', 'receive_return', 'cancel_return',
                         'plan_return_dispositions', 'close_return', 'return_restock_options')
@@ -697,18 +726,19 @@ select is(
 select is(
   (select string_agg(coalesce(to_regprocedure(s)::text, 'missing:' || s), ',' order by s collate "C")
      from unnest(array['public._return_exchange_create(uuid,uuid,jsonb,jsonb)', 'public._return_exchange_approve(uuid,jsonb,uuid,integer)',
-                       'public._return_exchange_on_deny(uuid,uuid)', 'public._return_exchange_on_cancel(uuid,uuid,text)']) s),
+                       'public._return_exchange_on_deny(uuid,uuid)', 'public._return_exchange_on_cancel(uuid,uuid,text)',
+                       'public._return_exchange_replay(uuid,integer)']) s),
   '_return_exchange_approve(uuid,jsonb,uuid,integer),_return_exchange_create(uuid,uuid,jsonb,jsonb),'
-  || '_return_exchange_on_cancel(uuid,uuid,text),_return_exchange_on_deny(uuid,uuid)',
-  'A19: the four exchange hooks exist with the signatures RX-2 replaces');
+  || '_return_exchange_on_cancel(uuid,uuid,text),_return_exchange_on_deny(uuid,uuid),_return_exchange_replay(uuid,integer)',
+  'A19: the five exchange hooks exist with the signatures RX-2 replaces');
 select is(
   (select md5(p.prosrc) || '|' || md5(regexp_replace(p.prosrc, '\n[^\n]*-- RX-1[^\n]*', '', 'g')) || '|'
           || p.prosecdef::text || '|' || p.proconfig::text || '|' || p.proacl::text || '|' || pg_get_userbyid(p.proowner) || '|'
           || md5(coalesce(obj_description(p.oid, 'pg_proc'), '<none>')) || '|' || (select ty.typname from pg_type ty where ty.oid = p.prorettype)
      from pg_proc p where p.oid = 'ledger.process_return_disposition(uuid)'::regprocedure),
-  '7c7edfe53e60e754e9bd47c76266cb7a|f6f516639a4f15ad83c0495a07ec89cf|true|{"search_path=public, extensions"}|'
+  '69e46c8163600cb55ae70246ca3a85d3|f6f516639a4f15ad83c0495a07ec89cf|true|{"search_path=public, extensions"}|'
   || '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}|postgres|39c71bb3ec9da1d20cc17322793fe353|returns',
-  'A20: the restated body (md5 7c7edfe5) minus its ten -- RX-1 lines IS production''s 0373 body minus the manager-role line (f6f51663); header, ACL, owner and (absent) comment unchanged');
+  'A20: the restated body (md5 69e46c81) minus its fifteen -- RX-1 lines IS production''s 0373 body minus the manager-role line (f6f51663); header, ACL, owner and (absent) comment unchanged');
 select is(
   (select (p.prosrc ~ 'if not public\.has_permission\(v_return\.organization_id, ''returns:manage''\) then  -- RX-1')::text || ','
           || (p.prosrc ~ 'user_can_access_inventory\(v_user, v_wh, null, ''write''\)')::text || ','
@@ -716,8 +746,8 @@ select is(
           || (select count(*) from regexp_matches(p.prosrc, '\n[^\n]*-- RX-1', 'g'))::text || ','
           || (select count(*) from regexp_matches(p.prosrc, '\n[^\n]*-- 0373', 'g'))::text
      from pg_proc p where p.oid = 'ledger.process_return_disposition(uuid)'::regprocedure),
-  'true,true,true,10,9',
-  'A21: the body gates on returns:manage and warehouse write, never the manager role; ten RX-1 lines, the nine 0373 lines kept');
+  'true,true,true,15,9',
+  'A21: the body gates on returns:manage and warehouse write, never the manager role; fifteen RX-1 lines, the nine 0373 lines kept');
 select is(
   (select count(*)::int from pg_publication_tables
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('returns', 'return_lines', 'return_decisions')),
@@ -957,9 +987,38 @@ select is(
      format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
                values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|token|' || public._return_normalize_request(%L::jsonb, 'requester')::text),
                        'completed', 'return', jsonb_build_object('returnId', %L))$q$,
-            :orgA, 'anon:03950000-0000-0000-0000-00000000f008', :oX, pg_temp.one(:lX2, 1)::text, :'rZ0'))),
+            :orgA, 'anon:' || :oX || ':03950000-0000-0000-0000-00000000f008', :oX, pg_temp.one(:lX2, 1)::text, :'rZ0'))),
   'P0001:idempotency_conflict,P0001:idempotency_conflict,P0001:idempotency_conflict',
   'C13: a key row the create did not write, naming another organization''s RMA or another order''s, is refused idempotency_conflict, never replayed, on the staff and the requester paths (F11)');
+-- A manager plants a completed row under a staff member's key, with that
+-- member's exact request hash, naming the manager's own RMA on the same order
+-- (review fix): the staff create is refused, never handed the manager's RMA.
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm,
+     format('select public.create_return_request(%L, %L::jsonb, %L)', :oX, pg_temp.one(:lX1, 1)::text, '03950000-0000-0000-0000-00000000f009'),
+     format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
+               values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|' || public._return_normalize_request(%L::jsonb, 'staff')::text),
+                       'completed', 'return', jsonb_build_object('returnId', %L))$q$,
+            :orgA, :stfRm || ':03950000-0000-0000-0000-00000000f009', :oX, pg_temp.one(:lX1, 1)::text, :'rG')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('service_role', null,
+     format('select public.create_requester_return_request(%L, %L::jsonb, %L, %L::jsonb)', :oX, pg_temp.one(:lX2, 1)::text,
+            '03950000-0000-0000-0000-00000000f00b', '{"channel":"token"}'),
+     format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
+               values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|token|' || public._return_normalize_request(%L::jsonb, 'requester')::text),
+                       'completed', 'return', jsonb_build_object('returnId', %L))$q$,
+            :orgA, 'anon:' || :oX || ':03950000-0000-0000-0000-00000000f00b', :oX, pg_temp.one(:lX2, 1)::text, :'rG'))),
+  'P0001:idempotency_conflict,P0001:idempotency_conflict',
+  'C14: a planted key row naming another member''s RMA on the same order (staff path), or a staff RMA on the token path, is refused idempotency_conflict, never replayed (review)');
+-- The token path keeps its keys per order (review fix): the same key on two
+-- orders makes two requests, never a conflict between strangers.
+select is(
+  coalesce(pg_temp.try_rpc('service_role', null,
+     format('select public.create_requester_return_request(%L, %L::jsonb, %L, %L::jsonb)', :oB, pg_temp.one(:lB2, 1)::text,
+            '03950000-0000-0000-0000-00000000f00a', '{"channel":"token"}'),
+     format('select public.create_requester_return_request(%L, %L::jsonb, %L, %L::jsonb)', :oX, pg_temp.one(:lX2, 1)::text,
+            '03950000-0000-0000-0000-00000000f00a', '{"channel":"token"}'))->>'changed', 'error'),
+  'true',
+  'C15: one token key on two orders creates two requests (the token path keys per order), never idempotency_conflict (review)');
 
 -- ══ D. Approval, deny, receive, cancel, plans ═════════════════════════════
 select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rG',
@@ -1074,6 +1133,17 @@ select is(
                     :orgA, :'rQ' || ':0', :'rQ')) as j) x),
   'approved:true:false',
   'D12: a planted approval key row (no approved decision behind it) is taken over: the approval goes through (F11)');
+-- A completed approval key's stored answer edited through the API (managers
+-- may write idempotency_keys): the replay answers what the function wrote, the
+-- next revision and no replacement, never the edited response (review fix).
+select is(
+  (select (j->>'replay') || ':' || (j->>'revision') || ':' || (j->'replacement')::text
+     from (select pg_temp.try_rpc('authenticated', :mgr,
+             format('select public.approve_return(%L, 0, %L::jsonb)', :'rG', pg_temp.dec(:'rGl', 'restock', 'staging')::text),
+             format($q$update public.idempotency_keys set response = '{"revision": 7, "replacement": {"orderId": "forged"}}'::jsonb
+                       where organization_id = %L and scope = 'return_approval' and key = %L$q$, :orgA, :'rG' || ':0')) as j) x),
+  'true:1:null',
+  'D13: an edited approval key response is never replayed: revision 1 (the approved decision), no replacement (review)');
 
 -- ══ E. Acceptance 36, inbound half: back to 31-C ══════════════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,
@@ -1140,6 +1210,27 @@ select is(
                from public.stock_movements m where m.reference_type = 'return' and m.reference_id = :'rS'),
   'received,closed|3|1|2|true|true:true',
   'F1: Leave in Staging: on hand +1, Staging +1 with a recorded draw, 31-C unchanged (brief 37)');
+-- A member's direct insert into stock_movements (via_ledger false) naming the
+-- RMA and a rack is no leg of the close (review fix): the answer, and the
+-- audit metadata the service writes from it, list the ledger's legs only.
+select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
+          pg_temp.one(:lX1, 1)::text))->>'returnId') as "rF2" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rF2',
+          pg_temp.dec((select id from public.return_lines where return_id = :'rF2'), 'restock', 'staging')::text))::text as "jF2a" \gset
+select pg_temp.write_as('authenticated', :mgr,
+    format($q$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity,
+                                                  to_location_id, reason, reference_type, reference_id, user_id)
+              values (%L, %L, 'return', 1, 0, 1, %L, 'Return restock (planted)', 'return', %L, %L)$q$, :orgA, :itX, :r31C, :'rF2', :mgr)) as "wF2" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rF2'))::text as "jF2b" \gset
+select is(
+  :'wF2' || '|' || ((:'jF2b'::jsonb)->>'status')
+  || '|' || jsonb_array_length((:'jF2b'::jsonb)->'legs')::text || ':' || ((:'jF2b'::jsonb)->'legs'->0->>'destination')
+  || '|' || jsonb_array_length((:'jF2b'::jsonb)->'lines'->0->'legs')::text
+  || '|' || (select string_agg(m.via_ledger::text || ':' || coalesce(m.to_location_id = :r31C, false)::text, ',' order by m.via_ledger)
+               from public.stock_movements m where m.reference_type = 'return' and m.reference_id = :'rF2')
+  || '|' || pg_temp.balanced(:itX)::text,
+  'ok:1|closed|1:staging|1|false:true,true:false|true',
+  'F2: a planted non-ledger return movement naming 31-C never appears in close_return''s legs: one Staging leg, holdings equal on hand (review)');
 
 -- ══ G. Acceptance 38: Scrap ═══════════════════════════════════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,
@@ -1253,6 +1344,23 @@ select is(
      from (select pg_temp.rpc('authenticated', :mgr, format('select public.return_restock_options(%L)', :'rU'))->'lines'->0 as l) x),
   'full_remainder:false:0:false/not_a_placement,false/not_a_placement,false/not_a_placement',
   'H6: a draw from Staging, Unplaced or a Site is never offered as an original location (D12)');
+-- An order still in flight is no provenance (review fix): picks drawn but not
+-- handed over (quantity_picked) are still in the building, and an order not
+-- completed or delivered has handed nothing over for good.
+select is(
+  pg_temp.undone(format('update public.order_request_lines set quantity_picked = 1 where id = %L', :lV),
+     format($q$select (ledger.return_line_sources(%L)->>'case') || '/' || (ledger.return_line_sources(%L)->>'notRecordedReason')$q$, :'rVl', :'rVl'))
+  || ',' || pg_temp.undone(
+     format($q$update public.order_request_lines set quantity_fulfilled = 1 where id = %L;
+               insert into public.returns (id, organization_id, order_request_id, status, source)
+                 values ('03950000-0000-0000-0000-000000000a01', %L, %L, 'requested', 'internal');
+               insert into public.return_lines (id, return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
+                 values ('03950000-0000-0000-0000-000000000a02', '03950000-0000-0000-0000-000000000a01', %L, %L, %L, 1, 'restock')$q$,
+            :lPend, :orgA, :oPend, :orgA, :lPend, :itX),
+     $q$select (ledger.return_line_sources('03950000-0000-0000-0000-000000000a02')->>'case') || '/'
+               || (ledger.return_line_sources('03950000-0000-0000-0000-000000000a02')->>'notRecordedReason')$q$),
+  'not_recorded/order_in_flight,not_recorded/order_in_flight',
+  'H8: a line with picks not handed over, or an RMA on an order not completed or delivered, is not recorded (order_in_flight), never a source (review)');
 
 -- ══ I. Acceptance 40: the rack is gone before the close ═══════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,
@@ -1316,6 +1424,16 @@ select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_r
 select id as "rWl" from public.return_lines where return_id = :'rW' \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rW',
           pg_temp.dec(:'rWl', 'restock', 'original')::text))::text as "jI7a" \gset
+-- The destination read marks what THIS caller may stock (review fix): the
+-- staff member who writes only the main warehouse sees 51-B as a proven,
+-- valid source it may not stock (Staging preselected); the manager may.
+select is(
+  (select (l->>'case') || ':' || (l->>'offerOriginal') || ':' || (l->'sources'->0->>'valid') || ':' || (l->'sources'->0->>'writable') || ':' || (l->>'preselect')
+     from (select pg_temp.rpc('authenticated', :stfRm, format('select public.return_restock_options(%L)', :'rW'))->'lines'->0 as l) x)
+  || '|' || (select (l->'sources'->0->>'writable') || ':' || (l->>'preselect')
+               from (select pg_temp.rpc('authenticated', :mgr, format('select public.return_restock_options(%L)', :'rW'))->'lines'->0 as l) x),
+  'single_source:true:true:false:staging|true:original',
+  'I9: the destination read says a rack in a warehouse the caller may not stock is not writable for that caller, and preselects Staging for it (review)');
 select pg_temp.try_rpc('authenticated', :stfRm, format('select public.close_return(%L)', :'rW'))::text as "jI7b" \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rW'))::text as "jI7c" \gset
 select is(
@@ -1324,6 +1442,21 @@ select is(
   || '|' || ((:'jI7c'::jsonb)->>'status') || '|' || pg_temp.held(:itW, :rB1)::text || '|' || pg_temp.balanced(:itW)::text,
   'received|42501:restock_location_forbidden:location_write:true|closed|3|true',
   'I7: a closer who may not stock the original rack''s warehouse is refused restock_location_forbidden (never "no permission to manage returns"); a manager''s close puts the unit back on 51-B (F7)');
+-- The Staging and scrap legs write the item's CURRENT warehouse (review fix):
+-- itW2 lives in the second warehouse though its order is the main's. The staff
+-- member who writes only the main warehouse is refused warehouse_write and
+-- nothing moves; the manager's close lands it in the second warehouse's Staging.
+select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW,
+          pg_temp.one(:lW2, 1)::text))->>'returnId') as "rW2" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rW2',
+          pg_temp.dec((select id from public.return_lines where return_id = :'rW2'), 'restock', 'staging')::text))::text as "jI8a" \gset
+select pg_temp.try_rpc('authenticated', :stfRm, format('select public.close_return(%L)', :'rW2'))::text as "jI8b" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rW2'))::text as "jI8c" \gset
+select is(
+  ((:'jI8a'::jsonb)->>'status') || '|' || pg_temp.err(:'jI8b'::jsonb) || ':' || ((pg_temp.detail(:'jI8b'::jsonb)->>'itemId') = :itW2::text)::text
+  || '|' || ((:'jI8c'::jsonb)->>'status') || '|' || pg_temp.held(:itW2, :'stB')::text || '|' || pg_temp.balanced(:itW2)::text,
+  'received|42501:warehouse_write:true|closed|1|true',
+  'I8: a Staging close for an item in a warehouse the closer may not write is refused warehouse_write (nothing moves); the manager''s lands in that warehouse''s Staging (review)');
 
 -- ══ J. Several sources ════════════════════════════════════════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,
@@ -1401,6 +1534,17 @@ select is(
   ((:'jJ9'::jsonb)->>'status') || ',' || pg_temp.balanced(:itP)::text,
   'closed,true',
   'J9: re-planned to Staging, the second RMA closes');
+-- The partial cap (review fix): 34-A took one unit back and one went to
+-- Staging unrecorded, so 35-B's cap is its remaining (3) less that one. With
+-- one more unrecorded return the cap no longer covers rP3's two units.
+select is(
+  (select string_agg((x->>'name') || '/' || (x->>'remaining') || '/' || (x->>'cap'), ',' order by x->>'name' collate "C")
+     from jsonb_array_elements(ledger.return_line_sources(:'rP3l')->'sources') x)
+  || '|' || (select string_agg(y, ',') from jsonb_array_elements_text(ledger.return_line_sources(:'rP3l')->'offerSourceIds') y)
+  || '|' || pg_temp.undone(format('update public.order_request_lines set returned_quantity = returned_quantity + 1 where id = %L', :lP),
+       format($q$select coalesce((select string_agg(y, ',') from jsonb_array_elements_text(ledger.return_line_sources(%L)->'offerSourceIds') y), 'none')$q$, :'rP3l')),
+  '34-A/0/0,35-B/3/2|' || :r35B::text || '|none',
+  'J10: a partial source is offered only within its cap: remaining less the line''s returns no rack leg recorded, as if each came from it (review)');
 
 -- ══ K. Direct writes and the old tabs ═════════════════════════════════════
 select is(
@@ -1497,8 +1641,45 @@ select is(
   || ',' || pg_temp.attempt('authenticated', :mgr,
     format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
            :'rQ', :orgA, :lX1, :itX)),
-  'P0002:order_not_found:order_not_found,22023:return_invalid:return_invalid,ok:1',
-  'K11: a member of two organizations cannot file an RMA in one for the other''s order, and a raw line naming another order''s line is refused; a line of the RMA''s own order still goes in (F3)');
+  'P0002:order_not_found:order_not_found,22023:return_invalid:return_invalid,42501:return_line_insert_through_rpc:return_line_insert_through_rpc',
+  'K11: a member of two organizations cannot file an RMA in one for the other''s order, and a raw line naming another order''s line is refused (F3); even a line of its own order is refused on a requester''s RMA (review)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source) values (%L, %L, 'requested', 'internal')$q$, :orgA, :oPend)),
+  'P0001:order_not_returnable:order_not_returnable',
+  'K12: a raw RMA on an order not handed over is refused order_not_returnable, the create functions'' rule (review)');
+-- Raw lines only on the caller's own raw RMA (review fix): kRaw is the
+-- manager's old-tab RMA; rK13 the manager's, created through the function.
+select pg_temp.write_as('authenticated', :mgr,
+    format($q$insert into public.returns (id, organization_id, order_request_id, status, source) values (%L, %L, %L, 'requested', 'internal')$q$,
+           :kRaw, :orgA, :oX)) as "wK13" \gset
+select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
+          pg_temp.one(:lX2, 1)::text))->>'returnId') as "rK13" \gset
+select is(
+  :'wK13'
+  || ',' || pg_temp.attempt('authenticated', :stfRm,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
+           :kRaw, :orgA, :lX1, :itX))
+  || ',' || pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'scrap')$q$,
+           :'rK13', :orgA, :lX1, :itX))
+  || ',' || pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
+           :kRaw, :orgA, :lX1, :itX)),
+  'ok:1,42501:return_line_insert_through_rpc:return_line_insert_through_rpc,42501:return_line_insert_through_rpc:return_line_insert_through_rpc,ok:1',
+  'K13: a raw line goes only on the caller''s own raw RMA: another member''s, or one a function created (it has decisions), is refused (review)');
+select is(
+  (select (p.prosrc ~* 'r\.status = ''requested''\s+for share')::text from pg_proc p where p.oid = 'public.tg_return_lines_api_guard()'::regprocedure),
+  'true',
+  'K14: the line guard reads the RMA FOR SHARE (the RMA functions'' FOR UPDATE makes it wait; the race script proves the order, case 9) (review)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source, requester_name) values (%L, %L, 'requested', 'internal', 'Spoofed Person')$q$, :orgA, :oX))
+  || ',' || pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source, requester_email) values (%L, %L, 'requested', 'internal', 'victim@example.com')$q$, :orgA, :oX))
+  || ',' || (select (return_number ~ '^RMA-[0-9]{8}-[0-9A-F]{6}$' and return_number <> 'RMA-OLDTAB-0001')::text from public.returns where id = :kOld),
+  '42501:return_insert_through_rpc:return_insert_through_rpc,42501:return_insert_through_rpc:return_insert_through_rpc,true',
+  'K15: a raw RMA carries no requester name or email, and its number is the server''s (the old tab''s own is replaced) (review)');
 
 -- ══ L. Regression ═════════════════════════════════════════════════════════
 select is(
@@ -1590,7 +1771,7 @@ select is(
 select is(
   (select string_agg(i.sku || '=' || pg_temp.balanced(i.id)::text, ',' order by i.sku collate "C")
      from public.inventory_items i where i.organization_id = :orgA),
-  '0395-C2=true,0395-G=true,0395-K=true,0395-M=true,0395-P=true,0395-R=true,0395-S=true,0395-SCR=true,0395-U=true,0395-V=true,0395-W=true,0395-X=true,0395-X2=true',
+  '0395-C2=true,0395-G=true,0395-K=true,0395-M=true,0395-P=true,0395-R=true,0395-S=true,0395-SCR=true,0395-U=true,0395-V=true,0395-W=true,0395-W2=true,0395-X=true,0395-X2=true',
   'L5: holdings equal on hand for every item this suite touched (brief 15)');
 select is(
   (select count(*)::int from public.return_decisions d

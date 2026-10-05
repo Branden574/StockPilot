@@ -28,17 +28,19 @@
 --      return_line_restock_legs, return_restock_original.
 --   6. ledger.process_return_disposition restated from its live text (0373,
 --      md5(prosrc) 1fc9012a1051d2250d67f864004bc757): the manager-role gate
---      becomes returns:manage plus write access to the order's warehouse, and
---      a restock planned to the original rack goes there in the same
---      transaction instead of Staging. Every other line is byte-identical;
+--      becomes returns:manage plus write access to the order's warehouse, a
+--      restock planned to the original rack goes there in the same
+--      transaction instead of Staging, and the Staging and scrap legs (which
+--      write the item's current warehouse) need write access to that
+--      warehouse when it is not the order's. Every other line is byte-identical;
 --      every added line ends in `-- RX-1` (the reverse-replace proof is in
 --      the pgTAP suite and the production check file).
 --   7. The RMA functions (SECURITY DEFINER, gate in the body): create (staff
 --      and, for the service role only, requester), approve (optionally
 --      receiving in the same transaction: the counter), deny, receive,
 --      cancel, plan the dispositions, close, and the restock options read.
---      Four exchange hooks RX-2 fills (here: exchange input is refused with
---      exchange_not_available).
+--      Five exchange hooks RX-2 fills (here: exchange input is refused with
+--      exchange_not_available, and an approval replay answers no replacement).
 --   8. The write posture (expand): the four write policies follow
 --      returns:manage instead of the manager role, AND write access to the
 --      warehouse of the RMA's order (user_can_access_inventory(..., 'write'),
@@ -50,9 +52,12 @@
 --      triggers hold API-role writes to the old tabs' shapes: an insert only
 --      at requested with no stamps, for an order of the RMA's organization
 --      in a warehouse the caller writes, a status edge only with its own
---      stamps naming the caller, never into closed, and a line only on a
---      requested RMA, for a line of that RMA's order, never applied. RX-4
---      revokes the remaining INSERT and the eight UPDATE columns.
+--      stamps naming the caller, never into closed, a completed or delivered
+--      order, no requester name or email, the server's RMA number; and a line
+--      only on a requested internal RMA the caller inserted itself that no
+--      function wrote (held FOR SHARE, so an approval in flight is waited
+--      for), for a line of that RMA's order, never applied. RX-4 revokes the
+--      remaining INSERT and the eight UPDATE columns.
 --
 -- ── ORIGINAL RACK (plan 3.5) ───────────────────────────────────────────────
 -- A return line's sources are the holdings its order's picks of that item
@@ -60,14 +65,16 @@
 -- minus what earlier closed returns of that order line restored to each
 -- location (their return movements with to_location_id). Never bin_location,
 -- primary_location_id or the custom_fields rack keys. The line is "not
--- recorded" (case not_recorded) when a pick carries no draw, a Reopen picking
--- movement exists for the item, the order has more than one line for the
--- item, or the drawn total differs from quantity_fulfilled +
+-- recorded" (case not_recorded) when the order is not completed or delivered
+-- or the line holds picks not handed over, a pick carries no draw, a Reopen
+-- picking movement exists for the item, the order has more than one line for
+-- the item, or the drawn total differs from quantity_fulfilled +
 -- coalesce(quantity_picked, 0). Otherwise: one location is single_source;
 -- several, with this return covering everything still out and every earlier
 -- return of the line restored to a recorded source, is full_remainder; any
 -- other several is partial (a manager picks one source, capped at what is
--- still out there). A source is valid when it exists in the RMA's
+-- still out there less the line's returns no rack leg recorded, as if each
+-- had come from that source). A source is valid when it exists in the RMA's
 -- organization, is not archived, is a placement (kind rack/crate/area or type
 -- shelf/bin, never Staging, Unplaced or a Site), has the kind and warehouse
 -- its draws recorded, is organization-level or in the item's warehouse, sits
@@ -208,15 +215,18 @@ declare
   v_offer_src jsonb := '[]'::jsonb;
   v_offer_org boolean := false;
   v_problem   text;
+  v_unattr    numeric(14,4) := 0;
+  v_cap       numeric(14,4);
   s           record;
 begin
   select rl.id, rl.return_id, rl.organization_id, rl.item_id, rl.quantity, rl.applied,
-         rl.order_request_line_id, r.order_request_id,
+         rl.order_request_line_id, r.order_request_id, o.status as order_status,
          orl.quantity_fulfilled, orl.quantity_picked, orl.returned_quantity,
          ii.warehouse_id as item_warehouse_id, ii.deleted_at as item_deleted_at
     into v_line
     from public.return_lines rl
     join public.returns r on r.id = rl.return_id
+    join public.order_requests o on o.id = r.order_request_id
     join public.order_request_lines orl on orl.id = rl.order_request_line_id
     join public.inventory_items ii on ii.id = rl.item_id
    where rl.id = p_return_line_id;
@@ -224,12 +234,22 @@ begin
     return null;
   end if;
 
-  -- Not recorded: any one of the four rules (plan 3.5.1).
+  -- Not recorded: any one of the rules (plan 3.5.1). First, an order still in
+  -- flight (review fix): only a handed-over order's draws are what left the
+  -- building. Picks drawn but not handed over (a backorder resumed and
+  -- re-picked, quantity_picked > 0) are still in the building, so they are no
+  -- source for a returned unit. The create functions and the API guard
+  -- accept only completed or delivered orders; this keeps the resolver right
+  -- whatever wrote the RMA.
+  if coalesce(v_line.order_status, '') not in ('completed', 'delivered') or coalesce(v_line.quantity_picked, 0) > 0 then
+    v_reason := 'order_in_flight';
+  end if;
+
   select count(*) into v_dup
     from public.order_request_lines
    where order_request_id = v_line.order_request_id
      and item_id = v_line.item_id;
-  if v_dup > 1 then
+  if v_reason is null and v_dup > 1 then
     v_reason := 'duplicate_line';
   end if;
 
@@ -280,6 +300,24 @@ begin
       from public.returns r2
      where r2.organization_id = v_line.organization_id
        and r2.order_request_id = v_line.order_request_id;
+
+    -- Units of this line already returned that no rack leg recorded (they
+    -- went to Staging, to scrap, or through the old close): which source each
+    -- came from is unknown. A manager's choice of one source (partial) is
+    -- capped as if every such unit had come from that source (review fix),
+    -- so a rack is never offered more units than could have been picked
+    -- there. single_source needs no cap (every unit came from its one
+    -- location) and full_remainder requires none unrecorded.
+    select greatest(coalesce(v_line.returned_quantity, 0) - coalesce(sum(m.quantity_change), 0), 0)
+      into v_unattr
+      from public.stock_movements m
+     where m.reference_id = any (v_rma_ids)
+       and m.reference_type = 'return'
+       and m.movement_type = 'return'
+       and m.organization_id = v_line.organization_id
+       and m.item_id = v_line.item_id
+       and m.to_location_id is not null
+       and m.via_ledger;
 
     for s in
       with held as (
@@ -353,6 +391,7 @@ begin
       v_count := v_count + 1;
       v_restored := v_restored + s.restored;
       v_remaining := v_remaining + s.remaining;
+      v_cap := greatest(s.remaining - v_unattr, 0);
       v_sources := v_sources || jsonb_build_array(jsonb_build_object(
         'locationId', s.location_id,
         'name',       s.l_name,
@@ -361,9 +400,10 @@ begin
         'drawn',      trim_scale(s.drawn),
         'restored',   trim_scale(s.restored),
         'remaining',  trim_scale(s.remaining),
+        'cap',        trim_scale(v_cap),
         'valid',      v_problem is null,
         'reason',     v_problem));
-      if v_problem is null and s.remaining >= v_line.quantity then
+      if v_problem is null and v_cap >= v_line.quantity then
         v_offer_src := v_offer_src || to_jsonb(s.location_id::text);
       end if;
     end loop;
@@ -476,7 +516,9 @@ begin
     if e is null then
       raise exception 'restock_plan_stale' using errcode = 'P0001', hint = 'restock_plan_stale';
     end if;
-    return query select v_plan.location_id, v_qty, (e->>'remaining')::numeric,
+    -- A manager's choice is held to the source's cap (its remaining less the
+    -- line's unrecorded returns), the same number the offer used.
+    return query select v_plan.location_id, v_qty, (e->>'cap')::numeric,
                         (e->>'valid')::boolean, e->>'reason';
   end if;
 end;
@@ -583,10 +625,12 @@ begin
 end;
 $$;
 
--- ── 1b. The restated body (plan 3.4): 0373's live text, ten lines tagged
+-- ── 1b. The restated body (plan 3.4): 0373's live text, fifteen lines tagged
 -- `-- RX-1` (the manager-role gate becomes returns:manage plus warehouse write;
--- a restock planned to the original rack takes the rack leg). Header, owner,
--- ACL and comment unchanged; the public wrapper is untouched.
+-- a restock planned to the original rack takes the rack leg; the Staging and
+-- scrap legs, which write the item's current warehouse, need write access to
+-- it when it is not the order's). Header, owner, ACL and comment unchanged;
+-- the public wrapper is untouched.
 CREATE OR REPLACE FUNCTION ledger.process_return_disposition(p_return_id uuid)
  RETURNS public.returns
  LANGUAGE plpgsql
@@ -691,6 +735,11 @@ begin
     if v_line.disposition = 'restock' and ledger.return_line_plans_original(v_line.line_id) then  -- RX-1
       perform ledger.return_restock_original(p_return_id, v_line.line_id, v_line.item_id, v_line.quantity, v_user);  -- RX-1
     else  -- RX-1
+    if v_item.warehouse_id is not null and v_item.warehouse_id is distinct from v_wh  -- RX-1
+       and not public.user_can_access_inventory(v_user, v_item.warehouse_id, null, 'write') then  -- RX-1
+      raise exception 'forbidden' using errcode = '42501', hint = 'warehouse_write',  -- RX-1
+            detail = jsonb_build_object('itemId', v_line.item_id)::text;  -- RX-1
+    end if;  -- RX-1
 
     -- INVENTORY MODEL: the returned unit already left on-hand at fulfilment.
     --   RESTOCK → +qty 'return' (re-enters sellable stock; net vs fulfilment = 0).
@@ -827,6 +876,23 @@ as $$
 begin
   -- RX-1: a return has no replacement to cancel.
   return;
+end;
+$$;
+
+-- An approval replay's replacement answer (review fix). The stored key
+-- response is writable by managers through the API, so a replay never reads
+-- the replacement from it: RX-2 replaces this body to read the replacement of
+-- that revision from its own tables.
+create function public._return_exchange_replay(p_return_id uuid, p_revision integer)
+returns jsonb
+language plpgsql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  -- RX-1: an approval creates no replacement.
+  return null;
 end;
 $$;
 
@@ -1244,11 +1310,18 @@ begin
     -- (desk check F11): idempotency_keys is writable by managers through the
     -- API, so a row this function did not write could name any RMA. Anything
     -- else is a conflict, never a replay.
+    -- And it must be the caller's own staff RMA (review fix): a manager could
+    -- plant a row under another member's key naming the manager's RMA on the
+    -- same order. The created decision this function writes names the actor.
     select r.status, r.return_number into v_status, v_number
       from public.returns r
      where r.id = (v_prev.response->>'returnId')::uuid
        and r.organization_id = v_org
-       and r.order_request_id = p_order_id;
+       and r.order_request_id = p_order_id
+       and r.source = 'internal'
+       and r.requested_by = v_user
+       and exists (select 1 from public.return_decisions d
+                    where d.return_id = r.id and d.kind = 'created' and d.actor_user_id = v_user);
     if not found then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
@@ -1334,7 +1407,9 @@ begin
 
   v_canon := public._return_normalize_request(p_request, 'requester');
   v_hash := md5(c_scope || ':v1|' || p_order_id::text || '|' || v_chan || '|' || v_canon::text);
-  v_key := coalesce(v_actor::text, 'anon') || ':' || p_key::text;
+  -- The token path has no actor: its keys are kept per order (review fix),
+  -- so two requesters of different orders never share a key space.
+  v_key := coalesce(v_actor::text, 'anon:' || p_order_id::text) || ':' || p_key::text;
 
   insert into public.idempotency_keys as k (organization_id, scope, key, request_hash, status, resource_type)
   values (v_org, c_scope, v_key, v_hash, 'in_progress', 'return')
@@ -1350,13 +1425,18 @@ begin
        or (v_prev.response->>'returnId') !~ c_uuid then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
-    -- Only an RMA of this organization and this order is replayed (desk
-    -- check F11; see create_return_request).
+    -- Only a requester RMA of this organization and this order, created on
+    -- this channel by this actor, is replayed (desk check F11 and the review
+    -- fix; see create_return_request).
     select r.status, r.return_number into v_status, v_number
       from public.returns r
      where r.id = (v_prev.response->>'returnId')::uuid
        and r.organization_id = v_org
-       and r.order_request_id = p_order_id;
+       and r.order_request_id = p_order_id
+       and r.source = 'requester'
+       and exists (select 1 from public.return_decisions d
+                    where d.return_id = r.id and d.kind = 'created' and d.channel = v_chan
+                      and d.actor_user_id is not distinct from v_actor);
     if not found then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
@@ -1501,10 +1581,14 @@ begin
     if not found or v_prev.request_hash is distinct from v_hash or v_prev.status is distinct from 'completed' then
       raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed';
     end if;
+    -- The answer comes from what this function wrote, never from the stored
+    -- response (a manager may edit it through the API; review fix): the
+    -- approved decision at the next revision exists (checked above, under
+    -- the RMA lock), and the replacement is read by the exchange hook.
     return jsonb_build_object('changed', false, 'replay', true, 'returnId', p_return_id,
-                              'revision', (v_prev.response->>'revision')::integer,
+                              'revision', p_expected_revision + 1,
                               'status', v_status,
-                              'replacement', coalesce(v_prev.response->'replacement', 'null'::jsonb));
+                              'replacement', coalesce(public._return_exchange_replay(p_return_id, p_expected_revision + 1), 'null'::jsonb));
   end if;
 
   if v_status <> 'requested' then
@@ -1890,7 +1974,8 @@ begin
    where m.reference_id = p_return_id
      and m.reference_type = 'return'
      and m.movement_type = 'return'
-     and m.organization_id = v_org;
+     and m.organization_id = v_org
+     and m.via_ledger;  -- a member's direct insert (via_ledger false) is no leg (review fix)
 
   -- Per line (plan 3.3.4 step 7): its disposition, the destination it was
   -- planned to, and the legs of its item (a line's movements carry its item,
@@ -1943,6 +2028,9 @@ declare
   v_seq    bigint;
   v_src    jsonb;
   v_plan   jsonb;
+  v_mgr    boolean;
+  v_srcs   jsonb;
+  v_legsok boolean;
   l        record;
 begin
   if v_user is null then
@@ -1960,6 +2048,7 @@ begin
   if not public.user_can_access_inventory(v_user, v_wh, null, 'read') then
     raise exception 'warehouse_read' using errcode = '42501', hint = 'warehouse_read';
   end if;
+  v_mgr := public.has_org_role(v_org, 'manager');
 
   for l in
     select rl.id, rl.item_id, rl.quantity, rl.disposition, rl.applied
@@ -1975,6 +2064,19 @@ begin
      order by d.seq desc
      limit 1;
     v_src := case when l.applied then null else ledger.return_line_sources(l.id) end;
+    -- Whether THIS caller may stock each source (review fix): the rack leg's
+    -- own gate (return_restock_original: a manager, or write access to the
+    -- location). Provenance and validity stay the resolver's; the screens
+    -- disable a rack the caller cannot stock, and the original rack is
+    -- preselected only when every leg is one the caller may stock.
+    select coalesce(jsonb_agg(x || jsonb_build_object(
+             'writable', v_mgr or public.caller_can_write_location((x->>'locationId')::uuid))
+             order by ord), '[]'::jsonb)
+      into v_srcs
+      from jsonb_array_elements(coalesce(v_src->'sources', '[]'::jsonb)) with ordinality as t(x, ord);
+    select coalesce(bool_and((x->>'writable')::boolean), true) into v_legsok
+      from jsonb_array_elements(v_srcs) as x
+     where (x->>'remaining')::numeric > 0;
     v_lines := v_lines || jsonb_build_array(jsonb_build_object(
       'returnLineId',      l.id,
       'itemId',            l.item_id,
@@ -1984,10 +2086,11 @@ begin
       'plan',              v_plan,
       'case',              v_src->>'case',
       'notRecordedReason', v_src->>'notRecordedReason',
-      'sources',           coalesce(v_src->'sources', '[]'::jsonb),
+      'sources',           v_srcs,
       'offerOriginal',     coalesce((v_src->>'offerOriginal')::boolean, false),
       'offerSourceIds',    coalesce(v_src->'offerSourceIds', '[]'::jsonb),
-      'preselect',         case when coalesce((v_src->>'offerOriginal')::boolean, false) then 'original' else 'staging' end));
+      'preselect',         case when coalesce((v_src->>'offerOriginal')::boolean, false) and v_legsok
+                                then 'original' else 'staging' end));
   end loop;
 
   select coalesce(max(d.seq), 0) into v_seq
@@ -2011,19 +2114,23 @@ as $$
 declare
   v_order_org uuid;
   v_wh        uuid;
+  v_ostatus   text;
 begin
   if current_user not in ('authenticated', 'anon') then
     return new;
   end if;
 
   if tg_op = 'INSERT' then
-    -- The old tab's create: requested, internal, no stamps (G2).
+    -- The old tab's create: requested, internal, no stamps (G2), and no
+    -- requester identity (an internal RMA has none; the review found a raw
+    -- insert could name any requester for the list to show).
     if new.status is distinct from 'requested' or new.source is distinct from 'internal'
        or new.approved_by is not null or new.approved_at is not null
        or new.received_by is not null or new.received_at is not null
        or new.closed_by is not null or new.closed_at is not null
        or new.denied_by is not null or new.denied_at is not null
-       or new.denial_reason is not null then
+       or new.denial_reason is not null
+       or new.requester_name is not null or new.requester_email is not null then
       raise exception 'return_insert_through_rpc' using errcode = '42501', hint = 'return_insert_through_rpc';
     end if;
     if new.requested_by is null then
@@ -2035,7 +2142,7 @@ begin
     -- that order's warehouse (the functions' rule, D27). Read as the caller:
     -- an order the caller cannot see answers like a missing one. The insert
     -- policy holds the same two rules; this answers them with a hint.
-    select o.organization_id, o.warehouse_id into v_order_org, v_wh
+    select o.organization_id, o.warehouse_id, o.status into v_order_org, v_wh, v_ostatus
       from public.order_requests o where o.id = new.order_request_id;
     if v_order_org is null or v_order_org is distinct from new.organization_id then
       raise exception 'order_not_found' using errcode = 'P0002', hint = 'order_not_found';
@@ -2043,6 +2150,17 @@ begin
     if not public.user_can_access_inventory(auth.uid(), v_wh, null, 'write') then
       raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
     end if;
+    -- Only a handed-over order is returnable (the create functions' rule and
+    -- the old service's; review fix): picks of an order still in flight are
+    -- not units that left the building.
+    if coalesce(v_ostatus, '') not in ('completed', 'delivered') then
+      raise exception 'order_not_returnable' using errcode = 'P0001', hint = 'order_not_returnable',
+        detail = v_ostatus;
+    end if;
+    -- The RMA number is the server's, in today's format (the old tab sends
+    -- one; any value it sends is replaced, never trusted for display).
+    new.return_number := 'RMA-' || to_char(now() at time zone 'UTC', 'YYYYMMDD') || '-'
+                         || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 6));
     new.created_at := now();
     return new;
   end if;
@@ -2113,6 +2231,8 @@ declare
   v_order      uuid;
   v_line_order uuid;
   v_wh         uuid;
+  v_source     text;
+  v_req        uuid;
 begin
   if current_user not in ('authenticated', 'anon') then
     return new;
@@ -2139,6 +2259,26 @@ begin
   if not public.user_can_access_inventory(auth.uid(), v_wh, null, 'write') then
     raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
   end if;
+  -- Under a lock the RMA functions' FOR UPDATE conflicts with (review fix):
+  -- an approval, denial or cancel in flight makes this wait, then the status
+  -- is read again (READ COMMITTED re-checks the row), so a line never slips
+  -- into an RMA approved a moment ago with no decision behind it. The lock
+  -- comes before the fulfilled cap's order-line lock (an AFTER trigger), the
+  -- order every close takes too (RMA, then source line): no cycle. The
+  -- update policy's terms equal the insert policy's, so a caller who may
+  -- insert may take it (authenticated holds UPDATE on eight returns columns).
+  select r.source, r.requested_by into v_source, v_req
+    from public.returns r
+   where r.id = new.return_id and r.organization_id = v_org and r.status = 'requested'
+     for share;
+  -- Only the old tab's own create adds raw lines (review fix): an internal
+  -- RMA the caller inserted itself, which no RMA function wrote (those write
+  -- a created decision). A requester's RMA, another member's, or one created
+  -- through a function takes no raw line.
+  if not found or v_source is distinct from 'internal' or v_req is distinct from auth.uid()
+     or exists (select 1 from public.return_decisions d where d.return_id = new.return_id) then
+    raise exception 'return_line_insert_through_rpc' using errcode = '42501', hint = 'return_line_insert_through_rpc';
+  end if;
   return new;
 end;
 $$;
@@ -2164,6 +2304,7 @@ revoke all on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) 
 revoke all on function public._return_exchange_approve(uuid, jsonb, uuid, integer) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_on_deny(uuid, uuid) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_on_cancel(uuid, uuid, text) from public, anon, authenticated, service_role;
+revoke all on function public._return_exchange_replay(uuid, integer) from public, anon, authenticated, service_role;
 revoke all on function public._return_normalize_request(jsonb, text) from public, anon, authenticated, service_role;
 revoke all on function public._return_create_core(uuid, uuid, jsonb, text, uuid, text, text, text, text, uuid, jsonb) from public, anon, authenticated, service_role;
 revoke all on function public._return_plan_lines(uuid, uuid, jsonb, uuid, text, boolean, boolean) from public, anon, authenticated, service_role;
@@ -2191,11 +2332,11 @@ grant execute on function public.close_return(uuid, jsonb, bigint) to authentica
 grant execute on function public.return_restock_options(uuid) to authenticated;
 
 comment on function ledger.return_line_sources(uuid) is
-  'RX-1 (plan 3.5): a return line''s proven sources from draw provenance only (the order''s stamped pick transfers of the item, minus earlier returns of the order restored to each location), the case (single_source, full_remainder, partial, not_recorded with its reason), each source''s validity now with its reason (missing, archived, not_a_placement, moved_warehouse, warehouse_inactive, item_deleted), and what may be offered (offerOriginal, offerSourceIds). Never reads bin_location, primary_location_id or custom_fields. SECURITY INVOKER, STABLE, no API EXECUTE: called by the DEFINER RMA functions as postgres.';
+  'RX-1 (plan 3.5): a return line''s proven sources from draw provenance only (the order''s stamped pick transfers of the item, minus earlier returns of the order restored to each location), the case (single_source, full_remainder, partial, not_recorded with its reason: order_in_flight for an order not completed or delivered or a line with picks not handed over, duplicate_line, reopened, no_draw, drawn_mismatch), each source''s validity now with its reason (missing, archived, not_a_placement, moved_warehouse, warehouse_inactive, item_deleted), its cap (remaining less the line''s returns no rack leg recorded), and what may be offered (offerOriginal, offerSourceIds: a partial source only when valid and its cap covers the line). Never reads bin_location, primary_location_id or custom_fields. SECURITY INVOKER, STABLE, no API EXECUTE: called by the DEFINER RMA functions as postgres.';
 comment on function ledger.return_line_plans_original(uuid) is
   'RX-1: true when the return line''s live plan (highest-seq disposition_planned) restocks to the original rack or one proven source. SECURITY INVOKER, no API EXECUTE.';
 comment on function ledger.return_line_restock_legs(uuid) is
-  'RX-1: the live original-rack plan re-derived now: single_source gives one leg (the whole line), full_remainder one leg per location (what is still out there), source one leg at the chosen proven location; anything else raises P0001 restock_plan_stale. Rows carry the remaining quantity and validity for the caller to enforce. SECURITY INVOKER, no API EXECUTE.';
+  'RX-1: the live original-rack plan re-derived now: single_source gives one leg (the whole line), full_remainder one leg per location (what is still out there), source one leg at the chosen proven location, held to that source''s cap; anything else raises P0001 restock_plan_stale. Rows carry the remaining quantity (the cap for a chosen source) and validity for the caller to enforce. SECURITY INVOKER, no API EXECUTE.';
 comment on function ledger.return_restock_original(uuid, uuid, uuid, numeric, uuid) is
   'RX-1: the rack leg of ledger.process_return_disposition. Locks the planned locations FOR SHARE in id order, then their warehouses FOR SHARE in id order (a deactivation is serialised with the close), re-derives the legs under those locks, refuses an invalid or over-remaining leg (P0001 restock_location_unavailable, detail {rule, locationId}) and a leg on a location a signed-in caller below manager may not write (42501 restock_location_forbidden, detail {rule location_write, locationId}: apply_holding_delta''s own gate, answered with a hint), then per leg: on hand +q, ledger.apply_holding_delta(item, location, +q), one return movement with to_location_id and the RMA reference. The legs must sum to the line (P0001 restock_plan_mismatch). SECURITY INVOKER, no API EXECUTE; runs inside the wrapper''s ledger transaction.';
 comment on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) is
@@ -2206,6 +2347,8 @@ comment on function public._return_exchange_on_deny(uuid, uuid) is
   'RX-1 hook stub: no-op. RX-2 declines the exchange lines. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_on_cancel(uuid, uuid, text) is
   'RX-1 hook stub: no-op. RX-2 locks, classifies and cancels a live replacement. SECURITY INVOKER, no API EXECUTE.';
+comment on function public._return_exchange_replay(uuid, integer) is
+  'RX-1 hook stub: an approval replay''s replacement answer, null (RX-1 creates no replacement). RX-2 replaces the body to read that revision''s replacement from its own tables; a replay never reads it from the stored key response. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_normalize_request(jsonb, text) is
   'RX-1: the create request checked (22023 return_invalid, detail the field) and in canonical form, lines sorted by source line. Requester tier forces restock and caps the total at 10,000. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_create_core(uuid, uuid, jsonb, text, uuid, text, text, text, text, uuid, jsonb) is
@@ -2213,11 +2356,11 @@ comment on function public._return_create_core(uuid, uuid, jsonb, text, uuid, te
 comment on function public._return_plan_lines(uuid, uuid, jsonb, uuid, text, boolean, boolean) is
   'RX-1: validates and appends disposition plans for approval, the planner and the close. Restock targets are checked against the resolver now (P0001 restock_location_not_offered, one answer whatever the cause); scrap carries no destination; with p_require_all every unapplied line needs a decision (P0001 return_decision_incomplete). SECURITY INVOKER, no API EXECUTE.';
 comment on function public.create_return_request(uuid, jsonb, uuid) is
-  'RX-1: the staff create, header and lines and the created decision in one transaction. Gates: signed in (42501 unauthenticated); order in a member organization (P0002 order_not_found); returns module (P0001 module_disabled); returns:manage (42501 returns_manage); write access to the order''s warehouse (42501 warehouse_write); key required (22023 idempotency_key_required). Idempotent on (caller, key): the same request replays the RMA (only an RMA of this organization and this order), another gets P0001 idempotency_conflict. Exchange input: P0001 exchange_not_available until RX-2. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: the staff create, header and lines and the created decision in one transaction. Gates: signed in (42501 unauthenticated); order in a member organization (P0002 order_not_found); returns module (P0001 module_disabled); returns:manage (42501 returns_manage); write access to the order''s warehouse (42501 warehouse_write); key required (22023 idempotency_key_required). Idempotent on (caller, key): the same request replays the RMA (only the caller''s own staff RMA of this organization and this order, with its created decision), another gets P0001 idempotency_conflict. Exchange input: P0001 exchange_not_available until RX-2. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.create_requester_return_request(uuid, jsonb, uuid, jsonb) is
-  'RX-1: the requester create (token, B2B portal, member) after the SERVER resolved the order and the actor; disposition always restock, requester name and email from the order, channel recorded on the created decision. Idempotent on (actor or anon, key). Never raises a retryable class (0367). SECURITY DEFINER, EXECUTE to service_role only.';
+  'RX-1: the requester create (token, B2B portal, member) after the SERVER resolved the order and the actor; disposition always restock, requester name and email from the order, channel recorded on the created decision. Idempotent on (actor, or anon per order, key); a replay names only a requester RMA of this organization and order created on the same channel by the same actor. Never raises a retryable class (0367). SECURITY DEFINER, EXECUTE to service_role only.';
 comment on function public.approve_return(uuid, integer, jsonb, boolean) is
-  'RX-1: requested to approved with every line''s disposition and destination (restock to Staging, the original rack or one proven source, or scrap), validated against the resolver now; optionally received in the same transaction (p_receive_now, channel counter). Moves no stock. Gates as create, plus orders module and orders:approve (42501 orders_approve) for an exchange approved or added. Idempotent on (RMA, expected revision): a replay answers the stored result, another decision P0001 return_changed; a key row with no approved decision at the next revision was not written by this function and is taken over, never trusted; a stale revision P0001 return_changed; another status P0001 invalid_status_transition. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: requested to approved with every line''s disposition and destination (restock to Staging, the original rack or one proven source, or scrap), validated against the resolver now; optionally received in the same transaction (p_receive_now, channel counter). Moves no stock. Gates as create, plus orders module and orders:approve (42501 orders_approve) for an exchange approved or added. Idempotent on (RMA, expected revision): a replay answers the next revision and the exchange hook''s replacement (never the stored response, which managers can edit), another decision P0001 return_changed; a key row with no approved decision at the next revision was not written by this function and is taken over, never trusted; a stale revision P0001 return_changed; another status P0001 invalid_status_transition. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.deny_return(uuid, text) is
   'RX-1: requested to denied with a reason of 1 to 1,000 characters (P0001 reason_required). Already denied answers changed false. Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.receive_return(uuid) is
@@ -2227,13 +2370,13 @@ comment on function public.cancel_return(uuid, integer, text) is
 comment on function public.plan_return_dispositions(uuid, jsonb) is
   'RX-1: while approved or received, appends a disposition plan for each changed unapplied line (an identical plan appends nothing) and keeps return_lines.disposition equal. Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.close_return(uuid, jsonb, bigint) is
-  'RX-1: received to closed in one transaction: optional changed plans (C-9), then the frozen wrapper public.process_return_disposition (Staging, original rack or scrap per line, revalidated under lock), then the closed decision. Already closed answers changed false with who and when; a plan changed since the screen loaded gives P0001 return_plan_changed; a failed revalidation raises and nothing moves; the restated body''s bare refusals are raised again with their hint (returns_manage for its forbidden). Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: received to closed in one transaction: optional changed plans (C-9), then the frozen wrapper public.process_return_disposition (Staging, original rack or scrap per line, revalidated under lock), then the closed decision; its legs (and per-line legs) are the ledger''s return movements only. Already closed answers changed false with who and when; a plan changed since the screen loaded gives P0001 return_plan_changed; a failed revalidation raises and nothing moves; the restated body''s bare refusals are raised again with their hint (returns_manage for its forbidden). Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.return_restock_options(uuid) is
-  'RX-1: the destination read for the workbench: per line the case, sources, validity now, offers and live plan, in one call. Gates: signed in, member (P0002 return_not_found), returns:read or returns:manage (42501 returns_read), read access to the order''s warehouse (42501 warehouse_read). STABLE, SECURITY DEFINER, EXECUTE to authenticated only; never called from a requester route.';
+  'RX-1: the destination read for the workbench: per line the case, sources (each with validity now, its cap, and whether this caller may stock it: writable), offers, the live plan and the preselection (the original rack only when offered and every leg is writable for the caller), in one call. Gates: signed in, member (P0002 return_not_found), returns:read or returns:manage (42501 returns_read), read access to the order''s warehouse (42501 warehouse_read). STABLE, SECURITY DEFINER, EXECUTE to authenticated only; never called from a requester route.';
 comment on function public.tg_returns_api_guard() is
-  'RX-1 guard (BEFORE INSERT OR UPDATE on returns, API roles only): an insert only at requested, source internal, with no stamps, requested_by the caller, for an order of the RMA''s own organization the caller can see (P0002 order_not_found) in a warehouse the caller may write (42501 warehouse_write); a status edge only with its own stamps, naming the caller, at now(); never into closed (42501 return_close_through_rpc); otherwise 42501 return_insert_through_rpc or return_stamp_forged. The update policy already limits an edge to returns:manage and write access to the order''s warehouse. RX-2 adds the exchange clause. SECURITY INVOKER, no EXECUTE.';
+  'RX-1 guard (BEFORE INSERT OR UPDATE on returns, API roles only): an insert only at requested, source internal, with no stamps and no requester name or email, requested_by the caller, for an order of the RMA''s own organization the caller can see (P0002 order_not_found) in a warehouse the caller may write (42501 warehouse_write), completed or delivered (P0001 order_not_returnable); the RMA number is the server''s; a status edge only with its own stamps, naming the caller, at now(); never into closed (42501 return_close_through_rpc); otherwise 42501 return_insert_through_rpc or return_stamp_forged. The update policy already limits an edge to returns:manage and write access to the order''s warehouse. RX-2 adds the exchange clause. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_lines_api_guard() is
-  'RX-1 guard (BEFORE INSERT on return_lines, API roles only): never applied, and only on a requested RMA of the same organization the caller can see (42501 return_line_insert_through_rpc), for a source line of that RMA''s own order (22023 return_invalid, detail orderRequestLineId), by a caller who may write the order''s warehouse (42501 warehouse_write). SECURITY INVOKER, no EXECUTE.';
+  'RX-1 guard (BEFORE INSERT on return_lines, API roles only): never applied, and only on a requested RMA of the same organization the caller can see (42501 return_line_insert_through_rpc), for a source line of that RMA''s own order (22023 return_invalid, detail orderRequestLineId), by a caller who may write the order''s warehouse (42501 warehouse_write); then, with the RMA held FOR SHARE (an RMA function in flight is waited for and the status read again), only an internal RMA the caller inserted itself that no RMA function wrote (no decision): otherwise 42501 return_line_insert_through_rpc. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_decisions_append_only() is
   'RX-1: return_decisions rows never change, for any role (42501 return_decisions_append_only). SECURITY INVOKER, no EXECUTE.';
 

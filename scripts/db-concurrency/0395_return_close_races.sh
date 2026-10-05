@@ -43,6 +43,14 @@
 #      writes nothing.
 #   8. No session ever sees 40001 or 40P01, nothing deadlocks, and on hand
 #      equals the sum of holdings for every fixture item.
+#   9. (review fix) An approval against an old tab's raw line insert, both
+#      orders. 9a: the approval holds the RMA; the raw line insert waits on
+#      the line guard's FOR SHARE, reads the status again and is refused
+#      return_line_insert_through_rpc: the approved RMA keeps one line and
+#      every line its decision. 9b: the raw insert holds the RMA FOR SHARE;
+#      the approval waits, then sees a line its decision does not cover and is
+#      refused return_decision_incomplete: nothing approved.
+#      (Checks 8 run last, over every session's output.)
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0395 applied. Fixtures are committed under the 03951111-... namespace
@@ -71,6 +79,8 @@ IT4B='03951111-0000-0000-0000-0000000000e3'
 IT5A='03951111-0000-0000-0000-0000000000e4'
 IT5B='03951111-0000-0000-0000-0000000000e5'
 IT4C='03951111-0000-0000-0000-0000000000e6'
+IT9='03951111-0000-0000-0000-0000000000e7'
+IT9B='03951111-0000-0000-0000-0000000000e8'
 ORDER='03951111-0000-0000-0000-000000000101'
 L='03951111-0000-0000-0000-000000000201'
 L4A='03951111-0000-0000-0000-000000000202'
@@ -78,6 +88,10 @@ L4B='03951111-0000-0000-0000-000000000203'
 L5A='03951111-0000-0000-0000-000000000204'
 L5B='03951111-0000-0000-0000-000000000205'
 L4C='03951111-0000-0000-0000-000000000206'
+L9='03951111-0000-0000-0000-000000000207'
+L9B='03951111-0000-0000-0000-000000000208'
+R9A='03951111-0000-0000-0000-000000000901'
+R9B='03951111-0000-0000-0000-000000000902'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -214,7 +228,9 @@ insert into public.inventory_items
   ('$IT4B', '$ORG', '$WH', '0395-2S-4B', '2S return shirt archive2', 2, 'active', 'none', '$RB'),
   ('$IT5A', '$ORG', '$WH', '0395-2S-5A', '2S return shirt key',     2,  'active', 'none', '$R1'),
   ('$IT5B', '$ORG', '$WH', '0395-2S-5B', '2S return shirt cap',     2,  'active', 'none', '$R1'),
-  ('$IT4C', '$ORG', '$WH', '0395-2S-4C', '2S return shirt closed wh', 2, 'active', 'none', '$RC');
+  ('$IT4C', '$ORG', '$WH', '0395-2S-4C', '2S return shirt closed wh', 2, 'active', 'none', '$RC'),
+  ('$IT9',  '$ORG', '$WH', '0395-2S-9',  '2S return shirt raw line', 4, 'active', 'none', '$R1'),
+  ('$IT9B', '$ORG', '$WH', '0395-2S-9B', '2S return shirt raw line 2', 4, 'active', 'none', '$R1');
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup');
@@ -224,7 +240,9 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   ('$L4B', '$ORDER', '$IT4B', 1,  0),
   ('$L5A', '$ORDER', '$IT5A', 1,  0),
   ('$L5B', '$ORDER', '$IT5B', 1,  0),
-  ('$L4C', '$ORDER', '$IT4C', 1,  0);
+  ('$L4C', '$ORDER', '$IT4C', 1,  0),
+  ('$L9',  '$ORDER', '$IT9',  2,  0),
+  ('$L9B', '$ORDER', '$IT9B', 2,  0);
 SQL
 then
   echo "fixture setup failed"; exit 1
@@ -237,7 +255,7 @@ if [ "$(sed -n 's/^P=//p' "$TMP/pick.out")/$(sed -n 's/^P=//p' "$TMP/sign.out")"
   echo "fixture: the pick or the hand-over failed:"; cat "$TMP/pick.out" "$TMP/sign.out"; exit 1
 fi
 check "fixture: every pick carries its recorded draw" \
-  "$(q "select count(*) from public.stock_movements where reference_type = 'order_request' and reference_id = '$ORDER' and movement_type = 'transfer' and quantity_change < 0 and via_ledger and draw is not null")" "6"
+  "$(q "select count(*) from public.stock_movements where reference_type = 'order_request' and reference_id = '$ORDER' and movement_type = 'transfer' and quantity_change < 0 and via_ledger and draw is not null")" "8"
 
 ans() { sed -n 's/^R=//p' "$TMP/$1.$2.out"; }
 # jget <dotted path> [more paths]: the values at those paths of the JSON on
@@ -442,6 +460,34 @@ check "7: B is refused 55P03 (lock_not_available)" "$(grep -c 'ERROR:  55P03' "$
 if [ $((T1 - T0)) -ge 4500 ] && [ $((T1 - T0)) -lt 6900 ]; then ok "7: after about 5 s ($((T1 - T0)) ms)"; else bad "7: B returned after $((T1 - T0)) ms"; fi
 wait "$PID"
 check "7: A's close committed alone (to Staging, the live plan)" "$(status_of "$R")/$(moves_for "$R")/$(decisions "$R" closed)" "closed/1/1"
+
+# ═══ 9. An approval against an old tab's raw line insert ══════════════════
+# raw_rma <id>: the old tab's create, committed (header and one line on L9).
+raw_line_sql() { printf "insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values ('%s', '%s', '%s', '%s', 1, 'restock');" "$1" "$ORG" "$2" "$3"; }
+raw_rma() {
+  as_user - "$MGR" "insert into public.returns (id, organization_id, order_request_id, status, source) values ('$1', '$ORG', '$ORDER', 'requested', 'internal');
+$(raw_line_sql "$1" "$L9" "$IT9")" > "$TMP/raw.$1.out"
+  grep -c ERROR "$TMP/raw.$1.out"
+}
+lines_of() { q "select count(*) from public.return_lines where return_id = '$1'"; }
+all_decided() { q "select count(*) from public.return_lines rl where rl.return_id = '$1' and not exists (select 1 from public.return_decisions d where d.return_line_id = rl.id and d.kind = 'disposition_planned')"; }
+
+echo "== 9a. an approval holds; the old tab's raw line insert waits, then is refused"
+check "9a: set up (the old tab's raw RMA, one line)" "$(raw_rma "$R9A")/$(status_of "$R9A")/$(lines_of "$R9A")" "0/requested/1"
+race appline "$MGR" "$(approve_sql "$R9A" 0 "$(dec_one "$(rl_of "$R9A")" staging)")" commit "$MGR" "$(raw_line_sql "$R9A" "$L9B" "$IT9B")"
+check "9a: A approved" "$(ans appline A | jget changed status)" "true/approved"
+check "9a: the raw line is refused return_line_insert_through_rpc" "$(refused appline B 42501 return_line_insert_through_rpc)" "1/1"
+waited appline "9a"
+check "9a: the approved RMA keeps its one line, and every line has its decision" "$(status_of "$R9A")/$(lines_of "$R9A")/$(all_decided "$R9A")" "approved/1/0"
+
+echo "== 9b. the raw line insert holds; the approval waits, then is refused"
+check "9b: set up (the old tab's raw RMA, one line)" "$(raw_rma "$R9B")/$(status_of "$R9B")/$(lines_of "$R9B")" "0/requested/1"
+D9B="$(dec_one "$(rl_of "$R9B")" staging)"
+race lineapp "$MGR" "$(raw_line_sql "$R9B" "$L9B" "$IT9B")" commit "$MGR2" "$(approve_sql "$R9B" 0 "$D9B")"
+check "9b: A's raw line went in" "$(grep -c ERROR "$TMP/lineapp.A.out")/$(lines_of "$R9B")" "0/2"
+check "9b: the approval is refused return_decision_incomplete" "$(refused lineapp B P0001 return_decision_incomplete)" "1/1"
+waited lineapp "9b"
+check "9b: nothing approved, no decision, no approval key left behind" "$(status_of "$R9B")/$(decisions "$R9B" approved)/$(approve_keys "$R9B")" "requested/0/0"
 
 # ═══ 8. No retryable SQLSTATE; holdings equal on hand ═════════════════════
 echo "== 8. no 40001 / 40P01, no deadlock; on hand = the sum of holdings"

@@ -861,8 +861,11 @@ select is(
   -- changed return_line_sources and return_restock_original, and again at the
   -- test stage after return_line_sources' NULL-safe placement test; the same
   -- query reproduces 8b442829|14 and the earlier 817dc7bd|18 and b19b3b42|18;
-  -- the local stack gives the same value).
-  'ledger.*|7b46ad415ad78e972b111da3f9d3a532|18\n'
+  -- the local stack gives the same value). Re-derived after the review fixes
+  -- (restated body 69e46c81; return_line_sources and return_line_restock_legs):
+  -- production (head 0393, own rows 8b442829|14) with the five RX-1 rows
+  -- substituted gives 1c283e93|18, equal to the local stack (2026-10-05).
+  'ledger.*|1c283e932202295a91e5c118f0873689|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier

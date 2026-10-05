@@ -122,9 +122,14 @@ insert into public.inventory_items
 -- order_requests_delivery_target_chk (0110) then demands a delivery_charter_id.
 -- A returns test doesn't care about delivery, so 'pickup' (which the check
 -- requires to have NO charter) is the minimal valid choice.
+-- RX-1 (0395, review fix): a raw RMA (the old tab's create, which INVARIANTS
+-- 3 to 5 use as authenticated) is accepted only for a handed-over order, the
+-- create functions' and the old service's rule, so the returns' own order is
+-- 'completed' (the cancel test keeps its separate 'in_transit' order). Every
+-- assertion is unchanged.
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
-  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
+  values (:order_id, :org_id, :wh_id, 'completed', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 insert into public.order_requests
