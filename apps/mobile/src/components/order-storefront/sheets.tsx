@@ -368,7 +368,30 @@ export function RequesterSheet({
   const check = someoneNewCheck(name, email);
   const inputStyle = [styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }];
   return (
-    <StorefrontSheet visible title={STOREFRONT_FOR_COPY} onClose={onClose}>
+    <StorefrontSheet
+      visible
+      title={STOREFRONT_FOR_COPY}
+      onClose={onClose}
+      footer={
+        // The someone-new action and its reason stay above the keyboard: at
+        // the bottom of the body they were cut off by its edge while the
+        // email was typed, and the part showing took no tap (simulator walk D6).
+        <>
+          {check.message ? (
+            <Body size={13} color={ACCENT.crit}>
+              {check.message}
+            </Body>
+          ) : null}
+          <SmallAction
+            label={CHECKOUT_USE_PERSON_COPY}
+            variant="primary"
+            disabled={!check.canUse}
+            hint={check.message ?? undefined}
+            onPress={() => onPick({ name: name.trim(), email: email.trim() })}
+          />
+        </>
+      }
+    >
       <RadioRow label={STOREFRONT_MYSELF_COPY} checked={current === null} onPress={() => onPick(null)} />
       <Mono size={11} color={c.ink4} upper tracking={0.12}>
         {CHECKOUT_RECENT_COPY}
@@ -433,18 +456,6 @@ export function RequesterSheet({
         accessibilityLabel={CHECKOUT_EMAIL_LABEL_COPY}
         maxFontSizeMultiplier={INPUT_CAP}
         style={inputStyle}
-      />
-      {check.message ? (
-        <Body size={13} color={ACCENT.crit}>
-          {check.message}
-        </Body>
-      ) : null}
-      <SmallAction
-        label={CHECKOUT_USE_PERSON_COPY}
-        variant="primary"
-        disabled={!check.canUse}
-        hint={check.message ?? undefined}
-        onPress={() => onPick({ name: name.trim(), email: email.trim() })}
       />
     </StorefrontSheet>
   );

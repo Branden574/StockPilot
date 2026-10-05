@@ -656,3 +656,22 @@ describe('long Manager notes keep the caret and the counter in view (simulator w
     expect(flat(fn)).not.toMatch(/showNotesCounter\(text\) \? \(/);
   });
 });
+
+// iPhone 17 simulator walk, 2026-10-05: with the keyboard up after typing
+// someone new's email, "Order for them" sat at the bottom of the sheet's
+// scrolling body, cut off by its edge, and a tap on the part showing did
+// nothing (the iOS landmine: a control half hidden ignores taps). The action
+// and its reason now sit in the sheet's footer, which stays above the
+// keyboard. Mutation caught: the action back inside the body.
+describe('For’s Order for them stays above the keyboard (simulator walk D6)', () => {
+  it('the someone-new action and its reason are the sheet’s footer', () => {
+    const fn = sheets.slice(sheets.indexOf('export function RequesterSheet('));
+    const body = fn.slice(0, fn.indexOf('\nexport function ') > 0 ? fn.indexOf('\nexport function ') : undefined);
+    const open = flat(body.slice(body.indexOf('<StorefrontSheet'), body.indexOf('<RadioRow')));
+    expect(open).toMatch(/<StorefrontSheet visible title=\{STOREFRONT_FOR_COPY\} onClose=\{onClose\} footer=\{/);
+    expect(open).toContain('label={CHECKOUT_USE_PERSON_COPY}');
+    expect(open).toContain('{check.message ? (');
+    const inBody = flat(body.slice(body.indexOf('<RadioRow')));
+    expect(inBody).not.toContain('label={CHECKOUT_USE_PERSON_COPY}');
+  });
+});
