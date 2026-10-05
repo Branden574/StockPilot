@@ -3,7 +3,8 @@ import * as React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { isOfflineState } from './exceptions-api';
-import { syncNow } from './sync';
+import { foregroundTick } from './foreground-tick';
+import { isOnline, syncNow } from './sync';
 import { retryWorkspace } from './use-workspace';
 
 import type { User } from '@supabase/supabase-js';
@@ -14,7 +15,8 @@ const FOREGROUND_INTERVAL_MS = 60_000;
  * Run sync on:
  *   • mount (when a user is signed in)
  *   • app foreground transition
- *   • a 60s timer while foregrounded
+ *   • a 60s timer while foregrounded (foregroundTick: the workspace retry
+ *     only when online, so an offline Try again does not flicker, L18a)
  *
  * No-op when not signed in. Errors are swallowed inside syncNow so a
  * sync failure never crashes the app shell.
@@ -36,8 +38,7 @@ export function useSync(user: User | null): void {
       if (interval) return;
       interval = setInterval(() => {
         if (cancelled) return;
-        void syncNow();
-        void retryWorkspace();
+        void foregroundTick({ syncNow, retryWorkspace, isOnline });
       }, FOREGROUND_INTERVAL_MS);
     };
     const stop = () => {
