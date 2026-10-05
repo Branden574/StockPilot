@@ -5993,6 +5993,10 @@ export class InventoryService {
     const current = await this.get(id);
     const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+    // An item that still holds stock is never deleted: its stock on record
+    // would vanish with it (L15). Same guard, words and fail-closed reads as
+    // archive() without acknowledgeStock.
+    await this.assertArchivableOrThrow(id, current);
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({
