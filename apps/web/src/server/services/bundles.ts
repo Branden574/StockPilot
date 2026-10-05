@@ -647,16 +647,17 @@ export class BundlesService {
         quantity: c.quantity,
         is_optional: c.isOptional ?? false,
       }));
+      const keep = payload.map((p) => p.item_id);
+      // The ids go into a PostgREST filter string below, so only uuids get
+      // there. Checked before the upsert, so a refusal writes nothing.
+      if (!keep.every((itemId) => UUID_SHAPE.test(itemId))) {
+        throw new ServiceError('validation_error', 'Invalid component item');
+      }
       const { error: uErr } = await this.ctx.supabase
         .from('bundle_components')
         .upsert(payload, { onConflict: 'bundle_id,item_id' });
       if (uErr) throw new ServiceError('internal_error', uErr.message);
 
-      const keep = payload.map((p) => p.item_id);
-      // The ids go into a PostgREST filter string, so only uuids get there.
-      if (!keep.every((itemId) => UUID_SHAPE.test(itemId))) {
-        throw new ServiceError('validation_error', 'Invalid component item');
-      }
       const { error: dErr } = await this.ctx.supabase
         .from('bundle_components')
         .delete()

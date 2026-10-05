@@ -81,6 +81,19 @@ describe('BundlesService.update: components', () => {
     expect(stub.chainsAll.get('bundle_components.delete')).toBeUndefined();
   });
 
+  it('refuses a component id that is not a uuid before writing anything', async () => {
+    const { stub, svc } = service({
+      'bundle_components.insert': { data: null, error: null },
+      'bundle_components.delete': { data: null, error: null },
+    });
+
+    await expect(
+      svc.update('b-1', { components: [{ itemId: 'not-a-uuid', quantity: 1 }] }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chainsAll.get('bundle_components.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('bundle_components.delete')).toBeUndefined();
+  });
+
   it('refuses a set that names one item twice, before writing anything', async () => {
     const { stub, svc } = service({});
 
