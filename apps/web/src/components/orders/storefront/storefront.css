@@ -2639,6 +2639,12 @@ html[data-sp-update-card] .sp-storefront .sf-rail {
     display: inline-flex;
   }
 }
+/* While the What's New notice is up it shares this corner and z-40 and is
+   drawn later, so it covered the whole button on a phone. The button rises
+   above it, as the toasts do (globals.css). */
+html[data-sp-update-card] .sp-storefront .sf-fab {
+  bottom: calc(22px + var(--sp-update-card-offset, 0px));
+}
 
 /* cart count pulse */
 @keyframes sf-pulse {

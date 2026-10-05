@@ -42,6 +42,15 @@ describe("the What's New card never covers the end of a page", () => {
     ).toContain('max-height: calc(100dvh - var(--sf-topbar-h) - 40px - var(--sp-update-card-offset, 0px));');
   });
 
+  it("below 1280 px the storefront's floating Cart button rises above the card, as the toasts do", () => {
+    // The button and the card share the bottom-right corner and z-40, and the
+    // card is drawn later, so at 390 px the card covered the whole button
+    // (test-stage walk, c01-cart5-fab-phone).
+    expect(ruleBody(STOREFRONT, 'html[data-sp-update-card] .sp-storefront .sf-fab')).toContain(
+      'bottom: calc(22px + var(--sp-update-card-offset, 0px));',
+    );
+  });
+
   it('the names these rules key on are the ones UpdateCenter sets and the shell renders', () => {
     expect(CENTER).toContain("root.setAttribute('data-sp-update-card', '')");
     expect(CENTER).toContain("root.style.setProperty('--sp-update-card-offset'");
