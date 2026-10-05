@@ -546,7 +546,7 @@ describe('a keystroke in the notes never redraws every storefront screen (desk c
     expect(checkout).toContain('const [notesDraft] = React.useState(() => createNotesDraft({ session }));');
     expect(checkout).toContain('React.useEffect(() => () => notesDraft.dispose(), [notesDraft]);');
     expect(checkout).toMatch(/<NotesField\s+key=\{`\$\{snap\.scope\?\.orgId \?\? ''\}:\$\{snap\.warehouseId \?\? ''\}`\}\s+initial=\{cart\.notes\}\s+locked=\{locked\}\s+lockHint=\{lockHint\}\s+draft=\{notesDraft\}/);
-    expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onBlur=\{\(\) => draft\.flush\(\)\}/);
+    expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onFocus=\{keyboard\.onNoteFocus\}\s+onBlur=\{\(\) => \{\s*draft\.flush\(\);\s*keyboard\.onNoteBlur\(\);\s*\}\}/);
     expect(checkout).not.toContain('value={cart.notes}');
     expect(checkout).not.toContain("type: 'set-notes'");
     expect(checkout).toContain('{showNotesCounter(text) ? (');
@@ -567,5 +567,51 @@ describe('the someone-new form refuses first what the server would refuse (desk 
     expect(sheets).toMatch(/label=\{CHECKOUT_USE_PERSON_COPY\}\s+variant="primary"\s+disabled=\{!check\.canUse\}\s+hint=\{check\.message \?\? undefined\}/);
     expect(sheets).toMatch(/\{check\.message \? \(\s*<Body size=\{13\} color=\{ACCENT\.crit\}>\s*\{check\.message\}/);
     expect(sheets).not.toContain("disabled={name.trim() === '' || email.trim() === ''}");
+  });
+});
+
+// iPhone 17 simulator walk, 2026-10-05 (desk check F8.3 confirmed): tapping
+// Manager notes in checkout brought the keyboard up over the field, so the
+// person could not see what they typed. Checkout's body now keeps the note in
+// view through the keyboard hook the exception and needed-by sheets use
+// (lib/use-sheet-keyboard.ts, lib/sheet-field-reveal.ts). Mutations caught:
+// the hook not wired to the body, the note not reporting focus, blur or where
+// it sits, the column offset from the top of the content.
+describe('checkout keeps Manager notes in view above the keyboard (simulator walk D3)', () => {
+  const sf = parseTsx(read(SCREENS.checkout), SCREENS.checkout);
+  const all: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+  walkJsx(sf, (el, ancestors) => all.push({ el, ancestors: [...ancestors] }));
+  const a = (el: JsxNode, name: string) => attrText(el, name, sf);
+  const body = all.find((n) => tagOf(n.el, sf) === 'ScrollView');
+
+  it('the body scrolls through the keyboard hook', () => {
+    expect(checkout).toContain('const [attachBody, kb] = useSheetKeyboard();');
+    expect(body).toBeDefined();
+    expect(a(body!.el, 'ref')).toBe('attachBody');
+    expect(a(body!.el, 'onScroll')).toBe('kb.onBodyScroll');
+    expect(a(body!.el, 'scrollEventThrottle')).toBe('16');
+    expect(a(body!.el, 'onLayout')).toBe('kb.onBodyLayout');
+    expect(a(body!.el, 'onContentSizeChange')).toBe('kb.onBodyContentSizeChange');
+    expect(a(body!.el, 'keyboardDismissMode')).toBe('on-drag');
+    expect(a(body!.el, 'keyboardShouldPersistTaps')).toBe('handled');
+  });
+
+  it('the reading column starts at the top of the content, so the note block reports its place in the body', () => {
+    const container = a(body!.el, 'contentContainerStyle') ?? '';
+    expect(container).not.toMatch(/padding(Vertical|Top)/);
+    const column = all.find((n) => n.ancestors.at(-1) === body!.el);
+    expect(column && tagOf(column.el, sf)).toBe('View');
+    expect(a(column!.el, 'style') ?? '').toContain('paddingTop: 8');
+  });
+
+  it('the note reports focus, blur and where it sits; its block sits directly in the column; blur still commits the typing', () => {
+    const notes = all.find((n) => tagOf(n.el, sf) === 'NotesField');
+    expect(notes).toBeDefined();
+    expect(a(notes!.el, 'keyboard')).toBe('kb');
+    const fn = checkout.slice(checkout.indexOf('function NotesField('));
+    expect(fn).toContain('onLayout={keyboard.onNoteBlockLayout}');
+    expect(fn).toContain('onFocus={keyboard.onNoteFocus}');
+    expect(fn).toContain('onLayout={keyboard.onNoteLayout}');
+    expect(flat(fn)).toMatch(/onBlur=\{\(\) => \{ draft\.flush\(\); keyboard\.onNoteBlur\(\); \}\}/);
   });
 });

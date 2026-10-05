@@ -61,6 +61,7 @@ import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 type CheckoutSheet = { kind: 'quantity'; itemId: string } | { kind: 'for' } | { kind: 'site' } | { kind: 'needed-by' } | null;
@@ -97,6 +98,10 @@ export default function Checkout() {
   // every storefront screen (desk check F8.1).
   const [notesDraft] = React.useState(() => createNotesDraft({ session }));
   React.useEffect(() => () => notesDraft.dispose(), [notesDraft]);
+  // Manager notes stay in view above the keyboard (simulator walk D3): the
+  // body is scrolled to the note when the keyboard takes its space, the
+  // helper the exception and needed-by sheets use.
+  const [attachBody, kb] = useSheetKeyboard();
 
   useFocusEffect(
     React.useCallback(() => {
@@ -177,11 +182,18 @@ export default function Checkout() {
       </SafeAreaView>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
+          ref={attachBody}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingVertical: 8, paddingBottom: 48, alignItems: 'center' }}
+          scrollEventThrottle={16}
+          onScroll={kb.onBodyScroll}
+          onLayout={kb.onBodyLayout}
+          onContentSizeChange={kb.onBodyContentSizeChange}
+          contentContainerStyle={{ alignItems: 'center' }}
         >
-          <View style={{ width: layout.readingWidth, gap: 16 }}>
+          {/* The column starts at the top of the content, so the note block's
+              place in the column is its place in the body (the reveal). */}
+          <View style={{ width: layout.readingWidth, gap: 16, paddingTop: 8, paddingBottom: 48 }}>
             <View style={{ gap: 6 }}>
               <Display size={28} accessibilityRole="header">
                 {REVIEW_TITLE_COPY}
@@ -312,6 +324,7 @@ export default function Checkout() {
               locked={locked}
               lockHint={lockHint}
               draft={notesDraft}
+              keyboard={kb}
             />
 
             <View style={{ gap: 8 }}>
@@ -417,16 +430,20 @@ function NotesField({
   locked,
   lockHint,
   draft,
+  keyboard,
 }: {
   initial: string;
   locked: boolean;
   lockHint: string | undefined;
   draft: NotesDraft;
+  /** The body's keyboard helper: the note reports where it sits and when it
+   *  has focus, and the body keeps it in view. */
+  keyboard: ReturnType<typeof useSheetKeyboard>[1];
 }) {
   const { c } = useTheme();
   const [text, setText] = React.useState(initial);
   return (
-    <View style={{ gap: 6 }}>
+    <View style={{ gap: 6 }} onLayout={keyboard.onNoteBlockLayout}>
       <FieldLabel>{`${CART_MANAGER_NOTES_LABEL_COPY} · ${CART_OPTIONAL_COPY}`}</FieldLabel>
       <TextInput
         defaultValue={initial}
@@ -434,7 +451,12 @@ function NotesField({
           setText(value);
           draft.change(value);
         }}
-        onBlur={() => draft.flush()}
+        onFocus={keyboard.onNoteFocus}
+        onBlur={() => {
+          draft.flush();
+          keyboard.onNoteBlur();
+        }}
+        onLayout={keyboard.onNoteLayout}
         multiline
         maxLength={ORDER_NOTES_MAX}
         editable={!locked}
