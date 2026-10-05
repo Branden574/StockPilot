@@ -1,0 +1,145 @@
+import * as React from 'react';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
+
+import {
+  CART_ALL_STOCK_IN_CART_COPY,
+  KIT_ADD_COPY,
+  KIT_DETAILS_COPY,
+  componentItem,
+  kitAvailability,
+  kitLimitedByCopy,
+  kitsAvailableCopy,
+  type KitOffer,
+  type StorefrontItem,
+} from '@stockpilot/core';
+
+import { Body, Mono } from '@/components/ui/text';
+import {
+  addKitLabel,
+  changeLockedHint,
+  decreaseKitLabel,
+  increaseBlockedHint,
+  increaseKitLabel,
+  kitAddBlockedHint,
+  kitCountLabel,
+  kitRowLabel,
+} from '@/lib/order-storefront/a11y';
+import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
+import { FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
+
+import { SmallAction, Stepper } from './controls';
+
+/**
+ * ONE KIT (phone ordering PO-4, Bundles module on): "Add kit", then a kit
+ * stepper; every change is all or nothing (core planKitChange, applied by the
+ * screen). "Details" lists what each kit holds. The kit's count in the cart
+ * and what limits it come from core (kitsInCart, kitAvailability).
+ */
+export const KitRow = React.memo(function KitRow({
+  kit,
+  itemMap,
+  inCart,
+  maxInCart,
+  locked,
+  onChange,
+  onDetails,
+}: {
+  kit: KitOffer;
+  itemMap: ReadonlyMap<string, StorefrontItem>;
+  /** Kits the cart holds now. */
+  inCart: number;
+  /** The most the cart can hold (core maxKits). */
+  maxInCart: number;
+  locked: boolean;
+  onChange: (bundleId: string, target: number) => void;
+  onDetails: (bundleId: string) => void;
+}) {
+  const { c } = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  // The row is the catalog's width less its gutters; too little room beside
+  // the controls puts them under the text (simulator walk D1).
+  const stacked = kitRowStacked({
+    fontScale,
+    rowWidth: storefrontLayout({ width, fontScale }).catalogWidth - 2 * STOREFRONT_GUTTER,
+    inCart,
+    maxInCart,
+  });
+  const avail = kitAvailability(kit, itemMap);
+  const limiting = avail.limiting ? componentItem(avail.limiting.component, itemMap) : null;
+  const out = avail.kits < 1;
+  // Add kit is dimmed because the cart's own lines already hold every kit the
+  // stock allows: said on screen too, not only to VoiceOver (PO-4 review).
+  const full = inCart === 0 && !out && maxInCart < 1;
+
+  return (
+    <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}>
+      <View
+        accessible
+        accessibilityLabel={kitRowLabel(kit, itemMap, inCart)}
+        style={{ flex: 1, minWidth: 0, gap: 3 }}
+      >
+        <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+          {kit.name}
+        </Body>
+        <Mono size={11.5} color={out ? c.critText : c.ink3}>
+          {kitsAvailableCopy(avail.kits)}
+        </Mono>
+        {limiting && avail.limiting ? (
+          <Mono size={11} color={c.ink3}>
+            {kitLimitedByCopy(limiting.name, avail.limiting.available)}
+          </Mono>
+        ) : null}
+        {full ? (
+          <Mono size={11} color={c.ink3}>
+            {CART_ALL_STOCK_IN_CART_COPY}
+          </Mono>
+        ) : null}
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        {inCart > 0 ? (
+          <Stepper
+            quantity={inCart}
+            available={maxInCart}
+            atMax={inCart >= maxInCart}
+            disabled={locked}
+            decLabel={decreaseKitLabel(kit.name, inCart)}
+            incLabel={increaseKitLabel(kit.name)}
+            countLabel={kitCountLabel(kit.name, inCart)}
+            incHint={increaseBlockedHint(inCart >= maxInCart)}
+            lockHint={changeLockedHint(locked)}
+            onDec={() => onChange(kit.bundleId, inCart - 1)}
+            onInc={() => onChange(kit.bundleId, inCart + 1)}
+            onCount={() => onDetails(kit.bundleId)}
+          />
+        ) : (
+          <SmallAction
+            label={KIT_ADD_COPY}
+            accessibilityLabel={addKitLabel(kit.name)}
+            disabled={locked || out || maxInCart < 1}
+            hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}
+            onPress={() => onChange(kit.bundleId, 1)}
+          />
+        )}
+        <SmallAction
+          label={KIT_DETAILS_COPY}
+          accessibilityLabel={`${KIT_DETAILS_COPY}: ${kit.name}`}
+          variant="ghost"
+          onPress={() => onDetails(kit.bundleId)}
+        />
+      </View>
+    </View>
+  );
+});
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+  },
+  rowStacked: { flexDirection: 'column', alignItems: 'stretch' },
+});

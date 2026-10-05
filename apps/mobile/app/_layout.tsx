@@ -16,6 +16,7 @@ import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
 import { pruneRejected } from '@/lib/queue';
+import { useHeldOrderSubmissions } from '@/lib/order-storefront/runtime';
 import { initSentry, Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
 import { useAccountGate } from '@/lib/use-account-gate';
@@ -139,6 +140,10 @@ function RootGate() {
 
   usePushNotifications(session?.user ?? null);
   useSync(session?.user ?? null);
+  // Order requests held at this account's last sign-out (phone ordering
+  // PO-4): checked at sign-in and on foreground, reads only.
+  const seeOrders = React.useCallback(() => router.navigate('/orders' as Href), [router]);
+  useHeldOrderSubmissions(session?.user?.id ?? null, seeOrders);
   // "Last seen" for the platform console (web mig 0352): foreground + navigation,
   // never a timer. Silent on every failure.
   useActivityBeacon(session?.user?.id ?? null, segments.join('/'));
@@ -231,6 +236,14 @@ function RootGate() {
         <Stack.Screen name="(drawer)" />
         <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="order/[id]" options={{ presentation: 'card' }} />
+        {/* Place an order (phone ordering PO-4). Static routes beside
+            order/[id], so /order/new never reaches it with id "new". The
+            success screen is reached with router.replace from checkout and
+            leaves to Orders, so the back swipe is off there. */}
+        <Stack.Screen name="order/new/index" options={{ presentation: 'card' }} />
+        <Stack.Screen name="order/new/browse" options={{ presentation: 'card' }} />
+        <Stack.Screen name="order/new/checkout" options={{ presentation: 'card' }} />
+        <Stack.Screen name="order/new/placed" options={{ presentation: 'card', gestureEnabled: false }} />
         <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
         <Stack.Screen name="cycle-count/scan/[id]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />

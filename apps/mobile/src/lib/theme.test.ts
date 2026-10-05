@@ -128,3 +128,31 @@ describe('resolveFontCap', () => {
     expect(resolveFontCap(2, undefined)).toBe(2);
   });
 });
+
+// PO-4 review: ink4 (about 3.3:1 on paper), ACCENT.warn (about 3.4:1 on
+// paper) and ACCENT.crit in dark mode (about 3.1:1) fall short of WCAG AA's
+// 4.5:1 for small text, and the storefront put its stock, honesty and refusal
+// words in them. The text tokens below are measured here on every surface the
+// storefront draws text on.
+describe('text colours meet WCAG AA (4.5:1) on every surface, in both modes (PO-4 review)', () => {
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const f = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * f(r!) + 0.7152 * f(g!) + 0.0722 * f(b!);
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+  it('warnText, critText and ink3 on paper, paper2 and card', async () => {
+    const { palette } = await import('./theme');
+    for (const mode of ['light', 'dark'] as const) {
+      const p = palette(mode);
+      for (const surface of [p.paper, p.paper2, p.card]) {
+        for (const [name, text] of [['warnText', p.warnText], ['critText', p.critText], ['ink3', p.ink3]] as const) {
+          expect(contrast(text, surface), `${mode} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+});

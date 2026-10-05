@@ -64,7 +64,8 @@ export function storefrontWillCallDeskCopy(warehouseName: string): string {
 }
 /** Under Pick up at. Fixed words, no promised time (owner decision O2). */
 export function storefrontPickupHintCopy(warehouseName: string): string {
-  return `Collect it at the ${warehouseName} will-call desk once it's ready.`;
+  const name = warehouseName.trim();
+  return name ? `Collect it at the ${name} will-call desk once it's ready.` : "Collect it at the will-call desk once it's ready.";
 }
 export const STOREFRONT_DELIVER_TO_COPY = 'Deliver to';
 export const STOREFRONT_CHOOSE_SITE_COPY = 'Choose a site';
@@ -105,9 +106,10 @@ export const CART_CHECK_OUT_COPY = 'Check out';
 export const CART_SUBMIT_FINE_PRINT_COPY =
   'Someone who approves orders will review it before stock is reserved.';
 
-/** A line holding everything available. */
+/** A line holding everything available ("The 1 available is in your cart"
+ *  when there is one: PO-4 review). */
 export function cartLineAtMaxCopy(available: number): string {
-  return `All ${available} available are in your cart`;
+  return available === 1 ? 'The 1 available is in your cart' : `All ${available} available are in your cart`;
 }
 /** A line holding more than is available (a restored draft, or stock that
  *  moved since it was added). */

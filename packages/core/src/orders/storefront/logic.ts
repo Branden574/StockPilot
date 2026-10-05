@@ -270,7 +270,9 @@ export function successRefLine(
 ): string {
   const handle = formatOrderNumber(orderNumber) ?? `Order ${orderId.replace(/-/g, '').slice(0, 8)}`;
   const units = `${unitCount} ${unitCount === 1 ? 'unit' : 'units'}`;
-  return `${handle} · ${warehouseName} · ${units}`;
+  // A warehouse with no name (no longer listed to this person) is left out.
+  const warehouse = warehouseName.trim();
+  return warehouse ? `${handle} · ${warehouse} · ${units}` : `${handle} · ${units}`;
 }
 
 /** True when the catalog is in the unfiltered "browse All" state. */

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -399,6 +402,14 @@ describe('the idempotency key, through the sheet’s own lines', () => {
       vi.unstubAllGlobals();
     }
     expect(globalThis.crypto).toBe(real);
+  });
+
+  // Phone ordering PO-4: the uuid is core's generator (randomRequestUuid),
+  // not a copy kept here. Mutation caught: the local Math.random copy restored.
+  it('mints through core randomRequestUuid, with no fallback of its own', () => {
+    const src = readFileSync(path.join(__dirname, 'order-shortfall-po.ts'), 'utf8');
+    expect(src).toMatch(/export function mintShortfallKey\(\): string \{\s*return `shortfall-\$\{randomRequestUuid\(\)\}`;\s*\}/);
+    expect(src).not.toContain('Math.random');
   });
 });
 

@@ -105,9 +105,14 @@ describe('the templated sentences', () => {
     expect(copy.storefrontPickupHintCopy('DC4')).toBe(
       "Collect it at the DC4 will-call desk once it's ready.",
     );
+    // A warehouse with no name (no longer listed): never "at the  will-call desk".
+    expect(copy.storefrontPickupHintCopy('')).toBe("Collect it at the will-call desk once it's ready.");
+    expect(copy.storefrontPickupHintCopy('  ')).toBe("Collect it at the will-call desk once it's ready.");
     expect(copy.cartCountsCopy(3, 12)).toBe('3 items · 12 units');
     expect(copy.cartCountsCopy(1, 1)).toBe('1 item · 1 unit');
     expect(copy.cartLineAtMaxCopy(8)).toBe('All 8 available are in your cart');
+    // PO-4 review: "All 1 available are in your cart" (web and phone).
+    expect(copy.cartLineAtMaxCopy(1)).toBe('The 1 available is in your cart');
     expect(copy.cartLineOverCopy(3)).toBe('Only 3 available. Reduce the quantity.');
     expect(copy.kitsAvailableCopy(1)).toBe('1 kit available');
     expect(copy.kitsAvailableCopy(60)).toBe('60 kits available');

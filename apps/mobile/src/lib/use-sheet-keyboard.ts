@@ -67,6 +67,13 @@ export function useSheetKeyboard() {
         revealer.blockLaid(e.nativeEvent.layout.y, e.nativeEvent.layout.height),
       onNoteLayout: (e: LayoutChangeEvent) => revealer.fieldLaid(e.nativeEvent.layout.y, e.nativeEvent.layout.height),
       onNoteFocus: () => revealer.focus(),
+      /** A block holding more than one field (the For sheet's Name and
+       *  Email): the field that took focus, where it sits in the block (its
+       *  own onLayout), then reveal it. */
+      onFieldFocus: (span: { top: number; height: number } | null) => {
+        if (span) revealer.fieldLaid(span.top, span.height);
+        revealer.focus();
+      },
       onNoteBlur: () => revealer.blur(),
       claimTapOutside: () => Keyboard.isVisible(),
       onTapOutside: () => Keyboard.dismiss(),

@@ -32,6 +32,7 @@ import {
   normalizeIdentityEmail,
   rememberIdentity,
 } from './remembered-identity';
+import { signOutOrderSubmissions } from './order-storefront/services';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
   endSession,
@@ -462,6 +463,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await cycleCountSync.forceSync();
           },
           confirmUnsynced: askAboutUnsynced,
+          // Order requests sent but not confirmed (phone ordering PO-4): their
+          // status is read first, and any still unknown are asked about and
+          // held by key (no personal data) for this account's next sign-in.
+          orderSubmissions: userId ? signOutOrderSubmissions(userId) : undefined,
           holdForAccount: async () => {
             if (userId) await adoptLegacyRows({ userId, orgId: scope.orgId });
           },
@@ -588,8 +593,11 @@ async function signOutDeliberately(scope: SignOutScope): Promise<{ error: unknow
 }
 
 /** The unsynced-work question, as an alert (sign-out-flow.ts owns the words). */
-function askAboutUnsynced(count: number, opts: { canDiscard: boolean }): Promise<UnsyncedChoice> {
-  const prompt = unsyncedPrompt(count, opts.canDiscard);
+function askAboutUnsynced(
+  count: number,
+  opts: { canDiscard: boolean; unconfirmedOrders?: number },
+): Promise<UnsyncedChoice> {
+  const prompt = unsyncedPrompt(count, opts.canDiscard, opts.unconfirmedOrders ?? 0);
   return new Promise((resolve) => {
     Alert.alert(
       prompt.title,

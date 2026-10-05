@@ -96,10 +96,16 @@ describe('the delivery-request draft opens only on a tap (Outlook rule 1)', () =
 
 const SHEET_FILE = 'src/components/revise-needed-by-sheet.tsx';
 const CARD_FILE = 'src/components/order-needed-by-card.tsx';
+// The day chips, slots, Other time and preview moved into the shared picker
+// (phone ordering PO-4: the storefront's checkout uses the same one). Their
+// pins moved with them, unchanged in substance.
+const PICKER_FILE = 'src/components/needed-by-picker.tsx';
 const sheetSrc = readFileSync(path.join(MOBILE_ROOT, SHEET_FILE), 'utf8');
 const cardSrc = readFileSync(path.join(MOBILE_ROOT, CARD_FILE), 'utf8');
+const pickerSrc = readFileSync(path.join(MOBILE_ROOT, PICKER_FILE), 'utf8');
 const sheetCode = codeOnly(sheetSrc);
 const cardCode = codeOnly(cardSrc);
+const pickerCode = codeOnly(pickerSrc);
 
 /** A node's text, comments dropped, whitespace collapsed, trailing commas
  *  removed (a reformat cannot break a pin). */
@@ -202,6 +208,7 @@ describe('the revise sheet', () => {
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
+        '@/components/needed-by-picker',
         '@/components/ui/text',
         '@/lib/exception-sheet-layout',
         '@/lib/order-needed-by',
@@ -217,7 +224,19 @@ describe('the revise sheet', () => {
         'react-native-safe-area-context',
       ].sort(),
     );
-    for (const src of [sheetCode, cardCode]) {
+    const pickerImports = [...pickerSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
+    expect(pickerImports.sort()).toEqual(
+      [
+        '@/components/item-verification-card',
+        '@/components/ui/text',
+        '@/lib/order-needed-by',
+        '@/lib/theme',
+        '@/lib/use-theme',
+        'react',
+        'react-native',
+      ].sort(),
+    );
+    for (const src of [sheetCode, cardCode, pickerCode]) {
       expect(src).not.toMatch(/Linking|openURL|MailComposer|mailto|openDeliveryRequestDraft|DateTimePicker/);
     }
   });
@@ -260,17 +279,19 @@ describe('the revise sheet', () => {
     expect(bodyOf(sheetSrc, SHEET_FILE, 'update')).toBe(
       '{ setDraft((d) => ({ ...d, ...patch })); setError(null); setNow(readClock()); }',
     );
-    for (const shown of [
-      '{view.current}',
-      '{view.zoneNote}',
-      '{view.preview}',
-      '{view.timeProblem}',
-      '{view.noSlotsNote}',
-      '{view.reasonProblem}',
-      '{view.effect}',
-    ]) {
+    for (const shown of ['{view.current}', '{view.zoneNote}', '{view.reasonProblem}', '{view.effect}']) {
       expect(sheetCode).toContain(shown);
     }
+    for (const shown of ['{view.preview}', '{view.timeProblem}', '{view.noSlotsNote}']) {
+      expect(pickerCode).toContain(shown);
+    }
+    // The sheet hands the picker its own view and draft, and every pick goes
+    // through the sheet's own update (which clears a refusal and re-reads the
+    // clock), exactly as the chips did when they lived here.
+    expect(sheetCode).toMatch(
+      /<NeededByPicker\s+view=\{view\}\s+draft=\{draft\}\s+busy=\{busy\}\s+focusOther=\{focusOther\}\s+onPickDay=\{pickDay\}\s+onPickSlot=\{\(time\) => update\(\{ slot: time, other: false \}\)\}\s+onPickOther=\{\(\) => \{\s*update\(\{ other: true \}\);\s*setFocusOther\(true\);\s*\}\}\s+onOtherText=\{\(t\) => update\(\{ otherText: t \}\)\}\s*\/>/,
+    );
+    expect(count(sheetCode, '<NeededByPicker')).toBe(1);
     // The web dialog's words, from core: title, field, reason and its hint, Save.
     for (const word of [
       '{NEEDED_BY_REVISE_TITLE}',
@@ -292,21 +313,23 @@ describe('the revise sheet', () => {
   });
 
   it('the chips are the tested days and slots, each a named 44 pt button with its selected state', () => {
-    expect(sheetCode).toMatch(
-      /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => pickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
+    expect(pickerCode).toMatch(
+      /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => onPickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
     );
-    expect(sheetCode).toMatch(
-      /\{view\.slots\.map\(\(s\) =>\s*chip\(\s*s\.time,\s*!draft\.other && draft\.slot === s\.time,\s*\(\) => update\(\{ slot: s\.time, other: false \}\),\s*s\.label,\s*\[s\.label\],?\s*\),?\s*\)\}/,
+    expect(pickerCode).toMatch(
+      /\{view\.slots\.map\(\(s\) =>\s*chip\(\s*s\.time,\s*!draft\.other && draft\.slot === s\.time,\s*\(\) => onPickSlot\(s\.time\),\s*s\.label,\s*\[s\.label\],?\s*\),?\s*\)\}/,
     );
-    expect(sheetCode).toMatch(
+    expect(pickerCode).toMatch(
       /<Pressable\s+key=\{key\}\s+onPress=\{onPress\}\s+disabled=\{busy\}\s+accessibilityRole="button"\s+accessibilityLabel=\{accessibilityLabel\}\s+accessibilityState=\{\{ selected, disabled: busy \}\}\s+style=\{\[\s*styles\.chip,/,
     );
-    expect(sheetCode).toMatch(/chip: \{\s*minHeight: MIN_TAP,\s*minWidth: MIN_TAP,/);
+    expect(pickerCode).toMatch(/chip: \{\s*minHeight: MIN_TAP,\s*minWidth: MIN_TAP,/);
     expect(bodyOf(sheetSrc, SHEET_FILE, 'pickDay')).toBe(
       '{ const at = readClock(); setDraft((d) => selectNeededByDay(d, dayKey, at, timeZone)); setError(null); setNow(at); }',
     );
-    expect(sheetCode).toContain('maxFontSizeMultiplier={CHIP_CAP}');
-    expect(sheetCode).toContain('const CHIP_CAP = capTo(12.5, TYPE_CEILING.control);');
+    expect(pickerCode).toContain('maxFontSizeMultiplier={CHIP_CAP}');
+    expect(pickerCode).toContain('const CHIP_CAP = capTo(12.5, TYPE_CEILING.control);');
+    // Other time: the chip, then focus only once chosen.
+    expect(pickerCode).toMatch(/chip\(\s*'other',\s*draft\.other,\s*onPickOther,\s*NEEDED_BY_OTHER_TIME_LABEL,\s*\[NEEDED_BY_OTHER_TIME_LABEL\],?\s*\)/);
   });
 
   describe('structure (sibling backdrop, VoiceOver, 44 pt, Dynamic Type)', () => {
@@ -348,9 +371,9 @@ describe('the revise sheet', () => {
       expect(attrText(card!, 'onResponderRelease', sf)).toBe('kb.onTapOutside');
     });
 
-    it('every button in the card (and the chip) is its own named button of at least 44 pt, its label capped', () => {
+    it('every button in the card (and the picker\'s chip) is its own named button of at least 44 pt, its label capped', () => {
       const presses = all.filter((n) => tagOf(n.el, sf) === 'Pressable' && n.el !== kids(container.el)[0]);
-      expect(presses.length).toBe(4); // the chip, the X, Save, Cancel
+      expect(presses.length).toBe(3); // the X, Save, Cancel (the chips are the picker's, below)
       for (const p of presses) {
         expect(attrText(p.el, 'accessibilityRole', sf)).toBe('button');
         expect(attrText(p.el, 'accessibilityLabel', sf)).toBeDefined();
@@ -367,19 +390,41 @@ describe('the revise sheet', () => {
     });
 
     it('both fields are named, stop growing at the input ceiling, lock while saving, and sit in no touchable', () => {
+      const pickerSf = parseTsx(pickerSrc, PICKER_FILE);
+      const pickerInputs: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+      walkJsx(pickerSf, (el, ancestors) => {
+        if (tagOf(el, pickerSf) === 'TextInput') pickerInputs.push({ el, ancestors: [...ancestors] });
+      });
       const inputs = all.filter((n) => tagOf(n.el, sf) === 'TextInput');
-      expect(inputs).toHaveLength(2);
-      for (const i of inputs) {
-        expect(attrText(i.el, 'accessibilityLabel', sf)).toBeDefined();
-        expect(attrText(i.el, 'maxFontSizeMultiplier', sf)).toBe('INPUT_CAP');
-        expect(attrText(i.el, 'editable', sf)).toBe('!busy');
-        expect(i.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toEqual([]);
+      expect(inputs).toHaveLength(1); // the reason (Other time is the picker's)
+      expect(pickerInputs).toHaveLength(1);
+      for (const [i, file] of [...inputs.map((n) => [n, sf] as const), ...pickerInputs.map((n) => [n, pickerSf] as const)]) {
+        expect(attrText(i.el, 'accessibilityLabel', file)).toBeDefined();
+        expect(attrText(i.el, 'maxFontSizeMultiplier', file)).toBe('INPUT_CAP');
+        expect(attrText(i.el, 'editable', file)).toBe('!busy');
+        expect(i.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, file)))).toEqual([]);
       }
       expect(sheetCode).toContain('const INPUT_CAP = capTo(15, TYPE_CEILING.input);');
+      expect(pickerCode).toContain('const INPUT_CAP = capTo(15, TYPE_CEILING.input);');
       // The reason is capped at the function's limit (core's constant).
       expect(sheetCode).toContain('maxLength={NEEDED_BY_REASON_MAX}');
       // Other time takes focus only when the person chose it, never on open.
-      expect(sheetCode).toContain('autoFocus={focusOther}');
+      expect(pickerCode).toContain('autoFocus={focusOther}');
+      expect(sheetCode).toContain('focusOther={focusOther}');
+    });
+
+    it('the picker\'s chips are each their own named button of at least 44 pt, in no other touchable', () => {
+      const pickerSf = parseTsx(pickerSrc, PICKER_FILE);
+      const presses: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+      walkJsx(pickerSf, (el, ancestors) => {
+        if (tagOf(el, pickerSf) === 'Pressable') presses.push({ el, ancestors: [...ancestors] });
+      });
+      expect(presses).toHaveLength(1); // the one chip builder
+      const p = presses[0]!;
+      expect(attrText(p.el, 'accessibilityRole', pickerSf)).toBe('button');
+      expect(attrText(p.el, 'accessibilityLabel', pickerSf)).toBe('accessibilityLabel');
+      expect(p.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, pickerSf)))).toEqual([]);
+      expect(attrText(p.el, 'style', pickerSf) ?? '').toContain('styles.chip');
     });
 
     // iPhone 17 walk, 2026-09-30: at the default text size with the keyboard
@@ -391,8 +436,12 @@ describe('the revise sheet', () => {
     // body not giving way, the sheet not capped by the measured space, the
     // title uncapped, the reason not revealed above the keyboard.
     const body = all.find((n) => tagOf(n.el, sf) === 'ScrollView' && attrText(n.el, 'horizontal', sf) === undefined)!;
-    const dayRow = all.find((n) => tagOf(n.el, sf) === 'ScrollView' && attrText(n.el, 'horizontal', sf) !== undefined)!;
+    const pickerSf = parseTsx(pickerSrc, PICKER_FILE);
+    const pickerNodes: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+    walkJsx(pickerSf, (el, ancestors) => pickerNodes.push({ el, ancestors: [...ancestors] }));
+    const dayRow = pickerNodes.find((n) => tagOf(n.el, pickerSf) === 'ScrollView' && attrText(n.el, 'horizontal', pickerSf) !== undefined)!;
     const a = (el: JsxNode, name: string) => attrText(el, name, sf);
+    const pa = (el: JsxNode, name: string) => attrText(el, name, pickerSf);
 
     it('the sheet is never taller than the space the keyboard leaves, below the status bar', () => {
       expect(sheetCode).toContain('const { height } = useWindowDimensions();');
@@ -420,7 +469,10 @@ describe('the revise sheet', () => {
       // still lands the first time.
       expect(a(body.el, 'keyboardDismissMode')).toBe('on-drag');
       expect(a(body.el, 'keyboardShouldPersistTaps')).toBe('handled');
-      expect(a(dayRow.el, 'keyboardShouldPersistTaps')).toBe('handled');
+      expect(pa(dayRow.el, 'keyboardShouldPersistTaps')).toBe('handled');
+      // The picker sits directly in the body, so it scrolls with it.
+      const picker = all.find((n) => tagOf(n.el, sf) === 'NeededByPicker')!;
+      expect(picker.ancestors.at(-1)).toBe(body.el);
     });
 
     it('the reason (the low field) is revealed above the keyboard: it reports focus, blur and where it sits, its block directly in the body', () => {
@@ -471,19 +523,19 @@ describe('the revise sheet', () => {
 
     // Mutation caught: the selected day left off the edge of the row on open.
     it('the selected day chip is scrolled into the row: on open (its layout, the row\'s) and when the selection moves', () => {
-      expect(a(dayRow.el, 'ref')).toBe('attachDayRow');
-      expect(a(dayRow.el, 'onLayout')).toBe('dayRow.rowLaid');
-      expect(a(dayRow.el, 'onScroll')).toBe('dayRow.scrolled');
-      expect(a(dayRow.el, 'scrollEventThrottle')).toBe('16');
-      expect(sheetCode).toContain('const [attachDayRow, dayRow] = useDayRowReveal(view.selectedDayKey);');
-      expect(sheetCode).toMatch(
-        /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => pickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
+      expect(pa(dayRow.el, 'ref')).toBe('attachDayRow');
+      expect(pa(dayRow.el, 'onLayout')).toBe('dayRow.rowLaid');
+      expect(pa(dayRow.el, 'onScroll')).toBe('dayRow.scrolled');
+      expect(pa(dayRow.el, 'scrollEventThrottle')).toBe('16');
+      expect(pickerCode).toContain('const [attachDayRow, dayRow] = useDayRowReveal(view.selectedDayKey);');
+      expect(pickerCode).toMatch(
+        /\{view\.days\.map\(\(d\) =>\s*chip\(\s*d\.key,\s*view\.selectedDayKey === d\.key,\s*\(\) => onPickDay\(d\.key\),\s*d\.accessibilityLabel,\s*\[d\.label, d\.dateLabel\],\s*\(e\) => dayRow\.chipLaid\(d\.key, e\),?\s*\),?\s*\)\}/,
       );
-      expect(sheetCode).toMatch(/style=\{\[\s*styles\.chip,[\s\S]*?\]\}\s+onLayout=\{onLayout\}/);
-      expect(bodyOf(sheetSrc, SHEET_FILE, 'revealDay')).toBe(
+      expect(pickerCode).toMatch(/style=\{\[\s*styles\.chip,[\s\S]*?\]\}\s+onLayout=\{onLayout\}/);
+      expect(bodyOf(pickerSrc, PICKER_FILE, 'revealDay')).toBe(
         '{ if (!row || !key) return; const chip = geometry.chips.get(key); if (!chip) return; const x = neededByDayRowScroll({ chipX: chip.x, chipWidth: chip.w, offset: geometry.offset, viewport: geometry.width }); if (x === null) return; geometry.offset = x; row.scrollTo({ x, animated: false }); }',
       );
-      const hook = bodyOf(sheetSrc, SHEET_FILE, 'useDayRowReveal');
+      const hook = bodyOf(pickerSrc, PICKER_FILE, 'useDayRowReveal');
       // Revealed when the selected chip lays out, when the row does, and when the selection moves.
       expect(hook).toContain('chipLaid: (key: string, e: LayoutChangeEvent) => { geometry.chips.set(key, { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width }); if (key === selected) revealDay(row, geometry, key); }');
       expect(hook).toContain('rowLaid: (e: LayoutChangeEvent) => { geometry.width = e.nativeEvent.layout.width; revealDay(row, geometry, selected); }');

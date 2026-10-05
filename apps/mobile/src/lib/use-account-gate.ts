@@ -21,6 +21,7 @@ import {
   withTimeout,
 } from './account-eviction';
 import { endAccountEpoch } from './account-epoch';
+import { holdDeviceOrderSends } from './order-storefront/services';
 import { wipeForEviction } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
 import { rejectAllPending } from './queue';
@@ -279,6 +280,15 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
           // Before the keys go: a workspace load or switch still running for
           // this account must not save one back (account-epoch.ts).
           endAccountEpoch();
+          // Every account's order request still not settled on this phone is
+          // held for its owner (ids and counts only) before the keys go, so
+          // a live key is never dropped unasked (PO-4 review). Local storage
+          // only, and a failure never stops the eviction.
+          try {
+            await holdDeviceOrderSends();
+          } catch (e) {
+            console.warn('[account-gate] could not hold the order requests on this device', e);
+          }
           const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
           if (keys.length > 0) await AsyncStorage.multiRemove(keys);
         },

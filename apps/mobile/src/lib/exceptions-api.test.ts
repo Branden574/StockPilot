@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -751,6 +754,23 @@ describe('small helpers', () => {
     const b = newClientEventId();
     expect(a).toMatch(/^[0-9a-f-]{36}$/);
     expect(a).not.toBe(b);
+  });
+
+  // Phone ordering PO-4: the fallback is core's (randomRequestUuid), not a
+  // copy kept here. Mutation caught: the local Math.random copy restored, or
+  // the generator swapped for one that is not a v4 uuid.
+  it('without crypto.randomUUID it still mints a v4-shaped id, through core', () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal('crypto', {});
+    try {
+      expect(newClientEventId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(globalThis.crypto).toBe(real);
+    const src = readFileSync(path.join(__dirname, 'exceptions-api.ts'), 'utf8');
+    expect(src).toMatch(/export function newClientEventId\(\): string \{[^}]*return randomRequestUuid\(\);\s*\}/);
+    expect(src).not.toContain('Math.random');
   });
 });
 
