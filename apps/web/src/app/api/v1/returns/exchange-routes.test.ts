@@ -11,6 +11,7 @@ import { GET as orderCandidatesGET } from '../orders/[id]/exchange-candidates/ro
 import { GET as candidatesGET } from './[id]/candidates/route';
 import { POST as cancelReplacementPOST } from './[id]/replacement/cancel/route';
 import { POST as declinePOST } from './[id]/replacement/decline/route';
+import { GET as exchangeSwitchGET } from './exchange-switch/route';
 import { POST as preparePOST } from './[id]/replacement/prepare/route';
 import { POST as releasePOST } from './[id]/replacement/release/route';
 import { POST as changePOST } from './[id]/replacement/route';
@@ -227,6 +228,25 @@ describe('POST /replacement/cancel, /release, /prepare', () => {
     );
     expect(res.status).toBe(403);
     expect((await res.json()).details).toEqual({ reason: 'aal2_required' });
+  });
+});
+
+// Desk check F9: the phone reads the kill switch when its create sheet opens.
+describe('GET /api/v1/returns/exchange-switch', () => {
+  it('answers the kill switch, no-store, for a signed-in member; 401 signed out', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const on = await exchangeSwitchGET(req('/api/v1/returns/exchange-switch'));
+    expect(on.status).toBe(200);
+    expect(on.headers.get('cache-control')).toBe('private, no-store');
+    expect(await on.json()).toEqual({ organizationId: 'org-1', exchangesEnabled: true });
+    vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const off = await exchangeSwitchGET(req('/api/v1/returns/exchange-switch'));
+    expect((await off.json()).exchangesEnabled).toBe(false);
+    vi.unstubAllEnvs();
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+    const signedOut = await exchangeSwitchGET(req('/api/v1/returns/exchange-switch'));
+    expect(signedOut.status).toBe(401);
   });
 });
 

@@ -128,8 +128,20 @@ describe('the order screen', () => {
   });
 
   it("the create sheet offers Exchange only while exchanges are on, and the picker asks by order", () => {
-    expect(screen).toContain('{order?.exchangesEnabled && d.quantity > 0 ? (');
+    expect(screen).toContain('{exchangesEnabled && d.quantity > 0 ? (');
     expect(screen).toContain('getOrderExchangeCandidates(id, l.orderRequestLineId, q)');
+  });
+
+  // Desk check F9: the kill switch is read when the create sheet opens (one
+  // light read), and the whole order is read only for a replacement's
+  // banner, never for every completed order the screen opens.
+  it('reads the exchange switch when the create sheet opens, and the order route only for a replacement', () => {
+    expect(screen).toMatch(/function openReturnSheet\(\) \{\s*const read = \+\+exchangeSwitchRead\.current;\s*setExchangesEnabled\(false\);\s*void getExchangeSwitch\(\)/);
+    expect(screen).toMatch(/if \(replacementForReturnId\) \{\s*try \{\s*const extras = await api</);
+    expect(screen).not.toMatch(/replacementForReturnId \|\| shouldLoadOrderReturns/);
+    expect(screen).not.toContain('order?.exchangesEnabled');
+    const client = code(read('src/lib/returns-api.ts'));
+    expect(client).toContain("const res = await api<{ exchangesEnabled?: boolean }>('/api/v1/returns/exchange-switch');");
   });
 
   it('the original order names each exchange from one batched read', () => {

@@ -83,7 +83,12 @@ import {
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
-import { getOrderExchangeCandidates, mintReturnKey, releaseReturnReplacement } from '@/lib/returns-api';
+import {
+  getExchangeSwitch,
+  getOrderExchangeCandidates,
+  mintReturnKey,
+  releaseReturnReplacement,
+} from '@/lib/returns-api';
 import {
   changeInRmaLabel,
   orderReplacementLines,
@@ -371,8 +376,6 @@ interface OrderHeader {
   /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
    *  the driver's line); null for an ordinary order or when unread. */
   replacement: MobileOrderReplacement | null;
-  /** The exchange kill switch (create sheet's Exchange choice). */
-  exchangesEnabled: boolean;
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -518,6 +521,10 @@ export default function OrderDetail() {
   // same RMA), and "The item is here", off by default.
   const [returnKey, setReturnKey] = React.useState<string | null>(null);
   const [returnItemIsHere, setReturnItemIsHere] = React.useState(false);
+  // RX-2: the exchange kill switch, read when the sheet opens (desk check F9).
+  // Off until it answers: the sheet offers a return only meanwhile.
+  const [exchangesEnabled, setExchangesEnabled] = React.useState(false);
+  const exchangeSwitchRead = React.useRef(0);
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
@@ -1121,6 +1128,11 @@ export default function OrderDetail() {
   }
 
   function openReturnSheet() {
+    const read = ++exchangeSwitchRead.current;
+    setExchangesEnabled(false);
+    void getExchangeSwitch().then((on) => {
+      if (exchangeSwitchRead.current === read) setExchangesEnabled(on);
+    });
     setReturnDraft(initialReturnDraft(orderReturnable));
     setReturnReason(null);
     setReturnNotes('');
@@ -1422,20 +1434,19 @@ export default function OrderDetail() {
       }
     }
 
-    // RX-2: a replacement order's banner and gate, and the create sheet's
-    // Exchange switch, come with GET /api/v1/orders/[id] (one read, only for
-    // a replacement or a returnable order).
+    // RX-2: a replacement order's banner and gate come with GET
+    // /api/v1/orders/[id], read only for a replacement. The create sheet's
+    // Exchange switch is read when the sheet opens (desk check F9: never the
+    // whole order for every completed order).
     const replacementForReturnId =
       ((data as Record<string, unknown> | null)?.replacement_for_return_id as string | null | undefined) ?? null;
     let replacement: MobileOrderReplacement | null = null;
-    let exchangesEnabled = false;
-    if (replacementForReturnId || shouldLoadOrderReturns(headerStatusForReturns)) {
+    if (replacementForReturnId) {
       try {
-        const extras = await api<{ replacement?: MobileOrderReplacement | null; exchangesEnabled?: boolean }>(
+        const extras = await api<{ replacement?: MobileOrderReplacement | null }>(
           `/api/v1/orders/${encodeURIComponent(id)}`,
         );
         replacement = extras.replacement ?? null;
-        exchangesEnabled = extras.exchangesEnabled === true;
       } catch {
         /* the order still shows; the gate is the server's anyway */
       }
@@ -1616,7 +1627,6 @@ export default function OrderDetail() {
         returns: orderReturns,
         replacementForReturnId,
         replacement,
-        exchangesEnabled,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -3908,7 +3918,7 @@ export default function OrderDetail() {
                     </View>
                     {/* RX-2: an exchange per line, while exchanges are on; the
                         replacement's other sizes load on the first Exchange. */}
-                    {order?.exchangesEnabled && d.quantity > 0 ? (
+                    {exchangesEnabled && d.quantity > 0 ? (
                       <View style={{ gap: 8 }}>
                         <View
                           style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}

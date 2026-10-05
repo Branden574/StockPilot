@@ -356,6 +356,21 @@ export function cancelReturnReplacement(
 }
 
 /**
+ * Whether a new exchange may be asked for right now (the kill switch), read
+ * when the create-return sheet opens (desk check F9: never the whole order
+ * for every completed order the screen opens). Any failure answers false:
+ * the sheet then offers a return only, and the server decides anyway.
+ */
+export async function getExchangeSwitch(): Promise<boolean> {
+  try {
+    const res = await api<{ exchangesEnabled?: boolean }>('/api/v1/returns/exchange-switch');
+    return res.exchangesEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * "Close as return only" after a replacement cancel (desk check F9): the
  * exchange ends for good. The revision the screen shows is required.
  */
