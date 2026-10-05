@@ -44,6 +44,7 @@ import {
   NEEDED_BY_SIGN_IN_COPY,
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   NeededByResultShapeError,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   READINESS_NEEDS_CONNECTION_COPY,
   isNeededByRevisable,
   isNeededByWithinReach,
@@ -165,12 +166,17 @@ export type NeededBySheetOpening =
  *     preview would be in another zone than the server converts in;
  *   - the viewer has no write access to the order's warehouse (the function's
  *     warehouse_write gate). A failed assignment read is not a refusal: the
- *     server decides, and says so in the sheet.
+ *     server decides, and says so in the sheet. Staff outside the warehouse
+ *     read the sentence every order action says, as the server words its own
+ *     refusal (small fixes slice 2 review); a viewer, who works there
+ *     read-only, keeps the date's "needs write access" sentence.
  */
 export function neededBySheetOpening(input: {
   rawZone: string | null | undefined;
   scope: { writableIds: readonly string[] | null; unreadable: boolean };
   warehouseId: string | null;
+  /** The viewer's role is viewer (read-only everywhere). */
+  isViewer: boolean;
 }): NeededBySheetOpening {
   const zone = typeof input.rawZone === 'string' ? input.rawZone.trim() : '';
   if (zone === '') {
@@ -188,7 +194,7 @@ export function neededBySheetOpening(input: {
     return {
       ok: false,
       title: NEEDED_BY_CANNOT_OPEN_TITLE,
-      message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
+      message: input.isViewer ? NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY : ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
     };
   }
   return { ok: true, timeZone: zone };
