@@ -127,6 +127,38 @@ export function serializeHolds(holds: readonly OrderSubmissionHold[]): string | 
   });
 }
 
+/** One marker's identity: its organization and key. */
+function holdId(h: Pick<OrderSubmissionHold, 'orgId' | 'key'>): string {
+  return `${h.orgId}.${h.key}`;
+}
+
+/**
+ * Every change to an account's markers is a fresh read, the change, and a
+ * write, one at a time in this app (PO-4 review, probe P3). The sign-in check
+ * runs its status reads for up to 20 s each; a sign-out can hold a new key
+ * meanwhile, and a check that wrote back its first read would lose it. Here
+ * the check removes only the keys it settled from what the marker holds when
+ * it writes. Nothing is written when nothing changed.
+ */
+let markerChain: Promise<unknown> = Promise.resolve();
+export function updateHolds(
+  store: Pick<HoldStore, 'getItem' | 'setItem' | 'removeItem'>,
+  userId: string,
+  change: (holds: OrderSubmissionHold[]) => OrderSubmissionHold[],
+): Promise<void> {
+  const run = markerChain.then(async () => {
+    const key = orderHoldKey(userId);
+    const before = parseHolds(await store.getItem(key));
+    const after = change(before);
+    if (after.length === before.length && after.every((h, i) => holdId(h) === holdId(before[i]!))) return;
+    const raw = serializeHolds(after);
+    if (raw === null) await store.removeItem(key);
+    else await store.setItem(key, raw);
+  });
+  markerChain = run.catch(() => undefined);
+  return run;
+}
+
 /** Adds markers, one per (organization, key). */
 export function mergeHolds(
   existing: readonly OrderSubmissionHold[],
@@ -231,10 +263,7 @@ export function createSignOutOrderSubmissions(deps: {
     async hold() {
       const adds = (await live()).map((s) => holdFor(s));
       if (adds.length === 0) return;
-      const key = orderHoldKey(deps.userId);
-      const merged = mergeHolds(parseHolds(await deps.store.getItem(key)), adds);
-      const raw = serializeHolds(merged);
-      if (raw !== null) await deps.store.setItem(key, raw);
+      await updateHolds(deps.store, deps.userId, (holds) => mergeHolds(holds, adds));
     },
     async report(result: { placed: string[]; unanswered: number }) {
       const lines = result.placed.map((label) =>
@@ -279,42 +308,40 @@ export async function checkHeldSubmissions(deps: {
   memberOrgIds?: () => Promise<readonly string[] | null>;
   now?: () => number;
 }): Promise<HeldCheckResult> {
-  const key = orderHoldKey(deps.userId);
-  const holds = parseHolds(await deps.store.getItem(key));
+  const holds = parseHolds(await deps.store.getItem(orderHoldKey(deps.userId)));
   if (holds.length === 0) return { placed: [], unknown: [], dropped: 0 };
   const onDevice = new Set((await deviceSends(deps.store, deps.userId)).map((s) => `${s.orgId}.${s.pending.key}`));
   const memberIds = deps.memberOrgIds ? await deps.memberOrgIds().catch(() => null) : null;
   const members = memberIds && memberIds.length > 0 ? new Set(memberIds) : null;
   const now = (deps.now ?? Date.now)();
-  const kept: OrderSubmissionHold[] = [];
+  // What this run settled or dropped: only these leave the marker.
+  const done = new Set<string>();
   const placed: (string | null)[] = [];
   const unknown: OrderSubmissionHold[] = [];
   let dropped = 0;
   for (const h of holds) {
-    if (onDevice.has(`${h.orgId}.${h.key}`)) {
-      kept.push(h);
-      continue;
-    }
+    if (onDevice.has(holdId(h))) continue;
     if (members && !members.has(h.orgId)) {
       dropped += 1;
+      done.add(holdId(h));
       continue;
     }
     const check = holdCheckFrom(await deps.calls.status({ orgId: h.orgId, userId: deps.userId }, h.key), h.orgId);
-    if (check.outcome === 'placed') placed.push(check.label);
-    else if (check.outcome === 'gone') dropped += 1;
-    else if (check.outcome === 'unknown') {
+    if (check.outcome === 'unknown') {
       const sent = Date.parse(h.sentAt);
       if (Number.isFinite(sent) && now - sent > ORDER_HOLD_MAX_AGE_MS) {
         dropped += 1;
+        done.add(holdId(h));
         continue;
       }
-      kept.push(h);
       unknown.push(h);
+      continue;
     }
+    done.add(holdId(h));
+    if (check.outcome === 'placed') placed.push(check.label);
+    else if (check.outcome === 'gone') dropped += 1;
   }
-  const raw = serializeHolds(kept);
-  if (raw === null) await deps.store.removeItem(key);
-  else if (kept.length !== holds.length) await deps.store.setItem(key, raw);
+  if (done.size > 0) await updateHolds(deps.store, deps.userId, (fresh) => fresh.filter((h) => !done.has(holdId(h))));
   return { placed, unknown, dropped };
 }
 
@@ -341,11 +368,7 @@ export async function withdrawHeldSubmission(
 ): Promise<HoldCheck> {
   const check = holdCheckFrom(await deps.calls.withdraw({ orgId: hold.orgId, userId: deps.userId }, hold.key), hold.orgId);
   if (check.outcome !== 'unknown') {
-    const key = orderHoldKey(deps.userId);
-    const rest = parseHolds(await deps.store.getItem(key)).filter((h) => !(h.key === hold.key && h.orgId === hold.orgId));
-    const raw = serializeHolds(rest);
-    if (raw === null) await deps.store.removeItem(key);
-    else await deps.store.setItem(key, raw);
+    await updateHolds(deps.store, deps.userId, (fresh) => fresh.filter((h) => holdId(h) !== holdId(hold)));
   }
   return check;
 }

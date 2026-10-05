@@ -354,3 +354,71 @@ describe('the sign-in and sign-out edges (desk check F5)', () => {
     expect(store.data.has(orderHoldKey(USER))).toBe(false);
   });
 });
+
+// PO-4 review (probe P3): the sign-in check read the marker once, ran its
+// reads (up to 20 s each), then wrote back what it had read less what it
+// settled. A sign-out that held a new key in the meantime lost that key: the
+// check removed the whole marker, and the next sign-in said nothing about it.
+describe('the marker is changed by a fresh read, never by an old one (PO-4 review, probe P3)', () => {
+  const K_OLD = KEY;
+  const K_NEW = '55555555-5555-4555-8555-555555555556';
+  const WH2 = '33333333-3333-4333-8333-333333333334';
+  const pendingNew: PendingOrderSubmission = { ...PENDING, key: K_NEW, body: { ...PENDING.body, idempotencyKey: K_NEW, warehouseId: WH2 } };
+
+  it('a key held by a sign-out while the check’s status read is out is kept; only the key the check settled goes', async () => {
+    const store = memory();
+    store.data.set(orderHoldKey(USER), serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!);
+    const draft = { userId: USER, orgId: ORG, warehouseId: WH2 };
+    store.data.set(
+      orderDraftKey(draft),
+      serializeOrderDraft(draft, { cart: initialCartState({ warehouseId: WH2, fulfillmentType: 'pickup' }), submission: pendingNew }, new Date()),
+    );
+    let release: (r: OrderCallResult) => void = () => undefined;
+    const calls = {
+      status: vi.fn((_s: unknown, key: string) =>
+        key === K_OLD ? new Promise<OrderCallResult>((r) => (release = r)) : Promise.resolve(answer({ organizationId: ORG, outcome: 'none' })),
+      ),
+      withdraw: vi.fn(),
+    };
+    const checking = checkHeldSubmissions({ userId: USER, store, calls });
+    await vi.waitFor(() => expect(calls.status).toHaveBeenCalledWith({ orgId: ORG, userId: USER }, K_OLD));
+    // A sign-out now: K_NEW is held, and the account's drafts go.
+    const signOut = createSignOutOrderSubmissions({ userId: USER, store, calls: { status: vi.fn(), withdraw: vi.fn() }, say: vi.fn() });
+    await signOut.hold();
+    store.data.delete(orderDraftKey(draft));
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_OLD, K_NEW]);
+    release(answer({ organizationId: ORG, outcome: 'placed', order: ORDER }));
+    expect(await checking).toEqual({ placed: ['SO-000123'], unknown: [], dropped: 0 });
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_NEW]);
+  });
+
+  it('a check that settles nothing writes nothing', async () => {
+    const store = memory();
+    const raw = serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!;
+    store.data.set(orderHoldKey(USER), raw);
+    const setItem = vi.spyOn(store, 'setItem');
+    const removeItem = vi.spyOn(store, 'removeItem');
+    const calls = { status: vi.fn(async () => answer({ organizationId: ORG, outcome: 'none' })), withdraw: vi.fn() };
+    await checkHeldSubmissions({ userId: USER, store, calls });
+    expect(setItem).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(store.data.get(orderHoldKey(USER))).toBe(raw);
+  });
+
+  it('Don’t send it at sign-in removes only its own key from what the marker holds then', async () => {
+    const store = memory();
+    store.data.set(orderHoldKey(USER), serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!);
+    let release: (r: OrderCallResult) => void = () => undefined;
+    const calls = { status: vi.fn(), withdraw: vi.fn(() => new Promise<OrderCallResult>((r) => (release = r))) };
+    const hold = parseHolds(store.data.get(orderHoldKey(USER)) ?? null)[0]!;
+    const withdrawing = withdrawHeldSubmission({ userId: USER, store, calls }, hold);
+    await vi.waitFor(() => expect(calls.withdraw).toHaveBeenCalled());
+    store.data.set(
+      orderHoldKey(USER),
+      serializeHolds([hold, holdFor({ orgId: ORG, warehouseId: WH2, pending: pendingNew })])!,
+    );
+    release(answer({ organizationId: ORG, outcome: 'withdrawn' }));
+    expect(await withdrawing).toEqual({ outcome: 'settled' });
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_NEW]);
+  });
+});
