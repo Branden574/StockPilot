@@ -123,6 +123,11 @@ const READERS: Record<string, Entry> = {
     count: 1,
     why: 'Pick slip / packing slip / scanner lookup rack labels; never drives a write (design NO CHANGE, optional follow-up).',
   },
+  'server/services/archive-cleanup.ts::itemIdsStillHolding': {
+    classification: 'service-client',
+    count: 1,
+    why: 'Auto-delete of archived items, called only by its cron (system context, admin client): every holding of the org decides what may be deleted (L15).',
+  },
   'server/services/exceptions.ts::placementRules': {
     classification: 'service-client',
     count: 1,
