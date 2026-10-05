@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
   ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
+  ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY,
   ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RATE_LIMIT,
   ACCOUNT_DELETE_RATE_WINDOW_MS,
@@ -122,10 +123,7 @@ export async function POST(req: NextRequest) {
         extra: { source: 'mobile' },
       });
       return NextResponse.json(
-        {
-          error: 'internal_error',
-          message: 'Could not check the organizations you own. Nothing was deleted. Try again.',
-        },
+        { error: 'internal_error', message: ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY },
         { status: 500 },
       );
     }

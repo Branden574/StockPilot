@@ -371,7 +371,7 @@ describe('POST /api/v1/account/delete', () => {
     expect(await res.json()).toEqual({
       error: 'last_owner',
       message:
-        'You are the only owner of Learn4Life. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.',
+        'You are the only owner of Learn4Life. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
     });
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(getUserById).not.toHaveBeenCalled();
@@ -400,7 +400,7 @@ describe('POST /api/v1/account/delete', () => {
     expect(await res.json()).toEqual({
       error: 'last_owner',
       message:
-        'You are the only owner of an organization that has other members. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.',
+        'You are the only owner of an organization that has other members. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
     });
     expect(deleteUser).not.toHaveBeenCalled();
     expect(insertAuditRowReported).not.toHaveBeenCalled();

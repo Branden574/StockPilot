@@ -215,11 +215,16 @@ export const RELEASES: Release[] = [
     // order email and still goes (a recorded follow-up), so the words say
     // "orders".
     //
+    // A3 review (2026-10-05): the summary and howItAffectsYou name where
+    // "Deleted user" shows instead of saying everything recorded shows it,
+    // and the owner is told to "transfer ownership" (the Team page's control
+    // is "Transfer ownership…"; owner is not in the role list).
+    //
     // For everyone, with no link: any member can delete their own account.
     status: 'draft',
     title: 'Records you made no longer stop you deleting your account',
     summary:
-      'You can now delete your account from Settings on the web or in the mobile app, whatever you recorded. What you recorded stays with your organization and shows “Deleted user” instead of your name. If you are the only owner of an organization with other members, make another member the owner first.',
+      'You can now delete your account from Settings on the web or in the mobile app, whatever you recorded. What you recorded stays with your organization; stock movements, received stock and the audit log show “Deleted user” instead of your name. If you are the only owner of an organization with other members, transfer ownership first.',
     publishedAt: '2026-10-11T17:00:00Z',
     entries: [
       {
@@ -232,9 +237,9 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Until now, an account linked to records your organization keeps could not be deleted from the app, and the person had to contact StockPilot support.',
         howItAffectsYou:
-          'Nothing changes unless someone deletes their account. If they do, records they made show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one. The only owner of an organization with other members must make another member the owner first.',
+          'Nothing changes unless someone deletes their account. If they do, their stock movements and received stock show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one. The only owner of an organization with other members must transfer ownership first.',
         whatToDo:
-          'If you are the only owner of an organization with other members, make another member the owner on the Team page on the web before you delete your account. In the mobile app, close the app completely and open it again to load the latest update.',
+          'If you are the only owner of an organization with other members, choose Transfer ownership on another member on the Team page on the web, or remove the other members, before you delete your account. In the mobile app, close the app completely and open it again to load the latest update.',
       },
     ],
   },

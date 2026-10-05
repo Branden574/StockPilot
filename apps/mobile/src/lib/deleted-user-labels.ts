@@ -75,8 +75,11 @@ export function signerEmailDefault(order: {
 }
 
 /**
- * The Settings "Delete your account?" text (A3 plan 9.5). Ownership moves on
- * the web Team page only (O-A3-8), so the last-owner line points there.
+ * The Settings "Delete your account?" text (A3 plan 9.5, A3 review wording).
+ * Only some records show "Deleted user" (the narrow scope): it names them and
+ * says some records keep the name or email they were made with. Ownership
+ * moves on the web Team page only (O-A3-8; its control is "Transfer
+ * ownership…"), so the last-owner line points there.
  */
 export const DELETE_ACCOUNT_CONFIRM_COPY =
-  'This permanently deletes your account, your profile photo, sign-in devices and notifications, and your access to every StockPilot organization. Your organization keeps what you recorded, shown as “Deleted user”, and work assigned to you becomes unassigned.\n\nIf you are the only owner of an organization with other members, make another member the owner on the web first.\n\nThis cannot be undone.';
+  'This permanently deletes your account, your profile photo, sign-in devices and notifications, and your access to every StockPilot organization. Records you made stay with your organization: stock movements, received stock and the audit log show “Deleted user” instead of your name, and some records, such as maintenance requests, keep the name or email they were made with. Work assigned to you becomes unassigned.\n\nIf you are the only owner of an organization with other members, transfer ownership on the Team page on the web first, or remove the other members.\n\nThis cannot be undone.';

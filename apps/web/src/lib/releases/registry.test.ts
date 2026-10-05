@@ -3735,8 +3735,17 @@ describe('account deletion for every member (slice A3) is held as a draft', () =
     expect(r.summary).toContain(`“${DELETED_USER_LABEL}”`);
     expect(entry.whatChanged).toContain(`“${DELETED_USER_LABEL}”`);
     // The one refusal a member can meet, and where ownership moves (web only).
-    expect(r.summary).toContain('If you are the only owner of an organization with other members, make another member the owner first.');
+    // Re-pinned by the A3 review (was "make another member the owner first"):
+    // the Team page's control is "Transfer ownership…".
+    expect(r.summary).toContain('If you are the only owner of an organization with other members, transfer ownership first.');
     expect(entry.whatToDo).toContain('on the Team page on the web');
+    expect(entry.whatToDo).toContain('choose Transfer ownership on another member');
+    expect(text).not.toMatch(/make another member the owner/i);
+    // A3 review: the narrow scope shows "Deleted user" on some records only;
+    // the words name them and never say that everything recorded shows it.
+    expect(r.summary).toContain(`stock movements, received stock and the audit log show “${DELETED_USER_LABEL}” instead of your name`);
+    expect(entry.howItAffectsYou).toContain(`If they do, their stock movements and received stock show “${DELETED_USER_LABEL}”`);
+    expect(text).not.toMatch(/(?:records they made|what you recorded)[^.;:]*(?:shows?|shown as) “Deleted user”/i);
     // Released work, as the account trigger releases it.
     expect(entry.howItAffectsYou).toMatch(/counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned/);
     expect(entry.howItAffectsYou).toContain('stop being a warehouse’s manager');

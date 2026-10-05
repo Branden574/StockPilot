@@ -69,12 +69,21 @@ describe('receiverText (PO receipt history)', () => {
 });
 
 describe('DELETE_ACCOUNT_CONFIRM_COPY (Settings)', () => {
+  // Re-pinned by the A3 review (was "Your organization keeps what you
+  // recorded, shown as “Deleted user”" and "make another member the owner on
+  // the web first"): only some records show "Deleted user" (narrow scope), and
+  // the Team page's control is "Transfer ownership…".
   it('says what stays, what is released, and where ownership moves', () => {
-    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('Your organization keeps what you recorded, shown as “Deleted user”');
-    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('work assigned to you becomes unassigned');
-    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('make another member the owner on the web first');
+    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain(
+      'Records you made stay with your organization: stock movements, received stock and the audit log show “Deleted user” instead of your name, and some records, such as maintenance requests, keep the name or email they were made with.',
+    );
+    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('Work assigned to you becomes unassigned.');
+    expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain(
+      'If you are the only owner of an organization with other members, transfer ownership on the Team page on the web first, or remove the other members.',
+    );
     expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('This cannot be undone.');
-    expect(DELETE_ACCOUNT_CONFIRM_COPY.toLowerCase()).not.toMatch(/\bbook\b/);
+    expect(DELETE_ACCOUNT_CONFIRM_COPY).not.toMatch(/keeps what you recorded, shown as “Deleted user”|make another member the owner/);
+    expect(DELETE_ACCOUNT_CONFIRM_COPY.toLowerCase()).not.toMatch(/\bbooks?\b/);
   });
 });
 

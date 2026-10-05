@@ -16,6 +16,7 @@ import { createClient } from '@/lib/supabase/server';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
   ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY,
   ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RATE_LIMIT,
   ACCOUNT_DELETE_RATE_WINDOW_MS,
@@ -541,7 +542,15 @@ export async function deleteOwnAccountAction(input: {
     // a failed read was once "owns nothing" and an account was deleted out
     // from under an org that still had people in it.
     const sole = await soleOwnedOrganizationsWithMembers(supabase, session.userId);
-    if (!sole.ok) throw new ServiceError('internal_error', sole.message);
+    if (!sole.ok) {
+      // A3 review: the raw PostgREST message used to reach the toast and
+      // nothing was reported. Same sentence and report as the phone route.
+      void reportError(new Error(sole.message), {
+        tag: 'account.delete.owner_check',
+        extra: { source: 'web' },
+      });
+      return err('internal_error', ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY);
+    }
     if (sole.organizations.length > 0) {
       return err(
         'conflict',

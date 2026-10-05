@@ -54,6 +54,7 @@ import { clearOfflineCache } from '@/lib/offline-cache';
 import { countHeld, countRejected, countUnconfirmedAdjust } from '@/lib/queue';
 import { unsentWorkDetail } from '@/lib/rejected-work';
 import { isOnline, syncNow } from '@/lib/sync';
+import { settingsRolePill } from '@/lib/role-pill';
 import { refreshEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
@@ -90,13 +91,14 @@ export default function Settings() {
   const profile = useProfile();
   const { c } = useTheme();
   const router = useRouter();
-  const { isAdmin } = useRole();
+  const { isAdmin, role } = useRole();
+  const rolePill = settingsRolePill(role);
   const enabledModules = useEnabledModules();
   const showIntegrations = enabledModules.has('integrations') && isAdmin;
   const navigation = useNavigation();
   const { fontScale } = useWindowDimensions();
   // The identity Card is a fixed three-up row — Avatar, name/email column,
-  // OWNER Pill — and the name is the only shrinkable part, so past the shared
+  // role Pill — and the name is the only shrinkable part, so past the shared
   // threshold it starves and iOS breaks the glyph run ("StockPil / ot").
   // Stacking hands the name the card's full interior; same threshold as
   // SettingRow below and every other stacking decision in this pass.
@@ -264,10 +266,12 @@ export default function Settings() {
               flexShrink, or it claims its full intrinsic width and starves the
               identity column. Past it the badge owns its own line, where
               shrinking it would only wrap a label that already fits. */}
-          {identityStacked ? (
-            <Pill status="ok">OWNER</Pill>
+          {rolePill === null ? null : identityStacked ? (
+            <Pill status={rolePill.status}>{rolePill.label}</Pill>
           ) : (
-            <Pill status="ok" style={{ flexShrink: 1 }}>OWNER</Pill>
+            <Pill status={rolePill.status} style={{ flexShrink: 1 }}>
+              {rolePill.label}
+            </Pill>
           )}
         </Card>
 
@@ -775,7 +779,7 @@ const styles = StyleSheet.create({
     gap: 14,
     marginTop: 14,
   },
-  // Stacked, the Avatar, the name/email column and the OWNER badge each take a
+  // Stacked, the Avatar, the name/email column and the role badge each take a
   // line of their own, so the name is measured against the card's full
   // interior rather than what the badge leaves behind. `flex-start` keeps the
   // 52pt Avatar circular and the badge pill-width instead of stretching both.

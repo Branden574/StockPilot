@@ -804,7 +804,7 @@ describe('deleteOwnAccountAction', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('conflict');
       expect(result.error.message).toBe(
-        'You are the only owner of Learn4Life. Make another member the owner on the Team page, then delete your account. Nothing was changed.',
+        'You are the only owner of Learn4Life. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
       );
       expect((result.error.details as { reason?: string } | undefined)?.reason).toBe('last_owner');
     }
@@ -855,7 +855,7 @@ describe('deleteOwnAccountAction', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('conflict');
       expect(result.error.message).toBe(
-        'You are the only owner of an organization that has other members. Make another member the owner on the Team page, then delete your account. Nothing was changed.',
+        'You are the only owner of an organization that has other members. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
       );
       expect((result.error.details as { reason?: string } | undefined)?.reason).toBe('last_owner');
     }
@@ -871,7 +871,7 @@ describe('deleteOwnAccountAction', () => {
   it.each([
     ['owned-orgs', 1],
     ['other-members', 2],
-  ])('a failed %s read refuses the delete and tombstones nothing', async (_label, failAt) => {
+  ])('a failed %s read refuses the delete with a plain sentence, reports it and changes nothing', async (_label, failAt) => {
     let n = 0;
     stubHolder.stub = makeSupabaseStub({
       'organization_members.select': () => {
@@ -883,7 +883,17 @@ describe('deleteOwnAccountAction', () => {
     });
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('internal_error');
+    if (!result.ok) {
+      expect(result.error.code).toBe('internal_error');
+      // A3 review: the raw PostgREST message reached the toast and nothing was
+      // reported; the phone route already said this sentence and reported it.
+      expect(result.error.message).toBe('Could not check the organizations you own. Nothing was deleted. Try again.');
+      expect(result.error.message).not.toContain('fetch failed');
+    }
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'fetch failed' }),
+      expect.objectContaining({ tag: 'account.delete.owner_check', extra: { source: 'web' } }),
+    );
     expect(stubHolder.stub.chains.get('user_profiles.update')).toBeUndefined();
     expect(audit).not.toHaveBeenCalled();
     expect(adminRpc).not.toHaveBeenCalled();

@@ -18,11 +18,12 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { orSessionEnded } from '@/lib/auth/session-ended';
+import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 
-import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
+import { resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
 
 // Override the root layout's marketing title for everything under
@@ -216,7 +217,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         organizationLogoUrl={orgRow?.logo_url ?? null}
         memberships={memberships}
         userName={ctx.fullName ?? ctx.email}
-        userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
+        userRole={`${userMenuRoleLabel(ctx.role)} · ${ctx.organizationName}`}
         role={ctx.role}
         permissions={ctx.permissions ? [...ctx.permissions] : undefined}
         isPlatformAdmin={platformAdmin}

@@ -451,16 +451,18 @@ describe("soleOwnedOrganizationsWithMembers (0394, the trigger's predicate, read
 describe('lastOwnerCopy', () => {
   it('names one organization, and points the phone to the web', () => {
     expect(lastOwnerCopy(['Learn4Life'], 'web')).toBe(
-      'You are the only owner of Learn4Life. Make another member the owner on the Team page, then delete your account. Nothing was changed.',
+      // Re-pinned by the A3 review (was "Make another member the owner on the Team page"): the
+      // Team page's control is "Transfer ownership…", and removing the other members also works.
+      'You are the only owner of Learn4Life. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
     );
     expect(lastOwnerCopy(['Learn4Life'], 'mobile')).toBe(
-      'You are the only owner of Learn4Life. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.',
+      'You are the only owner of Learn4Life. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
     );
   });
 
   it('names several, "of each"', () => {
     expect(lastOwnerCopy(['A', 'B'], 'mobile')).toBe(
-      'You are the only owner of A and B. Make another member the owner of each on the Team page on the web, then delete your account. Nothing was changed.',
+      'You are the only owner of A and B. For each, on the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
     );
     expect(lastOwnerCopy(['A', 'B', 'C'], 'web')).toContain('the only owner of A, B and C.');
   });
@@ -521,7 +523,14 @@ describe('the sentences', () => {
     expect(ACCOUNT_DELETE_BLOCKED_COPY).toContain('Nothing was changed.');
     expect(ACCOUNT_DELETE_BLOCKED_COPY).toContain('Contact StockPilot support');
     expect(ACCOUNT_DELETE_LAST_OWNER_COPY).toContain('Nothing was changed.');
-    expect(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE).toContain('on the Team page on the web');
+    // Re-pinned by the A3 review (was 'on the Team page on the web'): the sentence now starts with it.
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE).toContain('On the Team page on the web');
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY).toBe(
+      'You are the only owner of an organization that has other members. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE).toBe(
+      'You are the only owner of an organization that has other members. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
     expect(ACCOUNT_DELETE_PLATFORM_ADMIN_COPY).toBe(
       'This account is a StockPilot platform admin. Remove it from the platform admin list before deleting it. Nothing was changed.',
     );

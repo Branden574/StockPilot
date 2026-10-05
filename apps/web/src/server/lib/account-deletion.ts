@@ -76,12 +76,21 @@ export type AccountDeletionCheck =
 /** An integrity refusal after 0394, which converted every refusing key: unexpected. */
 export const ACCOUNT_DELETE_BLOCKED_COPY =
   'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.';
-/** The check's last-owner answer (0394), when the app could not name the organization (web). */
+/**
+ * The check's last-owner answer (0394), when the app could not name the
+ * organization (web). The Team page's control is a member row's "Transfer
+ * ownership…" (owner is not in the role list), and removing the other members
+ * also lets the account go (a solo organization), so the sentence names both
+ * (A3 review).
+ */
 export const ACCOUNT_DELETE_LAST_OWNER_COPY =
-  'You are the only owner of an organization that has other members. Make another member the owner on the Team page, then delete your account. Nothing was changed.';
+  'You are the only owner of an organization that has other members. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.';
 /** The same for the phone, where ownership is transferred on the web (O-A3-8). */
 export const ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE =
-  'You are the only owner of an organization that has other members. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.';
+  'You are the only owner of an organization that has other members. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.';
+/** The owner check could not be read (web and phone): nothing changed. */
+export const ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY =
+  'Could not check the organizations you own. Nothing was deleted. Try again.';
 /** O-A3-7: a platform admin's account is not deleted while its email is on the allowlist. */
 export const ACCOUNT_DELETE_PLATFORM_ADMIN_COPY =
   'This account is a StockPilot platform admin. Remove it from the platform admin list before deleting it. Nothing was changed.';
@@ -601,9 +610,10 @@ export async function soleOwnedOrganizationsWithMembers(
 }
 
 /**
- * The refusal sentence naming the organizations (plan 5): "You are the only
- * owner of A and B. Make another member the owner of each on the Team page
- * [on the web], then delete your account. Nothing was changed." Unnamed
+ * The refusal sentence naming the organizations (plan 5, A3 review wording):
+ * "You are the only owner of A and B. For each, on the Team page [on the
+ * web], choose Transfer ownership on another member, or remove the other
+ * members, then delete your account. Nothing was changed." Unnamed
  * organizations (a failed name read) fall back to the generic sentence.
  */
 export function lastOwnerCopy(names: readonly (string | null)[], surface: 'web' | 'mobile'): string {
@@ -611,13 +621,13 @@ export function lastOwnerCopy(names: readonly (string | null)[], surface: 'web' 
   if (named.length === 0 || named.length !== names.length) {
     return surface === 'mobile' ? ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE : ACCOUNT_DELETE_LAST_OWNER_COPY;
   }
-  const where = surface === 'mobile' ? ' on the Team page on the web' : ' on the Team page';
+  const where = surface === 'mobile' ? ' on the web' : '';
   const list =
     named.length === 1
       ? named[0]
       : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
-  const each = named.length > 1 ? ' of each' : '';
-  return `You are the only owner of ${list}. Make another member the owner${each}${where}, then delete your account. Nothing was changed.`;
+  const lead = named.length > 1 ? `For each, on the Team page${where}` : `On the Team page${where}`;
+  return `You are the only owner of ${list}. ${lead}, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.`;
 }
 
 /** Storage list/remove page size: the API's own limit. */

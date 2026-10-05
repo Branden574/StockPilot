@@ -10,6 +10,7 @@ import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { AcceptInviteButton } from './accept-button';
+import { inviteExpiredDescription } from './invite-copy';
 import { InviteSignupForm } from './signup-form';
 
 /**
@@ -56,13 +57,17 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
     .maybeSingle();
 
   let orgName = 'a workspace';
+  let orgKnown = false;
   if (invite) {
     const { data: org } = await admin
       .from('organizations')
       .select('name')
       .eq('id', invite.organization_id as string)
       .maybeSingle();
-    if (org?.name) orgName = org.name as string;
+    if (org?.name) {
+      orgName = org.name as string;
+      orgKnown = true;
+    }
   }
 
   const session = await getServerSession();
@@ -105,7 +110,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
             ) : expired ? (
               <>
                 <CardTitle>Invite expired</CardTitle>
-                <CardDescription>Ask the inviter to send a new one.</CardDescription>
+                <CardDescription>{inviteExpiredDescription(orgKnown ? orgName : null)}</CardDescription>
               </>
             ) : (
               <>
