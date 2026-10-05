@@ -152,6 +152,7 @@ import {
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
 import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
+import { orderHeaderEyebrow } from '@/lib/orders-list';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -2264,7 +2265,7 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{`ORDER${order.orderNumber ? ` ${formatOrderNumber(order.orderNumber)}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
+            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>

@@ -30,3 +30,12 @@ describe('the Orders list read', () => {
     expect(orders).toMatch(/\.eq\('organization_id', orgId\)\s*\.neq\('status', 'pending_confirmation'\);/);
   });
 });
+
+describe('the order screen header (L83a)', () => {
+  const screen = codeOnly(readFileSync(path.join(ROOT, 'app/order/[id].tsx'), 'utf8'));
+  // Mutation caught: the raw key printed again ("PICKING IN PROGRESS").
+  it('names the status through the tested helper, never its raw key', () => {
+    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>');
+    expect(screen).not.toContain("order.status.replace(/_/g, ' ')");
+  });
+});

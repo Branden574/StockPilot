@@ -11,7 +11,13 @@ import {
   type Permission,
 } from '@stockpilot/core';
 
-import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder } from './orders-list';
+import {
+  orderHeaderEyebrow,
+  orderStatusPill,
+  ordersListEmpty,
+  ordersListReloadNote,
+  showPlaceOrder,
+} from './orders-list';
 
 describe('the Orders list (phone ordering PO-4; audit D4, D6)', () => {
   it('every one of core’s statuses has its pill, in the web badge’s words (D6)', () => {
@@ -26,6 +32,21 @@ describe('the Orders list (phone ordering PO-4; audit D4, D6)', () => {
     expect(orderStatusPill('picking_in_progress')).toEqual({ label: 'PICKING', status: 'default' });
     expect(orderStatusPill('backordered')).toEqual({ label: 'BACKORDERED', status: 'warn' });
     expect(orderStatusPill('something_new')).toEqual({ label: 'SOMETHING NEW', status: 'default' });
+  });
+
+  // L83a: the order screen's header printed the raw status key
+  // ("PICKING IN PROGRESS"); it now uses the status's words, as the list does.
+  it('the order screen header names every status in words, after the order number', () => {
+    for (const key of ORDER_STATUS_KEYS) {
+      const line = orderHeaderEyebrow(49, key);
+      expect(line).toBe(`ORDER SO-000049 · ${orderStatusPill(key).label}`);
+      expect(line).not.toMatch(/_/);
+    }
+    expect(ORDER_STATUS_KEYS).toHaveLength(14);
+    expect(orderHeaderEyebrow(49, 'picking_in_progress')).toBe('ORDER SO-000049 · PICKING');
+    expect(orderHeaderEyebrow(49, 'staged_for_delivery')).toBe('ORDER SO-000049 · READY');
+    expect(orderHeaderEyebrow(49, 'in_transit')).toBe('ORDER SO-000049 · IN TRANSIT');
+    expect(orderHeaderEyebrow(null, 'completed')).toBe('ORDER · DELIVERED');
   });
 
   it('a failed read is said, never "No orders yet." (D4)', () => {
