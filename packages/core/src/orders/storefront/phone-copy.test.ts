@@ -84,6 +84,13 @@ describe('the templated sentences', () => {
   // PO-4 review: the For sheet's footer action reads as the sheet's confirm,
   // but Myself and a recent person apply on tap: it names someone new; and a
   // search that matched nobody is not "Nobody yet".
+  it('the Orders list’s words (PO-4 review)', () => {
+    expect(phone.ORDERS_LIST_EMPTY_TITLE_COPY).toBe('No orders yet.');
+    expect(phone.ORDERS_LIST_EMPTY_BODY_COPY).toBe('When someone requests inventory from one of your warehouses, the request lands here.');
+    expect(phone.ORDERS_LIST_EMPTY_OWN_BODY_COPY).toBe('The order requests you place show here.');
+    expect(phone.ORDERS_LIST_RELOAD_FAILED_COPY).toBe("Orders couldn't be loaded again, so these may be out of date. Pull down to load them again.");
+  });
+
   it('the For sheet’s words', () => {
     expect(phone.CHECKOUT_USE_PERSON_COPY).toBe('Order for someone new');
     expect(phone.CHECKOUT_REQUESTERS_NO_MATCH_COPY).toBe('Nobody matches that. Enter someone new.');

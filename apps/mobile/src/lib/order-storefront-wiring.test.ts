@@ -137,7 +137,8 @@ describe('the Orders list (D4, D5, D6) and the order screen', () => {
   it('a failed read is said, with Load again, never "No orders yet." (mutation: ignore the error)', () => {
     expect(orders).toMatch(/const \[\{ data, error \}, unsettled\] = await Promise\.all\(/);
     expect(orders).toMatch(/if \(error\) \{\s*setFailed\(true\);/);
-    expect(orders).toContain('const empty = ordersListEmpty(failed && rows.length === 0);');
+    // Who is reading it decides the empty words (PO-4 review).
+    expect(orders).toContain('const empty = ordersListEmpty(failed && rows.length === 0, canApprove);');
     expect(orders).toContain('emptyTitle={empty.title}');
     expect(orders).toContain('<SmallAction label={ORDERS_LIST_RETRY_COPY} onPress={() => void refresh()} />');
   });
@@ -910,5 +911,15 @@ describe('dimmed controls say why, and what can be tapped looks it (PO-4 review)
     const button = setup.slice(setup.indexOf('return (\n    <Pressable'));
     expect(button).toContain('<ChevronRight');
     expect(setup.slice(0, setup.indexOf('return (\n    <Pressable'))).not.toContain('<ChevronRight');
+  });
+});
+
+// PO-4 review: a failed re-read over rows already shown kept them and said
+// nothing (desk check F12). Mutation caught: the note not shown.
+describe('the Orders list says when a read again failed over the rows shown (PO-4 review)', () => {
+  it('the tested note, above the list', () => {
+    const orders = codeOnly(read('src/screens/orders.tsx'));
+    expect(orders).toContain('const reloadNote = ordersListReloadNote(failed, rows.length);');
+    expect(orders).toMatch(/\{reloadNote \? \(\s*<Body size=\{13\} color=\{ACCENT\.warn\} accessibilityRole="alert">\s*\{reloadNote\}/);
   });
 });

@@ -20,13 +20,13 @@ import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { unsettledSendsOnDevice } from '@/lib/order-storefront/services';
-import { orderStatusPill, ordersListEmpty, showPlaceOrder } from '@/lib/orders-list';
+import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder } from '@/lib/orders-list';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourTarget } from '@/lib/tour-targets';
@@ -164,7 +164,8 @@ export default function OrdersScreen() {
   }
 
   const pendingCount = rows.filter((r) => r.status === 'pending_approval').length;
-  const empty = ordersListEmpty(failed && rows.length === 0);
+  const empty = ordersListEmpty(failed && rows.length === 0, canApprove);
+  const reloadNote = ordersListReloadNote(failed, rows.length);
   const placeAnOrder = () => router.push('/order/new' as Href);
 
   return (
@@ -182,15 +183,26 @@ export default function OrdersScreen() {
         ) : undefined
       }
       header={
-        unconfirmed > 0 ? (
-          <Card padding={12}>
-            <View style={{ gap: 8 }}>
-              <Body size={13.5} accessibilityRole="alert">
-                {ORDERS_LIST_UNCONFIRMED_COPY}
+        unconfirmed > 0 || reloadNote ? (
+          <View style={{ gap: 10 }}>
+            {/* A read again that failed keeps the rows shown and says so
+                (PO-4 review). */}
+            {reloadNote ? (
+              <Body size={13} color={ACCENT.warn} accessibilityRole="alert">
+                {reloadNote}
               </Body>
-              <SmallAction label={ORDERS_LIST_OPEN_UNCONFIRMED_COPY} onPress={placeAnOrder} />
-            </View>
-          </Card>
+            ) : null}
+            {unconfirmed > 0 ? (
+              <Card padding={12}>
+                <View style={{ gap: 8 }}>
+                  <Body size={13.5} accessibilityRole="alert">
+                    {ORDERS_LIST_UNCONFIRMED_COPY}
+                  </Body>
+                  <SmallAction label={ORDERS_LIST_OPEN_UNCONFIRMED_COPY} onPress={placeAnOrder} />
+                </View>
+              </Card>
+            ) : null}
+          </View>
         ) : undefined
       }
       emptyIcon={ShoppingCart}

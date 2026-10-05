@@ -1,6 +1,10 @@
 import {
+  ORDERS_LIST_EMPTY_BODY_COPY,
+  ORDERS_LIST_EMPTY_OWN_BODY_COPY,
+  ORDERS_LIST_EMPTY_TITLE_COPY,
   ORDERS_LIST_LOAD_FAILED_BODY_COPY,
   ORDERS_LIST_LOAD_FAILED_TITLE_COPY,
+  ORDERS_LIST_RELOAD_FAILED_COPY,
   ORDER_STATUS_META,
   isOrderStatusKey,
   type OrderStatusColor,
@@ -51,12 +55,16 @@ export function showPlaceOrder(input: {
 }
 
 /** What the list shows when it has no rows: a read that FAILED is not "No
- *  orders yet." (D4: the read ignored its error). */
-export function ordersListEmpty(failed: boolean): { title: string; body: string } {
-  return failed
-    ? { title: ORDERS_LIST_LOAD_FAILED_TITLE_COPY, body: ORDERS_LIST_LOAD_FAILED_BODY_COPY }
-    : {
-        title: 'No orders yet.',
-        body: 'When someone requests inventory from one of your warehouses, the request lands here.',
-      };
+ *  orders yet." (D4: the read ignored its error). Someone who does not
+ *  approve orders sees only their own requests, so their empty list says so
+ *  (PO-4 review). */
+export function ordersListEmpty(failed: boolean, approver: boolean): { title: string; body: string } {
+  if (failed) return { title: ORDERS_LIST_LOAD_FAILED_TITLE_COPY, body: ORDERS_LIST_LOAD_FAILED_BODY_COPY };
+  return { title: ORDERS_LIST_EMPTY_TITLE_COPY, body: approver ? ORDERS_LIST_EMPTY_BODY_COPY : ORDERS_LIST_EMPTY_OWN_BODY_COPY };
+}
+
+/** A read again that failed over the rows already shown says so above them
+ *  (desk check F12, PO-4 review); with no rows, the empty state says it. */
+export function ordersListReloadNote(failed: boolean, rowCount: number): string | null {
+  return failed && rowCount > 0 ? ORDERS_LIST_RELOAD_FAILED_COPY : null;
 }

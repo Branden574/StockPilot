@@ -53,9 +53,9 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Place an order in the mobile app',
         whatChanged:
-          "The Orders screen in the app has a + button (and Place an order when the list is empty). It opens the order page: choose the warehouse to ship from, search by name, SKU or category, browse by category or Frequently ordered, and add items or a whole kit. Checkout shows your cart, who the order is for, pickup or delivery and the site, the needed-by time in your organization's time zone and manager notes. After you submit you see the order number and can open the order, or open a pickup or delivery request email as a draft.",
+          "The Orders screen in the app has a + button (and Place an order when the list is empty). It opens the order page: choose the warehouse to ship from, search by name, SKU or category, browse by category or Frequently ordered, and add items or a whole kit. Checkout shows your cart, who the order is for (if you can order for someone else), pickup or delivery and the site, the needed-by time in your organization's time zone and manager notes. After you submit you see the order number and can open the order, or open a pickup or delivery request email as a draft.",
         whyItMatters:
-          'Placing an order request needed the web. Now it works from the phone, with the same rules and the same words as the web.',
+          'Placing an order request needed the web. Now it works from the phone, with the same rules as the web.',
         howItAffectsYou:
           'Your cart is kept on your phone for each warehouse, for your account only. Submitting needs a connection; offline you can still browse the items as they were last loaded and build your cart. On an iPad the cart stays open beside the items. If you can approve orders, Review and approve takes you straight to the order.',
         whatToDo: 'No action needed.',
@@ -81,7 +81,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The Orders list in the app stays current',
         whatChanged:
-          "The Orders list in the app loads again whenever you come back to it, says when it couldn't load instead of showing No orders yet, and labels every status the way the web does.",
+          "The Orders list in the app loads again whenever you come back to it, says when it couldn't load instead of showing No orders yet, and names every status (some showed a raw code before).",
         whyItMatters:
           'A new order did not show until the screen was opened again, and a list that failed to load looked empty.',
         howItAffectsYou: 'Pull down on the list to load it again at any time.',

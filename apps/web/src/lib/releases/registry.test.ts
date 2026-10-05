@@ -3623,3 +3623,19 @@ describe('the order drafts never promise that Don\'t send it stops an order alre
     expect(text).toContain("Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.");
   });
 });
+
+/**
+ * PO-4 review: the phone labels statuses with core's defaults (not an
+ * organization's own labels, which the web badge applies), says some things
+ * in its own words ("Order for someone new", "Set quantity"), and shows For
+ * only to someone who may order for someone else. The phone draft claims
+ * none of those.
+ */
+describe('the phone draft claims nothing the phone does not do', () => {
+  it('no "the way the web does" for statuses, no "the same words as the web", and For is qualified', () => {
+    const r = RELEASES.find((x) => x.id === 'phone-place-order-2026-10')!;
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/the way the web does|same words as the web/i);
+    expect(text).toContain('who the order is for (if you can order for someone else)');
+  });
+});

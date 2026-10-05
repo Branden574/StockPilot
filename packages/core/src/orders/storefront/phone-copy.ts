@@ -203,6 +203,16 @@ export const SUCCESS_EMAIL_COPY_DETAILS_COPY = 'Copy details';
 
 // ── The Orders list ─────────────────────────────────────────────────────────
 
+export const ORDERS_LIST_EMPTY_TITLE_COPY = 'No orders yet.';
+/** The empty list of someone who approves orders (they see every request
+ *  from their warehouses). */
+export const ORDERS_LIST_EMPTY_BODY_COPY =
+  'When someone requests inventory from one of your warehouses, the request lands here.';
+/** The empty list of anyone else (they see only their own requests). */
+export const ORDERS_LIST_EMPTY_OWN_BODY_COPY = 'The order requests you place show here.';
+/** A read of the list that failed over the rows already shown. */
+export const ORDERS_LIST_RELOAD_FAILED_COPY =
+  "Orders couldn't be loaded again, so these may be out of date. Pull down to load them again.";
 export const ORDERS_LIST_LOAD_FAILED_TITLE_COPY = "Orders couldn't be loaded.";
 export const ORDERS_LIST_LOAD_FAILED_BODY_COPY = 'Check your connection, then load them again.';
 export const ORDERS_LIST_RETRY_COPY = 'Load again';
