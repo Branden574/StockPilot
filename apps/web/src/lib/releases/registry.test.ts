@@ -3742,6 +3742,13 @@ describe('account deletion for every member (slice A3) is held as a draft', () =
     expect(entry.howItAffectsYou).toContain('stop being a warehouse’s manager');
     // Pending invites stop working and leave the list: never "resend".
     expect(entry.howItAffectsYou).toContain('Invitations they sent that were not yet accepted stop working');
+    // Desk check F-1: no order email reaches them and no signing screen
+    // suggests their address. Orders only: the maintenance resolution email
+    // still goes to the address a request kept (a recorded follow-up).
+    expect(entry.howItAffectsYou).toContain(
+      'They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one.',
+    );
+    expect(text).not.toMatch(/never (be )?emailed|no longer emailed about anything|not emailed at all/i);
     expect(text).not.toMatch(/\bresend/i);
     // The phone's labels need the update; deleting does not.
     expect(entry.whatChanged).toContain('In the mobile app, after the latest update,');

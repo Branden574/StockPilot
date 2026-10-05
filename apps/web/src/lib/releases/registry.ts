@@ -206,7 +206,14 @@ export const RELEASES: Release[] = [
     // picks, deliveries, scheduled and in-progress schedule entries, open
     // maintenance requests, escalation claims and warehouse manager. Pending
     // invites the person sent stop working (they leave the invite list), so
-    // the words say "invite those people again", not "resend".
+    // the words say "invite those people again", not "resend". A deleted
+    // requester is not emailed about their orders on any path (status
+    // emails, hand-over and backorder notices on paper and by link, the
+    // return prompt, the signer receipt to their kept address, the denied
+    // order's support ticket), and neither signing screen suggests their
+    // address (desk check F-1). The maintenance resolution email is not an
+    // order email and still goes (a recorded follow-up), so the words say
+    // "orders".
     //
     // For everyone, with no link: any member can delete their own account.
     status: 'draft',
@@ -225,7 +232,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Until now, an account linked to records your organization keeps could not be deleted from the app, and the person had to contact StockPilot support.',
         howItAffectsYou:
-          'Nothing changes unless someone deletes their account. If they do, records they made show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned so someone else can pick them up; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. The only owner of an organization with other members is asked to make another member the owner first, and nothing is changed until they do.',
+          'Nothing changes unless someone deletes their account. If they do, records they made show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one. The only owner of an organization with other members must make another member the owner first.',
         whatToDo:
           'If you are the only owner of an organization with other members, make another member the owner on the Team page on the web before you delete your account. In the mobile app, close the app completely and open it again to load the latest update.',
       },
