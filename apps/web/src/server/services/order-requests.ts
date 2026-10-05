@@ -75,6 +75,7 @@ import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
 } from '@/server/lib/order-handover-notify';
+import { requesterEmailOptedOut, resolveRequesterContact } from '@/server/lib/requester-contact';
 
 import { audit } from './audit';
 import { createNotification } from './notifications';
@@ -3835,29 +3836,31 @@ export class OrderRequestsService {
     // Post-hand-over notifications — identical outcomes to the sign route.
     try {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
-      // A requester who deleted their account is never emailed again (A3), not
-      // even at the address the order kept: the backorder notices below gate
-      // only on `requesterEmail && !emailOptedOut`, and a deleted requester has
-      // no id whose preferences could opt them out. The RPC returns the whole
-      // row, so the marker is on it (requesterAccountDeleted reads it only for
-      // a narrow row). Same rule as the sign route's resolveRequesterContact.
+      // WHO the requester is and whether they muted order emails, resolved
+      // as the sign route resolves them (L94, server/lib/requester-contact):
+      // a member who placed their own order has an empty requester_email
+      // column, so their address is their user_profiles row, and their
+      // opt-out is read on their id alone (a failed read counts as opted out).
+      // A3 unchanged: a requester who deleted their account is never emailed
+      // again, not even at the address the order kept. The RPC returns the
+      // whole row, so the marker is on it (requesterAccountDeleted reads it
+      // only for a narrow row).
+      const admin = createAdminClient();
       const requesterGone = await this.requesterAccountDeleted(row);
-      const noticeEmail = requesterGone ? null : (row.requester_email ?? null);
-      const noticeName = requesterGone ? null : (row.requester_name ?? null);
-      // Requester opt-out read needs the service client: the caller's RLS
-      // can't see another user's notification_preferences row.
-      let emailOptedOut = false;
-      if (row.requester_user_id && row.requester_email) {
-        const admin = createAdminClient();
-        const { data: prefRow } = await admin
-          .from('notification_preferences')
-          .select('email_order_completed')
-          .eq('user_id', row.requester_user_id)
-          .maybeSingle();
-        emailOptedOut = !(
-          (prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true
-        );
-      }
+      const contact = requesterGone
+        ? { email: null, name: null }
+        : await resolveRequesterContact(admin, {
+            requester_user_id: row.requester_user_id ?? null,
+            requester_name: row.requester_name ?? null,
+            requester_email: row.requester_email ?? null,
+            requester_deleted_at: row.requester_deleted_at ?? null,
+          });
+      const noticeEmail = contact.email;
+      const noticeName = contact.name;
+      const emailOptedOut = await requesterEmailOptedOut(admin, row.requester_user_id ?? null, {
+        tag: 'orders.physical_signature.pref_read',
+        orderId: id,
+      });
 
       const { data: aggLines } = await this.ctx.supabase
         .from('order_request_lines')
