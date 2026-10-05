@@ -37,7 +37,6 @@ import {
   STOREFRONT_STATUS_LABEL_COPY,
   availabilityLabel,
   availableOf,
-  clampQty,
   componentItem,
   kitComponentLineCopy,
   statusOf,
@@ -64,7 +63,7 @@ import {
 } from '@/lib/order-needed-by';
 import { someoneNewCheck, wallClockIso } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
-import { earmarkLabel, matchRequesters, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
+import { earmarkLabel, matchRequesters, quantityFromField, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
 import { pickQtyFieldWidthFor, PICK_QTY_MAX_FONT_SIZE_MULTIPLIER } from '@/lib/pick-qty-field';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -76,11 +75,12 @@ import { StorefrontSheet } from './storefront-sheet';
  * The storefront's sheets (phone ordering PO-4), each in the shared frame
  * (storefront-sheet.tsx: the sibling backdrop, the keyboard, 640 pt wide at
  * most). Every word is core's; every rule they apply is a tested module's
- * (clampQty, matchRequesters, the needed-by draft view).
+ * (quantityFromField, matchRequesters, the needed-by draft view).
  */
 
-/** A typed quantity, clamped to what is available (0 removes the line). The
- *  field is as wide as the digits of what is available at the capped size
+/** A typed quantity, clamped to what is available (0 removes the line; a
+ *  blank field keeps the quantity, as the web's does). The field is as wide
+ *  as the digits of what is available at the capped size
  *  (pickQtyFieldWidthFor). */
 export function QuantitySheet({
   item,
@@ -97,15 +97,14 @@ export function QuantitySheet({
   const [text, setText] = React.useState(String(quantity));
   const available = availableOf(item);
   const digits = String(Math.max(1, available)).length;
-  const value = clampQty(Number.parseInt(text, 10), available);
+  const value = quantityFromField(text, available);
+  const save = () => (value === null ? onClose() : onSave(value));
   return (
     <StorefrontSheet
       visible
       title={STOREFRONT_QUANTITY_TITLE_COPY}
       onClose={onClose}
-      footer={
-        <SmallAction label={STOREFRONT_QUANTITY_SAVE_COPY} variant="primary" onPress={() => onSave(value)} />
-      }
+      footer={<SmallAction label={STOREFRONT_QUANTITY_SAVE_COPY} variant="primary" onPress={save} />}
     >
       <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
         {item.name}
@@ -118,7 +117,7 @@ export function QuantitySheet({
         returnKeyType="done"
         autoFocus
         selectTextOnFocus
-        onSubmitEditing={() => onSave(value)}
+        onSubmitEditing={save}
         accessibilityLabel={`${STOREFRONT_QUANTITY_TITLE_COPY}: ${item.name}`}
         accessibilityHint={storefrontQuantityHintCopy(available)}
         maxFontSizeMultiplier={PICK_QTY_MAX_FONT_SIZE_MULTIPLIER}

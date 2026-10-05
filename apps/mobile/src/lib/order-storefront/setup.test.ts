@@ -11,6 +11,7 @@ import {
   initialShipFrom,
   matchRequesters,
   photosNeedRefresh,
+  quantityFromField,
   requesterRowValue,
   siteAddressLines,
   siteLabel,
@@ -128,5 +129,21 @@ describe('freshness (never on a timer)', () => {
     expect(clockLabel(d.getTime())).toBe('9:41 AM');
     expect(clockLabel(new Date(2026, 9, 4, 0, 5).getTime())).toBe('12:05 AM');
     expect(clockLabel(new Date(2026, 9, 4, 13, 0).getTime())).toBe('1:00 PM');
+  });
+});
+
+// PO-4 review: the quantity sheet opens with its text selected, so one
+// backspace and Set quantity sent 0 and removed the line ("Removed X from
+// your cart."). The web's quantity field keeps the quantity for a blank one
+// (storefront-cards.tsx QtyField).
+describe('the quantity sheet’s field (PO-4 review)', () => {
+  it('blank keeps the quantity (nothing to set)', () => {
+    expect(quantityFromField('', 10)).toBeNull();
+  });
+  it('0 removes the line; a number is clamped to what is available', () => {
+    expect(quantityFromField('0', 10)).toBe(0);
+    expect(quantityFromField('7', 10)).toBe(7);
+    expect(quantityFromField('007', 10)).toBe(7);
+    expect(quantityFromField('99', 10)).toBe(10);
   });
 });

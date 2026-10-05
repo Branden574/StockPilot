@@ -803,3 +803,16 @@ describe('VoiceOver hears what changed, on the screen in view, once (PO-4 review
     expect(fn).toContain('accessibilityLabel={counter ? checkoutNotesCounterSpokenCopy(Array.from(text).length, ORDER_NOTES_MAX) : undefined}');
   });
 });
+
+// PO-4 review: a blank quantity field removed the line. Mutation caught: the
+// sheet back on clampQty(parseInt(text)), which reads blank as 0.
+describe('a blank quantity keeps the quantity (PO-4 review)', () => {
+  it('the sheet reads its field through the tested helper and closes on blank', () => {
+    const fn = sheets.slice(sheets.indexOf('export function QuantitySheet('), sheets.indexOf('export function QuickViewSheet('));
+    expect(fn).toContain('const value = quantityFromField(text, available);');
+    expect(fn).toContain('const save = () => (value === null ? onClose() : onSave(value));');
+    expect(fn).toContain('onSubmitEditing={save}');
+    expect(fn).toMatch(/label=\{STOREFRONT_QUANTITY_SAVE_COPY\} variant="primary" onPress=\{save\}/);
+    expect(fn).not.toContain('Number.parseInt(text');
+  });
+});

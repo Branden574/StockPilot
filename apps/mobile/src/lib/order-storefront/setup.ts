@@ -1,6 +1,7 @@
 import {
   ORDER_CATALOG_STALE_AFTER_SECONDS,
   STOREFRONT_MYSELF_COPY,
+  clampQty,
   type CharterAddress,
   type OrderCatalogAnswer,
   type OrderCatalogSite,
@@ -104,6 +105,15 @@ export function matchRequesters(
     const hay = `${p.name ?? ''} ${p.email}`.toLowerCase();
     return tokens.every((t) => hay.includes(t));
   });
+}
+
+/** The quantity sheet's field as a quantity to set: blank sets nothing (the
+ *  quantity is kept, as the web's field does; PO-4 review), 0 removes the
+ *  line, anything else is clamped to what is available. */
+export function quantityFromField(text: string, available: number): number | null {
+  const digits = text.replace(/[^0-9]/g, '');
+  if (digits === '') return null;
+  return clampQty(Number.parseInt(digits, 10), available);
 }
 
 /** Who the order is for, as the For row shows it. */
