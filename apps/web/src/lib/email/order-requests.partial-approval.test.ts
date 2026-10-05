@@ -92,7 +92,7 @@ function wire(holds: { data: unknown; error: { message: string } | null }): Supa
 async function send(kind: OrderRequestEmailKind = 'approved'): Promise<SendEmailArgs> {
   await sendOrderRequestEmail({
     kind,
-    request: makeRow(kind === 'approved' ? {} : { status: kind }),
+    request: makeRow(kind === 'in_transit' ? { status: 'in_transit' } : {}),
     recipientEmail: EMAIL,
     recipientName: 'Jane Teacher',
     appUrl: 'https://app.test',
