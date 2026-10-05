@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 import { AvatarUploader } from '@/components/settings/avatar-uploader';
 import { DeleteAccountButton } from '@/components/settings/delete-account-button';
+import { DELETE_ACCOUNT_CARD_COPY } from '@/components/settings/delete-account-copy';
 import { EmailSettingsCard } from '@/components/settings/email-settings-card';
 import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -115,12 +116,7 @@ export default async function ProfileSettingsPage({
         <Card className="border-destructive/40">
           <CardHeader>
             <CardTitle className="text-base text-destructive">Delete account</CardTitle>
-            <CardDescription>
-              Permanently delete your account and your access to StockPilot.
-              Orders you placed stay with your organization, with “Deleted
-              user” as the requester. If you own a workspace with other
-              members, transfer ownership first.
-            </CardDescription>
+            <CardDescription>{DELETE_ACCOUNT_CARD_COPY}</CardDescription>
           </CardHeader>
           <CardContent>
             <DeleteAccountButton />

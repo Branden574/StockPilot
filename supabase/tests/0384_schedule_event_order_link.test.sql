@@ -485,11 +485,15 @@ select is(
   (select coalesce(string_agg(a.attname || ':' || p, ',' order by a.attname, p), '')
      from pg_attribute a cross join unnest(array['INSERT', 'UPDATE']) p
     where a.attrelid = 'public.schedule_events'::regclass and a.attnum > 0 and not a.attisdropped
-      and a.attname not in ('order_request_id', 'assigned_user_id')
+      -- Re-pinned by 0393 (was the two server-owned columns): deleted_users
+      -- is server-owned too (stamped only by zzz_deleted_users when an
+      -- account deletion nulls a person column); authenticated may only
+      -- read it (0393 suite K8).
+      and a.attname not in ('order_request_id', 'assigned_user_id', 'deleted_users')
       and not (p = 'UPDATE' and a.attname in ('id', 'created_at'))
       and not has_column_privilege('authenticated', 'public.schedule_events', a.attname, p)),
   '',
-  'G1: authenticated may INSERT every schedule_events column but the two server-owned ones, and UPDATE every column but those two, id and created_at (a NEW column must be granted here or added to a list)');
+  'G1: authenticated may INSERT every schedule_events column but the three server-owned ones (0393 added deleted_users), and UPDATE every column but those three, id and created_at (a NEW column must be granted here or added to a list)');
 select is(
   (select string_agg(c || ':' || p || '=' || has_column_privilege('authenticated', 'public.schedule_events', c, p)::text, ',' order by c, p)
      from unnest(array['assigned_user_id', 'created_at', 'id', 'order_request_id']) c, unnest(array['INSERT', 'UPDATE']) p),

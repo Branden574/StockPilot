@@ -69,7 +69,8 @@
 --         MERGE); every SECURITY DEFINER updater is pinned by
 --         schema-qualified name and owner (15, all public, all owned by
 --         postgres; 16 since 0389 added generate_order_packing_slips, 18
---         since 0390 added assign_order_delivery and mark_order_in_transit),
+--         since 0390 added assign_order_delivery and mark_order_in_transit,
+--         19 since 0393 added the account trigger tg_auth_users_before_delete),
 --         and so is every SECURITY DEFINER function that inserts,
 --         merges or deletes order rows (AL9d: today only the expired
 --         confirmation cleanup), whether or not an API role holds EXECUTE: a
@@ -754,14 +755,23 @@ select is(
   'public.complete_picking:postgres,public.confirm_order_signature:postgres,public.confirm_physical_signature:postgres,'
   'public.confirm_public_order_request:postgres,public.generate_order_packing_slips:postgres,'
   'public.mark_order_in_transit:postgres,public.partial_pick_line:postgres,public.release_picking:postgres,'
-  'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres',
+  'public.reopen_picking:postgres,public.resume_fulfillment:postgres,public.revise_order_needed_by:postgres,'
+  'public.tg_auth_users_before_delete:postgres',
+  -- Re-pinned by 0393 (was 0390's 18, without tg_auth_users_before_delete):
+  -- the account trigger releases a deleted person's open picks and
+  -- deliveries (assigned_picker_id and picking_claimed_*,
+  -- assigned_delivery_*) before the cascade, as the account-deletion path
+  -- itself, reviewed for its own gate (it fires only inside a delete from
+  -- auth.users, which only GoTrue, account_deletion_check and the dashboard
+  -- run; 0393 suite D5, L12). It assigns no approval column (AL9a) and is
+  -- DEFINER (AL9b).
   -- Re-pinned by 0389 (was the 15 without generate_order_packing_slips):
   -- the packing-slip mint moved off the user client into a DEFINER body that
   -- gates in itself (signed in, member, orders module, orders:approve,
   -- warehouse write) and writes only picking_complete/packing_slip_generated
   -- -> packing_slip_generated, an edge the guard allows API roles anyway;
   -- 0389_order_secrets_expand.test.sql G1-G8 prove its gates.
-  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 18 (0389 added the packing-slip mint; 0390 added the delivery assignment and the in-transit mark), owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
+  'AL9c: the SECURITY DEFINER writers of order_requests, in every schema and whoever may EXECUTE them, are exactly these 19 (0389 added the packing-slip mint; 0390 added the delivery assignment and the in-transit mark; 0393 the account trigger''s release), owned by postgres (each bypasses the guard by design, and a trigger function needs no EXECUTE to fire: a new one fails here and is reviewed for its own gate)');
 select is(
   (select coalesce(string_agg(f.fn || ':' || f.owner, ',' order by f.fn collate "C"), '')
      from fn_scope f

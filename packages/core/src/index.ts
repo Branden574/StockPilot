@@ -73,6 +73,7 @@ export * from './orders/storefront/phone-copy';
 export * from './orders/delivery-request-recipients';
 export * from './orders/delivery-request';
 export * from './orders/delivery-request-input';
+export * from './people/deleted-user';
 export * from './orders/requester-identity';
 export * from './orders/order-returns-view';
 export * from './orders/readiness';

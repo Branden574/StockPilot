@@ -60,8 +60,16 @@ select ok(_is_validated('inventory_items', 'inventory_items_reorder_quantity_non
 --
 -- Pinned so a later cleanup pass cannot silently validate it -- doing so would
 -- fail the deploy on those five rows.
-select ok(NOT _is_validated('order_requests', 'order_requests_delivery_target_chk'),
-  'order_requests_delivery_target_chk is STILL not valid, by owner decision 2026-08-11: the 5 legacy charter-less delivery orders are left as-is, and the constraint keeps guarding new writes');
+--
+-- Re-pinned by 0393 (was NOT validated): a NOT VALID CHECK is re-checked on
+-- every update of a row, an account deletion's ON DELETE SET NULL included,
+-- so the five rows refused the deletion of their requester and approver
+-- (A3, F12). 0393 validates the constraint WITHOUT touching the rows (the
+-- owner's decision stands): they are exempt by primary key, only in their
+-- legacy shape, and every other row is held to the same rule as before
+-- (0393 suite K18 and F1-F5).
+select ok(_is_validated('order_requests', 'order_requests_delivery_target_chk'),
+  'order_requests_delivery_target_chk is validated since 0393, with the 5 legacy charter-less delivery orders (owner decision 2026-08-11: left as they are) exempt by primary key; it guards every other row exactly as before');
 
 -- INVERTED by 0327: the ordering this pin protected has now been honored.
 -- 0327 fixed both RPC writers FIRST (adjust_stock's explicit-location draw is

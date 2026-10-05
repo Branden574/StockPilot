@@ -551,8 +551,9 @@ PGTAP_TESTS=(
   # only their own rows, and an insert is accepted only while
   # stockpilot.order_submit holds this transaction's id, raised inline by the
   # two writers alone (census); 'on' or another transaction's id opens
-  # nothing. On-behalf ordering follows orders:approve (slice D). No foreign
-  # key on user_id (account deletion with submissions succeeds). The shape
+  # nothing. On-behalf ordering follows orders:approve (slice D). The
+  # placer's rows go with their account (0393: a CASCADE key on user_id;
+  # account deletion with submissions succeeds). The shape
   # rules are generated from core's parity fixture (pre-check 3). The
   # two-session proofs are scripts/db-concurrency/0391_place_order_races.sh.
   supabase/tests/0391_place_order_request.test.sql
@@ -623,6 +624,37 @@ PGTAP_TESTS=(
   # two-session proofs are scripts/db-concurrency/0392_secrets_contract_race.sh;
   # the lock footprint is scripts/db-concurrency/0392_migration_lock_footprint.sh.
   supabase/tests/0392_order_secrets_contract.test.sql
+  # Every member can delete their own account (0393, security slice A3): no
+  # key to a person refuses a deletion (the RESTRICT and NO ACTION business
+  # keys and the invites cascade are SET NULL; nine NOT NULL person columns
+  # sit behind an exactly-one CHECK), and the person-key census is pinned.
+  # deleted_users on the 16 narrow-scope tables is stamped only when a
+  # non-API role nulls a person column whose account is gone: an API role
+  # never sets, clears or changes a stamp, a live person nulled by
+  # service_role or postgres is never stamped, a profile-only delete fails
+  # closed. The account trigger (DEFINER, before any cascade) locks the
+  # owner rows of every organization the person belongs to and their own
+  # rows, re-reading until every owner row is locked, refuses
+  # the only owner of an organization with other members (P0001
+  # organization_last_owner; impersonation seats are neither owners nor
+  # members), then releases open counts, picks, deliveries, schedule
+  # entries, maintenance owners, escalation claims and warehouse managers,
+  # expires pending invites and drops the person from the notification
+  # audience. The schedule writer lets a deleted creator's null stand (no
+  # dangling key anywhere afterwards). transfer_org_ownership locks both
+  # rows and checks both updates. The membership guard lets an API caller
+  # change only role, is_delivery_driver and all_warehouses on a membership
+  # and never insert an "Act as" seat (review: admins could rewrite the
+  # owner's row). The F12 delivery-target check is validated with the five
+  # legacy orders exempt by primary key in their legacy shape. The
+  # two-session proofs (release against assign, last owner against a joining
+  # member and against a transfer, two owners at once, a transfer racing two
+  # deletions, the dry run against a row lock, the person's own pick and
+  # count line) are scripts/db-concurrency/0393_account_delete_race.sh;
+  # the lock footprint is scripts/db-concurrency/0393_migration_lock_footprint.sh;
+  # the marker's write overhead on the log tables (ordinary writes never call
+  # it) is scripts/db-concurrency/0393_marker_write_overhead.sh.
+  supabase/tests/0393_account_deletion_for_everyone.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -890,8 +922,18 @@ WEB_TESTS=(
   # check failure. A deleteUser error is settled against GoTrue, so an
   # account that is gone is never reported as kept. The platform cleanup
   # counts kept and failed accounts apart instead of claiming them deleted.
+  # Every member (0393): the only owner of an organization that has other
+  # members is refused before anything changes (the trigger's own predicate:
+  # impersonation seats and pending members do not count; a failed read fails
+  # closed), and the check's P0001 organization_last_owner is read before the
+  # class-23 rule; a platform admin's verified email on the allowlist is
+  # refused (O-A3-7); avatar files go only after the delete; the deletion's
+  # audit row is stamped "Deleted user". A requester who deleted their account
+  # is never emailed again (status emails, the signature receipt and notices,
+  # the return prompt), not even at the address the order kept.
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
+  src/server/services/order-requests.deleted-requester-email.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before

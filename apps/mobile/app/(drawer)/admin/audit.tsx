@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -20,6 +21,8 @@ interface AuditRow {
   user_agent: string | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0393: user_id null and stamped). */
+  actor_deleted: boolean;
 }
 
 export default function AuditLogAdmin() {
@@ -45,7 +48,7 @@ export default function AuditLogAdmin() {
     const { data } = await supabase
       .from('audit_logs')
       .select(
-        `id, event, metadata, ip, user_agent, created_at,
+        `id, event, metadata, ip, user_agent, created_at, user_id, deleted_users,
          actor:user_profiles!user_id (full_name, email)`,
       )
       .eq('organization_id', orgId)
@@ -63,6 +66,7 @@ export default function AuditLogAdmin() {
           user_agent: (r.user_agent as string | null) ?? null,
           created_at: r.created_at as string,
           actor: Array.isArray(a) ? a[0] ?? null : a,
+          actor_deleted: isRowPersonDeleted(r),
         };
       }),
     );
@@ -117,7 +121,7 @@ export default function AuditLogAdmin() {
 
 function AuditCard({ row }: { row: AuditRow }) {
   const { c } = useTheme();
-  const actor = row.actor?.full_name ?? row.actor?.email ?? 'system';
+  const actor = actorText(row.actor, row.actor_deleted);
   const when = new Date(row.created_at);
   return (
     <Card padding={12}>

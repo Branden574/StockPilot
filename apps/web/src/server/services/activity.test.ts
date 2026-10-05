@@ -110,6 +110,39 @@ describe('ActivityService.forItem', () => {
     expect(events.map((e) => e.id)).toEqual(['m:m-new', 'a:a1', 'm:m-old']);
   });
 
+  // 0393: a movement or audit row whose actor deleted their account names no
+  // user and carries a deleted_users stamp: "Deleted user", not "System".
+  it('names a deleted actor "Deleted user" on movements and audit rows, and keeps "System" for unstamped rows', async () => {
+    const stamp = { user_id: '2026-11-04T00:00:00+00:00' };
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          { id: 'm-del', movement_type: 'adjust', quantity_change: 1, new_quantity: 2, reason: null, notes: null,
+            created_at: '2026-03-02T00:00:00.000Z', user_id: null, deleted_users: stamp },
+          { id: 'm-sys', movement_type: 'adjust', quantity_change: 1, new_quantity: 3, reason: null, notes: null,
+            created_at: '2026-03-01T00:00:00.000Z', user_id: null, deleted_users: null },
+        ],
+        error: null,
+      },
+      'audit_logs.select': {
+        data: [
+          { id: 'a-del', event: 'item.updated', metadata: {}, created_at: '2026-03-03T00:00:00.000Z', user_id: null, deleted_users: stamp },
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events.map((e) => [e.id, e.actor])).toEqual([
+      ['a:a-del', 'Deleted user'],
+      ['m:m-del', 'Deleted user'],
+      ['m:m-sys', 'System'],
+    ]);
+    expect(String(stub.chainArgs.get('stock_movements.select')?.[0]?.[0] ?? '')).toContain('deleted_users');
+    expect(String(stub.chainArgs.get('audit_logs.select')?.[0]?.[0] ?? '')).toContain('deleted_users');
+  });
+
   // Pre-0306 pick rows stringified the ORDER'S UUID into the reason, so the
   // item feed read "Order pick (order_request b3c7390a-…)" while the item
   // history dialog showed a bare "Order pick" for the SAME event. Both now

@@ -135,6 +135,31 @@ describe('listPlatformAudit', () => {
     });
   });
 
+  // 0393: an admin or a target who deleted their account leaves the id null
+  // and a deleted_users stamp; actor_email is kept, so the row still names
+  // who acted.
+  it('flags a deleted actor and a deleted target from the stamps, keeping the actor email', async () => {
+    selectResult.set('platform_admin_audit', {
+      data: [
+        row({
+          id: 'd1',
+          actor_user_id: null,
+          target_user_id: null,
+          deleted_users: { actor_user_id: '2026-11-04T00:00:00+00:00', target_user_id: '2026-11-04T00:00:00+00:00' },
+        }),
+        row({ id: 'd2', actor_user_id: ACTOR, target_user_id: null, deleted_users: null }),
+      ],
+      error: null,
+    });
+
+    const rows = await listPlatformAudit();
+
+    expect(rows.map((r) => [r.id, r.actorDeleted, r.targetDeleted, r.actorEmail])).toEqual([
+      ['d1', true, true, 'god@stockpilotusa.com'],
+      ['d2', false, false, 'god@stockpilotusa.com'],
+    ]);
+  });
+
   it('resolves every distinct target in ONE batched lookup, not one per row', async () => {
     selectResult.set('platform_admin_audit', {
       data: [

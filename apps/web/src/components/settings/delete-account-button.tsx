@@ -4,9 +4,36 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DELETE_ACCOUNT_DIALOG_COPY } from '@/components/settings/delete-account-copy';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { deleteOwnAccountAction } from '@/server/actions/profile';
+
+/**
+ * How long the last-owner refusal stays up (A3 review): it is an instruction
+ * to follow (transfer ownership on the Team page), and the default 4 s toast
+ * vanished while the dialog stayed open.
+ */
+export const LAST_OWNER_TOAST_MS = 15_000;
+
+/**
+ * Show a refused deletion. The last-owner refusal stays up longer and links to
+ * the Team page; every other refusal is a plain toast, as before.
+ */
+export function showDeleteAccountError(
+  error: { message: string; details?: unknown },
+  openTeam: () => void,
+): void {
+  const reason = (error.details as { reason?: unknown } | undefined)?.reason;
+  if (reason === 'last_owner') {
+    toast.error(error.message, {
+      duration: LAST_OWNER_TOAST_MS,
+      action: { label: 'Open the Team page', onClick: openTeam },
+    });
+    return;
+  }
+  toast.error(error.message);
+}
 
 /**
  * Button + critical-confirm dialog that lets a user delete their own
@@ -14,8 +41,9 @@ import { deleteOwnAccountAction } from '@/server/actions/profile';
  * confirm button enables. On success we navigate to /signin so the
  * dashboard layout doesn't briefly render with a now-deleted session.
  *
- * The owner-of-a-shared-org guard runs server-side in
- * `deleteOwnAccountAction`; we surface its error via toast.
+ * The last-owner and platform-admin refusals run server-side in
+ * `deleteOwnAccountAction` (migration 0393); we surface their sentence via
+ * toast (showDeleteAccountError).
  */
 export function DeleteAccountButton() {
   const router = useRouter();
@@ -27,7 +55,10 @@ export function DeleteAccountButton() {
     const res = await deleteOwnAccountAction({ confirm: 'DELETE' });
     setPending(false);
     if (!res.ok) {
-      toast.error(res.error.message);
+      showDeleteAccountError(res.error, () => {
+        setOpen(false);
+        router.push('/dashboard/team');
+      });
       return;
     }
     setOpen(false);
@@ -52,17 +83,9 @@ export function DeleteAccountButton() {
         description={
           <div className="space-y-2">
             <p>
-              This deletes your account and removes your access immediately.
-              Orders you placed stay with your organization, with “Deleted
-              user” as the requester. If your account is linked to records
-              your organization must keep, such as received stock, you will
-              be told and nothing will change.
+              {DELETE_ACCOUNT_DIALOG_COPY.kept} {DELETE_ACCOUNT_DIALOG_COPY.released}
             </p>
-            <p>
-              If you own a workspace with other members, transfer ownership
-              first — you can&apos;t delete an account that still owns an
-              active org.
-            </p>
+            <p>{DELETE_ACCOUNT_DIALOG_COPY.owner}</p>
           </div>
         }
         confirmLabel="Delete account"

@@ -218,6 +218,25 @@ describe('maybeSendReturnPrompt', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  // A3: a requester who deleted their account (0388 requester_deleted_at) is
+  // never emailed again, even though the order keeps their address (O-A3-6);
+  // the marker is not burned, and nothing about the person is read.
+  it('skips a requester who deleted their account, with the address still on the order', async () => {
+    const stub = makeStub({
+      'order_requests.select': {
+        data: [{ ...COMPLETED_ORDER, requester_user_id: null, requester_deleted_at: '2026-10-04T12:00:00.000Z' }],
+        error: null,
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: false, reason: 'requester_deleted' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chainArgsAll.get('order_requests.update') ?? []).toHaveLength(0);
+    // The order's select asks for the marker.
+    const selected = String(stub.chainArgsAll.get('order_requests.select')?.[0]?.[0]?.[0] ?? '');
+    expect(selected).toContain('requester_deleted_at');
+  });
+
   it('email-less order still MINTS a token (dashboard link) — no email, marker untouched', async () => {
     // Staff-created internal orders have requester_email NULL by construction,
     // but their requester is still entitled to the "Request a return" link on

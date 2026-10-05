@@ -1013,14 +1013,20 @@ select is(
                 from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :delDrv, :gDelA)),
   'ok:1:in_transit/null/null/null/null/null/null/true/true',
   'G21: deleting the profile of an approver who approved, made the pick slip, the packing slip and the staging, assigned the driver and marked in transit, with the DELETING session authenticated (a probe policy lets it delete), still succeeds: approved_by and the five stamp columns are nulled by the FK action (run as the table owner, not the caller) and nothing else on the order changes');
+-- Re-pinned by 0393 (was: only assigned_delivery_user_id nulled, the
+-- assigner and the assignment time kept): 0393's account trigger releases the
+-- deleted driver's open deliveries before the cascade (A3 6.1, as the
+-- account-deletion path itself, never through assign_order_delivery), so the
+-- order reads unassigned: driver, assigned-at and assigned-by are null.
 select is(
   pg_temp.call_as('postgres', null, format('delete from auth.users where id = %L returning id::text', :delDrv),
-    format($q$select o.status || '/' || coalesce(o.assigned_delivery_user_id::text, 'null') || '/' || (o.assigned_delivery_by = %L)::text || '/'
-                     || ((to_jsonb(o) - array['assigned_delivery_user_id', 'updated_at'])
-                         = (b.whole - array['assigned_delivery_user_id', 'updated_at']))::text
-                from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :delApr, :gDelA)),
-  :delDrv || '|in_transit/null/true/true',
-  'G22: deleting the assigned driver''s account succeeds through the restated guard: the in-transit order loses only its driver, everything else (the assigner, the stamps, the token) unchanged');
+    format($q$select o.status || '/' || coalesce(o.assigned_delivery_user_id::text, 'null') || '/'
+                     || coalesce(o.assigned_delivery_by::text, 'null') || '/' || coalesce(o.assigned_delivery_at::text, 'null') || '/'
+                     || ((to_jsonb(o) - array['assigned_delivery_user_id', 'assigned_delivery_by', 'assigned_delivery_at', 'updated_at'])
+                         = (b.whole - array['assigned_delivery_user_id', 'assigned_delivery_by', 'assigned_delivery_at', 'updated_at']))::text
+                from public.order_requests o join del_before b on b.id = o.id where o.id = %L$q$, :gDelA)),
+  :delDrv || '|in_transit/null/null/null/true',
+  'G22: deleting the assigned driver''s account succeeds through the restated guard: since 0393 the in-transit order is released (driver, assigned-by and assigned-at null: unassigned), everything else (the stamps, the token, the status) unchanged');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(

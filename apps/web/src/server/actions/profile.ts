@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { getVerifiedEmail, isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
@@ -14,6 +15,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY,
+  ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RATE_LIMIT,
   ACCOUNT_DELETE_RATE_WINDOW_MS,
   ACCOUNT_DELETE_RETRY_COPY,
@@ -21,7 +25,14 @@ import {
   accountDeleteRateKey,
   auditAccountDeleted,
   checkAccountDeletable,
+  type CreatedStillActive,
+  lastOwnerCopy,
+  lateLastOwnerRefusal,
+  readDeletionReviewFacts,
+  removeAvatarObjects,
+  reportDeletionReviewFacts,
   settleFailedDelete,
+  soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
@@ -478,19 +489,28 @@ const deleteAccountSchema = z.object({
 });
 
 /**
- * Self-service account deletion. Asks the database whether the account can
- * go (`account_deletion_check`, migration 0388: a dry run of the real delete,
- * always undone), then deletes the auth user through the admin client, which
- * cascades to the profile and the memberships; orders the person placed are
- * kept with "Deleted user" as the requester. The `user.deactivated` audit row
- * is written only after the delete succeeded. Nothing is written when the
- * account cannot go: no tombstone, no audit row.
+ * Self-service account deletion, for every member (migration 0393). Asks the
+ * database whether the account can go (`account_deletion_check`, 0388: a dry
+ * run of the real delete, always undone), then deletes the auth user through
+ * the admin client: the profile and memberships cascade, every record the
+ * person made stays and reads "Deleted user", and work assigned to them is
+ * released (the 0393 account trigger). The `user.deactivated` audit row is
+ * written only after the delete succeeded (with the counts of the API keys,
+ * webhooks and links the person created that keep working, O-A3-5), and the
+ * person's avatar files are removed. A solo owner's organization with a Stripe
+ * subscription is reported to the platform admin (O-A3-2). Nothing is written
+ * when the account cannot go; a refusal that arrives only at the delete itself
+ * (a member joined after the check, F-5) keeps the sessions.
  *
- * Owners of an org with other accepted members cannot delete their
- * own account — they must first transfer ownership (handled separately
- * by `team` actions). The check runs against every org membership the
- * user has, so an owner of org A who's a staff member of org B can
- * only delete after either transferring A or leaving B.
+ * Refused, in order, before anything changes:
+ *  - a StockPilot platform admin while their VERIFIED auth email is on the
+ *    allowlist (O-A3-7; never the editable profile email);
+ *  - the only owner of an organization that has other members, named
+ *    (soleOwnedOrganizationsWithMembers: impersonation seats and pending
+ *    members do not count, a second owner lets them go). The account trigger
+ *    refuses the same and is the backstop (check kind last_owner).
+ * An owner of org A who is a staff member of org B is refused for A only;
+ * after transferring A their membership in B goes with the account.
  */
 export async function deleteOwnAccountAction(input: {
   confirm: string;
@@ -506,40 +526,40 @@ export async function deleteOwnAccountAction(input: {
     await gateMfaForSelfService();
     const supabase = await createClient();
 
-    // Find every org this user owns. If any of them have another
-    // accepted member, refuse the delete — the owner must transfer
-    // ownership or remove the other members first.
-    //
-    // Both reads bind their errors. Read as data, a failed read was "owns
-    // nothing" or "no other members", and the account was deleted out from
-    // under an org that still has people in it: the check this exists for
-    // failed open.
-    const { data: ownedRows, error: ownedErr } = await supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', session.userId)
-      .eq('role', 'owner')
-      .not('accepted_at', 'is', null);
-    if (ownedErr) throw new ServiceError('internal_error', ownedErr.message);
-    const ownedOrgIds = ((ownedRows as { organization_id: string }[] | null) ?? []).map(
-      (r) => r.organization_id,
-    );
-    if (ownedOrgIds.length > 0) {
-      const { data: otherMembers, error: othersErr } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        // in-list-bound: the orgs this one user owns (a handful)
-        .in('organization_id', ownedOrgIds)
-        .neq('user_id', session.userId)
-        .not('accepted_at', 'is', null)
-        .limit(1);
-      if (othersErr) throw new ServiceError('internal_error', othersErr.message);
-      if ((otherMembers ?? []).length > 0) {
-        return err(
-          'forbidden',
-          'Transfer ownership of your organization (or remove the other members) before deleting your account.',
-        );
-      }
+    // O-A3-7: a platform admin's account is not deleted while its email is on
+    // the allowlist (a re-registration would inherit god-mode, and the
+    // operator account would be lost by accident). The VERIFIED auth email,
+    // never the profile column the person can edit. An email that cannot be
+    // read fails closed: nothing changes, try again.
+    const verifiedEmail = await getVerifiedEmail();
+    if (!verifiedEmail) return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
+    if (isPlatformAdmin(verifiedEmail)) {
+      return err('forbidden', ACCOUNT_DELETE_PLATFORM_ADMIN_COPY, { reason: 'platform_admin' });
+    }
+
+    // The last-owner rule (0393), the account trigger's own predicate read
+    // with the user's client so it can name the organizations. Fails CLOSED:
+    // a failed read was once "owns nothing" and an account was deleted out
+    // from under an org that still had people in it.
+    const sole = await soleOwnedOrganizationsWithMembers(supabase, session.userId);
+    if (!sole.ok) {
+      // A3 review: the raw PostgREST message used to reach the toast and
+      // nothing was reported. Same sentence and report as the phone route.
+      void reportError(new Error(sole.message), {
+        tag: 'account.delete.owner_check',
+        extra: { source: 'web' },
+      });
+      return err('internal_error', ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY);
+    }
+    if (sole.organizations.length > 0) {
+      return err(
+        'conflict',
+        lastOwnerCopy(
+          sole.organizations.map((o) => o.name),
+          'web',
+        ),
+        { reason: 'last_owner' },
+      );
     }
 
     // Each attempt runs a full dry-run cascade (row locks on every row that
@@ -565,7 +585,13 @@ export async function deleteOwnAccountAction(input: {
     const check = await checkAccountDeletable(admin, session.userId, 'web');
     // Whether THIS request deleted the account (and so writes the audit row).
     let deletedHere = false;
+    let createdStillActive: CreatedStillActive | null = null;
     if (!check.ok) {
+      // A member joined between the read above and the check (the trigger is
+      // the backstop): the generic last-owner sentence.
+      if (check.kind === 'last_owner') {
+        return err('conflict', ACCOUNT_DELETE_LAST_OWNER_COPY, { reason: 'last_owner' });
+      }
       if (check.kind === 'blocked') {
         return err('conflict', ACCOUNT_DELETE_BLOCKED_COPY, { reason: 'account_linked_records' });
       }
@@ -578,6 +604,11 @@ export async function deleteOwnAccountAction(input: {
       // so and end this browser's session below; the request that deleted it
       // wrote the audit row (review R7).
     } else {
+      // What the deletion leaves for others to review, read now: the delete
+      // nulls created_by and cascades the memberships (O-A3-5 counts for the
+      // audit row, O-A3-2 subscriptions for the platform admin). Reads only;
+      // a failure is reported and never holds the deletion up.
+      const review = await readDeletionReviewFacts(admin, session.userId, auditOrganizationId, 'web');
       // Now delete the auth user. Profile + membership rows cascade via the
       // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
       // orders are kept (0388).
@@ -587,6 +618,12 @@ export async function deleteOwnAccountAction(input: {
       // (404 user_not_found). Ask GoTrue again before telling the person it
       // failed (review R7).
       const settled = authErr ? await settleFailedDelete(admin, session.userId, authErr) : 'deleted';
+      // Desk check F-5: the account trigger refused inside GoTrue because a
+      // member joined after the check. Nothing was deleted, so the person
+      // stays signed in and is told to transfer ownership (no SP-008).
+      if (authErr && settled === 'not_deleted' && (await lateLastOwnerRefusal(admin, session.userId, 'web'))) {
+        return err('conflict', ACCOUNT_DELETE_LAST_OWNER_COPY, { reason: 'last_owner' });
+      }
       if (authErr && settled === 'not_deleted') {
         // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
         //
@@ -639,16 +676,25 @@ export async function deleteOwnAccountAction(input: {
         });
       }
       deletedHere = settled === 'deleted';
+      if (deletedHere) {
+        // O-A3-2: a subscription nothing cancels is the platform admin's to
+        // review; O-A3-5: the counts go in the audit row below.
+        reportDeletionReviewFacts(review, 'web');
+        createdStillActive = review.createdStillActive;
+      }
     }
 
-    // The account is gone: now the audit row (user_id null, the profile no
-    // longer exists; the entity id keeps who it was), written by the request
-    // that deleted it.
+    // The account is gone: its avatar files (O-A3-9, best-effort), then the
+    // audit row (user_id null, the profile no longer exists; the entity id
+    // keeps who it was; stamped "Deleted user"; O-A3-5 counts), written by the
+    // request that deleted it.
     if (deletedHere) {
+      await removeAvatarObjects(admin, session.userId);
       await auditAccountDeleted({
         userId: session.userId,
         organizationId: auditOrganizationId,
         reason: 'self_deletion',
+        createdStillActive,
       });
     }
 

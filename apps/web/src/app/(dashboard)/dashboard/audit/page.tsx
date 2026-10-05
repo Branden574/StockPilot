@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/table';
 import { formatAuditEvent, formatEntityType, shortId } from '@/lib/audit/format';
 import { requireOrgContext } from '@/lib/auth/session';
+import { auditActorName } from '@/lib/people/deleted-person-labels';
 import { cn, formatRelative } from '@/lib/utils';
 import { AuditLogService } from '@/server/services/audit-log';
 import { ServiceError } from '@/server/services/context';
@@ -318,8 +319,7 @@ export default async function AuditLogPage({
                 const meta = row.metadata;
                 const entityType = (meta.entity_type as string | null | undefined) ?? null;
                 const entityId = (meta.entity_id as string | null | undefined) ?? null;
-                const actorName =
-                  row.actor?.fullName ?? row.actor?.email ?? (row.actor ? 'Unknown' : 'System');
+                const actorName = auditActorName(row);
                 // Precomputed (rather than letting <MetadataDiff> decide
                 // internally) so we know whether to render the extra diff
                 // row at all — an always-rendered empty row would leave

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isDeletedPerson } from '@stockpilot/core';
+
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
@@ -74,6 +76,9 @@ export async function recordPlatformAudit(input: RecordPlatformAuditInput): Prom
 export interface PlatformAuditRow {
   id: string;
   actorEmail: string;
+  /** The acting admin deleted their account (0393): actor_user_id is null and
+   *  stamped; actorEmail still names them. */
+  actorDeleted: boolean;
   action: PlatformAuditAction;
   targetOrganizationId: string | null;
   targetUserId: string | null;
@@ -87,6 +92,8 @@ export interface PlatformAuditRow {
    * legitimately change afterwards.
    */
   targetUserEmail: string | null;
+  /** The target deleted their account (0393): target_user_id null and stamped. */
+  targetDeleted: boolean;
   detail: Record<string, unknown>;
   createdAt: string;
 }
@@ -137,7 +144,9 @@ export async function listPlatformAudit(
   const admin = createAdminClient();
   let q = admin
     .from('platform_admin_audit')
-    .select('id, actor_email, action, target_organization_id, target_user_id, detail, created_at')
+    .select(
+      'id, actor_user_id, actor_email, action, target_organization_id, target_user_id, detail, created_at, deleted_users',
+    )
     .order('created_at', { ascending: false })
     .limit(Math.min(Math.max(opts.limit ?? 100, 1), 500));
   if (opts.organizationId) q = q.eq('target_organization_id', opts.organizationId);
@@ -160,10 +169,12 @@ export async function listPlatformAudit(
     return {
       id: r.id as string,
       actorEmail: r.actor_email as string,
+      actorDeleted: isDeletedPerson((r.actor_user_id as string | null) ?? null, r.deleted_users, 'actor_user_id'),
       action: r.action as PlatformAuditAction,
       targetOrganizationId: (r.target_organization_id as string | null) ?? null,
       targetUserId,
       targetUserEmail: targetUserId ? (emailById.get(targetUserId) ?? null) : null,
+      targetDeleted: isDeletedPerson(targetUserId, r.deleted_users, 'target_user_id'),
       detail: (r.detail as Record<string, unknown> | null) ?? {},
       createdAt: r.created_at as string,
     };

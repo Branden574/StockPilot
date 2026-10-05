@@ -33,6 +33,8 @@ import { reportError } from '@/lib/error-reporter';
  *   • at least one unit was actually fulfilled (a zero-fulfilled completion
  *     has nothing to return).
  * The EMAIL then additionally requires:
+ *   • a requester who has not deleted their account (A3: a deleted requester
+ *     is never emailed again, not even at the address the order kept);
  *   • a requester_email on file;
  *   • `return_prompt_sent_at` (0278) still NULL (marker = email sent; an
  *     email-less completion leaves it untouched, so if an email is added
@@ -65,6 +67,7 @@ export type ReturnPromptResult =
       reason:
         | 'order_not_found'
         | 'not_completed'
+        | 'requester_deleted'
         | 'no_requester_email'
         | 'already_sent'
         | 'suppressed'
@@ -93,7 +96,7 @@ export async function maybeSendReturnPrompt(
     const { data: row, error: rowErr } = await admin
       .from('order_requests')
       .select(
-        'id, organization_id, status, requester_email, requester_name, requester_user_id, order_number, return_prompt_sent_at',
+        'id, organization_id, status, requester_email, requester_name, requester_user_id, requester_deleted_at, order_number, return_prompt_sent_at',
       )
       .eq('id', orderId)
       .maybeSingle();
@@ -106,6 +109,7 @@ export async function maybeSendReturnPrompt(
       requester_email: string | null;
       requester_name: string | null;
       requester_user_id: string | null;
+      requester_deleted_at: string | null;
       order_number: number | null;
       return_prompt_sent_at: string | null;
     };
@@ -156,6 +160,7 @@ export async function maybeSendReturnPrompt(
 
     // ── Email-specific guards — from here down we decide only whether the
     // EMAIL sends; the token above is already minted either way. ──
+    if (order.requester_deleted_at) return { sent: false, reason: 'requester_deleted' };
     if (!order.requester_email) return { sent: false, reason: 'no_requester_email' };
     // Cheap pre-check; the guarded update below is the authoritative gate.
     if (order.return_prompt_sent_at) return { sent: false, reason: 'already_sent' };

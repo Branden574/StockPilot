@@ -68,8 +68,12 @@ async function resolveRequesterContact(
     requester_user_id: string | null;
     requester_name: string | null;
     requester_email: string | null;
+    requester_deleted_at?: string | null;
   },
 ): Promise<{ email: string | null; name: string | null }> {
+  // A requester who deleted their account is never emailed again (A3), not
+  // even at the address the order recorded (the copy is kept, O-A3-6).
+  if (order.requester_deleted_at) return { email: null, name: null };
   if (order.requester_email) {
     return { email: order.requester_email, name: order.requester_name ?? null };
   }
@@ -134,7 +138,7 @@ function rateLimited() {
 /** The order columns the route reads before the hand-over. */
 const ORDER_COLUMNS =
   'id, organization_id, warehouse_id, requester_user_id, requester_name, requester_email, ' +
-  'fulfillment_type, assigned_delivery_user_id';
+  'requester_deleted_at, fulfillment_type, assigned_delivery_user_id';
 
 interface SignOrderRow {
   id: string;
@@ -143,6 +147,8 @@ interface SignOrderRow {
   requester_user_id: string | null;
   requester_name: string | null;
   requester_email: string | null;
+  /** 0388: set when the requester's account was deleted (never emailed, A3). */
+  requester_deleted_at: string | null;
   fulfillment_type: 'pickup' | 'delivery';
   assigned_delivery_user_id: string | null;
 }
@@ -481,6 +487,16 @@ export async function POST(req: NextRequest) {
   // user_profiles row. Every requester-facing notice below uses THIS, never
   // the raw column — internal requesters have a NULL email column.
   const requester = await resolveRequesterContact(admin, order);
+  // A3: a requester who deleted their account is never emailed again. The
+  // phone pre-fills the signer email with the address the order kept (every
+  // installed bundle does), so a signer email equal to that kept address gets
+  // no signer receipt either: the server cannot tell an accepted default from
+  // a typed one, and the rule is "never".
+  const signerIsDeletedRequester =
+    Boolean(order.requester_deleted_at) &&
+    (order.requester_email ?? '').trim().toLowerCase() !== '' &&
+    parsed.data.signerEmail.trim().toLowerCase() ===
+      (order.requester_email ?? '').trim().toLowerCase();
 
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the
@@ -559,7 +575,7 @@ export async function POST(req: NextRequest) {
       // transactional receipt (matching the completed path's semantics).
       const signerIsRequester =
         parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
-      if (!signerIsRequester || requesterEmailOptedOut) {
+      if (!signerIsDeletedRequester && (!signerIsRequester || requesterEmailOptedOut)) {
         try {
           // es `partial-receipt` template: external-recipient receipt from
           // "<supplier> via StockPilot" — the signer may not be a StockPilot
@@ -622,7 +638,7 @@ export async function POST(req: NextRequest) {
           name: requester.name,
         });
       }
-      if (!recipients.has(parsed.data.signerEmail.toLowerCase())) {
+      if (!signerIsDeletedRequester && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
         recipients.set(parsed.data.signerEmail.toLowerCase(), {
           email: parsed.data.signerEmail,
           name: parsed.data.signerName,

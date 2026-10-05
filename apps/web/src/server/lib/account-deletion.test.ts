@@ -13,12 +13,22 @@ vi.mock('next/headers', () => ({
 
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
+  ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RETRY_COPY,
   ACCOUNT_DELETE_SIGNED_OUT_COPY,
   auditAccountDeleted,
   checkAccountDeletable,
+  lastOwnerCopy,
+  lateLastOwnerRefusal,
+  readDeletionReviewFacts,
+  removeAvatarObjects,
+  reportDeletionReviewFacts,
   settleFailedDelete,
+  soleOwnedOrganizationsWithMembers,
 } from './account-deletion';
+import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
  * The server's question before it deletes an account (migration 0388):
@@ -46,7 +56,10 @@ describe('checkAccountDeletable', () => {
     expect(reportErrorMock).not.toHaveBeenCalled();
   });
 
-  it('a kept record refuses: blocked, with the constraint and table (reported at info, names only)', async () => {
+  // Re-pinned by 0393 (was reported at info: "expected for linked
+  // records"): 0393 converted every refusing business key, so an integrity
+  // refusal now is a record the census missed, reported as a warning.
+  it('an integrity refusal is blocked, with the constraint and table (reported as a warning since 0393, names only)', async () => {
     const { admin } = adminAnswering({
       data: {
         deletable: false,
@@ -66,13 +79,52 @@ describe('checkAccountDeletable', () => {
     });
     expect(reportErrorMock).toHaveBeenCalledWith(expect.anything(), {
       tag: 'account.delete.blocked',
-      level: 'info',
+      level: 'warning',
       extra: {
         source: 'mobile',
         sqlstate: '23503',
         constraint: 'po_imports_uploaded_by_fkey',
         table: 'public.po_imports',
       },
+    });
+  });
+
+  // 0393: the account trigger's one refusal (P0001 is not class 23, so it
+  // must be read by its constraint before the class-23 rule).
+  it('the last-owner refusal (P0001, organization_last_owner) is last_owner, reported at info', async () => {
+    const { admin } = adminAnswering({
+      data: {
+        deletable: false,
+        reason: 'blocked',
+        sqlstate: 'P0001',
+        constraint: 'organization_last_owner',
+        table: 'public.organization_members',
+      },
+      error: null,
+    });
+    await expect(checkAccountDeletable(admin, 'u-1', 'web')).resolves.toEqual({
+      ok: false,
+      kind: 'last_owner',
+      sqlstate: 'P0001',
+      constraint: 'organization_last_owner',
+      table: 'public.organization_members',
+    });
+    expect(reportErrorMock).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'account.delete.last_owner',
+      level: 'info',
+      extra: { source: 'web', sqlstate: 'P0001' },
+    });
+  });
+
+  it('a P0001 from anything else is still a check failure (never last_owner, never blocked)', async () => {
+    const { admin } = adminAnswering({
+      data: { deletable: false, reason: 'blocked', sqlstate: 'P0001', constraint: null, table: null },
+      error: null,
+    });
+    await expect(checkAccountDeletable(admin, 'u-1', 'web')).resolves.toEqual({
+      ok: false,
+      kind: 'check_failed',
+      sqlstate: 'P0001',
     });
   });
 
@@ -281,7 +333,26 @@ describe('auditAccountDeleted', () => {
         after: null,
         reason: 'self_deletion',
       },
+      // 0393: the row's actor is the person who deleted their account.
+      deleted_users: { user_id: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) },
     });
+  });
+
+  it('O-A3-5: records the counts of what the person created that keeps working, when they were read', async () => {
+    await auditAccountDeleted({
+      userId: 'u-1',
+      organizationId: 'org-1',
+      reason: 'self_deletion',
+      createdStillActive: { apiKeys: 1, webhooks: 2, publicRequestLinks: 3, shareLinks: 4 },
+    });
+    expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          reason: 'self_deletion',
+          created_still_active: { api_keys: 1, webhooks: 2, public_request_links: 3, share_links: 4 },
+        }),
+      }),
+    );
   });
 
   it('a person with no organization (SP-129) is written with organization_id null', async () => {
@@ -292,16 +363,355 @@ describe('auditAccountDeleted', () => {
   });
 });
 
+describe("soleOwnedOrganizationsWithMembers (0393, the trigger's predicate, read with the user client)", () => {
+  const ownedRow = (organization_id: string) => ({ organization_id });
+
+  it('a member who owns nothing: no organization', async () => {
+    const stub = makeSupabaseStub({ 'organization_members.select': { data: [], error: null } });
+    await expect(soleOwnedOrganizationsWithMembers(stub.client, 'u-1')).resolves.toEqual({
+      ok: true,
+      organizations: [],
+    });
+  });
+
+  it('reads only accepted, real (non-impersonation) rows: the owner rows and the co-members', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        return n === 1
+          ? { data: [ownedRow('org-a')], error: null }
+          : { data: [{ organization_id: 'org-a', role: 'staff' }], error: null };
+      },
+      'organizations.select': { data: [{ id: 'org-a', name: 'Learn4Life' }], error: null },
+    });
+    await expect(soleOwnedOrganizationsWithMembers(stub.client, 'u-1')).resolves.toEqual({
+      ok: true,
+      organizations: [{ id: 'org-a', name: 'Learn4Life' }],
+    });
+    for (const chain of stub.chainsAll.get('organization_members.select') ?? []) {
+      expect(chain).toEqual(expect.arrayContaining(['not', 'is']));
+    }
+    const args = stub.chainArgsAll.get('organization_members.select') ?? [];
+    for (const a of args) {
+      expect(a).toEqual(expect.arrayContaining([['accepted_at', 'is', null], ['impersonation_expires_at', null]]));
+    }
+  });
+
+  it('a solo organization (no other accepted member) and one with a second owner do not block', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        return n === 1
+          ? { data: [ownedRow('org-solo'), ownedRow('org-two')], error: null }
+          : { data: [{ organization_id: 'org-two', role: 'owner' }, { organization_id: 'org-two', role: 'staff' }], error: null };
+      },
+    });
+    await expect(soleOwnedOrganizationsWithMembers(stub.client, 'u-1')).resolves.toEqual({
+      ok: true,
+      organizations: [],
+    });
+  });
+
+  it.each([[1], [2]])('fails closed when read %i fails', async (failAt) => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        return n === failAt
+          ? { data: null, error: { message: 'fetch failed' } }
+          : { data: [ownedRow('org-a')], error: null };
+      },
+    });
+    await expect(soleOwnedOrganizationsWithMembers(stub.client, 'u-1')).resolves.toEqual({
+      ok: false,
+      message: 'fetch failed',
+    });
+  });
+
+  it('still refuses, unnamed, when only the name read fails', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        return n === 1
+          ? { data: [ownedRow('org-a')], error: null }
+          : { data: [{ organization_id: 'org-a', role: 'viewer' }], error: null };
+      },
+      'organizations.select': { data: null, error: { message: 'boom' } },
+    });
+    await expect(soleOwnedOrganizationsWithMembers(stub.client, 'u-1')).resolves.toEqual({
+      ok: true,
+      organizations: [{ id: 'org-a', name: null }],
+    });
+  });
+});
+
+describe('lastOwnerCopy', () => {
+  it('names one organization, and points the phone to the web', () => {
+    expect(lastOwnerCopy(['Learn4Life'], 'web')).toBe(
+      // Re-pinned by the A3 review (was "Make another member the owner on the Team page"): the
+      // Team page's control is "Transfer ownership…", and removing the other members also works.
+      'You are the only owner of Learn4Life. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+    expect(lastOwnerCopy(['Learn4Life'], 'mobile')).toBe(
+      'You are the only owner of Learn4Life. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+  });
+
+  it('names several, "of each"', () => {
+    expect(lastOwnerCopy(['A', 'B'], 'mobile')).toBe(
+      'You are the only owner of A and B. For each, on the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+    expect(lastOwnerCopy(['A', 'B', 'C'], 'web')).toContain('the only owner of A, B and C.');
+  });
+
+  it('falls back to the generic sentence when a name is missing', () => {
+    expect(lastOwnerCopy([null], 'web')).toBe(ACCOUNT_DELETE_LAST_OWNER_COPY);
+    expect(lastOwnerCopy(['A', null], 'mobile')).toBe(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE);
+  });
+});
+
+describe('removeAvatarObjects (O-A3-9)', () => {
+  function storageStub(pages: Array<{ name: string }[]>, opts: { listError?: boolean; removeError?: boolean } = {}) {
+    const list = vi.fn(async () =>
+      opts.listError ? { data: null, error: { message: 'list failed' } } : { data: pages.shift() ?? [], error: null },
+    );
+    const remove = vi.fn(async (_paths: string[]) =>
+      opts.removeError ? { data: null, error: { message: 'remove failed' } } : { data: [], error: null },
+    );
+    const from = vi.fn(() => ({ list, remove }));
+    return { admin: { storage: { from } } as never, from, list, remove };
+  }
+
+  it("removes the folder's files under user-avatars/<uid>/ and stops on a short page", async () => {
+    const s = storageStub([[{ name: 'a.webp' }, { name: 'b.png' }]]);
+    await removeAvatarObjects(s.admin, 'u-1');
+    expect(s.from).toHaveBeenCalledWith('user-avatars');
+    expect(s.list).toHaveBeenCalledWith('u-1', { limit: 1000 });
+    expect(s.remove).toHaveBeenCalledTimes(1);
+    expect(s.remove).toHaveBeenCalledWith(['u-1/a.webp', 'u-1/b.png']);
+  });
+
+  it('pages in chunks of 1,000 until the folder is empty', async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({ name: `f${i}.png` }));
+    const s = storageStub([full, [{ name: 'last.png' }]]);
+    await removeAvatarObjects(s.admin, 'u-1');
+    expect(s.remove).toHaveBeenCalledTimes(2);
+    expect((s.remove.mock.calls[0]![0] as string[]).length).toBe(1000);
+  });
+
+  it('does nothing for an empty folder', async () => {
+    const s = storageStub([[]]);
+    await removeAvatarObjects(s.admin, 'u-1');
+    expect(s.remove).not.toHaveBeenCalled();
+  });
+
+  it('reports a failure and never throws', async () => {
+    const s = storageStub([], { listError: true });
+    await expect(removeAvatarObjects(s.admin, 'u-1')).resolves.toBeUndefined();
+    expect(reportErrorMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'account.delete.avatar_list' }));
+    const r = storageStub([[{ name: 'a.png' }]], { removeError: true });
+    await expect(removeAvatarObjects(r.admin, 'u-1')).resolves.toBeUndefined();
+    expect(reportErrorMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag: 'account.delete.avatar_remove' }));
+  });
+});
+
 describe('the sentences', () => {
   it('say nothing changed, in plain words', () => {
     expect(ACCOUNT_DELETE_BLOCKED_COPY).toContain('Nothing was changed.');
     expect(ACCOUNT_DELETE_BLOCKED_COPY).toContain('Contact StockPilot support');
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY).toContain('Nothing was changed.');
+    // Re-pinned by the A3 review (was 'on the Team page on the web'): the sentence now starts with it.
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE).toContain('On the Team page on the web');
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY).toBe(
+      'You are the only owner of an organization that has other members. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+    expect(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE).toBe(
+      'You are the only owner of an organization that has other members. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.',
+    );
+    expect(ACCOUNT_DELETE_PLATFORM_ADMIN_COPY).toBe(
+      'This account is a StockPilot platform admin. Remove it from the platform admin list before deleting it. Nothing was changed.',
+    );
     expect(ACCOUNT_DELETE_RETRY_COPY).toBe(
       'Your account could not be deleted right now. Nothing was changed. Try again in a minute.',
     );
     expect(ACCOUNT_DELETE_SIGNED_OUT_COPY).toContain('You have been signed out');
-    for (const s of [ACCOUNT_DELETE_BLOCKED_COPY, ACCOUNT_DELETE_RETRY_COPY, ACCOUNT_DELETE_SIGNED_OUT_COPY]) {
+    for (const s of [
+      ACCOUNT_DELETE_BLOCKED_COPY,
+      ACCOUNT_DELETE_RETRY_COPY,
+      ACCOUNT_DELETE_SIGNED_OUT_COPY,
+      ACCOUNT_DELETE_LAST_OWNER_COPY,
+      ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
+      ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
+    ]) {
       expect(s.toLowerCase()).not.toMatch(/\bbook\b/);
+    }
+  });
+});
+
+describe('readDeletionReviewFacts (O-A3-5 counts, O-A3-2 solo owner with a subscription)', () => {
+  /** The two organization_members reads, told apart by their filters. */
+  function membersResult(owned: string[], others: string[]) {
+    return (call: MockCall) =>
+      callArgs(call, 'neq')
+        ? { data: others.map((organization_id) => ({ organization_id })), error: null }
+        : { data: owned.map((organization_id) => ({ organization_id })), error: null };
+  }
+
+  it('counts, in the audit organization, the API keys, webhooks, public request links and share links the person created that still work', async () => {
+    const stub = makeSupabaseStub({
+      'api_keys.select': { data: null, error: null, count: 1 },
+      'integration_endpoints.select': { data: null, error: null, count: 2 },
+      'public_request_links.select': { data: null, error: null, count: 3 },
+      'maintenance_request_share_links.select': { data: null, error: null, count: 4 },
+      'organization_members.select': membersResult([], []),
+    });
+    const facts = await readDeletionReviewFacts(stub.client, 'u-1', 'org-1', 'web');
+    expect(facts.createdStillActive).toEqual({
+      apiKeys: 1,
+      webhooks: 2,
+      publicRequestLinks: 3,
+      shareLinks: 4,
+    });
+    const args = (t: string) => stub.chainArgsAll.get(`${t}.select`)?.[0] ?? [];
+    for (const t of ['api_keys', 'integration_endpoints', 'public_request_links', 'maintenance_request_share_links']) {
+      expect(args(t)).toEqual(
+        expect.arrayContaining([
+          ['id', { count: 'exact', head: true }],
+          ['created_by', 'u-1'],
+          ['organization_id', 'org-1'],
+        ]),
+      );
+    }
+    expect(args('api_keys')).toEqual(expect.arrayContaining([['revoked_at', null]]));
+    expect(args('integration_endpoints')).toEqual(expect.arrayContaining([['enabled', true]]));
+    expect(args('public_request_links')).toEqual(expect.arrayContaining([['active', true]]));
+    expect(args('maintenance_request_share_links')).toEqual(
+      expect.arrayContaining([['active', true], ['revoked_at', null]]),
+    );
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('a person with no organization: no counts (nothing to file them under), no count reads', async () => {
+    const stub = makeSupabaseStub({ 'organization_members.select': membersResult([], []) });
+    const facts = await readDeletionReviewFacts(stub.client, 'u-1', null, 'mobile');
+    expect(facts.createdStillActive).toBeNull();
+    expect(stub.fromCalls).not.toContain('api_keys');
+  });
+
+  it('a failed count read: counts null and reported (the deletion is never held up by it)', async () => {
+    const stub = makeSupabaseStub({
+      'api_keys.select': { data: null, error: { message: 'timeout' } },
+      'organization_members.select': membersResult([], []),
+    });
+    const facts = await readDeletionReviewFacts(stub.client, 'u-1', 'org-1', 'web');
+    expect(facts.createdStillActive).toBeNull();
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.review_counts', level: 'warning' }),
+    );
+  });
+
+  it('names the organizations the person is the only real member of that have a Stripe subscription', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': membersResult(['o-solo', 'o-team'], ['o-team']),
+      'organizations.select': { data: [{ id: 'o-solo' }], error: null },
+    });
+    const facts = await readDeletionReviewFacts(stub.client, 'u-1', null, 'web');
+    expect(facts.soloPaidOrganizationIds).toEqual(['o-solo']);
+    const owned = stub.chainArgsAll.get('organization_members.select')?.[0] ?? [];
+    expect(owned).toEqual(
+      expect.arrayContaining([
+        ['user_id', 'u-1'],
+        ['role', 'owner'],
+        ['accepted_at', 'is', null],
+        ['impersonation_expires_at', null],
+      ]),
+    );
+    const others = stub.chainArgsAll.get('organization_members.select')?.[1] ?? [];
+    expect(others).toEqual(
+      expect.arrayContaining([
+        ['organization_id', ['o-solo', 'o-team']],
+        ['user_id', 'u-1'],
+        ['accepted_at', 'is', null],
+        ['impersonation_expires_at', null],
+      ]),
+    );
+    const orgs = stub.chainArgsAll.get('organizations.select')?.[0] ?? [];
+    expect(orgs).toEqual(
+      expect.arrayContaining([
+        ['id', ['o-solo']],
+        ['stripe_subscription_id', 'is', null],
+      ]),
+    );
+  });
+
+  it('not an owner, or every owned organization has other members: none, and no organizations read', async () => {
+    const notOwner = makeSupabaseStub({ 'organization_members.select': membersResult([], []) });
+    expect((await readDeletionReviewFacts(notOwner.client, 'u-1', null, 'web')).soloPaidOrganizationIds).toEqual([]);
+    expect(notOwner.fromCalls).not.toContain('organizations');
+
+    const team = makeSupabaseStub({ 'organization_members.select': membersResult(['o-team'], ['o-team']) });
+    expect((await readDeletionReviewFacts(team.client, 'u-1', null, 'web')).soloPaidOrganizationIds).toEqual([]);
+    expect(team.fromCalls).not.toContain('organizations');
+  });
+
+  it('a failed subscription read is reported so a platform admin can look (never holds up the deletion)', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: null, error: { message: 'timeout' } },
+    });
+    const facts = await readDeletionReviewFacts(stub.client, 'u-1', null, 'web');
+    expect(facts.soloPaidOrganizationIds).toEqual([]);
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.review_subscription', level: 'warning' }),
+    );
+  });
+});
+
+describe('reportDeletionReviewFacts (O-A3-2)', () => {
+  it('tells the platform admin (info) which deleted solo owner organizations keep a subscription', () => {
+    reportDeletionReviewFacts({ createdStillActive: null, soloPaidOrganizationIds: ['o-solo'] }, 'mobile');
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'account.delete.solo_owner_subscription',
+        level: 'info',
+        extra: { source: 'mobile', organizationIds: 'o-solo' },
+      }),
+    );
+  });
+
+  it('says nothing when no such organization exists', () => {
+    reportDeletionReviewFacts({ createdStillActive: null, soloPaidOrganizationIds: [] }, 'web');
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('lateLastOwnerRefusal (desk check F-5)', () => {
+  it('true when the re-check answers last_owner (a member joined after the check): reported at info', async () => {
+    const { admin, rpc } = adminAnswering({
+      data: { deletable: false, reason: 'blocked', sqlstate: 'P0001', constraint: 'organization_last_owner', table: 'public.organization_members' },
+      error: null,
+    });
+    await expect(lateLastOwnerRefusal(admin, 'u-1', 'web')).resolves.toBe(true);
+    expect(rpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: 'u-1' });
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.late_last_owner', level: 'info' }),
+    );
+  });
+
+  it('false for any other answer (the delete failed for another reason: SP-008 stays)', async () => {
+    for (const res of [
+      { data: { deletable: true }, error: null },
+      { data: { deletable: false, reason: 'blocked', sqlstate: '55P03' }, error: null },
+      { data: null, error: { code: 'PGRST301' } },
+    ]) {
+      const { admin } = adminAnswering(res);
+      await expect(lateLastOwnerRefusal(admin, 'u-1', 'mobile')).resolves.toBe(false);
     }
   });
 });

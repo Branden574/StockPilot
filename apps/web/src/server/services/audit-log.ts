@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { can } from '@stockpilot/core';
+import { can, isDeletedPerson } from '@stockpilot/core';
 
 import { parseFromDateParam, parseToDateParam } from '@/lib/movements-filters';
 
@@ -18,6 +18,10 @@ export interface AuditLogRow {
   event: string;
   createdAt: string;
   actor: AuditLogActor | null;
+  /** The actor deleted their account (migration 0393): user_id is null and
+   *  the row's deleted_users marker records user_id. The page shows "Deleted
+   *  user" instead of "System". */
+  actorDeleted: boolean;
   metadata: Record<string, unknown>;
   ip: string | null;
 }
@@ -55,6 +59,8 @@ interface RawAuditRow {
   metadata: Record<string, unknown> | null;
   ip: string | null;
   created_at: string;
+  user_id: string | null;
+  deleted_users: unknown;
   actor:
     | {
         id: string;
@@ -107,7 +113,7 @@ function normalizeUntil(raw: string): { op: 'lt' | 'lte'; value: string } | unde
 }
 
 const SELECT_COLUMNS =
-  'id, event, metadata, ip, created_at, actor:user_id (id, full_name, email, avatar_url)';
+  'id, event, metadata, ip, created_at, user_id, deleted_users, actor:user_id (id, full_name, email, avatar_url)';
 
 function toRow(raw: RawAuditRow): AuditLogRow {
   // PostgREST sometimes returns embedded foreign rows as a single object
@@ -121,6 +127,7 @@ function toRow(raw: RawAuditRow): AuditLogRow {
     createdAt: raw.created_at,
     metadata: (raw.metadata ?? {}) as Record<string, unknown>,
     ip: raw.ip,
+    actorDeleted: isDeletedPerson(raw.user_id ?? null, raw.deleted_users, 'user_id'),
     actor: actorObj
       ? {
           userId: actorObj.id,

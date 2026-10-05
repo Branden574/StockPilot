@@ -28,6 +28,8 @@
  *     correctly against the denylist and are always kept.
  */
 
+import { actorText } from './deleted-user-labels';
+
 // ─── Shared filters (mirrors activity.ts verbatim) ─────────────────────────
 
 /**
@@ -82,6 +84,9 @@ export interface ActivityMovementInput {
   note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0393: user_id null and stamped). Rides
+   *  through untouched; the card labels it "Deleted user". */
+  actor_deleted?: boolean;
   reference_type: string | null;
   reference_id: string | null;
   reference_label: string | null;
@@ -101,6 +106,8 @@ export interface ActivityAuditInput {
   metadata: Record<string, unknown> | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0393: user_id null and stamped). */
+  actor_deleted?: boolean;
 }
 
 // ─── Crash-safe metadata rendering (compact port of metadata-diff.tsx) ─────
@@ -341,7 +348,7 @@ export function buildAuditCardModel(row: ActivityAuditInput): AuditCardModel {
     event: row.event,
     eventLabel: formatAuditEventLabel(row.event),
     createdAt: row.created_at,
-    actorName: row.actor?.full_name ?? row.actor?.email ?? 'system',
+    actorName: actorText(row.actor, row.actor_deleted),
     reason,
     changedKeys,
     diffRows: allDiffRows.slice(0, AUDIT_DIFF_ROW_CAP),

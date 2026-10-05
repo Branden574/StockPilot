@@ -777,8 +777,13 @@ select is(
 select is(
   (select string_agg(pg_get_triggerdef(t.oid) || '|' || t.tgenabled::text, ' ; ' order by t.tgname)
      from pg_trigger t where t.tgrelid = 'public.stock_movements'::regclass and not t.tgisinternal),
-  'CREATE TRIGGER trg_zz_stock_movements_via_ledger BEFORE INSERT OR UPDATE OF via_ledger, draw ON public.stock_movements FOR EACH ROW EXECUTE FUNCTION tg_stock_movements_via_ledger()|O',
-  'A10: the 0369 stamp is still the only trigger on stock_movements, enabled, now on UPDATE OF via_ledger, draw');
+  -- Re-pinned by 0393 (was the 0369 stamp alone): 0393 adds the
+  -- zzz_deleted_users_ins/_upd pair (WHEN clauses: an ordinary write never
+  -- calls tg_mark_deleted_users; neither touches via_ledger or draw).
+  'CREATE TRIGGER trg_zz_stock_movements_via_ledger BEFORE INSERT OR UPDATE OF via_ledger, draw ON public.stock_movements FOR EACH ROW EXECUTE FUNCTION tg_stock_movements_via_ledger()|O'
+  ' ; CREATE TRIGGER zzz_deleted_users_ins BEFORE INSERT ON public.stock_movements FOR EACH ROW WHEN ((new.deleted_users IS NOT NULL)) EXECUTE FUNCTION tg_mark_deleted_users(''user_id'')|O'
+  ' ; CREATE TRIGGER zzz_deleted_users_upd BEFORE UPDATE ON public.stock_movements FOR EACH ROW WHEN (((old.deleted_users IS NOT NULL) OR (new.deleted_users IS NOT NULL) OR ((old.user_id IS NOT NULL) AND (new.user_id IS NULL)))) EXECUTE FUNCTION tg_mark_deleted_users(''user_id'')|O',
+  'A10: the 0369 stamp is still the first trigger on stock_movements, enabled, on UPDATE OF via_ledger, draw; the only others are 0393''s marker pair');
 select is(
   (select count(*)::int || '|' || bool_and(p.prosecdef)::text || '|' || min(p.proconfig::text) || '|'
           || min(p.pronargdefaults) || '|' || min(p.prorettype::regtype::text) || '|'

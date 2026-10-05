@@ -291,7 +291,7 @@ export default function PoImportDetailScreen() {
         .from('po_imports')
         .select(
           `id, status, source_type, file_name, parse_error, approved_po_id,
-           vendor_id, warehouse_id, created_at, parsed_json, uploaded_by,
+           vendor_id, warehouse_id, created_at, parsed_json, uploaded_by, deleted_users,
            reimported_from_id, superseded_at,
            vendor:suppliers!vendor_id (name)`,
         )
@@ -365,7 +365,8 @@ export default function PoImportDetailScreen() {
         (r.superseded_at as string | null) != null,
       ),
     ]);
-    setUploadedBy(poImportUploaderLabel(uploaders, uploaderId));
+    // The import's stamp reads "Deleted user" (0393).
+    setUploadedBy(poImportUploaderLabel(uploaders, uploaderId, r.deleted_users));
 
     const flat: ImportLine[] = (lineRows ?? []).map((row) => {
       const lr = row as Record<string, unknown>;

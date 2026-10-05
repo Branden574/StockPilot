@@ -173,6 +173,77 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'account-deletion-everyone-2026-10',
+    revision: 1,
+    // Security slice A3 (migration 0393, every member can delete their own
+    // account; owner decision 2026-10-03). Held as a DRAFT until 0393 is
+    // pushed and verified, the web deploy is READY, the phone update that
+    // shows "Deleted user" is published and has launched, and the Demo Co
+    // walk has run (no production account is ever deleted; the walk opens
+    // Delete my account and cancels). The publishing follow-up sets the real
+    // publishedAt and re-reads these words against what shipped. A draft sits
+    // above the newest published release, dated after it and before the
+    // phone ordering draft above it.
+    //
+    // It supersedes the "can still stop a deletion" sentence of the published
+    // A2 releases (account-deletion-orders-2026-10, account-deletion-refused-
+    // 2026-10): after 0393 no record refuses a deletion. The keys that refused
+    // (received stock, PO imports, schedule entries, returns and the rest) are
+    // SET NULL, and the five legacy May orders that broke the NOT VALID
+    // delivery check (F12) are exempt by primary key, so their requester and
+    // approver can be deleted too. Two refusals remain, both said in place:
+    // the only owner of an organization with other members (transfer first,
+    // on the web Team page only, O-A3-8), and a StockPilot platform admin
+    // (not a reader of this note, so not mentioned). "Deleted user" shows on
+    // the 16 marked tables' surfaces only (narrow scope, O-A3-1): stock
+    // movements, the audit log and an order's timeline, received stock and
+    // the PO PDF, PO imports, a schedule entry's creator and a return's
+    // requester; other records keep their existing words, so the note names
+    // records, never "every screen". In the mobile app the labels need the
+    // update (movements, item activity, the audit log, PO receipts and PO
+    // imports); deleting from the phone works on every installed version
+    // (the route changed, not the app). Released work: counts in progress,
+    // picks, deliveries, scheduled and in-progress schedule entries, open
+    // maintenance requests, escalation claims and warehouse manager. Pending
+    // invites the person sent stop working (they leave the invite list), so
+    // the words say "invite those people again", not "resend". A deleted
+    // requester is not emailed about their orders on any path (status
+    // emails, hand-over and backorder notices on paper and by link, the
+    // return prompt, the signer receipt to their kept address, the denied
+    // order's support ticket), and neither signing screen suggests their
+    // address (desk check F-1). The maintenance resolution email is not an
+    // order email and still goes (a recorded follow-up), so the words say
+    // "orders".
+    //
+    // A3 review (2026-10-05): the summary and howItAffectsYou name where
+    // "Deleted user" shows instead of saying everything recorded shows it,
+    // and the owner is told to "transfer ownership" (the Team page's control
+    // is "Transfer ownership…"; owner is not in the role list).
+    //
+    // For everyone, with no link: any member can delete their own account.
+    status: 'draft',
+    title: 'Records you made no longer stop you deleting your account',
+    summary:
+      'You can now delete your account from Settings on the web or in the mobile app, whatever you recorded. What you recorded stays with your organization; stock movements, received stock and the audit log show “Deleted user” instead of your name. If you are the only owner of an organization with other members, transfer ownership first.',
+    publishedAt: '2026-10-11T17:00:00Z',
+    entries: [
+      {
+        id: 'account-deletion-everyone',
+        category: 'improved',
+        area: 'Account',
+        title: 'Records you made no longer stop you deleting your account',
+        whatChanged:
+          'An account linked to records your organization keeps, such as received stock, imported purchase orders, schedule entries or returns, can now be deleted from Settings on the web and in the mobile app. Those records stay and show “Deleted user” instead of the person’s name on stock movements, the audit log, order timelines, received stock and the purchase order PDF, purchase order imports, schedule entries and returns. In the mobile app, after the latest update, movements, item activity, the audit log and purchase order receipts and imports show it too.',
+        whyItMatters:
+          'Until now, an account linked to records your organization keeps could not be deleted from the app, and the person had to contact StockPilot support.',
+        howItAffectsYou:
+          'Nothing changes unless someone deletes their account. If they do, their stock movements and received stock show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one. The only owner of an organization with other members must transfer ownership first.',
+        whatToDo:
+          'If you are the only owner of an organization with other members, choose Transfer ownership on another member on the Team page on the web, or remove the other members, before you delete your account. In the mobile app, close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
     id: 'approval-follows-permission-2026-10',
     revision: 1,
     // Security slice D (migration 0390, pushed 2026-10-04 05:32:44Z;

@@ -2,6 +2,7 @@ import { Boxes, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 
 import { EmptyState } from '@/components/ui/empty-state';
+import { movementActorLabel } from '@/lib/movements/actor-label';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
@@ -199,7 +200,7 @@ export function RecentActivityWidget({
                         {item?.name ?? 'Unknown'}
                       </div>
                       <div className="mt-0.5 font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                        {m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System')}
+                        {movementActorLabel(m)}
                         {(m.reason ?? null) && (
                           <>
                             {' · '}

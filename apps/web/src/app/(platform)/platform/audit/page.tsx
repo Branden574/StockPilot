@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
+import { platformAuditActorLabel, platformAuditTargetLabel } from '@/lib/people/deleted-person-labels';
 import {
   auditDetailReason,
   auditDetailSuperseded,
@@ -94,7 +95,9 @@ export default async function PlatformAuditPage({
                     <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
                       {new Date(r.createdAt).toLocaleString()}
                     </td>
-                    <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{r.actorEmail}</td>
+                    {/* An admin who deleted their account (0393) keeps the
+                        email the row recorded: "Deleted user · email". */}
+                    <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{platformAuditActorLabel(r)}</td>
                     <td className="px-4 py-2.5 font-medium">
                       {ACTION_LABEL[r.action] ?? r.action}
                       {superseded ? (
@@ -113,7 +116,7 @@ export default async function PlatformAuditPage({
                       }
                       title={r.targetUserId ?? undefined}
                     >
-                      {r.targetUserEmail ?? r.targetUserId ?? '—'}
+                      {platformAuditTargetLabel(r)}
                     </td>
                     {/* `title` carries the full text: a reason can run to 500
                         characters and must not stretch the row. */}

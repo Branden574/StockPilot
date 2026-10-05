@@ -9,6 +9,7 @@ import {
   confirmCountDialogCopy,
   CONFIRMED_ONLY_FILTER_LABEL,
   DELETED_REQUESTER_LABEL,
+  DELETED_USER_LABEL,
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   describeShortPickLines,
@@ -2320,10 +2321,21 @@ describe('a refused account deletion says why, and is published with the account
     // The sentence the web toast and the phone alert showed in the walk.
     const BLOCKED =
       "Your account can't be deleted from the app because it is linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries. Nothing was changed. Contact StockPilot support to have it removed.";
+    // Re-pinned by 0393 (was: account-deletion.ts holds BLOCKED word for
+    // word). These words were true against 562d1f0c when A2 published them.
+    // 0393 converted every key that refused, so the code's sentence for an
+    // integrity refusal (which should no longer happen) is now the support
+    // sentence below, and the A3 release (account-deletion-everyone-2026-10,
+    // a draft until 0393 ships) supersedes this release's claim.
     const copy = readFileSync(resolve(__dirname, '../../server/lib/account-deletion.ts'), 'utf8');
-    expect(copy).toContain(`"${BLOCKED}"`);
-    // Both surfaces answer a records refusal with it, and the phone route no
-    // longer answers success for a delete that did not happen.
+    expect(copy).not.toContain(`"${BLOCKED}"`);
+    expect(copy).toContain(
+      "'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.'",
+    );
+    expect(RELEASES.map((x) => x.id)).toContain('account-deletion-everyone-2026-10');
+    // Both surfaces still answer an integrity refusal with that constant, and
+    // the phone route no longer answers success for a delete that did not
+    // happen.
     const route = readFileSync(resolve(__dirname, '../../app/api/v1/account/delete/route.ts'), 'utf8');
     expect(route).toContain("{ error: 'account_linked_records', message: ACCOUNT_DELETE_BLOCKED_COPY }");
     expect(route).toContain("{ error: 'internal_error', message: ACCOUNT_DELETE_SIGNED_OUT_COPY }");
@@ -3504,9 +3516,14 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    // Re-pinned by 0393 (was: the only other draft is PO-4's phone draft).
+    // A3's account deletion draft sits below this one and is dated earlier.
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'draft')) {
-      expect(r.id).toBe('phone-place-order-2026-10');
+      expect(['phone-place-order-2026-10', 'account-deletion-everyone-2026-10'], r.id).toContain(r.id);
     }
+    const a3 = RELEASES.findIndex((r) => r.id === 'account-deletion-everyone-2026-10');
+    expect(a3).toBeGreaterThan(at);
+    expect(Date.parse(RELEASES[a3]!.publishedAt)).toBeLessThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the New order page, and links there', () => {
@@ -3647,5 +3664,108 @@ describe('the phone draft claims nothing the phone does not do', () => {
     const text = readerText(r).join(' ');
     expect(text).not.toMatch(/offline you can still browse/i);
     expect(text).toContain("If the connection drops while you're ordering, you can still browse the items as they were last loaded and keep building your cart.");
+  });
+});
+
+/**
+ * Security slice A3 (migration 0393, every member can delete their own
+ * account): held as a DRAFT until 0393 is pushed and verified, the web deploy
+ * is READY, the phone update is published and launched, and the Demo Co walk
+ * has run. Pinned by id, never by index. The publishing follow-up sets
+ * 'published' and the real publishedAt, re-reads the words against what
+ * shipped, and flips the first pin here.
+ */
+describe('account deletion for every member (slice A3) is held as a draft', () => {
+  const ID = 'account-deletion-everyone-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release, dated after every published release and before the drafts above it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    // The A2 releases it supersedes stay published below it.
+    for (const id of ['account-deletion-orders-2026-10', 'account-deletion-refused-2026-10']) {
+      const i = RELEASES.findIndex((r) => r.id === id);
+      expect(i, id).toBeGreaterThan(at);
+      expect(RELEASES[i]?.status, id).toBe('published');
+    }
+  });
+
+  it('is told to every member, with no link, as one improved Account entry', () => {
+    const r = release();
+    expect(r.audience).toBeUndefined();
+    expect(r.entries.map((e) => e.id)).toEqual(['account-deletion-everyone']);
+    const [entry] = r.entries;
+    expect(entry!.category).toBe('improved');
+    expect(entry!.area).toBe('Account');
+    expect(entry!.link).toBeUndefined();
+    expect(entry!.audience).toBeUndefined();
+    const published: Release = { ...r, status: 'published' };
+    for (const role of ['viewer', 'staff', 'manager', 'admin', 'owner'] as const) {
+      expect(visibleReleases([published], { role, permissions: [], enabledModules: [] })[0]?.entries.length, role).toBe(1);
+    }
+  });
+
+  it('claims only what 0393 does: records kept as "Deleted user" where it shows, work released, the only-owner rule, the update', () => {
+    const r = release();
+    const entry = r.entries[0]!;
+    const text = readerText(r).join(' ');
+    // The label the app shows, in the app's quotes.
+    expect(r.summary).toContain(`“${DELETED_USER_LABEL}”`);
+    expect(entry.whatChanged).toContain(`“${DELETED_USER_LABEL}”`);
+    // The one refusal a member can meet, and where ownership moves (web only).
+    // Re-pinned by the A3 review (was "make another member the owner first"):
+    // the Team page's control is "Transfer ownership…".
+    expect(r.summary).toContain('If you are the only owner of an organization with other members, transfer ownership first.');
+    expect(entry.whatToDo).toContain('on the Team page on the web');
+    expect(entry.whatToDo).toContain('choose Transfer ownership on another member');
+    expect(text).not.toMatch(/make another member the owner/i);
+    // A3 review: the narrow scope shows "Deleted user" on some records only;
+    // the words name them and never say that everything recorded shows it.
+    expect(r.summary).toContain(`stock movements, received stock and the audit log show “${DELETED_USER_LABEL}” instead of your name`);
+    expect(entry.howItAffectsYou).toContain(`If they do, their stock movements and received stock show “${DELETED_USER_LABEL}”`);
+    expect(text).not.toMatch(/(?:records they made|what you recorded)[^.;:]*(?:shows?|shown as) “Deleted user”/i);
+    // Released work, as the account trigger releases it.
+    expect(entry.howItAffectsYou).toMatch(/counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned/);
+    expect(entry.howItAffectsYou).toContain('stop being a warehouse’s manager');
+    // Pending invites stop working and leave the list: never "resend".
+    expect(entry.howItAffectsYou).toContain('Invitations they sent that were not yet accepted stop working');
+    // Desk check F-1: no order email reaches them and no signing screen
+    // suggests their address. Orders only: the maintenance resolution email
+    // still goes to the address a request kept (a recorded follow-up).
+    expect(entry.howItAffectsYou).toContain(
+      'They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one.',
+    );
+    expect(text).not.toMatch(/never (be )?emailed|no longer emailed about anything|not emailed at all/i);
+    expect(text).not.toMatch(/\bresend/i);
+    // The phone's labels need the update; deleting does not.
+    expect(entry.whatChanged).toContain('In the mobile app, after the latest update,');
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    // Narrow scope: records are named, never "every screen" or "everywhere";
+    // never "anyone can delete" (the only owner of an organization with
+    // members cannot until ownership moves).
+    expect(text).not.toMatch(/every (screen|page|record)|everywhere|anyone can delete|all records/i);
+    expect(text).not.toMatch(/\bbooks?\b|\d+ ?%|token|hash|database|trigger|platform admin/i);
   });
 });
