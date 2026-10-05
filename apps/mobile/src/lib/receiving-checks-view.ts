@@ -1,0 +1,138 @@
+import {
+  liveChecklistVersion,
+  receiptChecklistAction,
+  receiptChecklistActionLabel,
+  receiptChecklistChipText,
+  receiptChecklistChipTone,
+  receiptChecklistState,
+  RECEIVING_CHECKLIST_COPY,
+  type ReceivingGate,
+} from '@stockpilot/core';
+
+import { checklistErrorReason, type PhonePoChecks } from './receiving-checks-api';
+
+/**
+ * WHAT THE PHONE SHOWS FOR THE RECEIVING CHECKLIST (F4-1), as pure helpers the
+ * node tests run: the chip and action on each Receipt history card, whether
+ * the "Posted" alert offers Record checklist, and the words when a start
+ * fails after a post. Every state comes from core (receiptChecklistState and
+ * receiptChecklistAction), the same rules the web PO page uses.
+ */
+
+const C = RECEIVING_CHECKLIST_COPY;
+
+/** The PO screen's checklist read: still loading, or the route's answer. */
+export type PoChecksState = { kind: 'loading' } | { kind: 'ready'; checks: PhonePoChecks };
+
+export interface ReceiptChip {
+  /** The chip's words; never colour alone. */
+  text: string;
+  tone: 'ok' | 'warn' | 'muted';
+  /** What tapping offers, with its label; null = the chip is only words. */
+  action: 'record' | 'continue' | 'view' | null;
+  actionLabel: string | null;
+  /** The run to open for continue and view. */
+  runId: string | null;
+}
+
+/**
+ * One Receipt history card's chip. Null while the read is in flight, when it
+ * failed (the history says so once, above the cards: historyChecksFailed),
+ * and for a receipt that has no checklist to show (a reversal entry, or one
+ * received before any checklist was turned on: never nagged).
+ */
+export function receiptChip(input: {
+  receipt: { id: string; status: string; receivedAt: string | null };
+  checks: PoChecksState;
+  canRecord: boolean;
+}): ReceiptChip | null {
+  if (input.checks.kind !== 'ready' || !input.checks.checks.ok) return null;
+  const { versions, runs } = input.checks.checks;
+  const state = receiptChecklistState({
+    receipt: {
+      id: input.receipt.id,
+      status: input.receipt.status,
+      receivedAt: input.receipt.receivedAt ?? '',
+    },
+    versions,
+    runs,
+  });
+  const text = receiptChecklistChipText(state);
+  const tone = receiptChecklistChipTone(state);
+  if (text === null || tone === null) return null;
+  const action = receiptChecklistAction({
+    state,
+    receiptStatus: input.receipt.status,
+    liveNow: liveChecklistVersion(versions) !== null,
+    canRecord: input.canRecord,
+  });
+  return {
+    text,
+    tone,
+    action,
+    actionLabel: action ? receiptChecklistActionLabel(action) : null,
+    runId: state.kind === 'completed' || state.kind === 'in_progress' ? state.runId : null,
+  };
+}
+
+/**
+ * "Checklist status didn't load", said once in Receipt history, and only when
+ * there are receipts to label (a draft or a PO with none says nothing).
+ */
+export function historyChecksFailed(checks: PoChecksState, receiptCount: number): boolean {
+  return receiptCount > 0 && checks.kind === 'ready' && !checks.checks.ok;
+}
+
+export interface PostedAlertPlan {
+  title: string;
+  body: string;
+  /** Offer Record checklist (with Done) instead of the plain OK. */
+  offerRecord: boolean;
+}
+
+/**
+ * The "Posted" alert. Record checklist is offered only on a known live
+ * version and a known yes to recording; when either is unknown (the read
+ * failed, the gate is unknown) the alert is the plain one it always was, and
+ * the receipt's card offers the checklist later.
+ */
+export function postedAlertPlan(input: {
+  lineCount: number;
+  /** From the post's answer; without an id there is nothing to start. */
+  receiptId: string | null;
+  receiptNumber: string | null;
+  gate: ReceivingGate | null;
+  checks: PoChecksState;
+}): PostedAlertPlan {
+  const live =
+    input.checks.kind === 'ready' &&
+    input.checks.checks.ok &&
+    liveChecklistVersion(input.checks.checks.versions) !== null;
+  const received = `Received ${input.lineCount} line${input.lineCount === 1 ? '' : 's'}.`;
+  const offerRecord = live && input.gate?.canRecordChecklist === true && input.receiptId !== null;
+  if (!offerRecord) return { title: 'Posted', body: received, offerRecord: false };
+  return {
+    title: input.receiptNumber ? C.postedTitle(input.receiptNumber) : 'Posted',
+    body: `${received} ${C.postedBody}`,
+    offerRecord: true,
+  };
+}
+
+/** The alert when the receipt posted but its checklist could not be started. */
+export function startAfterPostFailureBody(e: unknown): string {
+  return checklistErrorReason(e) === 'no_checklist'
+    ? `${C.noChecklist} ${C.startFailedAfterPostPhone}`
+    : C.startFailedAfterPostPhone;
+}
+
+/** Pass, Fail and Not applicable, in that order, with their words. */
+export const CHECK_ANSWER_OPTIONS: readonly { value: 'pass' | 'fail' | 'na'; label: string }[] = [
+  { value: 'pass', label: C.pass },
+  { value: 'fail', label: C.fail },
+  { value: 'na', label: C.notApplicable },
+];
+
+/** The run screen's native path for a run id (the web path rewrites to it). */
+export function receivingCheckPath(runId: string): string {
+  return `/receiving-check/${runId}`;
+}

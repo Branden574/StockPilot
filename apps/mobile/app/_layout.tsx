@@ -284,6 +284,9 @@ function RootGate() {
         <Stack.Screen name="exceptions/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="returns/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="location/[id]" options={{ presentation: 'card' }} />
+        {/* The receiving checklist (F4-1): one receipt's run, and the editor. */}
+        <Stack.Screen name="receiving-check/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="receiving-checklist" options={{ presentation: 'card' }} />
         {/* Book Order Totals: pushed over the drawer (or the Reports tab), so
             the shared Reports screen stays underneath and Back returns to it;
             the drill-down is pushed over the list, keeping its filters. */}
