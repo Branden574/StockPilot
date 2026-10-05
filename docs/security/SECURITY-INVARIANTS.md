@@ -746,6 +746,103 @@ actually fire.
   the `/api/v1/returns` route tests and core `return-actions.test.ts`,
   `return-error-map.test.ts` and `restock-view.test.ts`.
 
+### INV-C7 — an exchange's replacement order is written only by its RMA's functions, and waits for the returned item
+
+- **Invariant** (0397, returns RX-2): a replacement order is an ordinary
+  `order_requests` row linked to its RMA by `replacement_for_return_id`, and
+  every write that makes, changes or ends one runs inside the RMA's
+  functions.
+  - **The link.** `authenticated` has no INSERT or UPDATE grant on
+    `replacement_for_return_id` (0392 left it table-level SELECT and 13
+    column INSERT grants; the new column gets none), so an API insert naming
+    it is refused by privilege; `trg_order_requests_replacement_link`
+    refuses it too for any API role (`replacement_link_server_only`) and
+    refuses every change of the column for every role, `postgres` included
+    (`replacement_link_immutable`). The composite key
+    `order_requests_replacement_return_fkey` (column, organization) keeps the
+    RMA in the order's organization; a partial unique index allows one live
+    (not cancelled or denied) replacement per RMA.
+  - **The writers.** `_return_replacement_issue` (SECURITY DEFINER, no API
+    EXECUTE) inserts the header and lines as `postgres` (the 0387 workflow
+    guard exempts it; it is pinned in 0387 AL9 on purpose, critic K11) and
+    approves through `approve_partial` (called, never restated): the same
+    holds, the same free-stock rule (on hand minus every active hold). It
+    copies the requester from the original order (member, email-only,
+    portal customer, or a deleted requester's stamp), never mints a track
+    token, and stamps `unit_cost_at_request` from the item. The exchange
+    functions (`change_return_replacement`, `cancel_return_replacement`,
+    `release_return_replacement_early`, and the hooks behind
+    `approve_return`, `deny_return` and `cancel_return`) gate in this order:
+    signed in, the RMA read without a lock (foreign answers like missing),
+    the Returns and Orders modules, `returns:manage`, `orders:approve`,
+    write access to the original order's warehouse; then the RMA row lock,
+    then the live replacement's. One replacement per approved revision: the
+    approval's key `<rma>:<revision>` (scope `return_approval`) and the
+    change's (scope `return_replacement_change`) replay the order already
+    issued, and another body at the same revision is `return_changed`.
+  - **The return-first gate.** `trg_order_requests_zz_replacement_status`
+    (SECURITY DEFINER, every role) refuses a replacement's move to
+    `pick_slip_generated` (from `approved`, or a resume from `backordered`)
+    unless its RMA is `received` or `closed`, or a `released_early` decision
+    names THAT order (`replacement_waiting_for_return`); a substituted order
+    needs its own release. The same trigger refuses `cancelled` and `denied`
+    unless the RMA's functions set the transaction-bound flag
+    `stockpilot.return_exchange` (`replacement_cancel_via_return`), so a
+    requester or a manager cancelling from the order page is refused and the
+    RMA stays in step. A replacement already picked is cancelled through
+    `cancel_order_request`'s drawn branch (the batch back to Staging, holds
+    released); one handed over is never cancelled (`replacement_handed_over`).
+  - **Fixed lines.** `trg_order_request_lines_zz_replacement_guard` refuses
+    an API insert or update of a replacement's lines
+    (`replacement_lines_fixed`); the app refuses them before any write.
+  - **Reads.** `return_exchange_lines`: members SELECT (RLS on the RMA's
+    organization), no API write; `return_decisions.exchange_line_id` is a
+    composite key to (exchange line, RMA). `return_exchange_candidates` is
+    SECURITY INVOKER (the caller's item scope applies; gate: the order
+    readable, `returns:manage`); `return_exchange_options` (the requester
+    tier, RX-3) is `service_role` only; `return_exchange_flags` answers the
+    decision-log facts the security-invoker `return_overview` needs (released
+    early, received at the counter, the revision; no reason, name or rack) to
+    members and the service role.
+  - **Notifications.** `trg_order_requests_notify` now fires only for an
+    ordinary order (`WHEN replacement_for_return_id IS NULL`, the body
+    unchanged); a replacement's own trigger pings nobody on insert,
+    approval, cancel or denial, rewords the requester's ready, on the way,
+    partly handed over and completed pings, and stays silent on ready for
+    pickup after a counter receipt. Staff are never pinged for a replacement.
+  - **The requester tier.** The database accepts a requester's exchange
+    (`create_requester_return_request`, service role only, items from
+    `return_exchange_options`), but the server refuses one with
+    `exchange_not_available` until RX-3 ships its pages and messages. The
+    `RETURNS_EXCHANGE_CREATE=off` switch refuses a new exchange on every
+    create surface (and "Add a replacement") the same way.
+- **Why it matters**: a replacement is stock promised to someone. Without
+  these rules an exchange could be issued twice for one approval, picked and
+  handed over before the item it replaces came back, cancelled from the
+  order page while its RMA still promised it, edited to other items, or
+  linked to another organization's RMA through the API.
+- **Enforced by**: the column grants, the link, status and lines guards,
+  the partial unique index, the in-body gates and the flag; in the app,
+  `RMAService` (one function per action, audit, events and messages only on
+  `changed: true`), `OrderRequestsService` (the hints mapped by
+  `order-replacement.ts`, `loadEditableOrderHeader` refusing a
+  replacement, `prepareForHandover` running each order step with its own
+  gates and never signing) and the order email choke point (a replacement
+  never gets the ordinary order emails).
+- **Tested at**: [`0397_returns_exchange_staff.test.sql`](../../supabase/tests/0397_returns_exchange_staff.test.sql)
+  (acceptance 36 end to end and 41, header inheritance, the staff tier, one
+  replacement per revision, the link and lines guards, the cancel guard,
+  X-1 and C-1, the early release, cancel and deny, the notify split, the
+  status CASE, organization deletion, grants; each break named "Mutation:"
+  in the file is caught by the test before it), re-pinned 0384 GO1, 0385
+  Z2, 0387 AL9/AL10, 0388, 0391 and 0394; `scripts/db-concurrency/0397_exchange_races.sh`
+  (two sessions: double approval, substitution against a pick slip, cancel
+  against prepare, release against receive). App side:
+  `returns-exchange.test.ts`, `order-requests.replacement.test.ts`,
+  `order-replacement.test.ts`, `replacement-update.test.ts`, the exchange
+  route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
+  and `exchange-view.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
