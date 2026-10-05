@@ -25,6 +25,7 @@ import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
 import {
   collectLegacyRefIdsByKind,
+  formatMovementClock,
   movementReasonTeaser,
   orderNumberLabels,
   returnNumberLabels,
@@ -41,6 +42,8 @@ import { useAuth } from '@/lib/auth-context';
 import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { homeGreeting, nextDayPartChange } from '@/lib/greeting';
+import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
+import { readOrgTimeZone } from '@/lib/order-readiness';
 import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { syncBadgeState } from '@/lib/sync-badge';
@@ -153,6 +156,13 @@ export default function Home() {
   const [recent, setRecent] = React.useState<RecentMovement[]>([]);
   // The recent-movements read failed: said, never "No stock movements yet."
   const [recentFailed, setRecentFailed] = React.useState(false);
+  // The organization's time zone, which the recent movements print their time
+  // in (L7, owner decision Q1; slice 3 review F2), like the Movements list
+  // behind "See all". It was the device's zone. Null until read, when unset,
+  // or when the first read fails: core's documented default zone. A failed
+  // read on a refresh keeps the zone already read (nextKnownOrgZone, the
+  // Receive POs rule).
+  const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
   // Derived, not stored: the header label IS the workspace switcher's active
   // org name. It used to be useState set synchronously at the top of load(),
   // which is the same value one render late (with the same fallbacks).
@@ -223,7 +233,7 @@ export default function Home() {
     const orgId = activeOrgId;
 
     try {
-      const [items, out, valueRpc, lowRpc, flaggedLow, movements] = await Promise.all([
+      const [items, out, valueRpc, lowRpc, flaggedLow, movements, zone] = await Promise.all([
         supabase
           .from('inventory_items')
           .select('id', { count: 'exact', head: true })
@@ -265,7 +275,11 @@ export default function Home() {
           .eq('organization_id', orgId)
           .order('created_at', { ascending: false })
           .limit(3),
+        // Never rejects: null on any failure (the default zone then).
+        readOrgTimeZone(supabase, orgId),
       ]);
+      // A failed read on a refresh keeps the zone already read (nextKnownOrgZone).
+      setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
 
       // Every figure's reads must have answered: one failure is "couldn't
       // load", never a zero standing in for a number that was not read.
@@ -352,6 +366,8 @@ export default function Home() {
   // figures and the movements say so instead of a spinner that never stops.
   const noWorkspace = !activeOrgId && !workspaceLoading;
   const figures = noWorkspace ? null : summary;
+  // Only the zone read for the workspace on screen (L7).
+  const timeZone = knownZoneFor(knownZone, activeOrgId);
   const recentUnavailable = noWorkspace || recentFailed;
 
   const dateLabel = `TODAY · ${SHORT_DAY[now.getDay()].toUpperCase()} ${SHORT_MONTH[now.getMonth()].toUpperCase()} ${now.getDate()}`;
@@ -533,6 +549,7 @@ export default function Home() {
                     <MovementMiniRow
                       key={m.id}
                       m={m}
+                      timeZone={timeZone}
                       divider={i < recent.length - 1}
                       onPress={() =>
                         router.push({ pathname: '/item/[id]', params: { id: m.itemId } })
@@ -572,10 +589,13 @@ export default function Home() {
 
 function MovementMiniRow({
   m,
+  timeZone,
   divider,
   onPress,
 }: {
   m: RecentMovement;
+  /** The organization's zone (L7); null prints core's documented default. */
+  timeZone: string | null;
   divider: boolean;
   onPress: () => void;
 }) {
@@ -586,11 +606,9 @@ function MovementMiniRow({
   // The per-mode tones: accent in, refusal red out, warning for a zero change.
   const pipColor = isAdd ? c.accent : isSub ? c.critText : c.warnText;
   const verb = MOVEMENT_VERB[m.movementType] ?? m.movementType;
-  const time = new Date(m.createdAt).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  // "22:30" in the ORGANIZATION's zone (L7), the 24-hour shape the device's
+  // text had; nothing for a value that is not a date.
+  const time = formatMovementClock(m.createdAt, timeZone) ?? '';
   // Already resolved and clamped by the loader (packages/core
   // movementReasonTeaser) — the same words the web dashboard widget prints.
   const reason = m.reason;

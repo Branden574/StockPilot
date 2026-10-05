@@ -12721,24 +12721,50 @@ describe('the small fixes release (slice 3)', () => {
 
   // L7 (owner decision Q1): every surface the entry names formats with core's
   // formatMovementWhen / formatMovementDay in the organization's zone.
-  it('names the surfaces whose movement times changed, and each uses the org-zone formatter', () => {
+  // Slice 3 review F2: the entry names EXACTLY the screens that changed, and
+  // every one of them formats with core's org-zone formatter; the screens
+  // left in the viewer's zone (the L7 follow-on) are not named.
+  it('names exactly the screens whose movement times changed, and each uses the org-zone formatter', () => {
     const e = entry('movement-times-org-time-zone');
-    for (const surface of ['Movements page', "an item's movement history on the Staging page", "mobile app's Movements list"]) {
-      expect(e.whatChanged, surface).toContain(surface);
-    }
-    expect(e.whatChanged).toContain('Settings, Organization');
+    expect(e.whatChanged).toBe(
+      "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. " +
+        "On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. " +
+        "In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging.",
+    );
+    expect(e.howItAffectsYou).toBe(
+      'On these screens, everyone sees the same date and time for a movement, whatever time zone their device is set to.',
+    );
+    expect(release().summary).toContain(
+      "Stock movement dates and times on the Movements page, an item's Movements and Activity tabs and Staging's History now follow your organization's time zone",
+    );
+    // Left in the viewer's zone, so never named: the general Activity page, an
+    // order's Timeline, a PO's receipt history.
+    expect(`${release().summary} ${e.whatChanged}`).not.toMatch(/timeline|receipt|audit log|Activity page/i);
+
+    // Web: the Movements page (both modes), Staging's History, the item page's tabs.
     expect(read('../../app/(dashboard)/dashboard/movements/page.tsx')).toContain('formatMovementWhen(');
     expect(read('../../components/inventory/item-history-dialog.tsx')).toContain('formatMovementWhen(');
+    expect(read('../../components/inventory/activity-feed.tsx')).toContain('formatMovementWhen(e.createdAt, timeZone)');
+    const itemDetail = read('../../components/inventory/item-detail.tsx');
+    expect(itemDetail.split('timeZone={feedTimeZone}')).toHaveLength(3);
+    expect(itemDetail).toContain('getOrgRowForRequest(ctx.organizationId)');
+    // Phone: the Movements list, Staging's History, the item screen's tabs, home.
     expect(read('../../../../mobile/src/screens/movements.tsx')).toContain('formatMovementDay(');
     expect(read('../../../../mobile/src/lib/item-history.ts')).toContain('formatMovementWhen(');
-    // Neither mode renders the viewer-zone component any more: since the
-    // redesign (#369) both draw their When cell in movements-table.tsx.
+    const itemScreen = read('../../../../mobile/app/item/[id].tsx');
+    expect(itemScreen).toContain('formatMovementCardWhen(movement.created_at, timeZone)');
+    expect(itemScreen).toContain('formatMovementCardWhen(audit.createdAt, timeZone)');
+    expect(read('../../../../mobile/app/(drawer)/(tabs)/index.tsx')).toContain('formatMovementClock(m.createdAt, timeZone)');
+    // No web surface the entry names renders the viewer-zone component any
+    // more: since the redesign (#369) both Movements modes draw their When
+    // cell in movements-table.tsx.
     expect(read('../../components/movements/movements-table.tsx')).toContain('m.createdAtLabel');
     for (const path of [
       '../../app/(dashboard)/dashboard/movements/page.tsx',
       '../../components/movements/movements-table.tsx',
       '../../components/movements/movements-instant-table.tsx',
       '../../components/inventory/item-history-dialog.tsx',
+      '../../components/inventory/activity-feed.tsx',
     ]) {
       // JSX usage always carries props (`<LocalDateTime iso=`); the prose that
       // explains the change names the bare tag.

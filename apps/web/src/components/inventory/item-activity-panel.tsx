@@ -48,6 +48,13 @@ interface ItemActivityPanelProps {
    * action + RPC re-gate on `movements:edit_notes`.
    */
   canEditNotes?: boolean;
+  /**
+   * The organization's time zone, which every row's date and time prints in
+   * (L7, owner decision Q1). Required, so the item page cannot render the feed
+   * in some other zone by forgetting to pass it; the page resolves a missing
+   * or unusable zone to core's documented default.
+   */
+  timeZone: string;
 }
 
 export function ItemActivityPanel({
@@ -58,6 +65,7 @@ export function ItemActivityPanel({
   initialExhausted,
   kindFilter,
   canEditNotes = false,
+  timeZone,
 }: ItemActivityPanelProps) {
   const [events, setEvents] = React.useState<ActivityEvent[]>(initialEvents);
   const [locationNames, setLocationNames] = React.useState(initialLocationNames);
@@ -113,7 +121,12 @@ export function ItemActivityPanel({
 
   return (
     <>
-      <ActivityFeed events={events} locationNames={locationNames} canEditNotes={canEditNotes} />
+      <ActivityFeed
+        events={events}
+        locationNames={locationNames}
+        canEditNotes={canEditNotes}
+        timeZone={timeZone}
+      />
       {!exhausted && (
         <div className="mt-4 flex justify-center">
           <Button

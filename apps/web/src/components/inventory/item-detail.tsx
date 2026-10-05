@@ -85,12 +85,14 @@ import {
   isCountableItem,
   isLikelyIsbn,
   isManagerOrAbove,
+  resolveOrgTimezone,
   sharedSkuNoteCopy,
   type CustomFieldDefinition,
   type ItemElsewhere,
   type Role,
 } from '@stockpilot/core';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { placementSummary, transferableHoldings } from '@/lib/placements';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
@@ -232,6 +234,18 @@ export async function ItemDetail({
           return null;
         })
       : Promise.resolve<ActivityEvent[]>([]);
+  // THE FEED'S ZONE (L7, owner decision Q1; slice 3 review F2). Both feed tabs
+  // print every row's date and time in the ORGANIZATION's zone, like the
+  // Movements page, counts and orders. Read beside the feed, never after it:
+  // request-cached and normally already in hand from the request context, so
+  // it is not another round trip. A failed read never fails the tab; it prints
+  // in core's documented default zone. Overview shows no feed and never asks.
+  const feedTimeZoneRead: Promise<string> =
+    activeTab === 'movements' || activeTab === 'activity'
+      ? getOrgRowForRequest(ctx.organizationId)
+          .then((row) => resolveOrgTimezone(row?.timezone))
+          .catch(() => resolveOrgTimezone(null))
+      : Promise.resolve(resolveOrgTimezone(null));
   const imageRowsRead = isOverview
     ? imagesSvc.list(id)
     : Promise.resolve<Awaited<ReturnType<ItemImagesService['list']>>>([]);
@@ -353,6 +367,7 @@ export async function ItemDetail({
     writableWarehouseIds,
     skuSiblings,
     displayGroups,
+    feedTimeZone,
   ] = await Promise.all([
     categoryIdForFetch
       ? ctx.supabase
@@ -416,6 +431,7 @@ export async function ItemDetail({
     // Group selected (0400): the record's display group, read as the viewer
     // (RLS). Never fails the page: a failed read shows no group line.
     readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, [id]),
+    feedTimeZoneRead,
   ]);
 
   // ── Stock in warehouses the caller cannot see (0371) ────────────────
@@ -1337,6 +1353,7 @@ export async function ItemDetail({
                 initialExhausted={movementsInitialExhausted}
                 kindFilter="movement"
                 canEditNotes={canEditNotes}
+                timeZone={feedTimeZone}
               />
             )}
           </DetailSection>
@@ -1362,6 +1379,7 @@ export async function ItemDetail({
                 initialCursor={activityInitialCursor}
                 initialExhausted={activityInitialExhausted}
                 canEditNotes={canEditNotes}
+                timeZone={feedTimeZone}
               />
             )}
           </DetailSection>

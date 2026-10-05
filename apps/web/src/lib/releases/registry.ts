@@ -41,8 +41,12 @@ export const RELEASES: Release[] = [
     // Each entry says only what the code does, told to the people who can see
     // it: placing is stock:transfer on the Staging page (Inventory module);
     // the status names wherever Orders is on; movement times to anyone who
-    // reads items (an item's movement history on Staging) or the Movements
-    // page (activity_logs:read). The status entry says names AND colors: the
+    // reads items (an item's Movements and Activity tabs, Staging's History,
+    // the phone's home screen) or the Movements page (activity_logs:read). The
+    // movement-times entry names exactly the screens that changed (slice 3
+    // review F2); the web's general Activity page, an order's Timeline and a
+    // PO's receipt history still print the viewer's zone (the L7 follow-on in
+    // six/followups.md) and are not named. The status entry says names AND colors: the
     // one live organization with a config today (2026-10-05) changes seven
     // colors and no names. The Site entry says the rack label is not replaced
     // by the Site's name, which is what skipping the label stamp guarantees;
@@ -51,7 +55,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'Staged stock back on a Site, your status names in the app, and movement times in your time zone',
     summary:
-      "Place on the Staging page, and Place on Staging in the mobile app after the latest update, now offer your warehouse's Site, so stock returned to Staging can go back where the rest of the item sits. In the mobile app, after the latest update, orders show your organization's status names and colors. Stock movement dates and times now follow your organization's time zone, on the web and in the mobile app.",
+      "Place on the Staging page, and Place on Staging in the mobile app after the latest update, now offer your warehouse's Site, so stock returned to Staging can go back where the rest of the item sits. In the mobile app, after the latest update, orders show your organization's status names and colors. Stock movement dates and times on the Movements page, an item's Movements and Activity tabs and Staging's History now follow your organization's time zone, on the web and in the mobile app.",
     publishedAt: '2026-10-24T17:10:00Z',
     entries: [
       {
@@ -90,11 +94,11 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: "Movement times use your organization's time zone",
         whatChanged:
-          "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do: on the Movements page, in an item's movement history on the Staging page, and in the mobile app's Movements list and movement history after the latest update.",
+          "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging.",
         whyItMatters:
           'They followed the time zone of the device you were using, so near midnight a movement could show a different day from a count or an order.',
         howItAffectsYou:
-          'Everyone sees the same date and time for a movement, whatever time zone their device is set to.',
+          'On these screens, everyone sees the same date and time for a movement, whatever time zone their device is set to.',
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['items:read', 'activity_logs:read'] },

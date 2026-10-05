@@ -44,12 +44,28 @@ vi.mock('next/link', async () => {
 });
 
 // A marker, so a test can tell the feed rendered from the could-not-load state.
+// It also keeps the props each panel was rendered with (the feed's zone, L7).
+const panelProps: Array<Record<string, unknown>> = [];
 vi.mock('@/components/inventory/item-activity-panel', async () => {
   const React = await import('react');
   return {
-    ItemActivityPanel: () => React.createElement('div', { 'data-testid': 'activity-panel' }),
+    ItemActivityPanel: (props: Record<string, unknown>) => {
+      panelProps.push(props);
+      return React.createElement('div', { 'data-testid': 'activity-panel' });
+    },
   };
 });
+// The org row (request-cached; normally already in hand from the request
+// context). Recorded as a read so a test can see WHEN it starts, and on which
+// tabs. The feed's dates print in its zone (L7, slice 3 review F2).
+const orgRow = { answer: async (): Promise<unknown> => ({ timezone: 'Asia/Tokyo' }) };
+vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dashboard/request-cache')>()),
+  getOrgRowForRequest: vi.fn(async () => {
+    started.push('orgRow');
+    return orgRow.answer();
+  }),
+}));
 const reportError = vi.fn();
 vi.mock('@/lib/error-reporter', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
@@ -320,8 +336,9 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 /** Reads only the Overview panel shows. A Movements or Activity render makes none of them. */
 const OVERVIEW_ONLY_READS = ['reserved', 'images', 'costHistory', 'customFields', 'serials'];
-/** The reads that need nothing but the item id, on a Movements or Activity tab. */
-const TAB_ID_ONLY_READS = ['placements', 'activity', 'locations'];
+/** The reads that need nothing but the item id, on a Movements or Activity tab.
+ *  The org row carries the zone the feed's dates print in (L7). */
+const TAB_ID_ONLY_READS = ['placements', 'activity', 'locations', 'orgRow'];
 /** The reads that need nothing but the item id, on Overview. */
 const OVERVIEW_ID_ONLY_READS = ['placements', 'locations', ...OVERVIEW_ONLY_READS];
 /** The reads that need a field off the item row (Overview only). */
@@ -336,6 +353,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   started.length = 0;
   getCalls.length = 0;
+  panelProps.length = 0;
+  orgRow.answer = async () => ({ timezone: 'Asia/Tokyo' });
   unhandled = [];
   process.on('unhandledRejection', onUnhandled);
   control.get = async () => itemRow();
@@ -437,8 +456,9 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     expect(screen.getByText('HVAC')).toBeTruthy();
     expect(screen.getByText('Acme Supply')).toBeTruthy();
     expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
-    // The Overview tab never pays for the activity feed.
+    // The Overview tab never pays for the activity feed, nor for its zone.
     expect(started).not.toContain('activity');
+    expect(started).not.toContain('orgRow');
   });
 
   it('the row-keyed reads start as soon as the row answers, while slower id-only reads are still in flight', async () => {
@@ -753,5 +773,36 @@ describe('ItemDetail: the verification card is off the critical path (F1-3)', ()
     const qs = new URLSearchParams(String(card.el.props.movementsHref).slice(1));
     expect(qs.get('tab')).toBe('movements');
     expect(qs.get('return')).toBe('/dashboard/inventory?q=hvac');
+  });
+});
+
+// L7 (owner decision Q1), slice 3 review F2: the Movements and Activity tabs
+// print every row's date in the ORGANIZATION's zone, like the Movements page.
+// The zone comes off the request-cached org row, read beside the feed (never
+// after it), and a failed read never fails the tab.
+describe('ItemDetail: the feed prints in the organization zone (L7)', () => {
+  for (const tab of ['movements', 'activity'] as const) {
+    it(`the ${tab} tab hands the panel the org's zone`, async () => {
+      render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab }));
+      expect(screen.getByTestId('activity-panel')).toBeTruthy();
+      expect(panelProps.at(-1)).toMatchObject({ timeZone: 'Asia/Tokyo' });
+    });
+  }
+
+  it("a failed zone read still renders the feed, in core's documented default zone", async () => {
+    orgRow.answer = async () => {
+      throw new Error('org row read failed');
+    };
+    render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'movements' }));
+    expect(screen.getByTestId('activity-panel')).toBeTruthy();
+    expect(panelProps.at(-1)).toMatchObject({ timeZone: 'America/Los_Angeles' });
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('an unknown stored zone prints in the default zone too', async () => {
+    orgRow.answer = async () => ({ timezone: 'Mars/Olympus' });
+    render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'activity' }));
+    expect(panelProps.at(-1)).toMatchObject({ timeZone: 'America/Los_Angeles' });
   });
 });
