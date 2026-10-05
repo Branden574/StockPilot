@@ -49,11 +49,13 @@ import 'server-only';
 // unstable_cache nested inside another is a footgun: Next bypasses the
 // nested READ but still writes the recompute back — recurring bug
 // pattern #13):
-//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v3'
+//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v6'
+//     (page 1 + its placement; on Items under the instant cap page 1 is
+//      PLANNED with the instant derivation, see loadInventoryRowsUncached)
 //   • lookup tables    (org)                      'inventory-lookups-v1'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v2'
-//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v1'
+//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v2'
 //     (full ≤INSTANT_MODE_MAX_ROWS row set for client-side instant mode;
 //      over-cap views THROW a sentinel → wrapper returns null, uncached)
 // The default view (loadInventoryList) consumes all four. FILTERED
@@ -78,7 +80,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { inventoryViewPredicate } from '@stockpilot/core';
+import { inventoryDefaultLifecycle, inventoryViewPredicate } from '@stockpilot/core';
 
 import {
   can,
@@ -88,7 +90,12 @@ import {
   type Role,
 } from '@stockpilot/core';
 
-import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
+import {
+  INSTANT_MODE_MAX_ROWS,
+  planInstantFirstPage,
+  type InstantFirstPage,
+  type InstantModeRow,
+} from '@/lib/inventory/instant-mode';
 import { isSiteLocation } from '@/lib/locations/groups';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { withContext, type ServiceContext } from '@/server/services/context';
@@ -117,7 +124,8 @@ export const ALL_WAREHOUSES_KEY = 'all';
  * Rows per page on the two list pages. MUST match `PAGE_SIZE` in
  * inventory/page.tsx and books/page.tsx — if a page changes its size it
  * must change here too or the cached default view will disagree with
- * page 2+ of the live path.
+ * page 2+ (the live path's fixed slices, and on Items the instant
+ * derivation's group-aware pages, which the cached page 1 is planned with).
  */
 const DEFAULT_VIEW_PAGE_SIZE = 30;
 
@@ -376,6 +384,17 @@ export interface InventoryListPayload extends InventoryListLookups {
    *  badge on the "Expected" chip (mirrors InventoryService.
    *  countExpected; the 0277 partial index makes it ~free). */
   expectedCount: number;
+  /**
+   * Items view at or under INSTANT_MODE_MAX_ROWS: `items` IS page 1 of the
+   * instant-mode derivation (group-aware, so it can hold more or fewer than
+   * 30 rows) and this carries what the table prints for it ("Page 1 of N",
+   * "Showing 1–N", "N SKUs · M rows"), planned at fill time with the table's
+   * own functions. The page hands it to the table while the full dataset
+   * streams in, so the first paint is the page instant mode settles on.
+   * null = Books, or a view over the cap: those stay in server mode, and
+   * `items` is today's fixed 30-row slice.
+   */
+  firstPage: InstantFirstPage | null;
 }
 
 /** The filter-dependent slice cached per (org, warehouseKey, view). */
@@ -385,6 +404,8 @@ interface InventoryListRowsPayload {
   placement: Record<string, InventoryPlacementLine[]>;
   /** See InventoryListPayload.expectedCount. */
   expectedCount: number;
+  /** See InventoryListPayload.firstPage. */
+  firstPage: InstantFirstPage | null;
 }
 
 /* ---- loader (composition) ---------------------------------------------- */
@@ -429,6 +450,7 @@ export async function loadInventoryList(
     trends,
     placement: rows.placement,
     expectedCount: rows.expectedCount,
+    firstPage: rows.firstPage,
   };
 }
 
@@ -438,13 +460,15 @@ async function loadInventoryRows(
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryListRowsPayload> {
-  // v5: the row shape gained the five variant columns (group_id, variant_size,
-  // variant_size_system, variant_key, jersey_number) — a stale v4 entry would
-  // serve rows missing them for a whole TTL after deploy.
-  // (v4: rows EXCLUDE items awaiting first receipt (0277) + expectedCount.
-  //  v3: rows+placement split out of the bundled v2 payload.) One-time
-  // cold recompute per org — the */30 prewarm cron covers hot orgs.
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v5'], {
+  // v6: on the Items view `items` is now page 1 of the GROUP-AWARE instant
+  // derivation (a family is never cut, so it can hold more or fewer than 30
+  // rows) and the payload gained `firstPage`; a stale v5 entry would paint
+  // the old fixed 30-row slice, which is the first-paint flash this fixed.
+  // (v5: the row shape gained the five variant columns. v4: rows EXCLUDE items
+  //  awaiting first receipt (0277) + expectedCount. v3: rows+placement split
+  //  out of the bundled v2 payload.) One-time cold recompute per org — the
+  // */30 prewarm cron covers hot orgs.
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v6'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -486,6 +510,262 @@ function adminReadContext(organizationId: string): ServiceContext {
 const ITEM_SELECT_COLUMNS =
   'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by';
 
+/** PostgREST answers at most this many rows per request (`[api] max_rows`). */
+const POSTGREST_MAX_ROWS = 1000;
+
+/** The view-constant filters every default-view query carries. */
+interface ViewScope {
+  admin: ReturnType<typeof createAdminClient>;
+  organizationId: string;
+  itemType: ReturnType<typeof inventoryViewPredicate>['itemType'];
+  isRental: boolean;
+  warehouseId: string | null;
+}
+
+/**
+ * One row of the narrow whole-view read: exactly the columns the page-1 plan
+ * reads (the default URL state of deriveInstantView: lifecycle, the sort key,
+ * and the unit keys runAwarePages groups by), plus the item's holdings with
+ * stock, embedded only to be COUNTED (the footer's "rows").
+ */
+interface ViewKeyRow {
+  id: string;
+  sku: string;
+  name: string;
+  group_id: string | null;
+  status: 'active' | 'archived' | 'discontinued';
+  awaiting_first_receipt: boolean;
+  updated_at: string;
+  item_stock_levels: Array<{ quantity: number }> | null;
+}
+
+/**
+ * The default view's rows (active, not awaiting first receipt) — the same
+ * predicate as the shared lifecycle rule and as filterInstantRows' default
+ * state. Over the instant cap and on Books this picks today's fixed slice.
+ */
+function isDefaultViewKey(k: ViewKeyRow): boolean {
+  return (
+    k.status === inventoryDefaultLifecycle.status &&
+    k.awaiting_first_receipt === inventoryDefaultLifecycle.awaitingFirstReceipt
+  );
+}
+
+/** Holding lines an item renders as (one per holding with stock). */
+function holdingLinesOf(k: ViewKeyRow): number {
+  let n = 0;
+  for (const l of k.item_stock_levels ?? []) if (Number(l.quantity) > 0) n++;
+  return n;
+}
+
+/**
+ * A key row as the derivation's input. The default URL state reads only the
+ * columns the narrow read carries (inventory-list.first-page.test.ts proves
+ * page 1 does not move when every other column changes); the rest are neutral.
+ */
+function toPlanRow(k: ViewKeyRow): InstantModeRow {
+  return {
+    id: k.id,
+    sku: k.sku,
+    name: k.name,
+    group_id: k.group_id,
+    status: k.status,
+    awaiting_first_receipt: k.awaiting_first_receipt,
+    updated_at: k.updated_at,
+    quantity_on_hand: 0,
+    reorder_point: 0,
+    unit_cost: 0,
+    category_id: null,
+    primary_location_id: null,
+    charter_id: null,
+  };
+}
+
+/**
+ * WAVE 1 of the default-view fill: EVERY row of the view (all statuses, the
+ * population the instant dataset carries), narrowly, in the default order
+ * (newest first, id tiebreak), so its leading rows are also the fixed slice.
+ *
+ * One request for a view of up to 1,000 rows, which is every view today (L4L
+ * Items: 460). 1,001-2,000 rows takes a second, serial request; a write
+ * between the two can shift the window, so a short or repeated read THROWS
+ * (nothing half-read is cached; the next request reads again). Over the
+ * instant cap it stops at the first 1,000 (`complete: false`): those rows
+ * still hold the fixed slice, and the counts come from wave 2.
+ */
+async function readViewKeys(
+  scope: ViewScope,
+): Promise<{ keys: ViewKeyRow[]; viewRows: number; complete: boolean }> {
+  const page = (from: number, to: number, withCount: boolean) => {
+    let q = scope.admin
+      .from('inventory_items')
+      .select(
+        'id, sku, name, group_id, status, awaiting_first_receipt, updated_at, item_stock_levels(quantity)',
+        withCount ? { count: 'exact' } : undefined,
+      )
+      .eq('organization_id', scope.organizationId)
+      .is('deleted_at', null)
+      .eq('item_type', scope.itemType)
+      .eq('is_rental', scope.isRental)
+      // Filters on the EMBEDDED holdings narrow the holdings, never the items:
+      // the rows with stock, filed under this org — what the placement read
+      // in wave 2 and the instant dataset's own holdings read keep.
+      .gt('item_stock_levels.quantity', 0)
+      .eq('item_stock_levels.organization_id', scope.organizationId);
+    if (scope.warehouseId) q = q.eq('warehouse_id', scope.warehouseId);
+    return q
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{
+      data: ViewKeyRow[] | null;
+      error: { message: string } | null;
+      count: number | null;
+    }>;
+  };
+
+  const first = await page(0, POSTGREST_MAX_ROWS - 1, true);
+  if (first.error) throw new Error(`inventory-list view keys query failed: ${first.error.message}`);
+  const keys = first.data ?? [];
+  const viewRows = first.count ?? keys.length;
+  if (viewRows > INSTANT_MODE_MAX_ROWS) return { keys, viewRows, complete: false };
+
+  // The rest of a view the first response could not hold, from where it
+  // stopped (so a server whose max_rows is below 1,000 still reads it all).
+  const seen = new Set(keys.map((k) => k.id));
+  while (keys.length < viewRows) {
+    const rest = await page(keys.length, INSTANT_MODE_MAX_ROWS - 1, false);
+    if (rest.error) throw new Error(`inventory-list view keys query failed: ${rest.error.message}`);
+    const before = keys.length;
+    for (const k of rest.data ?? []) {
+      if (seen.has(k.id)) continue;
+      seen.add(k.id);
+      keys.push(k);
+    }
+    if (keys.length === before) break;
+  }
+  if (keys.length !== viewRows) {
+    throw new Error(
+      `inventory-list view changed between key reads (${keys.length} of ${viewRows})`,
+    );
+  }
+  return { keys, viewRows, complete: true };
+}
+
+/** Page 1 of the cached default view, decided from wave 1 alone (pure CPU). */
+interface PageOnePlan {
+  /** The page's item ids, in page order. */
+  ids: string[];
+  /** Default-view item rows; null = count it in wave 2 (keys incomplete). */
+  total: number | null;
+  /** The Expected chip's count; null = count it in wave 2. */
+  expectedCount: number | null;
+  firstPage: InstantFirstPage | null;
+}
+
+function planPageOne(
+  view: InventoryListView,
+  read: { keys: ViewKeyRow[]; complete: boolean },
+): PageOnePlan {
+  if (!read.complete) {
+    // Over the instant cap: no dataset ever streams, the view stays in server
+    // mode, and its pages 2+ come from the live path's fixed offsets, so page
+    // 1 must be today's fixed slice. The first 1,000 rows of the view in the
+    // default order hold the first 30 default rows of the whole view (the
+    // caller re-reads in the rare case they hold fewer).
+    const ids = read.keys
+      .filter(isDefaultViewKey)
+      .slice(0, DEFAULT_VIEW_PAGE_SIZE)
+      .map((k) => k.id);
+    return { ids, total: null, expectedCount: null, firstPage: null };
+  }
+  // Mirrors InventoryService.countExpected: flagged rows across lifecycles.
+  const expectedCount = read.keys.filter((k) => k.awaiting_first_receipt === true).length;
+  if (view === 'books') {
+    // Books keep the fixed slice: their cached path only paints when the
+    // dataset is unavailable, and then server mode (fixed offsets) is final.
+    const defaults = read.keys.filter(isDefaultViewKey);
+    return {
+      ids: defaults.slice(0, DEFAULT_VIEW_PAGE_SIZE).map((k) => k.id),
+      total: defaults.length,
+      expectedCount,
+      firstPage: null,
+    };
+  }
+  // Items under the cap: page 1 of the instant derivation itself, so the
+  // first paint is the page the table settles on once the dataset lands.
+  const lines = new Map(read.keys.map((k) => [k.id, holdingLinesOf(k)]));
+  const { view: derived, firstPage } = planInstantFirstPage(
+    read.keys.map(toPlanRow),
+    (id) => lines.get(id) ?? 0,
+    DEFAULT_VIEW_PAGE_SIZE,
+  );
+  return {
+    ids: derived.pageItems.map((r) => r.id),
+    total: derived.total,
+    expectedCount,
+    firstPage,
+  };
+}
+
+/** A HEAD count over the view (the over-cap path's totals). */
+async function countViewRows(scope: ViewScope, which: 'default' | 'expected'): Promise<number> {
+  let q = scope.admin
+    .from('inventory_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', scope.organizationId)
+    .is('deleted_at', null)
+    .eq('item_type', scope.itemType)
+    .eq('is_rental', scope.isRental);
+  q =
+    which === 'default'
+      ? q
+          .eq('status', inventoryDefaultLifecycle.status)
+          .eq('awaiting_first_receipt', inventoryDefaultLifecycle.awaitingFirstReceipt)
+      : // The Expected chip spans lifecycles (InventoryService.countExpected).
+        q.eq('awaiting_first_receipt', true);
+  if (scope.warehouseId) q = q.eq('warehouse_id', scope.warehouseId);
+  const { count, error } = await q;
+  if (error) throw new Error(`inventory-list ${which} count query failed: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
+ * The over-cap fixed slice when the view's first 1,000 rows hold fewer than
+ * 30 default rows (a mass archive): today's query, ids only. One more round
+ * trip, on that path alone.
+ */
+async function readFixedSliceIds(scope: ViewScope): Promise<string[]> {
+  let q = scope.admin
+    .from('inventory_items')
+    .select('id')
+    .eq('organization_id', scope.organizationId)
+    .is('deleted_at', null)
+    .eq('status', inventoryDefaultLifecycle.status)
+    .eq('item_type', scope.itemType)
+    .eq('is_rental', scope.isRental)
+    .eq('awaiting_first_receipt', inventoryDefaultLifecycle.awaitingFirstReceipt);
+  if (scope.warehouseId) q = q.eq('warehouse_id', scope.warehouseId);
+  const { data, error } = await q
+    .order('updated_at', { ascending: false })
+    .order('id', { ascending: true })
+    .range(0, DEFAULT_VIEW_PAGE_SIZE - 1);
+  if (error) throw new Error(`inventory-list fixed slice query failed: ${error.message}`);
+  return (data ?? []).map((r) => r.id as string);
+}
+
+/**
+ * The cached default view, in TWO waves of requests (as before this change):
+ *   1. every row of the view, narrowly (readViewKeys);
+ *      then page 1 is decided in memory (planPageOne): on Items under the cap
+ *      it is page 1 of the instant derivation, planned with the table's own
+ *      functions, so the first paint already IS the page instant mode settles
+ *      on once the streamed dataset lands (owner bug 2026-10-05: the old
+ *      fixed 30-row slice re-shuffled into a different page half a second
+ *      after a refresh);
+ *   2. the page's full columns, holdings and photos, by id, with the same
+ *      query shapes the instant dataset loader uses, so the two loaders hand
+ *      the table identical rows.
+ */
 async function loadInventoryRowsUncached(
   organizationId: string,
   warehouseKey: string,
@@ -496,95 +776,104 @@ async function loadInventoryRowsUncached(
   // books, never rentals. Restated in neither place.
   const { itemType, isRental } = inventoryViewPredicate(view);
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
+  const scope: ViewScope = { admin, organizationId, itemType, isRental, warehouseId };
 
-  // Default-view filters, mirroring InventoryService.list() with no
-  // searchParams: active, non-rental, not deleted, item_type by view,
-  // NOT awaiting first receipt (mig 0277 — phantoms from inbound POs are
-  // hidden until stock arrives), updated_desc + stable id tiebreak,
-  // page 1 of 30, exact count.
-  let mainQuery = admin
-    .from('inventory_items')
-    .select(ITEM_SELECT_COLUMNS, { count: 'exact' })
-    .eq('organization_id', organizationId)
-    .is('deleted_at', null)
-    .eq('status', 'active')
-    .eq('item_type', itemType)
-    .eq('is_rental', isRental)
-    .eq('awaiting_first_receipt', false)
-    .order('updated_at', { ascending: false })
-    .order('id', { ascending: true })
-    .range(0, DEFAULT_VIEW_PAGE_SIZE - 1);
-  if (warehouseId) mainQuery = mainQuery.eq('warehouse_id', warehouseId);
+  // Wave 1, then the plan. Throw on ANY read error so a failed pass is never
+  // cached (the page falls back to the live path for this request).
+  const read = await readViewKeys(scope);
+  const plan = planPageOne(view, read);
+  const ids =
+    !read.complete && plan.ids.length < DEFAULT_VIEW_PAGE_SIZE
+      ? await readFixedSliceIds(scope)
+      : plan.ids;
 
-  // Expected-chip badge count: flagged rows for this view ACROSS
-  // lifecycles (no status filter — the Expected view spans them, same as
-  // mobile's listStatusPredicate lifecycle:null) — mirrors
-  // InventoryService.countExpected exactly (the manager+ / all-access,
-  // no-extra-filters variant this default-view cache serves). Rides the
-  // 0277 partial index.
-  let expectedQuery = admin
-    .from('inventory_items')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', organizationId)
-    .is('deleted_at', null)
-    .eq('item_type', itemType)
-    .eq('is_rental', isRental)
-    .eq('awaiting_first_receipt', true);
-  if (warehouseId) expectedQuery = expectedQuery.eq('warehouse_id', warehouseId);
-
-  const [mainRes, expectedRes] = await Promise.all([mainQuery, expectedQuery]);
-
-  // Throw on ANY read error so a failed pass is never cached.
-  if (mainRes.error) throw new Error(`inventory-list items query failed: ${mainRes.error.message}`);
-  if (expectedRes.error) {
-    throw new Error(`inventory-list expected count query failed: ${expectedRes.error.message}`);
-  }
-  const expectedCount = expectedRes.count ?? 0;
-
-  const rows = (mainRes.data ?? []) as unknown as RawItemRow[];
-  const total = mainRes.count ?? 0;
-
-  const ids = rows.map((r) => r.id);
-
-  // Second wave: holdings (placement) + primary images — independent of
-  // each other, both keyed on the page's item ids. (Trends are NOT
-  // fetched here anymore — they derive per request from the org-wide
-  // bucket cache, see loadInventoryTrendBuckets.)
-  const [levelsRes, imageRowsRes] = await Promise.all([
-    ids.length > 0
-      ? admin
+  // Wave 2: the page's own rows, holdings and photos — independent of each
+  // other, all keyed on the page's ids, batched by fetchAllRowsByIds (page 1
+  // is at most max(30, the largest family) ids, so normally one batch each).
+  // An over-cap view also counts its totals here, in the same wave.
+  const byIds = { concurrency: DATASET_ID_BATCH_CONCURRENCY };
+  const [rawRows, levels, imageRows, total, expectedCount] = await Promise.all([
+    fetchAllRowsByIds<RawItemRow>(
+      ids,
+      (batch) => (from, to) => {
+        let q = admin
+          .from('inventory_items')
+          .select(ITEM_SELECT_COLUMNS)
+          .eq('organization_id', organizationId)
+          .is('deleted_at', null)
+          .eq('item_type', itemType)
+          .eq('is_rental', isRental)
+          .in('id', batch);
+        if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+        return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+          data: RawItemRow[] | null;
+          error: { message: string } | null;
+        }>;
+      },
+      byIds,
+    ),
+    fetchAllRowsByIds<HoldingLevelRow>(
+      ids,
+      (batch) => (from, to) =>
+        admin
           .from('item_stock_levels')
           .select('item_id, location_id, quantity, locations!inner(name, kind, type)')
           .eq('organization_id', organizationId)
-          // in-list-bound: one default-view page, DEFAULT_VIEW_PAGE_SIZE (30) ids
-          .in('item_id', ids)
+          .in('item_id', batch)
           .gt('quantity', 0)
-      : Promise.resolve({ data: [], error: null }),
-    ids.length > 0
-      ? admin
+          .order('id', { ascending: true })
+          // The to-one `locations` embed types as an array in generated
+          // PostgREST types but is a single object at runtime.
+          .range(from, to) as unknown as PromiseLike<{
+          data: HoldingLevelRow[] | null;
+          error: { message: string } | null;
+        }>,
+      byIds,
+    ),
+    fetchAllRowsByIds<PrimaryImageRow>(
+      ids,
+      (batch) => (from, to) =>
+        admin
           .from('item_images')
           .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
           .eq('organization_id', organizationId)
-          // in-list-bound: one default-view page, DEFAULT_VIEW_PAGE_SIZE (30) ids
-          .in('item_id', ids)
+          .in('item_id', batch)
+          // Same pick order as the dataset loader (primary first, then
+          // sort_order, id tiebreak), so both pick the same photo.
           .order('is_primary', { ascending: false })
           .order('sort_order', { ascending: true })
-      : Promise.resolve({ data: [], error: null }),
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: PrimaryImageRow[] | null;
+          error: { message: string } | null;
+        }>,
+      byIds,
+    ),
+    plan.total ?? countViewRows(scope, 'default'),
+    plan.expectedCount ?? countViewRows(scope, 'expected'),
   ]);
-  if (levelsRes.error) {
-    throw new Error(`inventory-list stock levels query failed: ${levelsRes.error.message}`);
-  }
-  if (imageRowsRes.error) {
-    throw new Error(`inventory-list item_images query failed: ${imageRowsRes.error.message}`);
-  }
 
+  // Page order (the batched read returns id order), and nothing but the page.
+  const rowById = new Map(rawRows.map((r) => [r.id, r]));
+  const pageRows = ids.flatMap((id) => {
+    const r = rowById.get(id);
+    return r ? [r] : [];
+  });
+  const onPage = new Set(ids);
   const { items, placement } = assembleInventoryRows(
-    rows,
-    (levelsRes.data ?? []) as unknown as HoldingLevelRow[],
-    (imageRowsRes.data ?? []) as unknown as PrimaryImageRow[],
+    pageRows,
+    levels.filter((l) => onPage.has(l.item_id)),
+    imageRows.filter((img) => onPage.has(img.item_id)),
   );
 
-  return { items, total, placement, expectedCount };
+  return {
+    items,
+    total,
+    placement,
+    expectedCount,
+    // "Showing 1–N" counts the rows this payload really carries.
+    firstPage: plan.firstPage ? { ...plan.firstPage, pageItemCount: items.length } : null,
+  };
 }
 
 /** A main-query row before the derived placement/image fields land. */

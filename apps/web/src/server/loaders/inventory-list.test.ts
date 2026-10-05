@@ -285,9 +285,30 @@ const emptyModuleGate = {
   organizations: { data: { all_modules_comp: false }, error: null },
 };
 
+/** fetchAllRows stand-in that actually INVOKES buildPage once, so the
+ *  query chain runs against the stub admin and its data flows back —
+ *  mirrors one-page fetch behavior. The default-view fill's second wave
+ *  (page rows, holdings, photos by id) and the dataset loader both read
+ *  through it. */
+function fetchAllRowsInvokesBuildPage() {
+  vi.mocked(fetchAllRows).mockImplementation(async (buildPage) => {
+    const res = await (
+      buildPage as (
+        f: number,
+        t: number,
+      ) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
+    )(0, 999);
+    if (res.error) throw new Error(res.error.message);
+    return (res.data ?? []) as never;
+  });
+}
+
 describe('loadInventoryList (cached payload shape)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Wave 2 of the fill reads the page's rows, holdings and photos by id
+    // through fetchAllRowsByIds → fetchAllRows.
+    fetchAllRowsInvokesBuildPage();
   });
 
   it('caches image storage PATHS (+ raw lqip), never signed URLs, and never signs inside the cached fn', async () => {
@@ -462,7 +483,7 @@ describe('loadInventoryList (cached payload shape)', () => {
       const serviceLines = (await svc.placementBreakdown(['i1'])).get('i1');
       expect(serviceLines).toEqual(payload.placement['i1']);
     } finally {
-      vi.mocked(fetchAllRows).mockResolvedValue([] as never[]);
+      fetchAllRowsInvokesBuildPage();
     }
   });
 
@@ -506,21 +527,31 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(row.rackHoldingsCount).toBe(2);
   });
 
-  it('expected-items visibility (mig 0277): the rows query EXCLUDES flagged rows, a separate head count of flagged-only rows fills payload.expectedCount', async () => {
-    // Track the two inventory_items builders separately: the first is
-    // the paged rows query, the second the Expected head count (created
-    // synchronously in that order inside the loader's Promise.all).
+  it('expected-items visibility (mig 0277): ONE read spans every lifecycle; flagged rows stay off the page and out of the total, and fill payload.expectedCount across lifecycles', async () => {
+    const flaggedActive = { ...baseItem, id: 'i2', sku: 'SKU-2', awaiting_first_receipt: true };
+    const flaggedArchived = {
+      ...baseItem,
+      id: 'i3',
+      sku: 'SKU-3',
+      status: 'archived' as const,
+      awaiting_first_receipt: true,
+    };
+    const archived = { ...baseItem, id: 'i4', sku: 'SKU-4', status: 'archived' as const };
     const itemBuilders: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
-    let itemCall = 0;
     createAdminClientMock.mockReturnValue({
       from: vi.fn((table: string) => {
         if (table === 'inventory_items') {
-          const result =
-            itemCall === 0
-              ? { data: [baseItem], count: 1, error: null } // rows query
-              : { data: null, count: 4, error: null }; // head count
-          itemCall++;
-          const b = makeBuilder(result) as Record<string, ReturnType<typeof vi.fn>>;
+          const b = makeBuilder(
+            itemBuilders.length === 0
+              ? // wave 1: the whole view, every lifecycle
+                {
+                  data: [baseItem, flaggedActive, flaggedArchived, archived],
+                  count: 4,
+                  error: null,
+                }
+              : // wave 2: the page's full rows by id
+                { data: [baseItem], error: null },
+          ) as Record<string, ReturnType<typeof vi.fn>>;
           itemBuilders.push(b);
           return b;
         }
@@ -537,24 +568,25 @@ describe('loadInventoryList (cached payload shape)', () => {
 
     const payload = await loadInventoryList('org-1', 'all', 'items');
 
-    // Payload carries the head count, NOT the rows count.
-    expect(payload.expectedCount).toBe(4);
+    // Flagged rows across lifecycles (the Expected view shows a manually
+    // archived flagged row, so the badge counts it); never on the page.
+    expect(payload.expectedCount).toBe(2);
     expect(payload.total).toBe(1);
+    expect(payload.items.map((r) => r.id)).toEqual(['i1']);
+    expect(payload.firstPage).toMatchObject({ pageCount: 1, pageItemCount: 1 });
+    // The wave-1 read is the view itself: no lifecycle filter, no flag
+    // filter (the default view is derived from it), org + type scoped. No
+    // separate head count is needed when the view fits one read.
+    const wave1Eq = itemBuilders[0]!.eq!;
+    const eqCols = (wave1Eq.mock.calls as Array<[string, unknown]>).map(([c]) => c);
+    expect(eqCols).not.toContain('status');
+    expect(eqCols).not.toContain('awaiting_first_receipt');
+    expect(wave1Eq).toHaveBeenCalledWith('organization_id', 'org-1');
+    expect(wave1Eq).toHaveBeenCalledWith('item_type', 'product');
     expect(itemBuilders).toHaveLength(2);
-    // Rows query hides flagged; head count selects ONLY flagged.
-    expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', false);
-    expect(itemBuilders[0]!.eq).not.toHaveBeenCalledWith('awaiting_first_receipt', true);
-    expect(itemBuilders[1]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', true);
-    // Both stay scoped to the org + view type.
     for (const b of itemBuilders) {
-      expect(b.eq).toHaveBeenCalledWith('organization_id', 'org-1');
-      expect(b.eq).toHaveBeenCalledWith('item_type', 'product');
+      expect((b.select!.mock.calls[0] as unknown[])[1]).not.toMatchObject({ head: true });
     }
-    // The rows query is the default (active) view; the Expected head
-    // count spans lifecycles (NO status filter — the Expected view shows
-    // a manually-archived flagged row, so the badge must count it).
-    expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('status', 'active');
-    expect(itemBuilders[1]!.eq).not.toHaveBeenCalledWith('status', 'active');
   });
 });
 
@@ -1108,8 +1140,8 @@ describe('sub-loader cache wiring', () => {
     // Pin the version keys: a rename here silently orphans warm entries
     // (one-time cold recompute) — bump deliberately, never accidentally.
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
-      // v5 = the row shape gained the five sports variant columns.
-      'inventory-list-v5',
+      // v6 = Items page 1 is the planned group-aware page (+ firstPage).
+      'inventory-list-v6',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
@@ -1144,17 +1176,6 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
       }),
     };
     return { admin, buildersByTable };
-  }
-
-  /** fetchAllRows stand-in that actually INVOKES buildPage once, so the
-   *  query chain runs against the recording admin and its data flows
-   *  back — mirrors one-page fetch behavior. */
-  function fetchAllRowsInvokesBuildPage() {
-    vi.mocked(fetchAllRows).mockImplementation(async (buildPage) => {
-      const res = await (buildPage as (f: number, t: number) => Promise<{ data: unknown[] | null; error: { message: string } | null }>)(0, 999);
-      if (res.error) throw new Error(res.error.message);
-      return (res.data ?? []) as never;
-    });
   }
 
   const archivedItem = { ...baseItem, id: 'i2', sku: 'SKU-2', name: 'Old Widget', status: 'archived' as const };
@@ -1249,9 +1270,10 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
       },
     };
 
-    // Paged loader (its second wave reads the builders directly).
+    // Paged loader (its second wave reads the page's rows by id through
+    // fetchAllRows → invoke the builders against the same tables).
     createAdminClientMock.mockReturnValue(makeAdmin(tables));
-    vi.mocked(fetchAllRows).mockResolvedValue([] as never); // value + trend sub-loaders
+    fetchAllRowsInvokesBuildPage();
     const paged = await loadInventoryList('org-1', 'all', 'items');
 
     // Dataset loader over the same rows (its second wave rides

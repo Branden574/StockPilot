@@ -143,6 +143,11 @@ const READERS: Record<string, Entry> = {
     count: 1,
     why: 'Cached manager-only default-view loader (createAdminClient); staff and viewers never read it.',
   },
+  'server/loaders/inventory-list.ts::readViewKeys': {
+    classification: 'service-client',
+    count: 1,
+    why: "Wave 1 of the same cached manager-only default-view fill (createAdminClient): embeds the holdings only to COUNT each item's lines for the footer. Staff and viewers never read it.",
+  },
   'server/loaders/inventory-list.ts::loadInventoryDatasetUncached': {
     classification: 'service-client',
     count: 1,

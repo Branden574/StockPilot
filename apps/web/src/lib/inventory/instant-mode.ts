@@ -37,6 +37,13 @@
 //   5. stock=low page fill — the server post-filters a pre-fetched page
 //      (pages can come up short); the client filters THEN paginates, so
 //      every page is full and consistent with `total`.
+//   6. Page boundaries — this module paginates GROUP-AWARE (runAwarePages:
+//      a SKU family or size run is never cut), the live server path slices
+//      a fixed 30 rows. That divergence is confined to the views that never
+//      switch modes (staff, viewers, orgs over the cap, dataset failures).
+//      The CACHED default Items view, which paints first and is then
+//      re-derived here once the full dataset streams in, plans its page 1
+//      with planInstantFirstPage below, so both paints show the same page.
 
 /**
  * Per-view row ceiling for instant mode. Orgs whose (view, warehouse)
@@ -632,8 +639,10 @@ export function deriveInstantView<T extends InstantModeRow>(
   // The group is the unit of display, so the group must be the unit of
   // pagination. Size-run clustering stays Items-only: books are never
   // sized and the table gates that grouping off for them.
-  // This is client-only; an ACCEPTED divergence from the server's fixed
-  // row-slice pagination (documented in the parity block above).
+  // The LIVE server path slices a fixed 30 rows instead (divergence #6 in
+  // the parity block above). The cached default Items view does not: it
+  // runs this function at cache-fill time (planInstantFirstPage), so its
+  // first paint is this page.
   const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
   const page = Math.min(Math.max(1, state.page), pageCount);
@@ -648,6 +657,112 @@ export function deriveInstantView<T extends InstantModeRow>(
     pageItems,
     pageStartIndex,
     filteredRows: filtered,
+  };
+}
+
+/* ---- the footer's set-wide counts (table AND cached first page) ------------ */
+//
+// The Items footer reads "N SKUs · M rows". Both numbers describe the WHOLE
+// filtered set, not the page, and they are computed in two places that must
+// agree to the digit: the table (instant mode, over the full dataset) and the
+// cached default-view loader (planInstantFirstPage, at cache-fill time), whose
+// first paint the table shows before the dataset arrives. One implementation,
+// called by both, is what keeps the footer from changing under the person.
+
+/**
+ * COUNT 3 — the TOP-LEVEL lines the SKU grouping renders: one per distinct
+ * SKU plus one per blank-SKU row (a blank SKU is never grouped, see
+ * group-by-sku.ts). KEYED ON THE RAW SKU, deliberately: groupPlacementsBySku
+ * keys on the raw string, so " ABC" and "ABC" render as two lines, and
+ * folding them here would make the footer under-count what the body shows.
+ */
+export function countDistinctSkuLines(rows: readonly { sku: string }[]): number {
+  const seen = new Set<string>();
+  let ungrouped = 0;
+  for (const r of rows) {
+    if (r.sku.trim()) seen.add(r.sku);
+    else ungrouped++;
+  }
+  return seen.size + ungrouped;
+}
+
+/**
+ * COUNT 2 — PLACEMENT rows: what the Items list renders, one row per holding
+ * line and exactly one fallback row for an item with no holding (mirrors
+ * expandInstantPlacementRows). `holdingLines(id)` is the item's line count.
+ */
+export function countPlacementRows(
+  rows: readonly { id: string }[],
+  holdingLines: (id: string) => number,
+): number {
+  let n = 0;
+  for (const r of rows) n += holdingLines(r.id) || 1;
+  return n;
+}
+
+/**
+ * Item rows per RAW SKU over a set (blank SKUs skipped: they are never
+ * grouped). The SKU-group split detector compares each header's distinct
+ * item rows against this, so it must count the population the groups key on.
+ */
+export function countItemRowsBySku(rows: readonly { sku: string }[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.sku.trim()) continue;
+    m.set(r.sku, (m.get(r.sku) ?? 0) + 1);
+  }
+  return m;
+}
+
+/**
+ * What the table needs to present page 1 of the DEFAULT Items view exactly as
+ * instant mode will, before (or without) the full dataset: the cached loader
+ * computes it with the same derivation at cache-fill time and ships it next
+ * to the page's rows. Every number is over the whole default view. Plain JSON
+ * (it rides the data cache and the RSC payload).
+ */
+export interface InstantFirstPage {
+  /** Pages in the group-aware derivation ("Page 1 of N"). */
+  pageCount: number;
+  /** Item rows on page 1, the rows shipped with this summary ("Showing 1–N"). */
+  pageItemCount: number;
+  /** COUNT 3 over the whole view (the footer's "N SKUs"). */
+  distinctSkus: number;
+  /** COUNT 2 over the whole view (the footer's "M rows"). */
+  placementRows: number;
+  /** Item rows per raw SKU over the whole view, for the SKUs on page 1 only
+   *  (the split detector's input). Pairs, not an object: a SKU is free text. */
+  skuItemRowCounts: Array<[string, number]>;
+}
+
+/**
+ * Plan page 1 of the default Items view from the view's rows: the SAME
+ * derivation instant mode runs (deriveInstantView with the default URL state,
+ * group-aware pages) plus the footer counts the table would compute. `rows`
+ * may span every status (the default state filters them); `holdingLines(id)`
+ * is an item's holding-line count. Pure.
+ */
+export function planInstantFirstPage<T extends InstantModeRow>(
+  rows: readonly T[],
+  holdingLines: (id: string) => number,
+  pageSize: number,
+): { view: InstantViewResult<T>; firstPage: InstantFirstPage } {
+  const view = deriveInstantView(rows, instantStateFromPageParams({}), 'items', pageSize);
+  const bySku = countItemRowsBySku(view.filteredRows);
+  const onPage = new Map<string, number>();
+  for (const r of view.pageItems) {
+    const n = bySku.get(r.sku);
+    if (n !== undefined) onPage.set(r.sku, n);
+  }
+  return {
+    view,
+    firstPage: {
+      pageCount: view.pageCount,
+      pageItemCount: view.pageItems.length,
+      distinctSkus: countDistinctSkuLines(view.filteredRows),
+      placementRows: countPlacementRows(view.filteredRows, holdingLines),
+      skuItemRowCounts: [...onPage],
+    },
   };
 }
 
