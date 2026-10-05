@@ -83,6 +83,7 @@ export function moveDestinationLabel(
  * dropped afterwards by `offeredDestinationOrder`.
  */
 export function destinationKindsOrFilter(kinds: readonly string[]): string {
+  // in-list-bound: the move sheet passes its 2- or 3-element literal of kinds
   return `kind.in.(${kinds.join(',')}),kind.is.null`;
 }
 
