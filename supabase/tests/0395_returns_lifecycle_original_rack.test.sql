@@ -82,6 +82,7 @@
 --   M22 the rack leg leaves the location gate to the bare writer (F7) -> I7
 --   M23 the create passes the cap trigger's bare token through (F7)  -> race 5b
 --   M24 the rack leg does not lock the locations' warehouses (F8)    -> race 4c
+--   M25 the reopen rule counts a direct (via_ledger false) row (F9)  -> H7
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -92,7 +93,7 @@
 
 begin;
 
-select plan(110);
+select plan(111);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -1173,6 +1174,15 @@ select is(
        format($q$select (ledger.return_line_sources(%L)->>'case') || '/' || (ledger.return_line_sources(%L)->>'notRecordedReason')$q$, :'rVl', :'rVl')),
   'single_source,not_recorded/reopened,not_recorded/duplicate_line,not_recorded/drawn_mismatch',
   'H5: a Reopen picking movement, a second line of the item and a drawn total that differs from what was handed over each make the line not recorded');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, reason, user_id)
+              values (%L, %L, 'transfer', 1, 1, 2, 'Reopen picking (order_request ' || %L || ')', %L)$q$, :orgA, :itV, :oA, :mgr),
+    null,
+    format($q$select (select string_agg(via_ledger::text, ',') from public.stock_movements where item_id = %L and reason like 'Reopen picking%%')
+                     || '/' || (ledger.return_line_sources(%L)->>'case')$q$, :itV, :'rVl')),
+  'ok:1:false/single_source',
+  'H7: a Reopen picking row a member wrote directly (via_ledger false) leaves a proven line proven; only a ledger row counts (F9)');
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oU,
           pg_temp.one(:lU, 3)::text))->>'returnId') as "rU" \gset
 select is(

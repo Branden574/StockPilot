@@ -233,11 +233,15 @@ begin
     v_reason := 'duplicate_line';
   end if;
 
+  -- Only a ledger row counts (desk check F9): a member may insert a movement
+  -- directly (via_ledger false) with any reason text, and that must not
+  -- change what the provenance proves.
   if v_reason is null and exists (
        select 1 from public.stock_movements m
         where m.item_id = v_line.item_id
           and m.organization_id = v_line.organization_id
-          and m.reason = 'Reopen picking (order_request ' || v_line.order_request_id::text || ')') then
+          and m.reason = 'Reopen picking (order_request ' || v_line.order_request_id::text || ')'
+          and m.via_ledger) then
     v_reason := 'reopened';
   end if;
 
