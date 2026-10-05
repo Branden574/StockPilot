@@ -28,68 +28,6 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'phone-place-order-2026-10',
-    revision: 1,
-    // Phone ordering PO-4: placing an order request in the iPhone and iPad
-    // app. Held as a DRAFT until the OTA is out and phones report launching
-    // it (plan PO-5: publish as soon as eas update:insights shows iOS
-    // launches, or after one working day, whichever is first); the follow-up
-    // that publishes it sets the real publishedAt and re-reads these words
-    // against what shipped. Dated after PO-2's draft, which ships first, and
-    // above it (newest first). The words describe what a person sees on the
-    // phone and claim no number nobody measured. Who is told: anyone who can
-    // open the New order page (Orders on, orders:request, which every role
-    // holds by default).
-    status: 'draft',
-    title: 'Place an order request from the mobile app',
-    summary:
-      "You can now place an order request in the StockPilot app on iPhone and iPad: choose the warehouse, search or browse what it has, add items or a whole kit to your cart, choose pickup or delivery and a needed-by time, and submit. If the app sends it but doesn't hear back, Check and finish sends the same request again, so it is never placed twice.",
-    publishedAt: '2026-10-12T17:10:00Z',
-    audience: { anyPermission: ['orders:request'], modules: ['orders'] },
-    entries: [
-      {
-        id: 'phone-place-order',
-        category: 'new',
-        area: 'Orders',
-        title: 'Place an order in the mobile app',
-        whatChanged:
-          "The Orders screen in the app has a + button (and Place an order when the list is empty). It opens the order page: choose the warehouse to ship from, search by name, SKU or category, browse by category or Frequently ordered, and add items or a whole kit. Checkout shows your cart, who the order is for (if you can order for someone else), pickup or delivery and the site, the needed-by time in your organization's time zone and manager notes. After you submit you see the order number and can open the order, or open a pickup or delivery request email as a draft.",
-        whyItMatters:
-          'Placing an order request needed the web. Now it works from the phone, with the same rules as the web.',
-        howItAffectsYou:
-          "Your cart is kept on your phone for each warehouse, for your account only. Submitting needs a connection. If the connection drops while you're ordering, you can still browse the items as they were last loaded and keep building your cart. On an iPad the cart stays open beside the items. If you can approve orders, Review and approve takes you straight to the order.",
-        whatToDo: 'No action needed.',
-        link: { href: '/dashboard/orders/new', label: 'Place an order' },
-        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
-      },
-      {
-        id: 'phone-place-order-once',
-        category: 'improved',
-        area: 'Orders',
-        title: "A lost answer on the phone can't place the same order twice",
-        whatChanged:
-          "If the app sends your order request and doesn't hear back, your cart stays as it was sent, with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
-        whyItMatters:
-          'A weak signal in a warehouse could leave you unsure whether an order request went through, and sending it again could place it twice.',
-        howItAffectsYou:
-          'Until you choose, the cart and its warehouse stay as they were sent. The app checks on its own when it comes back to the screen or the connection returns. If you sign out first, the app asks, and checks it the next time you sign in on that phone. Someone else who signs in on the same phone never sees your cart or your order request.',
-        whatToDo: 'No action needed.',
-      },
-      {
-        id: 'phone-orders-list-current',
-        category: 'fixed',
-        area: 'Orders',
-        title: 'The Orders list in the app stays current',
-        whatChanged:
-          "The Orders list in the app loads again whenever you come back to it, says when it couldn't load instead of showing No orders yet, and names every status (some showed a raw code before).",
-        whyItMatters:
-          'A new order did not show until the screen was opened again, and a list that failed to load looked empty.',
-        howItAffectsYou: 'Pull down on the list to load it again at any time.',
-        whatToDo: 'No action needed.',
-      },
-    ],
-  },
-  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
@@ -173,17 +111,253 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'phone-place-order-2026-10',
+    revision: 1,
+    // Phone ordering PO-4: placing an order request in the iPhone and iPad app
+    // (#320, 84c59c0d, merged 2026-10-05 06:15:59Z; no migration: the phone
+    // calls the routes PO-2 and PO-3 put up). Held as a draft until the web
+    // deploy (web build d6f607a6e66f, built 06:16:27Z), the phone update (OTA
+    // group 62d31b09, iOS update 01a10ab5, launched on phones; the later
+    // groups 58069c7e and c6d13905 carry the same code) and the Demo Co
+    // production walk (59 checks passed: SO-000023 placed from an iPhone on the
+    // published bundle, pickup, needed by Mon Oct 5 10:00 AM in the
+    // organization's zone; one submission; a status read, Don't send it and a
+    // resend under the same key each answered that order and wrote nothing;
+    // Review and approve opened the order at Approve and Deny; the iPad showed
+    // the cart beside the items; cancelled while pending) were done. Published
+    // after them, the newest release, a minute after returns RX-1's; PO-2's
+    // draft sits above it.
+    //
+    // Its words were re-read against what shipped. The phone part is an
+    // over-the-air update, which loads when the app is opened again with no
+    // prompt, so the summary says "after the latest update" and the What to do
+    // of the first and last entries says to close the app completely and open
+    // it again. Kits come only where Bundles is on (the storefront answer's
+    // kitsEnabled). The pickup or delivery request email is offered only when
+    // the organization's Email routing for delivery requests is set
+    // (success.ts successEmailInput: no routing hides it). The iPad's cart
+    // column needs a window at least 700 pt wide and text below the
+    // accessibility sizes (layout.ts). A sign-out removes the cart with the
+    // account's workspace keys. Check and finish can end in a refusal, which
+    // the app says. The order page reads a held send's status when a
+    // storefront screen comes into focus, when the app returns while one is
+    // open, and when the connection comes back (runtime.ts
+    // useStorefrontScope); a sign-out reads it first and asks only when it is
+    // still unknown (sign-out-flow.ts). The Orders list's banner for an order
+    // request that is not confirmed is said with the lost answer. Before PO-4
+    // the Orders list read once, when it was first shown, and a pull down read
+    // it again.
+    //
+    // Not announced, on purpose: the Orders tour's Place an order step (the
+    // tour does not launch again; this note announces the feature), a web
+    // link to /dashboard/orders/new opening the phone's order page (this
+    // note's own link uses it), the empty Orders list's words for someone who
+    // does not approve orders, and core's two wording fixes the web shares
+    // (one unit available, a warehouse with no name).
+    //
+    // Who is told: anyone who can open the New order page (Orders on,
+    // orders:request, which every role holds by default).
+    status: 'published',
+    title: 'Place an order request from the mobile app',
+    summary:
+      "After the latest update, you can place an order request in the mobile app on iPhone and iPad: choose the warehouse, search or browse what it has, add items (or kits, where your organization uses Bundles) to your cart, choose pickup or delivery and a needed-by time, and submit. If the app sends it but doesn't hear back, Check and finish sends the same request again, so it is never placed twice.",
+    publishedAt: '2026-10-05T15:55:00Z',
+    audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+    entries: [
+      {
+        id: 'phone-place-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Place an order in the mobile app',
+        whatChanged:
+          "The Orders screen in the app has a + button (and Place an order when the list is empty). It opens the order page: choose the warehouse to ship from, search by name, SKU or category, browse by category or Frequently ordered, and add items, or kits where your organization uses Bundles. Checkout shows your cart, who the order is for (if you can order for someone else), pickup or delivery and the site, the needed-by time in your organization's time zone and manager notes. After you submit you see the order number and can open the order.",
+        whyItMatters:
+          'Placing an order request needed the web. Now it works from the phone, with the same rules as the web.',
+        howItAffectsYou:
+          "Your cart is kept on your phone for each warehouse, for your account only, until you sign out. Submitting needs a connection. If the connection drops while you're ordering, you can still browse the items as they were last loaded and keep building your cart. On an iPad, the cart stays open beside the items, except at the largest text sizes or in a narrow window. If you can approve orders, Review and approve takes you straight to the order. If your organization has set up Email routing for delivery requests, you can also open a pickup or delivery request email as a draft.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        id: 'phone-place-order-once',
+        category: 'improved',
+        area: 'Orders',
+        title: "A lost answer on the phone can't place the same order twice",
+        whatChanged:
+          "If the app sends your order request and doesn't hear back, your cart stays as it was sent, with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once, or the app says why it can't be. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
+        whyItMatters:
+          'A weak signal in a warehouse could leave you unsure whether an order request went through, and sending it again could place it twice.',
+        howItAffectsYou:
+          "Until you choose, the cart and its warehouse stay as they were sent, and the Orders list says the order request isn't confirmed yet. The order page checks on its own when you come back to it or the connection returns. If you sign out before you choose, the app checks it first when it has a connection; if it still can't tell, it asks you, and checks again the next time you sign in on that phone. Someone else who signs in on the same phone never sees your cart or your order request.",
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'phone-orders-list-current',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The Orders list in the app stays current',
+        whatChanged:
+          "The Orders list in the app loads again whenever you come back to it, says when it couldn't load instead of showing No orders yet, and names every status (some showed a raw code before).",
+        whyItMatters:
+          'The list did not load again when you came back to it, so a new order could stay hidden until you pulled the list down, and a list that failed to load looked empty.',
+        howItAffectsYou: 'Pull down on the list to load it again at any time.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+    ],
+  },
+  {
+    id: 'returns-original-rack-2026-10',
+    revision: 1,
+    // Returns RX-1 (migration 0394, pushed 2026-10-05 13:26:00Z: every return
+    // runs through gated server functions; Original rack; #322, dab3a07d,
+    // merged 13:26:55Z). Held as a draft until 0394 was pushed and verified,
+    // the web deploy (web build b1c2cd51477a, built 13:27:29Z), the phone
+    // update with the Returns screens (OTA group c6d13905, iOS update
+    // 01a10c42, launched on phones) and the Demo Co production walk (101
+    // checks passed, and 5 harness checks were corrected and passed on a
+    // re-check: SO-000024 was picked from 31-B; RMA-20261005-8AC826 offered
+    // Return to original rack: 31-B, preselected; approving and receiving
+    // moved nothing; Process return put the unit back on 31-B with one return
+    // movement; the phone listed and opened the RMA with its history) were
+    // done. Published after them, a minute after A3's release and a minute
+    // before PO-4's: the owner's rule is to publish What's New as soon as
+    // phones have the update, ahead of the returns plan's RX-5.
+    //
+    // Its words were re-read against what shipped. The phone screens are an
+    // over-the-air update, so they are said "after the latest update", the
+    // list entry's What to do says to close the app completely and open it
+    // again, and the request ping opens the return there after the update
+    // (older bundles open the original order, the dual link). A line picked
+    // from several racks offers those racks (Return to original racks, or one
+    // of them up to what is still out: restock-view.ts), so the words say
+    // so. Before RX-1 the mobile app could already start a return from an
+    // order (order-returns.ts), so the list entry's why no longer says the
+    // phone could not work a return at all. Two changes the draft left out
+    // are said: Staging names the RMA a return left stock in (core
+    // stagingReturnedSourceLabel), and a requester of a requester return now
+    // hears about it (returns-notify.ts notifyRequesterReturnEvent: a member
+    // as a notification under their Order status changes setting, anyone
+    // else by email; nothing after a counter approval or receipt, nothing for
+    // a staff return, nothing to a requester who deleted their account).
+    //
+    // Claims review (2026-10-05), each checked against the code:
+    // - The list had status chips before RX-1 (All, Requested, Approved,
+    //   Received, Closed, Denied, Cancelled: dab3a07d~1 returns/page.tsx), and
+    //   RX-1's filters are the same statuses under new names (core
+    //   RETURN_LIST_FILTERS; Closed takes closed, denied and cancelled). So
+    //   the list entry no longer says returns were hard to find: it names what
+    //   RX-1 added (the names, Closed holding denied and cancelled, the search,
+    //   the returning items with photos), and its title says "clearer
+    //   filters".
+    // - The process button reads Process return only for several items, or
+    //   when a destination must be chosen again; for one item it names where
+    //   the item goes, such as Return to 31-B (core processLabelFor, the web
+    //   workbench, the phone's processButtonLabel; walk R4), so the words say
+    //   both and the counter sentence ends "then process it".
+    // - No setting is only for return messages: a member's follow their Order
+    //   status changes setting (prefFlags 'email_order_status_changed').
+    //   Someone without an account is emailed unless their address
+    //   unsubscribed (return-update.ts, public_email_unsubscribes). A customer
+    //   portal requester has a user id on the order (portal.ts), so their
+    //   email goes as an account holder's and no unsubscribe check applies;
+    //   the words therefore say only someone without an account can
+    //   unsubscribe.
+    // - Manage returns now works when granted: before 0394 every return write
+    //   needed the manager role in the database (0153 policies, the caller's
+    //   client, process_return_disposition), so a staff member given the
+    //   permission was refused and the role matrix marked the grant as
+    //   rolling out. 0394 gates every RMA write on returns:manage plus write
+    //   access to the order's warehouse (user_can_access_inventory: owners,
+    //   admins and managers every warehouse, staff their assigned ones) and
+    //   core lists it as fully grantable, so the list entry says so.
+    //
+    // Not announced, on purpose: the two new webhook events, Return received
+    // and Return cancelled, in Settings > Integrations (integrations:manage;
+    // they send nothing until an admin ticks them), the list's paging and
+    // waiting age (part of the list the second entry names), and the deny
+    // dialog's help words.
+    //
+    // What a person can see: the RMA workbench and the destination choice on
+    // the web and the phone, the returns list's filters and paging, the
+    // phone's Returns screens, Staging's source for returned stock, a granted
+    // Manage returns that now works, and the staff ping for requester returns
+    // with its preference. Who is told:
+    // anyone who can open Returns (the module on, returns:read or
+    // returns:manage); the ping entry only to returns:manage. The words name
+    // no number nobody measured, never say "book" for a recorded quantity, and
+    // claim no inspection.
+    status: 'published',
+    title: 'Returns remember the rack an item came from',
+    summary:
+      'When you approve a return you now choose Restock or Scrap, and for Restock you can send the item straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received and processed. Returns also have their own screens in the mobile app after the latest update, and return requests from requesters notify the people who manage returns.',
+    publishedAt: '2026-10-05T15:54:00Z',
+    audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+    entries: [
+      {
+        id: 'returns-original-rack',
+        category: 'new',
+        area: 'Returns',
+        title: 'Send a returned item back to the rack it was picked from',
+        whatChanged:
+          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. If it was picked from more than one rack, the return shows those racks. Nothing moves when you approve or receive the return: processing it puts every item where you chose, in one step. Its button reads Process return, or, for a single item, names where it goes (such as Return to 31-B).',
+        whyItMatters:
+          'A restocked return always landed in Staging and had to be put away by hand, even when everyone knew which rack it came from.',
+        howItAffectsYou:
+          'The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return, use Approve and receive, then process it. On the Staging page, stock a return put there shows Returned and the RMA as its source.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-list-and-phone',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Returns have clearer filters, a search, and their own screens on the phone',
+        whatChanged:
+          "The returns list's filters now say where each return stands (Awaiting approval, Waiting for returned item, Received, not processed, Closed). Closed now includes denied and cancelled returns. The list has a search by RMA, SO number or requester, and shows the returning items with their photos. In the mobile app on iPhone and iPad, after the latest update, Returns in the menu opens the same list and each return, with the same steps as the web.",
+        whyItMatters:
+          'The filters were named after statuses (Requested, Approved, Received), the list had no search and did not show what was coming back, and the mobile app could start a return from an order but not approve, receive or process one.',
+        howItAffectsYou:
+          'Each return opens on one screen: what is coming back, the next step, and its history from the original pick to the close. On the phone every return action needs a connection. If an admin gives a staff member the "Manage returns" permission, they can now create, approve, receive and process returns for orders in the warehouses they are assigned to; before, only owners, admins and managers could.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-request-notification',
+        category: 'new',
+        area: 'Returns',
+        title: 'Return requests from requesters reach the people who manage returns',
+        whatChanged:
+          'When a requester asks for a return from their return link or the customer portal, the people who manage returns at that warehouse get a notification that opens the return, on the web and in the mobile app after the latest update. The requester now hears when the request arrives and when it is approved, received, declined or cancelled: a member as a notification, unless they turned off Order status changes, and anyone else by email. Someone without an account can unsubscribe from these emails.',
+        whyItMatters: 'A requested return used to wait until someone happened to open the returns list.',
+        howItAffectsYou:
+          'Returns created by staff send no notification. When you use The item is here at the counter, the requester gets no approved or received message. Turn the new request notification off in Notifications: New return and exchange requests.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Notification settings' },
+        audience: { anyPermission: ['returns:manage'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
     id: 'account-deletion-everyone-2026-10',
     revision: 1,
-    // Security slice A3 (migration 0393, every member can delete their own
-    // account; owner decision 2026-10-03). Held as a DRAFT until 0393 is
-    // pushed and verified, the web deploy is READY, the phone update that
-    // shows "Deleted user" is published and has launched, and the Demo Co
-    // walk has run (no production account is ever deleted; the walk opens
-    // Delete my account and cancels). The publishing follow-up sets the real
-    // publishedAt and re-reads these words against what shipped. A draft sits
-    // above the newest published release, dated after it and before the
-    // phone ordering draft above it.
+    // Security slice A3 (migration 0393, pushed 2026-10-05 10:02:00Z: every
+    // member can delete their own account; owner decision 2026-10-03; #321,
+    // 98927216, merged 10:02:57Z). Held as a draft until 0393 was pushed and
+    // verified, the web deploy (web build 65856de9476f, built 10:03:26Z), the
+    // phone update that shows "Deleted user" and the member's own role (OTA
+    // group 58069c7e, iOS update 01a10b86; the later group c6d13905, which
+    // launched on phones, carries the same code) and the Demo Co production
+    // walk (27 checks passed, and one harness check was corrected and passed
+    // on a read-only re-check; no production account was deleted: every web
+    // page that reads the marker rendered with live names, the web dialog and
+    // the phone's alert showed the new words and were cancelled, and Settings
+    // in the mobile app showed ADMIN for the demo admin) were done. Published
+    // after them, the oldest of the three published together: returns RX-1's
+    // release sits a minute above it and PO-4's two minutes above.
     //
     // It supersedes the "can still stop a deletion" sentence of the published
     // A2 releases (account-deletion-orders-2026-10, account-deletion-refused-
@@ -198,34 +372,54 @@ export const RELEASES: Release[] = [
     // the 16 marked tables' surfaces only (narrow scope, O-A3-1): stock
     // movements, the audit log and an order's timeline, received stock and
     // the PO PDF, PO imports, a schedule entry's creator and a return's
-    // requester; other records keep their existing words, so the note names
-    // records, never "every screen". In the mobile app the labels need the
-    // update (movements, item activity, the audit log, PO receipts and PO
-    // imports); deleting from the phone works on every installed version
-    // (the route changed, not the app). Released work: counts in progress,
-    // picks, deliveries, scheduled and in-progress schedule entries, open
-    // maintenance requests, escalation claims and warehouse manager. Pending
-    // invites the person sent stop working (they leave the invite list), so
-    // the words say "invite those people again", not "resend". A deleted
-    // requester is not emailed about their orders on any path (status
-    // emails, hand-over and backorder notices on paper and by link, the
-    // return prompt, the signer receipt to their kept address, the denied
-    // order's support ticket), and neither signing screen suggests their
-    // address (desk check F-1). The maintenance resolution email is not an
-    // order email and still goes (a recorded follow-up), so the words say
-    // "orders".
+    // people (since RX-1, on its workbench and list); other records keep
+    // their existing words, so the note names records, never "every screen".
+    // In the mobile app the labels need the update (movements, item
+    // activity, the audit log, PO receipts and PO imports, and since RX-1 the
+    // Returns screens, which read the server's label); deleting from the
+    // phone works on every installed version (the route changed, not the
+    // app). Released work: counts in progress, picks, deliveries, scheduled
+    // and in-progress schedule entries, open maintenance requests, escalation
+    // claims and warehouse manager. Pending invites the person sent stop
+    // working (they leave the invite list), so the words say "invite those
+    // people again", not "resend". A deleted requester is not emailed about
+    // their orders on any path (status emails, hand-over and backorder
+    // notices on paper and by link, the return prompt, the signer receipt to
+    // their kept address, the denied order's support ticket), and neither
+    // signing screen suggests their address (desk check F-1). The
+    // maintenance resolution email is not an order email and still goes (a
+    // recorded follow-up), so the words say "orders".
     //
     // A3 review (2026-10-05): the summary and howItAffectsYou name where
     // "Deleted user" shows instead of saying everything recorded shows it,
     // and the owner is told to "transfer ownership" (the Team page's control
     // is "Transfer ownership…"; owner is not in the role list).
     //
+    // Publish re-read (2026-10-05), against the merged code and the walk:
+    // the summary and the entry say where "Deleted user" shows on the web,
+    // and that the mobile app needs the latest update for it. The phone's
+    // signature pad stops suggesting a deleted requester's address only with
+    // the update (signerEmailDefault; the sign route sends no receipt to that
+    // address from any version), so the words say so. Two changes the draft
+    // left out are said in What to do, beside the only-owner rule they serve:
+    // the web side menu marks the owner "(Owner)" (user-menu-role.ts; core
+    // labels owners and admins alike "Super Admin"), and the mobile app's
+    // Settings card shows the member's own role, where it said OWNER for
+    // everyone (role-pill.ts, with the update). howItAffectsYou drops its
+    // closing only-owner sentence, which the summary and What to do say.
+    //
+    // Not announced, on purpose: the invite page's words for an invite a
+    // deleted member sent (read by people who are not members yet, who cannot
+    // see this note), the last-owner refusal's toast staying up with a link
+    // to the Team page (the refusal's own words carry it), and the platform
+    // console's labels (StockPilot staff only).
+    //
     // For everyone, with no link: any member can delete their own account.
-    status: 'draft',
+    status: 'published',
     title: 'Records you made no longer stop you deleting your account',
     summary:
-      'You can now delete your account from Settings on the web or in the mobile app, whatever you recorded. What you recorded stays with your organization; stock movements, received stock and the audit log show “Deleted user” instead of your name. If you are the only owner of an organization with other members, transfer ownership first.',
-    publishedAt: '2026-10-11T17:00:00Z',
+      'You can now delete your account from Settings on the web or in the mobile app, whatever you recorded. What you recorded stays with your organization; on the web, and in the mobile app after the latest update, stock movements, received stock and the audit log show “Deleted user” instead of your name. If you are the only owner of an organization with other members, transfer ownership first.',
+    publishedAt: '2026-10-05T15:53:00Z',
     entries: [
       {
         id: 'account-deletion-everyone',
@@ -233,87 +427,13 @@ export const RELEASES: Release[] = [
         area: 'Account',
         title: 'Records you made no longer stop you deleting your account',
         whatChanged:
-          'An account linked to records your organization keeps, such as received stock, imported purchase orders, schedule entries or returns, can now be deleted from Settings on the web and in the mobile app. Those records stay and show “Deleted user” instead of the person’s name on stock movements, the audit log, order timelines, received stock and the purchase order PDF, purchase order imports, schedule entries and returns. In the mobile app, after the latest update, movements, item activity, the audit log and purchase order receipts and imports show it too.',
+          'An account linked to records your organization keeps, such as received stock, imported purchase orders, schedule entries or returns, can now be deleted from Settings on the web and in the mobile app. Those records stay. On the web, stock movements, the audit log, order timelines, received stock and the purchase order PDF, purchase order imports, schedule entries and returns show “Deleted user” instead of the person’s name. In the mobile app, after the latest update, movements, item activity, the audit log, purchase order receipts and imports, and returns show it too.',
         whyItMatters:
           'Until now, an account linked to records your organization keeps could not be deleted from the app, and the person had to contact StockPilot support.',
         howItAffectsYou:
-          'Nothing changes unless someone deletes their account. If they do, their stock movements and received stock show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed, and their address is not suggested when someone signs for one. The only owner of an organization with other members must transfer ownership first.',
+          'Nothing changes unless someone deletes their account. If they do, their stock movements and received stock show “Deleted user”, and counts, picks, deliveries, schedule entries and maintenance requests assigned to them become unassigned; they also stop being a warehouse’s manager. Invitations they sent that were not yet accepted stop working; invite those people again if they should still join. They are no longer emailed about orders they placed. Their address is not suggested when someone signs for one on the web, or in the mobile app after the latest update.',
         whatToDo:
-          'If you are the only owner of an organization with other members, choose Transfer ownership on another member on the Team page on the web, or remove the other members, before you delete your account. In the mobile app, close the app completely and open it again to load the latest update.',
-      },
-    ],
-  },
-  {
-    id: 'returns-original-rack-2026-10',
-    revision: 1,
-    // Returns RX-1 (migration 0394: every return runs through gated server
-    // functions; Original rack). Held as a DRAFT until 0394 is pushed and
-    // verified, the web deploy is READY, the OTA with the phone screens is
-    // published and the Demo Co walk passed (returns plan 10.1 R5-R8); RX-5
-    // publishes it, sets the real publishedAt and re-reads these words
-    // against what shipped. It sits directly below the phone-ordering drafts
-    // (PO-4 and PO-2) and security slice A3's account deletion draft, each
-    // dated later (A3's test wants every draft above it dated after it), and
-    // above every published release; the publishing follow-up keeps the order
-    // newest first.
-    //
-    // What a person can see: the RMA workbench and the destination choice on
-    // the web and the phone, the returns list's filters and paging, the
-    // phone's Returns screens, and the staff ping for requester returns with
-    // its preference. Who is told: anyone who can open Returns (the module on,
-    // returns:read or returns:manage); the ping entry only to returns:manage.
-    // The words name no number nobody measured, never say "book" for a
-    // recorded quantity, and claim no inspection.
-    status: 'draft',
-    title: 'Returns remember the rack an item came from',
-    summary:
-      'When you approve a return you now choose Restock or Scrap, and for Restock you can send the item straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received and processed. Returns also have their own screens on the phone, and return requests from requesters notify the people who manage returns.',
-    publishedAt: '2026-10-11T16:50:00Z',
-    audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
-    entries: [
-      {
-        id: 'returns-original-rack',
-        category: 'new',
-        area: 'Returns',
-        title: 'Send a returned item back to the rack it was picked from',
-        whatChanged:
-          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. Nothing moves when you approve or receive the return: Process return puts every item where you chose, in one step.',
-        whyItMatters:
-          'A restocked return always landed in Staging and had to be put away by hand, even when everyone knew which rack it came from.',
-        howItAffectsYou:
-          "The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return, use Approve and receive, then Process return.",
-        whatToDo: 'No action needed.',
-        link: { href: '/dashboard/returns', label: 'Open Returns' },
-        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
-      },
-      {
-        id: 'returns-list-and-phone',
-        category: 'improved',
-        area: 'Returns',
-        title: 'Returns have filters, and their own screens on the phone',
-        whatChanged:
-          'The returns list has filters (Awaiting approval, Waiting for returned item, Received, not processed, Closed), a search by RMA, SO number or requester, and photos of the returning items. On the phone and the iPad, Returns in the menu opens the same list and each return, with the same steps as the web.',
-        whyItMatters:
-          'Returns waiting for the item, or received and not yet processed, were hard to find among closed ones, and the phone could not work a return at all.',
-        howItAffectsYou:
-          'Each return opens on one screen: what is coming back, the next step, and its history from the original pick to the close. On the phone every return action needs a connection.',
-        whatToDo: 'No action needed.',
-        link: { href: '/dashboard/returns', label: 'Open Returns' },
-        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
-      },
-      {
-        id: 'returns-request-notification',
-        category: 'new',
-        area: 'Returns',
-        title: 'Return requests from requesters reach the people who manage returns',
-        whatChanged:
-          'When a requester asks for a return from their return link or the customer portal, the people who manage returns at that warehouse get a notification that opens the return.',
-        whyItMatters: 'A requested return used to wait until someone happened to open the returns list.',
-        howItAffectsYou:
-          'Returns created by staff send no notification. Turn it off in Notifications: New return and exchange requests.',
-        whatToDo: 'No action needed.',
-        link: { href: '/dashboard/settings/notifications', label: 'Notification settings' },
-        audience: { anyPermission: ['returns:manage'], modules: ['returns'] },
+          'If you are the only owner of an organization with other members, first choose Transfer ownership on another member on the Team page on the web, or remove the other members. On the web, the role under your name in the side menu now adds (Owner) for an owner. In the mobile app, close the app completely and open it again to load the latest update; Settings then shows your own role instead of OWNER.',
       },
     ],
   },
