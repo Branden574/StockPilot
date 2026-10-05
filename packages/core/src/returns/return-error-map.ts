@@ -79,6 +79,7 @@ export const RETURN_ERROR_WORDS = {
   decisionIncomplete: 'Choose what happens to every returned line.',
   notReturnable: 'Only orders that were handed over can be returned.',
   insufficientStock: 'Scrapping this line would take stock on record below zero.',
+  replacementNoRequester: 'This replacement has no requester to send it to. Decline the exchange or ask an admin.',
   internal: 'Something went wrong. Try again.',
 } as const;
 
@@ -131,6 +132,11 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   return_decision_incomplete: { code: 'validation_error', status: 400, message: W.decisionIncomplete },
   order_not_returnable: { code: 'validation_error', status: 400, message: W.notReturnable },
   insufficient_stock: { code: 'validation_error', status: 400, message: W.insufficientStock },
+  // RX-2 (0397): the replacement order's own checks and the exchange table's
+  // defence-in-depth trigger (only the functions write it).
+  replacement_requester_unavailable: { code: 'validation_error', status: 400, message: W.replacementNoRequester },
+  exchange_line_invalid: { code: 'validation_error', status: 400, message: W.invalid },
+  exchange_request_immutable: { code: 'forbidden', status: 403, message: W.notAllowed },
 };
 
 const BUSY: ReturnErrorEntry = { code: 'conflict', status: 409, message: W.busy, retryable: true };
@@ -147,8 +153,30 @@ export interface ReturnDbError {
 export interface MappedReturnError extends ReturnErrorEntry {
   /** The key that matched (hint or bare token), `busy`, or `internal_error`. */
   reason: string;
-  /** The parsed `detail` when it is JSON (e.g. {rule, locationId}). */
+  /** The parsed `detail` when it is a JSON object (e.g. {rule, locationId}). */
   detail: Record<string, unknown> | null;
+  /** The parsed `detail` when it is a JSON array (replacement_unavailable:
+   *  [{itemId, needed, available}]). */
+  detailList: Array<Record<string, unknown>> | null;
+}
+
+/** One short line of a refused approval (replacement_unavailable's detail). */
+export interface ReplacementShortItem {
+  itemId: string;
+  needed: number;
+  available: number;
+}
+
+/** replacement_unavailable's detail as typed rows (bad rows dropped). */
+export function replacementShortItems(list: Array<Record<string, unknown>> | null | undefined): ReplacementShortItem[] {
+  const out: ReplacementShortItem[] = [];
+  for (const r of list ?? []) {
+    const itemId = typeof r.itemId === 'string' ? r.itemId : null;
+    const needed = Number(r.needed);
+    const available = Number(r.available);
+    if (itemId && Number.isFinite(needed) && Number.isFinite(available)) out.push({ itemId, needed, available });
+  }
+  return out;
 }
 
 /** The key a refusal is mapped by: its hint, and nothing else. */
@@ -171,14 +199,28 @@ function parseDetail(details: string | null | undefined): Record<string, unknown
   }
 }
 
+function parseDetailList(details: string | null | undefined): Array<Record<string, unknown>> | null {
+  if (!details) return null;
+  const text = details.trim();
+  if (!text.startsWith('[')) return null;
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (!Array.isArray(value)) return null;
+    return value.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v));
+  } catch {
+    return null;
+  }
+}
+
 /** One refusal -> its entry, the key that matched and any structured detail. */
 export function mapReturnError(err: ReturnDbError | null | undefined): MappedReturnError {
   const key = returnErrorKey(err);
   const detail = parseDetail(err?.details);
-  if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail };
+  const detailList = parseDetailList(err?.details);
+  if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail, detailList };
   const code = (err?.code ?? '').toUpperCase();
-  if (code === '55P03' || code === '57014') return { ...BUSY, reason: 'busy', detail };
-  return { ...INTERNAL, reason: 'internal_error', detail };
+  if (code === '55P03' || code === '57014') return { ...BUSY, reason: 'busy', detail, detailList };
+  return { ...INTERNAL, reason: 'internal_error', detail, detailList };
 }
 
 /** The rule names restock_location_unavailable carries, as words for the

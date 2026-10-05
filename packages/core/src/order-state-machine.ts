@@ -185,7 +185,12 @@ export type OrderAction =
   | 'collect_signature'
   | 'view_signature'
   | 'view_denial_reason'
-  | 'view_final_packing_slip';
+  | 'view_final_packing_slip'
+  // RX-2 (0397): an exchange replacement waiting for its return: a manager
+  // with returns:manage and orders:approve may release it early, with a reason.
+  | 'release_replacement_early'
+  // RX-2: a replacement is changed or cancelled only from its RMA.
+  | 'cancel_in_rma';
 
 export interface AvailableActionsInput {
   status: OrderStatus;
@@ -233,6 +238,23 @@ export interface AvailableActionsInput {
    * Optional: omitted, every rule falls back to manager rank, as before.
    */
   canApproveOrders?: boolean;
+  /**
+   * RX-2 (0397): this order is an exchange replacement
+   * (order_requests.replacement_for_return_id). Its items come from its RMA,
+   * and it is changed or cancelled only there: `cancel` gives way to
+   * `cancel_in_rma` (the database refuses a cancel from the order page,
+   * replacement_cancel_via_return). Optional, default off.
+   */
+  isReplacement?: boolean;
+  /**
+   * RX-2: the return-first gate. 'waiting' while the RMA's item has not been
+   * received and nobody released the replacement early: the pick slip and a
+   * resume are refused by the database (replacement_waiting_for_return), so
+   * they are not offered. Optional, default off.
+   */
+  replacementGate?: 'waiting' | 'open' | null;
+  /** RX-2: the viewer holds returns:manage and orders:approve (server-computed). */
+  canReleaseReplacement?: boolean;
 }
 
 const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
@@ -351,6 +373,18 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       break;
     case 'cancelled':
       break;
+  }
+
+  if (input.isReplacement) {
+    const at = actions.indexOf('cancel');
+    if (at >= 0) actions.splice(at, 1, 'cancel_in_rma');
+  }
+  if (input.replacementGate === 'waiting') {
+    for (const gated of ['generate_pick_slip', 'resume_fulfillment'] as const) {
+      const at = actions.indexOf(gated);
+      if (at >= 0) actions.splice(at, 1);
+    }
+    if (input.canReleaseReplacement && input.status === 'approved') actions.unshift('release_replacement_early');
   }
 
   return actions;

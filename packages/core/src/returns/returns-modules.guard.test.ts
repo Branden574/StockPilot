@@ -39,6 +39,7 @@ describe('the returns modules', () => {
   it('are all here', () => {
     expect(SOURCES.sort()).toEqual([
       'exchange-status.ts',
+      'exchange-view.ts',
       'restock-view.ts',
       'return-actions.ts',
       'return-error-map.ts',

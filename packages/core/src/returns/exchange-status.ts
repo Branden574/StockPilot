@@ -4,10 +4,11 @@
  * answer the workbench, the lists and the requester tracking show BESIDE it,
  * never merged into it (brief 8).
  *
- * RX-2 computes it in ONE SQL CASE inside `return_overview`, between
- * `-- exchange-status:begin` and `-- exchange-status:end` markers, and a
- * vitest deep-equals that CASE's codes against `EXCHANGE_STATUSES` below. In
- * RX-1 no exchange can exist, so every RMA reads `none`.
+ * RX-2 (migration 0397) computes it in ONE SQL CASE inside
+ * `return_overview`, between `-- exchange-status:begin` and
+ * `-- exchange-status:end` markers, and a vitest deep-equals that CASE's codes
+ * against `EXCHANGE_STATUSES` below, in order. The view answers the same for
+ * every member (the decision-log facts come from return_exchange_flags).
  *
  * First match wins, in this order (the order of `EXCHANGE_STATUSES`).
  * `unavailable` outranks the waiting and ready codes because a shortage is
@@ -40,6 +41,12 @@ export type ExchangeStatus = (typeof EXCHANGE_STATUSES)[number];
 
 export function isExchangeStatus(value: unknown): value is ExchangeStatus {
   return typeof value === 'string' && (EXCHANGE_STATUSES as readonly string[]).includes(value);
+}
+
+/** The view's value, or `none` for a row with no value (a return, or an
+ *  unknown code from a newer server: shown as the return's own status). */
+export function parseExchangeStatus(value: unknown): ExchangeStatus {
+  return isExchangeStatus(value) ? value : 'none';
 }
 
 /** Staff words (plan 3.10). `none` is the plain "Return" type. */
@@ -148,23 +155,44 @@ export interface ReturnListFilter {
   statuses: readonly ReturnStatus[] | null;
   /**
    * Needs the exchange columns RX-2 appends to `return_overview` (kind,
-   * exchange_status). RX-1 surfaces hide these filters: every RMA is a
-   * return, so they would be empty or equal to All.
+   * exchange_status). A surface talking to a server without them (an RX-1
+   * deploy) hides these filters.
    */
   requiresExchanges: boolean;
   /** Oldest approval first (the waiting list shows its age). */
   sort: 'created_desc' | 'approved_asc';
+  /** RX-2: the view's kind column (return or exchange). */
+  kind?: 'return' | 'exchange';
+  /** RX-2: the exchange statuses the filter keeps. */
+  exchangeStatuses?: readonly ExchangeStatus[];
+  /** RX-2: also a requested exchange whose requested item is short (advice). */
+  orRequestedShort?: boolean;
 }
 
 export const RETURN_LIST_FILTERS: readonly ReturnListFilter[] = [
   { id: 'all', label: 'All', statuses: null, requiresExchanges: false, sort: 'created_desc' },
-  { id: 'returns', label: 'Returns only', statuses: null, requiresExchanges: true, sort: 'created_desc' },
-  { id: 'exchanges', label: 'Exchanges', statuses: null, requiresExchanges: true, sort: 'created_desc' },
+  { id: 'returns', label: 'Returns only', statuses: null, requiresExchanges: true, sort: 'created_desc', kind: 'return' },
+  { id: 'exchanges', label: 'Exchanges', statuses: null, requiresExchanges: true, sort: 'created_desc', kind: 'exchange' },
   { id: 'awaiting_approval', label: 'Awaiting approval', statuses: ['requested'], requiresExchanges: false, sort: 'created_desc' },
   { id: 'waiting_for_return', label: 'Waiting for returned item', statuses: ['approved'], requiresExchanges: false, sort: 'approved_asc' },
   { id: 'received_not_processed', label: 'Received, not processed', statuses: ['received'], requiresExchanges: false, sort: 'created_desc' },
-  { id: 'replacement_unavailable', label: 'Replacement unavailable', statuses: null, requiresExchanges: true, sort: 'created_desc' },
-  { id: 'replacement_ready', label: 'Replacement ready', statuses: null, requiresExchanges: true, sort: 'created_desc' },
+  {
+    id: 'replacement_unavailable',
+    label: 'Replacement unavailable',
+    statuses: null,
+    requiresExchanges: true,
+    sort: 'created_desc',
+    exchangeStatuses: ['unavailable'],
+    orRequestedShort: true,
+  },
+  {
+    id: 'replacement_ready',
+    label: 'Replacement ready',
+    statuses: null,
+    requiresExchanges: true,
+    sort: 'created_desc',
+    exchangeStatuses: ['ready_to_pick', 'ready_for_pickup'],
+  },
   { id: 'closed', label: 'Closed', statuses: ['closed', 'denied', 'cancelled'], requiresExchanges: false, sort: 'created_desc' },
 ];
 

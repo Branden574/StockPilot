@@ -1,6 +1,10 @@
 /**
  * The request bodies of the returns routes and actions (returns plan 3.9):
  * one set of zod schemas for the web actions, the API routes and the phone.
+ * RX-2 adds the exchange fields (a line's exchange; the approval's exchange
+ * decisions and replacement options) and the bodies of the replacement
+ * actions (change or re-issue, cancel, release early, the candidate search,
+ * the prepare chain).
  * They are ADVISORY mirrors of the SQL: every rule here is re-checked by the
  * database function (whole units only, closing G10; at most 100 lines and
  * 10,000 units a line; reasons 1 to 1,000 characters; scrap carries no
@@ -23,6 +27,12 @@ export const RETURN_MAX_UNITS_PER_LINE = 10_000;
 export const RETURN_MAX_UNITS_REQUESTER = 10_000;
 export const RETURN_NOTES_MAX = 2000;
 export const RETURN_REASON_MAX = 1000;
+/** RX-2: "Tell the warehouse what you need" (a warehouse-review request). */
+export const RETURN_EXCHANGE_NOTE_MAX = 500;
+/** RX-2: an early release's reason. */
+export const RETURN_RELEASE_REASON_MAX = 500;
+/** RX-2: the staff replacement search's term. */
+export const RETURN_CANDIDATE_QUERY_MAX = 80;
 
 export const RETURN_REASON_CODES = ['damaged', 'wrong_item', 'end_of_year', 'overage', 'other'] as const;
 export type ReturnReasonCodeValue = (typeof RETURN_REASON_CODES)[number];
@@ -40,9 +50,42 @@ function trimmedOptional(max: number) {
     .refine((v) => v === undefined || v.length <= max, { message: `At most ${max} characters.` });
 }
 
+function requiredReason(max: number) {
+  return z
+    .string()
+    .transform((v) => v.trim())
+    .pipe(z.string().min(1, { message: 'Add a reason.' }).max(max, { message: `At most ${max} characters.` }));
+}
+
 function buildSchemas() {
   const uuid = z.string().uuid();
   const quantity = z.number().int().min(1).max(RETURN_MAX_UNITS_PER_LINE);
+
+  // RX-2: one returned line's exchange (plan 3.3.6): an item (a size or, for
+  // staff, any orderable item), or "the warehouse will review" with a note;
+  // the quantity defaults to, and is capped by, the line's return quantity
+  // (checked on the line below). Nothing else may ride along.
+  const exchange = z
+    .object({
+      itemId: uuid.optional().nullable(),
+      quantity: quantity.optional().nullable(),
+      note: trimmedOptional(RETURN_EXCHANGE_NOTE_MAX),
+    })
+    .strict()
+    .superRefine((x, ctx) => {
+      if (!x.itemId && !x.note) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Choose a replacement or tell the warehouse what you need.' });
+      }
+    });
+
+  const capExchange = (ls: Array<{ quantity: number; exchange?: { quantity?: number | null } | null }>, ctx: z.RefinementCtx) => {
+    for (const l of ls) {
+      if (l.exchange && typeof l.exchange.quantity === 'number' && l.exchange.quantity > l.quantity) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A replacement can't be more than the quantity returned." });
+        return;
+      }
+    }
+  };
 
   const createLine = z.object({
     orderRequestLineId: uuid,
@@ -51,9 +94,7 @@ function buildSchemas() {
     // Optional identity assertion (the server always stamps the item from the
     // source line; a mismatch is refused, never coerced).
     itemId: uuid.optional(),
-    // RX-2's exchange field. RX-1 passes it through so the database hook
-    // answers exchange_not_available (the kill switch says the same words).
-    exchange: z.unknown().optional(),
+    exchange: exchange.optional().nullable(),
   });
 
   const lines = z
@@ -70,6 +111,7 @@ function buildSchemas() {
         }
         seen.add(key);
       }
+      capExchange(ls, ctx);
     });
 
   const create = z.object({
@@ -83,7 +125,7 @@ function buildSchemas() {
   const requesterLine = z.object({
     orderRequestLineId: uuid,
     quantity,
-    exchange: z.unknown().optional(),
+    exchange: exchange.optional().nullable(),
   });
 
   const requester = z
@@ -104,6 +146,7 @@ function buildSchemas() {
             }
             seen.add(key);
           }
+          capExchange(ls, ctx);
         }),
       idempotencyKey: uuid.optional(),
     })
@@ -154,19 +197,107 @@ function buildSchemas() {
       }
     });
 
+  // RX-2: one decision per requested exchange line (plan 3.3.3 step 6):
+  // approve (the requested item, or a staff choice: a choice differing from
+  // a requested item is a substitution and needs a reason, which the
+  // database decides), decline (a reason), or add one to a return-only line
+  // (G9).
+  const exchangeDecision = z.discriminatedUnion('action', [
+    z
+      .object({
+        action: z.literal('approve'),
+        exchangeLineId: uuid,
+        itemId: uuid.optional().nullable(),
+        quantity: quantity.optional().nullable(),
+        reason: trimmedOptional(RETURN_REASON_MAX),
+      })
+      .strict(),
+    z.object({ action: z.literal('decline'), exchangeLineId: uuid, reason: requiredReason(RETURN_REASON_MAX) }).strict(),
+    z
+      .object({
+        action: z.literal('add'),
+        returnLineId: uuid,
+        itemId: uuid,
+        quantity: quantity.optional().nullable(),
+        reason: trimmedOptional(RETURN_REASON_MAX),
+      })
+      .strict(),
+  ]);
+
+  // The replacement order's options: refused or backordered when short
+  // (D19), and the approver's fulfilment override (a delivery names a site
+  // the warehouse serves; the database checks the pair).
+  const replacementOptions = z
+    .object({
+      whenShort: z.enum(['refuse', 'backorder']).optional(),
+      fulfillmentType: z.enum(['pickup', 'delivery']).optional(),
+      deliveryCharterId: uuid.optional().nullable(),
+    })
+    .strict();
+
   const approve = z.object({
     lines: decisionLines,
-    // RX-2 fields, passed through so the RX-1 hook refuses them.
-    exchange: z.array(z.unknown()).optional(),
-    replacement: z.unknown().optional(),
+    exchange: z
+      .array(exchangeDecision)
+      .max(RETURN_MAX_LINES)
+      .optional()
+      .superRefine((xs, ctx) => {
+        const seen = new Set<string>();
+        for (const x of xs ?? []) {
+          const key = ('exchangeLineId' in x ? x.exchangeLineId : x.returnLineId).toLowerCase();
+          if (seen.has(key)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Each exchange line takes one decision.' });
+            return;
+          }
+          seen.add(key);
+        }
+      }),
+    replacement: replacementOptions.optional().nullable(),
   });
 
-  const reason = z
-    .string()
-    .transform((v) => v.trim())
-    .pipe(z.string().min(1, { message: 'Add a reason.' }).max(RETURN_REASON_MAX));
+  const reason = requiredReason(RETURN_REASON_MAX);
 
   const deny = z.object({ reason });
+
+  // RX-2: change a replacement (substitution) or issue a new one after a
+  // replacement cancel (C-1); cancel a replacement; release one early.
+  const changeReplacement = z.object({
+    expectedRevision: z.number().int().min(0),
+    lines: z
+      .array(
+        z
+          .object({
+            exchangeLineId: uuid,
+            itemId: uuid.optional().nullable(),
+            quantity: quantity.optional().nullable(),
+          })
+          .strict(),
+      )
+      .max(RETURN_MAX_LINES)
+      .default([]),
+    reason,
+    whenShort: z.enum(['refuse', 'backorder']).default('refuse'),
+    replacement: replacementOptions.omit({ whenShort: true }).optional().nullable(),
+  });
+
+  const cancelReplacement = z.object({
+    expectedRevision: z.number().int().min(0).optional().nullable(),
+    reason,
+  });
+
+  const releaseEarly = z.object({ reason: requiredReason(RETURN_RELEASE_REASON_MAX) });
+
+  const candidates = z.object({
+    line: uuid,
+    q: z
+      .string()
+      .max(RETURN_CANDIDATE_QUERY_MAX * 2)
+      .optional()
+      .nullable()
+      .transform((v) => (v ?? '').trim().slice(0, RETURN_CANDIDATE_QUERY_MAX)),
+  });
+
+  const prepare = z.object({ stopAt: z.enum(['staged']).optional() }).strict();
 
   const cancel = z.object({
     reason: trimmedOptional(RETURN_REASON_MAX),
@@ -208,7 +339,22 @@ function buildSchemas() {
       }
     });
 
-  return { create, requester, approve, deny, cancel, dispositions, steps, lineDecision };
+  return {
+    create,
+    requester,
+    approve,
+    deny,
+    cancel,
+    dispositions,
+    steps,
+    lineDecision,
+    changeReplacement,
+    cancelReplacement,
+    releaseEarly,
+    candidates,
+    prepare,
+    exchangeDecision,
+  };
 }
 
 type ReturnSchemas = ReturnType<typeof buildSchemas>;
@@ -228,8 +374,14 @@ export type ReturnDenyRequest = z.output<ReturnSchemas['deny']>;
 export type ReturnCancelRequest = z.output<ReturnSchemas['cancel']>;
 export type ReturnDispositionsRequest = z.output<ReturnSchemas['dispositions']>;
 export type ReturnStepsRequest = z.output<ReturnSchemas['steps']>;
+export type ReturnExchangeDecision = z.output<ReturnSchemas['exchangeDecision']>;
+export type ReturnChangeReplacementRequest = z.output<ReturnSchemas['changeReplacement']>;
+export type ReturnCancelReplacementRequest = z.output<ReturnSchemas['cancelReplacement']>;
+export type ReturnReleaseEarlyRequest = z.output<ReturnSchemas['releaseEarly']>;
+export type ReturnCandidatesQuery = z.output<ReturnSchemas['candidates']>;
+export type ReturnPrepareRequest = z.output<ReturnSchemas['prepare']>;
 
-export type ReturnSchemaName = keyof Omit<ReturnSchemas, 'lineDecision'>;
+export type ReturnSchemaName = keyof Omit<ReturnSchemas, 'lineDecision' | 'exchangeDecision'>;
 
 /** Parses a body; `{ ok: false, message }` carries the first issue's words. */
 export function parseReturnBody<K extends ReturnSchemaName>(
@@ -280,12 +432,30 @@ export function returnSchemaCases(): ReturnSchemaCase[] {
       coreAccepts: false,
     },
     {
-      // Core lets the exchange field through so the database answers
-      // exchange_not_available (RX-1's hook; RX-2 fills it).
-      name: 'create_exchange_refused',
+      // RX-2: "return 1, exchange for 2" (brief 4); the 0394 suite's
+      // one-transaction proof (C5) uses this body.
+      name: 'create_exchange_over_return',
       schema: 'create',
-      input: { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { itemId: L2, quantity: 1 } }] },
-      coreAccepts: true,
+      input: { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { itemId: L2, quantity: 2 } }] },
+      coreAccepts: false,
+    },
+    {
+      name: 'create_exchange_no_item_no_note',
+      schema: 'create',
+      input: { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: {} }] },
+      coreAccepts: false,
+    },
+    {
+      name: 'create_exchange_note_too_long',
+      schema: 'create',
+      input: { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { note: 'x'.repeat(501) } }] },
+      coreAccepts: false,
+    },
+    {
+      name: 'create_exchange_quantity_fractional',
+      schema: 'create',
+      input: { lines: [{ orderRequestLineId: L1, quantity: 2, exchange: { itemId: L2, quantity: 1.5 } }] },
+      coreAccepts: false,
     },
     { name: 'approve_no_lines', schema: 'approve', input: { lines: [] }, coreAccepts: false },
     {
@@ -302,5 +472,31 @@ export function returnSchemaCases(): ReturnSchemaCase[] {
     },
     { name: 'deny_reason_blank', schema: 'deny', input: { reason: '   ' }, coreAccepts: false },
     { name: 'deny_reason_too_long', schema: 'deny', input: { reason: 'x'.repeat(1001) }, coreAccepts: false },
+    {
+      name: 'approve_exchange_decline_without_reason',
+      schema: 'approve',
+      input: {
+        lines: [{ returnLineId: L1, disposition: 'restock' }],
+        exchange: [{ exchangeLineId: L2, action: 'decline' }],
+      },
+      coreAccepts: false,
+    },
+    {
+      name: 'approve_exchange_unknown_action',
+      schema: 'approve',
+      input: {
+        lines: [{ returnLineId: L1, disposition: 'restock' }],
+        exchange: [{ exchangeLineId: L2, action: 'swap' }],
+      },
+      coreAccepts: false,
+    },
+    {
+      name: 'change_replacement_reason_blank',
+      schema: 'changeReplacement',
+      input: { expectedRevision: 1, lines: [], reason: '  ' },
+      coreAccepts: false,
+    },
+    { name: 'release_reason_too_long', schema: 'releaseEarly', input: { reason: 'x'.repeat(501) }, coreAccepts: false },
+    { name: 'cancel_replacement_reason_blank', schema: 'cancelReplacement', input: { reason: '' }, coreAccepts: false },
   ];
 }

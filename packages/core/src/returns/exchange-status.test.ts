@@ -11,6 +11,7 @@ import {
   exchangeRequesterSentence,
   exchangeStatusStaffLabel,
   isExchangeStatus,
+  parseExchangeStatus,
   parseReturnListFilter,
   RETURN_LIST_FILTERS,
   returnListFilter,
@@ -67,20 +68,32 @@ describe('exchange status', () => {
     expect(isExchangeStatus(null)).toBe(false);
   });
 
-  it('RX-1: no migration computes an exchange status yet, so no view may carry the column (RX-2 adds the CASE and its parity test)', () => {
+  it('RX-2: the view\'s one CASE (between the exchange-status markers) names exactly these codes, in this precedence order', () => {
     const files = readdirSync(MIGRATIONS).filter((f) => /^\d{4}_.*\.sql$/.test(f));
-    const withMarkers = files.filter((f) => readFileSync(join(MIGRATIONS, f), 'utf8').includes('-- exchange-status:begin'));
-    const rx1 = files.find((f) => f.endsWith('_returns_lifecycle_original_rack.sql'));
-    expect(rx1).toBeDefined();
-    if (withMarkers.length === 0) {
-      expect(readFileSync(join(MIGRATIONS, rx1!), 'utf8')).not.toMatch(/exchange_status/);
-    } else {
-      // RX-2 has landed: its CASE must name exactly these codes.
-      const sql = readFileSync(join(MIGRATIONS, withMarkers.at(-1)!), 'utf8');
-      const block = sql.slice(sql.indexOf('-- exchange-status:begin'), sql.indexOf('-- exchange-status:end'));
-      const codes = [...block.matchAll(/then\s+'([a-z_]+)'/g)].map((m) => m[1]);
-      expect(new Set(codes)).toEqual(new Set(EXCHANGE_STATUSES));
-    }
+    const withMarkers = files.filter((f) => /^[ \t]*-- exchange-status:begin[ \t]*$/m.test(readFileSync(join(MIGRATIONS, f), 'utf8')));
+    const rx2 = files.find((f) => f.endsWith('_returns_exchange_staff.sql'));
+    expect(rx2).toBeDefined();
+    expect(withMarkers.at(-1)).toBe(rx2);
+    const sql = readFileSync(join(MIGRATIONS, rx2!), 'utf8');
+    // The marker LINES (a comment elsewhere may name the markers).
+    const begins = [...sql.matchAll(/^[ \t]*-- exchange-status:begin[ \t]*$/gm)];
+    const ends = [...sql.matchAll(/^[ \t]*-- exchange-status:end[ \t]*$/gm)];
+    expect(begins).toHaveLength(1);
+    expect(ends).toHaveLength(1);
+    const begin = begins[0]!.index!;
+    const end = ends[0]!.index!;
+    expect(end).toBeGreaterThan(begin);
+    const block = sql.slice(begin, end);
+    const codes = [...block.matchAll(/then\s+'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(codes).toEqual([...EXCHANGE_STATUSES]);
+    // One code per arm, and no ELSE hiding an unlisted code.
+    expect(block).not.toMatch(/\belse\s+'/i);
+  });
+
+  it('parses the view value, reading an unknown or missing one as none', () => {
+    expect(parseExchangeStatus('unavailable')).toBe('unavailable');
+    expect(parseExchangeStatus(null)).toBe('none');
+    expect(parseExchangeStatus('newer_code')).toBe('none');
   });
 });
 
@@ -102,6 +115,16 @@ describe('the list filters', () => {
     expect(returnListFilter('received_not_processed').statuses).toEqual(['received']);
     expect(returnListFilter('closed').statuses).toEqual(['closed', 'denied', 'cancelled']);
     expect(returnListFilter('all').statuses).toBeNull();
+  });
+
+  it('RX-2: the exchange filters read the view\'s kind and exchange status (replacement unavailable also takes a requested exchange that is short)', () => {
+    expect(returnListFilter('returns')).toMatchObject({ kind: 'return', requiresExchanges: true });
+    expect(returnListFilter('exchanges')).toMatchObject({ kind: 'exchange', requiresExchanges: true });
+    expect(returnListFilter('replacement_unavailable')).toMatchObject({ exchangeStatuses: ['unavailable'], orRequestedShort: true });
+    expect(returnListFilter('replacement_ready').exchangeStatuses).toEqual(['ready_to_pick', 'ready_for_pickup']);
+    for (const f of RETURN_LIST_FILTERS) {
+      for (const code of f.exchangeStatuses ?? []) expect(isExchangeStatus(code)).toBe(true);
+    }
   });
 
   it('parses a query value, falling back to all for an unknown or unavailable filter', () => {

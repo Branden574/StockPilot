@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapReturnError, RETURN_ERROR_TABLE, returnErrorKey, restockProblemWords } from './return-error-map';
+import { mapReturnError, replacementShortItems, RETURN_ERROR_TABLE, returnErrorKey, restockProblemWords } from './return-error-map';
 
 describe('the returns error map', () => {
   // One row per arm: each hint maps to its own entry, and only to it.
@@ -93,5 +93,31 @@ describe('the returns error map', () => {
     expect(restockProblemWords('archived')).toBe('(archived)');
     expect(restockProblemWords('moved_warehouse')).toBe('(moved to another warehouse)');
     expect(restockProblemWords('nope')).toBeNull();
+  });
+});
+
+describe('RX-2 refusals', () => {
+  it('maps the replacement hints, specific before general', () => {
+    expect(mapReturnError({ code: 'P0001', hint: 'replacement_waiting_for_return', details: 'RMA-1' })).toMatchObject({
+      status: 409,
+      reason: 'replacement_waiting_for_return',
+    });
+    expect(mapReturnError({ code: '42501', hint: 'replacement_cancel_via_return' }).status).toBe(403);
+    expect(mapReturnError({ code: '42501', hint: 'replacement_lines_fixed' }).status).toBe(403);
+    expect(mapReturnError({ code: 'P0001', hint: 'replacement_already_drawn' }).status).toBe(409);
+    expect(mapReturnError({ code: 'P0001', hint: 'replacement_requester_unavailable' }).status).toBe(400);
+    expect(mapReturnError({ code: '42501', hint: 'exchange_request_immutable' }).status).toBe(403);
+  });
+
+  it('reads replacement_unavailable\'s detail as a list of short items', () => {
+    const m = mapReturnError({
+      code: 'P0001',
+      hint: 'replacement_unavailable',
+      details: '[{"itemId": "a", "needed": 1, "available": 0}, {"bad": true}]',
+    });
+    expect(m.detail).toBeNull();
+    expect(replacementShortItems(m.detailList)).toEqual([{ itemId: 'a', needed: 1, available: 0 }]);
+    expect(mapReturnError({ hint: 'restock_location_unavailable', details: '{"rule":"archived"}' }).detailList).toBeNull();
+    expect(replacementShortItems(null)).toEqual([]);
   });
 });

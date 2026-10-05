@@ -516,3 +516,64 @@ describe('approval-class actions follow canApproveOrders (0390)', () => {
     expect(at('pick_slip_generated', 'staff', true, { viewerCanPick: false })).toEqual(['print_pick_slip']);
   });
 });
+
+/**
+ * RX-2 (0397): an exchange replacement. Its lines come from its RMA and it is
+ * changed or cancelled only there; while the returned item has not arrived
+ * (and nobody released it early) the database refuses the pick slip and a
+ * resume, so neither is offered.
+ */
+describe('exchange replacements (0397)', () => {
+  const mgr = {
+    fulfillmentType: 'pickup' as const,
+    hasAssignedDelivery: false,
+    viewerRole: 'manager' as const,
+    viewerUserId: 'u1',
+    assignedPickerId: null,
+    assignedDeliveryUserId: null,
+    canApproveOrders: true,
+  };
+
+  it('defaults off: an ordinary order is unchanged', () => {
+    expect(availableOrderActions({ ...mgr, status: 'approved' })).toEqual(['generate_pick_slip', 'cancel']);
+    expect(availableOrderActions({ ...mgr, status: 'approved', isReplacement: false, replacementGate: null })).toEqual([
+      'generate_pick_slip',
+      'cancel',
+    ]);
+  });
+
+  it('a replacement is cancelled only in its RMA', () => {
+    expect(availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'open' })).toEqual([
+      'generate_pick_slip',
+      'cancel_in_rma',
+    ]);
+    expect(availableOrderActions({ ...mgr, status: 'staged_for_pickup', isReplacement: true })).toEqual([
+      'collect_signature',
+      'print_warehouse_slip',
+      'cancel_in_rma',
+    ]);
+    // A viewer who could not cancel is not offered the RMA route either.
+    expect(
+      availableOrderActions({ ...mgr, viewerRole: 'staff', canApproveOrders: false, status: 'approved', isReplacement: true }),
+    ).toEqual(['generate_pick_slip']);
+  });
+
+  it('while waiting for the returned item: no pick slip, no resume; the release for whoever may give it', () => {
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'waiting', canReleaseReplacement: true }),
+    ).toEqual(['release_replacement_early', 'cancel_in_rma']);
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'waiting', canReleaseReplacement: false }),
+    ).toEqual(['cancel_in_rma']);
+    expect(
+      availableOrderActions({
+        ...mgr,
+        status: 'backordered',
+        hasFulfillableStock: true,
+        isReplacement: true,
+        replacementGate: 'waiting',
+        canReleaseReplacement: true,
+      }),
+    ).toEqual(['close_partial', 'cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
+  });
+});

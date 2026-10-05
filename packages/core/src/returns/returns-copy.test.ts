@@ -7,7 +7,21 @@ import {
   againstOrderLabel,
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approveReplacementSentence,
   availableLabel,
+  changeOrCancelInRmaLabel,
+  collectReturnedItemLine,
+  createdAsReplacementLabel,
+  exchangeReplacementBanner,
+  itemQuantityLabel,
+  originalExchangeLine,
+  pickingWaitsSentence,
+  prepareTakeLine,
+  releasedBeforeReturnLine,
+  replacementShortLine,
+  slipExchangeLine,
+  stillWaitingLine,
+  waitingForReturnLine,
   choiceNeededSentence,
   qtyRequestedLabel,
   qtyReturningLabel,
@@ -48,6 +62,22 @@ function allStrings(): string[] {
     alreadyClosedSentence(null, null),
     staffNewRequestBody('Pat', 'RMA-20261005-ABC123', 103),
     againstOrderLabel(103, '0000'),
+    itemQuantityLabel('New Hire Shirt, L', 1),
+    exchangeReplacementBanner('RMA-20261005-ABC123', 100),
+    waitingForReturnLine('RMA-20261005-ABC123'),
+    releasedBeforeReturnLine('Dana', 'Swap at delivery: the driver collects the returned item.'),
+    changeOrCancelInRmaLabel('RMA-20261005-ABC123'),
+    originalExchangeLine('Large ×1', 103, 'Waiting for returned item'),
+    collectReturnedItemLine('New Hire Shirt, M ×1', 'RMA-20261005-ABC123'),
+    slipExchangeLine('RMA-20261005-ABC123', 'New Hire Shirt, M ×1', false),
+    prepareTakeLine('Large', 1, '12-B', 3),
+    createdAsReplacementLabel('RMA-20261005-ABC123', 2),
+    approveReplacementSentence('New Hire Shirt, L', 1, 0),
+    approveReplacementSentence('New Hire Shirt, L', 2, 14),
+    pickingWaitsSentence('New Hire Shirt, M', false),
+    pickingWaitsSentence(null, true, true),
+    replacementShortLine('Large', 0, 1),
+    stillWaitingLine(15),
     ...Object.values(EXCHANGE_STATUS_STAFF_LABELS),
     ...EXCHANGE_STATUSES.map((s) => exchangeRequesterSentence(s) ?? ''),
     ...RETURN_LIST_FILTERS.map((f) => f.label),
@@ -103,6 +133,23 @@ describe('returns copy', () => {
     expect(returnLineLabel('Walk New Hire Shirt - 2XL', 'Size 2XL')).toBe('Walk New Hire Shirt - 2XL');
     expect(returnLineLabel('Medium Tee', 'Size M')).toBe('Medium Tee, M');
     expect(returnLineLabel(null, null)).toBe('Item');
+  });
+
+  it('RX-2: prints the plan section 6 replacement sentences', () => {
+    expect(exchangeReplacementBanner('RMA-20261005-ABC123', 100)).toBe('Exchange replacement for RMA-20261005-ABC123 · Original order SO-000100');
+    expect(waitingForReturnLine('RMA-1')).toBe('Replacement reserved. Waiting for returned item (RMA-1)');
+    expect(releasedBeforeReturnLine('Dana', 'Swap at delivery.')).toBe('Released before the return by Dana: Swap at delivery.');
+    expect(releasedBeforeReturnLine(null, null)).toBe('Released before the return.');
+    expect(originalExchangeLine('Large ×1', 103, 'Waiting for returned item')).toBe('Exchange: Large ×1 → SO-000103 (Waiting for returned item)');
+    expect(collectReturnedItemLine('New Hire Shirt, Medium ×1', 'RMA-1')).toBe('Collect the returned item: New Hire Shirt, Medium ×1 (RMA-1)');
+    expect(slipExchangeLine('RMA-1', 'New Hire Shirt, Medium ×1', true)).toBe(
+      'Exchange replacement for RMA-1 (returned item: New Hire Shirt, Medium ×1, received)',
+    );
+    expect(prepareTakeLine('Large', 1, '12-B', 3)).toBe('Take Large ×1 from 12-B (3 on hand)');
+    expect(changeOrCancelInRmaLabel('RMA-1')).toBe('Change or cancel in RMA-1');
+    expect(createdAsReplacementLabel('RMA-1', 2)).toBe('Created as exchange replacement for RMA-1 (revision 2)');
+    expect(createdAsReplacementLabel('RMA-1', 1)).toBe('Created as exchange replacement for RMA-1');
+    expect(replacementShortLine('Large', 0, 1)).toBe('Large: 0 available, 1 needed.');
   });
 
   it('builds the staff push body from what exists, joined by a middle dot', () => {
