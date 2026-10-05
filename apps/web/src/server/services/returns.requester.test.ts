@@ -2,6 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
+const auditRow = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => true));
+vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined), insertAuditRowReported: auditRow }));
+const notifyStaff = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+const notifyRequester = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('./returns-notify', () => ({
+  notifyStaffNewReturnRequest: notifyStaff,
+  notifyRequesterReturnEvent: notifyRequester,
+}));
+vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
+
 import {
   createRequesterReturn,
   loadRequesterReturnContext,
@@ -62,17 +72,10 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     'organization_modules.select': RETURNS_MODULE_ENABLED,
     'order_request_lines.select': { data: [ORDER_LINE], error: null },
-    'returns.insert': {
-      data: [
-        {
-          id: 'ret-1',
-          return_number: 'RMA-20260531-ABCDEF',
-          organization_id: ORG_ID,
-        },
-      ],
+    'rpc:create_requester_return_request': {
+      data: { changed: true, replay: false, organizationId: ORG_ID, returnId: 'ret-1', returnNumber: 'RMA-20260531-ABCDEF', status: 'requested' },
       error: null,
     },
-    'return_lines.insert': { data: [{ id: 'rline-1' }], error: null },
     ...overrides,
   });
 }
@@ -216,113 +219,51 @@ describe('loadRequesterReturnContext (where the token is found, 0389 and 0392)',
   });
 });
 
-describe('createRequesterReturn (server-side re-validation)', () => {
-  it('creates a source=requester, status=requested return for a valid token', async () => {
+describe('createRequesterReturn (create_requester_return_request, 0394)', () => {
+  function refusal(hint: string, code = 'P0001') {
+    return { 'rpc:create_requester_return_request': { data: null, error: { code, hint, message: hint, details: null } } };
+  }
+
+  it('creates through the service-role function with the anonymous token actor, then audits and notifies once', async () => {
     const stub = makeStub();
     const result = await createRequesterReturn(stub.client, TOKEN, VALID_INPUT);
-
-    expect(result.id).toBe('ret-1');
-    expect(stub.fromCalls).toContain('returns');
-    expect(stub.fromCalls).toContain('return_lines');
-
-    // The insert must stamp source='requester', requested_by=null, and the
-    // requester identity FROM THE ORDER (not the client).
-    const insertArgs = stub.chainArgs.get('returns.insert')?.[0]?.[0] as Record<string, unknown>;
-    expect(insertArgs.source).toBe('requester');
-    expect(insertArgs.requested_by).toBeNull();
-    expect(insertArgs.requester_email).toBe('requester@example.com');
-    expect(insertArgs.requester_name).toBe('Reggie Requester');
-    expect(insertArgs.status).toBe('requested');
+    expect(result).toMatchObject({ id: 'ret-1', returnNumber: 'RMA-20260531-ABCDEF', organizationId: ORG_ID, replay: false });
+    const call = stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!;
+    expect(call.args).toMatchObject({ p_order_id: ORDER_ID, p_actor: { channel: 'token', userId: null } });
+    // The token is never handed to the database function; only the order the server resolved.
+    expect(JSON.stringify(call.args)).not.toContain(TOKEN);
+    expect(auditRow).toHaveBeenCalledWith(expect.objectContaining({ user_id: null, event: 'return.created' }));
+    expect(notifyStaff).toHaveBeenCalledTimes(1);
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'request_received', channel: 'token' }));
   });
 
-  it('rejects an unknown token with not_found (never inserts)', async () => {
-    const stub = makeStub({ 'order_requests.select': { data: [], error: null } });
-    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({
-      code: 'not_found',
-    });
-    expect(stub.fromCalls).not.toContain('returns');
+  it('rejects an unknown token with not_found (never calls the function)', async () => {
+    const stub = makeStub({ 'order_request_secrets.select': { data: [], error: null } });
+    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
+    expect(stub.rpcCalls).toHaveLength(0);
   });
 
   it('rejects a malformed token with not_found', async () => {
     const stub = makeStub();
-    await expect(
-      createRequesterReturn(stub.client, 'not-a-uuid', VALID_INPUT),
-    ).rejects.toMatchObject({ code: 'not_found' });
-    expect(stub.fromCalls).not.toContain('returns');
+    await expect(createRequesterReturn(stub.client, 'not-a-token', VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
+    expect(stub.rpcCalls).toHaveLength(0);
   });
 
-  it('rejects an over-return beyond the DURABLE budget (server-side, client not trusted)', async () => {
-    // Source line fulfilled 10, already returned 8 → remaining 2. A client
-    // asking for 3 must be rejected even though the client "chose" 3.
-    const stub = makeStub({
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, returned_quantity: 8 }],
-        error: null,
-      },
-    });
-    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
-    });
-    expect(stub.fromCalls).not.toContain('returns');
+  it.each([
+    ['return_exceeds_fulfilled', 'validation_error'],
+    ['return_invalid', 'validation_error'],
+  ])('maps the database refusal %s (the client quantity and line are never trusted)', async (hint, code) => {
+    const stub = makeStub(refusal(hint, hint === 'return_invalid' ? '22023' : 'P0001'));
+    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({ code, details: { reason: hint } });
+    expect(auditRow).not.toHaveBeenCalled();
+    expect(notifyStaff).not.toHaveBeenCalled();
   });
 
-  it('rejects a quantity greater than fulfilled', async () => {
+  it('rejects a fractional quantity or a repeated line before the database (whole units only)', async () => {
     const stub = makeStub();
     await expect(
-      createRequesterReturn(stub.client, TOKEN, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 11 }],
-      }),
+      createRequesterReturn(stub.client, TOKEN, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1.5 }] }),
     ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rejects a fractional quantity (whole units only)', async () => {
-    const stub = makeStub();
-    await expect(
-      createRequesterReturn(stub.client, TOKEN, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 2.5 }],
-      }),
-    ).rejects.toThrow(); // zod .int() reject
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rejects a quantity the live PENDING demand no longer leaves room for', async () => {
-    // Fulfilled 10, durably returned 0, 8 pending on a live return → only 2
-    // remain offerable; asking for 3 fails BEFORE the insert the DB trigger
-    // would refuse.
-    const stub = makeStub({
-      'return_lines.select': {
-        data: [
-          {
-            order_request_line_id: OLINE_ID,
-            quantity: 8,
-            applied: false,
-            return: { status: 'approved' },
-          },
-        ],
-        error: null,
-      },
-    });
-    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
-    });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rejects a line that does not belong to the token\'s order', async () => {
-    const stub = makeStub();
-    await expect(
-      createRequesterReturn(stub.client, TOKEN, {
-        lines: [
-          { orderRequestLineId: '99999999-9999-4999-8999-999999999999', quantity: 1 },
-        ],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rejects duplicate lines in one request', async () => {
-    const stub = makeStub();
     await expect(
       createRequesterReturn(stub.client, TOKEN, {
         lines: [
@@ -331,31 +272,30 @@ describe('createRequesterReturn (server-side re-validation)', () => {
         ],
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
+    expect(stub.rpcCalls).toHaveLength(0);
   });
 
-  it('stamps item_id from the source line (client cannot pick the item)', async () => {
+  it('never sends a disposition: the requester cannot choose scrap', async () => {
     const stub = makeStub();
-    await createRequesterReturn(stub.client, TOKEN, VALID_INPUT);
-    const lineArgs = stub.chainArgs.get('return_lines.insert')?.[0]?.[0] as Array<
-      Record<string, unknown>
-    >;
-    expect(lineArgs[0]!.item_id).toBe(ITEM_ID);
-    expect(lineArgs[0]!.disposition).toBe('restock');
+    await createRequesterReturn(stub.client, TOKEN, {
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'scrap' } as never],
+    });
+    const body = (stub.rpcCalls[0]!.args as { p_request: { lines: Array<Record<string, unknown>> } }).p_request;
+    expect(body.lines[0]).toEqual({ orderRequestLineId: OLINE_ID, quantity: 1 });
   });
 
-  it('rolls back the header if line insert fails (no orphan return)', async () => {
+  it('a key replay answers the same RMA and sends nothing', async () => {
     const stub = makeStub({
-      'return_lines.insert': {
-        data: null,
-        error: { message: 'some db error' },
+      'rpc:create_requester_return_request': {
+        data: { changed: false, replay: true, organizationId: ORG_ID, returnId: 'ret-1', returnNumber: 'RMA-1', status: 'requested' },
+        error: null,
       },
     });
-    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({
-      code: 'internal_error',
-    });
-    // The header delete is issued on the rollback path.
-    const deleteChain = stub.chains.get('returns.delete');
-    expect(deleteChain).toBeDefined();
+    const key = '44444444-4444-4444-8444-444444444444';
+    const result = await createRequesterReturn(stub.client, TOKEN, VALID_INPUT, { idempotencyKey: key });
+    expect(result.replay).toBe(true);
+    expect((stub.rpcCalls[0]!.args as { p_key: string }).p_key).toBe(key);
+    expect(auditRow).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
   });
 });

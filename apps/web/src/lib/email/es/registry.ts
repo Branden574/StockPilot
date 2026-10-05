@@ -626,6 +626,29 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: 'reverse',
     footer: 'pref',
   }),
+  // Returns RX-1 (2026-10-05): the requester's progress on a return they
+  // asked for, outside the original design package (like maintenance-
+  // resolved). One template, five events; the words come from core's
+  // returns copy, which never names a rack, a disposition or a reason.
+  d({
+    id: 'return-update',
+    family: 'fulfillment',
+    name: 'Return Update',
+    status: 'live',
+    category: 'pref',
+    tag: 'Return Update',
+    trigger: 'A requester-sourced return is received, approved, received in, declined or cancelled',
+    to: 'Requester',
+    from: 'StockPilot <orders@stockpilotusa.com>',
+    replyTo: 'Not monitored',
+    subject: (p: { returnNumber: string; summary: string }) => `Return ${p.returnNumber}: ${p.summary}`,
+    preheader: (p: { sentence: string }) => p.sentence,
+    badge: { variant: 'info', label: (p: { label: string }) => p.label },
+    cta: 'View your return',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'pref',
+  }),
 
   // ── Rentals ───────────────────────────────────────────────────────
   d({

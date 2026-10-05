@@ -1,730 +1,545 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import type { ModuleId } from '@stockpilot/core';
 
-// audit is side-effecting; stub it so the service runs in isolation.
-vi.mock('@/server/services/audit', () => ({
-  audit: vi.fn(async () => undefined),
-}));
+/**
+ * RMAService over the 0394 database functions (returns RX-1). The service
+ * never writes a return table: every transition is one RPC, its refusals are
+ * mapped by hint (core return-error-map), and audit, the integration event,
+ * the outbox and the requester notifications run only for the call that
+ * answered `changed: true`.
+ *
+ * The 0153/0154 SQL body pins that lived here (G8) are gone: the restated
+ * disposition body and its reverse-replace proof are pinned in pgTAP
+ * (supabase/tests/0394_returns_lifecycle_original_rack.test.sql A20/A21,
+ * and 0373 P3).
+ */
 
-// The orphan-header rollback runs on the service-role client (returns RLS
-// deliberately denies DELETE for user-authed clients). Hand tests a swappable
-// stub so they can assert the rollback delete.
-const adminStubHolder = vi.hoisted(() => ({ current: null as unknown as { client: unknown } }));
-vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: () => adminStubHolder.current.client,
-}));
+const auditMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('@/server/services/audit', () => ({ audit: auditMock, insertAuditRowReported: vi.fn(async () => true) }));
+vi.mock('./audit', () => ({ audit: auditMock, insertAuditRowReported: vi.fn(async () => true) }));
 
-// Outbound integration dispatch is fire-and-forget; capture it so the
-// return.created payload (which external webhooks/Zendesk consume) can be
-// asserted rather than escaping to the real endpoint drainer.
-const dispatchMock = vi.hoisted(() => vi.fn(async () => undefined));
+const dispatchMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 vi.mock('./integration-events', () => ({ dispatchEvent: dispatchMock }));
 
-import { RMAService } from './returns';
+const notifyRequester = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+const notifyStaff = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('./returns-notify', () => ({
+  notifyRequesterReturnEvent: notifyRequester,
+  notifyStaffNewReturnRequest: notifyStaff,
+}));
+
+const workbenchMock = vi.hoisted(() => vi.fn(async (_ctx: unknown, id: string) => ({ return: { id }, marker: 'workbench' })));
+vi.mock('./returns-workbench', () => ({
+  buildReturnWorkbench: workbenchMock,
+  buildReturnListPage: vi.fn(async () => ({ rows: [] })),
+}));
+
+const invalidateMock = vi.hoisted(() => vi.fn());
+vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidateMock }));
+
 import { ServiceError } from './context';
+import { RMAService, returnRpcError } from './returns';
 
 const RETURNS_MODULES = new Set<ModuleId>(['returns']);
-
-// Real UUIDs — the createFromOrder schema validates orderRequestLineId as a
-// uuid, so the fixtures must be uuid-shaped.
 const ORDER_ID = '11111111-1111-4111-8111-111111111111';
 const OLINE_ID = '22222222-2222-4222-8222-222222222222';
 const ITEM_ID = '33333333-3333-4333-8333-333333333333';
-// A DIFFERENT item — used to prove a return line can never restock an item
-// other than the one fulfilled on its source line.
 const OTHER_ITEM_ID = '44444444-4444-4444-8444-444444444444';
+const RET_ID = '55555555-5555-4555-8555-555555555555';
+const RLINE_ID = '66666666-6666-4666-8666-666666666666';
+const KEY = '77777777-7777-4777-8777-777777777777';
 
-const COMPLETED_ORDER = {
-  id: ORDER_ID,
+const COMPLETED_ORDER = { id: ORDER_ID, organization_id: 'org-test', status: 'completed' };
+
+const HEADER = {
+  id: RET_ID,
   organization_id: 'org-test',
-  status: 'completed',
-};
-
-// The source line: fulfilled 10, none yet returned (returned_quantity 0). The
-// DURABLE budget the service reads is quantity_fulfilled - returned_quantity.
-const ORDER_LINE = {
-  id: OLINE_ID,
   order_request_id: ORDER_ID,
-  item_id: ITEM_ID,
-  quantity_fulfilled: 10,
-  returned_quantity: 0,
+  return_number: 'RMA-20261005-ABC123',
+  status: 'requested',
+  source: 'requester',
+  order_request: { order_number: 103, warehouse_id: 'wh-1' },
 };
 
-/**
- * Builds a stub for a returnable order with one fulfilled line. The remaining
- * returnable budget is derived from the source line's returned_quantity
- * (durable, 0153) — NOT from a SUM over prior return rows. Tests override the
- * source line (its returned_quantity / item_id) to exercise the budget.
- */
-function makeCreateStub(overrides: Record<string, unknown> = {}) {
-  return makeSupabaseStub({
+function svcFor(results: Record<string, unknown>, ctx: Parameters<typeof makeServiceContext>[1] = {}) {
+  const stub = makeSupabaseStub({
+    'returns.select': { data: [HEADER], error: null },
+    'return_lines.select': { data: [], error: null },
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
-    'order_request_lines.select': { data: [ORDER_LINE], error: null },
-    'returns.insert': {
-      data: [
-        {
-          id: 'ret-1',
-          organization_id: 'org-test',
-          order_request_id: ORDER_ID,
-          return_number: 'RMA-20260531-ABCDEF',
-          status: 'requested',
-          source: 'internal',
-        },
-      ],
-      error: null,
-    },
-    'return_lines.insert': {
-      data: [
-        {
-          id: 'rline-1',
-          return_id: 'ret-1',
-          organization_id: 'org-test',
-          order_request_line_id: OLINE_ID,
-          item_id: ITEM_ID,
-          quantity: 3,
-          disposition: 'restock',
-          applied: false,
-        },
-      ],
-      error: null,
-    },
-    ...overrides,
-  });
+    ...results,
+  } as never);
+  const svc = new RMAService(makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES, ...ctx }));
+  return { stub, svc };
 }
 
-const VALID_INPUT = {
-  reasonCode: 'damaged' as const,
-  lines: [{ orderRequestLineId: OLINE_ID, quantity: 3, disposition: 'restock' as const }],
-};
+const DECISION = { lines: [{ returnLineId: RLINE_ID, disposition: 'restock' as const, restock: { target: 'original' as const } }] };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  // Fresh admin stub per test; individual tests re-assign when they need to
-  // assert against it (the rollback path is the only consumer).
-  adminStubHolder.current = makeSupabaseStub({});
-});
+function rpcError(hint: string, code = 'P0001', details: string | null = null) {
+  return { data: null, error: { code, hint, message: hint, details } };
+}
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
-describe('RMAService.createFromOrder', () => {
-  it('creates a requested return + lines for a returnable order', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    const result = await svc.createFromOrder(ORDER_ID, VALID_INPUT);
-
-    expect(result.id).toBe('ret-1');
-    expect(result.status).toBe('requested');
-    expect(result.lines).toHaveLength(1);
-    expect(stub.fromCalls).toContain('returns');
-    expect(stub.fromCalls).toContain('return_lines');
+describe('database refusals are mapped by hint', () => {
+  it.each([
+    ['return_changed', 'conflict'],
+    ['invalid_status_transition', 'conflict'],
+    ['restock_location_not_offered', 'validation_error'],
+    ['returns_manage', 'forbidden'],
+    ['warehouse_write', 'forbidden'],
+    ['return_not_found', 'not_found'],
+    ['module_disabled', 'module_disabled'],
+    ['idempotency_conflict', 'conflict'],
+    ['exchange_not_available', 'validation_error'],
+  ])('%s -> %s with details.reason', (hint, code) => {
+    const e = returnRpcError({ code: 'P0001', hint, message: 'x' });
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e.code).toBe(code);
+    expect(e.details?.reason).toBe(hint);
   });
 
-  it('rejects a non-returnable (not completed/delivered) order', async () => {
-    const stub = makeCreateStub({
-      'order_requests.select': {
-        data: [{ ...COMPLETED_ORDER, status: 'approved' }],
-        error: null,
-      },
+  it('a lock wait is a retryable busy conflict; an unknown error is internal and keeps no raw text', () => {
+    expect(returnRpcError({ code: '55P03', message: 'lock timeout' })).toMatchObject({
+      code: 'conflict',
+      details: { reason: 'busy', retryable: true },
     });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
-    });
-    // Nothing was inserted.
-    expect(stub.fromCalls).not.toContain('returns');
+    const internal = returnRpcError({ code: '23505', message: 'duplicate key value violates unique constraint "x"' });
+    expect(internal.code).toBe('internal_error');
+    expect(internal.message).not.toMatch(/duplicate key/);
+    expect(internal.details).toEqual({ reason: 'failed' });
   });
 
-  it('accepts a legacy "delivered" order', async () => {
-    const stub = makeCreateStub({
-      'order_requests.select': {
-        data: [{ ...COMPLETED_ORDER, status: 'delivered' }],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    const result = await svc.createFromOrder(ORDER_ID, VALID_INPUT);
-    expect(result.status).toBe('requested');
-  });
-
-  it('rejects a quantity greater than the fulfilled quantity', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(
-      svc.createFromOrder(ORDER_ID, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 11, disposition: 'restock' }],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rejects an over-return using the DURABLE budget (quantity_fulfilled - returned_quantity)', async () => {
-    // Line fulfilled 10; 8 units already RETURNED (durable returned_quantity=8,
-    // incremented at apply-time in process_return_disposition). A new return of
-    // 3 would consume 11 of 10 fulfilled → reject. The budget is read straight
-    // off the source line, NOT summed from prior return rows.
-    const stub = makeCreateStub({
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, returned_quantity: 8 }],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
-    });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('over-return across MULTIPLE returns: 60 then 60 against fulfilled 100 → second rejected (budget 40)', async () => {
-    // First return of 60 against a fresh line (returned_quantity 0, fulfilled
-    // 100) is allowed.
-    const firstStub = makeCreateStub({
-      'order_requests.select': { data: [COMPLETED_ORDER], error: null },
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, quantity_fulfilled: 100, returned_quantity: 0 }],
-        error: null,
-      },
-    });
-    const firstSvc = new RMAService(
-      makeServiceContext(firstStub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(
-      firstSvc.createFromOrder(ORDER_ID, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 60, disposition: 'restock' }],
-      }),
-    ).resolves.toMatchObject({ status: 'requested' });
-
-    // After that return is received+closed, the disposition RPC increments the
-    // source line's returned_quantity to 60. A SECOND return of 60 now exceeds
-    // the remaining durable budget (100 - 60 = 40) → reject. Crucially the cap
-    // is the durable returned_quantity, so flipping/cancelling the first return
-    // header could not free it.
-    const secondStub = makeCreateStub({
-      'order_requests.select': { data: [COMPLETED_ORDER], error: null },
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, quantity_fulfilled: 100, returned_quantity: 60 }],
-        error: null,
-      },
-    });
-    const secondSvc = new RMAService(
-      makeServiceContext(secondStub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(
-      secondSvc.createFromOrder(ORDER_ID, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 60, disposition: 'restock' }],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(secondStub.fromCalls).not.toContain('returns');
-  });
-
-  it('the cap BASE is the DURABLE returned_quantity — a cancelled/denied return frees nothing', async () => {
-    // Defends the status-flip/delete exploit: a cancelled/denied/deleted return
-    // header must not free budget. The BASE of remaining is
-    // order_request_lines.returned_quantity (durable, apply-time); the
-    // return_lines read only SUBTRACTS live pending demand on top — cancelled/
-    // denied rows are excluded from pending, so they can never ADD budget back.
-    // Here the line is fully consumed durably (returned 10 of 10) so even a
-    // return of 1 is rejected, and a graveyard of cancelled return rows
-    // changes nothing.
-    const stub = makeCreateStub({
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, returned_quantity: 10 }],
-        error: null,
-      },
-      // A cancelled prior return with unapplied lines — must free NOTHING.
-      'return_lines.select': {
-        data: [
-          {
-            order_request_line_id: OLINE_ID,
-            quantity: 10,
-            applied: false,
-            return: { status: 'cancelled' },
-          },
-        ],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(
-      svc.createFromOrder(ORDER_ID, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'restock' }],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    // Nothing was inserted for a rejected create.
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('PENDING (unapplied, live) return lines consume remaining — mirrors the DB cap trigger', async () => {
-    // Fulfilled 10, durably returned 0, but 8 units sit on a live 'requested'
-    // return that has not been applied yet. The DB trigger counts that pending
-    // demand (returned + pending > fulfilled rejects), so the early validation
-    // must too: a new return of 3 (8 + 3 > 10) is rejected BEFORE the insert
-    // the trigger would refuse.
-    const stub = makeCreateStub({
-      'return_lines.select': {
-        data: [
-          {
-            order_request_line_id: OLINE_ID,
-            quantity: 8,
-            applied: false,
-            return: { status: 'requested' },
-          },
-        ],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
-    });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('cancelled/denied pending rows do NOT consume remaining (only live returns count)', async () => {
-    // The same 8 pending units, but on cancelled + denied headers — both are
-    // excluded from pending (exactly the DB trigger's status filter), so a
-    // return of 3 against the untouched budget of 10 succeeds.
-    const stub = makeCreateStub({
-      'return_lines.select': {
-        data: [
-          {
-            order_request_line_id: OLINE_ID,
-            quantity: 8,
-            applied: false,
-            return: { status: 'cancelled' },
-          },
-          {
-            order_request_line_id: OLINE_ID,
-            quantity: 8,
-            applied: false,
-            return: { status: 'denied' },
-          },
-        ],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).resolves.toMatchObject({
-      status: 'requested',
-    });
-  });
-
-  it('rejects a fractional quantity (whole units only)', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(
-      svc.createFromOrder(ORDER_ID, {
-        lines: [{ orderRequestLineId: OLINE_ID, quantity: 1.5, disposition: 'restock' }],
-      }),
-    ).rejects.toThrow(); // zod .int() reject
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('rolls back the orphan header (via the admin client) if the lines insert fails', async () => {
-    // The lines insert fails after the header insert. The header must not be
-    // stranded as a lineless 'requested' return — and because returns RLS
-    // denies DELETE to user-authed clients, the rollback must go through the
-    // service-role client.
-    const adminStub = makeSupabaseStub({});
-    adminStubHolder.current = adminStub;
-    const stub = makeCreateStub({
-      'return_lines.insert': { data: null, error: { message: 'some db error' } },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'internal_error',
-    });
-
-    // The rollback delete ran on the ADMIN client, scoped by id AND org.
-    const deleteArgs = adminStub.chainArgs.get('returns.delete') ?? [];
-    expect(adminStub.chains.get('returns.delete')).toBeDefined();
-    expect(deleteArgs).toContainEqual(['id', 'ret-1']);
-    expect(deleteArgs).toContainEqual(['organization_id', 'org-test']);
-    // The user-authed client issued NO delete (RLS would silently drop it).
-    expect(stub.chains.get('returns.delete')).toBeUndefined();
-  });
-
-  it('cross-item: a return line whose item != the source line item is rejected', async () => {
-    // The source line fulfilled ITEM_ID. A return line that explicitly claims a
-    // DIFFERENT item (OTHER_ITEM_ID) must be rejected — no path may restock an
-    // item other than the one fulfilled on that source line.
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(
-      svc.createFromOrder(ORDER_ID, {
-        lines: [
-          {
-            orderRequestLineId: OLINE_ID,
-            quantity: 3,
-            disposition: 'restock',
-            itemId: OTHER_ITEM_ID,
-          },
-        ],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
-  });
-
-  it('stamps the return line item from the SOURCE line (never from the client)', async () => {
-    // When the caller omits itemId (the normal path), the inserted return line
-    // takes its item_id from the order line — so it is structurally impossible
-    // to restock a different item than the one fulfilled.
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await svc.createFromOrder(ORDER_ID, VALID_INPUT);
-
-    const insertArgs = stub.chainArgs.get('return_lines.insert')?.[0]?.[0] as
-      | Array<{ item_id: string; order_request_line_id: string }>
-      | undefined;
-    expect(insertArgs).toBeTruthy();
-    expect(insertArgs?.[0]?.item_id).toBe(ITEM_ID);
-    expect(insertArgs?.[0]?.order_request_line_id).toBe(OLINE_ID);
-  });
-
-  it('rejects a line that does not belong to the order', async () => {
-    const stub = makeCreateStub({
-      'order_request_lines.select': { data: [], error: null }, // line not found on this order
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'validation_error',
+  it('carries a structured detail (rule and location) and a bare-token detail (the status)', () => {
+    expect(
+      returnRpcError({ code: 'P0001', hint: 'restock_location_unavailable', message: 'x', details: '{"rule":"archived","locationId":"l1"}' })
+        .details,
+    ).toEqual({ reason: 'restock_location_unavailable', detail: { rule: 'archived', locationId: 'l1' } });
+    expect(returnRpcError({ code: 'P0001', hint: 'invalid_status_transition', message: 'x', details: 'approved' }).details).toEqual({
+      reason: 'invalid_status_transition',
+      detail: 'approved',
     });
   });
 });
 
-describe('RMAService lifecycle transitions', () => {
-  function makeReturnStub(status: string, overrides: Record<string, unknown> = {}) {
-    return makeSupabaseStub({
-      'returns.select': {
-        data: [{ id: 'ret-1', organization_id: 'org-test', order_request_id: ORDER_ID, status }],
+describe('createFromOrder (create_return_request)', () => {
+  const INPUT = { reasonCode: 'damaged' as const, lines: [{ orderRequestLineId: OLINE_ID, quantity: 3, disposition: 'restock' as const }] };
+
+  it('calls the function once with the key, the canonical body and the item-is-here switch; audits and dispatches once', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:create_return_request': {
+        data: { changed: true, replay: false, returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested', channel: 'counter' },
         error: null,
       },
-      // The CAS update echoes back the new row.
-      'returns.update': {
-        data: [{ id: 'ret-1', organization_id: 'org-test', order_request_id: ORDER_ID, status }],
-        error: null,
-      },
-      ...overrides,
     });
-  }
-
-  it('approve: requested → approved', async () => {
-    const stub = makeReturnStub('requested');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.approve('ret-1')).resolves.toBeTruthy();
-    // The update CAS'd on the prior status.
-    const updateArgs = stub.chainArgs.get('returns.update');
-    const payload = updateArgs?.[0]?.[0] as Record<string, unknown>;
-    expect(payload.status).toBe('approved');
+    const created = await svc.createFromOrder(ORDER_ID, { ...INPUT, itemIsHere: true }, { idempotencyKey: KEY });
+    const call = stub.rpcCalls.find((c) => c.name === 'create_return_request')!;
+    expect(call.args).toEqual({
+      p_order_id: ORDER_ID,
+      p_request: {
+        reasonCode: 'damaged',
+        notes: null,
+        itemIsHere: true,
+        lines: [{ orderRequestLineId: OLINE_ID, quantity: 3, disposition: 'restock' }],
+      },
+      p_key: KEY,
+    });
+    expect(created).toMatchObject({ id: RET_ID, replay: false, channel: 'counter' });
+    expect(auditMock).toHaveBeenCalledTimes(1);
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({ event: 'return.created', extra: { source: 'internal', channel: 'counter' } });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'return.created', expect.objectContaining({ orderNumber: 'SO-000103' }));
+    // A staff-created return pings nobody (G11).
+    expect(notifyStaff).not.toHaveBeenCalled();
+    // The service never writes a return table itself.
+    expect(stub.fromCalls.filter((t) => t === 'returns' || t === 'return_lines')).toEqual(['returns', 'return_lines']);
+    expect(stub.chainsAll.get('returns.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('return_lines.insert')).toBeUndefined();
   });
 
-  it('approve: rejects an illegal transition (closed → approved)', async () => {
-    const stub = makeReturnStub('closed');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.approve('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
+  it('mints a fresh key for a body without one (installed phones, plan A-4)', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:create_return_request': { data: { changed: true, replay: false, returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested', channel: 'staff' }, error: null },
+    });
+    await svc.createFromOrder(ORDER_ID, INPUT);
+    expect((stub.rpcCalls[0]!.args as { p_key: string }).p_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
-  it('receive: approved → received WITHOUT touching inventory (no RPC)', async () => {
-    const stub = makeReturnStub('approved');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.receive('ret-1')).resolves.toBeTruthy();
-    // receive is a pure transition — the disposition RPC must NOT run here.
-    expect(stub.rpcCalls.find((c) => c.name === 'process_return_disposition')).toBeUndefined();
-    const payload = stub.chainArgs.get('returns.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(payload.status).toBe('received');
+  it('a replay writes no audit, sends no event and publishes nothing', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:create_return_request': { data: { changed: false, replay: true, returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested', channel: 'staff' }, error: null },
+    });
+    const created = await svc.createFromOrder(ORDER_ID, INPUT, { idempotencyKey: KEY });
+    expect(created.replay).toBe(true);
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('publish_outbox');
   });
 
-  it('receive: rejects from requested (must be approved first)', async () => {
-    const stub = makeReturnStub('requested');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.receive('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
+  it.each([
+    ['return_exceeds_fulfilled', 'validation_error'],
+    ['order_not_returnable', 'validation_error'],
+    ['idempotency_conflict', 'conflict'],
+    ['exchange_not_available', 'validation_error'],
+    ['warehouse_write', 'forbidden'],
+  ])('maps the refusal %s', async (hint, code) => {
+    const { svc } = svcFor({ 'rpc:create_return_request': rpcError(hint) });
+    await expect(svc.createFromOrder(ORDER_ID, INPUT)).rejects.toMatchObject({ code, details: { reason: hint } });
+    expect(auditMock).not.toHaveBeenCalled();
   });
 
-  it('close: received → closed applies the disposition via the RPC exactly ONCE', async () => {
-    const stub = makeReturnStub('received', {
-      'rpc:process_return_disposition': {
+  it('refuses a fractional quantity before the database (whole units only, G10)', async () => {
+    const { stub, svc } = svcFor({});
+    await expect(
+      svc.createFromOrder(ORDER_ID, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1.5, disposition: 'restock' }] }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('refuses a client item that is not the source line item (never coerced)', async () => {
+    const { stub, svc } = svcFor({ 'order_request_lines.select': { data: [{ id: OLINE_ID, item_id: ITEM_ID }], error: null } });
+    await expect(
+      svc.createFromOrder(ORDER_ID, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'restock', itemId: OTHER_ITEM_ID }] }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('passes an exchange field through so the RX-1 hook refuses it in the database', async () => {
+    const { stub, svc } = svcFor({ 'rpc:create_return_request': rpcError('exchange_not_available') });
+    await expect(
+      svc.createFromOrder(ORDER_ID, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_ID } }] }),
+    ).rejects.toMatchObject({ details: { reason: 'exchange_not_available' } });
+    const body = (stub.rpcCalls[0]!.args as { p_request: { lines: Array<Record<string, unknown>> } }).p_request;
+    expect(body.lines[0]).toHaveProperty('exchange');
+  });
+});
+
+describe('approve (approve_return)', () => {
+  it('sends the expected revision, the decision and receiveNow; audits approval and plan; notifies the requester', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:approve_return': { data: { changed: true, replay: false, returnId: RET_ID, revision: 1, status: 'approved', replacement: null }, error: null },
+    });
+    const answer = await svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION });
+    expect(stub.rpcCalls.find((c) => c.name === 'approve_return')!.args).toEqual({
+      p_return_id: RET_ID,
+      p_expected_revision: 0,
+      p_decision: DECISION,
+      p_receive_now: false,
+    });
+    expect(answer).toEqual({ changed: true, replay: false, status: 'approved', revision: 1 });
+    expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.approved', 'return.disposition_planned']);
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({
+      extra: { revision: 1, channel: 'staff', plan: [{ returnLineId: RLINE_ID, disposition: 'restock', target: 'original', locationId: null }] },
+    });
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'approved', channel: 'staff', source: 'requester' }));
+    // Approval moves no stock: no ledger function is ever called.
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('process_return_disposition');
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('close_return');
+  });
+
+  it('"Approve and receive" (the counter) also audits the receipt on the counter channel', async () => {
+    const { svc } = svcFor({
+      'rpc:approve_return': { data: { changed: true, replay: false, returnId: RET_ID, revision: 1, status: 'received' }, error: null },
+    });
+    await svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION, receiveNow: true });
+    expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual([
+      'return.approved',
+      'return.disposition_planned',
+      'return.received',
+    ]);
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'return.received', expect.anything());
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'approved', channel: 'counter' }));
+  });
+
+  it('a replay (double click) emits nothing', async () => {
+    const { svc } = svcFor({ 'rpc:approve_return': { data: { changed: false, replay: true, revision: 1, status: 'approved' }, error: null } });
+    const answer = await svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION });
+    expect(answer).toMatchObject({ changed: false, replay: true });
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
+  });
+
+  it('another decision at the same revision is a conflict (two managers)', async () => {
+    const { svc } = svcFor({ 'rpc:approve_return': rpcError('return_changed') });
+    await expect(svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION })).rejects.toMatchObject({
+      code: 'conflict',
+      details: { reason: 'return_changed' },
+    });
+  });
+
+  it('refuses scrap with a destination before the database (brief 10)', async () => {
+    const { stub, svc } = svcFor({});
+    await expect(
+      svc.approve(RET_ID, { expectedRevision: 0, decision: { lines: [{ returnLineId: RLINE_ID, disposition: 'scrap', restock: { target: 'original' } }] } as never }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+});
+
+describe('deny, receive, cancel, plan', () => {
+  it('deny needs a reason before the database, then audits with it and tells the requester without it', async () => {
+    const { stub, svc } = svcFor({ 'rpc:deny_return': { data: { changed: true, status: 'denied', deniedBy: 'user-test', deniedAt: '2026-10-05T10:00:00Z' }, error: null } });
+    await expect(svc.deny(RET_ID, '   ')).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.rpcCalls).toHaveLength(0);
+    await svc.deny(RET_ID, ' Not ours ');
+    expect(stub.rpcCalls[0]!.args).toEqual({ p_return_id: RET_ID, p_reason: 'Not ours' });
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({ event: 'return.denied', reason: 'Not ours' });
+    const notified = notifyRequester.mock.calls[0]![0] as Record<string, unknown>;
+    expect(notified).toMatchObject({ event: 'denied' });
+    expect(JSON.stringify(notified)).not.toContain('Not ours');
+  });
+
+  it('receive answers "already" with who received it, and emits nothing (P24)', async () => {
+    const { svc } = svcFor({
+      'rpc:receive_return': { data: { changed: false, status: 'received', receivedBy: '88888888-8888-4888-8888-888888888888', receivedAt: '2026-10-05T10:00:00Z' }, error: null },
+      'user_profiles.select': { data: [{ full_name: 'Dana Keeler', email: 'dana@example.com' }], error: null },
+    });
+    const answer = await svc.receive(RET_ID);
+    expect(answer).toMatchObject({ changed: false, status: 'received', byName: 'Dana Keeler', at: '2026-10-05T10:00:00Z' });
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
+  });
+
+  it('receive that changes audits, dispatches return.received and tells the requester', async () => {
+    const { svc } = svcFor({ 'rpc:receive_return': { data: { changed: true, status: 'received', receivedBy: 'user-test', receivedAt: 'now' }, error: null } });
+    await svc.receive(RET_ID);
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({ event: 'return.received' });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'return.received', expect.anything());
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'received', channel: 'staff' }));
+  });
+
+  it('cancel sends the revision and the optional reason', async () => {
+    const { stub, svc } = svcFor({ 'rpc:cancel_return': { data: { changed: true, status: 'cancelled', revision: 1 }, error: null } });
+    await svc.cancel(RET_ID, { expectedRevision: 0, reason: 'Sent by mistake' });
+    expect(stub.rpcCalls[0]!.args).toEqual({ p_return_id: RET_ID, p_expected_revision: 0, p_reason: 'Sent by mistake' });
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({ event: 'return.cancelled', reason: 'Sent by mistake' });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'return.cancelled', expect.anything());
+  });
+
+  it('an identical plan appends nothing and audits nothing', async () => {
+    const { svc } = svcFor({ 'rpc:plan_return_dispositions': { data: { changed: false, appended: 0, planSeq: 7 }, error: null } });
+    const answer = await svc.planDispositions(RET_ID, DECISION.lines);
+    expect(answer).toEqual({ changed: false, appended: 0, planSeq: 7 });
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('close (close_return)', () => {
+  it('a failed revalidation is refused with its rule, nothing moved, and the refusal is audited', async () => {
+    const { svc } = svcFor({
+      'rpc:close_return': rpcError('restock_location_unavailable', 'P0001', '{"rule":"archived","locationId":"loc-1"}'),
+    });
+    await expect(svc.close(RET_ID)).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Original rack is no longer available.',
+      details: { reason: 'restock_location_unavailable', detail: { rule: 'archived', locationId: 'loc-1' } },
+    });
+    expect(auditMock).toHaveBeenCalledTimes(1);
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({
+      event: 'return.restock_location_unavailable',
+      extra: { detail: { rule: 'archived', locationId: 'loc-1' } },
+    });
+    expect(invalidateMock).not.toHaveBeenCalled();
+  });
+
+  it('a close that moved stock audits per line, publishes the outbox event and invalidates the inventory list', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:close_return': {
         data: {
-          id: 'ret-1',
-          organization_id: 'org-test',
-          order_request_id: ORDER_ID,
+          changed: true,
           status: 'closed',
+          closedBy: 'user-test',
+          closedAt: 'now',
+          legs: [{ itemId: ITEM_ID, locationId: 'loc-31c', quantity: 1, destination: 'rack' }],
+          lines: [
+            {
+              returnLineId: RLINE_ID,
+              itemId: ITEM_ID,
+              quantity: 1,
+              disposition: 'restock',
+              target: 'original',
+              locationId: null,
+              legs: [{ itemId: ITEM_ID, locationId: 'loc-31c', quantity: 1, destination: 'rack' }],
+            },
+          ],
         },
         error: null,
       },
+      'return_lines.select': { data: [{ quantity: 1, order_request_line: { unit_cost_at_request: 12.5 } }], error: null },
     });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    const result = await svc.close('ret-1');
-
-    expect(result.status).toBe('closed');
-    // The disposition RPC ran EXACTLY once with the return id.
-    const dispositionCalls = stub.rpcCalls.filter(
-      (c) => c.name === 'process_return_disposition',
-    );
-    expect(dispositionCalls).toHaveLength(1);
-    expect(dispositionCalls[0]?.args).toMatchObject({ p_return_id: 'ret-1' });
-  });
-
-  it('close: publishes a return.closed outbox event with the credit total (Phase B)', async () => {
-    const stub = makeReturnStub('received', {
-      'rpc:process_return_disposition': {
-        data: {
-          id: 'ret-1',
-          organization_id: 'org-test',
-          order_request_id: ORDER_ID,
-          return_number: 'RMA-1',
-          status: 'closed',
-        },
-        error: null,
-      },
-      // publishReturnClosed reads the lines (joined to the source order line's
-      // unit_cost_at_request) to compute the informational total.
-      'return_lines.select': {
-        data: [
-          { quantity: 2, order_request_line: { unit_cost_at_request: 5 } },
-          { quantity: 1, order_request_line: { unit_cost_at_request: 3 } },
-        ],
-        error: null,
-      },
-      'rpc:publish_outbox': { data: null, error: null },
+    const answer = await svc.close(RET_ID, { expectedPlanSeq: 4 });
+    expect(stub.rpcCalls[0]!.args).toEqual({ p_return_id: RET_ID, p_lines: null, p_expected_plan_seq: 4 });
+    expect(answer.lines[0]).toMatchObject({ target: 'original', legs: [{ locationId: 'loc-31c', destination: 'rack' }] });
+    expect(auditMock.mock.calls[0]![0]).toMatchObject({
+      event: 'return.closed',
+      extra: { lines: [{ returnLineId: RLINE_ID, disposition: 'restock', destination: 'original', locationIds: ['loc-31c'] }] },
     });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
+    const outbox = stub.rpcCalls.find((c) => c.name === 'publish_outbox')!;
+    expect(outbox.args).toMatchObject({ p_topic: 'return.closed', p_dedupe_key: `return.closed:${RET_ID}`, p_payload: { total: 12.5 } });
+    expect(invalidateMock).toHaveBeenCalledWith('org-test', 'return.close');
+  });
 
-    await svc.close('ret-1');
-
-    const publish = stub.rpcCalls.find((c) => c.name === 'publish_outbox');
-    expect(publish).toBeTruthy();
-    expect(publish?.args).toMatchObject({
-      p_topic: 'return.closed',
-      p_aggregate_type: 'return',
-      p_aggregate_id: 'ret-1',
-      p_dedupe_key: 'return.closed:ret-1',
-      p_payload: { orderRequestId: ORDER_ID, lineCount: 2, total: 13 },
+  it('"already closed" emits nothing and names who closed it', async () => {
+    const { svc } = svcFor({
+      'rpc:close_return': { data: { changed: false, status: 'closed', closedBy: '88888888-8888-4888-8888-888888888888', closedAt: 'then' }, error: null },
+      'user_profiles.select': { data: [{ full_name: null, email: 'dana@example.com' }], error: null },
     });
+    const answer = await svc.close(RET_ID);
+    expect(answer).toMatchObject({ changed: false, byName: 'dana@example.com' });
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(invalidateMock).not.toHaveBeenCalled();
   });
 
-  it('close: a second close on an already-closed return is rejected (disposition applied once)', async () => {
-    const stub = makeReturnStub('closed');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.close('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
-    // No disposition RPC fires for an illegal transition.
-    expect(stub.rpcCalls.find((c) => c.name === 'process_return_disposition')).toBeUndefined();
-  });
-
-  it('close: maps the RPC invalid_status_transition error to a validation_error', async () => {
-    const stub = makeReturnStub('received', {
-      'rpc:process_return_disposition': {
-        data: null,
-        error: { message: 'invalid_status_transition', code: 'P0001' },
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.close('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
-  });
-
-  it('cancel: requested → cancelled', async () => {
-    const stub = makeReturnStub('requested');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.cancel('ret-1')).resolves.toBeTruthy();
-    const payload = stub.chainArgs.get('returns.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(payload.status).toBe('cancelled');
-  });
-
-  it('cancel: rejects from received (on the close-and-dispose path)', async () => {
-    const stub = makeReturnStub('received');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.cancel('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
-  });
-
-  it('deny: requested → denied with reason', async () => {
-    const stub = makeReturnStub('requested');
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.deny('ret-1', 'duplicate request')).resolves.toBeTruthy();
-    const payload = stub.chainArgs.get('returns.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(payload.status).toBe('denied');
-    // The reason goes to the dedicated denial_reason column (0154), NOT notes —
-    // so it can't clobber creation-time notes from createFromOrder.
-    expect(payload.denial_reason).toBe('duplicate request');
-    expect(payload.notes).toBeUndefined();
+  it('a destination changed at processing travels in the same call (C-9)', async () => {
+    const { stub, svc } = svcFor({ 'rpc:close_return': { data: { changed: true, status: 'closed', lines: [], legs: [] }, error: null } });
+    await svc.close(RET_ID, { lines: [{ returnLineId: RLINE_ID, disposition: 'restock', restock: { target: 'staging' } }] });
+    expect((stub.rpcCalls[0]!.args as { p_lines: unknown }).p_lines).toEqual([
+      { returnLineId: RLINE_ID, disposition: 'restock', restock: { target: 'staging' } },
+    ]);
   });
 });
 
-describe('RMAService module + permission gating', () => {
-  it('createFromOrder throws module_disabled when returns is off', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: new Set<ModuleId>() }),
-    );
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toBeInstanceOf(ServiceError);
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'module_disabled',
+describe('runSteps (the steps endpoint)', () => {
+  it('runs approve then process, reports done and already, and returns the workbench', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:approve_return': { data: { changed: false, replay: true, revision: 1, status: 'received' }, error: null },
+      'rpc:close_return': { data: { changed: true, status: 'closed', lines: [], legs: [] }, error: null },
     });
+    const result = await svc.runSteps(RET_ID, {
+      steps: ['approve', 'process'],
+      expectedRevision: 0,
+      expectedPlanSeq: null,
+      approve: DECISION,
+      receiveNow: true,
+      process: null,
+    } as never);
+    expect(result.ran).toEqual([
+      { step: 'approve', outcome: 'already' },
+      { step: 'process', outcome: 'done' },
+    ]);
+    expect(stub.rpcCalls.map((c) => c.name).filter((n) => n !== 'publish_outbox')).toEqual(['approve_return', 'close_return']);
+    expect(result.workbench).toMatchObject({ marker: 'workbench' });
   });
 
-  it('createFromOrder throws forbidden for a staff member (no returns:manage)', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'staff', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
-      code: 'forbidden',
+  it('stops at the first refusal; earlier steps stay committed', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null },
+      'rpc:close_return': rpcError('restock_location_unavailable', 'P0001', '{"rule":"archived","locationId":"l"}'),
     });
+    const result = await svc.runSteps(RET_ID, { steps: ['receive', 'process'] } as never);
+    expect(result.ran).toEqual([
+      { step: 'receive', outcome: 'done' },
+      { step: 'process', outcome: 'refused', reason: 'restock_location_unavailable', message: 'Original rack is no longer available.' },
+    ]);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['receive_return', 'close_return']);
+    expect(workbenchMock).toHaveBeenCalledTimes(1);
   });
+});
 
-  it('close throws forbidden for a viewer (no returns:manage)', async () => {
-    const stub = makeSupabaseStub({});
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'viewer', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.close('ret-1')).rejects.toMatchObject({ code: 'forbidden' });
-    expect(stub.rpcCalls.find((c) => c.name === 'process_return_disposition')).toBeUndefined();
-  });
-
-  it('list throws module_disabled when returns is off', async () => {
-    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: new Set<ModuleId>() }),
-    );
-    await expect(svc.list()).rejects.toMatchObject({ code: 'module_disabled' });
-  });
-
-  // ── Grantable read gate (auditor visibility) ─────────────────────────
-  // list/get accept returns:read so a read-only member can view returns;
-  // everything else (including returnableLinesForOrder) stays manage-only.
-
-  it('list allows a viewer whose EFFECTIVE set grants returns:read (no manage)', async () => {
-    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, {
-        role: 'viewer',
-        enabledModules: RETURNS_MODULES,
-        permissions: new Set(['returns:read']),
-      }),
-    );
-    await expect(svc.list()).resolves.toEqual([]);
-  });
-
-  it('list stays forbidden for a DEFAULT viewer (no grant)', async () => {
-    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'viewer', enabledModules: RETURNS_MODULES }),
-    );
-    await expect(svc.list()).rejects.toMatchObject({ code: 'forbidden' });
-  });
-
-  it('get allows the returns:read grantee too', async () => {
-    const stub = makeSupabaseStub({
-      'returns.select': {
-        data: [{ id: 'ret-1', organization_id: 'org-test', status: 'closed' }],
-        error: null,
-      },
-      'return_lines.select': { data: [], error: null },
+describe('an RMA outside the active organization (a member of two organizations, desk check F4)', () => {
+  // The functions gate on membership of the RMA's OWN organization. A member of
+  // two organizations (a stale screen after a switch, or a Bearer call naming
+  // the other organization) could act on the other one's RMA while this
+  // service wrote the audit row, the webhook and the cache invalidation into
+  // the active one. The service reads the RMA (or the order) in the active
+  // organization first: a miss is a 404 before any function runs.
+  const OTHER_ORG_HEADER = { ...HEADER, organization_id: 'org-other' };
+  const foreign = () =>
+    svcFor({
+      'returns.select': servedLikePostgrest([OTHER_ORG_HEADER]),
+      'order_requests.select': servedLikePostgrest([{ ...COMPLETED_ORDER, organization_id: 'org-other' }]),
+      'rpc:approve_return': { data: { changed: true, replay: false, revision: 1, status: 'approved' }, error: null },
+      'rpc:deny_return': { data: { changed: true, status: 'denied' }, error: null },
+      'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null },
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled', revision: 1 }, error: null },
+      'rpc:plan_return_dispositions': { data: { changed: true, appended: 1, planSeq: 2 }, error: null },
+      'rpc:close_return': { data: { changed: true, status: 'closed', lines: [], legs: [] }, error: null },
+      'rpc:return_restock_options': { data: { returnId: RET_ID, status: 'approved', planSeq: 0, lines: [] }, error: null },
+      'rpc:create_return_request': { data: { changed: true, replay: false, returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested', channel: 'staff' }, error: null },
     });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, {
-        role: 'viewer',
-        enabledModules: RETURNS_MODULES,
-        permissions: new Set(['returns:read']),
-      }),
-    );
-    await expect(svc.get('ret-1')).resolves.toMatchObject({ id: 'ret-1' });
+
+  it.each([
+    ['approve', (svc: RMAService) => svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION })],
+    ['deny', (svc: RMAService) => svc.deny(RET_ID, 'Not ours')],
+    ['receive', (svc: RMAService) => svc.receive(RET_ID)],
+    ['cancel', (svc: RMAService) => svc.cancel(RET_ID, { expectedRevision: 0 })],
+    ['planDispositions', (svc: RMAService) => svc.planDispositions(RET_ID, DECISION.lines)],
+    ['close', (svc: RMAService) => svc.close(RET_ID)],
+    ['restockOptions', (svc: RMAService) => svc.restockOptions(RET_ID)],
+    [
+      'createFromOrder',
+      (svc: RMAService) =>
+        svc.createFromOrder(ORDER_ID, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'restock' as const }] }, { idempotencyKey: KEY }),
+    ],
+  ])('%s answers not found and runs nothing: no function, audit, webhook, notification or invalidation', async (_name, act) => {
+    const { stub, svc } = foreign();
+    await expect(act(svc)).rejects.toMatchObject({ code: 'not_found' });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
+    expect(invalidateMock).not.toHaveBeenCalled();
   });
 
-  it('returns:read does NOT unlock writes or the create-flow read', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, {
-        role: 'viewer',
-        enabledModules: RETURNS_MODULES,
-        permissions: new Set(['returns:read']),
-      }),
-    );
-    await expect(svc.approve('ret-1')).rejects.toMatchObject({ code: 'forbidden' });
-    await expect(svc.returnableLinesForOrder(ORDER_ID)).rejects.toMatchObject({
-      code: 'forbidden',
-    });
+  it('the steps endpoint refuses its first step the same way and runs no function', async () => {
+    const { stub, svc } = foreign();
+    const result = await svc.runSteps(RET_ID, { steps: ['receive', 'process'] } as never);
+    expect(result.ran).toEqual([{ step: 'receive', outcome: 'refused', reason: 'return_not_found', message: "This return isn't available." }]);
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(auditMock).not.toHaveBeenCalled();
   });
 
-  it('a manage holder with the read perm REVOKED still reads (manage implies read)', async () => {
-    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, {
-        role: 'manager',
-        enabledModules: RETURNS_MODULES,
-        permissions: new Set(['returns:manage']),
-      }),
+  it('the active-organization read is filtered by the active organization and the id', async () => {
+    const { stub, svc } = svcFor({ 'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null } });
+    await svc.receive(RET_ID);
+    const first = stub.chainArgsAll.get('returns.select')![0]!;
+    const methods = stub.chainsAll.get('returns.select')![0]!;
+    const eqs = methods.map((m, i) => [m, first[i]] as const).filter(([m]) => m === 'eq').map(([, a]) => a);
+    expect(eqs).toEqual(expect.arrayContaining([['organization_id', 'org-test'], ['id', RET_ID]]));
+    // The read comes before the function call.
+    expect(stub.client.from.mock.invocationCallOrder[0]).toBeLessThan(stub.client.rpc.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('gates (the service is the friendly early refusal; the functions decide)', () => {
+  it('module off: module_disabled before any call', async () => {
+    const { stub, svc } = svcFor({}, { enabledModules: new Set<ModuleId>() });
+    await expect(svc.receive(RET_ID)).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('a staff member without returns:manage is refused every write; returns:read reads', async () => {
+    const { svc } = svcFor({ 'returns.select': { data: [], error: null } }, { role: 'staff' });
+    await expect(svc.close(RET_ID)).rejects.toMatchObject({ code: 'forbidden' });
+    const reader = svcFor({ 'returns.select': { data: [], error: null } }, { role: 'viewer', permissions: new Set(['returns:read']) });
+    await expect(reader.svc.list()).resolves.toEqual([]);
+    await expect(reader.svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION })).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('a staff member GRANTED returns:manage passes the service gate (the database checks the warehouse)', async () => {
+    const { stub, svc } = svcFor(
+      { 'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null } },
+      { role: 'staff', permissions: new Set(['returns:manage']) },
     );
-    await expect(svc.list()).resolves.toEqual([]);
+    await svc.receive(RET_ID);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['receive_return']);
+  });
+
+  it('the MFA floor applies to writes (aal2_required)', async () => {
+    const { svc } = svcFor({}, { mfaRequired: true, mfaSatisfied: false });
+    await expect(svc.receive(RET_ID)).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('the workbench and the list need returns:read or returns:manage', async () => {
+    const { svc } = svcFor({}, { role: 'viewer' });
+    await expect(svc.workbench(RET_ID)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(svc.listPage({})).rejects.toMatchObject({ code: 'forbidden' });
   });
 });
 
@@ -964,103 +779,68 @@ describe('RMAService reads carry the parent order number', () => {
   });
 });
 
-describe('return.created integration payload', () => {
-  it('sends the real SO number as orderNumber', async () => {
-    const stub = makeCreateStub({
-      'order_requests.select': {
-        data: [{ ...COMPLETED_ORDER, order_number: 49 }],
-        error: null,
-      },
-    });
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
 
-    const created = await svc.createFromOrder(ORDER_ID, VALID_INPUT);
+describe('guards over the returns code', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const service = readFileSync(join(HERE, 'returns.ts'), 'utf8');
 
-    expect(created.order_number).toBe(49);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      'org-test',
-      'return.created',
-      expect.objectContaining({ orderNumber: 'SO-000049' }),
-    );
+  it('RMAService never writes a return table itself (every write is a database function)', () => {
+    expect(service).not.toMatch(/from\(['"]returns['"]\)\s*\.\s*(insert|update|upsert|delete)/);
+    expect(service).not.toMatch(/from\(['"]return_lines['"]\)\s*\.\s*(insert|update|upsert|delete)/);
+    expect(service).not.toMatch(/from\(['"]return_decisions['"]\)\s*\.\s*(insert|update|upsert|delete)/);
   });
 
-  it('falls back to the order id prefix when the order has no number', async () => {
-    const stub = makeCreateStub();
-    const svc = new RMAService(
-      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
-    );
-
-    await svc.createFromOrder(ORDER_ID, VALID_INPUT);
-
-    expect(dispatchMock).toHaveBeenCalledWith(
-      'org-test',
-      'return.created',
-      expect.objectContaining({ orderNumber: ORDER_ID.slice(0, 8).toUpperCase() }),
-    );
+  it('never reads order_requests.return_token for a link (0392: the side table only)', () => {
+    expect(service).not.toMatch(/return_token/);
   });
-});
 
-// ── DB inventory-correctness invariants ────────────────────────────────────
-// The scrap NET-ZERO write and the apply-once / returned_quantity increment
-// live in the process_return_disposition RPC (migrations 0153/0154), which the
-// service invokes via rpc('process_return_disposition'). There is no JS-level
-// adjust_stock in returns.ts to mock, so these regression guards assert against
-// the COMMITTED migration SQL — they fail loudly if a future edit reintroduces
-// the double-decrement (bare -qty scrap) or drops the durable-budget increment.
-describe('process_return_disposition DB invariants (migration SQL)', () => {
-  // Derive the migrations dir from THIS file's location (apps/web/src/server/
-  // services) so the test does not depend on the process cwd:
-  //   …/apps/web/src/server/services → up 5 → repo root → supabase/migrations.
-  const thisDir = dirname(fileURLToPath(import.meta.url));
-  const migrationsDir = join(thisDir, '..', '..', '..', '..', '..', 'supabase', 'migrations');
-  const sql0153 = readFileSync(join(migrationsDir, '0153_returns.sql'), 'utf8');
-  const sql0154 = readFileSync(
-    join(migrationsDir, '0154_returns_status_machine_db_guard.sql'),
-    'utf8',
-  );
-  // 0154 redefines process_return_disposition (adds the layer-2 budget backstop)
-  // so it is the authoritative on-disk definition; test it. 0153 carries the
-  // original; assert both encode the net-zero scrap.
-  const dispositions = [
-    { name: '0153', sql: sql0153 },
-    { name: '0154', sql: sql0154 },
-  ];
+  /**
+   * Plan 3.1.4: RX-2 gives returns and order_requests a second relationship
+   * (the replacement link). Every embed between them must name its
+   * constraint or PostgREST answers PGRST201. Scans the web and the phone.
+   */
+  it('no embed between returns and order_requests is left unhinted (web and phone)', () => {
+    const roots = [
+      join(HERE, '..', '..'),
+      join(HERE, '..', '..', '..', '..', 'mobile', 'app'),
+      join(HERE, '..', '..', '..', '..', 'mobile', 'src'),
+    ];
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const name of entries) {
+        if (name === 'node_modules' || name.startsWith('.')) continue;
+        const p = join(dir, name);
+        const st = statSync(p);
+        if (st.isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name)) files.push(p);
+      }
+    };
+    roots.forEach(walk);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      // A read FROM returns that embeds order_requests, or FROM order_requests
+      // that embeds returns, within the same query chain.
+      for (const m of text.matchAll(/from\(['"](returns|order_requests)['"]\)([\s\S]{0,700}?)(?=\.from\(|$)/g)) {
+        const parent = m[1];
+        const chain = m[2] ?? '';
+        const child = parent === 'returns' ? 'order_requests' : 'returns';
+        const unhinted = new RegExp(`(^|[\\s,:(\`'"])${child}\\s*\\(`);
+        if (unhinted.test(chain)) offenders.push(`${file.split('/apps/')[1]}: ${parent} -> ${child}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 
-  for (const { name, sql } of dispositions) {
-    it(`${name}: SCRAP is net-zero — receives (+qty 'return') THEN writes off (-qty 'loss'), never a bare single decrement`, () => {
-      // Both legs of the net-zero scrap must be present: a +qty 'return' receive
-      // and a -qty 'loss' write-off. -v_line.quantity into a 'loss' movement is
-      // the write-off leg; v_line.quantity (positive) into a 'return' movement is
-      // the receive leg. If scrap were a bare single -qty 'loss' (the
-      // double-decrement bug), the receive leg would be absent.
-      expect(sql).toContain("'return'"); // the receive leg movement_type
-      expect(sql).toContain("'loss'"); // the write-off leg movement_type
-      expect(sql).toContain('v_prev + v_line.quantity'); // receive: on-hand += qty
-      expect(sql).toContain('v_prev - v_line.quantity'); // write-off: on-hand -= qty
-      // The scrap branch performs the -qty leg ONLY inside `if ... = 'scrap'`.
-      const scrapBranch = sql.slice(sql.indexOf("if v_line.disposition = 'scrap'"));
-      expect(scrapBranch).toContain('v_prev - v_line.quantity');
-      expect(scrapBranch).toContain("'loss'");
-    });
-
-    it(`${name}: applies each line ONCE (one-way 'applied' latch) and increments the DURABLE returned_quantity`, () => {
-      // Idempotency: only unapplied lines are processed, and each flips applied.
-      expect(sql).toContain('rl.applied = false');
-      expect(sql).toContain('set applied = true');
-      // Durable budget consumed at apply-time on the immutable source line.
-      expect(sql).toContain('set returned_quantity = returned_quantity + v_line.quantity');
-      // Inventory only moves for a RECEIVED return (status gate).
-      expect(sql).toContain("v_return.status <> 'received'");
-    });
-  }
-
-  it('0154: process_return_disposition re-asserts the durable cap before moving stock (returned + qty <= fulfilled)', () => {
-    // Layer-2 backstop reads the durable returned_quantity (not a SUM) and locks
-    // the source line FOR UPDATE before consuming budget.
-    expect(sql0154).toContain('orl.quantity_fulfilled, orl.returned_quantity');
-    expect(sql0154).toContain('v_returned + v_line.quantity > v_fulfilled');
-    expect(sql0154).toContain('return_exceeds_fulfilled');
+  it('the guard sees an unhinted embed', () => {
+    const chain = ".select('*, order_request:order_requests (order_number)')";
+    expect(/(^|[\s,:(`'"])order_requests\s*\(/.test(chain)).toBe(true);
+    expect(/(^|[\s,:(`'"])order_requests\s*\(/.test(".select('*, order_request:order_requests!order_request_id (order_number)')")).toBe(false);
   });
 });

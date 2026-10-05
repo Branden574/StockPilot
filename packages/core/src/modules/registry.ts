@@ -575,9 +575,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     title: 'Returns',
     dependsOn: [],
     permissions: ['returns:read', 'returns:manage'],
-    surfaces: ['api'],
-    apiPrefixes: ['/api/returns'],
-    ownsTables: ['returns', 'return_lines'],
+    surfaces: ['web', 'mobile', 'api'],
+    apiPrefixes: ['/api/returns', '/api/v1/returns'],
+    ownsTables: ['returns', 'return_lines', 'return_decisions'],
     // Net-new RMA / returns flow — OFF for every pack; explicit opt-in only.
     // Surfaced via its own /dashboard/returns staff UI (Phase A3). The sidebar
     // placement is module-derived: it only renders when the org has the
@@ -586,11 +586,13 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // optional modules surface their nav. Sits just after Orders (80) in the
     // Inventory section.
     defaultOnFor: [],
-    // Web-only for Phase A3 — there is no mobile /returns route yet, so we
-    // deliberately add ONLY a web_sidebar placement (a mobile_drawer placement
-    // would surface a dead nav link in the app).
+    // Returns RX-1: the phone has its own list (app/(drawer)/returns.tsx) and
+    // RMA workbench (app/returns/[id].tsx), so the drawer carries the entry
+    // too, gated exactly like the sidebar (module on, returns:read or
+    // returns:manage). Sits just after Orders (80).
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Returns', href: '/returns', iconName: 'Undo2', defaultSortOrder: 85, requiresAnyOf: ['returns:read', 'returns:manage'] },
     ],
   },
 

@@ -3,114 +3,137 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * A return's line names. The page read every line's item in one `.in()` with
- * the error ignored; a return's lines follow its order's, which have no total
- * cap. Now 100 ids per request, and a failure (names are labels only) shows
- * the lines unnamed and is reported instead of vanishing silently.
+ * The RMA workbench page (returns RX-1): returns:read or returns:manage
+ * views, a missing or foreign RMA is a 404, an internal failure is thrown
+ * (not hidden as a 404), and the page renders the workbench the service
+ * built in one call. The line-name batching (100 ids per request, a failed
+ * batch reported) moved into the workbench builder:
+ * server/services/returns-workbench.test.ts.
  */
 
-const { stubRef, rmaGet, reportError } = vi.hoisted(() => ({
-  stubRef: { current: null as unknown },
-  rmaGet: vi.fn(),
-  reportError: vi.fn(async () => {}),
-}));
-
-vi.mock('next/navigation', () => ({
+const { workbench, notFound } = vi.hoisted(() => ({
+  workbench: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
-  redirect: vi.fn(),
+}));
+
+vi.mock('next/navigation', () => ({
+  notFound,
+  redirect: vi.fn((u: string) => {
+    throw new Error(`redirect:${u}`);
+  }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
-    default: ({ href, children }: { href: string; children: React.ReactNode }) =>
-      React.createElement('a', { href }, children),
+    default: ({ href, children }: { href: string; children: React.ReactNode }) => React.createElement('a', { href }, children),
   };
 });
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async (m: string) => ({ enabled: m === 'returns', canManage: false })),
 }));
-vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({
-    organizationId: 'org-1',
-    userId: 'u1',
-    role: 'admin',
-    permissions: new Set(['returns:read']),
-  })),
-}));
-vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => stubRef.current) }));
-vi.mock('@/lib/error-reporter', () => ({ reportError }));
-vi.mock('@/server/services/returns', () => ({
-  RMAService: { forCurrentUser: vi.fn(async () => ({ get: rmaGet })) },
-}));
+const orgCtx = vi.hoisted(() => ({ value: { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set(['returns:read']) } }));
+vi.mock('@/lib/auth/session', () => ({ requireOrgContext: vi.fn(async () => orgCtx.value) }));
+vi.mock('@/server/services/returns', () => ({ RMAService: { forCurrentUser: vi.fn(async () => ({ workbench })) } }));
 vi.mock('@/server/services/shipping', () => ({ ShippingService: { forCurrentUser: vi.fn() } }));
-vi.mock('@/components/returns/return-actions-panel', () => ({ ReturnActionsPanel: () => null }));
+vi.mock('@/server/actions/returns', () => ({
+  runReturnStepsAction: vi.fn(),
+  denyReturnAction: vi.fn(),
+  cancelReturnAction: vi.fn(),
+  planReturnDispositionsAction: vi.fn(),
+  buyReturnLabelAction: vi.fn(),
+}));
 
-import { inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { ServiceError } from '@/server/services/context';
 
 import ReturnDetailPage from './page';
 
-const itemId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+const args = { params: Promise.resolve({ id: 'r1' }) };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  rmaGet.mockResolvedValue({
-    id: 'r1',
-    return_number: 'RMA-1',
-    status: 'requested',
-    source: 'internal',
-    reason: 'damaged',
-    notes: null,
-    created_at: '2026-09-01T00:00:00Z',
-    updated_at: '2026-09-01T00:00:00Z',
-    order_request_id: '22222222-2222-2222-2222-222222222222',
-    order_number: 7,
-    reason_code: 'damaged',
-    requester_name: null,
-    requester_email: null,
-    denial_reason: null,
-    approved_at: null,
-    received_at: null,
-    closed_at: null,
-    denied_at: null,
-    lines: Array.from({ length: 250 }, (_, i) => ({
-      id: `rl-${i}`,
-      item_id: itemId(i),
-      quantity: 1,
-      disposition: null,
-      applied: false,
-    })),
-  });
-});
-
-function stubWith(items: (call: MockCall) => { data: unknown; error: unknown }) {
-  stubRef.current = makeSupabaseStub({ 'inventory_items.select': items as never }).client;
+function bench(over: Record<string, unknown> = {}) {
+  return {
+    organizationId: 'org-1',
+    return: {
+      id: 'r1',
+      returnNumber: 'RMA-1',
+      status: 'approved',
+      source: 'requester',
+      reasonCode: 'damaged',
+      notes: null,
+      denialReason: null,
+      orderRequestId: 'o1',
+      orderNumber: 103,
+      warehouseId: 'w1',
+      warehouseName: 'Main',
+      requesterName: 'Pat Lee',
+      requesterEmail: null,
+      createdAt: '2026-10-01T00:00:00Z',
+      approvedAt: '2026-10-02T00:00:00Z',
+      receivedAt: null,
+      closedAt: null,
+      deniedAt: null,
+      requestedByName: null,
+      approvedByName: 'Dana',
+      receivedByName: null,
+      closedByName: null,
+      deniedByName: null,
+    },
+    revision: 1,
+    planSeq: 3,
+    createdOnCounter: false,
+    lines: [
+      {
+        id: 'l1',
+        orderRequestLineId: 'ol1',
+        itemId: 'i1',
+        quantity: 1,
+        disposition: 'restock',
+        applied: false,
+        item: { name: 'Walk New Hire Shirt', sku: 'NH-M', variant: 'Size M', deleted: false, imageUrl: null, thumbUrl: null },
+        restock: null,
+        legs: [],
+        inboundState: 'Waiting',
+      },
+    ],
+    decisions: [],
+    chain: [{ at: '2026-10-01T00:00:00Z', kind: 'created', label: 'Return requested by the requester', actorName: null }],
+    viewer: { canManageReturns: false, canApproveOrders: false, canReadDecisions: true },
+    actions: { primary: null, secondary: [], readOnlyReason: "You don't have permission to manage returns." },
+    ...over,
+  };
 }
 
-describe('return detail with 250 lines', () => {
-  it('names every line, reading items 100 at a time', async () => {
-    const lists: string[][] = [];
-    stubWith((call) => {
-      const ids = (inFilters(call).find(([c]) => c === 'id')?.[1] ?? []) as string[];
-      lists.push(ids);
-      return { data: ids.map((id) => ({ id, name: `Item ${id.slice(-3)}`, sku: null })), error: null };
-    });
-    render(await ReturnDetailPage({ params: Promise.resolve({ id: 'r1' }) }));
-    expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
-    expect(screen.getByText('Item 249')).toBeTruthy();
+beforeEach(() => vi.clearAllMocks());
+
+describe('the RMA workbench page', () => {
+  it('renders the workbench for a returns:read viewer, read-only', async () => {
+    workbench.mockResolvedValueOnce(bench());
+    render(await ReturnDetailPage(args));
+    expect(screen.getByRole('heading', { name: 'RMA-1' })).toBeInTheDocument();
+    expect(screen.getByText('Walk New Hire Shirt')).toBeInTheDocument();
+    expect(screen.getByText('Size M · NH-M')).toBeInTheDocument();
+    expect(screen.getByText('Qty returning: 1')).toBeInTheDocument();
+    expect(screen.getByText("You don't have permission to manage returns.")).toBeInTheDocument();
+    expect(screen.getByText('Return requested by the requester')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Receive' })).not.toBeInTheDocument();
   });
 
-  it('a failed batch still shows the return, and reports the missing names', async () => {
-    let n = 0;
-    stubWith(() =>
-      ++n === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
-    );
-    render(await ReturnDetailPage({ params: Promise.resolve({ id: 'r1' }) }));
-    expect(screen.getByText('RMA-1')).toBeTruthy();
-    expect(reportError).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tag: 'returns.detail.item_names', level: 'warning' }),
-    );
+  it('a missing or foreign RMA is a 404', async () => {
+    workbench.mockRejectedValueOnce(new ServiceError('not_found', "This return isn't available."));
+    await expect(ReturnDetailPage(args)).rejects.toThrow('notFound');
+  });
+
+  it('an internal failure is thrown, never dressed up as a 404', async () => {
+    workbench.mockRejectedValueOnce(new ServiceError('internal_error', 'boom'));
+    await expect(ReturnDetailPage(args)).rejects.toBeInstanceOf(ServiceError);
+    expect(notFound).not.toHaveBeenCalled();
+  });
+
+  it('a member without returns:read or returns:manage is sent away', async () => {
+    orgCtx.value = { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set([]) };
+    await expect(ReturnDetailPage(args)).rejects.toThrow('redirect:/dashboard');
+    orgCtx.value = { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set(['returns:read']) };
   });
 });

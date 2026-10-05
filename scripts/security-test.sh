@@ -655,6 +655,21 @@ PGTAP_TESTS=(
   # the marker's write overhead on the log tables (ordinary writes never call
   # it) is scripts/db-concurrency/0393_marker_write_overhead.sh.
   supabase/tests/0393_account_deletion_for_everyone.test.sql
+  # Returns RX-1 (0394, INV-C6): every RMA transition runs through a gated
+  # SECURITY DEFINER function (signed in, member, Returns module,
+  # returns:manage, warehouse write) and the four write policies follow
+  # returns:manage, so a manager revoked by override is refused by the
+  # functions AND by a raw PostgREST insert or update. anon holds nothing;
+  # authenticated updates exactly eight returns columns and no return_lines
+  # column; the guards refuse an insert at a later status, a forged stamp, a
+  # raw close and an applied line; return_decisions is append-only and read
+  # only with returns:read or returns:manage. A restock to a rack is honoured
+  # only for a location the pick provenance proves and is revalidated under
+  # lock at the close. The ledger helpers are INVOKER with no API EXECUTE.
+  # The close, approve and plan races are
+  # scripts/db-concurrency/0394_return_close_races.sh; the lock footprint is
+  # scripts/db-concurrency/0394_migration_lock_footprint.sh.
+  supabase/tests/0394_returns_lifecycle_original_rack.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1002,6 +1017,34 @@ WEB_TESTS=(
   src/server/loaders/orders-new-catalog.test.ts
   src/server/loaders/orders-kits.test.ts
   src/server/loaders/orders-frequently-ordered.test.ts
+
+  # Returns RX-1 (0394): RMAService calls only the gated functions, checks
+  # the module, the MFA floor and returns:manage before any write, maps every
+  # refusal by hint (never raw database text), and writes audit, outbox and
+  # webhooks only on a real change. The v1 routes answer cookie and Bearer
+  # callers for their own organization, never cached; a foreign RMA is a 404
+  # like a missing one, for a write too (the service reads the RMA or order
+  # in the active organization before any function runs, so a member of two
+  # organizations never acts on the other one's RMA and logs it here); the
+  # legacy create body mints a key, and the web create dialog mints one per
+  # open and the requester token form one per page load (an edited resend
+  # after a lost answer is a conflict, never a second RMA). The public submit
+  # keeps its honeypot and unit cap, keys its bucket by the token's hash and
+  # gives one generic answer for every failure; the requester and portal
+  # paths copy identity from the order and go through the service-role
+  # function only. The workbench reads a return's legs and picks from the
+  # ledger only, so a member's direct movement insert never reads as one
+  # (review). The migration guard pins the grants and the guard triggers the
+  # app relies on.
+  src/server/services/returns.test.ts
+  src/server/services/returns.portal.test.ts
+  src/server/services/returns-migration.guard.test.ts
+  src/server/services/returns-workbench.test.ts
+  src/app/api/v1/returns/routes.test.ts
+  'src/app/api/v1/orders/[id]/returns/route.test.ts'
+  src/app/api/v1/public/returns/route.test.ts
+  src/components/returns/create-return-dialog.test.tsx
+  'src/app/returns/request/[token]/requester-return-form.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1085,6 +1128,13 @@ MOBILE_TESTS=(
   # staff member sees Approve, a revoked manager does not, a staff driver
   # never sees Mark in transit (owner decision O3, default).
   src/lib/order-manager-actions.test.ts
+
+  # Returns RX-1 (0394): every return action is online only (no outbox kind
+  # exists for a return, queue.ts kinds pinned), the next-step bar follows
+  # the server's viewer booleans, never a role, and the client sends the
+  # caller's Bearer token to the gated routes only.
+  src/lib/returns-api.test.ts
+  src/lib/returns-screen-wiring.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1111,6 +1161,13 @@ CORE_TESTS=(
   # are generated from.
   src/orders/place-order.test.ts
   src/orders/place-order.parity.test.ts
+  # Returns RX-1 (0394): the actions a viewer is offered follow the server's
+  # booleans (returns:manage, warehouse write), the request schemas share
+  # their case table with the pgTAP file, and every database hint maps to
+  # its own words, specific before general, never by message text.
+  src/returns/return-actions.test.ts
+  src/returns/return-schemas.test.ts
+  src/returns/return-error-map.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

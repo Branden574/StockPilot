@@ -3,116 +3,103 @@ import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { createRequesterReturn } from '@/server/services/returns';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { createRequesterReturn } from '@/server/services/returns';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Public requester-initiated return submit endpoint (Returns Phase B, B4).
+ * Public requester-initiated return submit (returns RX-1 on the Phase B
+ * route). PUBLIC + UNAUTHENTICATED, called from `/returns/request/<token>`.
+ * The per-order return token (order_request_secrets since 0392) is the only
+ * authorization; it opens exactly one order, resolved server-side. The
+ * create itself is ONE database transaction
+ * (create_requester_return_request, service role only): every line is
+ * re-checked against that order (belonging, the durable budget less pending
+ * demand, the cap trigger), the item is stamped from the source line, the
+ * disposition is always restock, and the requester's name and email come
+ * from the order. zod strips everything else a client might send
+ * (disposition, status, warehouse, organization, location, item).
  *
- * PUBLIC + UNAUTHENTICATED. Called from `/returns/request/<token>`. The only
- * authorization the requester carries is the per-order `return_token`
- * (0156; order_request_secrets.return_token since 0389/0392). The token scopes to EXACTLY ONE order;
- * everything else in the body is treated as hostile and re-validated
- * server-side inside `createRequesterReturn` against the order the token
- * resolves to (durable returned_quantity budget, line belonging, item identity
- * stamped from the source line, requester identity copied from the order — see
- * that function's contract). This route adds the public-surface defenses:
+ * Defenses on this surface:
+ *   • HONEYPOT: a non-empty `hp` answers a fake success and writes nothing.
+ *   • 10,000 units per request, at most 100 lines.
+ *   • RATE LIMIT, fail-CLOSED: per IP (10 an hour) and per token (30 an
+ *     hour). The token bucket is keyed by sha256(token), so the raw token
+ *     never lands in the rate-limit table.
+ *   • IDEMPOTENT: `idempotencyKey` (minted when the form opens) replays the
+ *     same RMA on a resend; a body without one gets a fresh key.
+ *   • ONE ANSWER for every closed door: an unknown token, an order that is
+ *     not returnable, and the module switched off all answer the same 404.
  *
- *   • HONEYPOT — an off-screen field real users never fill; a non-empty value
- *     silently returns a fake-success 200 so bots can't tune around it.
- *   • RATE LIMIT — two Supabase-backed buckets (0048) in fail-CLOSED mode:
- *     per-IP (10/hr) and per-token (30/hr). Closed mode means a DB outage
- *     denies rather than unlocking unlimited submissions on an anon endpoint.
- *
- * On success the return lands in the staff approval queue (status='requested',
- * source='requester'); no inventory moves until staff approve + receive + close.
+ * On success the return waits in the staff approval queue; nothing moves
+ * until staff approve, receive and process it.
  */
 
 const lineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
-  quantity: z.coerce.number().int().positive().max(10_000),
+  quantity: z.number().int().positive().max(10_000),
 });
 
 const bodySchema = z.object({
-  // The return_token is a uuid (0156). Validate the shape here; the service
-  // re-resolves it against the DB (a syntactically-valid but unknown token
-  // becomes a 404 there, not here).
   token: z.string().uuid(),
   reasonCode: z.enum(['damaged', 'wrong_item', 'end_of_year', 'overage', 'other']).optional(),
   notes: z.string().max(2000).nullish(),
   lines: z.array(lineSchema).min(1).max(100),
-  // Honeypot — intentionally permissive on the schema so a tripped bot isn't
-  // told why; the explicit check below silently fake-succeeds.
+  idempotencyKey: z.string().uuid().optional(),
   hp: z.string().max(500).optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
 
 const RATE_LIMIT_PER_IP_PER_HOUR = 10;
-/**
- * Per-token cap. A single returnable order should not generate many return
- * requests; 30/hr is well above any legitimate retry-after-typo pattern but
- * stops a leaked/guessed token from flooding the staff approval queue.
- */
 const RATE_LIMIT_PER_TOKEN_PER_HOUR = 30;
 const ONE_HOUR_MS = 60 * 60 * 1000;
-/** Mirror the public order-request cap so a requester can't file an
- *  oversized return. */
 const MAX_TOTAL_QTY = 10_000;
 
+const CLOSED_DOOR = {
+  error: 'not_found',
+  message: 'This return link is invalid or has expired.',
+};
+
 export async function POST(req: NextRequest) {
-  // 1. Parse + validate BEFORE touching the admin client.
   let raw: unknown;
   try {
     raw = await req.json();
   } catch {
-    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+    return NextResponse.json({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
   }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? 'validation_error' },
+      { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
       { status: 400 },
     );
   }
   const body: Body = parsed.data;
 
-  // 2. Honeypot — silently 200 with a fake id so a bot can't distinguish
-  //    success from failure. Nothing is persisted.
   if (typeof body.hp === 'string' && body.hp.trim().length > 0) {
     return NextResponse.json({ id: 'ok' });
   }
 
-  // 3. Total-qty cap (matches the public order-request route).
   const totalQty = body.lines.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
   if (totalQty > MAX_TOTAL_QTY) {
     return NextResponse.json(
-      {
-        error: 'too_many_units',
-        message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
-      },
+      { error: 'too_many_units', message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.` },
       { status: 400 },
     );
   }
 
-  // 4. Rate limit. Only trust x-forwarded-for on Vercel (elsewhere a client
-  //    could rotate the header to dodge the per-IP cap). Both buckets are
-  //    fail-CLOSED on this anonymous surface.
+  // Only trust x-forwarded-for on Vercel (elsewhere a client could rotate it).
   const onVercel = process.env.VERCEL === '1';
   const xff = onVercel ? req.headers.get('x-forwarded-for') : null;
   const ip = xff?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-return-request:${ip}`, RATE_LIMIT_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
-    checkRateLimit(
-      `public-return-request:token:${body.token}`,
-      RATE_LIMIT_PER_TOKEN_PER_HOUR,
-      ONE_HOUR_MS,
-      'closed',
-    ),
+    checkRateLimit(returnTokenBucketKey(body.token), RATE_LIMIT_PER_TOKEN_PER_HOUR, ONE_HOUR_MS, 'closed'),
   ]);
   const denied = !ipLimit.allowed ? ipLimit : !tokenLimit.allowed ? tokenLimit : null;
   if (denied) {
@@ -121,56 +108,55 @@ export async function POST(req: NextRequest) {
     void reportError(new Error(`public return-request rate limit hit (${trippedBucket})`), {
       tag: 'public.returns.rate-limited',
       level: 'warning',
-      extra: {
-        bucket: trippedBucket,
-        count: denied.count,
-        retryAfterSeconds: retryAfter,
-        tokenPrefix: body.token.slice(0, 8),
-      },
+      extra: { bucket: trippedBucket, count: denied.count, retryAfterSeconds: retryAfter },
     });
     return NextResponse.json(
       {
         error: 'rate_limited',
-        message:
-          "You've hit the request limit. Please wait an hour and try again, or contact the warehouse directly.",
+        message: "You've hit the request limit. Please wait an hour and try again, or contact the warehouse directly.",
       },
       { status: 429, headers: { 'retry-after': String(retryAfter) } },
     );
   }
 
-  // 5. Hand off to the service path, which re-validates the token + budget +
-  //    line belonging server-side and creates the source='requester' return.
   let admin;
   try {
     admin = createAdminClient();
   } catch {
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 
   try {
-    const result = await createRequesterReturn(admin, body.token, {
-      reasonCode: body.reasonCode,
-      notes: body.notes ?? undefined,
-      lines: body.lines.map((l) => ({
-        orderRequestLineId: l.orderRequestLineId,
-        quantity: l.quantity,
-      })),
-    });
-    return NextResponse.json({ id: result.id, returnNumber: result.returnNumber });
+    const result = await createRequesterReturn(
+      admin,
+      body.token,
+      {
+        reasonCode: body.reasonCode,
+        notes: body.notes ?? undefined,
+        lines: body.lines.map((l) => ({ orderRequestLineId: l.orderRequestLineId, quantity: l.quantity })),
+      },
+      { idempotencyKey: body.idempotencyKey ?? null },
+    );
+    return NextResponse.json(
+      { id: result.id, returnNumber: result.returnNumber, replay: result.replay },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch (e) {
     if (e instanceof ServiceError) {
-      // Map service errors to status codes. not_found (bad/expired token) and
-      // validation_error (over-return, bad line) surface a friendly message;
-      // internal_error is logged.
+      if (e.code === 'not_found' || e.code === 'module_disabled' || e.code === 'forbidden') {
+        return NextResponse.json(CLOSED_DOOR, { status: 404 });
+      }
       if (e.code === 'internal_error') {
         await reportError(e, { tag: 'public.returns.create' });
+        return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
       }
+      const reason = typeof e.details?.reason === 'string' ? e.details.reason : undefined;
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        { error: e.code, message: e.message, ...(reason ? { details: { reason } } : {}) },
         { status: serviceErrorStatus(e.code) },
       );
     }
     await reportError(e, { tag: 'public.returns.create.unknown' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 }

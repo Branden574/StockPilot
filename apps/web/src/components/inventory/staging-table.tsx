@@ -1,6 +1,7 @@
 'use client';
 
 import { Clock, History, Search, X } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
@@ -32,7 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { BookStorageInfo } from '@stockpilot/core';
+import { stagingReturnedSourceLabel, type BookStorageInfo } from '@stockpilot/core';
 
 import { cn, formatRelative } from '@/lib/utils';
 import type { DestinationOption } from '@/lib/locations/destination-option';
@@ -54,6 +55,9 @@ interface StagedRow {
   receiptNumber: string | null;
   receivedAt: string | null;
   ageDays: number | null;
+  /** Returns RX-1: the RMA when a return restocked this stock into Staging. */
+  sourceReturnId?: string | null;
+  sourceReturnNumber?: string | null;
   /**
    * Searchable identifiers only (the toolbar search box): a book's ISBN lives
    * in `barcode`; `modelNumber` is the manufacturer part number. Neither is
@@ -132,14 +136,29 @@ function AgeBadge({ ageDays }: { ageDays: number | null }) {
 function SourceCell({
   poNumber,
   receiptNumber,
+  returnId,
+  returnNumber,
   onFilterByPo,
   onSearchReceipt,
 }: {
   poNumber: string | null;
   receiptNumber: string | null;
+  returnId?: string | null;
+  returnNumber?: string | null;
   onFilterByPo: (po: string) => void;
   onSearchReceipt: (receipt: string) => void;
 }) {
+  if (returnId) {
+    return (
+      <Link
+        href={`/dashboard/returns/${returnId}`}
+        onClick={(e) => e.stopPropagation()}
+        className="text-sm underline-offset-2 hover:underline"
+      >
+        {stagingReturnedSourceLabel(returnNumber ?? null)}
+      </Link>
+    );
+  }
   if (!poNumber && !receiptNumber) {
     return <span className="text-muted-foreground text-sm">—</span>;
   }
@@ -637,6 +656,8 @@ export function StagingTable({
                         <SourceCell
                           poNumber={row.sourcePoNumber}
                           receiptNumber={row.receiptNumber}
+                          returnId={row.sourceReturnId ?? null}
+                          returnNumber={row.sourceReturnNumber ?? null}
                           onFilterByPo={filterByPo}
                           onSearchReceipt={(receipt) => updateFilters({ query: receipt })}
                         />

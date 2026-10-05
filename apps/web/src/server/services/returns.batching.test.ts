@@ -80,16 +80,18 @@ describe('pendingReturnQuantitiesByLine with 250 order lines', () => {
   });
 });
 
-describe('RMAService.createFromOrder with 150 lines', () => {
+describe('RMAService.createFromOrder line caps and the item check', () => {
+  // A return carries at most 100 lines (the same cap the database function
+  // holds), so the item identity check is one read; past 100 lines the body
+  // is refused before anything is read.
   const ORDER = uuid(1, 'd');
-  const lineIds = Array.from({ length: 150 }, (_, i) => uuid(i, 'f'));
-  const input = {
-    lines: lineIds.map((orderRequestLineId) => ({
-      orderRequestLineId,
+  const linesOf = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      orderRequestLineId: uuid(i, 'f'),
       quantity: 1,
       disposition: 'restock' as const,
-    })),
-  };
+      itemId: uuid(9, 'a'),
+    }));
   const svcFor = (client: unknown) =>
     new RMAService(
       makeServiceContext(client, {
@@ -98,53 +100,43 @@ describe('RMAService.createFromOrder with 150 lines', () => {
       }) as never,
     );
 
-  it('reads the order lines in batches of at most 100 before writing', async () => {
+  it('refuses 150 lines before any read or call', async () => {
+    const stub = makeSupabaseStub({});
+    await expect(svcFor(stub.client).createFromOrder(ORDER, { lines: linesOf(150) })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(stub.fromCalls).toHaveLength(0);
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('checks 100 named items in one read, then calls the database function', async () => {
     const lists: string[][] = [];
     const stub = makeSupabaseStub({
-      'order_requests.select': {
-        data: { id: ORDER, organization_id: 'org-test', status: 'completed', order_number: 7 },
-        error: null,
-      },
+      // The order, read in the active organization first (desk check F4).
+      'order_requests.select': { data: [{ id: ORDER }], error: null },
       'order_request_lines.select': (call) => {
         const list = inList(call, 'id');
         lists.push(list);
-        return {
-          data: list.map((id) => ({
-            id,
-            order_request_id: ORDER,
-            item_id: 'item-1',
-            quantity_fulfilled: 1,
-            returned_quantity: 0,
-          })),
-          error: null,
-        };
+        return { data: list.map((id) => ({ id, item_id: uuid(9, 'a') })), error: null };
       },
-      'return_lines.select': { data: [], error: null },
-      // Stop right after validation: every line passed, so the header insert runs.
-      'returns.insert': { data: null, error: { message: 'stop here' } },
+      'rpc:create_return_request': { data: null, error: { code: 'XX000', message: 'stop here' } },
     });
-    await expect(svcFor(stub.client).createFromOrder(ORDER, input)).rejects.toMatchObject({
+    await expect(svcFor(stub.client).createFromOrder(ORDER, { lines: linesOf(100) })).rejects.toMatchObject({
       code: 'internal_error',
     });
-    expect(lists.map((l) => l.length)).toEqual([100, 50]);
-    expect(stub.chainsAll.get('returns.insert')).toHaveLength(1);
+    expect(lists.map((l) => l.length)).toEqual([100]);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['create_return_request']);
   });
 
-  it('throws and writes nothing when an order-line batch fails', async () => {
-    let n = 0;
+  it('throws and calls nothing when the item read fails', async () => {
     const stub = makeSupabaseStub({
-      'order_requests.select': {
-        data: { id: ORDER, organization_id: 'org-test', status: 'completed', order_number: 7 },
-        error: null,
-      },
-      'order_request_lines.select': () => {
-        n += 1;
-        return n === 2 ? { data: null, error: { message: 'boom' } } : { data: [], error: null };
-      },
+      'order_requests.select': { data: [{ id: ORDER }], error: null },
+      'order_request_lines.select': { data: null, error: { message: 'boom' } },
     });
-    await expect(svcFor(stub.client).createFromOrder(ORDER, input)).rejects.toMatchObject({
+    await expect(svcFor(stub.client).createFromOrder(ORDER, { lines: linesOf(3) })).rejects.toMatchObject({
       code: 'internal_error',
     });
-    expect(stub.chainsAll.get('returns.insert')).toBeUndefined();
+    expect(stub.fromCalls).toContain('order_request_lines');
+    expect(stub.rpcCalls).toHaveLength(0);
   });
 });

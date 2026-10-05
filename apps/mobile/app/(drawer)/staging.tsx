@@ -41,7 +41,7 @@ import {
   stagingRowKey,
   stagingScreenFilter,
   stagingSourceKindLabel,
-  stagingSourceLabel,
+  stagingRowSourceLabel,
   stagingWarehouseLabel,
   stagingWarehouseNameMap,
   stagingWorklistPath,
@@ -505,7 +505,7 @@ function StagingCard({
         <View style={{ marginTop: 12, gap: 6 }}>
           <CardField
             label="SOURCE PO / RECEIPT"
-            value={stagingSourceLabel(row.sourcePoNumber, row.receiptNumber)}
+            value={stagingRowSourceLabel(row)}
           />
           <CardField label="RECEIVED" value={stagingReceivedLabel(row.receivedAt)} />
           <CardField

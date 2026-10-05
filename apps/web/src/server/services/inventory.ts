@@ -8510,6 +8510,13 @@ export class InventoryService {
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
     /**
+     * Returns RX-1: when the newest thing that put this item's stock in
+     * Staging was a return restocked there (and not a later posted receipt),
+     * the RMA it came from; the row then shows "Returned (RMA-…)" as its
+     * source and ages from that close. Null otherwise.
+     */
+    sourceReturnId: string | null; sourceReturnNumber: string | null;
+    /**
      * Searchable identifiers for the staging table's client-side search: the
      * item's barcode (a book's ISBN lives here; legacy isbn/isbn13/isbn10
      * custom-field keys are the fallback, same as the export) and its model
@@ -8721,16 +8728,79 @@ export class InventoryService {
       sourceByItem.set(m.item_id, { receivedAt: m.created_at, receiptId });
     }
 
+    // 5. Returns RX-1: a return restocked into Staging (movement_type and
+    //    reference 'return', no explicit location, the restock reason) names
+    //    its RMA as the source when it is newer than the item's posted
+    //    receipt. A separate read, so the receive_po filter above stays as
+    //    narrow as it was; the scrap leg (also a Staging landing, written off
+    //    in the same close) and the original-rack leg (to_location_id set) are
+    //    excluded. Each batch degrades on its own, reported.
+    const returnSourceByItem = new Map<string, { at: string; returnId: string }>();
+    const returnBatches = await mapIdBatches(itemIds, async (batch) => {
+      try {
+        return await fetchAllRows<Record<string, any>>((from, to) =>
+          ctx.supabase
+            .from('stock_movements')
+            .select('item_id, created_at, reference_id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('movement_type', 'return')
+            .eq('reference_type', 'return')
+            .is('to_location_id', null)
+            .like('reason', 'Return restock %')
+            // Ledger rows only (returns review): a member's direct insert
+            // (via_ledger false) must not relabel a row "Returned (RMA-...)".
+            .eq('via_ledger', true)
+            .in('item_id', batch)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(from, to),
+        );
+      } catch (e) {
+        reportDegradedRead('inventory.staged_worklist.return_movements', e, { items: batch.length });
+        return [] as Array<Record<string, any>>;
+      }
+    });
+    for (const m of returnBatches.flat()) {
+      if (returnSourceByItem.has(m.item_id) || typeof m.reference_id !== 'string') continue;
+      returnSourceByItem.set(m.item_id, { at: m.created_at, returnId: m.reference_id });
+    }
+    const returnNumberById = new Map<string, string | null>();
+    const returnIds = [...new Set([...returnSourceByItem.values()].map((v) => v.returnId))].filter((v) => UUID_RE.test(v));
+    if (returnIds.length > 0) {
+      const numberBatches = await mapIdBatches(returnIds, async (batch) => {
+        try {
+          return await fetchAllRows<Record<string, any>>((from, to) =>
+            ctx.supabase
+              .from('returns')
+              .select('id, return_number')
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .order('id')
+              .range(from, to),
+          );
+        } catch (e) {
+          reportDegradedRead('inventory.staged_worklist.return_numbers', e, { returns: batch.length });
+          return [] as Array<Record<string, any>>;
+        }
+      });
+      for (const r of numberBatches.flat()) returnNumberById.set(r.id, (r.return_number as string | null) ?? null);
+    }
+
     const nowMs = Date.now();
     return rows.map((r) => {
       const sourceKind: 'staging' | 'unplaced' =
         r.locations.kind === 'unplaced' ? 'unplaced' : 'staging';
       // PO/receipt source + age only apply to PO-staged stock. Unplaced stock has
       // no receive_po movement, so it carries no source (columns render "—").
-      const src = sourceKind === 'staging' ? (sourceByItem.get(r.item_id) ?? null) : null;
+      const receiptSrc = sourceKind === 'staging' ? (sourceByItem.get(r.item_id) ?? null) : null;
+      const returnSrc = sourceKind === 'staging' ? (returnSourceByItem.get(r.item_id) ?? null) : null;
+      // The newest landing wins: a return restocked after the last posted
+      // receipt is what sits in Staging now.
+      const fromReturn = returnSrc !== null && (receiptSrc === null || returnSrc.at > receiptSrc.receivedAt);
+      const src = fromReturn ? null : receiptSrc;
       const meta = src?.receiptId ? receiptMeta.get(src.receiptId) : undefined;
       // Prefer receipts.received_at for the displayed date; fall back to sm.created_at.
-      const receivedAt = meta?.receivedAt ?? src?.receivedAt ?? null;
+      const receivedAt = fromReturn ? returnSrc!.at : (meta?.receivedAt ?? src?.receivedAt ?? null);
       return {
         itemId: r.item_id,
         name: r.inventory_items.name,
@@ -8747,6 +8817,8 @@ export class InventoryService {
         receiptNumber: meta?.receiptNumber ?? null,
         receivedAt,
         ageDays: deriveAgeDays(receivedAt, nowMs),
+        sourceReturnId: fromReturn ? returnSrc!.returnId : null,
+        sourceReturnNumber: fromReturn ? (returnNumberById.get(returnSrc!.returnId) ?? null) : null,
         // Books only: the neutral rack_* keys belong to non-books and mean
         // something different (0068), so reading them here would mislabel.
         bookStorage:

@@ -101,6 +101,8 @@ export async function requestPortalReturnAction(
         organizationId: ctx.organizationId,
         customerId: ctx.customerId,
         orderRequestId: parsed.data.orderId,
+        // Recorded on the created decision (0394): the portal user asked.
+        portalUserId: ctx.userId,
       },
       {
         reasonCode: parsed.data.reasonCode,

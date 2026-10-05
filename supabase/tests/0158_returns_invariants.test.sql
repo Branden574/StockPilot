@@ -122,9 +122,14 @@ insert into public.inventory_items
 -- order_requests_delivery_target_chk (0110) then demands a delivery_charter_id.
 -- A returns test doesn't care about delivery, so 'pickup' (which the check
 -- requires to have NO charter) is the minimal valid choice.
+-- RX-1 (0394, review fix): a raw RMA (the old tab's create, which INVARIANTS
+-- 3 to 5 use as authenticated) is accepted only for a handed-over order, the
+-- create functions' and the old service's rule, so the returns' own order is
+-- 'completed' (the cancel test keeps its separate 'in_transit' order). Every
+-- assertion is unchanged.
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
-  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
+  values (:order_id, :org_id, :wh_id, 'completed', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 insert into public.order_requests
@@ -155,15 +160,21 @@ set local "request.jwt.claim.sub" to 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
+-- RX-1 (0394): an API role may no longer insert a return past 'requested' (the
+-- returns API guard, G2), so the received fixtures are written by the owner;
+-- every assertion below is unchanged.
+
 -- ═════════════════════════════════════════════════════════════════════
 -- INVARIANT 1 — RESTOCK conserves: a return that restocks N raises
 -- quantity_on_hand by exactly N (once) and returned_quantity by N.
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_restock, :org_id, :order_id, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_restock, :org_id, :line_restock, :item_restock, 3, 'restock');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('a1111111-1111-1111-1111-111111111111'); end $$;
 
@@ -206,11 +217,13 @@ select is(
 -- then -loss legs net to zero); returned_quantity += N; a 'loss' and a
 -- 'return' movement are both recorded.
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_scrap, :org_id, :order_id, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_scrap, :org_id, :line_scrap, :item_scrap, 4, 'scrap');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('a2222222-2222-2222-2222-222222222222'); end $$;
 
@@ -255,11 +268,13 @@ select is(
 -- fulfilled=5. First return claims 5 (the whole budget); a second pending
 -- return claiming even 1 more must be rejected by the cap trigger.
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_over_a, :org_id, :order_id, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_over_a, :org_id, :line_over, :item_over, 5, 'restock');
+set local role to 'authenticated';
 
 -- A single line over the whole fulfilled qty is rejected outright.
 insert into public.returns (id, organization_id, order_request_id, status)
@@ -333,11 +348,13 @@ select lives_ok(
 -- budget survives, so a fresh full return is still rejected.
 -- fulfilled=5; apply a return for all 5; then attempt DELETE + a fresh return.
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_durable, :org_id, :order_id, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_durable, :org_id, :line_durable, :item_durable, 5, 'restock');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('a5555551-5555-5555-5555-555555555555'); end $$;
 
@@ -349,7 +366,12 @@ select is(
 
 -- DELETE of the applied return is denied by the RESTRICTIVE no-delete policy:
 -- the statement affects ZERO rows (RLS filters it out), so the return survives.
-delete from public.returns where id = :ret_durable;
+-- RX-1 (0394) revoked DELETE on returns from authenticated, so the attempt now
+-- raises instead of reaching no row; the RESTRICTIVE policy stays as insurance.
+do $$ begin
+  delete from public.returns where id = 'a5555551-5555-5555-5555-555555555555';
+exception when insufficient_privilege then null;
+end $$;
 select is(
   (select count(*)::int from public.returns where id = :ret_durable),
   1,
@@ -382,11 +404,13 @@ select throws_ok(
 -- INVARIANT 6 — apply-once idempotency: calling process_return_disposition a
 -- second time does not double-apply (returned_quantity + on_hand unchanged).
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_idem, :org_id, :order_id, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_idem, :org_id, :line_idem, :item_idem, 2, 'restock');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('a6666666-6666-6666-6666-666666666666'); end $$;
 
@@ -428,11 +452,13 @@ select is(
 -- 102 -> 105) — independent of the return — and PRESERVES quantity_fulfilled=5
 -- (goods that left the building are never un-shipped by a cancel).
 -- ═════════════════════════════════════════════════════════════════════
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_cancel, :org_id, :order_cancel, 'received');
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_cancel, :org_id, :line_cancel, :item_cancel, 2, 'restock');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('a7777777-7777-7777-7777-777777777777'); end $$;
 

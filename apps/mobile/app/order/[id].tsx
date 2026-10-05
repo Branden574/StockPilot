@@ -1,4 +1,4 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useNetworkState } from 'expo-network';
 import {
@@ -25,11 +25,13 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   TextInput,
+  useWindowDimensions,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
@@ -81,6 +83,7 @@ import {
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
+import { mintReturnKey } from '@/lib/returns-api';
 import {
   buildReturnPayload,
   describeLineFulfilment,
@@ -92,6 +95,7 @@ import {
   ORDER_RETURNS_SELECT,
   orderReturnSummary,
   parseOrderReturns,
+  pendingReturnQuantities,
   RETURN_REASONS,
   returnableLines,
   returnHandle,
@@ -189,6 +193,7 @@ import {
   PARTIAL_ACTION_TITLE,
   previewPartialFulfilment,
   READINESS_NEEDS_CONNECTION_COPY,
+  RETURNS_COPY,
   readinessOfflineCopy,
   shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
@@ -209,7 +214,10 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { MIN_TAP } from '@/components/item-verification-card';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { useTheme } from '@/lib/use-theme';
 
 const BUCKET = 'order-attachments';
@@ -466,11 +474,22 @@ export default function OrderDetail() {
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
+  // The sheet's size at any text size (returns review, AX5 walk): bounded by
+  // the screen with its header and Submit pinned and the rest scrolling, the
+  // line rows stacked at large text (the exception sheets' layout).
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const sheetInsets = useSafeAreaInsets();
+  const returnSheetLayout = exceptionSheetLayout({ windowHeight, availableHeight: null, topInset: sheetInsets.top });
+  const returnRowsStacked = shouldStackRow(fontScale);
   const [returnDraft, setReturnDraft] = React.useState<Record<string, ReturnDraftLine>>({});
   const [returnReason, setReturnReason] = React.useState<ReturnReasonCode | null>(null);
   const [returnNotes, setReturnNotes] = React.useState('');
   const [returnSubmitting, setReturnSubmitting] = React.useState(false);
   const [returnError, setReturnError] = React.useState<string | null>(null);
+  // Returns RX-1: one idempotency key per opened sheet (a resend replays the
+  // same RMA), and "The item is here", off by default.
+  const [returnKey, setReturnKey] = React.useState<string | null>(null);
+  const [returnItemIsHere, setReturnItemIsHere] = React.useState(false);
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
@@ -584,10 +603,17 @@ export default function OrderDetail() {
               quantityFulfilled: l.fulfilled,
               returnedQuantity: l.returned,
             })),
+            // The server's remaining: pending (unapplied, live) returns count.
+            pendingReturnQuantities(order.returns),
           )
         : [],
     [order],
   );
+  const canReadReturns =
+    role !== null &&
+    enabledModules.has('returns') &&
+    (can({ role: role as Role, permissions }, 'returns:read') ||
+      can({ role: role as Role, permissions }, 'returns:manage'));
   const showCreateReturn =
     canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
   // Order-level returned roll-up (SO-000085) — null when nothing was ever
@@ -1045,6 +1071,8 @@ export default function OrderDetail() {
     setReturnReason(null);
     setReturnNotes('');
     setReturnError(null);
+    setReturnKey(mintReturnKey());
+    setReturnItemIsHere(false);
     setReturnOpen(true);
   }
 
@@ -1068,12 +1096,14 @@ export default function OrderDetail() {
   async function submitReturn() {
     // Double-submit guard: the button is disabled while submitting, and this
     // re-check covers a queued second tap racing the state update.
-    if (!id || returnSubmitting) return;
+    if (!id || returnSubmitting || offline) return;
     const payload = buildReturnPayload({
       lines: orderReturnable,
       draft: returnDraft,
       reasonCode: returnReason,
       notes: returnNotes,
+      idempotencyKey: returnKey,
+      itemIsHere: returnItemIsHere,
     });
     if (!payload.ok) {
       setReturnError(payload.error);
@@ -1082,9 +1112,15 @@ export default function OrderDetail() {
     setReturnSubmitting(true);
     setReturnError(null);
     try {
-      await createOrderReturn(id, payload.body);
+      const created = await createOrderReturn(id, payload.body);
       setReturnOpen(false);
-      Alert.alert('Return created', 'Return created — pending approval.');
+      if (canReadReturns) {
+        // The RMA's workbench is where it is approved (and, with "The item
+        // is here", approved and received at once).
+        router.push(`/returns/${created.id}` as Href);
+      } else {
+        Alert.alert('Return created', 'Return created — pending approval.');
+      }
       await load();
     } catch (e) {
       // 4xx (over-budget, module off, permission revoked mid-session…) —
@@ -2960,7 +2996,15 @@ export default function OrderDetail() {
                 {`RETURNS${order.returns.length > 0 ? ` · ${order.returns.length}` : ''}`}
               </Eyebrow>
               {order.returns.map((r) => (
-                <Card key={r.id} padding={14}>
+                <Pressable
+                  key={r.id}
+                  disabled={!canReadReturns}
+                  onPress={() => router.push(`/returns/${r.id}` as Href)}
+                  accessibilityRole={canReadReturns ? 'link' : undefined}
+                  accessibilityLabel={canReadReturns ? `Open ${returnHandle(r)}, ${returnStatusLabel(r.status)}` : undefined}
+                  style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+                >
+                <Card padding={14}>
                   <View
                     style={{
                       flexDirection: 'row',
@@ -2999,7 +3043,13 @@ export default function OrderDetail() {
                       {r.notes}
                     </Body>
                   ) : null}
+                  {canReadReturns ? (
+                    <Mono size={10.5} color={c.ink4} style={{ marginTop: 8 }}>
+                      Open the return →
+                    </Mono>
+                  ) : null}
                 </Card>
+                </Pressable>
               ))}
               {order.returns.length > 0 ? (
                 <Mono size={10.5} color={c.ink4}>
@@ -3011,8 +3061,7 @@ export default function OrderDetail() {
                   {actionBtn('Create return', 'create-return', openReturnSheet)}
                   {connectionNotice}
                   <Mono size={10.5} color={c.ink4}>
-                    Goes to the returns approval queue — stock moves only after it is approved
-                    and received.
+                    {RETURNS_COPY.createReturnQueueNote}
                   </Mono>
                 </>
               ) : null}
@@ -3514,25 +3563,43 @@ export default function OrderDetail() {
               borderTopRightRadius: 18,
               padding: 18,
               gap: 12,
+              maxHeight: returnSheetLayout.sheetMaxHeight,
             }}
           >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Create return</Body>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                maxFontSizeMultiplier={capTo(15, TYPE_CEILING.display)}
+                style={{ fontFamily: FONT.display, flex: 1 }}
+              >
+                Create return
+              </Body>
               <Pressable
                 onPress={() => {
                   if (!returnSubmitting) setReturnOpen(false);
                 }}
+                disabled={returnSubmitting}
                 hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                accessibilityState={{ disabled: returnSubmitting }}
+                style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
               >
                 <X size={18} color={c.ink4} />
               </Pressable>
             </View>
-            <Mono size={11} color={c.ink4}>
-              Pick how many of each item is coming back. Restock adds it to inventory once the
-              return is received; Scrap writes it off.
-            </Mono>
 
-            <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 12 }}>
+            <ScrollView
+              // At large text the body takes all the room the bounded sheet
+              // leaves (it shrinks to fit between the header and Submit).
+              style={{ maxHeight: returnRowsStacked ? undefined : Math.max(returnSheetLayout.bodyMaxHeight, 380), flexShrink: 1 }}
+              contentContainerStyle={{ gap: 12 }}
+            >
+              <Mono size={11} color={c.ink4}>
+                {RETURNS_COPY.createReturnHelp}
+              </Mono>
               {orderReturnable.map((l) => {
                 const d = returnDraft[l.orderRequestLineId] ?? {
                   quantity: 0,
@@ -3543,9 +3610,13 @@ export default function OrderDetail() {
                     onPress={() => stepReturnQty(l.orderRequestLineId, delta, l.quantityRemaining)}
                     disabled={disabled}
                     hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`}
+                    accessibilityState={{ disabled }}
                     style={{
-                      width: 32,
-                      height: 32,
+                      minWidth: MIN_TAP,
+                      minHeight: MIN_TAP,
+                      paddingHorizontal: 8,
                       borderRadius: 8,
                       borderWidth: 1,
                       borderColor: c.hair,
@@ -3554,7 +3625,9 @@ export default function OrderDetail() {
                       opacity: disabled ? 0.35 : 1,
                     }}
                   >
-                    <Mono size={15} color={c.ink}>{label}</Mono>
+                    <Mono size={15} color={c.ink} maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}>
+                      {label}
+                    </Mono>
                   </Pressable>
                 );
                 return (
@@ -3562,22 +3635,38 @@ export default function OrderDetail() {
                     key={l.orderRequestLineId}
                     style={{ gap: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
                   >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Body size={14} color={c.ink} numberOfLines={2}>{l.name}</Body>
+                    <View
+                      style={{
+                        flexDirection: returnRowsStacked ? 'column' : 'row',
+                        alignItems: returnRowsStacked ? 'flex-start' : 'center',
+                        gap: 12,
+                      }}
+                    >
+                      <View style={returnRowsStacked ? { alignSelf: 'stretch' } : { flex: 1, minWidth: 0 }}>
+                        <Body size={14} color={c.ink} numberOfLines={returnRowsStacked ? undefined : 2}>{l.name}</Body>
                         <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
                           {`${l.sku ? `${l.sku} · ` : ''}${l.quantityRemaining} of ${l.quantityFulfilled} returnable`}
                         </Mono>
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         {stepBtn('−', -1, d.quantity <= 0 || returnSubmitting)}
-                        <Mono size={15} color={c.ink} style={{ minWidth: 24, textAlign: 'center' }}>
+                        <Mono
+                          size={15}
+                          color={c.ink}
+                          style={{ minWidth: 24, textAlign: 'center' }}
+                          accessibilityLabel={`${d.quantity} ${l.name} returning`}
+                          accessibilityLiveRegion="polite"
+                        >
                           {d.quantity}
                         </Mono>
                         {stepBtn('+', 1, d.quantity >= l.quantityRemaining || returnSubmitting)}
                       </View>
                     </View>
-                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <View
+                      style={{ flexDirection: 'row', gap: 6 }}
+                      accessibilityRole="radiogroup"
+                      accessibilityLabel={`${RETURNS_COPY.returnDisposition} for ${l.name}`}
+                    >
                       {(['restock', 'scrap'] as const).map((disp) => {
                         const on = d.disposition === disp;
                         return (
@@ -3585,6 +3674,9 @@ export default function OrderDetail() {
                             key={disp}
                             onPress={() => setReturnDisposition(l.orderRequestLineId, disp)}
                             disabled={returnSubmitting}
+                            accessibilityRole="radio"
+                            accessibilityLabel={disp === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
+                            accessibilityState={{ checked: on, disabled: returnSubmitting }}
                             style={{
                               paddingHorizontal: 10,
                               paddingVertical: 5,
@@ -3594,7 +3686,7 @@ export default function OrderDetail() {
                               backgroundColor: on ? c.ink : 'transparent',
                             }}
                           >
-                            <Mono size={10.5} color={on ? c.paper : c.ink3}>
+                            <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
                               {disp === 'restock' ? 'Restock' : 'Scrap'}
                             </Mono>
                           </Pressable>
@@ -3607,7 +3699,7 @@ export default function OrderDetail() {
 
               <View style={{ gap: 8 }}>
                 <Eyebrow>REASON</Eyebrow>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="Reason">
                   {RETURN_REASONS.map((r) => {
                     const on = returnReason === r.value;
                     return (
@@ -3617,6 +3709,9 @@ export default function OrderDetail() {
                         // chip again clears it.
                         onPress={() => setReturnReason(on ? null : r.value)}
                         disabled={returnSubmitting}
+                        accessibilityRole="radio"
+                        accessibilityLabel={r.label}
+                        accessibilityState={{ checked: on, disabled: returnSubmitting }}
                         style={{
                           paddingHorizontal: 10,
                           paddingVertical: 6,
@@ -3626,11 +3721,31 @@ export default function OrderDetail() {
                           backgroundColor: on ? c.ink : 'transparent',
                         }}
                       >
-                        <Mono size={10.5} color={on ? c.paper : c.ink3}>{r.label}</Mono>
+                        <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
+                          {r.label}
+                        </Mono>
                       </Pressable>
                     );
                   })}
                 </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Body size={14} color={c.ink}>
+                    {RETURNS_COPY.itemIsHere}
+                  </Body>
+                  <Body size={12} color={c.ink3}>
+                    {RETURNS_COPY.itemIsHereHelp}
+                  </Body>
+                </View>
+                <Switch
+                  value={returnItemIsHere}
+                  onValueChange={setReturnItemIsHere}
+                  disabled={returnSubmitting}
+                  accessibilityLabel={RETURNS_COPY.itemIsHere}
+                  accessibilityHint={RETURNS_COPY.itemIsHereHelp}
+                />
               </View>
 
               <View style={{ gap: 8 }}>
@@ -3660,16 +3775,32 @@ export default function OrderDetail() {
             {returnError ? (
               <Mono size={11} color="#b42318">{returnError}</Mono>
             ) : null}
+            {offline ? (
+              <Body size={12} color={c.ink3}>
+                {READINESS_NEEDS_CONNECTION_COPY}
+              </Body>
+            ) : null}
 
             <Pressable
               onPress={() => void submitReturn()}
-              disabled={returnSubmitting}
-              style={[styles.addBtn, { backgroundColor: c.ink, opacity: returnSubmitting ? 0.6 : 1 }]}
+              disabled={returnSubmitting || offline}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: returnSubmitting || offline }}
+              accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
+              style={[
+                styles.addBtn,
+                // The box grows with its capped label (Dynamic Type policy: a
+                // cap always comes with its box fix).
+                { height: undefined, minHeight: 44, paddingVertical: 10 },
+                { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
+              ]}
             >
               {returnSubmitting ? (
                 <ActivityIndicator color={c.paper} />
               ) : (
-                <Mono size={13} color={c.paper}>Submit return</Mono>
+                <Mono size={13} color={c.paper} maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}>
+                  Submit return
+                </Mono>
               )}
             </Pressable>
           </View>

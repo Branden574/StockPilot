@@ -207,7 +207,7 @@ describe('POST /api/v1/orders/[id]/returns', () => {
     expect((await res.json()).message).toMatch(/remain returnable/);
   });
 
-  it('creates via the service with path id + body and returns { ok, return }', async () => {
+  it('creates via the service with path id + body and returns { ok, return, replay }', async () => {
     const ctx = buildCtx();
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx);
     const created = {
@@ -215,41 +215,79 @@ describe('POST /api/v1/orders/[id]/returns', () => {
       return_number: 'RMA-1',
       status: 'requested',
       lines: [{ id: 'rl-1' }],
+      replay: false,
     };
-    const createFromOrder = vi.fn(async () => created);
+    const createFromOrder = vi.fn(async (..._args: unknown[]) => created);
     mockService({ createFromOrder });
 
     const res = await POST(buildRequest(goodBody), buildParams());
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, return: created });
-    // Service constructed from the Bearer API ctx (NOT forCurrentUser —
-    // that path is cookie-session-bound and dead on the Bearer surface).
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({ ok: true, return: created, replay: false });
     expect(RMAService.forApiContext).toHaveBeenCalledWith(
       expect.objectContaining({ organizationId: 'org-1', userId: 'u-1' }),
     );
-    expect(createFromOrder).toHaveBeenCalledWith(ORDER_ID, {
-      reasonCode: 'damaged',
-      notes: 'Box crushed in transit',
-      lines: [{ orderRequestLineId: LINE_ID, quantity: 2, disposition: 'restock' }],
-    });
+    expect(createFromOrder).toHaveBeenCalledWith(
+      ORDER_ID,
+      {
+        reasonCode: 'damaged',
+        notes: 'Box crushed in transit',
+        lines: [{ orderRequestLineId: LINE_ID, quantity: 2, disposition: 'restock' }],
+      },
+      // An old body without a key: the service mints one per request (A-4).
+      { idempotencyKey: null },
+    );
   });
 
-  it('omits reasonCode/notes when not sent (optional, same as the web action)', async () => {
+  it('passes the idempotency key and the item-is-here switch through', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
-    const createFromOrder = vi.fn(async () => ({ id: 'ret-2', lines: [] }));
+    const createFromOrder = vi.fn(async (..._args: unknown[]) => ({ id: 'ret-2', lines: [], replay: true }));
     mockService({ createFromOrder });
+    const key = '33333333-3333-4333-8333-333333333333';
+    const res = await POST(buildRequest({ ...goodBody, idempotencyKey: key, itemIsHere: true }), buildParams());
+    expect(res.status).toBe(200);
+    expect((await res.json()).replay).toBe(true);
+    const [, body, opts] = createFromOrder.mock.calls[0]!;
+    expect(body).toMatchObject({ itemIsHere: true, idempotencyKey: key });
+    expect(opts).toEqual({ idempotencyKey: key });
+  });
 
+  it('reads a numeric-string quantity from an older phone as a number', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const createFromOrder = vi.fn(async (..._args: unknown[]) => ({ id: 'ret-3', lines: [], replay: false }));
+    mockService({ createFromOrder });
     const res = await POST(
-      buildRequest({
-        lines: [{ orderRequestLineId: LINE_ID, quantity: 1, disposition: 'scrap' }],
-      }),
+      buildRequest({ lines: [{ orderRequestLineId: LINE_ID, quantity: '2', disposition: 'scrap' }] }),
       buildParams(),
     );
-
     expect(res.status).toBe(200);
-    expect(createFromOrder).toHaveBeenCalledWith(ORDER_ID, {
-      lines: [{ orderRequestLineId: LINE_ID, quantity: 1, disposition: 'scrap' }],
+    expect((createFromOrder.mock.calls[0]![1] as { lines: Array<{ quantity: unknown }> }).lines[0]!.quantity).toBe(2);
+  });
+
+  it('a refusal keeps its database reason; an internal error never carries raw text', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    mockService({
+      createFromOrder: vi.fn(async () => {
+        throw new ServiceError('conflict', 'This request was already sent with different details. Reload and try again.', {
+          reason: 'idempotency_conflict',
+        });
+      }),
     });
+    const res = await POST(buildRequest(goodBody), buildParams());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'conflict', details: { reason: 'idempotency_conflict' } });
+
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    mockService({
+      createFromOrder: vi.fn(async () => {
+        throw new ServiceError('internal_error', 'relation "returns" does not exist');
+      }),
+    });
+    const res2 = await POST(buildRequest(goodBody), buildParams());
+    expect(res2.status).toBe(500);
+    const body2 = await res2.json();
+    expect(JSON.stringify(body2)).not.toMatch(/relation/);
+    expect(body2.details).toEqual({ reason: 'failed' });
   });
 });

@@ -1055,13 +1055,15 @@ select is(pg_temp.ps(:'phantom', :'stA'), null::timestamptz,
 
 -- process_return_disposition: restock lands in Staging (new holding: now);
 -- scrap is +n then -n from Staging (a stocked holding keeps its age).
-set local role to 'authenticated';
+-- RX-1 (0394): the received fixtures are written by the owner (an API role may
+-- no longer insert past 'requested'); the manager still runs the dispositions.
 insert into public.returns (id, organization_id, order_request_id, status) values
   (:retRR, :orgA, :ordW, 'received'),
   (:retRS, :orgA, :ordW, 'received');
 insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values
   (:retRR, :orgA, :olRR, :pRR, 3, 'restock'),
   (:retRS, :orgA, :olRS, :pRS, 4, 'scrap');
+set local role to 'authenticated';
 select lives_ok(format($$select public.process_return_disposition(%L::uuid)$$, :retRR),
   'W21: the manager restocks a return');
 select lives_ok(format($$select public.process_return_disposition(%L::uuid)$$, :retRS),

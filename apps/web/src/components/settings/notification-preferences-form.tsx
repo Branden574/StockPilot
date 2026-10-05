@@ -133,6 +133,12 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'In-app notification when a maintenance request you submitted is marked resolved.',
     group: 'push',
   },
+  {
+    key: 'push_return_requested',
+    label: 'New return and exchange requests',
+    hint: 'In-app notification when a requester asks for a return on an order in a warehouse you manage returns for.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {

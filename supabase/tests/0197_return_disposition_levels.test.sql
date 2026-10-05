@@ -158,12 +158,16 @@ set local role to 'authenticated';
 --   Σ item_stock_levels = quantity_on_hand = 103
 -- ═════════════════════════════════════════════════════════════════════════════
 
+-- RX-1 (0394): the received fixture is written by the owner (an API role may
+-- no longer insert past 'requested'); the assertions are unchanged.
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_rst, :org_id, :order_id, 'received');
 
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_rst, :org_id, :line_rst, :item_rst, 3, 'restock');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('ee970000-0000-0000-0000-000000000041'); end $$;
 
@@ -222,12 +226,16 @@ select is(
 --   Σ item_stock_levels = quantity_on_hand = 120
 -- ═════════════════════════════════════════════════════════════════════════════
 
+-- RX-1 (0394): the received fixture is written by the owner (an API role may
+-- no longer insert past 'requested'); the assertions are unchanged.
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_scr, :org_id, :order_id, 'received');
 
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_scr, :org_id, :line_scr, :item_scr, 4, 'scrap');
+set local role to 'authenticated';
 
 do $$ begin perform public.process_return_disposition('ee970000-0000-0000-0000-000000000042'); end $$;
 

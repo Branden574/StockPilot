@@ -125,7 +125,9 @@ describe('the staging row opens it', () => {
     // The safety property of this approach: a history VIEW cannot regress the
     // PO attribution or reset the row date and delete the Stale badge, because
     // it does not touch either. Both still come from stagedWorklist().
-    expect(screen).toContain('stagingSourceLabel(row.sourcePoNumber, row.receiptNumber)');
+    // returns RX-1: the source cell also names a returning RMA
+    // (stagingRowSourceLabel falls back to stagingSourceLabel).
+    expect(screen).toContain('stagingRowSourceLabel(row)');
     expect(screen).toContain('stagingReceivedLabel(row.receivedAt)');
     expect(screen).toContain('stagingAgeLabel(row.ageDays)');
     expect(screen).toContain('{STAGING_STALE_LABEL}');

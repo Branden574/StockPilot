@@ -853,7 +853,19 @@ select is(
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
-  'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
+  -- Re-pinned by 0394 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
+  -- process_return_disposition restated (header, owner and ACL unchanged; 0394
+  -- A20 proves the edit) and four SECURITY INVOKER return helpers with no API
+  -- EXECUTE added. revise_order_needed_by calls none of them. Same computation
+  -- as 0385 Z2's re-pin (re-derived 2026-10-05 after the desk-check fixes
+  -- changed return_line_sources and return_restock_original, and again at the
+  -- test stage after return_line_sources' NULL-safe placement test; the same
+  -- query reproduces 8b442829|14 and the earlier 817dc7bd|18 and b19b3b42|18;
+  -- the local stack gives the same value). Re-derived after the review fixes
+  -- (restated body 69e46c81; return_line_sources and return_line_restock_legs):
+  -- production (head 0393, own rows 8b442829|14) with the five RX-1 rows
+  -- substituted gives 1c283e93|18, equal to the local stack (2026-10-05).
+  'ledger.*|1c283e932202295a91e5c118f0873689|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier

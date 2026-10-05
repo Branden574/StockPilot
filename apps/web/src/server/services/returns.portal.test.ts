@@ -4,6 +4,17 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import type { ModuleId } from '@stockpilot/core';
 
+// The created path's side effects are asserted through these mocks.
+const auditRow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined), insertAuditRowReported: auditRow }));
+const notifyStaff = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+const notifyRequester = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('./returns-notify', () => ({
+  notifyStaffNewReturnRequest: notifyStaff,
+  notifyRequesterReturnEvent: notifyRequester,
+}));
+vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
+
 import { RMAService, createPortalReturn, loadPortalReturnContext } from './returns';
 
 /**
@@ -28,7 +39,8 @@ const CUSTOMER_ID = '44444444-4444-4444-8444-444444444444';
 const OLINE_ID = '22222222-2222-4222-8222-222222222222';
 const ITEM_ID = '33333333-3333-4333-8333-333333333333';
 
-const SCOPE = { organizationId: ORG_ID, customerId: CUSTOMER_ID, orderRequestId: ORDER_ID };
+const PORTAL_USER = '55555555-5555-4555-8555-555555555555';
+const SCOPE = { organizationId: ORG_ID, customerId: CUSTOMER_ID, orderRequestId: ORDER_ID, portalUserId: PORTAL_USER };
 
 const COMPLETED_ORDER = {
   id: ORDER_ID,
@@ -53,13 +65,17 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
     'order_request_lines.select': { data: [ORDER_LINE], error: null },
-    'returns.insert': {
-      data: [
-        { id: 'ret-1', return_number: 'RMA-20260720-ABCDEF', organization_id: ORG_ID },
-      ],
+    'rpc:create_requester_return_request': {
+      data: {
+        changed: true,
+        replay: false,
+        organizationId: ORG_ID,
+        returnId: 'ret-1',
+        returnNumber: 'RMA-20260720-ABCDEF',
+        status: 'requested',
+      },
       error: null,
     },
-    'return_lines.insert': { data: [{ id: 'rline-1' }], error: null },
     ...overrides,
   });
 }
@@ -145,81 +161,101 @@ describe('loadPortalReturnContext (customer-own-order scoping)', () => {
   });
 });
 
-describe('createPortalReturn (shared requester-return core)', () => {
-  it("rejects a cross-customer / foreign order id with not_found (never inserts)", async () => {
-    // The id+org+customer filter finds no row — exactly what another
-    // customer's (or another org's) order id produces.
+describe('createPortalReturn (create_requester_return_request, 0394)', () => {
+  it("rejects a cross-customer / foreign order id with not_found (never calls the function)", async () => {
     const stub = makeStub({ 'order_requests.select': { data: [], error: null } });
     await expect(createPortalReturn(stub.client, SCOPE, VALID_INPUT)).rejects.toMatchObject({
       code: 'not_found',
     });
-    expect(stub.fromCalls).not.toContain('returns');
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('create_requester_return_request');
   });
 
-  it('rejects an over-return beyond the DURABLE budget (client quantity never trusted)', async () => {
-    // Fulfilled 10, already returned 8 → remaining 2. Asking for 3 must fail.
+  it('maps an over-return refused by the database (durable budget, cap trigger) to validation_error', async () => {
     const stub = makeStub({
-      'order_request_lines.select': {
-        data: [{ ...ORDER_LINE, returned_quantity: 8 }],
-        error: null,
+      'rpc:create_requester_return_request': {
+        data: null,
+        error: { code: 'P0001', hint: 'return_exceeds_fulfilled', message: 'return_exceeds_fulfilled', details: null },
       },
     });
     await expect(createPortalReturn(stub.client, SCOPE, VALID_INPUT)).rejects.toMatchObject({
       code: 'validation_error',
+      details: { reason: 'return_exceeds_fulfilled' },
     });
-    expect(stub.fromCalls).not.toContain('returns');
+    expect(auditRow).not.toHaveBeenCalled();
+    expect(notifyStaff).not.toHaveBeenCalled();
   });
 
-  it("rejects a line that does not belong to the customer's order", async () => {
+  it("maps a line that does not belong to the customer's order (return_invalid) to validation_error", async () => {
+    const stub = makeStub({
+      'rpc:create_requester_return_request': {
+        data: null,
+        error: { code: '22023', hint: 'return_invalid', message: 'return_invalid', details: 'orderRequestLineId' },
+      },
+    });
+    await expect(createPortalReturn(stub.client, SCOPE, VALID_INPUT)).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { reason: 'return_invalid' },
+    });
+  });
+
+  it('calls the service-role function with the portal actor and no disposition, then audits and notifies once', async () => {
     const stub = makeStub();
-    await expect(
-      createPortalReturn(stub.client, SCOPE, {
-        lines: [{ orderRequestLineId: '99999999-9999-4999-8999-999999999999', quantity: 1 }],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(stub.fromCalls).not.toContain('returns');
+    const result = await createPortalReturn(stub.client, SCOPE, {
+      ...VALID_INPUT,
+      // A forged disposition is stripped by the requester schema.
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 3, disposition: 'scrap' } as never],
+    });
+    expect(result).toMatchObject({ id: 'ret-1', organizationId: ORG_ID, replay: false });
+
+    const call = stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!;
+    const args = call.args as { p_order_id: string; p_request: { lines: Array<Record<string, unknown>> }; p_key: string; p_actor: unknown };
+    expect(args.p_order_id).toBe(ORDER_ID);
+    expect(args.p_actor).toEqual({ channel: 'portal', userId: PORTAL_USER });
+    expect(args.p_request.lines).toEqual([{ orderRequestLineId: OLINE_ID, quantity: 3 }]);
+    expect(args.p_key).toMatch(/^[0-9a-f-]{36}$/);
+
+    expect(auditRow).toHaveBeenCalledTimes(1);
+    expect(auditRow.mock.calls[0]![0]).toMatchObject({
+      organization_id: ORG_ID,
+      user_id: PORTAL_USER,
+      event: 'return.created',
+      metadata: { entity_id: 'ret-1', source: 'requester', channel: 'portal' },
+    });
+    expect(notifyStaff).toHaveBeenCalledTimes(1);
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'request_received', returnId: 'ret-1' }));
   });
 
-  it("creates a source='requester', status='requested' return with identity from the ORDER", async () => {
-    const stub = makeStub();
-    const result = await createPortalReturn(stub.client, SCOPE, VALID_INPUT);
-
-    expect(result.id).toBe('ret-1');
-    expect(result.organizationId).toBe(ORG_ID);
-
-    const insertArgs = stub.chainArgs.get('returns.insert')?.[0]?.[0] as Record<string, unknown>;
-    expect(insertArgs.status).toBe('requested');
-    expect(insertArgs.source).toBe('requester');
-    expect(insertArgs.organization_id).toBe(ORG_ID);
-    expect(insertArgs.order_request_id).toBe(ORDER_ID);
-    expect(insertArgs.requested_by).toBeNull();
-    // Requester identity comes from the ORDER row, never the client.
-    expect(insertArgs.requester_email).toBe('buyer@customer.example.com');
-    expect(insertArgs.requester_name).toBe('Casey Customer');
-
-    // item_id is STAMPED from the source line; disposition stays staff-decided.
-    const lineArgs = stub.chainArgs.get('return_lines.insert')?.[0]?.[0] as Array<
-      Record<string, unknown>
-    >;
-    expect(lineArgs[0]!.item_id).toBe(ITEM_ID);
-    expect(lineArgs[0]!.disposition).toBe('restock');
+  it('a replay (same key, same body) writes no audit and sends nothing', async () => {
+    const stub = makeStub({
+      'rpc:create_requester_return_request': {
+        data: { changed: false, replay: true, organizationId: ORG_ID, returnId: 'ret-1', returnNumber: 'RMA-1', status: 'requested' },
+        error: null,
+      },
+    });
+    const result = await createPortalReturn(stub.client, SCOPE, VALID_INPUT, {
+      idempotencyKey: '66666666-6666-4666-8666-666666666666',
+    });
+    expect(result.replay).toBe(true);
+    expect((stub.rpcCalls[0]?.args as { p_key: string }).p_key).toBe('66666666-6666-4666-8666-666666666666');
+    expect(auditRow).not.toHaveBeenCalled();
+    expect(notifyStaff).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
   });
 
-  it('lands in the staff Returns queue (RMAService.list picks up the created row)', async () => {
-    // Create through the portal path…
-    const createStub = makeStub();
-    const created = await createPortalReturn(createStub.client, SCOPE, VALID_INPUT);
-    const insertedHeader = createStub.chainArgs.get('returns.insert')?.[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+  it('a module switched off between load and create answers the same closed door (not_found)', async () => {
+    const stub = makeStub({
+      'rpc:create_requester_return_request': {
+        data: null,
+        error: { code: 'P0001', hint: 'module_disabled', message: 'module_disabled', details: null },
+      },
+    });
+    await expect(createPortalReturn(stub.client, SCOPE, VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
+  });
 
-    // …then read the queue the way the staff Returns page does: an org-scoped
-    // RMAService.list filtered to status='requested'. Seed the staff stub with
-    // exactly the row the portal path inserted.
+  it('lands in the staff Returns queue (RMAService.list reads requested rows)', async () => {
     const staffStub = makeSupabaseStub({
       'returns.select': {
-        data: [{ id: created.id, ...insertedHeader }],
+        data: [{ id: 'ret-1', organization_id: ORG_ID, status: 'requested', source: 'requester' }],
         error: null,
       },
     });
@@ -231,10 +267,8 @@ describe('createPortalReturn (shared requester-return core)', () => {
       }),
     );
     const queue = await service.list({ status: 'requested' });
-
     expect(queue).toHaveLength(1);
     expect(queue[0]).toMatchObject({ id: 'ret-1', status: 'requested', source: 'requester' });
-    // The queue read is org-scoped and filtered to the requested status.
     const chainArgs = staffStub.chainArgs.get('returns.select') ?? [];
     expect(chainArgs).toContainEqual(['organization_id', ORG_ID]);
     expect(chainArgs).toContainEqual(['status', ['requested']]);

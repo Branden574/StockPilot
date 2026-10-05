@@ -331,6 +331,15 @@ const EXPECTED: Expected[] = [
     badge: 'Email changed',
   },
   {
+    id: 'return-update',
+    subject: 'Return RMA-20261005-ABC123: approved',
+    subjectParams: { returnNumber: 'RMA-20261005-ABC123', summary: 'approved' },
+    preheader: 'Your return was approved. Bring or send the item back as arranged with the warehouse.',
+    preheaderParams: { sentence: 'Your return was approved. Bring or send the item back as arranged with the warehouse.' },
+    badge: 'Approved',
+    badgeParams: { label: 'Approved' },
+  },
+  {
     id: 'maintenance-resolved',
     subject: 'Maintenance request MR-2026-000123 marked resolved',
     subjectParams: { handle: 'MR-2026-000123' },
@@ -342,15 +351,15 @@ const EXPECTED: Expected[] = [
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (33 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25)', () => {
-    expect(ES_EMAILS).toHaveLength(33);
-    expect(EXPECTED).toHaveLength(33);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(33);
+  it('carries every row of ES.EMAILS (34 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05)', () => {
+    expect(ES_EMAILS).toHaveLength(34);
+    expect(EXPECTED).toHaveLength(34);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(34);
   });
 
-  it('splits into 29 live + 2 latent + 2 concept', () => {
+  it('splits into 30 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(29);
+    expect(by('live')).toBe(30);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
@@ -361,7 +370,8 @@ describe('es registry — shape', () => {
     expect(by('security')).toBe(5);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);
-    expect(by('fulfillment')).toBe(4);
+    // 4 design-package rows + Return Update (returns RX-1, 2026-10-05).
+    expect(by('fulfillment')).toBe(5);
     expect(by('rentals')).toBe(3);
     expect(by('schedule')).toBe(2);
     expect(by('digest')).toBe(2);

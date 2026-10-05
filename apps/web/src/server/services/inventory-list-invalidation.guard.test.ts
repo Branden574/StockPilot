@@ -90,6 +90,8 @@ const STOCK_RPCS: Record<string, string> = {
   distribute_bundle: 'inventory_items, stock_movements, item_stock_levels via apply_level_delta',
   assemble_bundle: 'inventory_items (components + phantom kit item), stock_movements',
   process_return_disposition: 'inventory_items, stock_movements (restock or scrap)',
+  close_return:
+    'process_return_disposition (0394: Staging, the original rack through ledger.apply_holding_delta, or scrap; on hand, holdings and movements)',
   cancel_order_request: 'adjust_stock (restocks a drawn batch)',
   complete_picking: 'adjust_stock (draws the picked batch)',
   reopen_picking: 'adjust_stock (gives the draw back)',

@@ -46,6 +46,9 @@ export const INTEGRATION_EVENT_TYPES = [
   'return.approved',
   'return.closed',
   'return.denied',
+  // Returns RX-1 (0394).
+  'return.received',
+  'return.cancelled',
   'cycle_count.completed',
   // Security feed (cybersecurity monitoring Phase 1, 2026-06-12): forensic-
   // relevant account/credential events an org admin wants in a #security
@@ -177,6 +180,10 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
         title: '❌ Return Denied',
         summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was denied${s('reason') ? ': ' + s('reason') : ''}.`,
       };
+    case 'return.received':
+      return { title: 'Return received', summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was received.` };
+    case 'return.cancelled':
+      return { title: 'Return cancelled', summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was cancelled.` };
     case 'cycle_count.completed':
       return { title: '🔢 Cycle count complete', summary: `A cycle count finished${s('warehouse') ? ` at ${s('warehouse')}` : ''}.` };
     case 'security.new_device_login':

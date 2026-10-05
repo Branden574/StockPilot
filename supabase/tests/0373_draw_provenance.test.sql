@@ -871,7 +871,10 @@ select is(
   (select string_agg(x.fn || '=' || (x.stripped = x.want)::text || ':' || x.shapes_ok::text, ',' order by x.fn)
      from (
        select v.fn, v.want,
-              md5(regexp_replace(p.prosrc, '\n[^\n]*-- 0373[^\n]*', '', 'g')) as stripped,
+              -- RX-1 (0394) restated process_return_disposition with ten lines
+              -- tagged -- RX-1 (plan 3.4); both tags are stripped, and its expected
+              -- value is 0373's body minus the manager-role line those lines replace.
+              md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1)[^\n]*', '', 'g')) as stripped,
               (select bool_and(btrim(m[1]) ~ '^(v_prov\s+public\.stock_draw;|v_prov := ledger\.apply_level_delta_for\([^;]+, true, v_user\);|draw,|v_prov,)\s+-- 0373$'
                                or btrim(m[1]) = '-- 0373: drawn before the insert (0197 drew after it), so this row carries its own draw.')
                  from regexp_matches(p.prosrc, '\n([^\n]*-- 0373[^\n]*)', 'g') m) as shapes_ok
@@ -879,7 +882,7 @@ select is(
            ('adjust_stock',               'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)',         '2a3526c05ad8d2dfbd3deba457e7bf42'),
            ('assemble_bundle',            'ledger.assemble_bundle(uuid,numeric,uuid,text)',                     '19f334042018cd4667032da003b6e6ce'),
            ('distribute_bundle',          'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)', '04909b1f699a977aa95f9cd0cf6cc427'),
-           ('process_return_disposition', 'ledger.process_return_disposition(uuid)',                            'e13b1e104876286949d95c282008f84b')
+           ('process_return_disposition', 'ledger.process_return_disposition(uuid)',                            '25edb84ee7516ead2d621a44d56096a7')
          ) v(fn, sig, want)
          join pg_proc p on p.oid = v.sig::regprocedure) x),
   'adjust_stock=true:true,assemble_bundle=true:true,distribute_bundle=true:true,process_return_disposition=true:true',

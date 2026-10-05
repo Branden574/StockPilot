@@ -188,10 +188,10 @@ vi.mock('@/components/rentals/rentals-tabs', () => ({
   RentalsTabs: () => null,
 }));
 
-const returnsList = vi.fn(async () => []);
+const returnsList = vi.fn(async () => ({ organizationId: 'org-1', filter: 'all', q: '', rows: [], nextCursor: null, pageSize: 25 }));
 vi.mock('@/server/services/returns', () => ({
   RMAService: {
-    forCurrentUser: vi.fn(async () => ({ list: returnsList })),
+    forCurrentUser: vi.fn(async () => ({ listPage: returnsList })),
   },
 }));
 

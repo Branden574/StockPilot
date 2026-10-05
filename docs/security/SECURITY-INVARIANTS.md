@@ -581,6 +581,167 @@ actually fire.
   the two route tests, `order-submission.hook.test.tsx` and core
   `place-order.test.ts` cover the app's organization and account checks.
 
+### INV-C6 — every RMA transition runs through a gated function; the database follows `returns:manage`
+
+- **Invariant** (0394, returns RX-1): the RMA tables answer to the
+  `returns:manage` permission, not to a role.
+  - **Writes.** The `returns_insert`, `returns_update`, `return_lines_insert`
+    and `return_lines_update` policies test
+    `has_permission(organization_id, 'returns:manage')` (a revoke by
+    override refuses a manager; a grant lets a staff member through) AND
+    write access to the warehouse of the RMA's order
+    (`user_can_access_inventory(auth.uid(), <order warehouse>, null,
+    'write')`, the order read in the RMA's own organization). Because
+    `returns:manage` is fully grantable, the warehouse is what bounds a
+    grant: a staff member granted it for one warehouse cannot insert, approve,
+    deny, receive or cancel another warehouse's RMA through PostgREST.
+    `anon` and PUBLIC hold nothing on `returns`, `return_lines`,
+    `return_decisions` or `return_overview`. `authenticated` holds SELECT
+    and INSERT on `returns` and `return_lines`, UPDATE on exactly eight
+    `returns` columns (`status` and the approve, receive and deny stamps,
+    `denial_reason`), no UPDATE on `return_lines`, and no DELETE, TRUNCATE,
+    TRIGGER, REFERENCES or MAINTAIN on either.
+  - **Guards** (`trg_returns_zz_api_guard`, `trg_return_lines_zz_api_guard`,
+    INVOKER, firing only when `current_user` is `authenticated` or `anon`):
+    an API insert of an RMA must be `requested`, `internal`, unstamped and
+    carry no requester name or email (`return_insert_through_rpc`), and its
+    RMA number is replaced by the server's; `requested_by` is the caller
+    (`return_stamp_forged`); its order must be an order of the RMA's own
+    organization the caller can see (`order_not_found`, P0002) in a
+    warehouse the caller may write (`warehouse_write`), completed or
+    delivered (`order_not_returnable`, the create functions' rule); an update moves one
+    edge, sets only that edge's stamps naming the caller, with the time
+    forced to `now()` (`return_stamp_forged`); no API update reaches `closed`
+    (`return_close_through_rpc`); an API line insert must be unapplied and
+    belong to a `requested` RMA the caller can see in the same organization
+    (`return_line_insert_through_rpc`), name a line of that RMA's own order
+    (`return_invalid`, so no other order loses return budget), and come from
+    a caller who may write the order's warehouse (`warehouse_write`), and
+    then, with the RMA held FOR SHARE (an approval, denial or cancel in
+    flight is waited for and the status read again, so no line slips into an
+    RMA approved a moment ago), only on an internal RMA the caller inserted
+    itself that no function wrote (no decision row): a requester's RMA,
+    another member's, or a function-created one takes no raw line. The old
+    tabs' raw create, approve, deny, receive and cancel keep working within
+    these rules; closing (the only edge that moves stock) is function-only.
+  - **Accepted until RX-4** (review 2026-10-05): the raw edges above and the
+    frozen wrapper `public.process_return_disposition` still move an RMA
+    forward outside the functions for a `returns:manage` holder with write
+    access to the order's warehouse. Such an edge writes no decision, no
+    audit row and no requester notification, and the raw policies and the
+    wrapper do not check the Returns module. Every stock rule still holds on
+    that path (status gate, budget, latch, the planned-rack revalidation,
+    holdings = on hand). RX-4 revokes the remaining INSERT, the eight UPDATE
+    columns and the wrapper's EXECUTE. The read boundary is also wider than
+    the app's `returns:read` gate: every member reads `returns`,
+    `return_lines` and `return_overview` (requester email and the denial
+    reason included); only `return_decisions` needs `returns:read` or
+    `returns:manage`. MFA step-up is enforced by the web service, not inside
+    the functions (plan follow-up 13.3).
+  - **Decisions.** `return_decisions` is append-only (an UPDATE raises
+    `return_decisions_append_only` for every role, the owner included);
+    `authenticated` holds SELECT only, and its one policy shows rows to
+    holders of `returns:read` or `returns:manage` (reasons and racks are
+    staff information). Only the RMA functions write it.
+  - **Functions.** `create_return_request`, `approve_return`, `deny_return`,
+    `receive_return`, `cancel_return`, `plan_return_dispositions`,
+    `close_return` and `return_restock_options` are SECURITY DEFINER with an
+    in-body gate in this order: signed in, a member of the RMA's
+    organization (a foreign RMA answers like a missing one, P0002), the
+    Returns module on, `returns:manage`, then write access to the order's
+    warehouse (`user_can_access_inventory(..., 'write')`). EXECUTE is
+    granted to `authenticated` only; `create_requester_return_request` (the
+    token page, the customer portal and member requesters) is EXECUTE for
+    `service_role` only and copies the requester's identity from the order.
+    The private helpers (`_return_*`, the three guard trigger functions) and
+    the four `ledger.return_*` helpers hold no EXECUTE for PUBLIC, `anon`,
+    `authenticated` or `service_role`; the `ledger` helpers are INVOKER, so
+    0359 test 15 still lists exactly four DEFINER `ledger` functions. Every
+    write locks the RMA row first under `lock_timeout = '5s'`, so a blocked
+    caller is refused with 55P03, and no function raises 40001 or 40P01
+    (PostgREST retries those forever). The functions never trust a key row
+    in `idempotency_keys` they did not write (managers may write that table
+    through the API): a create replays only an RMA of its own organization
+    and order that the same caller created (the staff path: its
+    `requested_by` and `created` decision; the requester path: a requester
+    RMA created on the same channel by the same actor, the token path keyed
+    per order), else `idempotency_conflict`; an approval takes over a key row
+    with no `approved` decision at the next revision instead of answering
+    `return_changed` or a false replay, and a replay answers the next
+    revision and the exchange hook's replacement, never the stored response.
+  - **The restock destination.** A restock to a rack is honoured only for a
+    location the pick provenance proves (`stock_movements.draw`, 0373): the
+    server offers `original` or a `source` location from the line's own
+    draws of a handed-over order (an order in flight, or picks not handed
+    over, are no provenance), a `source` capped at what is still unreturned
+    there less the line's returns no rack leg recorded, and refuses anything
+    else (`restock_location_not_offered`). `close_return` revalidates every
+    destination under lock just before it moves stock (archived, no longer
+    a placement, moved warehouse, inactive warehouse, deleted item) and
+    refuses with `restock_location_unavailable` rather than falling back
+    silently; a rack in a warehouse the closer may not stock is refused
+    `restock_location_forbidden` (the holdings writer's own gate, answered
+    with a hint), and a Staging or scrap leg in an item's current warehouse
+    the closer may not write is refused `warehouse_write` (detail `itemId`).
+    `close_return`'s legs, and the workbench, history and Staging-worklist
+    reads, count ledger movements only (`via_ledger`), so a member's direct
+    insert into `stock_movements` never reads as a leg of a return. The restated `ledger.process_return_disposition` keeps
+    today's net-zero scrap and holdings = on hand; its bare refusals reach
+    the app only with a hint (`close_return` raises them again, and the
+    create does the same for the cap trigger's race-time
+    `return_exceeds_fulfilled`), so nothing is mapped by its words.
+  - **Account deletion** (with 0393, security slice A3). Nothing RX-1 adds
+    refuses a deletion: `return_decisions.actor_user_id` has no foreign key,
+    and the five RMA person columns keep 0393's SET NULL keys and
+    `deleted_users` stamps (the API guard acts only for API roles, so the
+    referential action and the stamp pass). The workbench and the list name
+    a requester who deleted their account "Deleted user" (null and stamped,
+    core `isDeletedPerson`) only when neither the RMA nor its order recorded
+    a name or email, and the stamp columns' people the same way.
+    `return_overview` carries `requested_by` and `deleted_users` for that.
+    A requester whose account was deleted (the order's
+    `requester_deleted_at`) is sent no return message, in the app or by
+    email, not even at an address the order kept.
+- **Why it matters**: before 0394 any member with an admin or manager role
+  could PATCH an RMA straight to `closed` without the close's stock step,
+  forge another person's approval, flip `return_lines.applied`, or insert an
+  RMA already `received`, and `anon` kept Supabase's default table
+  privileges. A permission revoked
+  for one manager was ignored by the database. And a restock could only
+  land in Staging; letting the client name a rack would let a caller place
+  stock on any location in the organization.
+- **Enforced by**: the four policies, the grants, the two guard triggers,
+  the append-only trigger, and the in-body gates. In the app,
+  `RMAService` calls only the functions (the raw edges are gone from new
+  code), reads the RMA (or, for a create, the order) in the ACTIVE
+  organization before any function runs and answers a miss as not found (the
+  functions gate on the RMA's own organization, so a member of two
+  organizations could otherwise act on the other one's RMA and have the
+  audit row, the webhook and the inventory invalidation written into the
+  active one), maps refusals by hint (core `return-error-map.ts`), and writes
+  audit, outbox and webhooks only on `changed: true`. The list reads
+  `return_overview` (security_invoker, so the caller's RLS applies) behind
+  `returns:read` or `returns:manage`.
+- **Tested at**: [`0394_returns_lifecycle_original_rack.test.sql`](../../supabase/tests/0394_returns_lifecycle_original_rack.test.sql)
+  A (grants, the eight columns, function posture, the view's column order),
+  B (unauthenticated, anon, foreign, module off, revoked by override for
+  every function and for the raw policies, granted staff with and without
+  warehouse write, granted staff refused on another warehouse's RMA by
+  every function (B12), `returns:read` only, disabled), C (one-transaction
+  create, key replay and conflict, the cap, the requester path), D (approval
+  moves nothing), E to J (acceptance 36 to 40 and several sources, rule 9),
+  K (every direct write refused, the old tabs' edges allowed, the raw
+  paths bounded by the order's warehouse (K10) and tied to the order's
+  organization and lines (K11)) and L
+  (regression, organization deletion); each break named "Mutation:" in the
+  file is caught by the test before it. The 0359 census (tests 15, 17, 18),
+  INV-25 and the 0367 class guard cover the new functions.
+  `scripts/db-concurrency/0394_return_close_races.sh` proves the close,
+  approve and plan races across two sessions. App side:
+  `returns.test.ts`, `returns.requester.test.ts`, `returns.portal.test.ts`,
+  the `/api/v1/returns` route tests and core `return-actions.test.ts`,
+  `return-error-map.test.ts` and `restock-view.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure

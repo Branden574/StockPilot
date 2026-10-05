@@ -50,6 +50,18 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // (the web's ?warehouse= or a prefill) is dropped. The cold-start shim is
   // app/dashboard/orders/new.tsx.
   { re: /\/dashboard\/orders\/new(\?.*)?$/, to: () => '/order/new' },
+  // Returns (RX-1) have native twins: the RMA workbench (app/returns/[id].tsx)
+  // and the list (the drawer's Returns). Staff pushes carry the DUAL link
+  // /dashboard/returns/<rma>?order=/dashboard/orders/<original> (returns plan
+  // C-3), and rewriteWebPath answers the FIRST match. These two rules sit
+  // ABOVE the unanchored orders rule on purpose: a bundle that has them opens
+  // the RMA; every older bundle (no returns rule) matches the orders path
+  // embedded in the query and opens the original order, never Home. Moving
+  // them below the orders rule would send new bundles to the order too
+  // (web-path-rewrite.returns.test.ts pins both tables). The cold-start shim is
+  // app/dashboard/returns/[id].tsx.
+  { re: new RegExp(`/dashboard/returns/${UUID}`), to: (m) => `/returns/${m[1]}` },
+  { re: /\/dashboard\/returns(\?.*)?$/, to: () => '/returns' },
   { re: new RegExp(`/dashboard/orders/${UUID}`), to: (m) => `/order/${m[1]}` },
   // Staging has a native twin now. It must be matched BEFORE the generic
   // /dashboard/* catch-all (which would dead-end it on home) — and it sits

@@ -27,6 +27,7 @@ import {
   Tag,
   Tags,
   Truck,
+  Undo2,
   Upload,
   Users,
   Warehouse,
@@ -78,6 +79,8 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   AlertTriangle,
   FileLock,
   Wrench,
+  // Returns (RX-1): same icon name the web sidebar placement uses.
+  Undo2,
   // Zendesk uses a custom react-native-svg mark (not in lucide); cast to
   // LucideIcon since it accepts the same { size, color } prop shape the
   // drawer renders with.
