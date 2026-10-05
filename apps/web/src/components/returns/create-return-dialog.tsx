@@ -65,17 +65,21 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
   // the returned item is in hand; the workbench then offers Approve and
   // receive. Never a silent receipt.
   const [itemIsHere, setItemIsHere] = React.useState(false);
-  // The idempotency key, minted when the dialog opens and kept for the same
-  // body: a double click or a lost answer replays the same RMA; a changed
-  // body (after a refusal) gets a new key.
-  const keyRef = React.useRef<{ fingerprint: string; key: string } | null>(null);
+  // The idempotency key: minted when the dialog OPENS and kept for that open,
+  // whatever the body (returns plan: "the key minted when the dialog opens";
+  // desk check F6). A double click or a lost answer replays the same RMA, and
+  // an edited resend after a lost answer is refused idempotency_conflict
+  // instead of making a second RMA. A refused create rolls its key back in
+  // the database, so keeping it after a refusal loses nothing. The phone's
+  // create sheet does the same per sheet open.
+  const keyRef = React.useRef<string | null>(null);
 
   function reset() {
     setReason('');
     setNotes('');
     setItemIsHere(false);
     setLineState(initialLineState(lines));
-    keyRef.current = null;
+    keyRef.current = randomRequestUuid();
   }
 
   function updateLine(id: string, patch: Partial<LineState>) {
@@ -128,13 +132,10 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
         disposition: s.disposition,
       })),
     };
-    const fingerprint = JSON.stringify(payload);
-    if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) {
-      keyRef.current = { fingerprint, key: randomRequestUuid() };
-    }
+    keyRef.current ??= randomRequestUuid();
 
     setBusy(true);
-    const res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current.key });
+    const res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current });
     setBusy(false);
 
     if (!res.ok) {
