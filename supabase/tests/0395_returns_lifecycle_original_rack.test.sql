@@ -451,6 +451,15 @@ end $$;
 create function pg_temp.err(j jsonb) returns text language sql immutable as $$
   select case when j ? 'error' then (j->>'error') || ':' || coalesce(j->>'hint', '-') else 'ok' end
 $$;
+-- A refusal's detail as json; a detail that is not json (a mutation's bare
+-- refusal carries '') reads as {"unparsed": ...}, so the assertion fails as
+-- itself instead of aborting the file (test stage: M22 aborted it at I7).
+create function pg_temp.detail(j jsonb) returns jsonb language plpgsql immutable as $$
+begin
+  return (j->>'detail')::jsonb;
+exception when others then
+  return jsonb_build_object('unparsed', j->>'detail');
+end $$;
 -- What a read says after a change, the change ALWAYS undone (superuser).
 create function pg_temp.undone(p_prep text, p_read text) returns text language plpgsql as $$
 declare v text; v_state text;
@@ -1256,8 +1265,8 @@ update public.locations set deleted_at = now() where id = :r40;
 select pg_temp.snap(:itR) as "snapR0" \gset
 select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rR'))::text as "jI2" \gset
 select is(
-  pg_temp.err(:'jI2'::jsonb) || ':' || (((:'jI2'::jsonb)->>'detail')::jsonb->>'rule')
-  || ':' || ((((:'jI2'::jsonb)->>'detail')::jsonb->>'locationId') = :r40::text)::text,
+  pg_temp.err(:'jI2'::jsonb) || ':' || (pg_temp.detail(:'jI2'::jsonb)->>'rule')
+  || ':' || ((pg_temp.detail(:'jI2'::jsonb)->>'locationId') = :r40::text)::text,
   'P0001:restock_location_unavailable:archived:true',
   'I2: 40-A archived after approval: the close is refused restock_location_unavailable (rule archived), never a silent Staging fallback (brief 17)');
 select is(
@@ -1279,13 +1288,13 @@ select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%
           pg_temp.dec(:'rVl', 'restock', 'original')::text))::text as "jI5" \gset
 select is(
   ((:'jI5'::jsonb)->>'status')
-  || ',' || (select ((j->>'detail')::jsonb->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
+  || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
                   format('update public.locations set warehouse_id = %L where id = %L', :whB, :r41)) as j) x)
-  || ',' || (select ((j->>'detail')::jsonb->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
+  || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
                   format($q$update public.locations set kind = null, type = 'room' where id = %L$q$, :r41)) as j) x)
-  || ',' || (select ((j->>'detail')::jsonb->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
+  || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
                   format($q$update public.warehouses set status = 'inactive' where id = %L$q$, :whA)) as j) x)
-  || ',' || (select ((j->>'detail')::jsonb->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
+  || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
                   format('update public.inventory_items set deleted_at = now() where id = %L', :itV)) as j) x),
   'received,moved_warehouse,not_a_placement,warehouse_inactive,item_deleted',
   'I5: a rack moved to another warehouse, turned into a Site, in a closed warehouse, or a deleted item: each refuses the close with its rule');
@@ -1310,8 +1319,8 @@ select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%
 select pg_temp.try_rpc('authenticated', :stfRm, format('select public.close_return(%L)', :'rW'))::text as "jI7b" \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rW'))::text as "jI7c" \gset
 select is(
-  ((:'jI7a'::jsonb)->>'status') || '|' || pg_temp.err(:'jI7b'::jsonb) || ':' || (((:'jI7b'::jsonb)->>'detail')::jsonb->>'rule')
-  || ':' || ((((:'jI7b'::jsonb)->>'detail')::jsonb->>'locationId') = :rB1::text)::text
+  ((:'jI7a'::jsonb)->>'status') || '|' || pg_temp.err(:'jI7b'::jsonb) || ':' || (pg_temp.detail(:'jI7b'::jsonb)->>'rule')
+  || ':' || ((pg_temp.detail(:'jI7b'::jsonb)->>'locationId') = :rB1::text)::text
   || '|' || ((:'jI7c'::jsonb)->>'status') || '|' || pg_temp.held(:itW, :rB1)::text || '|' || pg_temp.balanced(:itW)::text,
   'received|42501:restock_location_forbidden:location_write:true|closed|3|true',
   'I7: a closer who may not stock the original rack''s warehouse is refused restock_location_forbidden (never "no permission to manage returns"); a manager''s close puts the unit back on 51-B (F7)');
@@ -1375,7 +1384,7 @@ select is(
   'J6: the first close puts its unit back on 34-A');
 select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rP2'))::text as "jJ7" \gset
 select is(
-  pg_temp.err(:'jJ7'::jsonb) || ':' || (((:'jJ7'::jsonb)->>'detail')::jsonb->>'rule') || '|' || pg_temp.held(:itP, :r34A)::text
+  pg_temp.err(:'jJ7'::jsonb) || ':' || (pg_temp.detail(:'jJ7'::jsonb)->>'rule') || '|' || pg_temp.held(:itP, :r34A)::text
   || '|' || (select status from public.returns where id = :'rP2'),
   'P0001:restock_location_unavailable:remaining|1|received',
   'J7: rule 9: the second close re-derives 34-A''s remaining (0) and raises, never caps (judge B-7)');
