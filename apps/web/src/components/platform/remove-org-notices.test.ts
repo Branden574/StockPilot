@@ -14,12 +14,15 @@ describe('orphanAccountNotices', () => {
     expect(orphanAccountNotices({ keptUsers: 0, failedUsers: 0 })).toEqual({ kept: null, failed: null });
   });
 
-  it('names accounts kept for linked records, singular and plural', () => {
+  // Re-pinned by 0394 (was "kept because it is linked to records that must
+  // be kept"): every member's records are kept as "Deleted user" now, so a
+  // kept account is a platform admin's, or the rare unreleased record.
+  it('names kept accounts (a platform admin, or a record that could not be released), singular and plural', () => {
     expect(orphanAccountNotices({ keptUsers: 1, failedUsers: 0 }).kept).toBe(
-      '1 account was kept because it is linked to records that must be kept.',
+      '1 account was kept: it belongs to a StockPilot platform admin or is still linked to a record that could not be released. The error report has the details.',
     );
     expect(orphanAccountNotices({ keptUsers: 3, failedUsers: 0 }).kept).toBe(
-      '3 accounts were kept because they are linked to records that must be kept.',
+      '3 accounts were kept: they belong to a StockPilot platform admin or are still linked to a record that could not be released. The error report has the details.',
     );
   });
 

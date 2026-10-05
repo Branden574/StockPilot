@@ -28,18 +28,38 @@ vi.mock('@/server/services/audit', () => ({
 const deleteUser = vi.fn(async (_id: string) => ({
   error: null as { message: string; status?: number; code?: string; name?: string } | null,
 }));
-/** Review R7: asked only after deleteUser answered an error. */
+/**
+ * GoTrue's user read: first the platform-admin check's verified email (0394,
+ * O-A3-7), then (review R7) again only after deleteUser answered an error.
+ */
 const getUserById = vi.fn(async (_id: string) => ({
-  data: { user: { id: 'present' } as { id: string } | null },
+  data: { user: { id: 'present', email: 'staff@x.org' } as { id: string; email?: string } | null },
   error: null as { message: string; status?: number; code?: string } | null,
 }));
+/** O-A3-9 (0394): user-avatars/<uid>/ is emptied after the delete. */
+const avatarList = vi.fn(async (_prefix: string, _opts?: { limit?: number }) => ({
+  data: [] as Array<{ name: string }> | null,
+  error: null as { message: string } | null,
+}));
+const avatarRemove = vi.fn(async (_paths: string[]) => ({ data: [] as unknown, error: null }));
+const storageFrom = vi.fn((_bucket: string) => ({ list: avatarList, remove: avatarRemove }));
 /** account_deletion_check (0388), the dry run the route asks first. */
 const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
   data: { deletable: true } as unknown,
   error: null as { code?: string } | null,
 }));
 vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: vi.fn(() => ({ auth: { admin: { deleteUser, getUserById } }, rpc })),
+  createAdminClient: vi.fn(() => ({
+    auth: { admin: { deleteUser, getUserById } },
+    rpc,
+    storage: { from: storageFrom },
+  })),
+}));
+
+/** O-A3-7: the allowlist check, driven per test. */
+const isPlatformAdmin = vi.fn((_email: string | null | undefined) => false);
+vi.mock('@/lib/auth/platform-admin', () => ({
+  isPlatformAdmin: (e: string | null | undefined) => isPlatformAdmin(e),
 }));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
@@ -92,9 +112,12 @@ describe('POST /api/v1/account/delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     deleteUser.mockResolvedValue({ error: null });
-    getUserById.mockResolvedValue({ data: { user: { id: USER_ID } }, error: null });
+    getUserById.mockResolvedValue({ data: { user: { id: USER_ID, email: 'staff@x.org' } }, error: null });
     rpc.mockResolvedValue({ data: { deletable: true }, error: null });
     checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: 0 });
+    isPlatformAdmin.mockImplementation(() => false);
+    avatarList.mockResolvedValue({ data: [], error: null });
+    avatarRemove.mockResolvedValue({ data: [], error: null });
   });
 
   it('returns 401 without an auth context and never audits or deletes', async () => {
@@ -166,11 +189,17 @@ describe('POST /api/v1/account/delete', () => {
       order.push('audit');
       return true;
     });
+    avatarList.mockImplementationOnce(async () => {
+      order.push('avatars');
+      return { data: [], error: null };
+    });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
 
     await POST(buildRequest({ confirm: 'DELETE' }));
 
-    expect(order).toEqual(['check', 'deleteUser', 'audit']);
+    // Re-pinned by 0394 (was ['check', 'deleteUser', 'audit']): the avatar
+    // files are removed once the account is gone, before the audit row.
+    expect(order).toEqual(['check', 'deleteUser', 'avatars', 'audit']);
     expect(rpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: USER_ID });
   });
 
@@ -205,6 +234,8 @@ describe('POST /api/v1/account/delete', () => {
     deleteUser.mockResolvedValueOnce({
       error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
     });
+    // 0394: the platform-admin check reads the user first (still there).
+    getUserById.mockResolvedValueOnce({ data: { user: { id: USER_ID, email: 'staff@x.org' } }, error: null });
     getUserById.mockResolvedValueOnce({
       data: { user: null },
       error: { status: 404, code: 'user_not_found', message: 'User not found' },
@@ -215,7 +246,8 @@ describe('POST /api/v1/account/delete', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(getUserById).toHaveBeenCalledWith(USER_ID);
+    expect(getUserById).toHaveBeenCalledTimes(2);
+    expect(getUserById).toHaveBeenNthCalledWith(2, USER_ID);
     expect(insertAuditRowReported).toHaveBeenCalledTimes(1);
     expect(insertAuditRowReported).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -241,9 +273,13 @@ describe('POST /api/v1/account/delete', () => {
     const res = await POST(buildRequest({ confirm: 'DELETE' }));
 
     expect(res.status).toBe(200);
-    expect(getUserById).not.toHaveBeenCalled();
+    // Re-pinned by 0394 (was not called at all): read once, by the
+    // platform-admin check before the delete; never again to settle it.
+    expect(getUserById).toHaveBeenCalledTimes(1);
     expect(insertAuditRowReported).not.toHaveBeenCalled();
     expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+    // The request that deleted it removes the avatar files.
+    expect(avatarList).not.toHaveBeenCalled();
   });
 
   it('the check finds no such account: 200, nothing deleted or written here', async () => {
@@ -294,10 +330,139 @@ describe('POST /api/v1/account/delete', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe('account_linked_records');
-    expect(body.message).toContain('Nothing was changed.');
+    // Re-pinned by 0394 (was "linked to records your organization keeps"):
+    // no business key refuses after 0394, so this is the support sentence.
+    expect(body.message).toBe(
+      'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.',
+    );
     expect(deleteUser).not.toHaveBeenCalled();
     expect(insertAuditRowReported).not.toHaveBeenCalled();
     expect(stub.chains.get('user_profiles.update')).toBeUndefined();
+    expect(avatarList).not.toHaveBeenCalled();
+  });
+
+  // 0394: the only owner of an organization that has other members is
+  // refused, naming it; ownership moves on the web Team page (O-A3-8).
+  it('the only owner of an org with other members gets 403 last_owner naming it, before the rate limit and the check', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        return n === 1
+          ? { data: [{ organization_id: 'org-1' }], error: null }
+          : { data: [{ organization_id: 'org-1', role: 'viewer' }], error: null };
+      },
+      'organizations.select': { data: [{ id: 'org-1', name: 'Learn4Life' }], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub, 'owner') as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'last_owner',
+      message:
+        'You are the only owner of Learn4Life. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.',
+    });
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(getUserById).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
+
+  it('the check answering last owner (a member joined in between) gets 403 last_owner with the generic phone sentence', async () => {
+    const stub = happyStub();
+    rpc.mockResolvedValueOnce({
+      data: {
+        deletable: false,
+        reason: 'blocked',
+        sqlstate: 'P0001',
+        constraint: 'organization_last_owner',
+        table: 'public.organization_members',
+      },
+      error: null,
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub, 'owner') as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'last_owner',
+      message:
+        'You are the only owner of an organization that has other members. Make another member the owner on the Team page on the web, then delete your account. Nothing was changed.',
+    });
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
+
+  // O-A3-7 (0394): the allowlist is checked against GoTrue's verified email.
+  it('a platform admin account gets 403 platform_admin (the verified GoTrue email) and nothing changes', async () => {
+    const stub = happyStub();
+    getUserById.mockResolvedValueOnce({ data: { user: { id: USER_ID, email: 'ops@stockpilotusa.com' } }, error: null });
+    isPlatformAdmin.mockImplementation((e) => e === 'ops@stockpilotusa.com');
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'platform_admin',
+      message:
+        'This account is a StockPilot platform admin. Remove it from the platform admin list before deleting it. Nothing was changed.',
+    });
+    expect(getUserById).toHaveBeenCalledWith(USER_ID);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
+
+  it('an email read that fails answers 503 try-again and changes nothing (fails closed)', async () => {
+    const stub = happyStub();
+    getUserById.mockResolvedValueOnce({ data: { user: null }, error: { status: 500, message: 'boom' } });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toBe('check_failed');
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.platform_admin_check' }),
+    );
+  });
+
+  it('GoTrue has no such user at the email read (deleted from another device): 200, nothing deleted or written here', async () => {
+    const stub = happyStub();
+    getUserById.mockResolvedValueOnce({
+      data: { user: null },
+      error: { status: 404, code: 'user_not_found', message: 'User not found' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+  });
+
+  it('removes the avatar files under user-avatars/<uid>/ after the delete (O-A3-9)', async () => {
+    const stub = happyStub();
+    avatarList.mockResolvedValueOnce({ data: [{ name: 'me.webp' }], error: null });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(storageFrom).toHaveBeenCalledWith('user-avatars');
+    expect(avatarList).toHaveBeenCalledWith(USER_ID, { limit: 1000 });
+    expect(avatarRemove).toHaveBeenCalledWith([`${USER_ID}/me.webp`]);
   });
 
   it.each([

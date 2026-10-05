@@ -915,8 +915,18 @@ WEB_TESTS=(
   # check failure. A deleteUser error is settled against GoTrue, so an
   # account that is gone is never reported as kept. The platform cleanup
   # counts kept and failed accounts apart instead of claiming them deleted.
+  # Every member (0394): the only owner of an organization that has other
+  # members is refused before anything changes (the trigger's own predicate:
+  # impersonation seats and pending members do not count; a failed read fails
+  # closed), and the check's P0001 organization_last_owner is read before the
+  # class-23 rule; a platform admin's verified email on the allowlist is
+  # refused (O-A3-7); avatar files go only after the delete; the deletion's
+  # audit row is stamped "Deleted user". A requester who deleted their account
+  # is never emailed again (status emails, the signature receipt and notices,
+  # the return prompt), not even at the address the order kept.
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
+  src/server/services/order-requests.deleted-requester-email.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before

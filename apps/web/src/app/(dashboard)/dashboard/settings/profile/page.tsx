@@ -117,9 +117,9 @@ export default async function ProfileSettingsPage({
             <CardTitle className="text-base text-destructive">Delete account</CardTitle>
             <CardDescription>
               Permanently delete your account and your access to StockPilot.
-              Orders you placed stay with your organization, with “Deleted
-              user” as the requester. If you own a workspace with other
-              members, transfer ownership first.
+              Your organization keeps what you recorded, shown as “Deleted
+              user”. If you are the only owner of an organization with other
+              members, make another member the owner first.
             </CardDescription>
           </CardHeader>
           <CardContent>

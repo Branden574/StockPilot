@@ -68,8 +68,12 @@ async function resolveRequesterContact(
     requester_user_id: string | null;
     requester_name: string | null;
     requester_email: string | null;
+    requester_deleted_at?: string | null;
   },
 ): Promise<{ email: string | null; name: string | null }> {
+  // A requester who deleted their account is never emailed again (A3), not
+  // even at the address the order recorded (the copy is kept, O-A3-6).
+  if (order.requester_deleted_at) return { email: null, name: null };
   if (order.requester_email) {
     return { email: order.requester_email, name: order.requester_name ?? null };
   }
@@ -134,7 +138,7 @@ function rateLimited() {
 /** The order columns the route reads before the hand-over. */
 const ORDER_COLUMNS =
   'id, organization_id, warehouse_id, requester_user_id, requester_name, requester_email, ' +
-  'fulfillment_type, assigned_delivery_user_id';
+  'requester_deleted_at, fulfillment_type, assigned_delivery_user_id';
 
 interface SignOrderRow {
   id: string;
@@ -143,6 +147,8 @@ interface SignOrderRow {
   requester_user_id: string | null;
   requester_name: string | null;
   requester_email: string | null;
+  /** 0388: set when the requester's account was deleted (never emailed, A3). */
+  requester_deleted_at: string | null;
   fulfillment_type: 'pickup' | 'delivery';
   assigned_delivery_user_id: string | null;
 }

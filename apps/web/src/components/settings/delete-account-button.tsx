@@ -14,8 +14,9 @@ import { deleteOwnAccountAction } from '@/server/actions/profile';
  * confirm button enables. On success we navigate to /signin so the
  * dashboard layout doesn't briefly render with a now-deleted session.
  *
- * The owner-of-a-shared-org guard runs server-side in
- * `deleteOwnAccountAction`; we surface its error via toast.
+ * The last-owner and platform-admin refusals run server-side in
+ * `deleteOwnAccountAction` (migration 0394); we surface their sentence via
+ * toast.
  */
 export function DeleteAccountButton() {
   const router = useRouter();
@@ -53,15 +54,14 @@ export function DeleteAccountButton() {
           <div className="space-y-2">
             <p>
               This deletes your account and removes your access immediately.
-              Orders you placed stay with your organization, with “Deleted
-              user” as the requester. If your account is linked to records
-              your organization must keep, such as received stock, you will
-              be told and nothing will change.
+              What you recorded stays with your organization and shows
+              “Deleted user” instead of your name. Counts, picks and
+              deliveries assigned to you become unassigned so someone else
+              can finish them.
             </p>
             <p>
-              If you own a workspace with other members, transfer ownership
-              first — you can&apos;t delete an account that still owns an
-              active org.
+              If you are the only owner of an organization with other
+              members, make another member the owner first.
             </p>
           </div>
         }

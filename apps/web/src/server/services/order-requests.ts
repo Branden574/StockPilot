@@ -131,6 +131,9 @@ export interface OrderRequestRow {
   requester_user_id: string | null;
   requester_email: string | null;
   requester_name: string | null;
+  /** When the requester's account was deleted (0388); a deleted requester is
+   *  never emailed again (A3). Absent when the row came from a narrow select. */
+  requester_deleted_at?: string | null;
   requester_org_label: string | null;
   approved_by: string | null;
   approved_at: string | null;
@@ -4725,6 +4728,10 @@ export class OrderRequestsService {
       | 'cancelled',
     row: OrderRequestRow,
   ): Promise<boolean> {
+    // A requester who deleted their account opted out of everything: their
+    // preferences went with the account, and the order's null requester id
+    // must not read as "public, always email" (A3).
+    if (row.requester_deleted_at) return false;
     if (!row.requester_user_id) return true;
 
     const col = (() => {
@@ -4839,9 +4846,40 @@ export class OrderRequestsService {
     }
   }
 
+  /**
+   * Whether the order's requester deleted their account (0388:
+   * requester_deleted_at). A deleted requester is never emailed again, not
+   * even at an address the order recorded (the copy itself is kept, O-A3-6).
+   * Only an order with no requester id can be in that state. When the row came
+   * from a select that did not carry the marker, it is read (only then, and
+   * only for such an order); a failed read sends nothing (a missed status
+   * email over mailing someone who deleted their account) and is reported.
+   */
+  private async requesterAccountDeleted(row: OrderRequestRow): Promise<boolean> {
+    if (row.requester_user_id) return false;
+    if (row.requester_deleted_at !== undefined) return row.requester_deleted_at !== null;
+    const { data, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('requester_deleted_at')
+      .eq('id', row.id)
+      .maybeSingle();
+    if (error) {
+      void reportSrvError(new Error(error.message), {
+        tag: 'order-requests.email.requester_deleted_read',
+        level: 'warning',
+        extra: { orderId: row.id },
+      });
+      return true;
+    }
+    return ((data as { requester_deleted_at?: string | null } | null)?.requester_deleted_at ?? null) !== null;
+  }
+
   private async resolveRecipient(
     row: OrderRequestRow,
   ): Promise<{ recipientEmail: string | null; recipientName: string | null }> {
+    if (await this.requesterAccountDeleted(row)) {
+      return { recipientEmail: null, recipientName: null };
+    }
     if (row.requester_email) {
       return { recipientEmail: row.requester_email, recipientName: row.requester_name ?? null };
     }

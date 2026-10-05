@@ -295,6 +295,38 @@ describe('POST /api/orders/sign — internal requester contact resolution', () =
     expect(recipients).toContain('ext@x.com');
     expect(recipients).toContain('bob@site.org');
   });
+
+  // A3: a requester who deleted their account (0388 requester_deleted_at) is
+  // never emailed again, not even at the address the order kept (O-A3-6).
+  // Before A3 the kept requester_email was used first, so the deleted
+  // person still got the receipt and the backorder notices.
+  it('a requester who deleted their account gets nothing; the signer still gets a receipt', async () => {
+    const deleted = {
+      ...INTERNAL_ORDER,
+      requester_user_id: null,
+      requester_email: 'gone@x.com',
+      requester_name: 'Gone',
+      requester_deleted_at: '2026-10-04T12:00:00.000Z',
+    };
+    const admin = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: deleted, error: null },
+      'order_requests.select.single': { data: { ...deleted, status: 'completed' }, error: null },
+      'order_request_lines.select': { data: [{ quantity_fulfilled: 2 }], error: null },
+      'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
+    });
+    adminHolder.client = admin.client;
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+
+    expect(sentTo()).toEqual(['bob@site.org']);
+    expect(notifyRequesterBackorderShipped).toHaveBeenCalledTimes(1);
+    expect((notifyRequesterBackorderShipped.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+    // The route asks for the marker with the order.
+    const firstSelect = admin.chainArgsAll.get('order_requests.select')?.[0]?.[0]?.[0];
+    expect(String(firstSelect)).toContain('requester_deleted_at');
+    expect(admin.fromCalls).not.toContain('user_profiles');
+  });
 });
 
 describe('POST /api/orders/sign — reads after the signature is recorded', () => {

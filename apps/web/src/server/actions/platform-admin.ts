@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
+import { checkPlatformAdmin, isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { hashPassphrase, verifyPassphrase } from '@/lib/auth/platform-passphrase';
 import { renderWorkspaceReadyEmail } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
@@ -12,7 +12,12 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
-import { checkAccountDeletable, settleFailedDelete } from '@/server/lib/account-deletion';
+import {
+  checkAccountDeletable,
+  readAuthEmail,
+  removeAvatarObjects,
+  settleFailedDelete,
+} from '@/server/lib/account-deletion';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { insertAuditRowReported } from '@/server/services/audit';
 
@@ -476,14 +481,17 @@ export async function removeOrgAction(
   //    membership rows, so any remaining row means the user was added to another
   //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
   //    Then ask the database whether the account can go (0388's dry run,
-  //    always undone): an account linked to records kept elsewhere is KEPT and
-  //    counted, never half-deleted. A check that could not answer (a row lock,
-  //    a fault) or a delete that failed is counted as FAILED, apart from kept,
-  //    so the dialog never calls a transient fault "linked to records" (review
-  //    R8). A deleteUser `{ error }` is read (it used to be ignored and the
-  //    account counted as deleted anyway) and settled: if GoTrue no longer has
-  //    the user, the delete happened and only its reply failed (review R7).
-  //    An account already gone is neither.
+  //    always undone). Since 0394 every member is deletable, so KEPT means: a
+  //    platform admin's account while its email is on the allowlist (O-A3-7,
+  //    read from GoTrue, reported), or the rare integrity refusal or last
+  //    owner (no membership is left here, so neither is expected). A check
+  //    that could not answer (a row lock, a fault), an email that could not be
+  //    read, or a delete that failed is counted as FAILED, apart from kept, so
+  //    the dialog never calls a transient fault a refusal (review R8). A
+  //    deleteUser `{ error }` is read and settled: if GoTrue no longer has the
+  //    user, the delete happened and only its reply failed (review R7). An
+  //    account already gone is neither. After each deleted orphan its avatar
+  //    files are removed (O-A3-9).
   let deletedUsers = 0;
   let keptUsers = 0;
   let failedUsers = 0;
@@ -494,9 +502,28 @@ export async function removeOrgAction(
         .select('organization_id', { count: 'exact', head: true })
         .eq('user_id', uid);
       if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
+      const orphanAuth = await readAuthEmail(admin, uid);
+      if (orphanAuth.kind === 'gone') continue; // already deleted elsewhere: neither
+      if (orphanAuth.kind === 'failed') {
+        failedUsers += 1;
+        await reportError(new Error(orphanAuth.message), {
+          tag: 'platform-admin.orphan-user-email',
+          extra: { uid },
+        });
+        continue;
+      }
+      if (isPlatformAdmin(orphanAuth.email)) {
+        keptUsers += 1;
+        await reportError(new Error('orphan account kept: platform admin'), {
+          tag: 'platform-admin.orphan-platform-admin-kept',
+          level: 'info',
+          extra: { uid },
+        });
+        continue;
+      }
       const check = await checkAccountDeletable(admin, uid, 'platform');
       if (!check.ok) {
-        if (check.kind === 'blocked') keptUsers += 1;
+        if (check.kind === 'blocked' || check.kind === 'last_owner') keptUsers += 1;
         else if (check.kind !== 'gone') failedUsers += 1;
         continue;
       }
@@ -508,11 +535,14 @@ export async function removeOrgAction(
           ...(settled === 'not_deleted' ? {} : { level: 'warning' as const }),
           extra: { uid, settled },
         });
-        if (settled === 'deleted') deletedUsers += 1;
-        else if (settled === 'not_deleted') failedUsers += 1;
+        if (settled === 'deleted') {
+          deletedUsers += 1;
+          await removeAvatarObjects(admin, uid);
+        } else if (settled === 'not_deleted') failedUsers += 1;
         continue;
       }
       deletedUsers += 1;
+      await removeAvatarObjects(admin, uid);
     } catch (e) {
       failedUsers += 1;
       await reportError(e, { tag: 'platform-admin.orphan-user-delete', extra: { uid } });

@@ -1,11 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
+  ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RATE_LIMIT,
   ACCOUNT_DELETE_RATE_WINDOW_MS,
   ACCOUNT_DELETE_RETRY_COPY,
@@ -13,7 +16,11 @@ import {
   accountDeleteRateKey,
   auditAccountDeleted,
   checkAccountDeletable,
+  lastOwnerCopy,
+  readAuthEmail,
+  removeAvatarObjects,
   settleFailedDelete,
+  soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -35,8 +42,9 @@ export const runtime = 'nodejs';
  *   body: { confirm: "DELETE" }
  *   200: { ok: true }                          // the account is gone (also when it was already gone)
  *   400: { error: "validation_error", message }
- *   403: { error: "forbidden", message }       // sole-owner with co-members
- *   403: { error: "account_linked_records", message } // kept records refuse it (0388)
+ *   403: { error: "last_owner", message }      // the only owner of an org with other members (0394)
+ *   403: { error: "platform_admin", message }  // an allowlisted platform admin's account (O-A3-7)
+ *   403: { error: "account_linked_records", message } // a record still refuses it (unexpected after 0394)
  *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes
  *   503: { error: "check_failed", message }    // the check could not answer, or a row lock: try again
  *   500: { error: "internal_error", message }  // the delete itself failed (sessions revoked)
@@ -44,7 +52,9 @@ export const runtime = 'nodejs';
  * Every installed phone shows `message` for any non-2xx and stays signed in
  * (settings.tsx performDelete), so these answers need no phone change.
  * Nothing is written before the delete (no profile tombstone); the
- * `user.deactivated` row is written after it succeeded (0388).
+ * `user.deactivated` row is written after it succeeded (0388), after the
+ * person's avatar files are removed (0394). Ownership is transferred on the
+ * web Team page (O-A3-8), so the phone's last-owner sentence points there.
  */
 export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -88,15 +98,19 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Refuse the delete if the user is the sole accepted owner of an
-    // org that still has other accepted members — they must transfer
-    // ownership first. Same rule as the web action.
-    //
-    // Both reads bind their errors. Read as data, a failed read was "owns
-    // nothing" or "no other members", and the account was deleted out from
-    // under an org that still has people in it: the check failed open.
-    const ownerCheckFailed = (err: { message: string }) => {
-      void reportError(new Error(err.message), {
+    // The last-owner rule (0394), the account trigger's own predicate read
+    // with the caller's client so it can name the organizations: the only
+    // accepted owner (impersonation seats count as neither owners nor
+    // members) of an org that has other accepted members is refused until
+    // ownership moves. Fails CLOSED: a failed read was once "owns nothing"
+    // and an account was deleted out from under an org that still had people
+    // in it.
+    const sole = await soleOwnedOrganizationsWithMembers(
+      ctx.supabase as Parameters<typeof soleOwnedOrganizationsWithMembers>[0],
+      ctx.userId,
+    );
+    if (!sole.ok) {
+      void reportError(new Error(sole.message), {
         tag: 'account.delete.owner_check',
         extra: { source: 'mobile' },
       });
@@ -107,37 +121,18 @@ export async function POST(req: NextRequest) {
         },
         { status: 500 },
       );
-    };
-    const { data: ownedRows, error: ownedErr } = await ctx.supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', ctx.userId)
-      .eq('role', 'owner')
-      .not('accepted_at', 'is', null);
-    if (ownedErr) return ownerCheckFailed(ownedErr);
-    const ownedOrgIds = ((ownedRows as { organization_id: string }[] | null) ?? []).map(
-      (r) => r.organization_id,
-    );
-    if (ownedOrgIds.length > 0) {
-      const { data: otherMembers, error: othersErr } = await ctx.supabase
-        .from('organization_members')
-        .select('organization_id')
-        // in-list-bound: the orgs this one user owns (a handful)
-        .in('organization_id', ownedOrgIds)
-        .neq('user_id', ctx.userId)
-        .not('accepted_at', 'is', null)
-        .limit(1);
-      if (othersErr) return ownerCheckFailed(othersErr);
-      if ((otherMembers ?? []).length > 0) {
-        return NextResponse.json(
-          {
-            error: 'forbidden',
-            message:
-              'Transfer ownership of your organization (or remove the other members) before deleting your account.',
-          },
-          { status: 403 },
-        );
-      }
+    }
+    if (sole.organizations.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'last_owner',
+          message: lastOwnerCopy(
+            sole.organizations.map((o) => o.name),
+            'mobile',
+          ),
+        },
+        { status: 403 },
+      );
     }
 
     // Each attempt runs a full dry-run cascade (row locks on every row that
@@ -159,11 +154,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // O-A3-7: a platform admin's account is not deleted while its email is
+    // on the allowlist. The bearer context carries no email, so it is read
+    // from GoTrue (the verified auth email, never the editable profile
+    // column). A read that fails changes nothing: try again. No such user:
+    // another request deleted the account a moment ago, the same answer as
+    // the check's "gone" below (review R7).
+    const admin = createAdminClient();
+    const authEmail = await readAuthEmail(admin, ctx.userId);
+    if (authEmail.kind === 'gone') return NextResponse.json({ ok: true });
+    if (authEmail.kind === 'failed') {
+      void reportError(new Error(authEmail.message), {
+        tag: 'account.delete.platform_admin_check',
+        extra: { source: 'mobile' },
+      });
+      return NextResponse.json(
+        { error: 'check_failed', message: ACCOUNT_DELETE_RETRY_COPY },
+        { status: 503 },
+      );
+    }
+    if (isPlatformAdmin(authEmail.email)) {
+      return NextResponse.json(
+        { error: 'platform_admin', message: ACCOUNT_DELETE_PLATFORM_ADMIN_COPY },
+        { status: 403 },
+      );
+    }
+
     // Ask first (migration 0388): a dry run of the real delete, always undone.
     // Every answer but "deletable" changes nothing.
-    const admin = createAdminClient();
     const check = await checkAccountDeletable(admin, ctx.userId, 'mobile');
     if (!check.ok) {
+      // A member joined between the read above and the check: the trigger's
+      // refusal, with the generic sentence.
+      if (check.kind === 'last_owner') {
+        return NextResponse.json(
+          { error: 'last_owner', message: ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE },
+          { status: 403 },
+        );
+      }
       if (check.kind === 'blocked') {
         return NextResponse.json(
           { error: 'account_linked_records', message: ACCOUNT_DELETE_BLOCKED_COPY },
@@ -220,6 +248,8 @@ export async function POST(req: NextRequest) {
     // through audit()'s withContext() fallback, which redirects on /api (the
     // bug that dropped every mobile row once).
     if (settled === 'deleted') {
+      // The person's avatar files (O-A3-9), best-effort, then the audit row.
+      await removeAvatarObjects(admin, ctx.userId);
       await auditAccountDeleted({
         userId: ctx.userId,
         organizationId: ctx.organizationId ?? null,
