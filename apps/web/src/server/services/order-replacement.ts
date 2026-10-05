@@ -81,6 +81,12 @@ export interface OrderReplacementInfo {
   originalOrderNumber: number | null;
   /** This order is the RMA's live replacement (not one cancelled earlier). */
   live: boolean;
+  /**
+   * This live replacement was handed over (completed): nothing is left to
+   * wait for, pick, collect, change or cancel, so the banner says how the
+   * exchange ended instead (core's replacementBannerLines).
+   */
+  handedOver: boolean;
   /** The view's exchange status for the RMA ('none' when unreadable). */
   exchangeStatus: ExchangeStatus;
   exchangeStatusLabel: string;
@@ -230,6 +236,7 @@ export async function loadReplacementInfo(
   const waitingForReturn =
     live && GATED_STATUSES.has(order.status) && returnStatus === 'approved' && !releasedEarly;
   const returnClosed = live && (returnStatus === 'cancelled' || returnStatus === 'denied');
+  const handedOver = live && order.status === 'completed';
   const exchangeStatus = parseExchangeStatus(ov?.exchange_status);
   const returnedWords = returnedItems.length > 0
     ? returnedItems.map((r) => itemQuantityLabel(r.label, r.quantity)).join(', ')
@@ -243,6 +250,7 @@ export async function loadReplacementInfo(
     originalOrderId: ov?.order_request_id ?? null,
     originalOrderNumber: ov?.order_number ?? null,
     live,
+    handedOver,
     exchangeStatus,
     // Desk check F9: a replacement closed with part never sent says so.
     exchangeStatusLabel: exchangeStatusStaffLabel(exchangeStatus, {

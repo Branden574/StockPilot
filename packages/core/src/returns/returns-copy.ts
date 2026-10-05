@@ -393,6 +393,68 @@ export function changeOrCancelInRmaLabel(returnNumber: string | null): string {
   return `Change or cancel in ${returnNumber ?? 'its RMA'}`;
 }
 
+/** "Open RMA-…" (the link to the RMA once its replacement was handed over). */
+export function openRmaLabel(returnNumber: string | null): string {
+  return `Open ${returnNumber ?? 'its RMA'}`;
+}
+
+/** What the replacement order's banner reads (the server's replacement block). */
+export interface ReplacementBannerInput {
+  returnNumber: string | null;
+  originalOrderNumber: number | null;
+  /** This order is its RMA's current replacement (not one cancelled earlier). */
+  live: boolean;
+  /** This order was handed over (completed). Absent from an older server. */
+  handedOver?: boolean;
+  waitingForReturn: boolean;
+  /** The RMA was cancelled or denied under it (desk check F3). Absent from an older server. */
+  returnClosed?: boolean;
+  releasedEarly: boolean;
+  release: { byName: string | null; reason: string | null } | null;
+  /** The exchange status in staff words (they say when part was never sent). */
+  exchangeStatusLabel: string;
+  driverLine: string | null;
+}
+
+export type ReplacementBannerKey = 'title' | 'handed_over' | 'gate' | 'closed' | 'released' | 'driver' | 'change';
+
+/**
+ * The replacement order's banner, line by line (web and phone, one rule;
+ * plan 3.6.9). While the replacement is still to be handed over: the
+ * return-first gate, an RMA cancelled under it, an early release, the
+ * driver's line for a delivery, and where it is changed or cancelled. Once it
+ * was handed over (its order completed) nothing is left to wait for, pick,
+ * collect, change or cancel: the banner says how the exchange ended instead
+ * (the staff exchange words, which say when part was never sent and when the
+ * return was cancelled) and keeps an early release as history.
+ */
+export function replacementBannerLines(
+  info: ReplacementBannerInput,
+  fulfillmentType: 'pickup' | 'delivery' | null,
+): Array<{ key: ReplacementBannerKey; text: string }> {
+  const out: Array<{ key: ReplacementBannerKey; text: string }> = [
+    { key: 'title', text: exchangeReplacementBanner(info.returnNumber, info.originalOrderNumber) },
+  ];
+  const handedOver = info.live && info.handedOver === true;
+  const inFlight = info.live && !handedOver;
+  if (handedOver && info.exchangeStatusLabel) out.push({ key: 'handed_over', text: info.exchangeStatusLabel });
+  if (inFlight && info.waitingForReturn) out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber) });
+  if (inFlight && info.returnClosed === true) {
+    out.push({ key: 'closed', text: returnCancelledReplacementLine(info.returnNumber) });
+  }
+  if (info.releasedEarly) {
+    out.push({ key: 'released', text: releasedBeforeReturnLine(info.release?.byName ?? null, info.release?.reason ?? null) });
+  }
+  if (inFlight && fulfillmentType === 'delivery' && info.driverLine) out.push({ key: 'driver', text: info.driverLine });
+  if (inFlight) out.push({ key: 'change', text: RETURNS_COPY.changeOrCancelHere });
+  return out;
+}
+
+/** The banner's link to the RMA: where it is changed while in flight, else the RMA itself. */
+export function replacementRmaLinkLabel(info: Pick<ReplacementBannerInput, 'returnNumber' | 'live' | 'handedOver'>): string {
+  return info.live && info.handedOver === true ? openRmaLabel(info.returnNumber) : changeOrCancelInRmaLabel(info.returnNumber);
+}
+
 /** The original order's returns section: "Exchange: Large ×1 → SO-000103 (Waiting for returned item)". */
 export function originalExchangeLine(replacement: string, replacementOrderNumber: number | null, statusWords: string | null): string {
   const so = formatOrderNumber(replacementOrderNumber);

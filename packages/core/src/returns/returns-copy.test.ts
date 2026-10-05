@@ -14,12 +14,16 @@ import {
   createdAsReplacementLabel,
   exchangeReplacementBanner,
   itemQuantityLabel,
+  openRmaLabel,
   originalExchangeLine,
   pickingWaitsSentence,
   prepareTakeLine,
   releasedBeforeReturnLine,
   releaseOutcomeLine,
+  replacementBannerLines,
+  replacementRmaLinkLabel,
   replacementShortLine,
+  type ReplacementBannerInput,
   slipExchangeLine,
   stillWaitingLine,
   waitingForReturnLine,
@@ -70,6 +74,22 @@ function allStrings(): string[] {
     returnCancelledReplacementLine('RMA-20261005-ABC123'),
     releasedBeforeReturnLine('Dana', 'Swap at delivery: the driver collects the returned item.'),
     changeOrCancelInRmaLabel('RMA-20261005-ABC123'),
+    openRmaLabel('RMA-20261005-ABC123'),
+    ...replacementBannerLines(
+      {
+        returnNumber: 'RMA-20261005-ABC123',
+        originalOrderNumber: 103,
+        live: true,
+        handedOver: false,
+        waitingForReturn: true,
+        returnClosed: true,
+        releasedEarly: true,
+        release: { byName: 'Dana', reason: 'Swap at delivery: the driver collects the returned item.' },
+        exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
+        driverLine: 'Collect the returned item: New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+      },
+      'delivery',
+    ).map((l) => l.text),
     originalExchangeLine('Large ×1', 103, 'Waiting for returned item'),
     collectReturnedItemLine('New Hire Shirt, M ×1', 'RMA-20261005-ABC123'),
     slipExchangeLine('RMA-20261005-ABC123', 'New Hire Shirt, M ×1', false),
@@ -155,6 +175,70 @@ describe('returns copy', () => {
     expect(createdAsReplacementLabel('RMA-1', 2)).toBe('Created as exchange replacement for RMA-1 (revision 2)');
     expect(createdAsReplacementLabel('RMA-1', 1)).toBe('Created as exchange replacement for RMA-1');
     expect(replacementShortLine('Large', 0, 1)).toBe('Large: 0 available, 1 needed.');
+  });
+
+  // The replacement order's banner (web and phone, one rule). Desk check
+  // F9 (verifier): a replacement already handed over never says it waits,
+  // isn't picked, goes with the driver or can be changed or cancelled; it
+  // says how the exchange ended.
+  it('RX-2: the replacement banner while in flight, and once handed over', () => {
+    const base: ReplacementBannerInput = {
+      returnNumber: 'RMA-1',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      waitingForReturn: true,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
+      driverLine: 'Collect the returned item: New Hire Shirt, M ×1 (RMA-1)',
+    };
+    expect(replacementBannerLines(base, 'delivery')).toEqual([
+      { key: 'title', text: 'Exchange replacement for RMA-1 · Original order SO-000103' },
+      { key: 'gate', text: 'Replacement reserved. Waiting for returned item (RMA-1)' },
+      { key: 'driver', text: 'Collect the returned item: New Hire Shirt, M ×1 (RMA-1)' },
+      { key: 'change', text: 'Change or cancel this replacement from its RMA.' },
+    ]);
+    expect(replacementBannerLines(base, 'pickup').map((l) => l.key)).toEqual(['title', 'gate', 'change']);
+    // The RMA cancelled under a replacement still in flight (desk check F3).
+    expect(replacementBannerLines({ ...base, waitingForReturn: false, returnClosed: true }, 'pickup')).toEqual([
+      { key: 'title', text: 'Exchange replacement for RMA-1 · Original order SO-000103' },
+      { key: 'closed', text: "RMA-1 was cancelled. This replacement isn't picked." },
+      { key: 'change', text: 'Change or cancel this replacement from its RMA.' },
+    ]);
+    expect(replacementRmaLinkLabel(base)).toBe('Change or cancel in RMA-1');
+
+    // Handed over (completed), part never sent, then the RMA cancelled: how
+    // the exchange ended, the early release kept as history, nothing else.
+    const handed: ReplacementBannerInput = {
+      ...base,
+      handedOver: true,
+      waitingForReturn: false,
+      returnClosed: true,
+      releasedEarly: true,
+      release: { byName: 'Dana', reason: 'Swap at delivery: the driver collects the returned item.' },
+      exchangeStatusLabel: 'Part of the replacement handed over, the rest not sent; return cancelled',
+    };
+    expect(replacementBannerLines(handed, 'delivery')).toEqual([
+      { key: 'title', text: 'Exchange replacement for RMA-1 · Original order SO-000103' },
+      { key: 'handed_over', text: 'Part of the replacement handed over, the rest not sent; return cancelled' },
+      { key: 'released', text: 'Released before the return by Dana: Swap at delivery: the driver collects the returned item.' },
+    ]);
+    expect(replacementBannerLines({ ...handed, releasedEarly: false, exchangeStatusLabel: 'Exchange completed' }, 'pickup')).toEqual([
+      { key: 'title', text: 'Exchange replacement for RMA-1 · Original order SO-000103' },
+      { key: 'handed_over', text: 'Exchange completed' },
+    ]);
+    expect(replacementRmaLinkLabel(handed)).toBe('Open RMA-1');
+    expect(openRmaLabel(null)).toBe('Open its RMA');
+
+    // An earlier replacement (cancelled, not the live one): the title and
+    // its early release only; an older server without handedOver keeps the
+    // in-flight lines.
+    expect(replacementBannerLines({ ...handed, live: false }, 'delivery').map((l) => l.key)).toEqual(['title', 'released']);
+    expect(replacementRmaLinkLabel({ ...handed, live: false })).toBe('Change or cancel in RMA-1');
+    const { handedOver: _omit, ...older } = base;
+    expect(replacementBannerLines(older, 'pickup').map((l) => l.key)).toEqual(['title', 'gate', 'change']);
   });
 
   it('RX-2: words an early release the same on the web and the phone', () => {

@@ -22,6 +22,7 @@ const INFO = {
   originalOrderId: 'orig',
   originalOrderNumber: 103,
   live: true,
+  handedOver: false,
   exchangeStatus: 'waiting_for_return' as const,
   exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
   waitingForReturn: true,
@@ -80,6 +81,40 @@ describe('ReplacementBanner', () => {
       "RMA-20261005-ABC123 was cancelled. This replacement isn't picked.",
     );
     expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
+  });
+
+  // Desk check F9 (verifier): a replacement already handed over says how the
+  // exchange ended, never that it waits, isn't picked, goes with the driver
+  // or can be changed or cancelled (core's replacementBannerLines, the
+  // phone's rule too).
+  it('handed over: how the exchange ended, the release kept, nothing to wait for, collect, change or cancel', () => {
+    render(
+      <ReplacementBanner
+        replacement={{
+          ...INFO,
+          handedOver: true,
+          waitingForReturn: false,
+          returnClosed: true,
+          returnStatus: 'cancelled',
+          exchangeStatus: 'handed_over_return_cancelled',
+          exchangeStatusLabel: 'Part of the replacement handed over, the rest not sent; return cancelled',
+          releasedEarly: true,
+          release: { byName: 'Dana', reason: 'Swap at delivery: the driver collects the returned item.', at: 't' },
+        }}
+        fulfillmentType="delivery"
+      />,
+    );
+    expect(screen.getByTestId('replacement-handed-over')).toHaveTextContent(
+      'Part of the replacement handed over, the rest not sent; return cancelled',
+    );
+    expect(screen.getByText('Released before the return by Dana: Swap at delivery: the driver collects the returned item.')).toBeInTheDocument();
+    expect(screen.queryByTestId('replacement-return-closed')).toBeNull();
+    expect(screen.queryByText(/isn't picked/)).toBeNull();
+    expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
+    expect(screen.queryByText(/Collect the returned item/)).toBeNull();
+    expect(screen.queryByText(/Change or cancel/)).toBeNull();
+    // The RMA is still one click away from the title.
+    expect(screen.getByRole('link', { name: 'RMA-20261005-ABC123' })).toHaveAttribute('href', '/dashboard/returns/rma-1');
   });
 
   it('a member who cannot open the RMA reads its number without a link', () => {

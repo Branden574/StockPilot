@@ -14,6 +14,7 @@ const runSteps = vi.hoisted(() => vi.fn());
 const releaseAction = vi.hoisted(() => vi.fn());
 const cancelReplacementAction = vi.hoisted(() => vi.fn());
 const declineAction = vi.hoisted(() => vi.fn());
+const changeAction = vi.hoisted(() => vi.fn());
 const candidatesAction = vi.hoisted(() => vi.fn(async () => ({ ok: true, data: { siblings: [], matches: [] } })));
 vi.mock('@/server/actions/returns', () => ({
   runReturnStepsAction: runSteps,
@@ -24,7 +25,7 @@ vi.mock('@/server/actions/returns', () => ({
   releaseReturnReplacementAction: releaseAction,
   cancelReturnReplacementAction: cancelReplacementAction,
   declineReturnReplacementAction: declineAction,
-  changeReturnReplacementAction: vi.fn(),
+  changeReturnReplacementAction: changeAction,
   prepareReturnReplacementAction: vi.fn(),
   returnExchangeCandidatesAction: candidatesAction,
 }));
@@ -328,6 +329,99 @@ describe('an approved exchange waiting for the returned item', () => {
     await waitFor(() =>
       expect(declineAction).toHaveBeenCalledWith({ id: RET, body: { expectedRevision: 2, reason: 'The requester wants a refund instead' } }),
     );
+  });
+
+  // Desk check F6 (verifier): the change and the re-issue ask where the
+  // replacement goes after a refused delivery site, as the approval does, and
+  // send the same change again with the choice.
+  it('a change refused for its delivery site asks where it goes, then sends the same change with the site', async () => {
+    const sites = { deliverySites: [{ id: 'site-2', name: 'West Campus' }] };
+    changeAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'Choose a delivery site this warehouse serves.', details: { reason: 'replacement_site_not_available' } },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', { ...WAITING, ...sites })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change replacement' }));
+    const change = await screen.findByRole('dialog', { name: 'Change replacement' });
+    fireEvent.change(within(change).getByLabelText('Reason (required)'), { target: { value: 'Wrong size' } });
+    fireEvent.click(within(change).getByRole('button', { name: 'Change replacement' }));
+    await waitFor(() => expect(changeAction).toHaveBeenCalledTimes(1));
+    const first = (changeAction.mock.calls[0]![0] as { id: string; body: Record<string, unknown> });
+    expect(first).toEqual({
+      id: RET,
+      body: { expectedRevision: 1, lines: [{ exchangeLineId: 'x1', itemId: 'item-l', quantity: 1 }], reason: 'Wrong size', whenShort: 'refuse' },
+    });
+
+    const site = await screen.findByRole('dialog', { name: 'Where does the replacement go?' });
+    const send = within(site).getByRole('button', { name: 'Send again' });
+    expect(send).toBeDisabled();
+    fireEvent.click(within(site).getByLabelText('Deliver to West Campus'));
+    changeAction.mockResolvedValueOnce({ ok: true, data: { workbench: bench('approved', { ...WAITING, ...sites }) } });
+    fireEvent.click(send);
+    await waitFor(() => expect(changeAction).toHaveBeenCalledTimes(2));
+    expect((changeAction.mock.calls[1]![0] as { body: Record<string, unknown> }).body).toEqual({
+      ...first.body,
+      replacement: { fulfillmentType: 'delivery', deliveryCharterId: 'site-2' },
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Replacement changed.'));
+    // Both dialogs close: the site dialog never stays on screen behind the
+    // change (the two are sibling elements whose keys must differ).
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(site.isConnected).toBe(false);
+  });
+
+  it('a re-issue refused for its delivery site asks where it goes, then issues it again with the choice', async () => {
+    const cancelled = {
+      ...WAITING,
+      status: 'replacement_cancelled',
+      statusLabel: 'Replacement cancelled: issue a new one or close as return only',
+      lines: [exchangeLine({ status: 'cancelled', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: ITEM_L })],
+      replacement: { ...WAITING.replacement, status: 'cancelled', live: false, class: 'none' },
+      deliverySites: [{ id: 'site-2', name: 'West Campus' }],
+    };
+    changeAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'Choose a delivery site this warehouse serves.', details: { reason: 'replacement_site_not_available' } },
+    });
+    render(<ReturnWorkbench workbench={bench('closed', cancelled, { revision: 2 })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Issue a new replacement' }));
+    const issue = await screen.findByRole('dialog', { name: 'Issue a new replacement' });
+    fireEvent.change(within(issue).getByLabelText('Reason (required)'), { target: { value: 'Send the right size' } });
+    fireEvent.click(within(issue).getByRole('button', { name: 'Issue a new replacement' }));
+    await waitFor(() => expect(changeAction).toHaveBeenCalledTimes(1));
+    const first = (changeAction.mock.calls[0]![0] as { body: Record<string, unknown> }).body;
+    expect(first).toEqual({
+      expectedRevision: 2,
+      lines: [{ exchangeLineId: 'x1', itemId: 'item-l', quantity: 1 }],
+      reason: 'Send the right size',
+      whenShort: 'refuse',
+    });
+
+    const site = await screen.findByRole('dialog', { name: 'Where does the replacement go?' });
+    fireEvent.click(within(site).getByLabelText('Pickup instead'));
+    changeAction.mockResolvedValueOnce({ ok: true, data: { workbench: bench('closed', { ...WAITING, status: 'ready_to_pick' }, { revision: 3 }) } });
+    fireEvent.click(within(site).getByRole('button', { name: 'Send again' }));
+    await waitFor(() => expect(changeAction).toHaveBeenCalledTimes(2));
+    expect((changeAction.mock.calls[1]![0] as { body: Record<string, unknown> }).body).toEqual({
+      ...first,
+      replacement: { fulfillmentType: 'pickup', deliveryCharterId: null },
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('New replacement issued.'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(site.isConnected).toBe(false);
+  });
+
+  // The screen shows no live replacement (its read failed): the release sends
+  // nothing and says so outside the dialog, never a silent click.
+  it('release early with no live replacement shown sends nothing and says why', async () => {
+    render(<ReturnWorkbench workbench={bench('approved', { ...WAITING, replacement: null })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Release replacement before return is received' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Release before return is received' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Another person changed this return. Review it again.'));
+    expect(releaseAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('a picked replacement: the cancel confirm says the items go back to Staging on record', async () => {

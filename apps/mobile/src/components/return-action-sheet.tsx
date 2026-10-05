@@ -337,7 +337,10 @@ function SheetContent({
         const shown = exchangeOf(wb).replacement;
         const shownOrderId = shown?.live ? shown.orderId : null;
         if (!shownOrderId) {
+          // Nothing was sent: the sheet is free again (it can be closed, or
+          // the person reloads), never stuck on "Saving…".
           setError(RETURN_ERROR_WORDS.returnChanged);
+          setBusy(false);
           return;
         }
         const res = await releaseReturnReplacement(id, shownOrderId, reasonText);

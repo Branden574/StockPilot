@@ -92,6 +92,15 @@ describe('online only', () => {
     expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
   });
 
+  // When the sheet shows no live replacement (its read failed, or it changed)
+  // the release sends nothing and frees the sheet: never stuck on "Saving…",
+  // which also blocks Close, the backdrop and the escape. No refusal path in
+  // the sheet returns while still busy.
+  it('a release with no live replacement shown frees the sheet, and no refusal returns while busy', () => {
+    expect(sheet).toMatch(/if \(!shownOrderId\) \{\s*setError\(RETURN_ERROR_WORDS\.returnChanged\);\s*setBusy\(false\);\s*return;\s*\}/);
+    expect(sheet.match(/setError\([^;]*\);\s*return;/g) ?? []).toEqual([]);
+  });
+
   // Desk check F6: a refused delivery site asks where the replacement goes
   // (the warehouse's sites, or pickup) and sends the same request again.
   it('a refused delivery site asks where the replacement goes and sends the choice', () => {

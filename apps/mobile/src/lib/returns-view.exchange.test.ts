@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { MobileExchangeLine, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
 import {
   NO_EXCHANGE,
+  changeInRmaLabel,
   exchangeApprovalDecisions,
   exchangeForLine,
   exchangeItemLabel,
@@ -300,5 +301,24 @@ describe('the list and the order screen', () => {
     expect(replacementPickBlocked(info)).toBe(true);
     expect(replacementPickBlocked({ ...info, waitingForReturn: false })).toBe(false);
     expect(replacementPickBlocked(null)).toBe(false);
+    expect(changeInRmaLabel(info)).toBe('Change or cancel in RMA-1');
+    // Desk check F9 (verifier): handed over (its order completed), part never
+    // sent, then the RMA cancelled: the banner says how the exchange ended,
+    // never the gate, "isn't picked", the driver's line or "Change or
+    // cancel", and the link only opens the RMA (core's rule, the web's too).
+    const handed: MobileOrderReplacement = {
+      ...info,
+      handedOver: true,
+      waitingForReturn: false,
+      returnClosed: true,
+      returnStatus: 'cancelled',
+      exchangeStatus: 'handed_over_return_cancelled',
+      exchangeStatusLabel: 'Part of the replacement handed over, the rest not sent; return cancelled',
+    };
+    expect(orderReplacementLines(handed, 'delivery')).toEqual([
+      { key: 'title', text: 'Exchange replacement for RMA-1 · Original order SO-000103' },
+      { key: 'handed_over', text: 'Part of the replacement handed over, the rest not sent; return cancelled' },
+    ]);
+    expect(changeInRmaLabel(handed)).toBe('Open RMA-1');
   });
 });

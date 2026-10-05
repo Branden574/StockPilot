@@ -133,10 +133,30 @@ describe('loadReplacementInfo', () => {
     expect(gated).toMatchObject({ waitingForReturn: true, returnClosed: false });
   });
 
+  // Desk check F9 (verifier): a completed replacement was handed over; its
+  // banner says how the exchange ended (part never sent, the RMA cancelled).
+  it('completed: handed over, with the words for how the exchange ended', async () => {
+    const { ctx } = ctxFor({
+      'return_overview.select': {
+        data: [{ ...OVERVIEW, status: 'cancelled', exchange_status: 'handed_over_return_cancelled', replacement_status: 'completed', replacement_owed: 1 }],
+        error: null,
+      },
+    });
+    const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'completed', replacement_for_return_id: RMA });
+    expect(info).toMatchObject({
+      live: true,
+      handedOver: true,
+      exchangeStatusLabel: 'Part of the replacement handed over, the rest not sent; return cancelled',
+    });
+    const open = ctxFor({});
+    const gated = await loadReplacementInfo(open.ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
+    expect(gated).toMatchObject({ live: true, handedOver: false });
+  });
+
   it('a cancelled earlier replacement is not the live one: no gate words', async () => {
     const { ctx } = ctxFor({ 'return_overview.select': { data: [{ ...OVERVIEW, replacement_order_id: 'ord-newer' }], error: null } });
     const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'cancelled', replacement_for_return_id: RMA });
-    expect(info).toMatchObject({ live: false, waitingForReturn: false });
+    expect(info).toMatchObject({ live: false, handedOver: false, waitingForReturn: false });
   });
 
   it('the returns module off: the RMA cannot be opened or released from here', async () => {

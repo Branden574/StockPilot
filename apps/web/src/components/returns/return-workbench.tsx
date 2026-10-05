@@ -73,6 +73,7 @@ import {
   replacementShortItems,
   replacementShortLine,
   RETURN_ACTION_LABELS,
+  RETURN_ERROR_WORDS,
   RETURN_REASON_MAX,
   RETURNS_COPY,
   returnReasonLabel,
@@ -351,7 +352,15 @@ export function ReturnWorkbench({
     // The live replacement the workbench shows (desk check F7): a newer one
     // since (a substitution or a re-issue) is return_changed, never released.
     const shownOrderId = ex.replacement?.live ? ex.replacement.orderId : null;
-    if (!shownOrderId) return;
+    if (!shownOrderId) {
+      // The screen shows no live replacement (its read failed, or it changed):
+      // nothing is sent; say so outside the dialog and redraw, never a
+      // silent click (the phone's sheet says the same words).
+      setReleaseOpen(false);
+      toast.error(RETURN_ERROR_WORDS.returnChanged);
+      router.refresh();
+      return;
+    }
     setBusy('release');
     const res = await releaseReturnReplacementAction({ id: r.id, orderId: shownOrderId, reason });
     setBusy(null);
@@ -961,8 +970,12 @@ export function ReturnWorkbench({
             inTransit={ex.replacement?.status === 'in_transit'}
             onConfirm={cancelReplacement}
           />
+          {/* The two keyed dialogs are siblings: their keys must never be
+              equal. They were ('change' while a change was open, 'closed'
+              when idle), and React then left a closed site dialog on
+              screen after a change refused for its site. */}
           <SiteChoiceDialog
-            key={siteChoiceFor ? siteChoiceFor.kind : 'closed'}
+            key={siteChoiceFor ? `site-choice-${siteChoiceFor.kind}` : 'site-choice-closed'}
             open={siteChoiceFor !== null}
             onOpenChange={(v) => {
               if (!v) setSiteChoiceFor(null);
@@ -983,7 +996,7 @@ export function ReturnWorkbench({
             onConfirm={closeAsReturnOnly}
           />
           <ChangeReplacementDialog
-            key={changeMode ?? 'closed'}
+            key={changeMode ? `change-replacement-${changeMode}` : 'change-replacement-closed'}
             open={changeMode !== null}
             onOpenChange={(v) => {
               if (!v) setChangeMode(null);

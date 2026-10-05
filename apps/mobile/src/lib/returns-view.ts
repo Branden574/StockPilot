@@ -17,19 +17,17 @@ import {
   approvalPreviewLines,
   availableLabel,
   availableReturnActions,
-  changeOrCancelInRmaLabel,
-  exchangeReplacementBanner,
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber as formatSo,
   releasedBeforeReturnLine,
+  replacementBannerLines,
   replacementChipState,
-  returnCancelledReplacementLine,
+  replacementRmaLinkLabel,
   replacementShortItems,
   replacementShortLine,
   returnActionLabel,
   shortLabel,
-  waitingForReturnLine,
   type ExchangeReviewState,
   choiceNeededSentence,
   choiceToDecision,
@@ -473,6 +471,8 @@ export interface MobileOrderReplacement {
   originalOrderId: string | null;
   originalOrderNumber: number | null;
   live: boolean;
+  /** Handed over (its order completed): the banner says how the exchange ended. Absent from an older server. */
+  handedOver?: boolean;
   exchangeStatus: string;
   exchangeStatusLabel: string;
   waitingForReturn: boolean;
@@ -488,18 +488,17 @@ export interface MobileOrderReplacement {
   driverLine: string | null;
 }
 
-/** The banner's sentences, in order (the RMA link is the screen's, for canOpenReturn). */
+/**
+ * The banner's sentences, in order (the RMA link is the screen's, for
+ * canOpenReturn): core's replacementBannerLines, the web banner's rule too.
+ * A replacement already handed over says how the exchange ended instead of
+ * the gate, the closed RMA, the driver's line and "Change or cancel".
+ */
 export function orderReplacementLines(
   info: MobileOrderReplacement,
   fulfillmentType: 'pickup' | 'delivery' | null,
 ): { key: string; text: string }[] {
-  const out = [{ key: 'title', text: exchangeReplacementBanner(info.returnNumber, info.originalOrderNumber) }];
-  if (info.live && info.waitingForReturn) out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber) });
-  if (info.live && info.returnClosed) out.push({ key: 'closed', text: returnCancelledReplacementLine(info.returnNumber) });
-  if (info.releasedEarly) out.push({ key: 'released', text: releasedBeforeReturnLine(info.release?.byName ?? null, info.release?.reason ?? null) });
-  if (info.live && fulfillmentType === 'delivery' && info.driverLine) out.push({ key: 'driver', text: info.driverLine });
-  if (info.live) out.push({ key: 'change', text: RETURNS_COPY.changeOrCancelHere });
-  return out;
+  return replacementBannerLines(info, fulfillmentType);
 }
 
 /**
@@ -511,9 +510,12 @@ export function replacementPickBlocked(info: Pick<MobileOrderReplacement, 'waiti
   return info?.waitingForReturn === true || info?.returnClosed === true;
 }
 
-/** "Change or cancel in RMA-…" (the button that opens the RMA). */
-export function changeInRmaLabel(info: Pick<MobileOrderReplacement, 'returnNumber'>): string {
-  return changeOrCancelInRmaLabel(info.returnNumber);
+/**
+ * The link that opens the RMA: "Change or cancel in RMA-…" while the
+ * replacement is still to be handed over, "Open RMA-…" once it was.
+ */
+export function changeInRmaLabel(info: Pick<MobileOrderReplacement, 'returnNumber' | 'live' | 'handedOver'>): string {
+  return replacementRmaLinkLabel(info);
 }
 
 /** The orders list chip: "Exchange" and, for the live replacement, the gate words. */
