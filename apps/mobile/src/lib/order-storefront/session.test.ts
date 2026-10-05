@@ -27,6 +27,7 @@ import { showUnconfirmedPanel } from './submit';
 import {
   orderCatalogKey,
   orderDraftKey,
+  orderPhotosKey,
   orderPrefsKey,
   parseStoredOrderDraft,
   serializeCatalog,
@@ -1074,6 +1075,58 @@ describe('signing out and back in as the same account starts over (simulator wal
     await session.open(scope);
     expect(api.storefront).toHaveBeenCalledTimes(1);
     expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+  });
+});
+
+// L137 removes the catalog and the photo map (signed photo URLs) when the
+// session is taken away. A read still out at that moment used to check only
+// the warehouse generation, not the account epoch, so when it landed it wrote
+// its key back after the removal (desk check F11, review 2026-10-05). The
+// epoch ends the moment auth says the account is gone (use-workspace.ts), so a
+// read that lands after that writes nothing to the device.
+describe('a catalog or photo read still out when the session is taken away writes nothing back (desk check F11)', () => {
+  const ds = { userId: USER, orgId: ORG, warehouseId: WH };
+
+  it('the catalog read that lands after the account ended leaves its key removed', async () => {
+    await session.open(scope);
+    let land!: (a: OrderCatalogAnswer) => void;
+    api.catalog.mockImplementationOnce(() => new Promise<OrderCatalogAnswer>((r) => (land = r)));
+    const refreshing = session.refresh();
+    await vi.waitFor(() => expect(api.catalog).toHaveBeenCalledTimes(2));
+    // The session is taken away: the epoch ends, then the caches are removed.
+    epoch += 1;
+    store.data.delete(orderCatalogKey(ds));
+    land(catalogAnswer(WH, 7));
+    await refreshing;
+    expect(store.data.has(orderCatalogKey(ds))).toBe(false);
+  });
+
+  it('the photo map read that lands after the account ended leaves its key removed', async () => {
+    await session.open(scope);
+    let land!: (a: Awaited<ReturnType<OrderStorefrontApi['photos']>>) => void;
+    api.photos.mockImplementationOnce(() => new Promise((r) => (land = r)));
+    const refreshing = session.refresh();
+    await vi.waitFor(() => expect(api.photos).toHaveBeenCalledTimes(2));
+    epoch += 1;
+    store.data.delete(orderPhotosKey(ds));
+    land({
+      organizationId: ORG,
+      warehouseId: WH,
+      photos: { [A]: 'https://example.test/signed' },
+      signedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 30 * 864e5).toISOString(),
+    });
+    await refreshing;
+    expect(store.data.has(orderPhotosKey(ds))).toBe(false);
+  });
+
+  it('while the account lasts, both reads still save to the device', async () => {
+    await session.open(scope);
+    store.data.delete(orderCatalogKey(ds));
+    store.data.delete(orderPhotosKey(ds));
+    await session.refresh();
+    expect(store.data.has(orderCatalogKey(ds))).toBe(true);
+    expect(store.data.has(orderPhotosKey(ds))).toBe(true);
   });
 });
 
