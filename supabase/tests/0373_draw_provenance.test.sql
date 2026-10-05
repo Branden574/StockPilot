@@ -1274,8 +1274,13 @@ select is(
   'D14: exactly two movements, both stamped order_request (the exactly-one probe still works); each movement''s rows sum to its batch; the duplicate line keeps its own rows');
 
 -- D15: cancel restocks both lines into Staging.
+-- Changed on purpose by 0396 (N1; was the requester, u_stf): the person who
+-- placed an order may cancel it only while it is pending approval, so the
+-- picked order is cancelled by a manager, as the app has always required.
+-- The restock this suite checks (D16) does not depend on who cancels.
+set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
-select lives_ok(format($$select public.cancel_order_request(%L, 'D17 cancel')$$, :ordP), 'D15: the requester cancels the picked order');
+select lives_ok(format($$select public.cancel_order_request(%L, 'D17 cancel')$$, :ordP), 'D15: a manager cancels the picked order');
 reset role;
 select is(
   (select string_agg(pg_temp.rows(m.id), ' / ' order by m.id)

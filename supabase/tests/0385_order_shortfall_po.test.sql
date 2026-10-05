@@ -990,13 +990,18 @@ select is(
   'caller_can_read_item(uuid)|80523d2cc0fafe7fc6b3599903d7f014|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 7a2302dec888970054738b0dad420fd3): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'cancel_order_request(uuid,text)|47cabcd1fe4f52fb7b2b6b6b64b68da1|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0396 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
+  -- pending approval, and the restock movements carry the order (0396 R1:
+  -- removing both gives 0390's body exactly); nothing proven here reads either.
+  'cancel_order_request(uuid,text)|f045aa484b35d9f35e70bfb3099bae61|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
   'complete_picking(uuid)|b8f1ef1fb01efa5c04c916c178129541|true|{"search_path=public, extensions"}|postgres\n'
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
-  'confirm_physical_signature(uuid,text)|f7a14a46d2c70f635c3da844c786ce67|true|{search_path=public}|postgres\n'
+  -- Re-pinned by 0396 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
+  -- requires a member with Orders on (0396 R3); the hand-over accounting is unchanged.
+  'confirm_physical_signature(uuid,text)|09d4c2fb10d31a55d97c5a1070d02f3d|true|{search_path=public}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
@@ -1012,11 +1017,16 @@ select is(
   'po_over_approval_threshold(uuid,numeric)|9175487be2556e9c0fb23812e0ec6503|true|{search_path=public}|postgres\n'
   'po_status_for_line_write(uuid,uuid)|38c35a2979bbe0a924ea353155074c4c|true|{search_path=public}|postgres\n'
   'po_status_in_org(uuid,uuid)|9087d7c2caffb59d4eb4e9eb51a9b400|true|{search_path=public}|postgres\n'
-  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|efc01e2e0ea98531c92c7db27f17695c|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0396 (was efc01e2e0ea98531c92c7db27f17695c): the wrapper refuses a direct
+  -- call without stock:adjust before raising the flag (0396 R9); its body and
+  -- what a posted receipt writes are unchanged.
+  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|58460bf51bcdf622fa054d70708b9ee9|false|{search_path=public}|postgres\n'
   'purchase_order_visible(uuid)|0f26ab9fb9e7f74d966de79d4e354163|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
-  'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0396 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
+  -- (0396 R2); the draw reversal and the holds it restores are unchanged.
+  'reopen_picking(uuid,text)|4d5508df23b02c7dde2db2ac13c859e9|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
@@ -1129,7 +1139,13 @@ select is(
   -- unchanged. Computed from production's policy text minus that term with
   -- the local authenticated role's OID (16444, the OID that reproduces the
   -- old pin from the same text); verify on the stack.
-  'order_requests + schedule_events policies|bff8a9854b1856ae3fefe1a3dcf702a8|8\n'
+  -- Re-pinned by 0396 (was bff8a9854b1856ae3fefe1a3dcf702a8|8): order_requests_update
+  -- (USING and WITH CHECK) also requires a manager by role or write access to
+  -- the order's warehouse; every other term and policy is unchanged. Computed
+  -- from production's policy text plus that term (the deparsed shape the 0396
+  -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
+  -- that reproduces the old pin from production's text); verify on the stack.
+  'order_requests + schedule_events policies|6ac22882c61690faf1be7f991f0fe44b|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
   'purchase_orders + purchase_order_items + idempotency_keys policies|4d66c95449ef3c5127f8d19974023c70|6',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');
