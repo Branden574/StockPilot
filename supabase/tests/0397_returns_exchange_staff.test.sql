@@ -94,6 +94,7 @@
 --   M31 a replacement closed with part never sent reads handed over      -> N9
 --   M32 the CHECK refuses a replacement on a declined line again         -> X5, X6, X7
 --   M33 a move that is not into approved rewrites the line's decision    -> X7
+--   M34 the issue's short read names its table l again (42702)          -> A11, B6, C3
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -104,7 +105,7 @@
 
 begin;
 
-select plan(102);
+select plan(103);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -567,6 +568,9 @@ $$;
 create function pg_temp.xl(p_rma uuid) returns uuid language sql as $$
   select xl.id from public.return_exchange_lines xl where xl.return_id = p_rma order by xl.created_at, xl.id limit 1
 $$;
+-- (Every \gset of it coalesces to the nil uuid: psql's \gset UNSETS a
+-- variable for NULL, and the next :'var' would abort the whole file instead
+-- of failing the named tests.)
 create function pg_temp.live(p_rma uuid) returns uuid language sql as $$
   select o.id from public.order_requests o
    where o.replacement_for_return_id = p_rma and o.status not in ('cancelled', 'denied')
@@ -584,7 +588,7 @@ $$;
 create function pg_temp.approve(p_sub uuid, p_rma uuid, p_dec jsonb, p_here boolean default false) returns jsonb language plpgsql as $$
 begin
   return pg_temp.rpc('authenticated', p_sub,
-                     format('select public.approve_return(%L, %s, %L::jsonb, %s)', p_rma, pg_temp.rev(p_rma), p_dec, p_here));
+                     format('select public.approve_return(%L, %s, %L::jsonb, %L::boolean)', p_rma, pg_temp.rev(p_rma), p_dec, p_here));
 end $$;
 -- A manager walks a released replacement to picking_complete through the
 -- real order path: the pick slip (the API edge), then complete_picking (one
@@ -800,6 +804,37 @@ select is(
   '_return_exchange_approve=true,_return_exchange_on_deny=true,_return_replacement_issue=true,change_return_replacement=true,'
   || 'decline_return_replacement=true|true|true',
   'A10: every exchange writer (the approval, the issue, the change, the denial and "Keep as return only") takes the order-number lock when it issues an order and then its items FOR UPDATE in id order before the first row naming an item (desk check F4: never two writers each holding a key-share lock the other''s FOR UPDATE needs), the same order-number lock 0254 takes');
+-- A11 (test stage 2026-10-05): plpgsql_check, bundled with the local stack,
+-- reads every statement of every function this file creates against the
+-- catalog. Its first run found _return_replacement_issue's short read naming
+-- its table l while l is also the function's record variable: 42702 at run
+-- time, so every approval that issued a replacement failed, a defect no
+-- offline parse can see. The extension is created inside this file's
+-- transaction (in schema extensions) and leaves with its rollback.
+create extension if not exists plpgsql_check with schema extensions;
+select is(
+  (select coalesce(string_agg(p.proname || ' line ' || coalesce(c.lineno::text, '?') || ': ' || c.message, '; '
+                              order by p.proname, c.lineno), 'none')
+     from pg_proc p
+     left join lateral (select min(t.tgrelid::regclass::text) as rel from pg_trigger t
+                         where t.tgfoid = p.oid and not t.tgisinternal) tr on true
+     cross join lateral extensions.plpgsql_check_function_tb(
+        p.oid, case when tr.rel is null then 0::oid::regclass else tr.rel::regclass end,
+        fatal_errors => false, other_warnings => false, extra_warnings => false, performance_warnings => false) c
+    where p.pronamespace = 'public'::regnamespace
+      and p.proname in ('_notify_replacement_order_changes', '_return_exchange_approve', '_return_exchange_create',
+                        '_return_exchange_fulfilled', '_return_exchange_item_ok', '_return_exchange_on_cancel',
+                        '_return_exchange_on_deny', '_return_exchange_quantity', '_return_exchange_reason',
+                        '_return_exchange_replay', '_return_exchange_requester_options', '_return_lock_items',
+                        '_return_replacement_cancel_order', '_return_replacement_class', '_return_replacement_issue',
+                        '_return_replacement_summary', 'cancel_return_replacement', 'change_return_replacement',
+                        'decline_return_replacement', 'release_return_replacement_early', 'return_exchange_candidates',
+                        'return_exchange_flags', 'return_exchange_options', 'tg_order_request_lines_replacement_guard',
+                        'tg_order_requests_replacement_link', 'tg_order_requests_replacement_status',
+                        'tg_return_decisions_exchange_requested', 'tg_return_exchange_lines_validate', 'tg_returns_api_guard')
+      and c.level = 'error'),
+  'none',
+  'A11: plpgsql_check finds no error in any of the 29 functions this file creates (an ambiguous name, a missing column or a type a statement cannot take fails here, even on a path no other test runs)');
 
 -- ══ B. Gates ══════════════════════════════════════════════════════════════
 -- rBq: an exchange still requested; rB0: an exchange approved and waiting.
@@ -956,7 +991,7 @@ select jsonb_build_object(
          'replacement', jsonb_build_object('whenShort', 'refuse'))::text as "dE" \gset
 select pg_temp.snap(:gM) as "sMbefore", pg_temp.snap(:gL) as "sLbefore" \gset
 select pg_temp.approve(:mgr, :'rE', :'dE'::jsonb) as "jE" \gset
-select pg_temp.live(:'rE') as "oRepE" \gset
+select coalesce(pg_temp.live(:'rE'), '00000000-0000-0000-0000-000000000000'::uuid) as "oRepE" \gset
 select is(
   ((:'jE'::jsonb)->>'changed') || ':' || ((:'jE'::jsonb)->>'status') || ':'
   || (((:'jE'::jsonb)->'replacement'->>'orderId') = :'oRepE')::text || ':'
@@ -1036,8 +1071,8 @@ select pg_temp.approve(:mgr, :'rHp',  pg_temp.xdec(:'rHp'))  as "jHp" \gset
 select pg_temp.approve(:mgr, :'rHg',  pg_temp.xdec(:'rHg'))  as "jHg" \gset
 select pg_temp.approve(:mgr, :'rHd',  pg_temp.xdec(:'rHd'))  as "jHd" \gset
 select pg_temp.approve(:mgr, :'rHdl', pg_temp.xdec(:'rHdl')) as "jHdl" \gset
-select pg_temp.live(:'rHm') as "oHm", pg_temp.live(:'rHe') as "oHe", pg_temp.live(:'rHp') as "oHp",
-       pg_temp.live(:'rHg') as "oHg", pg_temp.live(:'rHd') as "oHd", pg_temp.live(:'rHdl') as "oHdl" \gset
+select coalesce(pg_temp.live(:'rHm'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHm", coalesce(pg_temp.live(:'rHe'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHe", coalesce(pg_temp.live(:'rHp'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHp",
+       coalesce(pg_temp.live(:'rHg'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHg", coalesce(pg_temp.live(:'rHd'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHd", coalesce(pg_temp.live(:'rHdl'), '00000000-0000-0000-0000-000000000000'::uuid) as "oHdl" \gset
 select is(
   (select o.source || ':' || coalesce(o.customer_id::text, 'none') || ':' || (o.requester_user_id = :req)::text || ':'
           || coalesce(o.requester_name, '-') || ':' || o.fulfillment_type || ':' || coalesce(o.pickup_location_notes, '-') || ':'
@@ -1173,7 +1208,7 @@ select is(
   || pg_temp.balanced(:gM)::text || ':' || pg_temp.xs(:'rSh', :mgr),
   'received:closed:1:true:unavailable',
   'J3: the returned Medium is still received and restocked (to Staging: its order has no recorded pick) while the replacement waits for stock (acceptance 41)');
-select pg_temp.live(:'rSh') as "oShOld" \gset
+select coalesce(pg_temp.live(:'rSh'), '00000000-0000-0000-0000-000000000000'::uuid) as "oShOld" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Navy instead: no Large in stock', 'refuse')$q$,
           :'rSh', pg_temp.rev(:'rSh'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rSh'), 'itemId', :itNavy))::text)) as "jSh3" \gset
 select is(
@@ -1202,7 +1237,7 @@ select is(
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX1" \gset
 select pg_temp.approve(:mgr, :'rX1', pg_temp.xdec(:'rX1')) as "jX1a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX1', pg_temp.live(:'rX1'))) as "jX1r" \gset
-select pg_temp.live(:'rX1') as "oX1" \gset
+select coalesce(pg_temp.live(:'rX1'), '00000000-0000-0000-0000-000000000000'::uuid) as "oX1" \gset
 select pg_temp.pick(:mgr, :'oX1') as "x1Pick" \gset
 select pg_temp.stage(:mgr, :'oX1') as "x1Stage" \gset
 select pg_temp.held(:gL, :'stA') as "x1StL", (select trim_scale(quantity_on_hand) from public.inventory_items where id = :gL) as "x1OnL" \gset
@@ -1222,7 +1257,7 @@ select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', 
 select pg_temp.approve(:mgr, :'rX2', pg_temp.xdec(:'rX2', 'approve', '{}'::jsonb,
          jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jX2a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rX2', pg_temp.live(:'rX2'))) as "jX2r" \gset
-select pg_temp.live(:'rX2') as "oX2" \gset
+select coalesce(pg_temp.live(:'rX2'), '00000000-0000-0000-0000-000000000000'::uuid) as "oX2" \gset
 select pg_temp.pick(:mgr, :'oX2') as "x2Pick" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oX2')) as "x2Slip" \gset
 update public.order_requests set status = 'staged_for_delivery' where id = :'oX2';
@@ -1232,7 +1267,7 @@ select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX3" \gset
 select pg_temp.approve(:mgr, :'rX3', pg_temp.xdec(:'rX3')) as "jX3a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX3', pg_temp.live(:'rX3'))) as "jX3r" \gset
-select pg_temp.live(:'rX3') as "oX3" \gset
+select coalesce(pg_temp.live(:'rX3'), '00000000-0000-0000-0000-000000000000'::uuid) as "oX3" \gset
 select pg_temp.pick(:mgr, :'oX3') as "x3Pick" \gset
 select pg_temp.held(:gL, :'stA') as "x3StL" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Picked the wrong size')$q$, :'rX3', pg_temp.rev(:'rX3'))) as "jX3c" \gset
@@ -1249,7 +1284,7 @@ select is(
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX4" \gset
 select pg_temp.approve(:mgr, :'rX4', pg_temp.xdec(:'rX4')) as "jX4a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX4', pg_temp.live(:'rX4'))) as "jX4r" \gset
-select pg_temp.live(:'rX4') as "oX4" \gset
+select coalesce(pg_temp.live(:'rX4'), '00000000-0000-0000-0000-000000000000'::uuid) as "oX4" \gset
 select pg_temp.pick(:mgr, :'oX4') as "x4Pick" \gset
 select pg_temp.stage(:mgr, :'oX4') as "x4Stage" \gset
 select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oX4')) as "x4Sign" \gset
@@ -1342,7 +1377,7 @@ values (:lPh, :oPh, :gM, 4, 4);
 select pg_temp.mk(:mgr, :oPh, pg_temp.xbody(:lPh, 2, jsonb_build_object('itemId', :pX))) as "rPh" \gset
 select pg_temp.approve(:mgr, :'rPh', pg_temp.xdec(:'rPh', 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb)) as "jPh" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rPh', pg_temp.live(:'rPh'))) as "jPhr" \gset
-select pg_temp.live(:'rPh') as "oPhR" \gset
+select coalesce(pg_temp.live(:'rPh'), '00000000-0000-0000-0000-000000000000'::uuid) as "oPhR" \gset
 select pg_temp.pick(:mgr, :'oPhR') as "phPick" \gset
 select pg_temp.stage(:mgr, :'oPhR') as "phStage" \gset
 select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oPhR')) as "phSign" \gset
@@ -1356,12 +1391,19 @@ select is(
   || pg_temp.xs(:'rPh', :mgr),
   'true:picking_complete:ok:1:backordered:1:P0001:replacement_handed_over:P0001:replacement_handed_over:partly_handed_over',
   'Z1: a replacement handed over in part (a backorder with 1 of 2 handed over) is neither cancelled nor changed from the RMA (desk check F2)');
--- Stock arrives (+1 on 12-B) and the backorder is resumed into picking.
-do $$
+-- A restock through the real path: +1 on 12-B. adjust_stock's ledger gate
+-- needs a member signed in (has_org_role 'staff'), so the manager signs in
+-- for the call; any refusal raises and stops the file.
+create function pg_temp.restock(p_item uuid) returns text language plpgsql as $$
+declare v_prev text := coalesce(current_setting('request.jwt.claim.sub', true), '');
 begin
-  perform public.adjust_stock('03970000-0000-0000-0000-000000000e1b'::uuid, 1, 'add',
-                              '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+  perform set_config('request.jwt.claim.sub', '03970000-0000-0000-0000-0000000000a1', true);
+  perform public.adjust_stock(p_item, 1, 'add', '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+  perform set_config('request.jwt.claim.sub', v_prev, true);
+  return 'ok';
 end $$;
+-- Stock arrives (+1 on 12-B) and the backorder is resumed into picking.
+select pg_temp.restock(:pX) as "phRestock" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oPhR')) as "phResume" \gset
 select is(
   :'phResume' || ':' || pg_temp.holds(:'oPhR')::text || ':'
@@ -1425,7 +1467,7 @@ select is(
                      :mgr, pg_temp.live(:'rRel'))),
   'ready_to_pick:true/ready_to_pick:ok:1',
   'R3: the release opens the gate for that order: the pick slip passes, and a member without returns access reads the same exchange status');
-select pg_temp.live(:'rRel') as "oRelOld" \gset
+select coalesce(pg_temp.live(:'rRel'), '00000000-0000-0000-0000-000000000000'::uuid) as "oRelOld" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Small instead', 'refuse')$q$,
           :'rRel', pg_temp.rev(:'rRel'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rRel'), 'itemId', :gS))::text)) as "jR4" \gset
 select is(
@@ -1489,7 +1531,7 @@ select is(
 -- ══ K. Cancel and deny ════════════════════════════════════════════════════
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rCa" \gset
 select pg_temp.approve(:mgr, :'rCa', pg_temp.xdec(:'rCa')) as "jCa" \gset
-select pg_temp.live(:'rCa') as "oCa" \gset
+select coalesce(pg_temp.live(:'rCa'), '00000000-0000-0000-0000-000000000000'::uuid) as "oCa" \gset
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.cancel_return(%L, %s, null)', :'rCa', pg_temp.rev(:'rCa')))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.cancel_return(%L, %s, 'No longer needed')$q$, :'rCa', pg_temp.rev(:'rCa')))) || ','
@@ -1506,7 +1548,7 @@ select is(
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rCaH" \gset
 select pg_temp.approve(:mgr, :'rCaH', pg_temp.xdec(:'rCaH')) as "jCaHa" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rCaH', pg_temp.live(:'rCaH'))) as "jCaHr" \gset
-select pg_temp.live(:'rCaH') as "oCaH" \gset
+select coalesce(pg_temp.live(:'rCaH'), '00000000-0000-0000-0000-000000000000'::uuid) as "oCaH" \gset
 select pg_temp.pick(:mgr, :'oCaH') as "caHPick" \gset
 select pg_temp.stage(:mgr, :'oCaH') as "caHStage" \gset
 select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oCaH')) as "caHSign" \gset
@@ -1558,7 +1600,7 @@ begin
   return v_rma;
 end $$;
 select pg_temp.part_handed_over(:oK5, :lK5, :pY) as "rK5" \gset
-select pg_temp.live(:'rK5') as "oK5R", pg_temp.snap(:pY) as "k5Snap" \gset
+select coalesce(pg_temp.live(:'rK5'), '00000000-0000-0000-0000-000000000000'::uuid) as "oK5R", pg_temp.snap(:pY) as "k5Snap" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Original not returned')$q$, :'rK5', pg_temp.rev(:'rK5'))) as "jK5" \gset
 select is(
   ((:'jK5'::jsonb)->>'status') || ':' || (select status from public.order_requests where id = :'oK5R') || ':'
@@ -1567,24 +1609,20 @@ select is(
   || (select string_agg(status, ',') from public.return_exchange_lines where return_id = :'rK5') || ':'
   || pg_temp.xs(:'rK5', :mgr) || ':' || (pg_temp.snap(:pY) = :'k5Snap')::text || ':'
   || pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK5R'),
-                     'select public.adjust_stock(''03970000-0000-0000-0000-000000000e1c''::uuid, 1, ''add'', ''03970000-0000-0000-0000-000000000c12''::uuid, ''Walk restock'', null)'),
+                     'select pg_temp.restock(''03970000-0000-0000-0000-000000000e1c''::uuid)'),
   'cancelled:completed:0:1:approved:handed_over_return_cancelled:true:P0001:-:invalid_status_transition',
   'K5: released early and handed over in part, cancelling the RMA closes the replacement as delivered-partial (the record kept, nothing moves, nothing held): it is completed and can never be resumed (desk check F3)');
 select pg_temp.part_handed_over(:oK7, :lK7, :pZ) as "rK7" \gset
-select pg_temp.live(:'rK7') as "oK7R" \gset
+select coalesce(pg_temp.live(:'rK7'), '00000000-0000-0000-0000-000000000000'::uuid) as "oK7R" \gset
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R'),
-    format($q$select public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add', '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+    format($q$select pg_temp.restock('03970000-0000-0000-0000-000000000e1d'::uuid);
               update public.returns set status = 'cancelled' where id = %L$q$, :'rK7'))
   || ' | ' || pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R'),
-    format($q$select public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add', '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null)$q$)),
+    format($q$select pg_temp.restock('03970000-0000-0000-0000-000000000e1d'::uuid)$q$)),
   'P0001:replacement_return_cancelled:replacement_return_cancelled | ok:1',
   'K6: the gate never lets a cancelled return''s replacement into picking, released or not (a resume refused replacement_return_cancelled); while the RMA is open the released resume passes (desk check F3)');
-do $$
-begin
-  perform public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add',
-                              '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
-end $$;
+select pg_temp.restock(:pZ) as "k7Restock" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R')) as "k7Resume" \gset
 select pg_temp.holds(:'oK7R') as "k7Held", pg_temp.snap(:pZ) as "k7Snap" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Original not returned')$q$, :'rK7', pg_temp.rev(:'rK7'))) as "jK7" \gset
@@ -1677,7 +1715,7 @@ select is(
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rBo" \gset
 select pg_temp.approve(:mgr, :'rBo', pg_temp.xdec(:'rBo')) as "jBo" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rBo', pg_temp.live(:'rBo'))) as "jBor" \gset
-select pg_temp.live(:'rBo') as "oBo" \gset
+select coalesce(pg_temp.live(:'rBo'), '00000000-0000-0000-0000-000000000000'::uuid) as "oBo" \gset
 select pg_temp.pick(:mgr, :'oBo') as "boPick" \gset
 select pg_temp.stage(:mgr, :'oBo') as "boStage" \gset
 update public.order_requests set status = 'backordered' where id = :'oBo';
@@ -1728,7 +1766,7 @@ select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', 
 select pg_temp.approve(:mgr, :'rOD', pg_temp.xdec(:'rOD', 'approve', '{}'::jsonb,
          jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jOD" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rOD', pg_temp.live(:'rOD'))) as "jODr" \gset
-select pg_temp.live(:'rOD') as "oOD" \gset
+select coalesce(pg_temp.live(:'rOD'), '00000000-0000-0000-0000-000000000000'::uuid) as "oOD" \gset
 select pg_temp.pick(:mgr, :'oOD') as "odPick" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oOD')) as "odSlip" \gset
 update public.order_requests set status = 'staged_for_delivery' where id = :'oOD';
@@ -1779,7 +1817,7 @@ select pg_temp.call_as('authenticated', :req, format($q$select (public.create_or
           jsonb_build_array(jsonb_build_object('item_id', :gL, 'quantity', 1)))) as "oOrdP" \gset
 select pg_temp.mk(:mgr, :oPar, pg_temp.xbody(:lPar, 1, jsonb_build_object('itemId', :gL))) as "rPar" \gset
 select pg_temp.approve(:mgr, :'rPar', pg_temp.xdec(:'rPar')) as "jPar" \gset
-select pg_temp.live(:'rPar') as "oRepP" \gset
+select coalesce(pg_temp.live(:'rPar'), '00000000-0000-0000-0000-000000000000'::uuid) as "oRepP" \gset
 select is(
   (select coalesce(string_agg(k.k, ',' order by k.k), '')
      from (select (select to_jsonb(a) from public.order_requests a where a.id = :'oOrdP') as ja,

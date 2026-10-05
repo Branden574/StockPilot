@@ -752,10 +752,10 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object('itemId', l2.item_id, 'needed', trim_scale(l2.quantity_requested),
                                                'available', trim_scale(l2.held)) order by l2.item_id), '[]'::jsonb)
     into v_short
-    from (select l.item_id, l.quantity_requested,
+    from (select orl.item_id, orl.quantity_requested,
                  coalesce((select sum(sr.quantity) from public.stock_reservations sr
-                            where sr.order_request_id = v_id and sr.item_id = l.item_id and sr.released_at is null), 0) as held
-            from public.order_request_lines l where l.order_request_id = v_id) l2
+                            where sr.order_request_id = v_id and sr.item_id = orl.item_id and sr.released_at is null), 0) as held
+            from public.order_request_lines orl where orl.order_request_id = v_id) l2
    where l2.held < l2.quantity_requested;
   if v_short <> '[]'::jsonb and v_when = 'refuse' then
     raise exception 'replacement_unavailable' using errcode = 'P0001', hint = 'replacement_unavailable',
