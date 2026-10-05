@@ -231,6 +231,33 @@ describe('a requested exchange', () => {
     expect((runSteps.mock.calls[1]![0] as { body: { approve: { replacement: unknown } } }).body.approve.replacement).toEqual({ whenShort: 'backorder' });
   });
 
+  // Desk check F6: the original delivery site is not one the warehouse serves.
+  it('a refused delivery site asks where the replacement goes, then sends the approval again with the choice', async () => {
+    runSteps.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        ran: [{ step: 'approve', outcome: 'refused', reason: 'replacement_site_not_available', message: 'Choose a delivery site this warehouse serves.' }],
+        workbench: bench('requested', { deliverySites: [{ id: 'site-2', name: 'West Campus' }] }),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('requested', { deliverySites: [{ id: 'site-2', name: 'West Campus' }] })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve return & exchange' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Where does the replacement go?')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Deliver to West Campus')).toBeInTheDocument();
+    const send = within(dialog).getByRole('button', { name: 'Send again' });
+    expect(send).toBeDisabled();
+    fireEvent.click(within(dialog).getByLabelText('Pickup instead'));
+    runSteps.mockResolvedValueOnce({ ok: true, data: { ran: [{ step: 'approve', outcome: 'done' }], workbench: bench('approved', WAITING) } });
+    fireEvent.click(send);
+    await waitFor(() => expect(runSteps).toHaveBeenCalledTimes(2));
+    expect((runSteps.mock.calls[1]![0] as { body: { approve: { replacement: unknown } } }).body.approve.replacement).toEqual({
+      whenShort: 'refuse',
+      fulfillmentType: 'pickup',
+      deliveryCharterId: null,
+    });
+  });
+
   it('a return-only line can get "Add a replacement" while exchanges are on; not while the switch is off', () => {
     const plain = { kind: 'return', status: 'none', lines: [], rail: [] };
     const { unmount } = render(<ReturnWorkbench workbench={bench('requested', plain)} />);

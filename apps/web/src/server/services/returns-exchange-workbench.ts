@@ -10,6 +10,7 @@ import {
   type ExchangeStatus,
   type RailStep,
   type ReplacementClass,
+  type ReplacementDeliverySite,
 } from '@stockpilot/core';
 
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
@@ -108,6 +109,12 @@ export interface ReturnWorkbenchExchange {
   hasApprovedExchange: boolean;
   /** The kill switch: "Add a replacement" (a new exchange) is offered only when on. */
   createEnabled: boolean;
+  /**
+   * The active delivery sites the original order's warehouse serves, by name
+   * (desk check F6): offered with "Pickup instead" when an approval, a change
+   * or a re-issue is refused replacement_site_not_available.
+   */
+  deliverySites: ReplacementDeliverySite[];
 }
 
 export type RawExchangeLine = {
@@ -194,6 +201,39 @@ export async function readExchangeTier2(
     overview: (ovRes.data as OverviewFacts | null) ?? null,
     replacements: (repRes.data as ReplacementRow[] | null) ?? [],
   };
+}
+
+/**
+ * The active delivery sites a warehouse serves (desk check F6), under the
+ * caller's RLS: the warehouse's charters whose status is active, the pair the
+ * database checks for a delivery replacement. A failed read answers [] (the
+ * chooser then offers pickup only; the database decides anyway).
+ */
+export async function readDeliverySites(ctx: ServiceContext, warehouseId: string | null): Promise<ReplacementDeliverySite[]> {
+  if (!warehouseId) return [];
+  try {
+    const { data, error } = await ctx.supabase
+      .from('warehouse_charters')
+      .select('charter:charters!charter_id (id, name, status)')
+      .eq('organization_id', ctx.organizationId)
+      .eq('warehouse_id', warehouseId);
+    if (error) {
+      reportDegradedRead('returns.workbench.delivery_sites', error, { warehouseId });
+      return [];
+    }
+    const out: ReplacementDeliverySite[] = [];
+    for (const row of (data ?? []) as Array<{ charter: unknown }>) {
+      const c = (Array.isArray(row.charter) ? row.charter[0] : row.charter) as
+        | { id?: unknown; name?: unknown; status?: unknown }
+        | null
+        | undefined;
+      if (c && typeof c.id === 'string' && typeof c.name === 'string' && c.status === 'active') out.push({ id: c.id, name: c.name });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  } catch (err) {
+    reportDegradedRead('returns.workbench.delivery_sites', err, { warehouseId });
+    return [];
+  }
 }
 
 /** Free stock per item: on hand minus every active hold (advice; never decides). */
@@ -291,6 +331,7 @@ export function buildExchangeView(input: {
   itemOf: (itemId: string | null) => ExchangeItem | null;
   freeOf: (itemId: string | null) => number | null;
   decisions: Decision[];
+  deliverySites?: ReplacementDeliverySite[];
 }): ReturnWorkbenchExchange {
   const lines: ReturnWorkbenchExchangeLine[] = [...input.rawLines]
     .sort((a, b) => (a.created_at === b.created_at ? a.id.localeCompare(b.id) : a.created_at.localeCompare(b.created_at)))
@@ -397,5 +438,6 @@ export function buildExchangeView(input: {
     }),
     hasApprovedExchange: lines.some((l) => l.approvedItemId !== null) || input.replacements.length > 0,
     createEnabled: exchangeCreateEnabled(),
+    deliverySites: input.deliverySites ?? [],
   };
 }

@@ -121,6 +121,12 @@ export const RETURNS_COPY = {
   exchangeKillSwitch: 'Exchanges are turned off right now. Request a return only.',
   releaseEarlyReasonLabel: 'Reason for releasing early (required)',
   cancelReplacementReasonLabel: 'Reason for cancelling the replacement (required)',
+  // Desk check F6: where the replacement goes when the original delivery site
+  // is not one the warehouse serves (replacement_site_not_available).
+  siteChoiceTitle: 'Where does the replacement go?',
+  siteChoiceHelp: "The original delivery site isn't one this warehouse serves now. Choose a site it serves, or pickup.",
+  pickupInstead: 'Pickup instead',
+  chooseSite: 'Choose where the replacement goes.',
   // Desk check F9: after a replacement cancel, the exchange ends for good.
   closeAsReturnOnlyHelp: 'No new replacement is issued. The return goes on as a return only.',
   closeAsReturnOnlyReasonLabel: 'Reason for keeping the return only (required)',
@@ -375,6 +381,11 @@ export function releaseOutcomeLine(answer: { changed?: boolean | null; notNeeded
 export function releasedBeforeReturnLine(who: string | null, reason: string | null): string {
   const by = who ? ` by ${who}` : '';
   return reason ? `Released before the return${by}: ${reason}` : `Released before the return${by}.`;
+}
+
+/** A delivery site the replacement can go to (desk check F6). */
+export function deliverToSiteLabel(siteName: string): string {
+  return `Deliver to ${siteName}`;
 }
 
 /** "Change or cancel in RMA-…" (replaces Cancel, Add items and Edit lines). */

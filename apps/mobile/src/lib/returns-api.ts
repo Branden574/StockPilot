@@ -166,6 +166,8 @@ export interface MobileReturnExchange {
   rail: RailStep[];
   hasApprovedExchange: boolean;
   createEnabled: boolean;
+  /** Desk check F6: the sites the warehouse serves (absent from an older server). */
+  deliverySites?: { id: string; name: string }[];
 }
 
 export interface MobileReturnChainEvent {
@@ -342,6 +344,8 @@ export function changeReturnReplacement(
     lines: { exchangeLineId: string; itemId: string | null; quantity: number }[];
     reason: string;
     whenShort: 'refuse' | 'backorder';
+    /** Desk check F6: where it goes when the original site is refused. */
+    replacement?: { fulfillmentType: 'pickup' | 'delivery'; deliveryCharterId: string | null };
   },
 ): Promise<ReplacementAnswer<{ changed: boolean; mode: 'substitute' | 'reissue' | null }>> {
   return replacementCall(id, '', body);

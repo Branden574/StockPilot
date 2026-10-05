@@ -33,6 +33,7 @@ import {
   releasedBeforeReturnLine,
   replacementShortItems,
   replacementShortLine,
+  replacementSiteOptions,
   returnLineLabel,
   RETURN_REASON_MAX,
   RETURN_RELEASE_REASON_MAX,
@@ -42,6 +43,8 @@ import {
   type ExchangeCandidatesAnswer,
   type ExchangeReviewState,
   type RailStep,
+  type ReplacementDeliverySite,
+  type ReplacementFulfilment,
 } from '@stockpilot/core';
 
 /**
@@ -559,6 +562,72 @@ export function CancelReplacementDialog({
           <Button variant="destructive" onClick={() => onConfirm(reason.trim())} disabled={busy || !reason.trim()}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {RETURNS_COPY.cancelReplacement}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Where the replacement goes (desk check F6): shown when an approval, a
+ * change or a re-issue is refused replacement_site_not_available (the
+ * original delivery site is missing, closed or not served by the warehouse).
+ * Every active site the warehouse serves, then "Pickup instead"; the choice is
+ * sent again as the request's replacement and the database checks it.
+ */
+export function SiteChoiceDialog({
+  open,
+  onOpenChange,
+  busy,
+  sites,
+  onChoose,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  busy: boolean;
+  sites: readonly ReplacementDeliverySite[];
+  onChoose: (value: ReplacementFulfilment) => void;
+}) {
+  const options = replacementSiteOptions(sites);
+  const [key, setKey] = React.useState<string | null>(null);
+  const chosen = options.find((o) => o.key === key) ?? null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (busy) return;
+        onOpenChange(v);
+        if (!v) setKey(null);
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{RETURNS_COPY.siteChoiceTitle}</DialogTitle>
+          <DialogDescription>{RETURNS_COPY.siteChoiceHelp}</DialogDescription>
+        </DialogHeader>
+        <div role="radiogroup" aria-label={RETURNS_COPY.siteChoiceTitle} className="space-y-1.5">
+          {options.map((o) => (
+            <label key={o.key} className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="radio"
+                name="replacement-site"
+                value={o.key}
+                checked={key === o.key}
+                onChange={() => setKey(o.key)}
+                disabled={busy}
+              />
+              {o.label}
+            </label>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Back
+          </Button>
+          <Button onClick={() => chosen && onChoose(chosen.value)} disabled={busy || !chosen}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Send again
           </Button>
         </DialogFooter>
       </DialogContent>

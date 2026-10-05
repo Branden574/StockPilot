@@ -28,6 +28,7 @@ import {
   RETURN_RELEASE_REASON_MAX,
   RETURNS_COPY,
   releaseOutcomeLine,
+  replacementSiteOptions,
   restockOptionRows,
   returnLineLabel,
   type ExchangeReviewState,
@@ -223,6 +224,12 @@ function SheetContent({
   const lines = openLines(wb);
   const ex = exchangeOf(wb);
   const needsDestinations = mode === 'approve' || mode === 'process' || mode === 'destination';
+  // Desk check F6: after replacement_site_not_available the sheet asks where
+  // the replacement goes (the warehouse's sites, or pickup) and sends again.
+  const [sitePrompt, setSitePrompt] = React.useState(false);
+  const [siteKey, setSiteKey] = React.useState<string | null>(null);
+  const siteOptions = replacementSiteOptions(ex.deliverySites ?? []);
+  const siteValue = sitePrompt ? (siteOptions.find((o) => o.key === siteKey)?.value ?? null) : null;
   const reasonText = reason.trim();
   const reasonCount = Array.from(reasonText).length;
   // A reason is required to deny, to cancel an RMA whose exchange was
@@ -258,11 +265,13 @@ function SheetContent({
         ? exchangeProblems.join(' ')
         : !picksValid
           ? RETURNS_COPY.chooseReplacement
-          : !reasonValid
-            ? reasonRequired && reasonCount === 0
-              ? RETURNS_COPY.reasonRequired
-              : `At most ${reasonMax} characters.`
-            : null;
+          : sitePrompt && !siteValue
+            ? RETURNS_COPY.chooseSite
+            : !reasonValid
+              ? reasonRequired && reasonCount === 0
+                ? RETURNS_COPY.reasonRequired
+                : `At most ${reasonMax} characters.`
+              : null;
   const canSubmit = disabledReason === null && !submitting;
   const shortLines = shortSentences(shortDetail, (id) => exchangeItemLabel(wb, id));
   const loaderFor = (orderRequestLineId: string) => (q: string) => getReturnCandidates(wb.return.id, orderRequestLineId, q);
@@ -355,6 +364,7 @@ function SheetContent({
             lines: changeLines.map((x) => ({ exchangeLineId: x.id, itemId: pickFor(x).itemId, quantity: pickFor(x).quantity })),
             reason: reasonText,
             whenShort,
+            ...(siteValue ? { replacement: siteValue } : {}),
           });
           onDone({
             message: mode === 'issue_replacement' ? 'New replacement issued.' : 'Replacement changed.',
@@ -366,6 +376,7 @@ function SheetContent({
             const detail = (e as { details?: { detail?: unknown } }).details?.detail;
             setShortDetail(detail ?? []);
           }
+          if (returnErrorReason(e) === 'replacement_site_not_available') setSitePrompt(true);
           setError(describeReturnError(e));
           setBusy(false);
         }
@@ -382,13 +393,20 @@ function SheetContent({
             ? {
                 approve: {
                   ...approvalDecision(wb, choices),
-                  ...(exchange.length > 0 ? { exchange, replacement: { whenShort } } : {}),
+                  ...(exchange.length > 0 ? { exchange, replacement: { whenShort, ...(siteValue ?? {}) } } : {}),
                 },
                 receiveNow: itemIsHere,
               }
             : { process: changed.length > 0 ? { lines: changed } : null }),
         });
         const step = res.ran[0];
+        if (step && step.outcome === 'refused' && step.reason === 'replacement_site_not_available') {
+          // Desk check F6: ask where the replacement goes, then send again.
+          setSitePrompt(true);
+          setError(stepOutcomeMessage(step, res.workbench, itemIsHere));
+          setBusy(false);
+          return;
+        }
         if (step && step.outcome === 'refused' && step.reason === 'replacement_unavailable') {
           setShortDetail(step.detail ?? []);
           setError(stepOutcomeMessage(step, res.workbench, itemIsHere));
@@ -614,6 +632,28 @@ function SheetContent({
               </View>
             ) : null}
 
+            {sitePrompt ? (
+              <View style={{ gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel={RETURNS_COPY.siteChoiceTitle}>
+                <FieldLabel>{RETURNS_COPY.siteChoiceTitle}</FieldLabel>
+                <Body size={13} color={c.ink3}>
+                  {RETURNS_COPY.siteChoiceHelp}
+                </Body>
+                {siteOptions.map((o) => (
+                  <Pressable
+                    key={o.key}
+                    onPress={() => setSiteKey(o.key)}
+                    accessibilityRole="radio"
+                    accessibilityLabel={o.label}
+                    accessibilityState={{ checked: siteKey === o.key }}
+                    style={[styles.option, { borderColor: siteKey === o.key ? c.ink : c.hair, minHeight: MIN_TAP }]}
+                  >
+                    <Body size={14} color={c.ink}>
+                      {o.label}
+                    </Body>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             {mode === 'close_as_return_only' ? (
               <Body size={13.5} color={c.ink3}>
                 {RETURNS_COPY.closeAsReturnOnlyHelp}

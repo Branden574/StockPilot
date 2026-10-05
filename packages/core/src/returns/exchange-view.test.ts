@@ -9,6 +9,7 @@ import {
   exchangeReviewDecision,
   exchangeReviewProblem,
   parseExchangeCandidates,
+  replacementSiteOptions,
   type ExchangeCandidate,
   type RailStep,
 } from './exchange-view';
@@ -196,5 +197,19 @@ describe('the approval review (web and phone)', () => {
     });
     expect(addReplacementDecision('rl1', { itemId: null, quantity: 1 })).toBeNull();
     expect(addReplacementDecision('rl1', { itemId: 'l', quantity: 2 })).toEqual({ action: 'add', returnLineId: 'rl1', itemId: 'l', quantity: 2 });
+  });
+});
+
+// Desk check F6: the original delivery site is not one the warehouse serves.
+describe('replacementSiteOptions (web and phone)', () => {
+  it('lists every served site by name as "Deliver to …", then "Pickup instead", with the request value each sends', () => {
+    const options = replacementSiteOptions([
+      { id: 's2', name: 'West Campus' },
+      { id: 's1', name: 'East Campus' },
+    ]);
+    expect(options.map((o) => o.label)).toEqual(['Deliver to East Campus', 'Deliver to West Campus', 'Pickup instead']);
+    expect(options[0]!.value).toEqual({ fulfillmentType: 'delivery', deliveryCharterId: 's1' });
+    expect(options.at(-1)!.value).toEqual({ fulfillmentType: 'pickup', deliveryCharterId: null });
+    expect(replacementSiteOptions(null).map((o) => o.key)).toEqual(['pickup']);
   });
 });

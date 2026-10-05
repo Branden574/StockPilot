@@ -18,6 +18,7 @@ import type { ExchangeStatus } from './exchange-status';
 import {
   approveReplacementSentence,
   availableLabel,
+  deliverToSiteLabel,
   pickingWaitsSentence,
   RETURNS_COPY,
   shortLabel,
@@ -302,4 +303,40 @@ export function addReplacementDecision(
   if (!add.itemId) return null;
   const reason = (add.reason ?? '').trim();
   return { action: 'add', returnLineId, itemId: add.itemId, quantity: add.quantity, ...(reason ? { reason } : {}) };
+}
+
+// ── Where the replacement goes (desk check F6) ──────────────────────────────
+
+/** An active delivery site the original order's warehouse serves. */
+export interface ReplacementDeliverySite {
+  id: string;
+  name: string;
+}
+
+/** The replacement's fulfilment override sent with an approval, a change or a re-issue. */
+export interface ReplacementFulfilment {
+  fulfillmentType: 'pickup' | 'delivery';
+  deliveryCharterId: string | null;
+}
+
+export interface ReplacementSiteOption {
+  key: string;
+  label: string;
+  value: ReplacementFulfilment;
+}
+
+/**
+ * The choices after replacement_site_not_available (the original delivery
+ * site is missing, closed or not served by the warehouse): every active site
+ * the warehouse serves, by name, then "Pickup instead". Web and phone show
+ * these in this order and send the chosen value as the request's
+ * `replacement` (the database checks the pair again).
+ */
+export function replacementSiteOptions(sites: readonly ReplacementDeliverySite[] | null | undefined): ReplacementSiteOption[] {
+  const out: ReplacementSiteOption[] = [...(sites ?? [])]
+    .filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string')
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .map((s) => ({ key: s.id, label: deliverToSiteLabel(s.name), value: { fulfillmentType: 'delivery', deliveryCharterId: s.id } }));
+  out.push({ key: 'pickup', label: RETURNS_COPY.pickupInstead, value: { fulfillmentType: 'pickup', deliveryCharterId: null } });
+  return out;
 }

@@ -92,6 +92,17 @@ describe('online only', () => {
     expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
   });
 
+  // Desk check F6: a refused delivery site asks where the replacement goes
+  // (the warehouse's sites, or pickup) and sends the same request again.
+  it('a refused delivery site asks where the replacement goes and sends the choice', () => {
+    expect(sheet).toContain("step.reason === 'replacement_site_not_available'");
+    expect(sheet).toContain("if (returnErrorReason(e) === 'replacement_site_not_available') setSitePrompt(true);");
+    expect(sheet).toContain('const siteOptions = replacementSiteOptions(ex.deliverySites ?? []);');
+    expect(sheet).toContain('replacement: { whenShort, ...(siteValue ?? {}) }');
+    expect(sheet).toContain('...(siteValue ? { replacement: siteValue } : {}),');
+    expect(sheet).toMatch(/sitePrompt && !siteValue\s*\?\s*RETURNS_COPY\.chooseSite/);
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {

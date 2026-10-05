@@ -31,6 +31,7 @@ import {
   buildExchangeView,
   EXCHANGE_LINES_EMBED,
   exchangeItemIds,
+  readDeliverySites,
   readExchangeTier2,
   readFreeStock,
   readReplacementDetail,
@@ -482,7 +483,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   const allItemIds = [...new Set([...itemIds, ...exchangeIds])];
 
   // Tier 2, in parallel.
-  const [optionsRes, decisionsRes, items, movementsRes, warehouseRes, writeOk, exchangeTier2, freeStock] = await Promise.all([
+  const [optionsRes, decisionsRes, items, movementsRes, warehouseRes, writeOk, exchangeTier2, freeStock, deliverySites] = await Promise.all([
     ctx.supabase.rpc('return_restock_options', { p_return_id: id }),
     ctx.supabase
       .from('return_decisions')
@@ -511,6 +512,8 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     canWriteWarehouse(ctx, warehouseId),
     readExchangeTier2(ctx, id, rawExchange.length > 0),
     readFreeStock(ctx, exchangeIds),
+    // Desk check F6: where a replacement may go when its site is refused (an exchange only).
+    rawExchange.length > 0 ? readDeliverySites(ctx, warehouseId) : Promise.resolve([]),
   ]);
 
   let options: ReturnType<typeof parseRestockOptions> | null = null;
@@ -739,6 +742,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       createdAt: d.createdAt,
       orderRequestId: d.orderRequestId,
     })),
+    deliverySites,
   });
 
   const warehouse = (warehouseRes as { data: { name?: string } | null }).data;

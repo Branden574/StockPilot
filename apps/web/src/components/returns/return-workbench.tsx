@@ -10,6 +10,7 @@ import {
   AddReplacement,
   CancelReplacementDialog,
   CloseAsReturnOnlyDialog,
+  SiteChoiceDialog,
   ChangeReplacementDialog,
   ReleaseEarlyDialog,
   ReplacementOrderSection,
@@ -78,6 +79,7 @@ import {
   sameChoice,
   unreadDestinationChoice,
   whenProcessedSentence,
+  type ReplacementFulfilment,
   type RestockChoice,
   type ReturnAction,
 } from '@stockpilot/core';
@@ -96,6 +98,13 @@ export interface WorkbenchReturnLabel {
 
 type Mode = 'idle' | 'change_destination';
 
+/** A replacement change or re-issue as the change dialog sends it. */
+type ChangeBody = {
+  lines: Array<{ exchangeLineId: string; itemId: string | null; quantity: number }>;
+  reason: string;
+  whenShort: 'refuse' | 'backorder';
+};
+
 /** A workbench payload from before RX-2 (or a test) has no exchange half. */
 const NO_EXCHANGE: ReturnWorkbenchExchange = {
   kind: 'return',
@@ -110,6 +119,7 @@ const NO_EXCHANGE: ReturnWorkbenchExchange = {
   rail: [],
   hasApprovedExchange: false,
   createEnabled: false,
+  deliverySites: [],
 };
 
 /**
@@ -183,6 +193,13 @@ export function ReturnWorkbench({
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [cancelReplacementOpen, setCancelReplacementOpen] = React.useState(false);
   const [returnOnlyOpen, setReturnOnlyOpen] = React.useState(false);
+  // Desk check F6: an approval, change or re-issue refused because the
+  // delivery site is not one the warehouse serves asks where it goes instead.
+  const [siteChoiceFor, setSiteChoiceFor] = React.useState<
+    | { kind: 'approve'; whenShort: 'refuse' | 'backorder' }
+    | { kind: 'change'; body: ChangeBody }
+    | null
+  >(null);
   const [changeMode, setChangeMode] = React.useState<'change' | 'issue' | null>(null);
   const [changeShort, setChangeShort] = React.useState<unknown>(null);
   const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? { kind: 'as_requested' };
@@ -244,7 +261,11 @@ export function ReturnWorkbench({
     setChoices((prev) => ({ ...prev, [lineId]: next }));
   }
 
-  async function runSteps(steps: Array<'approve' | 'receive' | 'process'>, extra: Record<string, unknown>, key: string) {
+  async function runSteps(
+    steps: Array<'approve' | 'receive' | 'process'>,
+    extra: Record<string, unknown>,
+    key: string,
+  ): Promise<Array<{ outcome: string; reason?: string | null }> | null> {
     setBusy(key);
     const res = await runReturnStepsAction({
       id: r.id,
@@ -254,7 +275,7 @@ export function ReturnWorkbench({
     if (!res.ok) {
       toast.error(res.error.message);
       router.refresh();
-      return;
+      return null;
     }
     const next = res.data.workbench as Workbench;
     adopt(next);
@@ -289,21 +310,27 @@ export function ReturnWorkbench({
       }
     }
     router.refresh();
+    return res.data.ran;
   }
 
-  async function approve(whenShort: 'refuse' | 'backorder' = 'refuse') {
+  async function approve(whenShort: 'refuse' | 'backorder' = 'refuse', site: ReplacementFulfilment | null = null) {
     if (!allOffered || exchangeProblems.length > 0) return;
     const lines = unappliedLines.map((l) => choiceToDecision(l.id, choiceFor(l)));
     const exchange = exchangeDecisions();
     setShortDetail(null);
-    await runSteps(
+    const ran = await runSteps(
       ['approve'],
       {
-        approve: { lines, ...(exchange.length > 0 ? { exchange, replacement: { whenShort } } : {}) },
+        approve: { lines, ...(exchange.length > 0 ? { exchange, replacement: { whenShort, ...(site ?? {}) } } : {}) },
         receiveNow: itemIsHere,
       },
       'approve',
     );
+    // Desk check F6: the delivery site is not one the warehouse serves: ask
+    // where the replacement goes, then send the same approval again with it.
+    if (ran?.some((s) => s.outcome === 'refused' && s.reason === 'replacement_site_not_available')) {
+      setSiteChoiceFor({ kind: 'approve', whenShort });
+    }
   }
 
   // ── RX-2: the replacement actions ──────────────────────────────────────
@@ -352,21 +379,29 @@ export function ReturnWorkbench({
     if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly)) setReturnOnlyOpen(false);
   }
 
-  async function changeReplacement(body: {
-    lines: Array<{ exchangeLineId: string; itemId: string | null; quantity: number }>;
-    reason: string;
-    whenShort: 'refuse' | 'backorder';
-  }) {
+  async function changeReplacement(body: ChangeBody, site: ReplacementFulfilment | null = null) {
     setBusy('change_replacement');
     setChangeShort(null);
     const res = await changeReturnReplacementAction({
       id: r.id,
-      body: { expectedRevision: wb.revision, lines: body.lines, reason: body.reason, whenShort: body.whenShort },
+      body: {
+        expectedRevision: wb.revision,
+        lines: body.lines,
+        reason: body.reason,
+        whenShort: body.whenShort,
+        ...(site ? { replacement: site } : {}),
+      },
     });
     setBusy(null);
     if (!res.ok && res.error.details?.reason === 'replacement_unavailable') {
       setChangeShort(res.error.details.detail ?? []);
       toast.error(res.error.message);
+      return;
+    }
+    if (!res.ok && res.error.details?.reason === 'replacement_site_not_available') {
+      // Desk check F6: ask where it goes, then send the same change again with it.
+      toast.error(res.error.message);
+      setSiteChoiceFor({ kind: 'change', body });
       return;
     }
     if (afterReplacement(res, changeMode === 'issue' ? 'New replacement issued.' : 'Replacement changed.')) setChangeMode(null);
@@ -925,6 +960,21 @@ export function ReturnWorkbench({
             drawn={ex.replacement?.class === 'drawn'}
             inTransit={ex.replacement?.status === 'in_transit'}
             onConfirm={cancelReplacement}
+          />
+          <SiteChoiceDialog
+            key={siteChoiceFor ? siteChoiceFor.kind : 'closed'}
+            open={siteChoiceFor !== null}
+            onOpenChange={(v) => {
+              if (!v) setSiteChoiceFor(null);
+            }}
+            busy={busy === 'approve' || busy === 'change_replacement'}
+            sites={ex.deliverySites ?? []}
+            onChoose={(site) => {
+              const pending = siteChoiceFor;
+              setSiteChoiceFor(null);
+              if (pending?.kind === 'approve') void approve(pending.whenShort, site);
+              else if (pending?.kind === 'change') void changeReplacement(pending.body, site);
+            }}
           />
           <CloseAsReturnOnlyDialog
             open={returnOnlyOpen}
