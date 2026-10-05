@@ -3,13 +3,15 @@
  * database refusal to the service error, the HTTP status and the words, for
  * the web services, the API routes and the phone.
  *
- * MAP BY HINT, NEVER BY MESSAGE TEXT (pattern 28). Every RMA function raises
- * with a stable `hint`. Two older paths raise a bare token as the whole
- * message with no hint: the frozen ledger body (`forbidden`,
- * `invalid_status_transition`, `insufficient_stock`, `return_exceeds_fulfilled`,
- * `return_not_found`) and the 0153 cap trigger (`return_exceeds_fulfilled`).
- * For those, and only when no hint is present, a message that IS exactly one
- * lower-case token is read as the key. A sentence never is.
+ * MAP BY HINT, NEVER BY MESSAGE TEXT (pattern 28). Every refusal the RMA
+ * functions answer carries a stable `hint`, including the two frozen paths
+ * that raise a bare token: close_return raises the restated ledger body's
+ * refusals again with their hint (its bare `forbidden` as `returns_manage`),
+ * the create raises the 0153 cap trigger's race-time
+ * `return_exceeds_fulfilled` again with its hint, and the rack leg answers a
+ * location the closer may not stock as `restock_location_forbidden` before
+ * the holdings writer's bare `forbidden` (desk check F7). A refusal with no
+ * known hint is an internal error, whatever its message says.
  *
  * Specific before general: a hint wins over the SQLSTATE; 55P03 and 57014
  * (lock wait, statement timeout) map to a retryable "Busy" only when no hint
@@ -55,6 +57,7 @@ export const RETURN_ERROR_WORDS = {
   replacementUnavailable: 'The replacement is not available in the quantity needed.',
   restockUnavailable: 'Original rack is no longer available.',
   restockNotOffered: "That rack isn't one this item was picked from.",
+  restockForbidden: "That rack is in a warehouse you can't stock. Leave the item in Staging or ask a manager.",
   restockStale: 'The original locations changed. Choose the destination again.',
   exchangeItemNotEligible: "That item can't be used as a replacement.",
   exchangeQuantity: "A replacement can't be more than the quantity returned.",
@@ -91,8 +94,6 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   orders_approve: { code: 'forbidden', status: 403, message: W.ordersApprove },
   warehouse_write: { code: 'forbidden', status: 403, message: W.warehouseWrite },
   warehouse_read: { code: 'forbidden', status: 403, message: W.warehouseRead },
-  // The frozen ledger body's bare permission refusal.
-  forbidden: { code: 'forbidden', status: 403, message: W.returnsManage },
   module_disabled: { code: 'module_disabled', status: 403, message: W.moduleDisabled },
   invalid_status_transition: { code: 'conflict', status: 409, message: W.invalidStatus },
   return_changed: { code: 'conflict', status: 409, message: W.returnChanged },
@@ -102,6 +103,7 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   replacement_unavailable: { code: 'validation_error', status: 400, message: W.replacementUnavailable },
   restock_location_unavailable: { code: 'validation_error', status: 400, message: W.restockUnavailable },
   restock_location_not_offered: { code: 'validation_error', status: 400, message: W.restockNotOffered },
+  restock_location_forbidden: { code: 'forbidden', status: 403, message: W.restockForbidden },
   restock_plan_stale: { code: 'validation_error', status: 400, message: W.restockStale },
   restock_plan_mismatch: { code: 'validation_error', status: 400, message: W.restockStale },
   exchange_item_not_eligible: { code: 'validation_error', status: 400, message: W.exchangeItemNotEligible },
@@ -149,17 +151,11 @@ export interface MappedReturnError extends ReturnErrorEntry {
   detail: Record<string, unknown> | null;
 }
 
-const TOKEN = /^[a-z][a-z0-9_]*$/;
-
-/** The key a refusal is mapped by: its hint, else a bare-token message. */
+/** The key a refusal is mapped by: its hint, and nothing else. */
 export function returnErrorKey(err: ReturnDbError | null | undefined): string | null {
   if (!err) return null;
   const hint = (err.hint ?? '').trim();
   if (hint && Object.prototype.hasOwnProperty.call(RETURN_ERROR_TABLE, hint)) return hint;
-  if (!hint) {
-    const msg = (err.message ?? '').trim();
-    if (TOKEN.test(msg) && Object.prototype.hasOwnProperty.call(RETURN_ERROR_TABLE, msg)) return msg;
-  }
   return null;
 }
 
@@ -195,6 +191,7 @@ export const RESTOCK_PROBLEM_WORDS: Readonly<Record<string, string>> = {
   item_deleted: '(the item was deleted)',
   missing: '(no longer exists)',
   remaining: '(already holds every unit returned from this order)',
+  location_write: "(in a warehouse you can't stock)",
 };
 
 export function restockProblemWords(rule: string | null | undefined): string | null {

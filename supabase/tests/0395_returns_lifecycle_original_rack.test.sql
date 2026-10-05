@@ -45,7 +45,8 @@
 --     mismatch; Staging, Unplaced and a Site never offered).
 -- I.  Acceptance 40 (rack archived after approval, then moved, no longer a
 --     placement, warehouse inactive, item deleted): the close raises, nothing
---     moves, a re-plan to Staging closes.
+--     moves, a re-plan to Staging closes; every refusal of the close carries
+--     a hint, and a rack the closer may not stock is its own refusal (F7).
 -- J.  Several sources: full remainder, partial with a manager choice capped
 --     at its remaining, rule 9 (two pending RMAs, room for one), a forged leg
 --     sum.
@@ -77,6 +78,9 @@
 --   M18 the API guard skips the insert's warehouse check (F2)        -> K10
 --   M19 the API guard skips the RMA-order organization tie (F3)      -> K11
 --   M20 the line guard skips the line-order tie (F3)                 -> K11
+--   M21 close_return passes the body's bare tokens through (F7)      -> I6
+--   M22 the rack leg leaves the location gate to the bare writer (F7) -> I7
+--   M23 the create passes the cap trigger's bare token through (F7)  -> race 5b
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -87,7 +91,7 @@
 
 begin;
 
-select plan(108);
+select plan(110);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -1221,6 +1225,32 @@ select is(
                   format('update public.inventory_items set deleted_at = now() where id = %L', :itV)) as j) x),
   'received,moved_warehouse,not_a_placement,warehouse_inactive,item_deleted',
   'I5: a rack moved to another warehouse, turned into a Site, in a closed warehouse, or a deleted item: each refuses the close with its rule');
+-- Every refusal the close answers carries a hint (desk check F7): the
+-- restated body's bare tokens are raised again by close_return; the frozen
+-- wrapper an old tab calls keeps today's bare token.
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rN'),
+     format('update public.order_request_lines set returned_quantity = quantity_fulfilled where id = %L', :lX1)))
+  || ',' || pg_temp.attempt('authenticated', :mgr, format('select public.process_return_disposition(%L)', :'rN'),
+     format('update public.order_request_lines set returned_quantity = quantity_fulfilled where id = %L', :lX1))
+  || ',' || (select status from public.returns where id = :'rN'),
+  'P0001:return_exceeds_fulfilled,P0001:-:return_exceeds_fulfilled,received',
+  'I6: a close the restated body refuses (a forged budget) answers with the hint the app maps; the frozen wrapper keeps its bare token; nothing changed (F7)');
+-- oW's pick drew from 51-B in the second warehouse. stfRm writes only the
+-- main warehouse (the order's): it may manage the RMA, not stock that rack.
+select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW,
+          pg_temp.one(:lW, 1)::text))->>'returnId') as "rW" \gset
+select id as "rWl" from public.return_lines where return_id = :'rW' \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rW',
+          pg_temp.dec(:'rWl', 'restock', 'original')::text))::text as "jI7a" \gset
+select pg_temp.try_rpc('authenticated', :stfRm, format('select public.close_return(%L)', :'rW'))::text as "jI7b" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rW'))::text as "jI7c" \gset
+select is(
+  ((:'jI7a'::jsonb)->>'status') || '|' || pg_temp.err(:'jI7b'::jsonb) || ':' || (((:'jI7b'::jsonb)->>'detail')::jsonb->>'rule')
+  || ':' || ((((:'jI7b'::jsonb)->>'detail')::jsonb->>'locationId') = :rB1::text)::text
+  || '|' || ((:'jI7c'::jsonb)->>'status') || '|' || pg_temp.held(:itW, :rB1)::text || '|' || pg_temp.balanced(:itW)::text,
+  'received|42501:restock_location_forbidden:location_write:true|closed|3|true',
+  'I7: a closer who may not stock the original rack''s warehouse is refused restock_location_forbidden (never "no permission to manage returns"); a manager''s close puts the unit back on 51-B (F7)');
 
 -- ══ J. Several sources ════════════════════════════════════════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,

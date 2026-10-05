@@ -521,6 +521,17 @@ begin
     if v_leg.quantity <= 0 then
       continue;
     end if;
+    -- apply_holding_delta below refuses a signed-in caller below manager who
+    -- may not write this location, with a bare token. The same test, first,
+    -- with a hint the app maps (desk check F7): the rack sits in a warehouse
+    -- the closer may not stock, which is not a missing permission to manage
+    -- returns.
+    if auth.uid() is not null and not public.has_org_role(v_org, 'manager')
+       and not public.caller_can_write_location(v_leg.location_id) then
+      raise exception 'restock_location_forbidden'
+        using errcode = '42501', hint = 'restock_location_forbidden',
+              detail = jsonb_build_object('rule', 'location_write', 'locationId', v_leg.location_id)::text;
+    end if;
 
     select quantity_on_hand into v_prev from public.inventory_items where id = p_item_id;
     v_new := v_prev + v_leg.quantity;
@@ -914,6 +925,9 @@ declare
   v_cname   text;
   v_line    record;
   v_pending numeric(14,4);
+  v_msg     text;
+  v_hint    text;
+  v_detail  text;
   l         jsonb;
 begin
   select o.status into v_status
@@ -977,11 +991,24 @@ begin
     end;
   end loop;
 
-  insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
-  select v_id, p_org, orl.id, orl.item_id, (x->>'quantity')::numeric, x->>'disposition'
-    from jsonb_array_elements(p_canon->'lines') as x
-    join public.order_request_lines orl on orl.id = (x->>'orderRequestLineId')::uuid
-   order by orl.item_id, orl.id;
+  begin
+    insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
+    select v_id, p_org, orl.id, orl.item_id, (x->>'quantity')::numeric, x->>'disposition'
+      from jsonb_array_elements(p_canon->'lines') as x
+      join public.order_request_lines orl on orl.id = (x->>'orderRequestLineId')::uuid
+     order by orl.item_id, orl.id;
+  exception when raise_exception then
+    -- 0153's cap trigger (frozen) raises a bare token. It fires here only when
+    -- a concurrent create took the budget after the check above (its source
+    -- line lock serialises the two); answer with the hint the app maps (desk
+    -- check F7). Anything else propagates unchanged.
+    get stacked diagnostics v_msg = message_text, v_hint = pg_exception_hint, v_detail = pg_exception_detail;
+    if coalesce(v_hint, '') = '' and v_msg = 'return_exceeds_fulfilled' then
+      raise exception 'return_exceeds_fulfilled'
+        using errcode = 'P0001', hint = 'return_exceeds_fulfilled', detail = coalesce(v_detail, '');
+    end if;
+    raise;
+  end;
 
   perform public._return_exchange_create(v_id, p_order_id, p_canon, p_actor);
 
@@ -1709,6 +1736,10 @@ declare
   v_legs  jsonb;
   v_lines jsonb;
   v_ret   public.returns;
+  v_state text;
+  v_msg   text;
+  v_hint  text;
+  v_detail text;
 begin
   if v_user is null then
     raise exception 'unauthenticated' using errcode = '42501', hint = 'unauthenticated';
@@ -1758,7 +1789,25 @@ begin
   -- The frozen INVOKER wrapper raises the ledger flag and calls the restated
   -- body: on hand, holdings, movements, the budget, the latch and the header
   -- close commit together, or nothing does (and the RMA stays received).
-  v_ret := public.process_return_disposition(p_return_id);
+  -- The body's own refusals are 0373's text, a bare token with no hint; the
+  -- ones the app maps are raised again here with their hint, the same
+  -- SQLSTATE, message and detail (desk check F7: map by hint only). A bare
+  -- 'forbidden' there is the body's returns:manage line (the rack leg answers
+  -- restock_location_forbidden itself). Everything else propagates as is.
+  begin
+    v_ret := public.process_return_disposition(p_return_id);
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text,
+                            v_hint = pg_exception_hint, v_detail = pg_exception_detail;
+    if coalesce(v_hint, '') = '' and v_msg in ('unauthenticated', 'return_not_found', 'forbidden',
+                                               'invalid_status_transition', 'return_exceeds_fulfilled',
+                                               'insufficient_stock') then
+      raise exception using message = v_msg, errcode = v_state,
+        hint = case when v_msg = 'forbidden' then 'returns_manage' else v_msg end,
+        detail = coalesce(v_detail, '');
+    end if;
+    raise;
+  end;
 
   insert into public.return_decisions (organization_id, return_id, kind, channel, actor_user_id, actor_kind)
   values (v_org, p_return_id, 'closed', 'staff', v_user, 'staff');
@@ -2081,7 +2130,7 @@ comment on function ledger.return_line_plans_original(uuid) is
 comment on function ledger.return_line_restock_legs(uuid) is
   'RX-1: the live original-rack plan re-derived now: single_source gives one leg (the whole line), full_remainder one leg per location (what is still out there), source one leg at the chosen proven location; anything else raises P0001 restock_plan_stale. Rows carry the remaining quantity and validity for the caller to enforce. SECURITY INVOKER, no API EXECUTE.';
 comment on function ledger.return_restock_original(uuid, uuid, uuid, numeric, uuid) is
-  'RX-1: the rack leg of ledger.process_return_disposition. Locks the planned locations FOR SHARE in id order, re-derives the legs under those locks, refuses an invalid or over-remaining leg (P0001 restock_location_unavailable, detail {rule, locationId}), then per leg: on hand +q, ledger.apply_holding_delta(item, location, +q), one return movement with to_location_id and the RMA reference. The legs must sum to the line (P0001 restock_plan_mismatch). SECURITY INVOKER, no API EXECUTE; runs inside the wrapper''s ledger transaction.';
+  'RX-1: the rack leg of ledger.process_return_disposition. Locks the planned locations FOR SHARE in id order, re-derives the legs under those locks, refuses an invalid or over-remaining leg (P0001 restock_location_unavailable, detail {rule, locationId}) and a leg on a location a signed-in caller below manager may not write (42501 restock_location_forbidden, detail {rule location_write, locationId}: apply_holding_delta''s own gate, answered with a hint), then per leg: on hand +q, ledger.apply_holding_delta(item, location, +q), one return movement with to_location_id and the RMA reference. The legs must sum to the line (P0001 restock_plan_mismatch). SECURITY INVOKER, no API EXECUTE; runs inside the wrapper''s ledger transaction.';
 comment on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) is
   'RX-1 hook stub: refuses any line carrying an exchange (P0001 exchange_not_available). RX-2 replaces the body (exchange lines). SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_approve(uuid, jsonb, uuid, integer) is
@@ -2111,7 +2160,7 @@ comment on function public.cancel_return(uuid, integer, text) is
 comment on function public.plan_return_dispositions(uuid, jsonb) is
   'RX-1: while approved or received, appends a disposition plan for each changed unapplied line (an identical plan appends nothing) and keeps return_lines.disposition equal. Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.close_return(uuid, jsonb, bigint) is
-  'RX-1: received to closed in one transaction: optional changed plans (C-9), then the frozen wrapper public.process_return_disposition (Staging, original rack or scrap per line, revalidated under lock), then the closed decision. Already closed answers changed false with who and when; a plan changed since the screen loaded gives P0001 return_plan_changed; a failed revalidation raises and nothing moves. Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: received to closed in one transaction: optional changed plans (C-9), then the frozen wrapper public.process_return_disposition (Staging, original rack or scrap per line, revalidated under lock), then the closed decision. Already closed answers changed false with who and when; a plan changed since the screen loaded gives P0001 return_plan_changed; a failed revalidation raises and nothing moves; the restated body''s bare refusals are raised again with their hint (returns_manage for its forbidden). Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.return_restock_options(uuid) is
   'RX-1: the destination read for the workbench: per line the case, sources, validity now, offers and live plan, in one call. Gates: signed in, member (P0002 return_not_found), returns:read or returns:manage (42501 returns_read), read access to the order''s warehouse (42501 warehouse_read). STABLE, SECURITY DEFINER, EXECUTE to authenticated only; never called from a requester route.';
 comment on function public.tg_returns_api_guard() is

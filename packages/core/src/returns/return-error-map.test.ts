@@ -35,15 +35,35 @@ describe('the returns error map', () => {
     expect(mapReturnError({ code: '42501', hint: 'warehouse_write', message: 'forbidden' }).reason).toBe('warehouse_write');
   });
 
-  it('reads a bare-token message only when there is no hint (the frozen ledger body and the cap trigger)', () => {
-    expect(returnErrorKey({ code: 'P0001', message: 'return_exceeds_fulfilled' })).toBe('return_exceeds_fulfilled');
-    expect(returnErrorKey({ code: '42501', message: 'forbidden' })).toBe('forbidden');
-    expect(returnErrorKey({ code: 'P0001', message: 'invalid_status_transition' })).toBe('invalid_status_transition');
-    // A sentence is never mapped by its words, even when it contains a hint.
+  it('never maps by message text: a bare token with no hint is an internal error (desk check F7)', () => {
+    // The frozen paths' bare tokens reach the app only with a hint now
+    // (close_return and the create raise them again); without one, nothing
+    // is guessed from the words.
+    expect(returnErrorKey({ code: 'P0001', message: 'return_exceeds_fulfilled' })).toBeNull();
+    expect(returnErrorKey({ code: '42501', message: 'forbidden' })).toBeNull();
+    expect(returnErrorKey({ code: 'P0001', message: 'invalid_status_transition' })).toBeNull();
+    expect(mapReturnError({ code: '42501', message: 'forbidden' })).toMatchObject({ reason: 'internal_error', status: 500 });
     expect(returnErrorKey({ message: 'new row violates return_exceeds_fulfilled' })).toBeNull();
-    expect(returnErrorKey({ message: 'Return_Changed' })).toBeNull();
-    // An unknown hint does not fall back to the message.
     expect(returnErrorKey({ hint: 'something_new', message: 'return_changed' })).toBeNull();
+    // The re-raised forms map by their hint.
+    expect(returnErrorKey({ code: '42501', hint: 'returns_manage', message: 'forbidden' })).toBe('returns_manage');
+    expect(returnErrorKey({ code: 'P0001', hint: 'return_exceeds_fulfilled', message: 'return_exceeds_fulfilled' })).toBe('return_exceeds_fulfilled');
+  });
+
+  it('a rack the closer may not stock is its own refusal, never "no permission to manage returns" (desk check F7)', () => {
+    const m = mapReturnError({
+      code: '42501',
+      hint: 'restock_location_forbidden',
+      message: 'restock_location_forbidden',
+      details: '{"rule": "location_write", "locationId": "00000000-0000-4000-8000-000000000001"}',
+    });
+    expect(m).toMatchObject({ reason: 'restock_location_forbidden', code: 'forbidden', status: 403 });
+    expect(m.message).toBe("That rack is in a warehouse you can't stock. Leave the item in Staging or ask a manager.");
+    expect(m.message).not.toBe(mapReturnError({ hint: 'returns_manage' }).message);
+    expect(m.detail).toEqual({ rule: 'location_write', locationId: '00000000-0000-4000-8000-000000000001' });
+    expect(restockProblemWords('location_write')).toBe("(in a warehouse you can't stock)");
+    // The bare permission token is no longer a key of its own.
+    expect(Object.prototype.hasOwnProperty.call(RETURN_ERROR_TABLE, 'forbidden')).toBe(false);
   });
 
   it('answers busy for a lock wait or a statement timeout with no known hint', () => {

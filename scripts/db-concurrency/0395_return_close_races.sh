@@ -29,7 +29,9 @@
 #   5. Create replay. 5a: the same key from two sessions: B waits on the key,
 #      then replays A's RMA (one RMA). 5b: two different keys, each for the
 #      whole line: the fulfilled cap's order-line lock serialises them and
-#      the second is refused return_exceeds_fulfilled (one RMA).
+#      the second is refused return_exceeds_fulfilled, WITH its hint (the
+#      create raises the frozen cap trigger's bare token again; desk check
+#      F7), one RMA.
 #   6. A destination change against the close: A plans Staging and holds; B's
 #      close with the plan sequence it read before waits, then is refused
 #      return_plan_changed and moves nothing.
@@ -388,7 +390,7 @@ echo "== 5b. two keys, each for the whole line"
 M0="$(rmas)"
 race createcap "$MGR" "$(create_sql "$(key 51)" "$L5B")" commit "$MGR2" "$(create_sql "$(key 52)" "$L5B")"
 check "5b: A created" "$(ans createcap A | jget changed)" "true"
-check "5b: B is refused return_exceeds_fulfilled" "$(grep -c 'ERROR:  P0001' "$TMP/createcap.B.out")/$(grep -c 'return_exceeds_fulfilled' "$TMP/createcap.B.out")" "1/1"
+check "5b: B is refused return_exceeds_fulfilled, with its hint" "$(refused createcap B P0001 return_exceeds_fulfilled)" "1/1"
 waited createcap "5b"
 check "5b: exactly one RMA" "$(( $(rmas) - M0 ))" "1"
 

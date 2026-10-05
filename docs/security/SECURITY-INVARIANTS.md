@@ -647,8 +647,13 @@ actually fire.
     destination under lock just before it moves stock (archived, no longer
     a placement, moved warehouse, inactive warehouse, deleted item) and
     refuses with `restock_location_unavailable` rather than falling back
-    silently. The restated `ledger.process_return_disposition` keeps today's
-    net-zero scrap and holdings = on hand.
+    silently; a rack in a warehouse the closer may not stock is refused
+    `restock_location_forbidden` (the holdings writer's own gate, answered
+    with a hint). The restated `ledger.process_return_disposition` keeps
+    today's net-zero scrap and holdings = on hand; its bare refusals reach
+    the app only with a hint (`close_return` raises them again, and the
+    create does the same for the cap trigger's race-time
+    `return_exceeds_fulfilled`), so nothing is mapped by its words.
 - **Why it matters**: before 0395 any member with an admin or manager role
   could PATCH an RMA straight to `closed` without the close's stock step,
   forge another person's approval, flip `return_lines.applied`, or insert an
