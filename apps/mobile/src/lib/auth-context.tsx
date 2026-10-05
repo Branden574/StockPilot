@@ -32,6 +32,7 @@ import {
   normalizeIdentityEmail,
   rememberIdentity,
 } from './remembered-identity';
+import { removeOrderCachesAtRest } from './order-storefront/caches-at-rest';
 import { signOutOrderSubmissions } from './order-storefront/services';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
@@ -260,7 +261,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // made /(auth)/welcome unreachable at launch for every first-run user.
         // isInvoluntarySessionEnd draws that line; the branch below still
         // resets the lock/MFA UI for any null-session event.
-        if (isInvoluntarySessionEnd(event, Boolean(s?.user))) markSessionEnded();
+        // The session was taken away, so the deliberate sign-out's storage
+        // cleanup never ran: the order catalog and the photo map (signed
+        // URLs) are removed here; the workspace, prefs and carts stay (L137).
+        const involuntary = isInvoluntarySessionEnd(event, Boolean(s?.user));
+        if (involuntary) markSessionEnded();
+        if (involuntary) void removeOrderCachesAtRest(AsyncStorage);
         // Deliberately does NOT clear the account gate. The eviction's own
         // local sign-out fires SIGNED_OUT, so clearing it here would unmount
         // the disabled screen the instant it appeared and hand the user back
