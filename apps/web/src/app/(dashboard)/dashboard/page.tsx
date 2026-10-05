@@ -236,6 +236,12 @@ async function DashboardBody({
   warehouseFilter: string | null;
 }) {
   const isManagerPlus = isManagerOrAbove(ctx.role);
+  // The "waiting for signature" card links to the orders list filtered to
+  // those orders, a list only someone who approves orders gets
+  // (orders/page.tsx canApprove); anyone else lands on their own requests,
+  // unfiltered, under an org-wide count (desk check F10). So only an approver
+  // sees the card, and only for them is the count read.
+  const canApproveOrders = can(ctx, 'orders:approve');
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
   // queries total, the second waiting on the first to complete). With
@@ -309,9 +315,9 @@ async function DashboardBody({
     isManagerPlus
       ? OrderRequestsService.forCurrentUser().then((svc) => svc.pendingCount())
       : Promise.resolve(0),
-    OrderRequestsService.forCurrentUser().then((svc) =>
-      svc.awaitingSignatureCount(),
-    ),
+    canApproveOrders
+      ? OrderRequestsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount())
+      : Promise.resolve(0),
     supabase
       .from('organization_members')
       .select('id', { count: 'exact', head: true })

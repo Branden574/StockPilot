@@ -16,6 +16,10 @@ const calls = vi.hoisted(() => ({
   /** Every Supabase table read: [table, ...chain of [method, ...args]]. */
   reads: [] as Array<{ table: string; chain: Call[] }>,
   profile: { onboarding_dismissed_at: null as string | null },
+  /** The viewer's role and effective permissions (requireOrgContext). */
+  viewer: { role: 'owner', permissions: new Set<string>() },
+  /** Orders staged for pickup or in transit (awaitingSignatureCount). */
+  awaitingSignature: vi.fn(async () => 0),
 }));
 
 // ── The fan-out's services. `summary` is held open by the timing tests. ──
@@ -50,7 +54,7 @@ vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: {
     forCurrentUser: async () => ({
       pendingCount: async () => 0,
-      awaitingSignatureCount: async () => 0,
+      awaitingSignatureCount: () => calls.awaitingSignature(),
     }),
   },
 }));
@@ -70,8 +74,8 @@ vi.mock('@/lib/auth/session', () => ({
     userId: 'u1',
     email: 'a@b.com',
     fullName: 'Ann Example',
-    role: 'owner',
-    permissions: new Set<string>(),
+    role: calls.viewer.role,
+    permissions: calls.viewer.permissions,
   }),
 }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
@@ -170,6 +174,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   calls.reads.length = 0;
   calls.profile.onboarding_dismissed_at = null;
+  calls.viewer = { role: 'owner', permissions: new Set<string>() };
+  calls.awaitingSignature.mockResolvedValue(0);
   summaryGate = null;
   lowStockRows = [{ id: 'i1', quantity_on_hand: 2 }];
 });
@@ -249,5 +255,48 @@ describe('/dashboard data body: one wave', () => {
     ).done;
     // warehouse yes, team (2 members) yes, item yes, MFA no: not complete.
     expect(widgetProps.mock.calls[0]![0]).toMatchObject({ checklistComplete: false });
+  });
+});
+
+// Desk check F10, raised again in review (2026-10-05): the "waiting for
+// signature" card counted the whole organization's staged and in-transit
+// orders for EVERY member, and its link lands on the filtered list only for
+// someone who approves orders. A staff requester saw "2 orders waiting for
+// signature" and landed on My requests, unfiltered, in every status. The card
+// is now shown, and counted, only for orders:approve, the list's own gate
+// (orders/page.tsx canApprove).
+describe('/dashboard: the waiting for signature card follows orders:approve (F10)', () => {
+  type Item = { id: string; href?: string; title?: string };
+  const attention = () =>
+    ((widgetProps.mock.calls[0]![0] as { attentionItems: Item[] }).attentionItems ?? []) as Item[];
+
+  it('an approver sees the count, linked to the filtered list', async () => {
+    calls.viewer = { role: 'staff', permissions: new Set(['orders:request', 'orders:approve']) };
+    calls.awaitingSignature.mockResolvedValue(2);
+    await (
+      await startBody()
+    ).done;
+    const card = attention().find((i) => i.id === 'orders-awaiting-signature');
+    expect(card?.title).toBe('2 orders waiting for signature');
+    expect(card?.href).toBe('/dashboard/orders?status=awaiting_signature');
+  });
+
+  it('a staff requester without orders:approve gets no card, and the org-wide count is never read', async () => {
+    calls.viewer = { role: 'staff', permissions: new Set(['orders:request']) };
+    calls.awaitingSignature.mockResolvedValue(2);
+    await (
+      await startBody()
+    ).done;
+    expect(attention().map((i) => i.id)).not.toContain('orders-awaiting-signature');
+    expect(calls.awaitingSignature).not.toHaveBeenCalled();
+  });
+
+  it('a manager whose orders:approve was revoked gets no card either', async () => {
+    calls.viewer = { role: 'manager', permissions: new Set(['orders:request']) };
+    calls.awaitingSignature.mockResolvedValue(2);
+    await (
+      await startBody()
+    ).done;
+    expect(attention().map((i) => i.id)).not.toContain('orders-awaiting-signature');
   });
 });
