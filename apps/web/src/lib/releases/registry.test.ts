@@ -4333,7 +4333,7 @@ describe('the small fixes release (slice 1)', () => {
       resolve(__dirname, '../../components/orders/order-timeline.tsx'),
       'utf8',
     );
-    const sentence = "Only people who can see activity can see this order's history.";
+    const sentence = "Only people who can view the audit log can see this order's history.";
     expect(timeline).toContain(JSON.stringify(sentence));
     expect(text).toContain(sentence);
   });

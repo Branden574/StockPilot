@@ -210,13 +210,16 @@ describe('OrderTimeline — draft PO created for the shortfall (F2-5)', () => {
 // an order with a full history. The timeline now says why it is empty, and
 // reads nothing it cannot see.
 describe('OrderTimeline — a viewer who cannot see activity (L89)', () => {
-  it('says only people who can see activity can see the history, and reads nothing', async () => {
+  // Review (2026-10-05): the permission is named "View audit log" on the
+  // roles page and the page is "Audit log" in the sidebar; nothing is called
+  // "activity", so a requester had nothing to ask an admin for.
+  it('says only people who can view the audit log can see the history, and reads nothing', async () => {
     clientBuilds.count = 0;
     auditRows.current = [stockHeld('a', { trigger: 'manual', held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })];
     render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: false }));
 
     expect(
-      screen.getByText("Only people who can see activity can see this order's history."),
+      screen.getByText("Only people who can view the audit log can see this order's history."),
     ).toBeInTheDocument();
     expect(screen.queryByText('No events yet.')).toBeNull();
     expect(clientBuilds.count).toBe(0);

@@ -169,9 +169,9 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "Clearer words on an order's screens",
         whatChanged:
-          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can see activity can see this order's history. A slip of a cancelled, denied or backordered order says why it is not available, and the delivery request notes after placing an order use the full width.",
+          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can view the audit log can see this order's history. A slip of a cancelled, denied or backordered order says why it is not available, and the delivery request notes after placing an order use the full width.",
         whyItMatters:
-          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot see activity. A slip of a closed order asked you to generate it first, which could not be done. The notes sat in a narrow column.',
+          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot view the audit log. A slip of a closed order asked you to generate it first, which could not be done. The notes sat in a narrow column.',
         howItAffectsYou: 'No change to what you can do, or to who may print a slip.',
         whatToDo: 'No action needed.',
         audience: { modules: ['orders'] },

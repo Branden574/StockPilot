@@ -26,9 +26,11 @@ interface Props {
   canReadActivity: boolean;
 }
 
-/** What a viewer without activity_logs:read sees instead of the history. */
+/** What a viewer without activity_logs:read sees instead of the history, in
+ *  the product's own name for that permission: "View audit log" on the roles
+ *  page, "Audit log" in the sidebar (review 2026-10-05). */
 export const ORDER_TIMELINE_NO_ACTIVITY_ACCESS =
-  "Only people who can see activity can see this order's history.";
+  "Only people who can view the audit log can see this order's history.";
 
 interface AuditRow {
   id: string;
