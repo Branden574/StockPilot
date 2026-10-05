@@ -151,6 +151,10 @@ describe('release registry', () => {
       '/dashboard/support',
       '/dashboard/settings/profile',
       '/dashboard/whats-new',
+      // Each member's own email and notification choices: the page checks
+      // only the session (requireSession), and every member may turn the
+      // weekly digest on.
+      '/dashboard/settings/notifications',
     ]);
     const ungated = RELEASES.flatMap((r) =>
       r.entries
@@ -3532,10 +3536,17 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // above the newest published release, dated after every published
     // release. Re-pinned by the small fixes (slice 1, 2026-10-05; was: the
     // only draft, at the top): their draft is dated later and sits above it.
+    // Re-pinned by the weekly digest fixes (2026-10-05): their draft is dated
+    // later still and sits above both.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(1);
-    expect(RELEASES[0]?.id).toBe('small-fixes-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['small-fixes-2026-10', ID]);
+    expect(at).toBe(2);
+    expect(RELEASES[0]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(RELEASES[1]?.id).toBe('small-fixes-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'weekly-digest-and-fixes-2026-10',
+      'small-fixes-2026-10',
+      ID,
+    ]);
     for (const id of [
       'phone-place-order-2026-10',
       'returns-original-rack-2026-10',
@@ -3548,7 +3559,9 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(RELEASES[i]?.status, id).toBe('published');
     }
     expect(RELEASES[at + 1]?.id).toBe('phone-place-order-2026-10');
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'small-fixes-2026-10')) {
+    for (const r of RELEASES.filter(
+      (x) => x.id !== ID && x.id !== 'small-fixes-2026-10' && x.id !== 'weekly-digest-and-fixes-2026-10',
+    )) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -3643,8 +3656,13 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     expect(at).toBeGreaterThanOrEqual(0);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
     // Re-pinned by the small fixes (slice 1, 2026-10-05; was: only PO-2's
-    // draft): their draft is dated later and sits above PO-2's.
-    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual(['small-fixes-2026-10', 'order-submit-once-2026-10']);
+    // draft): their draft is dated later and sits above PO-2's. Re-pinned by
+    // the weekly digest fixes (2026-10-05): their draft sits above both.
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'weekly-digest-and-fixes-2026-10',
+      'small-fixes-2026-10',
+      'order-submit-once-2026-10',
+    ]);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4229,10 +4247,13 @@ describe('the small fixes release (slice 1)', () => {
   const ID = 'small-fixes-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
 
-  it('is the newest entry, a draft, dated after every release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
+  it('is a draft, below only the weekly digest draft, dated after every release but that one', () => {
+    // Re-pinned by the weekly digest fixes (2026-10-05; was: the newest
+    // entry): their draft is dated later and sits above this one.
+    expect(RELEASES[0]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(RELEASES[1]?.id).toBe(ID);
     expect(release().status).toBe('draft');
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'weekly-digest-and-fixes-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -4397,5 +4418,49 @@ describe('the small fixes release (slice 1)', () => {
   it('offers Cancel only with orders:request, as the entry says (desk check F3)', () => {
     const entry = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
     expect(entry.howItAffectsYou).toContain('Cancel is offered only to people allowed to request orders');
+  });
+});
+
+// The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, web only, no
+// migration): a DRAFT until the web deploy is live. Each change is told to the
+// people who can see it.
+describe('the weekly digest and fixes release', () => {
+  const ID = 'weekly-digest-and-fixes-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+
+  it('is the newest entry, a draft, dated after every release', () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('tells each change only to the people who can see it, and links the digest to notification settings', () => {
+    const published: Release = { ...release(), status: 'published' };
+    const ids = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    // Every member may turn the digest on, and every member can open a
+    // warehouse's page from search.
+    expect(ids('viewer', [], [])).toEqual(['weekly-digest-sent', 'weekly-digest-your-view', 'warehouse-page-opens']);
+    expect(ids('manager', ['purchase_orders:manage'], ['purchase_orders'])).toContain('make-recurring-works');
+    expect(ids('manager', ['purchase_orders:manage'], [])).not.toContain('make-recurring-works');
+    expect(ids('staff', ['rentals:create'], ['rentals'])).toContain('rental-member-name');
+    expect(ids('staff', ['rentals:read'], ['rentals'])).not.toContain('rental-member-name');
+    const sent = release().entries.find((e) => e.id === 'weekly-digest-sent')!;
+    expect(sent.link).toEqual({ href: '/dashboard/settings/notifications', label: 'Open notification settings' });
+  });
+
+  it('names the settings the way the page does', () => {
+    const controls = readFileSync(
+      resolve(__dirname, '../../components/settings/digest-controls.tsx'),
+      'utf8',
+    );
+    expect(controls).toContain('Email me a weekly inventory digest');
+    expect(controls).toContain("'Send preview now'");
+    const sent = release().entries.find((e) => e.id === 'weekly-digest-sent')!;
+    expect(sent.whatToDo).toContain('Email me a weekly inventory digest');
+    expect(sent.whatToDo).toContain('Send preview now');
   });
 });
