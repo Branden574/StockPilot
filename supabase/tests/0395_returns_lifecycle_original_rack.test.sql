@@ -14,6 +14,7 @@
 --   stf     staff, no grant, assigned       vwr  viewer, assigned
 --   dis     manager whose account is disabled
 --   outZ    manager of org Z
+--   mgrAZ   manager of org A and of org Z (the two-organization member)
 --
 -- S.  The pick: complete_picking draws seven lines from their racks (recorded
 --     draws, stamped to the order), and confirm_physical_signature hands the
@@ -27,7 +28,8 @@
 --     function; the restated body's md5 and its reverse-replace proof.
 -- B.  Gates (brief 42: revocation, disabled): unauthenticated, anon, foreign
 --     and missing, module off, the revoked manager (RPCs and raw policies),
---     staff granted returns:manage with and without warehouse write,
+--     staff granted returns:manage with and without warehouse write, and
+--     refused on another warehouse's RMA by every function (desk check F2),
 --     returns:read only, disabled, viewer, and the restock read's gate.
 -- C.  Create: one transaction, idempotency, the cap, the requester path
 --     forcing restock and copying identity, the RMA number key, exchange
@@ -47,7 +49,9 @@
 -- J.  Several sources: full remainder, partial with a manager choice capped
 --     at its remaining, rule 9 (two pending RMAs, room for one), a forged leg
 --     sum.
--- K.  Direct writes (brief 42) and the old tabs' raw edges.
+-- K.  Direct writes (brief 42) and the old tabs' raw edges; the raw paths
+--     bounded by the order's warehouse (F2) and tied to the order's
+--     organization and lines (F3).
 -- L.  Regression: frozen bodies and triggers, organization deletion, holdings
 --     equal on hand for every item touched, the 0359 flag census.
 --
@@ -69,6 +73,10 @@
 --   M13 approve_return skips the revision check                     -> D4
 --   M14 return_line_sources ignores the reopen rule                  -> H5
 --   M15 the restated body skips the warehouse write check            -> A21, B8 (wrapper)
+--   M17 the write policies drop the warehouse term (F2)              -> K10
+--   M18 the API guard skips the insert's warehouse check (F2)        -> K10
+--   M19 the API guard skips the RMA-order organization tie (F3)      -> K11
+--   M20 the line guard skips the line-order tie (F3)                 -> K11
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -79,7 +87,7 @@
 
 begin;
 
-select plan(105);
+select plan(108);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -93,6 +101,7 @@ select plan(105);
 \set vwr       '\'03950000-0000-0000-0000-0000000000a7\''
 \set dis       '\'03950000-0000-0000-0000-0000000000a8\''
 \set outZ      '\'03950000-0000-0000-0000-0000000000b1\''
+\set mgrAZ     '\'03950000-0000-0000-0000-0000000000a9\''
 \set whA       '\'03950000-0000-0000-0000-0000000000d1\''
 \set whB       '\'03950000-0000-0000-0000-0000000000d2\''
 \set whZ       '\'03950000-0000-0000-0000-0000000000d3\''
@@ -105,6 +114,7 @@ select plan(105);
 \set r41       '\'03950000-0000-0000-0000-000000000c41\''
 \set rOther    '\'03950000-0000-0000-0000-000000000c42\''
 \set siteA     '\'03950000-0000-0000-0000-000000000c50\''
+\set rB1       '\'03950000-0000-0000-0000-000000000c51\''
 \set itM       '\'03950000-0000-0000-0000-000000000e01\''
 \set itS       '\'03950000-0000-0000-0000-000000000e02\''
 \set itScr     '\'03950000-0000-0000-0000-000000000e03\''
@@ -118,6 +128,7 @@ select plan(105);
 \set itX       '\'03950000-0000-0000-0000-000000000e0b\''
 \set itX2      '\'03950000-0000-0000-0000-000000000e0c\''
 \set itZ       '\'03950000-0000-0000-0000-000000000e0d\''
+\set itW       '\'03950000-0000-0000-0000-000000000e0e\''
 \set oA        '\'03950000-0000-0000-0000-000000000101\''
 \set oK        '\'03950000-0000-0000-0000-000000000102\''
 \set oU        '\'03950000-0000-0000-0000-000000000103\''
@@ -125,6 +136,8 @@ select plan(105);
 \set oX        '\'03950000-0000-0000-0000-000000000105\''
 \set oZ        '\'03950000-0000-0000-0000-000000000106\''
 \set oPend     '\'03950000-0000-0000-0000-000000000107\''
+\set oB        '\'03950000-0000-0000-0000-000000000108\''
+\set oW        '\'03950000-0000-0000-0000-000000000109\''
 \set lM        '\'03950000-0000-0000-0000-000000000201\''
 \set lS        '\'03950000-0000-0000-0000-000000000202\''
 \set lScr      '\'03950000-0000-0000-0000-000000000203\''
@@ -139,6 +152,9 @@ select plan(105);
 \set lX2       '\'03950000-0000-0000-0000-00000000020c\''
 \set lZ        '\'03950000-0000-0000-0000-00000000020d\''
 \set lPend     '\'03950000-0000-0000-0000-00000000020e\''
+\set lB        '\'03950000-0000-0000-0000-00000000020f\''
+\set lB2       '\'03950000-0000-0000-0000-000000000210\''
+\set lW        '\'03950000-0000-0000-0000-000000000211\''
 \set kOld      '\'03950000-0000-0000-0000-000000000901\''
 \set kOld2     '\'03950000-0000-0000-0000-000000000902\''
 \set kOld3     '\'03950000-0000-0000-0000-000000000903\''
@@ -155,7 +171,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:stf,       '0395-stf@test.local',       '{}'::jsonb),
   (:vwr,       '0395-vwr@test.local',       '{}'::jsonb),
   (:dis,       '0395-dis@test.local',       '{}'::jsonb),
-  (:outZ,      '0395-outz@test.local',      '{}'::jsonb)
+  (:outZ,      '0395-outz@test.local',      '{}'::jsonb),
+  (:mgrAZ,     '0395-mgraz@test.local',     '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them); returns is
 -- off by default and is turned on here.
@@ -172,7 +189,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :stf,       'staff',   now()),
   (:orgA, :vwr,       'viewer',  now()),
   (:orgA, :dis,       'manager', now()),
-  (:orgZ, :outZ,      'manager', now());
+  (:orgZ, :outZ,      'manager', now()),
+  (:orgA, :mgrAZ,     'manager', now()),
+  (:orgZ, :mgrAZ,     'manager', now());
 update public.user_profiles set disabled_at = now() where id = :dis;
 insert into public.organization_modules (organization_id, module_id, enabled, tier, settings) values
   (:orgA, 'returns', true, 'optional', '{}'::jsonb),
@@ -208,7 +227,8 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
   (:r40,    :orgA, :whA, '40-A',      'shelf', 'rack', now() - interval '55 minutes'),
   (:r41,    :orgA, :whA, '41-A',      'shelf', 'rack', now() - interval '54 minutes'),
   (:rOther, :orgA, :whA, '42-A',      'shelf', 'rack', now() - interval '53 minutes'),
-  (:siteA,  :orgA, :whA, 'Back room', 'room',  null,   now() - interval '52 minutes');
+  (:siteA,  :orgA, :whA, 'Back room', 'room',  null,   now() - interval '52 minutes'),
+  (:rB1,    :orgA, :whB, '51-B',      'shelf', 'rack', now() - interval '51 minutes');
 
 -- Single-rack items seed their holding at primary_location_id (the seed
 -- trigger); the two- and three-holding items get theirs below.
@@ -225,7 +245,8 @@ insert into public.inventory_items
   (:itC2,  :orgA, :whA, '0395-C2',  'Walk Shirt Two Racks',   0, 'active', 'none', null),
   (:itP,   :orgA, :whA, '0395-P',   'Walk Shirt Partial',     0, 'active', 'none', null),
   (:itU,   :orgA, :whA, '0395-U',   'Walk Shirt Forged',      0, 'active', 'none', null),
-  (:itG,   :orgA, :whA, '0395-G',   'Walk Shirt Two Staging', 0, 'active', 'none', null);
+  (:itG,   :orgA, :whA, '0395-G',   'Walk Shirt Two Staging', 0, 'active', 'none', null),
+  (:itW,   :orgA, :whB, '0395-W',   'Walk Shirt Second WH',   2, 'active', 'none', :rB1);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
   (:itZ, :orgZ, :whZ, '0395-Z', 'Zed shirt', 2, 'active', 'none');
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
@@ -246,6 +267,8 @@ insert into public.order_requests
   (:oG,    :orgA, :whA, 'completed',           'internal', :mgr, 'pickup', null, null),
   (:oX,    :orgA, :whA, 'completed',           'internal', null, 'pickup', 'Requester Person', 'requester-0395@test.local'),
   (:oPend, :orgA, :whA, 'pending_approval',    'internal', :mgr, 'pickup', null, null),
+  (:oB,    :orgA, :whB, 'completed',           'internal', :mgr, 'pickup', null, null),
+  (:oW,    :orgA, :whA, 'completed',           'internal', :mgr, 'pickup', null, null),
   (:oZ,    :orgZ, :whZ, 'completed',           'internal', :outZ, 'pickup', null, null);
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
   (:lM,    :oA,    :itM,   1, 0),
@@ -261,6 +284,9 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   (:lX1,   :oX,    :itX,  10, 10),
   (:lX2,   :oX,    :itX2,  5, 5),
   (:lPend, :oPend, :itX,   1, 0),
+  (:lB,    :oB,    :itX2,  1, 1),
+  (:lB2,   :oB,    :itX,   2, 2),
+  (:lW,    :oW,    :itW,   1, 1),
   (:lZ,    :oZ,    :itZ,   2, 2);
 
 -- oK: a pick written before draw provenance (via_ledger, no draw).
@@ -279,6 +305,15 @@ insert into public.stock_movements
        array[row(:'stA', -1, 'placed', 'staging', :whA, null)::public.stock_draw_holding,
              row(:'unA', -1, 'placed', 'unplaced', :whA, null)::public.stock_draw_holding,
              row(:siteA, -1, 'placed', null, :whA, null)::public.stock_draw_holding])::public.stock_draw);
+-- oW: an order of the main warehouse whose pick drew the item from rack 51-B
+-- of the second warehouse (the item lives there): a staff member who writes
+-- only the main warehouse may manage the RMA but not stock that rack.
+insert into public.stock_movements
+  (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity,
+   reason, reference_type, reference_id, user_id, draw) values
+  (:orgA, :itW, 'transfer', -1, 3, 2, 'Order pick (second warehouse fixture)', 'order_request', :oW, :mgr,
+   row('placed', :whB, 'manager',
+       array[row(:rB1, -1, 'placed', 'rack', :whB, null)::public.stock_draw_holding])::public.stock_draw);
 select set_config('stockpilot.ledger', '', true);
 
 -- ══ Helpers ═══════════════════════════════════════════════════════════════
@@ -757,6 +792,25 @@ select is(
   || pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format('select public.return_restock_options(%L)', :'rG'))),
   'requested,42501:returns_read,42501:returns_read',
   'B11: the destination read answers returns:read holders and refuses members without it');
+-- The second warehouse's RMA: one unit of X2 on oB (whB), created by the
+-- manager (kept). stfRm holds returns:manage and writes the main warehouse only.
+select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, %L)',
+          :oB, pg_temp.one(:lB, 1)::text, '03950000-0000-0000-0000-00000000f003'))->>'returnId') as "rB" \gset
+select id as "rBl" from public.return_lines where return_id = :'rB' \gset
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.approve_return(%L, 0, %L::jsonb)', :'rB', pg_temp.dec(:'rBl', 'restock', 'staging')::text))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rB', pg_temp.dec(:'rBl', 'restock', 'staging')::text))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.deny_return(%L, ''No'')', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.cancel_return(%L, 0, null)', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.receive_return(%L)', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.plan_return_dispositions(%L, ''[]''::jsonb)', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.close_return(%L)', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.return_restock_options(%L)', :'rB'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oB, pg_temp.one(:lB2, 1)::text)))
+  || ',' || coalesce(pg_temp.try_rpc('authenticated', :mgr, format('select public.receive_return(%L)', :'rB'))->>'error', 'none'),
+  '42501:warehouse_write,42501:warehouse_write,42501:warehouse_write,42501:warehouse_write,42501:warehouse_write,'
+  || '42501:warehouse_write,42501:warehouse_write,42501:warehouse_read,42501:warehouse_write,P0001',
+  'B12: staff granted returns:manage who writes only the main warehouse is refused on the second warehouse''s RMA and order by every function (approve, approve and receive, deny, cancel, receive, plan, close, the destination read, create), before any status check; the manager reaches the status check (F2)');
 
 -- ══ C. Create ═════════════════════════════════════════════════════════════
 select is(
@@ -1316,6 +1370,32 @@ select is(
   :'wK9' || '|' || pg_temp.held(:itV, :r41)::text || '|' || pg_temp.held(:itV, :'stA')::text || '|' || pg_temp.balanced(:itV)::text,
   'closed|2|0|true',
   'K9: an old tab closing through the frozen wrapper honours the planned original rack (41-A +1)');
+-- returns:manage is fully grantable, so the warehouse bounds the raw paths
+-- too (F2): stfRm writes only the main warehouse; rB is the second's.
+select is(
+  pg_temp.attempt('authenticated', :stfRm,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source) values (%L, %L, 'requested', 'internal')$q$, :orgA, :oB))
+  || ',' || pg_temp.attempt('authenticated', :stfRm, format($q$update public.returns set status = 'cancelled' where id = %L$q$, :'rB'))
+  || ',' || pg_temp.attempt('authenticated', :stfRm, format($q$update public.returns set status = 'denied', denied_by = %L, denied_at = now(), denial_reason = 'x' where id = %L$q$, :stfRm, :'rB'))
+  || ',' || pg_temp.attempt('authenticated', :stfRm,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
+           :'rB', :orgA, :lB2, :itX))
+  || ',' || pg_temp.attempt('authenticated', :stfRm,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source) values (%L, %L, 'requested', 'internal')$q$, :orgA, :oX),
+    null, format('select requested_by = %L from public.returns where order_request_id = %L and requested_by = %L', :stfRm, :oX, :stfRm)),
+  '42501:warehouse_write:warehouse_write,ok:0,ok:0,42501:warehouse_write:warehouse_write,ok:1:true',
+  'K10: the same staff member''s raw insert on the second warehouse''s order is refused warehouse_write, a raw cancel or deny of its RMA reaches no row, a raw line on it is refused; on the main warehouse the raw insert works (F2)');
+select is(
+  pg_temp.attempt('authenticated', :mgrAZ,
+    format($q$insert into public.returns (organization_id, order_request_id, status, source) values (%L, %L, 'requested', 'internal')$q$, :orgA, :oZ))
+  || ',' || pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
+           :'rQ', :orgA, :lB2, :itX))
+  || ',' || pg_temp.attempt('authenticated', :mgr,
+    format($q$insert into public.return_lines (return_id, organization_id, order_request_line_id, item_id, quantity, disposition) values (%L, %L, %L, %L, 1, 'restock')$q$,
+           :'rQ', :orgA, :lX1, :itX)),
+  'P0002:order_not_found:order_not_found,22023:return_invalid:return_invalid,ok:1',
+  'K11: a member of two organizations cannot file an RMA in one for the other''s order, and a raw line naming another order''s line is refused; a line of the RMA''s own order still goes in (F3)');
 
 -- ══ L. Regression ═════════════════════════════════════════════════════════
 select is(
@@ -1396,7 +1476,7 @@ select is(
 select is(
   (select string_agg(i.sku || '=' || pg_temp.balanced(i.id)::text, ',' order by i.sku collate "C")
      from public.inventory_items i where i.organization_id = :orgA),
-  '0395-C2=true,0395-G=true,0395-K=true,0395-M=true,0395-P=true,0395-R=true,0395-S=true,0395-SCR=true,0395-U=true,0395-V=true,0395-X=true,0395-X2=true',
+  '0395-C2=true,0395-G=true,0395-K=true,0395-M=true,0395-P=true,0395-R=true,0395-S=true,0395-SCR=true,0395-U=true,0395-V=true,0395-W=true,0395-X=true,0395-X2=true',
   'L5: holdings equal on hand for every item this suite touched (brief 15)');
 select is(
   (select count(*)::int from public.return_decisions d

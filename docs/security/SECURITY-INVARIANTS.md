@@ -588,7 +588,13 @@ actually fire.
   - **Writes.** The `returns_insert`, `returns_update`, `return_lines_insert`
     and `return_lines_update` policies test
     `has_permission(organization_id, 'returns:manage')` (a revoke by
-    override refuses a manager; a grant lets a staff member through).
+    override refuses a manager; a grant lets a staff member through) AND
+    write access to the warehouse of the RMA's order
+    (`user_can_access_inventory(auth.uid(), <order warehouse>, null,
+    'write')`, the order read in the RMA's own organization). Because
+    `returns:manage` is fully grantable, the warehouse is what bounds a
+    grant: a staff member granted it for one warehouse cannot insert, approve,
+    deny, receive or cancel another warehouse's RMA through PostgREST.
     `anon` and PUBLIC hold nothing on `returns`, `return_lines`,
     `return_decisions` or `return_overview`. `authenticated` holds SELECT
     and INSERT on `returns` and `return_lines`, UPDATE on exactly eight
@@ -599,12 +605,16 @@ actually fire.
     INVOKER, firing only when `current_user` is `authenticated` or `anon`):
     an API insert of an RMA must be `requested`, `internal` and unstamped
     (`return_insert_through_rpc`); `requested_by` is the caller
-    (`return_stamp_forged`); an update moves one edge, sets only that edge's
-    stamps naming the caller, with the time forced to `now()`
-    (`return_stamp_forged`); no API update reaches `closed`
+    (`return_stamp_forged`); its order must be an order of the RMA's own
+    organization the caller can see (`order_not_found`, P0002) in a
+    warehouse the caller may write (`warehouse_write`); an update moves one
+    edge, sets only that edge's stamps naming the caller, with the time
+    forced to `now()` (`return_stamp_forged`); no API update reaches `closed`
     (`return_close_through_rpc`); an API line insert must be unapplied and
     belong to a `requested` RMA the caller can see in the same organization
-    (`return_line_insert_through_rpc`). The old tabs' raw create, approve,
+    (`return_line_insert_through_rpc`), name a line of that RMA's own order
+    (`return_invalid`, so no other order loses return budget), and come from
+    a caller who may write the order's warehouse (`warehouse_write`). The old tabs' raw create, approve,
     deny, receive and cancel keep working within these rules; closing (the
     only edge that moves stock) is function-only.
   - **Decisions.** `return_decisions` is append-only (an UPDATE raises
@@ -658,10 +668,13 @@ actually fire.
   A (grants, the eight columns, function posture, the view's column order),
   B (unauthenticated, anon, foreign, module off, revoked by override for
   every function and for the raw policies, granted staff with and without
-  warehouse write, `returns:read` only, disabled), C (one-transaction
+  warehouse write, granted staff refused on another warehouse's RMA by
+  every function (B12), `returns:read` only, disabled), C (one-transaction
   create, key replay and conflict, the cap, the requester path), D (approval
   moves nothing), E to J (acceptance 36 to 40 and several sources, rule 9),
-  K (every direct write refused, the old tabs' edges allowed) and L
+  K (every direct write refused, the old tabs' edges allowed, the raw
+  paths bounded by the order's warehouse (K10) and tied to the order's
+  organization and lines (K11)) and L
   (regression, organization deletion); each break named "Mutation:" in the
   file is caught by the test before it. The 0359 census (tests 15, 17, 18),
   INV-25 and the 0367 class guard cover the new functions.

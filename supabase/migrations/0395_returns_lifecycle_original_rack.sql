@@ -40,15 +40,19 @@
 --      Four exchange hooks RX-2 fills (here: exchange input is refused with
 --      exchange_not_available).
 --   8. The write posture (expand): the four write policies follow
---      returns:manage instead of the manager role; anon loses every privilege
---      on both tables; authenticated loses DELETE, TRUNCATE, TRIGGER,
---      REFERENCES, MAINTAIN, every UPDATE on return_lines, and every UPDATE on
---      returns except the eight columns today's raw transitions write. Two
---      INVOKER guard triggers hold API-role writes to the old tabs' shapes: an
---      insert only at requested with no stamps, a status edge only with its
---      own stamps naming the caller, never into closed, and a line only on a
---      requested RMA, never applied. RX-4 revokes the remaining INSERT and the
---      eight UPDATE columns.
+--      returns:manage instead of the manager role, AND write access to the
+--      warehouse of the RMA's order (user_can_access_inventory(..., 'write'),
+--      the rule every RMA function applies, D27), with the order read in the
+--      RMA's own organization; anon loses every privilege on both tables;
+--      authenticated loses DELETE, TRUNCATE, TRIGGER, REFERENCES, MAINTAIN,
+--      every UPDATE on return_lines, and every UPDATE on returns except the
+--      eight columns today's raw transitions write. Two INVOKER guard
+--      triggers hold API-role writes to the old tabs' shapes: an insert only
+--      at requested with no stamps, for an order of the RMA's organization
+--      in a warehouse the caller writes, a status edge only with its own
+--      stamps naming the caller, never into closed, and a line only on a
+--      requested RMA, for a line of that RMA's order, never applied. RX-4
+--      revokes the remaining INSERT and the eight UPDATE columns.
 --
 -- ── ORIGINAL RACK (plan 3.5) ───────────────────────────────────────────────
 -- A return line's sources are the holdings its order's picks of that item
@@ -1888,6 +1892,9 @@ language plpgsql
 security invoker
 set search_path = public, pg_temp
 as $$
+declare
+  v_order_org uuid;
+  v_wh        uuid;
 begin
   if current_user not in ('authenticated', 'anon') then
     return new;
@@ -1908,9 +1915,24 @@ begin
     elsif new.requested_by is distinct from auth.uid() then
       raise exception 'return_stamp_forged' using errcode = '42501', hint = 'return_stamp_forged';
     end if;
+    -- The RMA belongs to its order's organization, and the caller writes
+    -- that order's warehouse (the functions' rule, D27). Read as the caller:
+    -- an order the caller cannot see answers like a missing one. The insert
+    -- policy holds the same two rules; this answers them with a hint.
+    select o.organization_id, o.warehouse_id into v_order_org, v_wh
+      from public.order_requests o where o.id = new.order_request_id;
+    if v_order_org is null or v_order_org is distinct from new.organization_id then
+      raise exception 'order_not_found' using errcode = 'P0002', hint = 'order_not_found';
+    end if;
+    if not public.user_can_access_inventory(auth.uid(), v_wh, null, 'write') then
+      raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
+    end if;
     new.created_at := now();
     return new;
   end if;
+
+  -- An update reaches this trigger only for a row the update policy let
+  -- through: returns:manage and write access to the order's warehouse.
 
   if new.status is not distinct from old.status then
     -- No edge: none of the stamps may change.
@@ -1970,8 +1992,11 @@ security invoker
 set search_path = public, pg_temp
 as $$
 declare
-  v_org    uuid;
-  v_status text;
+  v_org        uuid;
+  v_status     text;
+  v_order      uuid;
+  v_line_order uuid;
+  v_wh         uuid;
 begin
   if current_user not in ('authenticated', 'anon') then
     return new;
@@ -1980,10 +2005,23 @@ begin
     raise exception 'return_line_insert_through_rpc' using errcode = '42501', hint = 'return_line_insert_through_rpc';
   end if;
   -- Read as the caller (RLS): an RMA the caller cannot see is refused too.
-  select r.organization_id, r.status into v_org, v_status
+  select r.organization_id, r.status, r.order_request_id into v_org, v_status, v_order
     from public.returns r where r.id = new.return_id;
   if v_org is null or v_org is distinct from new.organization_id or v_status is distinct from 'requested' then
     raise exception 'return_line_insert_through_rpc' using errcode = '42501', hint = 'return_line_insert_through_rpc';
+  end if;
+  -- The source line is a line of the RMA's own order (the create functions'
+  -- rule): a line of another order would take that order's return budget.
+  select orl.order_request_id into v_line_order
+    from public.order_request_lines orl where orl.id = new.order_request_line_id;
+  if v_line_order is distinct from v_order then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'orderRequestLineId';
+  end if;
+  -- And the caller writes the order's warehouse (as the insert policy).
+  select o.warehouse_id into v_wh
+    from public.order_requests o where o.id = v_order and o.organization_id = v_org;
+  if not public.user_can_access_inventory(auth.uid(), v_wh, null, 'write') then
+    raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
   end if;
   return new;
 end;
@@ -2077,9 +2115,9 @@ comment on function public.close_return(uuid, jsonb, bigint) is
 comment on function public.return_restock_options(uuid) is
   'RX-1: the destination read for the workbench: per line the case, sources, validity now, offers and live plan, in one call. Gates: signed in, member (P0002 return_not_found), returns:read or returns:manage (42501 returns_read), read access to the order''s warehouse (42501 warehouse_read). STABLE, SECURITY DEFINER, EXECUTE to authenticated only; never called from a requester route.';
 comment on function public.tg_returns_api_guard() is
-  'RX-1 guard (BEFORE INSERT OR UPDATE on returns, API roles only): an insert only at requested, source internal, with no stamps, requested_by the caller; a status edge only with its own stamps, naming the caller, at now(); never into closed (42501 return_close_through_rpc); otherwise 42501 return_insert_through_rpc or return_stamp_forged. RX-2 adds the exchange clause. SECURITY INVOKER, no EXECUTE.';
+  'RX-1 guard (BEFORE INSERT OR UPDATE on returns, API roles only): an insert only at requested, source internal, with no stamps, requested_by the caller, for an order of the RMA''s own organization the caller can see (P0002 order_not_found) in a warehouse the caller may write (42501 warehouse_write); a status edge only with its own stamps, naming the caller, at now(); never into closed (42501 return_close_through_rpc); otherwise 42501 return_insert_through_rpc or return_stamp_forged. The update policy already limits an edge to returns:manage and write access to the order''s warehouse. RX-2 adds the exchange clause. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_lines_api_guard() is
-  'RX-1 guard (BEFORE INSERT on return_lines, API roles only): never applied, and only on a requested RMA of the same organization the caller can see (42501 return_line_insert_through_rpc). SECURITY INVOKER, no EXECUTE.';
+  'RX-1 guard (BEFORE INSERT on return_lines, API roles only): never applied, and only on a requested RMA of the same organization the caller can see (42501 return_line_insert_through_rpc), for a source line of that RMA''s own order (22023 return_invalid, detail orderRequestLineId), by a caller who may write the order''s warehouse (42501 warehouse_write). SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_decisions_append_only() is
   'RX-1: return_decisions rows never change, for any role (42501 return_decisions_append_only). SECURITY INVOKER, no EXECUTE.';
 
@@ -2261,16 +2299,53 @@ comment on view public.return_overview is
   'RX-1: one row per RMA for the returns list (security_invoker: the caller''s RLS applies). Lines carry ids, quantities and dispositions only; item names, costs and locations come from the batched item read. waiting_days counts days since approval while approved. RX-2 appends exchange columns after waiting_days.';
 
 -- ═══ 7. The write posture (plan 3.8, expand) ═══════════════════════════════
+-- returns:manage is fully grantable (G1), so the warehouse bounds it: a raw
+-- write needs write access to the warehouse of the RMA's order, read in the
+-- RMA's own organization (an order of another organization gives no
+-- warehouse, so no access). The same rule every RMA function applies (D27).
 alter policy returns_insert on public.returns
-  with check ((select public.has_permission(organization_id, 'returns:manage')));
+  with check ((select public.has_permission(organization_id, 'returns:manage'))
+              and public.user_can_access_inventory(
+                    (select auth.uid()),
+                    (select o.warehouse_id from public.order_requests o
+                      where o.id = returns.order_request_id and o.organization_id = returns.organization_id),
+                    null, 'write'));
 alter policy returns_update on public.returns
-  using ((select public.has_permission(organization_id, 'returns:manage')))
-  with check ((select public.has_permission(organization_id, 'returns:manage')));
+  using ((select public.has_permission(organization_id, 'returns:manage'))
+         and public.user_can_access_inventory(
+               (select auth.uid()),
+               (select o.warehouse_id from public.order_requests o
+                 where o.id = returns.order_request_id and o.organization_id = returns.organization_id),
+               null, 'write'))
+  with check ((select public.has_permission(organization_id, 'returns:manage'))
+              and public.user_can_access_inventory(
+                    (select auth.uid()),
+                    (select o.warehouse_id from public.order_requests o
+                      where o.id = returns.order_request_id and o.organization_id = returns.organization_id),
+                    null, 'write'));
 alter policy return_lines_insert on public.return_lines
-  with check ((select public.has_permission(organization_id, 'returns:manage')));
+  with check ((select public.has_permission(organization_id, 'returns:manage'))
+              and public.user_can_access_inventory(
+                    (select auth.uid()),
+                    (select o.warehouse_id from public.returns r
+                       join public.order_requests o on o.id = r.order_request_id and o.organization_id = r.organization_id
+                      where r.id = return_lines.return_id and r.organization_id = return_lines.organization_id),
+                    null, 'write'));
 alter policy return_lines_update on public.return_lines
-  using ((select public.has_permission(organization_id, 'returns:manage')))
-  with check ((select public.has_permission(organization_id, 'returns:manage')));
+  using ((select public.has_permission(organization_id, 'returns:manage'))
+         and public.user_can_access_inventory(
+               (select auth.uid()),
+               (select o.warehouse_id from public.returns r
+                  join public.order_requests o on o.id = r.order_request_id and o.organization_id = r.organization_id
+                 where r.id = return_lines.return_id and r.organization_id = return_lines.organization_id),
+               null, 'write'))
+  with check ((select public.has_permission(organization_id, 'returns:manage'))
+              and public.user_can_access_inventory(
+                    (select auth.uid()),
+                    (select o.warehouse_id from public.returns r
+                       join public.order_requests o on o.id = r.order_request_id and o.organization_id = r.organization_id
+                      where r.id = return_lines.return_id and r.organization_id = return_lines.organization_id),
+                    null, 'write'));
 
 revoke all on public.returns, public.return_lines from public, anon;
 revoke delete, truncate, trigger, references, maintain on public.returns, public.return_lines from authenticated;

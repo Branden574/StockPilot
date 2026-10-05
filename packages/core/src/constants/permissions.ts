@@ -413,8 +413,9 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // function that gates on has_permission(org,'returns:manage') plus write
   // access to the order's warehouse (create, approve, deny, receive, cancel,
   // plan, close, and the restated ledger.process_return_disposition); the
-  // four raw write policies follow has_permission too. A grant is fully
-  // effective end-to-end, and a revoke is effective in the database.
+  // four raw write policies and the two API guards hold the same pair, so
+  // the warehouse bounds a grant on every path. A grant is fully effective
+  // end-to-end, and a revoke is effective in the database.
   'returns:manage',
 ]);
 
