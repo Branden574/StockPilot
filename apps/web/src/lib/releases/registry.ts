@@ -325,7 +325,8 @@ export const RELEASES: Release[] = [
           'The old messages named the warehouse by a long internal code, or said only that write access was needed, and none said who could help. Cancel did not check the warehouse at all.',
         howItAffectsYou:
           'If you approve orders, Cancel now follows the same rule as Approve: you can cancel an order only in a warehouse you work in. An order you placed yourself can still be cancelled while it waits for approval.',
-        whatToDo: 'No action needed.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { roles: ['staff'], anyPermission: ['orders:approve', 'items:update'], modules: ['orders'] },
       },
       {

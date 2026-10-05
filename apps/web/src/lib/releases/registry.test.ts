@@ -4954,7 +4954,11 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     expect(entry.howItAffectsYou).toContain('while it waits for approval');
     expect(entry.howItAffectsYou).not.toContain('Nothing changes in who can do what');
     expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|uuid|database|policy|works there/i);
-    expect(entry.whatToDo).toBe('No action needed.');
+    // The phone's needed-by check and its item sheets say it only after the
+    // update (44cad980, 5719842d), so the entry says to load it.
+    expect(entry.whatToDo).toBe(
+      'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
   });
 
   it('quotes the notification word for word and the email as it reads, and claims nothing else', () => {
