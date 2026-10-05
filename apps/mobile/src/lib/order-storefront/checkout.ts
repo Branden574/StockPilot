@@ -53,6 +53,23 @@ import {
  * the server's item check) must be removed first.
  */
 
+/**
+ * Which body checkout draws (PO-4 review). The storefront answer is read
+ * again when checkout opens and after a refusal for permission or the module
+ * (R1), and it can come back turned off, refused or with no answer while the
+ * cart is shown. Then checkout says why in place, with how the send ended and
+ * the unconfirmed panel (a locked cart must still settle), as the catalog
+ * does; a spinner only while there is nothing to show yet.
+ */
+export type CheckoutStage = 'loading' | 'unavailable' | 'checkout';
+export function checkoutStage(
+  snap: { setup: { status: 'loading' | 'ready' | 'off' | 'refused' | 'failed' }; cart: CartState | null } | null,
+): CheckoutStage {
+  if (!snap || snap.setup.status === 'loading') return 'loading';
+  if (snap.setup.status !== 'ready') return 'unavailable';
+  return snap.cart ? 'checkout' : 'loading';
+}
+
 /** The parts of the checkout the body is built from. */
 export interface CheckoutInput {
   cart: CartState;

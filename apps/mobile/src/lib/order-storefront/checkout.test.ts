@@ -29,6 +29,7 @@ import {
 import {
   buildOrderCreateBody,
   cartLineNote,
+  checkoutStage,
   cartLineView,
   checkoutTotals,
   neededByRowValue,
@@ -320,5 +321,32 @@ describe('what the server would refuse is refused here first (desk check F11)', 
     expect(someoneNewCheck('Bee', 'bee@')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
     expect(someoneNewCheck('x'.repeat(121), 'bee@orgb.example')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
     expect(someoneNewCheck(' Bee ', ' bee@orgb.example ')).toEqual({ canUse: true, message: null });
+  });
+});
+
+// PO-4 review (MEDIUM): checkout drew a bare spinner whenever the storefront
+// answer was not 'ready'. Since R1 re-reads the answer on checkout open and
+// after a refusal for permission, a refused or turned-off answer left the
+// person looking at a spinner that never ended, the refusal's sentence and the
+// unconfirmed panel hidden behind it.
+describe('which body checkout draws (PO-4 review: never a spinner that does not end)', () => {
+  const cart = initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' });
+  const ready = { status: 'ready' as const };
+
+  it('a spinner only while there is nothing to show yet: no snapshot, the answer loading, or the cart not read yet', () => {
+    expect(checkoutStage(null)).toBe('loading');
+    expect(checkoutStage({ setup: { status: 'loading' }, cart })).toBe('loading');
+    expect(checkoutStage({ setup: ready, cart: null })).toBe('loading');
+  });
+
+  it('a ready answer and a cart: checkout itself', () => {
+    expect(checkoutStage({ setup: ready, cart })).toBe('checkout');
+  });
+
+  it('turned off, refused or read with no answer: the reason in place, with or without a cart', () => {
+    for (const status of ['off', 'refused', 'failed'] as const) {
+      expect(checkoutStage({ setup: { status }, cart }), status).toBe('unavailable');
+      expect(checkoutStage({ setup: { status }, cart: null }), status).toBe('unavailable');
+    }
   });
 });

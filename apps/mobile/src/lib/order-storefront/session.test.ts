@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   NEEDED_BY_IN_PAST_COPY,
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_PERMISSION_COPY,
   ORDER_WITHDRAWN_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
   ORDER_PHONE_TURNED_OFF_COPY,
@@ -18,8 +19,10 @@ import {
 } from '@stockpilot/core';
 
 import { OrderAnswerForAnotherOrganization, type OrderStorefrontApi } from './api';
+import { checkoutStage } from './checkout';
 import { storefrontOutcome } from './outcome';
 import { STOREFRONT_ANSWER_STALE_MS, createStorefrontSession, type SessionStore, type StorefrontSession } from './session';
+import { showUnconfirmedPanel } from './submit';
 import {
   orderCatalogKey,
   orderDraftKey,
@@ -1070,5 +1073,45 @@ describe('signing out and back in as the same account starts over (simulator wal
     await session.open(scope);
     expect(api.storefront).toHaveBeenCalledTimes(1);
     expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+  });
+});
+
+// PO-4 review (MEDIUM, both lenses): R1 reads the storefront answer again on
+// checkout open and straight after a final refusal for permission or the
+// module, and the storefront route refuses then too, so the answer leaves
+// 'ready'. Checkout must still say how the send ended and offer the panel:
+// the session keeps both (this block), and checkout draws them instead of a
+// spinner (checkoutStage, pinned in order-storefront-wiring.test.ts).
+describe('checkout when the answer read again is no longer ready (PO-4 review)', () => {
+  it('Submit refused for permission, then the answer is refused: the refusal and the cart are still there to say', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 403, code: 'forbidden', details: { reason: 'permission', settled: true, organizationId: ORG } },
+    });
+    api.storefront.mockRejectedValueOnce({ status: 403, code: 'forbidden', details: { reason: 'permission' } });
+    await session.submit(false);
+    await vi.waitFor(() => expect(snap().setup.status).toBe('refused'));
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(snap().submission.state.phase).toBe('refused');
+    expect(storefrontOutcome(snap(), { itemName: () => 'Planner', warehouseName: null })?.text).toBe(ORDER_PERMISSION_COPY);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(checkoutStage(snap())).toBe('unavailable');
+  });
+
+  it('a lost answer, then the kill switch while checkout opens: the cart stays locked and the panel is offered', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    await session.submit(false);
+    expect(snap().locked).toBe(true);
+    api.storefront.mockResolvedValueOnce({ organizationId: ORG, enabled: false, message: ORDER_PHONE_TURNED_OFF_COPY, serverNow: 'x' });
+    await session.openCheckout();
+    expect(snap().setup).toEqual({ status: 'off', message: ORDER_PHONE_TURNED_OFF_COPY });
+    expect(snap().locked).toBe(true);
+    expect(showUnconfirmedPanel(snap().submission.state)).toBe(true);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(checkoutStage(snap())).toBe('unavailable');
   });
 });

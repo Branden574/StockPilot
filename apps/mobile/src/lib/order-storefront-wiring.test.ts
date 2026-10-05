@@ -688,3 +688,27 @@ describe('a stacked item row gives the name the full width (simulator walk D7)',
     expect(itemRow).toContain('<View style={stacked ? styles.textStacked : styles.text}>');
   });
 });
+
+// PO-4 review (MEDIUM, both lenses): checkout returned a Back chip and a
+// spinner whenever the answer was not 'ready', so a refused or turned-off
+// answer read again on checkout open (R1) hid the refusal and the unconfirmed
+// panel behind a spinner that never ended. Mutations caught: the bare spinner
+// back for every non-ready answer, the state drawn without the outcome or the
+// panel, the panel not bound to the session's Check and finish and Don't send it.
+describe('checkout says why when the storefront is not usable, never a spinner that does not end (PO-4 review)', () => {
+  it('draws by the tested stage: the spinner only while loading', () => {
+    expect(checkout).toContain('const stage = checkoutStage(snap);');
+    expect(checkout).toMatch(/if \(stage === 'unavailable' && snap\) \{\s*return \(\s*<StorefrontState/);
+    expect(checkout).not.toMatch(/if \(!snap \|\| !ready \|\| !snap\.cart\) \{\s*return \(\s*<View style=\{\{ flex: 1, backgroundColor: c\.paper \}\}>\s*<SafeAreaView edges=\{\['top'\]\}>/);
+  });
+
+  it('the turned-off or refused state carries the outcome and the unconfirmed panel bound to the session', () => {
+    const at = checkout.indexOf("if (stage === 'unavailable' && snap) {");
+    const state = checkout.slice(at, checkout.indexOf('/>\n    );', at) + 4);
+    expect(state).toContain('outcome={outcome}');
+    expect(state).toMatch(/panel=\{\s*<UnconfirmedPanel\s+state=\{snap\.submission\.state\}/);
+    expect(state).toContain('onCheckAndFinish={() => void session.checkAndFinish()}');
+    expect(state).toContain('onDontSend={() => void session.dontSend()}');
+    expect(state).toContain('onRefresh={() => void refresh()}');
+  });
+});

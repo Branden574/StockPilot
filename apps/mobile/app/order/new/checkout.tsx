@@ -44,11 +44,13 @@ import {
 import { CartPanel } from '@/components/order-storefront/cart-panel';
 import { Segmented, SetupRow } from '@/components/order-storefront/controls';
 import { NeededBySheet, QuantitySheet, RequesterSheet, SiteSheet } from '@/components/order-storefront/sheets';
+import { StorefrontState } from '@/components/order-storefront/storefront-state';
 import { UnconfirmedPanel } from '@/components/order-storefront/unconfirmed-panel';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
 import { lineChangeAnnouncement, quantityAnnouncement, submittedAnnouncement } from '@/lib/order-storefront/a11y';
 import {
+  checkoutStage,
   forRowView,
   itemNameFrom,
   neededByRowValue,
@@ -93,6 +95,7 @@ export default function Checkout() {
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
   const [sheet, setSheet] = React.useState<CheckoutSheet>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
   // Manager notes are typed in the field and committed to the cart by this
   // draft (a pause, blur, Submit, leaving), so a keystroke never redraws
   // every storefront screen (desk check F8.1).
@@ -133,10 +136,36 @@ export default function Checkout() {
     if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);
   }, [outcomeText, focused]);
 
+  // The answer read again on open (or after a refusal for permission) can
+  // come back turned off, refused or with no answer: checkout then says why in
+  // place, with the outcome and the panel, never a spinner that does not end
+  // (PO-4 review). What replaced the screen is announced while it is shown.
+  const stage = checkoutStage(snap);
+  const setupMessage =
+    snap && snap.setup.status !== 'ready' && snap.setup.status !== 'loading' ? snap.setup.message : null;
+  React.useEffect(() => {
+    if (setupMessage && focused) AccessibilityInfo.announceForAccessibility(setupMessage);
+  }, [setupMessage, focused]);
+
   const leave = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/order/new' as Href);
   };
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await session.refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const topBar = (
+    <View style={styles.topbar}>
+      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
+    </View>
+  );
 
   // A stepper or Remove in checkout's cart: the change, then what the line is
   // now, announced (as the catalog does; desk check F7.4).
@@ -146,14 +175,36 @@ export default function Checkout() {
     if (said) AccessibilityInfo.announceForAccessibility(said);
   };
 
-  if (!snap || !ready || !snap.cart) {
+  if (stage === 'unavailable' && snap) {
+    return (
+      <StorefrontState
+        topBar={topBar}
+        title={REVIEW_TITLE_COPY}
+        setup={snap.setup.status === 'ready' ? { status: 'loading' } : snap.setup}
+        refreshing={refreshing}
+        onRefresh={() => void refresh()}
+        outcome={outcome}
+        panel={
+          <UnconfirmedPanel
+            state={snap.submission.state}
+            busy={snap.submission.busy}
+            offline={offline}
+            warehouseName={null}
+            itemName={itemName}
+            onCheckAndFinish={() => void session.checkAndFinish()}
+            onDontSend={() => void session.dontSend()}
+            onSeeOrders={() => router.push('/orders' as Href)}
+          />
+        }
+      />
+    );
+  }
+
+  // Nothing to show yet: the answer loading, or the cart not read yet.
+  if (stage === 'loading' || !snap || !ready || !snap.cart) {
     return (
       <View style={{ flex: 1, backgroundColor: c.paper }}>
-        <SafeAreaView edges={['top']}>
-          <View style={styles.topbar}>
-            <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
-          </View>
-        </SafeAreaView>
+        <SafeAreaView edges={['top']}>{topBar}</SafeAreaView>
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       </View>
     );
@@ -176,9 +227,7 @@ export default function Checkout() {
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
-        </View>
+        {topBar}
       </SafeAreaView>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
