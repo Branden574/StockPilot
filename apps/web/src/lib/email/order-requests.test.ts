@@ -193,16 +193,18 @@ const LONG_ITEM_NAME =
 function wireFullAdmin(
   opts: {
     unsubscribed?: boolean;
-    items?: { quantity_picked: number | null; quantity_requested: number | null; item: { name: string; sku: string } }[];
+    items?: { item_id?: string; quantity_picked: number | null; quantity_requested: number | null; item: { name: string; sku: string } }[];
   } = {},
 ): SupabaseStub {
   const items = opts.items ?? [
     {
+      item_id: 'it-gloves',
       quantity_picked: 4,
       quantity_requested: 6,
       item: { name: 'Blue Nitrile Gloves — Large', sku: 'GLV-BL-L' },
     },
     {
+      item_id: 'it-goggles',
       quantity_picked: null,
       quantity_requested: 2,
       item: { name: 'Safety Goggles', sku: 'SG-01' },
@@ -214,6 +216,13 @@ function wireFullAdmin(
       error: null,
     },
     'order_request_lines.select': { data: items, error: null },
+    // Every unit of the default lines held: the approved email's ordinary case
+    // (0396, L86; the part-held and nothing-held wordings are proven in
+    // order-requests.partial-approval.test.ts).
+    'stock_reservations.select': {
+      data: items.map((l) => ({ item_id: l.item_id, quantity: l.quantity_requested })),
+      error: null,
+    },
     'warehouses.select.maybeSingle': {
       data: { name: 'Fresno DC', code: 'DCIV', address: { city: 'Fresno' } },
       error: null,

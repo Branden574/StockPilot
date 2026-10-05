@@ -9,9 +9,11 @@ import type { OrderRequestRow } from '@/server/services/order-requests';
  * approved email said "we’ve reserved every unit on this request" either way.
  * It now reads the order's active holds and says every unit only when every
  * unit is held, "N of M units ... the rest is waiting for stock" when only part
- * is, and neither when the holds could not be read. The requester's in-app
- * notification and push make the same distinction in the database
- * (_notify_order_request_changes, 0396 suite A1-A4).
+ * is, "Nothing is reserved yet; your order is waiting for stock." when nothing
+ * is (approve_partial approves even then), and neither when the holds could
+ * not be read. The requester's in-app notification and push make the same
+ * distinction in the database (_notify_order_request_changes, 0396 suite
+ * A1-A5).
  */
 
 const envState = vi.hoisted(() => ({ UNSUBSCRIBE_SECRET: 'sender-test-secret-0123456789abcdef' }));
@@ -31,7 +33,7 @@ vi.mock('./resend', () => ({ sendEmail: (args: SendEmailArgs) => sendEmailMock(a
 const adminHolder = { client: null as unknown };
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
-import { heldSummary, sendOrderRequestEmail, type OrderRequestEmailKind } from './order-requests';
+import { heldState, heldSummary, sendOrderRequestEmail, type OrderRequestEmailKind } from './order-requests';
 
 const EMAIL = 'requester@school.edu';
 
@@ -133,6 +135,15 @@ describe('heldSummary', () => {
     expect(heldSummary(two, [{ item_id: 'it-p', quantity: 6 }, { item_id: 'it-p', quantity: 6 }]).partly).toBe(false);
   });
 
+  it('names the four states the approved email tells apart', () => {
+    expect(heldState(null)).toBe('unknown');
+    expect(heldState(heldSummary(LINES, [{ item_id: 'it-a', quantity: 6 }, { item_id: 'it-b', quantity: 2 }]))).toBe('all');
+    expect(heldState(heldSummary(LINES, [{ item_id: 'it-a', quantity: 4 }, { item_id: 'it-b', quantity: 2 }]))).toBe('part');
+    expect(heldState(heldSummary(LINES, []))).toBe('none');
+    // A hold of 0 units holds nothing.
+    expect(heldState(heldSummary(LINES, [{ item_id: 'it-a', quantity: 0 }]))).toBe('none');
+  });
+
   it('owes nothing for what was already fulfilled, and never counts more held than owed', () => {
     expect(
       heldSummary(
@@ -165,6 +176,23 @@ describe('the approved email says what is held (L86)', () => {
     expect(args.html).not.toContain('every unit');
     expect(args.text).toContain('we’ve reserved 6 of 8 units on this request; the rest is waiting for stock.');
     expect(args.text).toContain('Reserved: 6 of 8 units');
+  });
+
+  it('nothing held: says nothing is reserved yet and the order is waiting for stock, never "0 of 8" or "packing has started"', async () => {
+    // approve_partial approves even when nothing is free (production has one
+    // such order): every count would read 0, and packing has nothing to pack.
+    wire({ data: [], error: null });
+    const args = await send();
+    expect(args.subject).toMatch(/ is approved — waiting for stock$/);
+    expect(args.html).toContain('your request is approved. Nothing is reserved yet; your order is waiting for stock.');
+    expect(args.html).toContain('Approved. Nothing is reserved yet; your order is waiting for stock.');
+    expect(args.html).toContain('It is waiting for stock.');
+    expect(args.html).toContain('your order is approved and waiting for stock');
+    expect(args.html).toContain('8 units');
+    expect(args.html).not.toMatch(/reserved 0|Reserved 0|0 of 8|every unit|part of your order|Packing starts now|packing has started/i);
+    expect(args.text).toContain('your request is approved. Nothing is reserved yet; your order is waiting for stock.');
+    expect(args.text).toContain('Reserved: nothing yet (waiting for stock)');
+    expect(args.text).not.toMatch(/0 of 8|Reserved 0|every unit|packing has started/i);
   });
 
   it('holds not readable: claims neither every unit nor part', async () => {

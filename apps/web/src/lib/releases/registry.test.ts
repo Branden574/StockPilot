@@ -4868,8 +4868,15 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     const migration = readFileSync(resolve(dir, file[0]!), 'utf8');
     expect(migration).toContain("v_body := 'Part of your order is held; the rest is waiting for stock.';");
     expect(entry.whatChanged).toContain('"Part of your order is held; the rest is waiting for stock."');
-    // The email's count, as the email prints it ("6 of 8 units").
+    // An approval that held nothing has its own sentence, quoted exactly too.
+    expect(migration).toContain("v_body := 'Nothing is held yet; your order is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Nothing is held yet; your order is waiting for stock."');
+    // The email's count, as the email prints it ("6 of 8 units"), and its
+    // nothing-held sentence.
     expect(entry.whatChanged).toContain('for example 6 of 8');
+    const email = readFileSync(resolve(__dirname, '../email/order-requests.ts'), 'utf8');
+    expect(email).toContain("'Nothing is reserved yet; your order is waiting for stock.'");
+    expect(entry.whatChanged).toContain('or that nothing is reserved yet');
     expect(text).not.toMatch(/\bbook\b|every unit is held for you|filled automatically|as soon as stock arrives/i);
     expect(entry.whatToDo).toBe('No action needed.');
   });

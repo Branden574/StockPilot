@@ -167,6 +167,34 @@ const DEGRADED_SUMMARY: SummaryData = {
   held: null,
 };
 
+/**
+ * Which of the approved email's four wordings applies (0396, L86): the holds
+ * could not be read, every unit is held, part is held, or nothing is held
+ * (approve_partial approves even when nothing is free; the database's
+ * notification then says "Nothing is held yet; your order is waiting for
+ * stock.").
+ */
+export type HeldState = 'unknown' | 'all' | 'part' | 'none';
+
+export function heldState(held: HeldSummary | null): HeldState {
+  if (held === null) return 'unknown';
+  if (!held.partly) return 'all';
+  return held.heldUnits > 0 ? 'part' : 'none';
+}
+
+/**
+ * The subject line, from the registry, for both the sent email and the HTML
+ * title. 0396 (L86): an approval that held nothing says it is waiting for
+ * stock, not that packing has started.
+ */
+function emailSubject(kind: OrderRequestEmailKind, held: HeldSummary | null, orderId: string): string {
+  if (kind === 'approved' && heldState(held) === 'none') return `${orderId} is approved — waiting for stock`;
+  return esEmailById(REGISTRY_ID_BY_KIND[kind]).subject({ orderId });
+}
+
+/** The approved email's sentence when nothing is held yet (HTML and text). */
+const NOTHING_HELD_YET = 'Nothing is reserved yet; your order is waiting for stock.';
+
 /** HeldSummary from an order's lines and its active holds (pure). */
 export function heldSummary(
   lines: ReadonlyArray<{ item_id?: string | null; quantity_requested?: number | null; quantity_fulfilled?: number | null }>,
@@ -521,7 +549,8 @@ function buildView(a: TemplateArgs): OrderEmailView {
   const lines = a.summary.lineCount;
 
   // The order number the app shows (L91); WO- only when there is none.
-  const subject = def.subject({ orderId: displayId });
+  // emailSubject: the approval that held nothing has its own subject.
+  const subject = emailSubject(a.kind, a.summary.held, displayId);
   const preheader = (() => {
     switch (a.kind) {
       case 'confirm_request':
@@ -530,7 +559,9 @@ function buildView(a: TemplateArgs): OrderEmailView {
         return def.preheader({ submittedAt: submittedOn, warehouse: wh });
       case 'approved':
         // 0396 (L86): the preheader says "Reserved N units", so N is what
-        // was held when only part of the order could be.
+        // was held when only part of the order could be; when nothing could
+        // be, it says so instead of "Reserved 0 units".
+        if (heldState(a.summary.held) === 'none') return `Approved. ${NOTHING_HELD_YET}`;
         return def.preheader({
           units: a.summary.held?.partly ? a.summary.held.heldUnits : units,
           lines,
@@ -625,17 +656,22 @@ function strongHtml(s: string): string {
 
 /**
  * The approved email's opening sentence (0396, L86), for both renderers:
- * every unit held, part held, or (the holds could not be read) neither claim.
- * `greet` is hi(...) already escaped for the renderer it is used in; the
- * numbers are plain integers.
+ * every unit held, part held, nothing held yet, or (the holds could not be
+ * read) neither claim. `greet` is hi(...) already escaped for the renderer it
+ * is used in; the numbers are plain integers.
  */
 function approvedProse(greet: string, held: HeldSummary | null): string {
   const next = 'You’ll get another note the moment it leaves the dock.';
-  if (held === null) return `${greet}your request is approved. ${next}`;
-  if (held.partly) {
-    return `${greet}we’ve reserved ${held.heldUnits} of ${held.owedUnits} units on this request; the rest is waiting for stock. ${next}`;
+  switch (heldState(held)) {
+    case 'unknown':
+      return `${greet}your request is approved. ${next}`;
+    case 'none':
+      return `${greet}your request is approved. ${NOTHING_HELD_YET} ${next}`;
+    case 'part':
+      return `${greet}we’ve reserved ${held!.heldUnits} of ${held!.owedUnits} units on this request; the rest is waiting for stock. ${next}`;
+    case 'all':
+      return `${greet}we’ve reserved every unit on this request. ${next}`;
   }
-  return `${greet}we’ve reserved every unit on this request. ${next}`;
 }
 
 /** "Hi Jane — …" / "Hi — …" (missing-name fallback per the design prompt). */
@@ -850,18 +886,27 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'approved': {
-      // 0396 (L86): approve_partial holds only what is free, so the prose
-      // says every unit only when every unit is held.
+      // 0396 (L86): approve_partial holds only what is free, which may be
+      // nothing, so the prose says every unit only when every unit is held,
+      // and nothing is said to be packing when nothing is held.
       const held = a.summary.held;
+      const state = heldState(held);
       const prose = approvedProse(hi(v.firstName, true), held);
       return {
         rows: [
-          introSection(v, `${escapeHtml(v.displayId)} is approved.`, 'Packing starts now.', prose),
+          introSection(
+            v,
+            `${escapeHtml(v.displayId)} is approved.`,
+            state === 'none' ? 'It is waiting for stock.' : 'Packing starts now.',
+            prose,
+          ),
           motionSection(
             'settle',
-            held?.partly
-              ? 'Three cartons settle into a row — part of your order is reserved and moving to packing'
-              : 'Three cartons settle into a row — your order is reserved and moving to packing',
+            state === 'none'
+              ? 'Three cartons settle into a row — your order is approved and waiting for stock'
+              : state === 'part'
+                ? 'Three cartons settle into a row — part of your order is reserved and moving to packing'
+                : 'Three cartons settle into a row — your order is reserved and moving to packing',
           ),
           section(PAD_TIMELINE, orderTimeline({ steps: stagePath(1), tone: 'ok' })),
           ...(showGrid
@@ -869,9 +914,12 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
                 section(
                   PAD_BLOCK,
                   orderGrid(a, v, {
-                    reserved: true,
+                    // Nothing held: the cell reads Contents, not "Reserved 8 units".
+                    reserved: state !== 'none',
                     approvedSpan: true,
-                    ...(held?.partly ? { heldOf: { held: held.heldUnits, owed: held.owedUnits } } : {}),
+                    ...(state === 'part' && held
+                      ? { heldOf: { held: held.heldUnits, owed: held.owedUnits } }
+                      : {}),
                   }),
                 ),
               ]
@@ -1221,8 +1269,13 @@ function renderText(a: TemplateArgs): string {
     lines.push('— Order summary —');
     lines.push(`Order: ${v.displayId}${v.displayId !== v.woId ? ` (${v.woId})` : ''}`);
     lines.push(`Contents: ${v.units} units across ${v.lines} lines`);
-    if (a.kind === 'approved' && a.summary.held?.partly) {
-      lines.push(`Reserved: ${a.summary.held.heldUnits} of ${a.summary.held.owedUnits} units`);
+    if (a.kind === 'approved') {
+      const state = heldState(a.summary.held);
+      if (state === 'part' && a.summary.held) {
+        lines.push(`Reserved: ${a.summary.held.heldUnits} of ${a.summary.held.owedUnits} units`);
+      } else if (state === 'none') {
+        lines.push('Reserved: nothing yet (waiting for stock)');
+      }
     }
     if (a.summary.shipDate) lines.push(`Ships: ${a.summary.shipDate}`);
     if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
@@ -1384,10 +1437,12 @@ export async function sendOrderRequestEmail(
   // Subject: the registry builder fed the order number the app shows
   // (SO-000049), with the `WO-` + 8-char handle only as the fallback for an
   // order without one (L91). Same string as the HTML title (buildView).
-  const subject = def.subject({
-    orderId:
-      formatOrderNumber(request.order_number) ?? `WO-${request.id.slice(0, 8).toUpperCase()}`,
-  });
+  // emailSubject: the approval that held nothing has its own subject.
+  const subject = emailSubject(
+    kind,
+    summary.held,
+    formatOrderNumber(request.order_number) ?? `WO-${request.id.slice(0, 8).toUpperCase()}`,
+  );
 
   // Gmail clips past ~102KB and hides the unsubscribe footer — refuse to
   // send an over-budget render (tests keep this from ever firing).

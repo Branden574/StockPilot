@@ -257,7 +257,7 @@ export const RELEASES: Release[] = [
     revision: 1,
     // Small fixes slice 2 (migration 0396, L86): a partly approved order's
     // notification (in the app and as a push) and approval email say what is
-    // held instead of "every unit is reserved". Held as a DRAFT until 0396 is
+    // held, or that nothing is held yet, instead of "every unit is reserved". Held as a DRAFT until 0396 is
     // pushed and the web deploy with the email variant is live (the push text
     // comes from the database, so no phone update is needed); the follow-up
     // that publishes it sets the real publishedAt and re-reads these words
@@ -273,7 +273,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'A partly approved order says what is held',
     summary:
-      'When only part of your order request can be held for you, the notification and the approval email now say so, instead of saying every unit is reserved.',
+      'When only part of your order request, or none of it, can be held for you yet, the notification and the approval email now say so, instead of saying every unit is reserved.',
     publishedAt: '2026-10-10T17:10:00Z',
     audience: { anyPermission: ['orders:request'], modules: ['orders'] },
     entries: [
@@ -283,7 +283,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'A partly approved order says what is held',
         whatChanged:
-          'When your order request is approved but only part of it can be held, because the rest is not in stock yet, the notification now says "Part of your order is held; the rest is waiting for stock." The approval email says how many units are reserved, for example 6 of 8, and that the rest is waiting for stock. When every unit is held, both still say so.',
+          'When your order request is approved but only part of it can be held, because the rest is not in stock yet, the notification now says "Part of your order is held; the rest is waiting for stock." When none of it can be held yet, it says "Nothing is held yet; your order is waiting for stock." The approval email says how many units are reserved, for example 6 of 8, and that the rest is waiting for stock, or that nothing is reserved yet. When every unit is held, both still say so.',
         whyItMatters:
           'Both used to say every unit was reserved even when only part was, so you could expect the whole order when only part of it was set aside for you.',
         howItAffectsYou:
