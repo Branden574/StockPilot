@@ -4850,14 +4850,17 @@ export class OrderRequestsService {
    * Whether the order's requester deleted their account (0388:
    * requester_deleted_at). A deleted requester is never emailed again, not
    * even at an address the order recorded (the copy itself is kept, O-A3-6).
-   * Only an order with no requester id can be in that state. When the row came
-   * from a select that did not carry the marker, it is read (only then, and
-   * only for such an order); a failed read sends nothing (a missed status
-   * email over mailing someone who deleted their account) and is reported.
+   * Only an order with no requester id can be in that state, and it matters
+   * only when the order kept an address (otherwise nothing is sent anyway).
+   * When the row came from a select that did not carry the marker, it is read
+   * (only then, and only for such an order); a failed read sends nothing (a
+   * missed status email over mailing someone who deleted their account) and is
+   * reported.
    */
   private async requesterAccountDeleted(row: OrderRequestRow): Promise<boolean> {
     if (row.requester_user_id) return false;
     if (row.requester_deleted_at !== undefined) return row.requester_deleted_at !== null;
+    if (!row.requester_email) return false;
     const { data, error } = await this.ctx.supabase
       .from('order_requests')
       .select('requester_deleted_at')

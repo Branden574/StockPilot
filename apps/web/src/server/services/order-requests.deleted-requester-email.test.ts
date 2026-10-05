@@ -134,6 +134,15 @@ describe('order status email: a deleted requester is never emailed (A3)', () => 
     );
   });
 
+  it('a row with no kept address reads nothing more (no email can go out anyway)', async () => {
+    // The cancel and approve RPCs answer a narrow row (id, status, number):
+    // no requester column, no address. No extra order read for it.
+    const stub = makeSupabaseStub();
+    await notify(svc(stub), { id: 'ord-1', status: 'cancelled', order_number: 7 }, 'cancelled');
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('order_requests');
+  });
+
   it('a narrow-select public row whose marker reads null is emailed', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { requester_deleted_at: null }, error: null },

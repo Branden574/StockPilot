@@ -90,14 +90,19 @@ const reviewScreen = read('../../app/po-import/[id].tsx');
 
 describe('imports list: who uploaded each row', () => {
   it('reads uploaded_by and looks the names up through readPoImportUploaders', () => {
-    expect(listScreen).toMatch(/approved_po_id, created_at, uploaded_by,/);
+    // Re-pinned by 0394 (was /approved_po_id, created_at, uploaded_by,/):
+    // the row's deleted_users marker rides along for "Deleted user".
+    expect(listScreen).toMatch(/approved_po_id, created_at, uploaded_by, deleted_users,/);
     expect(listScreen).toContain('const uploaders = await readPoImportUploaders(');
     expect(listScreen).not.toContain(".from('user_profiles')");
   });
 
   it('labels each row with poImportUploaderLabel and shows it on the date line', () => {
-    expect(listScreen).toContain(
-      'uploader: poImportUploaderLabel(uploaders, (r.uploaded_by as string | null) ?? null),',
+    // Re-pinned by 0394 (was poImportUploaderLabel(uploaders, uploaded_by)):
+    // the import's stamp is passed, so an uploader who deleted their account
+    // reads "Deleted user".
+    expect(listScreen).toMatch(
+      /uploader: poImportUploaderLabel\(\s*uploaders,\s*\(r\.uploaded_by as string \| null\) \?\? null,\s*r\.deleted_users,\s*\),/,
     );
     expect(listScreen).toContain('{` · by ${row.uploader}`}');
   });
@@ -105,11 +110,13 @@ describe('imports list: who uploaded each row', () => {
 
 describe('import review: who uploaded it', () => {
   it('reads uploaded_by and looks the name up beside the lineage', () => {
-    expect(reviewScreen).toMatch(/created_at, parsed_json, uploaded_by,/);
+    // Re-pinned by 0394 (was /created_at, parsed_json, uploaded_by,/).
+    expect(reviewScreen).toMatch(/created_at, parsed_json, uploaded_by, deleted_users,/);
     expect(reviewScreen).toMatch(
       /const \[uploaders\] = await Promise\.all\(\[\s*readPoImportUploaders\(supabase, \[uploaderId\]\),\s*loadLineage\(/,
     );
-    expect(reviewScreen).toContain('setUploadedBy(poImportUploaderLabel(uploaders, uploaderId));');
+    // Re-pinned by 0394 (was poImportUploaderLabel(uploaders, uploaderId)).
+    expect(reviewScreen).toContain('setUploadedBy(poImportUploaderLabel(uploaders, uploaderId, r.deleted_users));');
     expect(reviewScreen).not.toContain(".from('user_profiles')");
   });
 
