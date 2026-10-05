@@ -858,9 +858,11 @@ select is(
   -- A20 proves the edit) and four SECURITY INVOKER return helpers with no API
   -- EXECUTE added. revise_order_needed_by calls none of them. Same computation
   -- as 0385 Z2's re-pin (re-derived 2026-10-05 after the desk-check fixes
-  -- changed return_line_sources and return_restock_original; the same query
-  -- reproduces 8b442829|14 and the earlier 817dc7bd|18); verify on the stack.
-  'ledger.*|b19b3b42b13e22c020bc64e5fae89dca|18\n'
+  -- changed return_line_sources and return_restock_original, and again at the
+  -- test stage after return_line_sources' NULL-safe placement test; the same
+  -- query reproduces 8b442829|14 and the earlier 817dc7bd|18 and b19b3b42|18;
+  -- the local stack gives the same value).
+  'ledger.*|7b46ad415ad78e972b111da3f9d3a532|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier

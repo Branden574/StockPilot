@@ -1114,9 +1114,11 @@ select is(
   -- production's own ledger rows (which reproduce the old pin exactly) with those
   -- five rows changed, under production's collation (2026-10-04; re-derived
   -- 2026-10-05 after the desk-check fixes changed return_line_sources and
-  -- return_restock_original, the same query giving 817dc7bd|18 for the earlier
-  -- bodies); verify on the stack.
-  'ledger.*|b19b3b42b13e22c020bc64e5fae89dca|18\n'
+  -- return_restock_original, and again at the test stage after
+  -- return_line_sources' NULL-safe placement test, the same query giving
+  -- 817dc7bd|18 and b19b3b42|18 for the earlier bodies; the local stack gives
+  -- the same value).
+  'ledger.*|7b46ad415ad78e972b111da3f9d3a532|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are

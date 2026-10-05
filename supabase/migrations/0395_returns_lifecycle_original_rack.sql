@@ -330,11 +330,15 @@ begin
       -- Validity, now (plan 3.5.2 rules 1-8; rule 9 is the remaining quantity).
       -- The placement test mirrors core isRackShelfLocation
       -- (location-groups.ts): not a system bucket, and a placement kind or type.
+      -- A NULL kind or type reads as '' (core's `?? ''`): without the coalesce
+      -- a NULL-kind Site gives NULL here, the CASE skips it, and the Site
+      -- would be offered as an original rack (D12; test stage, pgTAP H6).
       v_problem := case
         when s.l_id is null or s.l_org <> v_line.organization_id then 'missing'
         when s.l_deleted_at is not null then 'archived'
-        when not (s.l_kind is distinct from 'staging' and s.l_kind is distinct from 'unplaced'
-                  and (s.l_kind in ('rack', 'crate', 'area') or s.l_type in ('shelf', 'bin')))
+        when not (coalesce(s.l_kind, '') not in ('staging', 'unplaced')
+                  and (coalesce(s.l_kind, '') in ('rack', 'crate', 'area')
+                       or coalesce(s.l_type, '') in ('shelf', 'bin')))
           then 'not_a_placement'
         when s.kinds_at_draw <> array[coalesce(s.l_kind, '')] then 'not_a_placement'
         when s.whs_at_draw <> array[coalesce(s.l_wh::text, '')] then 'moved_warehouse'

@@ -1239,7 +1239,8 @@ select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_r
           pg_temp.one(:lU, 3)::text))->>'returnId') as "rU" \gset
 select is(
   (select (l->>'case') || ':' || (l->>'offerOriginal') || ':' || jsonb_array_length(l->'offerSourceIds')::text || ':'
-          || (select string_agg((s->>'valid') || '/' || (s->>'reason'), ',') from jsonb_array_elements(l->'sources') s)
+          || (select string_agg((s->>'valid') || '/' || coalesce(s->>'reason', '-'), ',' order by s->>'locationId')
+                from jsonb_array_elements(l->'sources') s)
      from (select pg_temp.rpc('authenticated', :mgr, format('select public.return_restock_options(%L)', :'rU'))->'lines'->0 as l) x),
   'full_remainder:false:0:false/not_a_placement,false/not_a_placement,false/not_a_placement',
   'H6: a draw from Staging, Unplaced or a Site is never offered as an original location (D12)');
