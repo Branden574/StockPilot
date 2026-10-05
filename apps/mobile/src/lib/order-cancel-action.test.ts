@@ -113,4 +113,22 @@ describe('order/[id].tsx wiring (L93)', () => {
     expect(screen).toMatch(/action: 'cancel', reason: cancelReasonForPost\(reason\)/);
     expect(screen.match(/action: 'cancel'/g)).toHaveLength(1);
   });
+
+  // Review (2026-10-05, Medium): at AX5 the new Cancel request read "Cancel
+  // reque" on the iPhone, with the lower half of every glyph cut on both
+  // devices (s1-test AX5 shots), and Add items above it the same. actionBtn
+  // draws every order action through styles.addBtn, which had a FIXED
+  // `height: 44` around an uncapped Mono label. The Dynamic Type policy pairs
+  // text with a minimum height, never a fixed one, and lets the label wrap.
+  it('the order action buttons grow with the text: a minimum height, never a fixed one, and a label that wraps', () => {
+    const addBtn = screen.match(/\n {2}addBtn: \{[^}]*\}/)?.[0] ?? '';
+    expect(addBtn).toMatch(/minHeight: 44,/);
+    expect(addBtn).toMatch(/paddingVertical: 10,/);
+    expect(addBtn).not.toMatch(/[^A-Za-z]height: 44/);
+    const helper = screen.slice(screen.indexOf('const actionBtn = ('), screen.indexOf('async function uploadOne('));
+    expect(helper).toContain('styles.addBtn');
+    expect(helper).toMatch(
+      /<Mono size=\{13\} color=\{fg\} style=\{\{ flexShrink: 1, textAlign: 'center' \}\}>\s*\{label\}\s*<\/Mono>/,
+    );
+  });
 });

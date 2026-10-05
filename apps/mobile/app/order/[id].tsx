@@ -2021,7 +2021,13 @@ export default function OrderDetail() {
           },
         ]}
       >
-        {isBusy ? <ActivityIndicator color={fg} /> : <Mono size={13} color={fg}>{label}</Mono>}
+        {isBusy ? (
+          <ActivityIndicator color={fg} />
+        ) : (
+          <Mono size={13} color={fg} style={{ flexShrink: 1, textAlign: 'center' }}>
+            {label}
+          </Mono>
+        )}
       </Pressable>
     );
   };
@@ -4004,12 +4010,17 @@ const styles = StyleSheet.create({
   // order's heading 3pt off its top (4 -> 1), so both sit where they did.
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  // Dynamic Type: a minimum height, never a fixed one. Every order action
+  // (actionBtn) and the screen's other buttons draw through this around an
+  // uncapped label; a fixed 44 cut the label at AX5 ("Cancel reque", the
+  // lower half of each glyph gone; review 2026-10-05). The label wraps.
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 16,
-    height: 44,
+    paddingVertical: 10,
+    minHeight: 44,
     borderRadius: 10,
     justifyContent: 'center',
   },
