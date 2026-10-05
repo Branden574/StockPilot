@@ -218,6 +218,22 @@ describe('the run and editor screens (4)', () => {
     expect(run).toContain('receivingRunStatusLines(');
   });
 
+  // Desk check F5 (mutation caught: the Editor keyed on every read, so Reload
+  // after a conflict threw away the staged edits the message says are kept).
+  it('the editor keeps its staged edits across Reload, and publishes against the version they began on', () => {
+    expect(editor).toContain('key={state.generation}');
+    expect(editor).toContain('setState((prev) => editorScreenLoaded(prev, editor, saved));');
+    expect(editor).toContain('onSaved={() => void reload(true)}');
+    expect(editor).toContain('onReload={() => reload(false)}');
+    expect(editor).toContain('expectedCurrentId: baseId,');
+    const begin = fnBody(editor, "  function begin(from: 'suggested' | 'blank' | 'live') {");
+    expect(begin).toContain('setBaseId(live?.id ?? null);');
+    const again = fnBody(editor, '  async function reloadAfterConflict() {');
+    expect(again).toContain('const fresh = await onReload();');
+    expect(again).toContain('setBaseId(fresh.live?.id ?? null);');
+    expect(editor).toContain('onPress={() => void reloadAfterConflict()}');
+  });
+
   it('the editor: read only without the publisher gate, confirmations to publish and to turn off', () => {
     expect(editor).toContain('const canPublish = editor.gate.canPublishChecklist;');
     expect(editor).toContain('{C.readOnlyEditor}');

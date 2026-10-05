@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { RECEIVING_CHECKLIST_COPY as C, receivingGate } from '@stockpilot/core';
 
-import { IDS, poChecksAnswer } from './__fixtures__/receiving-checks';
-import { parsePoChecks } from './receiving-checks-api';
+import { editorAnswer, IDS, poChecksAnswer } from './__fixtures__/receiving-checks';
+import { parseChecklistEditor, parsePoChecks } from './receiving-checks-api';
 import {
   CHECK_ANSWER_OPTIONS,
+  editorScreenFailed,
+  editorScreenLoaded,
   historyChecksFailed,
   postedAlertPlan,
   receiptChip,
@@ -235,5 +237,40 @@ describe('the run screen', () => {
       { value: 'na', label: 'Not applicable' },
     ]);
     expect(receivingCheckPath(IDS.runA)).toBe(`/receiving-check/${IDS.runA}`);
+  });
+});
+
+/**
+ * Desk check F5: the editor screen mounts its Editor under a generation that
+ * moves only after a publish or a turn off. Reload after a conflict keeps the
+ * staged title and steps (as the web does) and brings the new live version,
+ * history and next number under them; the Editor re-bases on the version the
+ * reload brought (receiving-checklist-wiring.test.ts pins that wiring).
+ */
+describe('the editor screen across reads', () => {
+  const editor = parseChecklistEditor(editorAnswer());
+  const newer = { ...editor, nextVersionNumber: 4 };
+
+  it('the first read is generation 0, and a Reload keeps the generation (the staged edits stay)', () => {
+    const first = editorScreenLoaded({ kind: 'loading' }, editor, false);
+    expect(first).toEqual({ kind: 'ready', editor, generation: 0 });
+    const reloaded = editorScreenLoaded(first, newer, false);
+    expect(reloaded).toEqual({ kind: 'ready', editor: newer, generation: 0 });
+  });
+
+  // Mutation caught: every read remounts the Editor (the staged edits lost).
+  it('a publish or a turn off starts the editor over (a new generation)', () => {
+    const first = editorScreenLoaded({ kind: 'loading' }, editor, false);
+    expect(editorScreenLoaded(first, newer, true)).toEqual({
+      kind: 'ready',
+      editor: newer,
+      generation: 1,
+    });
+  });
+
+  it('a failed read keeps what is on screen; with nothing on screen it says why', () => {
+    const first = editorScreenLoaded({ kind: 'loading' }, editor, false);
+    expect(editorScreenFailed(first, 'x')).toBe(first);
+    expect(editorScreenFailed({ kind: 'loading' }, 'x')).toEqual({ kind: 'failed', message: 'x' });
   });
 });

@@ -49,6 +49,11 @@ import {
   type PhoneChecklistEditor,
   type PhoneChecklistVersion,
 } from '@/lib/receiving-checks-api';
+import {
+  editorScreenFailed,
+  editorScreenLoaded,
+  type ChecklistEditorScreen,
+} from '@/lib/receiving-checks-view';
 import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -73,40 +78,47 @@ const MIN_TAP = 44;
  * again by the service and the database.
  *
  * Online only: offline, publishing and turning off are disabled with the
- * reason. Leaving a version being prepared asks first.
+ * reason. Leaving a version being prepared asks first. Reload after a
+ * conflict keeps the version being prepared (desk check F5); only a publish
+ * or a turn off starts the editor over.
  */
 export default function ReceivingChecklistScreen() {
   const router = useRouter();
   const { c } = useTheme();
   const offline = isOfflineState(useNetworkState());
-  const [state, setState] = React.useState<
-    | { kind: 'loading' }
-    | { kind: 'failed'; message: string }
-    | { kind: 'ready'; editor: PhoneChecklistEditor; at: number }
-  >({ kind: 'loading' });
+  const [state, setState] = React.useState<ChecklistEditorScreen>({ kind: 'loading' });
   const [reloading, setReloading] = React.useState(false);
   const seqRef = React.useRef(0);
 
-  const load = React.useCallback(async (): Promise<string | null> => {
-    const seq = ++seqRef.current;
-    try {
-      const editor = await getChecklistEditor();
-      if (seq === seqRef.current) setState({ kind: 'ready', editor, at: Date.now() });
-      return null;
-    } catch (e) {
-      const message = describeChecklistError(e, C.loadFailed);
-      if (seq === seqRef.current) {
-        setState((prev) => (prev.kind === 'ready' ? prev : { kind: 'failed', message }));
+  /**
+   * Read the checklist; `saved` after a publish or a turn off (a new
+   * generation). A read overtaken by a later one changes nothing (`stale`).
+   */
+  const load = React.useCallback(
+    async (
+      saved: boolean,
+    ): Promise<{ editor: PhoneChecklistEditor } | { error: string } | { stale: true }> => {
+      const seq = ++seqRef.current;
+      try {
+        const editor = await getChecklistEditor();
+        if (seq !== seqRef.current) return { stale: true };
+        setState((prev) => editorScreenLoaded(prev, editor, saved));
+        return { editor };
+      } catch (e) {
+        const message = describeChecklistError(e, C.loadFailed);
+        if (seq !== seqRef.current) return { stale: true };
+        setState((prev) => editorScreenFailed(prev, message));
+        return { error: message };
       }
-      return message;
-    }
-  }, []);
+    },
+    [],
+  );
 
   const haveEditor = state.kind === 'ready';
   React.useEffect(() => {
     if (offline || haveEditor) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set in load() is post-await; the effect synchronizes with the server
-    void load();
+    void load(false);
   }, [load, offline, haveEditor]);
 
   function goBack() {
@@ -114,12 +126,18 @@ export default function ReceivingChecklistScreen() {
     else router.replace('/' as Href);
   }
 
-  async function reload() {
-    if (reloading) return;
+  /** Read again: the editor read, or null (the failure is said). */
+  async function reload(saved: boolean): Promise<PhoneChecklistEditor | null> {
+    if (reloading) return null;
     setReloading(true);
     try {
-      const failed = await load();
-      if (failed) Alert.alert(C.loadFailed, failed);
+      const read = await load(saved);
+      if ('stale' in read) return null;
+      if ('error' in read) {
+        Alert.alert(C.loadFailed, read.error);
+        return null;
+      }
+      return read.editor;
     } finally {
       setReloading(false);
     }
@@ -132,13 +150,15 @@ export default function ReceivingChecklistScreen() {
       </View>
       {state.kind === 'ready' ? (
         <Editor
-          // A new read (after a publish, a turn off or Reload) starts the
-          // screen over from what the server holds.
-          key={state.at}
+          // A publish or a turn off starts the editor over from what the
+          // server holds; Reload after a conflict keeps the version being
+          // prepared (desk check F5): the generation moves only on a save.
+          key={state.generation}
           editor={state.editor}
           offline={offline}
           reloading={reloading}
-          onChanged={() => void reload()}
+          onSaved={() => void reload(true)}
+          onReload={() => reload(false)}
         />
       ) : offline ? (
         <View style={styles.pad}>
@@ -158,7 +178,7 @@ export default function ReceivingChecklistScreen() {
               size="sm"
               variant="outline"
               disabled={reloading}
-              onPress={() => void reload()}
+              onPress={() => void reload(false)}
               style={{ alignSelf: 'flex-start', marginTop: 12, minHeight: MIN_TAP }}
             >
               {C.tryAgain}
@@ -178,12 +198,16 @@ function Editor({
   editor,
   offline,
   reloading,
-  onChanged,
+  onSaved,
+  onReload,
 }: {
   editor: PhoneChecklistEditor;
   offline: boolean;
   reloading: boolean;
-  onChanged: () => void;
+  /** After a publish or a turn off: read again and start over. */
+  onSaved: () => void;
+  /** Reload after a conflict: read again, keeping the staged edits. */
+  onReload: () => Promise<PhoneChecklistEditor | null>;
 }) {
   const { c } = useTheme();
   const navigation = useNavigation();
@@ -200,6 +224,10 @@ function Editor({
   // One publish id per payload: a resend of the same version after a lost
   // reply is answered as that publish, never a second version.
   const pending = React.useRef<{ payload: string; clientPublishId: string } | null>(null);
+  // The live version the staged edits began on, sent as the expected one (a
+  // version someone else published meanwhile is refused, never replaced).
+  // Only Reload after that refusal moves it, to the version the reload read.
+  const [baseId, setBaseId] = React.useState<string | null>(null);
 
   usePreventRemove(editing, ({ data }) => {
     Alert.alert(C.leaveTitle, C.leaveEditorBody, [
@@ -210,6 +238,7 @@ function Editor({
 
   function begin(from: 'suggested' | 'blank' | 'live') {
     setError(null);
+    setBaseId(live?.id ?? null);
     if (from === 'live' && live) {
       setTitle(live.title);
       setSteps(checklistEditorStepsFrom(live.steps));
@@ -258,7 +287,7 @@ function Editor({
       title,
       steps: checklistPublishPayload(steps),
       procedureId: procedureId || null,
-      expectedCurrentId: live?.id ?? null,
+      expectedCurrentId: baseId,
     };
     const payload = JSON.stringify(body);
     if (!pending.current || pending.current.payload !== payload) {
@@ -274,7 +303,7 @@ function Editor({
       setBusy(false);
       setEditing(false);
       Alert.alert(C.published(res.versionNumber));
-      onChanged();
+      onSaved();
     } catch (e) {
       setBusy(false);
       const reason = checklistErrorReason(e);
@@ -302,7 +331,7 @@ function Editor({
       await retireChecklist(versionId);
       setBusy(false);
       Alert.alert(C.turnedOff);
-      onChanged();
+      onSaved();
     } catch (e) {
       setBusy(false);
       const reason = checklistErrorReason(e);
@@ -311,6 +340,15 @@ function Editor({
         step: null,
         changed: reason === 'checklist_changed',
       });
+    }
+  }
+
+  /** Reload after a conflict: the staged edits stay, re-based on what it read. */
+  async function reloadAfterConflict() {
+    const fresh = await onReload();
+    if (fresh) {
+      setBaseId(fresh.live?.id ?? null);
+      setError(null);
     }
   }
 
@@ -324,7 +362,7 @@ function Editor({
           size="sm"
           variant="outline"
           disabled={reloading || offline}
-          onPress={onChanged}
+          onPress={() => void reloadAfterConflict()}
           style={{ alignSelf: 'flex-start', marginTop: 10, minHeight: MIN_TAP }}
         >
           {C.reload}

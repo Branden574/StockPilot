@@ -9,7 +9,11 @@ import {
   type ReceivingGate,
 } from '@stockpilot/core';
 
-import { checklistErrorReason, type PhonePoChecks } from './receiving-checks-api';
+import {
+  checklistErrorReason,
+  type PhoneChecklistEditor,
+  type PhonePoChecks,
+} from './receiving-checks-api';
 
 /**
  * WHAT THE PHONE SHOWS FOR THE RECEIVING CHECKLIST (F4-1), as pure helpers the
@@ -141,4 +145,34 @@ export const CHECK_ANSWER_OPTIONS: readonly { value: 'pass' | 'fail' | 'na'; lab
 /** The run screen's native path for a run id (the web path rewrites to it). */
 export function receivingCheckPath(runId: string): string {
   return `/receiving-check/${runId}`;
+}
+
+/**
+ * The editor screen's read, and the generation its Editor is mounted under
+ * (desk check F5). The generation moves only after a publish or a turn off,
+ * which start the editor over from what the server holds. Reload after a
+ * conflict, and the first read, keep it: the staged title and steps stay (as
+ * on the web) with the new live version, history and next number under them.
+ */
+export type ChecklistEditorScreen =
+  | { kind: 'loading' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; editor: PhoneChecklistEditor; generation: number };
+
+/** A read landed; `saved` after a publish or a turn off. */
+export function editorScreenLoaded(
+  prev: ChecklistEditorScreen,
+  editor: PhoneChecklistEditor,
+  saved: boolean,
+): ChecklistEditorScreen {
+  const generation = prev.kind === 'ready' ? prev.generation + (saved ? 1 : 0) : 0;
+  return { kind: 'ready', editor, generation };
+}
+
+/** A read failed: what is on screen stays; with nothing on screen, why. */
+export function editorScreenFailed(
+  prev: ChecklistEditorScreen,
+  message: string,
+): ChecklistEditorScreen {
+  return prev.kind === 'ready' ? prev : { kind: 'failed', message };
 }
