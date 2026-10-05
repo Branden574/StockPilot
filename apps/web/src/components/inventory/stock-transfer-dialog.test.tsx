@@ -830,3 +830,88 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
     expect(await screen.findByRole('option', { name: /Rack A-9/ })).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A SITE'S NAME IS NEVER A RACK NAME (slice 3 review, F1; the Transfer
+// dialog's hole since it began listing Sites). The name checks used every
+// location in the source warehouse, so a Site named "DC4" made a typed rack
+// "DC4" read as existing: no "Create new rack DC4?", while the server, which
+// resolves a typed rack only among racks and crates, minted rack DC4 anyway.
+// The checks now see racks and crates only; the Site stays a destination in
+// the list, by id.
+// ---------------------------------------------------------------------------
+
+describe('StockTransferDialog — a Site name is never a rack name (F1)', () => {
+  const LOCS = [
+    { id: 'site-dc4', name: 'DC4', kind: null, warehouse_id: 'wh-1' },
+    { id: 'r-1a', name: '1-A', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '1', rackRow: 'A' },
+    { id: 'r-31c', name: '31-C', kind: 'rack', warehouse_id: 'wh-1', rackNumber: '31', rackRow: 'C' },
+  ];
+  const ON_1A = [{ locationId: 'r-1a', name: '1-A', quantity: 12, kind: 'rack', warehouseId: 'wh-1' }];
+
+  function renderWithDc4(opts: { itemType?: string; canMintDestination?: boolean } = {}) {
+    return render(
+      <StockTransferDialog
+        itemId="item-1"
+        itemName="Countertop Blender"
+        currentQuantity={12}
+        currentLocationId={null}
+        locations={LOCS as never}
+        holdings={ON_1A as never}
+        itemType={opts.itemType ?? 'asset'}
+        bookStorage={null}
+        canMintDestination={opts.canMintDestination ?? true}
+      />,
+    );
+  }
+
+  async function newLocation(user: ReturnType<typeof userEvent.setup>, rack: string) {
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    await user.click(await screen.findByRole('option', { name: /new location/i }));
+    await user.type(screen.getByLabelText(/rack number/i), rack);
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+  }
+
+  it('a typed "DC4" still asks "Create new rack DC4?" with a Site named DC4 in the warehouse', async () => {
+    const user = userEvent.setup();
+    renderWithDc4();
+    await newLocation(user, 'DC4');
+
+    expect(mockTransferStockAction).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Create new rack DC4?');
+  });
+
+  it.each(['C4', '4', 'DC4-A'])('a near-miss "%s" never offers the Site as a rack to use instead', async (typed) => {
+    const user = userEvent.setup();
+    renderWithDc4();
+    await newLocation(user, typed);
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent(`Create new rack ${typed}?`);
+    expect(screen.queryByRole('button', { name: /use DC4 instead/i })).not.toBeInTheDocument();
+  });
+
+  it('a BOOK without the mint grant typing rack "DC4" is told inline it would be created', async () => {
+    const user = userEvent.setup();
+    renderWithDc4({ itemType: 'book', canMintDestination: false });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+
+    expect(screen.getByText(/DC4 does not exist yet, and placing into a new rack or crate needs/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /transfer stock/i })).toBeDisabled();
+  });
+
+  it('the Site is still offered as a destination, by id', async () => {
+    mockTransferStockAction.mockResolvedValueOnce({ ok: true, data: { toLocationId: 'site-dc4' } });
+    const user = userEvent.setup();
+    renderWithDc4();
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    await user.click(await screen.findByRole('option', { name: 'DC4' }));
+    await user.click(screen.getByRole('button', { name: /transfer stock/i }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockTransferStockAction.mock.calls.at(-1)![0].destination).toEqual({ existingLocationId: 'site-dc4' });
+  });
+});

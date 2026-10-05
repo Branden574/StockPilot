@@ -60,6 +60,7 @@ import {
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  rackOrCrateRows,
   seedDestinationFields,
   type ChosenDestination,
   type DestinationFields,
@@ -252,6 +253,14 @@ export function StockTransferDialog({
   // a known warehouse there's nowhere to create it, so the option hides.
   const sourceWarehouseId = selectedHolding?.warehouseId ?? null;
   const canCreateHere = canMintDestination && !!sourceWarehouseId;
+  // THE ROWS EVERY NAME CHECK SEES (F1): the source warehouse's racks and
+  // crates, the only rows the server resolves a typed rack or crate among. This
+  // list carries every location, so a Site named "DC4" used to make a typed
+  // "DC4" read as existing (no question, while the server minted rack DC4), and
+  // a near-miss offered the Site as a rack to use instead.
+  const rackNameRows = rackOrCrateRows(
+    locations.filter((l) => l.warehouse_id === sourceWarehouseId),
+  );
 
   const isNew = !isBook && toLocation === NEW_LOCATION_SENTINEL;
 
@@ -354,11 +363,7 @@ export function StockTransferDialog({
   const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
   const needsMint =
     plannedLabel.length > 0 &&
-    !locations.some(
-      (l) =>
-        l.warehouse_id === sourceWarehouseId &&
-        l.name.trim().toLowerCase() === plannedLabel.toLowerCase(),
-    );
+    !rackNameRows.some((l) => l.name.trim().toLowerCase() === plannedLabel.toLowerCase());
   const cannotMint = needsMint && !canCreateHere;
   // A transfer INTO the place the stock is already in is a no-op the server
   // refuses; for a book whose fields were seeded from the crate it is being
@@ -577,9 +582,7 @@ export function StockTransferDialog({
         ? describeNewRackPlacement({
             label: destinationLabel(dest),
             quantity: qtyNum,
-            existingLabels: locations
-              .filter((l) => l.warehouse_id === sourceWarehouseId)
-              .map((l) => l.name),
+            existingLabels: rackNameRows.map((l) => l.name),
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           })
         : null;
@@ -607,13 +610,12 @@ export function StockTransferDialog({
   }
 
   /** "Did you mean 10-A?" — move into the EXISTING location instead of minting
-   *  the typo. Resolved within the source warehouse so a same-named rack
-   *  elsewhere is never the target. */
+   *  the typo. Resolved among the source warehouse's racks and crates, so a
+   *  same-named rack elsewhere, or a Site sharing the name, is never the
+   *  target. */
   function moveIntoSuggestion(label: string) {
-    const match = locations.find(
-      (l) =>
-        l.warehouse_id === sourceWarehouseId &&
-        l.name.trim().toLowerCase() === label.trim().toLowerCase(),
+    const match = rackNameRows.find(
+      (l) => l.name.trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (!match) return;
     setPendingConfirm(null);

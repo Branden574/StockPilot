@@ -1355,3 +1355,124 @@ describe('PlaceFromStagingDialog — the warehouse Site (L121)', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Placed 1 copy of The Outsiders at Main Distribution Center.');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A SITE'S NAME IS NEVER A RACK NAME (slice 3 review, F1)
+//
+// The list now carries the warehouse's Site (L121). A typed rack resolves on
+// the server only among racks and crates (LocationsService.findRackOrCrate
+// filters by kind), so a Site named "DC4" never answers a typed "DC4": the
+// server mints a real rack DC4 and stamps the item's rack label with it. L4L's
+// Site IS named DC4 (the 2026-09-24 "items went under rack DC4" report), so the
+// guard must still ask "Create new rack DC4?", the needs-mint check must still
+// see a mint, and no near-miss ("C4", "4", "DC4-A") may offer the Site as a
+// rack to "use instead".
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('PlaceFromStagingDialog — a Site name is never a rack name (F1)', () => {
+  const DC4_SITE: DestinationOption = {
+    id: 'site-dc4',
+    name: 'DC4',
+    kind: '',
+    type: 'warehouse',
+    rackNumber: null,
+    rackRow: null,
+    crateColor: null,
+    crateNumber: null,
+  };
+  const WITH_DC4 = [DC4_SITE, ...DESTINATIONS];
+
+  function renderWithDc4(opts: { canMintDestination?: boolean; destinations?: DestinationOption[] } = {}) {
+    return render(
+      <PlaceFromStagingDialog
+        itemId="item-1"
+        itemName="Trail Runner"
+        itemType="asset"
+        sourceLocationId="stg-1"
+        sourceKind="staging"
+        warehouseId="wh-1"
+        warehouseName="Main Warehouse"
+        availableQuantity={3}
+        destinations={opts.destinations ?? WITH_DC4}
+        canMintDestination={opts.canMintDestination ?? true}
+      />,
+    );
+  }
+
+  it('a typed "DC4" still asks "Create new rack DC4?" with a Site named DC4 in the list', async () => {
+    const user = userEvent.setup();
+    renderWithDc4();
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Create new rack DC4?');
+    expect(confirm).toHaveTextContent('DC4 does not exist in Main Warehouse yet');
+
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({
+      newRack: { warehouseId: 'wh-1', rackNumber: 'DC4' },
+    });
+  });
+
+  it.each(['C4', '4', 'DC4-A'])('a near-miss "%s" never offers the Site as a rack to use instead', async (typed) => {
+    const user = userEvent.setup();
+    renderWithDc4();
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), typed);
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    const confirm = screen.getByRole('alertdialog');
+    expect(confirm).toHaveTextContent(`Create new rack ${typed}?`);
+    expect(within(confirm).queryByRole('button', { name: /use DC4 instead/i })).not.toBeInTheDocument();
+    expect(confirm).not.toHaveTextContent(/did you mean/i);
+  });
+
+  it('without the mint grant, a typed "DC4" is said inline as a rack to create, and Place is held', async () => {
+    const user = userEvent.setup();
+    renderWithDc4({ canMintDestination: false });
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), 'DC4');
+
+    expect(
+      screen.getByText(/DC4 does not exist yet, and placing into a new rack or crate needs the Transfer stock permission/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /place stock/i })).toBeDisabled();
+  });
+
+  it('a BOOK typing rack "DC4" into the fields is asked the same question', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: null, destinations: WITH_DC4, availableQuantity: 3 });
+    await openDialog(user);
+    await user.type(screen.getByLabelText(/^rack number$/i), 'DC4');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockPlaceStockAction).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Create new rack DC4?');
+  });
+
+  it('"Use DC4 instead" places into the RACK named DC4, never the Site of the same name', async () => {
+    // 0270's unique index is partial over rack/crate, so a rack may share a
+    // Site's name; the Site is listed first (an id lookup by name that saw it
+    // would land the stock on the Site under a button that reads as a rack).
+    const user = userEvent.setup();
+    const DC4_RACK: DestinationOption = {
+      id: 'r-dc4',
+      name: 'DC4',
+      kind: 'rack',
+      rackNumber: 'DC4',
+      rackRow: null,
+      crateColor: null,
+      crateNumber: null,
+    };
+    renderWithDc4({ destinations: [DC4_SITE, ...DESTINATIONS, DC4_RACK] });
+    await openNewRackForm(user);
+    await user.type(screen.getByLabelText(/rack number/i), 'DC5');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /use DC4 instead/i }));
+
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'r-dc4' });
+  });
+});

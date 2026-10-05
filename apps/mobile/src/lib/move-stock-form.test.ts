@@ -168,9 +168,11 @@ describe('hazard: the destination scope disagreeing with the actual source', () 
   // skipped while the server mints a brand-new rack anyway.
   it('scopes the new-rack existence check to the SOURCE warehouse, not all warehouses', () => {
     // existingLabels is filtered by the source holding's warehouse before the
-    // decision is taken.
+    // decision is taken. The filter lives in rackNameDestinations since slice
+    // 3's review (F1: racks and crates only), asserted by value in
+    // move-stock-destinations.test.ts; the modal hands it the source warehouse.
     expect(modal).toContain('const sourceWarehouseId = selected?.warehouseId ?? null;');
-    expect(modal).toContain('d.warehouseId === sourceWarehouseId');
+    expect(modal).toContain('rackNameDestinations(destinations, sourceWarehouseId)');
     expect(modal).toContain('existingLabels,');
     // and it is NOT the old all-warehouses map.
     expect(modal).not.toContain('existingLabels: destinations.map((d) => d.name)');

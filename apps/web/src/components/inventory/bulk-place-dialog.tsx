@@ -66,6 +66,7 @@ import {
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
+  rackOrCrateRows,
   seedDestinationFields,
   sharedRecordedStorage,
   type ChosenDestination,
@@ -178,6 +179,11 @@ export function BulkPlaceDialog({
   // The warehouse's Site is offered beside its racks and crates (L121); the
   // copy says so only when one is in the list.
   const offersSite = destinations.some(isSiteOption);
+  // EVERY NAME CHECK SEES RACKS AND CRATES ONLY (F1): a typed rack resolves on
+  // the server among racks and crates, so the Site must never make a typed name
+  // read as existing (minting a rack for the whole batch unasked), nor be
+  // suggested as a rack to use instead.
+  const rackNameRows = rackOrCrateRows(destinations);
 
   // MIXED SELECTIONS ARE RACK-ONLY (for inline creation).
   //
@@ -249,7 +255,7 @@ export function BulkPlaceDialog({
   const plannedLabel = chosen && chosen.mode !== 'existing' ? destinationLabel(chosen) : '';
   const needsMint =
     plannedLabel.length > 0 &&
-    !destinations.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
+    !rackNameRows.some((d) => d.name.trim().toLowerCase() === plannedLabel.toLowerCase());
   const cannotMint = needsMint && !canMintDestination;
   const newProblem =
     chosen !== null
@@ -414,7 +420,7 @@ export function BulkPlaceDialog({
             label: destinationLabel(dest),
             warehouseName,
             quantity: totalUnits,
-            existingLabels: destinations.map((d) => d.name),
+            existingLabels: rackNameRows.map((d) => d.name),
             noun: isCrateChoice(dest) ? 'crate' : 'rack',
           });
     const creating = creation !== null && !creation.exists;
@@ -453,9 +459,10 @@ export function BulkPlaceDialog({
   }
 
   // "Did you mean 10-A?" — place into the EXISTING rack the worker probably
-  // meant. The suggestion is an existing label; map it to that destination id.
+  // meant. The suggestion is an existing label; map it to that destination id,
+  // among racks and crates only (a rack may share a Site's name; F1).
   function placeIntoSuggestion(label: string) {
-    const match = destinations.find(
+    const match = rackNameRows.find(
       (d) => d.name.trim().toLowerCase() === label.trim().toLowerCase(),
     );
     if (!match) return;

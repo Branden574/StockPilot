@@ -51,6 +51,8 @@ import {
   moveDestinationLabel,
   offeredDestinationOrder,
   placementDestinationsForSource,
+  rackNameDestinations,
+  rackNameMatch,
 } from '@/components/move-stock-destinations';
 import { transferStock, type NewRack } from '@/lib/stock-api';
 import { useAuth } from '@/lib/auth-context';
@@ -645,15 +647,16 @@ export function MoveStockModal({
     [rackNumber, rackRow],
   );
   // The place the fields name, if it would have to be CREATED. Existence is
-  // judged in the SOURCE warehouse, the one the server creates in.
+  // judged in the SOURCE warehouse, the one the server creates in, among its
+  // racks and crates only (F1): a typed rack resolves on the server among racks
+  // and crates, so the Site and the Unplaced bucket in `destinations` must never
+  // make a typed name read as existing, nor be suggested as a rack.
   const sourceWarehouseId = selected?.warehouseId ?? null;
-  const existingLabels = React.useMemo(
-    () =>
-      destinations
-        .filter((d) => sourceWarehouseId == null || d.warehouseId === sourceWarehouseId)
-        .map((d) => d.name),
+  const rackNameRows = React.useMemo(
+    () => rackNameDestinations(destinations, sourceWarehouseId),
     [destinations, sourceWarehouseId],
   );
+  const existingLabels = React.useMemo(() => rackNameRows.map((d) => d.name), [rackNameRows]);
   const bookNeedsMint = bookDest !== null && bookDestinationNeedsMint(bookDest, existingLabels);
   const cannotMint = isBook && bookNeedsMint && !canCreateLocation;
   // A move INTO the place the stock is already in is a no-op the server
@@ -850,15 +853,12 @@ export function MoveStockModal({
     // into that rack, creating nothing), then Cancel and the deliberate create.
     // Android's native AlertDialog renders at most THREE buttons, so with Cancel
     // and Create already taking two, only ONE suggestion fits there; iOS shows
-    // them all. The suggestion's rack is resolved within the SOURCE warehouse so
-    // a same-named rack elsewhere is never the target.
+    // them all. The suggestion's rack is resolved among the SOURCE warehouse's
+    // racks and crates, so a same-named rack elsewhere, or a Site sharing the
+    // name, is never the target.
     const maxSuggestions = Platform.OS === 'android' ? 1 : 2;
     const suggestionButtons = decision.suggestions.slice(0, maxSuggestions).flatMap((label) => {
-      const match = destinations.find(
-        (d) =>
-          (sourceWarehouseId == null || d.warehouseId === sourceWarehouseId) &&
-          d.name.trim().toLowerCase() === label.trim().toLowerCase(),
-      );
+      const match = rackNameMatch(rackNameRows, label);
       return match
         ? [{ text: `Use ${label} instead`, onPress: () => void performMove({ toLocationId: match.id }) }]
         : [];

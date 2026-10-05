@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   bookDestination,
+  bookDestinationNeedsMint,
+  decideNewRackPlacement,
   fieldsFromDestination,
   type MoveDestination,
   type MoveHolding,
@@ -17,6 +19,8 @@ import {
   moveDestinationLabel,
   offeredDestinationOrder,
   placementDestinationsForSource,
+  rackNameDestinations,
+  rackNameMatch,
 } from './move-stock-destinations';
 
 /**
@@ -251,5 +255,96 @@ describe('move-stock-modal.tsx — L121 wiring (the Site)', () => {
   it('the heading names the Site when one is on screen', () => {
     expect(modal).toMatch(/const offersSite = destChoices\.some\(\(d\) => moveDestinationGroup\(d\) === 'site'\)/);
     expect(modal).toContain('TO RACK, CRATE, OR SITE');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A SITE'S NAME IS NEVER A RACK NAME (slice 3 review, F1).
+//
+// The destinations now carry the warehouse's Site (L121), in put-away AND in
+// free-form Move. The sheet's name checks (the existing labels, needs-mint,
+// "Create new rack X?", the near-match suggestions and "Use X instead") were
+// built from every destination, so at L4L, whose Site is named DC4, a typed
+// rack "DC4" read as existing: no question, while the server, which resolves a
+// typed rack only among racks and crates, minted a real rack DC4 and moved the
+// stock into it. A near-miss ("C4", "4") offered "Use DC4 instead", which put
+// the stock on the Site under a button that reads as a rack.
+// ---------------------------------------------------------------------------
+
+describe('rack-name checks see racks and crates only (F1)', () => {
+  const DC4_SITE: MoveDestination = { id: 'site-dc4', name: 'DC4', kind: null, type: 'warehouse', warehouseId: 'wh-l4l' };
+  const L4L: MoveDestination[] = offeredDestinationOrder([
+    DC4_SITE,
+    { id: 'r-1a', name: '1-A', kind: 'rack', type: 'shelf', warehouseId: 'wh-l4l' },
+    { id: 'r-31c', name: '31-C', kind: 'rack', type: 'shelf', warehouseId: 'wh-l4l' },
+    { id: 'c-blue4', name: 'Blue #4', kind: 'crate', type: 'bin', warehouseId: 'wh-l4l' },
+    { id: 'unp-l4l', name: 'Unplaced', kind: 'unplaced', type: 'warehouse', warehouseId: 'wh-l4l' },
+    { id: 'r-dc4-far', name: 'DC4', kind: 'rack', type: 'shelf', warehouseId: 'wh-far' },
+  ]);
+  const labels = (sourceWarehouseId: string | null) =>
+    rackNameDestinations(L4L, sourceWarehouseId).map((d) => d.name);
+
+  it("keeps the source warehouse's racks and crates, never a Site or the Unplaced bucket", () => {
+    expect(rackNameDestinations(L4L, 'wh-l4l').map((d) => d.id)).toEqual(['r-1a', 'r-31c', 'c-blue4']);
+    // No source warehouse yet: every warehouse's racks and crates (as before).
+    expect(labels(null)).toEqual(['1-A', '31-C', 'Blue #4', 'DC4']);
+  });
+
+  it('decideNewRackPlacement still asks "Create new rack DC4?" with a Site named DC4 in the list', () => {
+    const d = decideNewRackPlacement({
+      rack: { kind: 'rack', rackNumber: 'DC4' },
+      warehouseName: 'Learn4Life',
+      quantity: 3,
+      existingLabels: labels('wh-l4l'),
+    });
+    expect(d.exists).toBe(false);
+    expect(d.title).toBe('Create new rack DC4?');
+    // The list as the sheet used to build it says the opposite: the bug.
+    const before = decideNewRackPlacement({
+      rack: { kind: 'rack', rackNumber: 'DC4' },
+      quantity: 3,
+      existingLabels: L4L.filter((x) => x.warehouseId === 'wh-l4l').map((x) => x.name),
+    });
+    expect(before.exists).toBe(true);
+  });
+
+  it.each(['C4', '4', 'DC4-A', 'DC5'])('a near-miss "%s" never suggests the Site', (typed) => {
+    const d = decideNewRackPlacement({
+      rack: { kind: 'rack', rackNumber: typed },
+      quantity: 1,
+      existingLabels: labels('wh-l4l'),
+    });
+    expect(d.exists).toBe(false);
+    expect(d.suggestions).not.toContain('DC4');
+  });
+
+  it('bookDestinationNeedsMint sees a mint for rack "DC4" with a Site named DC4 in the list', () => {
+    const dest = bookDestination({ rackNumber: 'DC4', rackRow: '', crateColor: '', crateNumber: '' }, null)!;
+    expect(dest.mode).toBe('new');
+    expect(bookDestinationNeedsMint(dest, labels('wh-l4l'))).toBe(true);
+    expect(bookDestinationNeedsMint(dest, labels('wh-l4l').concat('dc4'))).toBe(false);
+  });
+
+  it('"Use X instead" resolves only to a rack or crate, never the Site of the same name', () => {
+    const DC4_RACK: MoveDestination = { id: 'r-dc4', name: 'DC4', kind: 'rack', warehouseId: 'wh-l4l' };
+    const rows = rackNameDestinations([DC4_SITE, ...L4L, DC4_RACK], 'wh-l4l');
+    expect(rackNameMatch(rows, 'dc4 ')?.id).toBe('r-dc4');
+    expect(rackNameMatch(rackNameDestinations(L4L, 'wh-l4l'), 'DC4')).toBeNull();
+    expect(rackNameMatch(rows, '31-c')?.id).toBe('r-31c');
+  });
+});
+
+describe('move-stock-modal.tsx — F1 wiring (rack-name checks)', () => {
+  it('builds the existing labels from rackNameDestinations, not from every destination', () => {
+    const at = modal.indexOf('const existingLabels');
+    expect(at, 'existingLabels not found').toBeGreaterThan(-1);
+    const decl = modal.slice(modal.lastIndexOf('const rackNameRows', at), modal.indexOf(';\n', at));
+    expect(decl).toMatch(/rackNameDestinations\(destinations, sourceWarehouseId\)/);
+    expect(decl).toMatch(/rackNameRows\.map\(\(d\) => d\.name\)/);
+  });
+
+  it('looks the "Use X instead" row up among the same rows', () => {
+    expect(modal).toContain('const match = rackNameMatch(rackNameRows, label);');
+    expect(modal).not.toMatch(/const match = destinations\.find\(/);
   });
 });

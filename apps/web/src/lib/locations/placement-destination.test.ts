@@ -20,6 +20,7 @@ import {
   isSiteOption,
   newDestinationProblem,
   newDestinationReady,
+  rackOrCrateRows,
   seedDestinationFields,
   sharedRecordedStorage,
   type ChosenDestination,
@@ -365,6 +366,39 @@ describe('a Site among the Place destinations (L121)', () => {
   it('picking a Site fills nothing, and the blank boxes still name the Site by id', () => {
     expect(fieldsFromOption(site)).toEqual(EMPTY_DESTINATION_FIELDS);
     expect(destinationFromFields(EMPTY_DESTINATION_FIELDS, site)).toEqual({ mode: 'existing', option: site });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A SITE'S NAME IS NEVER A RACK NAME (slice 3 review, F1)
+//
+// A typed rack or crate resolves on the server only among rows of that kind
+// (LocationsService.findRackOrCrate filters by kind; 0270's unique index is
+// partial over rack/crate), so a Site named "DC4" never answers a typed "DC4":
+// the server mints a real rack DC4. Every name check a dialog makes (existing
+// labels, needs-mint, "Create new rack X?", the near-match suggestions, "Use X
+// instead") is built from these rows, and only these.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('rackOrCrateRows — the rows a typed rack or crate name is checked against (F1)', () => {
+  it('keeps racks and crates, and drops Sites, the system buckets, areas and legacy NULL-kind shelves', () => {
+    const rows = [
+      { id: 'site-dc4', name: 'DC4', kind: '' },
+      { id: 'r-31c', name: '31-C', kind: 'rack' },
+      { id: 'site-dock', name: 'Receiving Dock', kind: null },
+      { id: 'c-blue4', name: 'Blue #4', kind: 'crate' },
+      { id: 'stg', name: 'Staging', kind: 'staging' },
+      { id: 'unp', name: 'Unplaced', kind: 'unplaced' },
+      { id: 'area-1', name: 'Mezzanine', kind: 'area' },
+      { id: 'shelf-3', name: 'Shelf 3', kind: null, type: 'shelf' },
+    ];
+    expect(rackOrCrateRows(rows).map((r) => r.id)).toEqual(['r-31c', 'c-blue4']);
+  });
+
+  it('keeps the rows as given, so a dialog can map a suggestion back to its id', () => {
+    const rack = option({ id: 'r-dc4', name: 'DC4' });
+    expect(rackOrCrateRows([rack])[0]).toBe(rack);
+    expect(rackOrCrateRows([])).toEqual([]);
   });
 });
 

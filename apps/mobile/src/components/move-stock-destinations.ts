@@ -77,6 +77,41 @@ export function moveDestinationLabel(
 }
 
 /**
+ * THE ROWS A TYPED RACK OR CRATE NAME IS CHECKED AGAINST (slice 3 review, F1):
+ * the racks and crates, in the source holding's warehouse when there is one.
+ *
+ * A typed rack or crate resolves on the server only among rows of that kind
+ * (the transfer route's resolve-or-create filters by kind; 0270's unique index
+ * is partial over rack/crate), so a Site named "DC4" never answers a typed
+ * "DC4": the server mints a real rack DC4. The destinations carry the Site
+ * (L121) and, in free-form Move, the Unplaced bucket, so every name check the
+ * sheet makes (the existing labels, needs-mint, "Create new rack X?", the
+ * near-match suggestions and "Use X instead") is built from these rows and
+ * only these. Existence is judged in the warehouse the server creates in.
+ */
+export function rackNameDestinations<T extends Pick<MoveDestination, 'kind' | 'type' | 'warehouseId'>>(
+  destinations: readonly T[],
+  sourceWarehouseId: string | null,
+): T[] {
+  return destinations.filter((d) => {
+    const group = moveDestinationGroup(d);
+    if (group !== 'rack' && group !== 'crate') return false;
+    return sourceWarehouseId == null || d.warehouseId === sourceWarehouseId;
+  });
+}
+
+/** "Use 10-A instead": the row a suggested label names among `rows` (built
+ *  by rackNameDestinations), or null. Never a Site: a rack may share a Site's
+ *  name, and the Site is not among the rows. */
+export function rackNameMatch<T extends Pick<MoveDestination, 'name'>>(
+  rows: readonly T[],
+  label: string,
+): T | null {
+  const key = label.trim().toLowerCase();
+  return rows.find((d) => d.name.trim().toLowerCase() === key) ?? null;
+}
+
+/**
  * The PostgREST filter for the destinations read: the listed kinds, plus the
  * NULL-kind rows among which the Sites are. A bare `.in('kind', …)` drops
  * every NULL row (pattern #23); the NULL-kind rows that are NOT Sites are
