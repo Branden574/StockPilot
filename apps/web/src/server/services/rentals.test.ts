@@ -106,6 +106,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
   const rentalInsertCalls: unknown[] = [];
   // Every rpc(name, args) call, in order.
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  // Every borrower-name read on organization_members: its select and filters.
+  const memberReads: Array<{ select: string; filters: Array<[string, string]> }> = [];
   const rpcDefaults: Record<string, { data: unknown; error: unknown }> = {
     create_rental: { data: insertedRentalId, error: null },
     return_rental: { data: 'returned', error: null },
@@ -290,23 +292,45 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       // ----------------------------------------------------------------
       // organization_members table — borrower name auto-fill
       // ----------------------------------------------------------------
+      // Answers like PostgREST: organization_members has two foreign keys
+      // to user_profiles (user_id, invited_by), so an embed of user_profiles
+      // that names neither is refused with PGRST201 and no row. This mock
+      // used to answer any select with the member's name, which is how the
+      // unnamed embed shipped: the real read always failed, and create()
+      // silently kept the name the client sent.
       if (table === 'organization_members') {
         return {
-          select(_cols: string) {
+          select(cols: string) {
+            const read = { select: cols, filters: [] as Array<[string, string]> };
+            memberReads.push(read);
+            const embedsProfile = /user_profiles\s*(?:![a-z_]+\s*)*\(/.test(cols);
+            const namesRelationship = /user_profiles!(organization_members_user_id_fkey|organization_members_invited_by_fkey|user_id|invited_by)\b/.test(cols);
             return {
-              eq(_col: string, _val: string) {
+              eq(col: string, val: string) {
+                read.filters.push([col, val]);
                 return {
-                  eq(_col2: string, _val2: string) {
+                  eq(col2: string, val2: string) {
+                    read.filters.push([col2, val2]);
                     return {
-                      maybeSingle: async () => ({
-                        data:
-                          opts.memberFullName !== undefined
-                            ? {
-                                user: { full_name: opts.memberFullName },
-                              }
-                            : null,
-                        error: null,
-                      }),
+                      maybeSingle: async () =>
+                        embedsProfile && !namesRelationship
+                          ? {
+                              data: null,
+                              error: {
+                                code: 'PGRST201',
+                                message:
+                                  "Could not embed because more than one relationship was found for 'organization_members' and 'user_profiles'",
+                              },
+                            }
+                          : {
+                              data:
+                                opts.memberFullName !== undefined
+                                  ? {
+                                      user: { full_name: opts.memberFullName },
+                                    }
+                                  : null,
+                              error: null,
+                            },
                     };
                   },
                 };
@@ -362,6 +386,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
     reservationReleases,
     rentalInsertCalls,
     rpcCalls,
+    memberReads,
   };
 }
 
@@ -435,6 +460,28 @@ describe('RentalsService.create', () => {
     expect(auditMock).toHaveBeenCalledOnce();
     const auditCall = auditMock.mock.calls[0]![0];
     expect(auditCall.extra?.borrower).toBe('Alice Smith');
+    expect(rpcCalls[0]!.args.p_borrower_name).toBe('Alice Smith');
+  });
+
+  it("reads the borrower member's own profile through organization_members_user_id_fkey (wiring pin)", async () => {
+    const { ctx, memberReads, rpcCalls } = makeCtx({ memberFullName: 'Alice Smith' });
+    const svc = new RentalsService(ctx);
+    await svc.create({
+      ...validCreateInput,
+      borrowerUserId: '00000000-0000-0000-0000-000000000050',
+      borrowerName: 'Fallback Name',
+    });
+    // The member row is the borrower's (user_id), so the profile is the one
+    // that row's user_id points at, not the person who invited them.
+    expect(memberReads).toEqual([
+      {
+        select: 'user:user_profiles!organization_members_user_id_fkey(full_name)',
+        filters: [
+          ['user_id', '00000000-0000-0000-0000-000000000050'],
+          ['organization_id', 'org-1'],
+        ],
+      },
+    ]);
     expect(rpcCalls[0]!.args.p_borrower_name).toBe('Alice Smith');
   });
 

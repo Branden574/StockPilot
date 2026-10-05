@@ -219,11 +219,17 @@ export class RentalsService {
     }
 
     // Resolve borrower name when a member is selected.
+    //
+    // The embed NAMES its foreign key: organization_members has two to
+    // user_profiles (user_id, and invited_by), and PostgREST refuses an embed
+    // that names neither with HTTP 300 PGRST201. Unnamed, this read failed on
+    // every call and the rental silently kept the name the client sent. The
+    // borrower's profile is the one this member row's user_id points at.
     let borrowerName = input.borrowerName;
     if (input.borrowerUserId) {
       const { data: member } = await this.ctx.supabase
         .from('organization_members')
-        .select('user:user_profiles(full_name)')
+        .select('user:user_profiles!organization_members_user_id_fkey(full_name)')
         .eq('user_id', input.borrowerUserId)
         .eq('organization_id', this.ctx.organizationId)
         .maybeSingle();
