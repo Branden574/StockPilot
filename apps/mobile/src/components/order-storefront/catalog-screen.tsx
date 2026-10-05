@@ -186,6 +186,12 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   React.useEffect(() => {
     if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);
   }, [outcomeText, focused]);
+  // The one notice (a restored cart checked against the fresh catalog), said
+  // while this screen is in view (PO-4 review).
+  const noticeText = snap?.notice ?? null;
+  React.useEffect(() => {
+    if (noticeText && focused) AccessibilityInfo.announceForAccessibility(noticeText);
+  }, [noticeText, focused]);
 
   const say = React.useCallback((message: string) => AccessibilityInfo.announceForAccessibility(message), []);
 
@@ -455,7 +461,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         </Body>
       ) : null}
       {snap.notice ? (
-        <Body size={13.5} color={ACCENT.warn}>
+        <Body size={13.5} color={ACCENT.warn} accessibilityRole="alert">
           {snap.notice}
         </Body>
       ) : null}

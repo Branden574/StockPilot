@@ -1,3 +1,4 @@
+import { useIsFocused } from 'expo-router';
 import * as React from 'react';
 import { AccessibilityInfo, View } from 'react-native';
 
@@ -13,6 +14,7 @@ import {
 } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
+import { createPanelAnnouncer } from '@/lib/order-storefront/a11y';
 import { showUnconfirmedPanel } from '@/lib/order-storefront/submit';
 import { Body } from '@/components/ui/text';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -20,13 +22,17 @@ import { useTheme } from '@/lib/use-theme';
 
 import { SmallAction } from './controls';
 
+/** One announcer for every mounted panel: only the panel on the screen in
+ *  focus speaks, and a sentence once across them (PO-4 review). */
+const panelAnnouncer = createPanelAnnouncer();
+
 /**
  * THE UNCONFIRMED PANEL (plan 3.4, section 6): "Your order request is not
  * confirmed", core's sentence for why, and the three ways on: Check and finish
  * (the same key and body again), Don't send it (withdraw; its answer is
  * final), See my orders. The cart stays locked until the key is settled. The
- * sentence is a role alert and is announced when it changes (iOS gives a
- * Text no live region). Offline, both sends are off and say they need a
+ * sentence is a role alert and is announced when it changes, by the panel on
+ * the screen in focus only (iOS gives a Text no live region). Offline, both sends are off and say they need a
  * connection; a body an earlier build wrote is never resent (Check and finish
  * is not offered).
  */
@@ -60,13 +66,11 @@ export function UnconfirmedPanel({
         bodyUnreadable: pending?.bodyUnreadable === true,
       })
     : null;
-  const lastSpoken = React.useRef<string | null>(null);
+  const focused = useIsFocused();
   React.useEffect(() => {
-    if (message && message !== lastSpoken.current) {
-      lastSpoken.current = message;
-      AccessibilityInfo.announceForAccessibility(`${ORDER_UNCONFIRMED_TITLE_COPY}. ${message}`);
-    }
-  }, [message]);
+    const said = panelAnnouncer.next(message, focused);
+    if (said) AccessibilityInfo.announceForAccessibility(said);
+  }, [message, focused]);
 
   if (!showUnconfirmedPanel(state)) return null;
   const waiting = busy || state.phase !== 'unconfirmed';

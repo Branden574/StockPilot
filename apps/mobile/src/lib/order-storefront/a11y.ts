@@ -1,6 +1,8 @@
 import {
   CART_ALL_STOCK_IN_CART_COPY,
   CART_CHECK_OUT_COPY,
+  CHECKOUT_NOTES_FULL_COPY,
+  ORDER_UNCONFIRMED_TITLE_COPY,
   FREQUENTLY_ORDERED_TITLE_COPY,
   ORDER_ADD_WHILE_LOCKED_COPY,
   STOREFRONT_CART_LOCKED_COPY,
@@ -8,6 +10,7 @@ import {
   availabilityLabel,
   availableOf,
   cartCountsCopy,
+  checkoutNotesCounterSpokenCopy,
   formatOrderNumber,
   frequentlyOrderedTagCopy,
   kitAvailability,
@@ -19,6 +22,8 @@ import {
   type OrderSummary,
   type StorefrontItem,
 } from '@stockpilot/core';
+
+import { NOTES_COUNTER_FROM } from './checkout';
 
 /**
  * WHAT VOICEOVER SAYS IN THE STOREFRONT (phone ordering PO-4). Every row is
@@ -145,4 +150,44 @@ export function lineChangeAnnouncement(
 export function submittedAnnouncement(order: Pick<OrderSummary, 'orderNumber' | 'orderLabel'>): string {
   const label = order.orderLabel ?? formatOrderNumber(order.orderNumber);
   return label ? `Order request submitted: ${label}.` : 'Order request submitted.';
+}
+
+// ── Said where the person is, once (PO-4 review) ────────────────────────────
+
+/** A screen's own news (the success screen's order number) is spoken this
+ *  long after it appears, queued behind what VoiceOver says for the new
+ *  screen: said in the same moment as the screen change, it is cut off. */
+export const SCREEN_ANNOUNCE_DELAY_MS = 700;
+
+/**
+ * The unconfirmed panel's sentence, for every mounted panel at once (home,
+ * browse and checkout stay stacked): spoken only by the panel on the screen
+ * in focus, and a sentence once across them all, so moving between screens
+ * with the same lock says nothing new. When the panel goes (the lock ends) a
+ * later lock is news again. One announcer for the app run (the panel's
+ * module keeps it).
+ */
+export function createPanelAnnouncer() {
+  let lastSpoken: string | null = null;
+  return {
+    next(message: string | null, focused: boolean): string | null {
+      if (message === null) {
+        lastSpoken = null;
+        return null;
+      }
+      if (!focused || message === lastSpoken) return null;
+      lastSpoken = message;
+      return `${ORDER_UNCONFIRMED_TITLE_COPY}. ${message}`;
+    },
+  };
+}
+
+/** What a change to Manager notes says: the counter, in words, when it first
+ *  shows (1,800 characters) and when the note reaches its limit, where the
+ *  field stops taking characters; nothing on any other keystroke. */
+export function notesCounterAnnouncement(before: number, after: number, max: number): string | null {
+  if (after <= before) return null;
+  if (after >= max) return `${checkoutNotesCounterSpokenCopy(after, max)}. ${CHECKOUT_NOTES_FULL_COPY}`;
+  if (before < NOTES_COUNTER_FROM && after >= NOTES_COUNTER_FROM) return checkoutNotesCounterSpokenCopy(after, max);
+  return null;
 }

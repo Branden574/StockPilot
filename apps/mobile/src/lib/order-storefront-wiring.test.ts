@@ -260,7 +260,9 @@ describe('accessibility and Dynamic Type', () => {
   it('refusals and the unconfirmed panel are said in place and announced', () => {
     const panel = codeOnly(read(PANEL));
     expect(panel).toMatch(/<Body size=\{13\.5\} color=\{c\.ink\} accessibilityRole="alert">\s*\{message\}/);
-    expect(panel).toContain('AccessibilityInfo.announceForAccessibility(`${ORDER_UNCONFIRMED_TITLE_COPY}. ${message}`);');
+    // The title is joined to the sentence by the tested announcer, which
+    // speaks only on the screen in focus (PO-4 review).
+    expect(panel).toContain('const said = panelAnnouncer.next(message, focused);');
   });
 
   it('how a send ended is said on checkout, home and browse, and the turned-off or refused screen, by the tested helper, and announced where shown (F3)', () => {
@@ -552,7 +554,11 @@ describe('a keystroke in the notes never redraws every storefront screen (desk c
     expect(checkout).toContain('const [notesDraft] = React.useState(() => createNotesDraft({ session }));');
     expect(checkout).toContain('React.useEffect(() => () => notesDraft.dispose(), [notesDraft]);');
     expect(checkout).toMatch(/<NotesField\s+key=\{`\$\{snap\.scope\?\.orgId \?\? ''\}:\$\{snap\.warehouseId \?\? ''\}`\}\s+initial=\{cart\.notes\}\s+locked=\{locked\}\s+lockHint=\{lockHint\}\s+draft=\{notesDraft\}/);
-    expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onFocus=\{keyboard\.onNoteFocus\}\s+onBlur=\{\(\) => \{\s*draft\.flush\(\);\s*keyboard\.onNoteBlur\(\);\s*\}\}/);
+    // The keystroke also says the counter at 1,800 and at the limit (PO-4
+    // review); it still only reaches the field and the draft.
+    expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{[^}]*?if \(said\) AccessibilityInfo\.announceForAccessibility\(said\);\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onFocus=\{keyboard\.onNoteFocus\}\s+onBlur=\{\(\) => \{\s*draft\.flush\(\);\s*keyboard\.onNoteBlur\(\);\s*\}\}/);
+    const keystroke = checkout.slice(checkout.indexOf('onChangeText={(value) => {'), checkout.indexOf('onFocus={keyboard.onNoteFocus}'));
+    expect(keystroke).not.toMatch(/session\.|dispatch\(/);
     expect(checkout).not.toContain('value={cart.notes}');
     expect(checkout).not.toContain("type: 'set-notes'");
     expect(checkout).toContain('const counter = showNotesCounter(text) ? checkoutNotesCounterCopy(');
@@ -756,5 +762,44 @@ describe('the eviction holds every account’s live order request before it remo
     expect(gate.indexOf('await holdDeviceOrderSends();')).toBeLessThan(gate.indexOf('const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());'));
     const services = flat(codeOnly(read('src/lib/order-storefront/services.ts')));
     expect(services).toContain('export function holdDeviceOrderSends(): Promise<void> { return holdEveryDeviceSend(orderStore); }');
+  });
+});
+
+// PO-4 review (VoiceOver, code reading; the simulator has no VoiceOver): the
+// submitted announcement was spoken in the same effect as the screen change,
+// which cuts it off, and the success screen reached from the catalog said
+// nothing; the stock notice, the For line after a re-read and the notes
+// counter were never announced; every stacked panel spoke. Mutations caught:
+// each announcement removed or ungated by focus.
+describe('VoiceOver hears what changed, on the screen in view, once (PO-4 review)', () => {
+  const panel = codeOnly(read(PANEL));
+  it('the success screen announces the order itself, queued after the screen change, on every way in', () => {
+    expect(flat(placed)).toContain(
+      'const timer = setTimeout(() => { AccessibilityInfo.announceForAccessibilityWithOptions(submittedAnnouncement(order), { queue: true }); }, SCREEN_ANNOUNCE_DELAY_MS); return () => clearTimeout(timer); }, [placedId, session]);',
+    );
+    expect(checkout).not.toContain('submittedAnnouncement(');
+  });
+
+  it('the stock notice is announced on checkout and the catalog while each is in view', () => {
+    for (const src of [checkout, catalog]) {
+      expect(src).toContain('if (noticeText && focused) AccessibilityInfo.announceForAccessibility(noticeText);');
+    }
+  });
+
+  it('checkout announces the For line when a read of the answer brings it', () => {
+    expect(checkout).toContain('if (forDetail && focused) AccessibilityInfo.announceForAccessibility(forDetail);');
+  });
+
+  it('the unconfirmed panel speaks through the shared announcer, only on the screen in focus', () => {
+    expect(panel).toContain('const focused = useIsFocused();');
+    expect(panel).toContain('const said = panelAnnouncer.next(message, focused);');
+    expect(panel).toContain('if (said) AccessibilityInfo.announceForAccessibility(said);');
+    expect(panel).not.toContain('lastSpoken');
+  });
+
+  it('Manager notes’ counter is announced in words at 1,800 and at the limit, and reads as words', () => {
+    const fn = checkout.slice(checkout.indexOf('function NotesField('));
+    expect(flat(fn)).toContain('const said = notesCounterAnnouncement(before, value.length, ORDER_NOTES_MAX); if (said) AccessibilityInfo.announceForAccessibility(said);');
+    expect(fn).toContain('accessibilityLabel={counter ? checkoutNotesCounterSpokenCopy(Array.from(text).length, ORDER_NOTES_MAX) : undefined}');
   });
 });

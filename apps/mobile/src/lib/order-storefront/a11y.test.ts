@@ -6,7 +6,9 @@ import * as path from 'node:path';
 import ts from 'typescript';
 
 import {
+  CHECKOUT_NOTES_FULL_COPY,
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_UNCONFIRMED_TITLE_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   initialCartState,
@@ -20,7 +22,9 @@ import {
   addItemLabel,
   addKitLabel,
   changeLockedHint,
+  createPanelAnnouncer,
   lineChangeAnnouncement,
+  notesCounterAnnouncement,
   addedAnnouncement,
   cartBarLabel,
   decreaseKitLabel,
@@ -183,6 +187,9 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       a11y.kitAddBlockedHint({ locked: false, out: false, full: true })!,
       addKitLabel('QA New Hire Kit'),
       lineChangeAnnouncement({ itemMap: new Map(), cart: { ...initialCartState({ warehouseId: 'w', fulfillmentType: 'pickup' }), lines: [] } }, 'gone')!,
+      createPanelAnnouncer().next('It was sent.', true)!,
+      notesCounterAnnouncement(1799, 1800, 2000)!,
+      notesCounterAnnouncement(1999, 2000, 2000)!,
     ];
     // Every export is walked: a new one must be added above.
     const exported = Object.keys(a11y).sort();
@@ -192,6 +199,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
         'changeLockedHint', 'decreaseKitLabel', 'decreaseLabel', 'increaseBlockedHint', 'increaseKitLabel', 'kitAddBlockedHint',
         'increaseLabel', 'itemRowLabel', 'kitAnnouncement', 'kitRowLabel', 'lineChangeAnnouncement',
         'quantityAnnouncement', 'quantityButtonLabel', 'submittedAnnouncement',
+        'SCREEN_ANNOUNCE_DELAY_MS', 'createPanelAnnouncer', 'notesCounterAnnouncement',
       ].sort(),
     );
     for (const s of said) rules(s, s);
@@ -248,5 +256,38 @@ describe('a dimmed Add kit says why, and a kit is never read "Kit kit" (simulato
     expect(kitAnnouncement('QA New Hire Kit', 0)).toBe('Took the QA New Hire Kit out of your cart.');
     expect(addKitLabel('Starter')).toBe('Add one Starter kit to your cart');
     expect(addKitLabel('Toolkit')).toBe('Add one Toolkit kit to your cart');
+  });
+});
+
+// PO-4 review (VoiceOver): every mounted unconfirmed panel (home, browse and
+// checkout stay stacked) announced its whole sentence, whatever screen was in
+// view, and again each time checkout mounted while locked; Manager notes'
+// counter was never announced, so typing stopped at 2,000 without a word.
+describe('announcements land where the person is, once (PO-4 review)', () => {
+  it('the unconfirmed panel speaks on the screen in focus only, and a sentence once across the storefront’s screens', () => {
+    const p = createPanelAnnouncer();
+    const said = (m: string) => `${ORDER_UNCONFIRMED_TITLE_COPY}. ${m}`;
+    expect(p.next('We sent it.', false)).toBeNull();
+    expect(p.next('We sent it.', true)).toBe(said('We sent it.'));
+    expect(p.next('We sent it.', true)).toBeNull();
+    expect(p.next('We sent it again.', true)).toBe(said('We sent it again.'));
+    expect(p.next(null, true)).toBeNull();
+    // A new lock with the same words is new news.
+    expect(p.next('We sent it again.', true)).toBe(said('We sent it again.'));
+  });
+
+  it('Manager notes’ counter is announced in words when it appears and when the note is full, never per keystroke', () => {
+    expect(notesCounterAnnouncement(1799, 1800, 2000)).toBe('1,800 of 2,000 characters');
+    expect(notesCounterAnnouncement(1800, 1801, 2000)).toBeNull();
+    expect(notesCounterAnnouncement(10, 1900, 2000)).toBe('1,900 of 2,000 characters');
+    expect(notesCounterAnnouncement(1999, 2000, 2000)).toBe(`2,000 of 2,000 characters. ${CHECKOUT_NOTES_FULL_COPY}`);
+    expect(notesCounterAnnouncement(0, 2000, 2000)).toBe(`2,000 of 2,000 characters. ${CHECKOUT_NOTES_FULL_COPY}`);
+    expect(notesCounterAnnouncement(2000, 1990, 2000)).toBeNull();
+    expect(notesCounterAnnouncement(1700, 1750, 2000)).toBeNull();
+  });
+
+  it('a screen’s own news waits for the screen change to finish', () => {
+    expect(a11y.SCREEN_ANNOUNCE_DELAY_MS).toBeGreaterThanOrEqual(500);
+    expect(a11y.SCREEN_ANNOUNCE_DELAY_MS).toBeLessThanOrEqual(1000);
   });
 });

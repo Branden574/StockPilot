@@ -2,6 +2,7 @@ import { type Href, useRouter } from 'expo-router';
 import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Platform,
@@ -49,6 +50,7 @@ import {
   shouldWarnDuplicateDrafts,
   type DeliveryOpenResult,
 } from '@/lib/delivery-request-actions';
+import { SCREEN_ANNOUNCE_DELAY_MS, submittedAnnouncement } from '@/lib/order-storefront/a11y';
 import { storefrontLayout } from '@/lib/order-storefront/layout';
 import { storefrontSession, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import {
@@ -95,6 +97,18 @@ export default function OrderPlaced() {
   const placedId = placed?.order.id ?? null;
   React.useEffect(() => {
     if (placedId) session.placedShown();
+  }, [placedId, session]);
+  // The order number, said by this screen once it is shown (PO-4 review):
+  // said in the same moment as the screen change it is cut off, and the
+  // catalog's way here (a status read, Don't send it) said nothing at all.
+  React.useEffect(() => {
+    if (!placedId) return;
+    const order = session.getSnapshot().placed?.order;
+    if (!order) return;
+    const timer = setTimeout(() => {
+      AccessibilityInfo.announceForAccessibilityWithOptions(submittedAnnouncement(order), { queue: true });
+    }, SCREEN_ANNOUNCE_DELAY_MS);
+    return () => clearTimeout(timer);
   }, [placedId, session]);
   // What this screen shows beside the order was taken when it was placed
   // (PO-4 review): a read of the answer on return from the mail app that

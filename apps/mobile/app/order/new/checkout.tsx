@@ -36,6 +36,7 @@ import {
   STOREFRONT_PICKUP_OR_DELIVERY_COPY,
   STOREFRONT_SHIP_FROM_COPY,
   checkoutNotesCounterCopy,
+  checkoutNotesCounterSpokenCopy,
   neededByZoneNote,
   storefrontPickupHintCopy,
   type CartAction,
@@ -48,7 +49,7 @@ import { StorefrontState } from '@/components/order-storefront/storefront-state'
 import { UnconfirmedPanel } from '@/components/order-storefront/unconfirmed-panel';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
-import { lineChangeAnnouncement, quantityAnnouncement, submittedAnnouncement } from '@/lib/order-storefront/a11y';
+import { lineChangeAnnouncement, notesCounterAnnouncement, quantityAnnouncement } from '@/lib/order-storefront/a11y';
 import {
   checkoutStage,
   forRowView,
@@ -115,14 +116,13 @@ export default function Checkout() {
     }, [session]),
   );
 
-  // A placed order: the success screen, in place of this one.
+  // A placed order: the success screen, in place of this one (it says the
+  // order number itself, once it is shown).
   const placedId = snap?.placed?.order.id ?? null;
   React.useEffect(() => {
     if (!placedId || !focused) return;
-    const placed = session.getSnapshot().placed;
-    if (placed) AccessibilityInfo.announceForAccessibility(submittedAnnouncement(placed.order));
     router.replace('/order/new/placed' as Href);
-  }, [placedId, focused, router, session]);
+  }, [placedId, focused, router]);
 
   // How a send ended (a final refusal, withdrawn, the device could not save
   // it) or a change refused, said in place and announced on this screen
@@ -135,6 +135,23 @@ export default function Checkout() {
   React.useEffect(() => {
     if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);
   }, [outcomeText, focused]);
+  // The stock that moved under the cart (read when checkout opens), said
+  // while this screen is in view: a role alert does nothing on iOS (PO-4
+  // review).
+  const noticeText = snap?.notice ?? null;
+  React.useEffect(() => {
+    if (noticeText && focused) AccessibilityInfo.announceForAccessibility(noticeText);
+  }, [noticeText, focused]);
+
+  // The For line a read of the answer can bring (approve revoked while the
+  // app stayed open: Submit dims and the line says why), said while in view.
+  const forDetail =
+    snap?.setup.status === 'ready' && snap.cart
+      ? forRowView({ canOrderOnBehalf: snap.setup.answer.viewer.canOrderOnBehalf, onBehalfOf: snap.cart.onBehalfOf, lockHint: snap.locked ? STOREFRONT_CART_LOCKED_COPY : undefined }).detail
+      : null;
+  React.useEffect(() => {
+    if (forDetail && focused) AccessibilityInfo.announceForAccessibility(forDetail);
+  }, [forDetail, focused]);
 
   // The answer read again on open (or after a refusal for permission) can
   // come back turned off, refused or with no answer: checkout then says why in
@@ -492,12 +509,19 @@ function NotesField({
   const { c } = useTheme();
   const [text, setText] = React.useState(initial);
   const counter = showNotesCounter(text) ? checkoutNotesCounterCopy(Array.from(text).length, ORDER_NOTES_MAX) : null;
+  // The counter is said in words when it first shows and when the note is
+  // full (the field then stops taking characters), never per keystroke.
+  const lengthRef = React.useRef(initial.length);
   return (
     <View style={{ gap: 6 }} onLayout={keyboard.onNoteBlockLayout}>
       <FieldLabel>{`${CART_MANAGER_NOTES_LABEL_COPY} · ${CART_OPTIONAL_COPY}`}</FieldLabel>
       <TextInput
         defaultValue={initial}
         onChangeText={(value) => {
+          const before = lengthRef.current;
+          lengthRef.current = value.length;
+          const said = notesCounterAnnouncement(before, value.length, ORDER_NOTES_MAX);
+          if (said) AccessibilityInfo.announceForAccessibility(said);
           setText(value);
           draft.change(value);
         }}
@@ -523,6 +547,7 @@ function NotesField({
       <Body
         size={12}
         color={c.ink3}
+        accessibilityLabel={counter ? checkoutNotesCounterSpokenCopy(Array.from(text).length, ORDER_NOTES_MAX) : undefined}
         accessibilityElementsHidden={counter === null}
         importantForAccessibility={counter ? 'auto' : 'no-hide-descendants'}
       >

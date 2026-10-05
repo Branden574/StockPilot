@@ -138,6 +138,14 @@ export const STOREFRONT_FOR_NOW_MYSELF_COPY = 'This order request is now for you
 export function checkoutNotesCounterCopy(length: number, max: number): string {
   return `${groupThousands(length)} / ${groupThousands(max)}`;
 }
+/** The counter as VoiceOver says it (the slash is not read as words):
+ *  "1,850 of 2,000 characters". */
+export function checkoutNotesCounterSpokenCopy(length: number, max: number): string {
+  return `${groupThousands(length)} of ${groupThousands(max)} characters`;
+}
+/** Said with the counter when the note reaches its limit (the field stops
+ *  taking characters there). */
+export const CHECKOUT_NOTES_FULL_COPY = "That's the most a note can hold.";
 /** Shown once, on checkout, when stock moved under the cart since its lines
  *  were added (quantities above available are kept, as on the web, and the
  *  approval checks stock). */

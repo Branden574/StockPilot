@@ -29,6 +29,9 @@ describe('the templated sentences', () => {
     expect(phone.kitsInCartCopy(3)).toBe('3 kits in your cart');
     expect(phone.checkoutNotesCounterCopy(1850, 2000)).toBe('1,850 / 2,000');
     expect(phone.checkoutNotesCounterCopy(12, 2000)).toBe('12 / 2,000');
+    // Spoken (PO-4 review): "1,850 / 2,000" read aloud is a slash.
+    expect(phone.checkoutNotesCounterSpokenCopy(1850, 2000)).toBe('1,850 of 2,000 characters');
+    expect(phone.CHECKOUT_NOTES_FULL_COPY).toBe("That's the most a note can hold.");
     expect(phone.successEmailButtonCopy('pickup')).toBe('Email pickup request');
     expect(phone.successEmailButtonCopy('delivery')).toBe('Email delivery request');
     expect(phone.signOutUnconfirmedOrdersCopy(1)).toBe('1 order request was sent but not confirmed.');
@@ -95,6 +98,7 @@ describe('the words rules (plan section 6)', () => {
     phone.successEmailButtonCopy('pickup'),
     phone.signOutUnconfirmedOrdersCopy(1),
     phone.signInHeldPlacedCopy('SO-000001'),
+    phone.checkoutNotesCounterSpokenCopy(1800, 2000),
   ];
 
   it('has the sentences this guard walks', () => {
