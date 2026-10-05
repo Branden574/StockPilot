@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
-import { BundlesService } from '@/server/services/bundles';
+import { BUNDLE_DUPLICATE_COMPONENT, BundlesService } from '@/server/services/bundles';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -20,12 +20,21 @@ const componentInputSchema = z.object({
   isOptional: z.boolean().optional(),
 });
 
+/** One row per item (L10): (bundle_id, item_id) is the table's key. */
+const componentsSchema = z
+  .array(componentInputSchema)
+  .min(1)
+  .max(100)
+  .refine((list) => new Set(list.map((c) => c.itemId)).size === list.length, {
+    message: BUNDLE_DUPLICATE_COMPONENT,
+  });
+
 const createBundleSchema = z.object({
   name: z.string().trim().min(1).max(200),
   sku: z.string().trim().max(64).nullable().optional(),
   description: z.string().max(2000).nullable().optional(),
   preassemblyEnabled: z.boolean().optional(),
-  components: z.array(componentInputSchema).min(1).max(100),
+  components: componentsSchema,
 });
 
 export async function createBundleAction(
@@ -51,7 +60,7 @@ const updateBundleSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   isActive: z.boolean().optional(),
   preassemblyEnabled: z.boolean().optional(),
-  components: z.array(componentInputSchema).min(1).max(100).optional(),
+  components: componentsSchema.optional(),
 });
 
 export async function updateBundleAction(

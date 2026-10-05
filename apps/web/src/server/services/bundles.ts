@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import {
@@ -166,6 +167,21 @@ export interface DistributeInput {
  */
 export const BUNDLE_SKU_TAKEN =
   'A bundle with that SKU already exists. Choose another SKU, or use Auto to generate one.';
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const BUNDLE_DUPLICATE_COMPONENT = 'Each item can be in a bundle only once.';
+
+/** A component set naming one item twice is refused before anything is
+ *  written: (bundle_id, item_id) is the table's key, so the second row would
+ *  fail the insert, or the upsert, part way through. */
+function assertDistinctComponents(components: ReadonlyArray<{ itemId: string }>): void {
+  const seen = new Set<string>();
+  for (const c of components) {
+    if (seen.has(c.itemId)) throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
+    seen.add(c.itemId);
+  }
+}
 
 function bundleWriteError(error: { code?: string; message: string }): ServiceError {
   if (error.code === '23505' && /bundles_org_sku_unique/.test(error.message)) {
@@ -492,6 +508,7 @@ export class BundlesService {
     if (input.components.length === 0) {
       throw new ServiceError('validation_error', 'A bundle needs at least one component');
     }
+    assertDistinctComponents(input.components);
 
     const { data: bundle, error } = await this.ctx.supabase
       .from('bundles')
@@ -518,7 +535,23 @@ export class BundlesService {
     const { error: cErr } = await this.ctx.supabase
       .from('bundle_components')
       .insert(componentsPayload);
-    if (cErr) throw new ServiceError('internal_error', cErr.message);
+    if (cErr) {
+      // Never leave a bundle with no components behind (L10): remove the one
+      // just made. Its components never landed, so nothing else names it.
+      const { error: undoErr } = await this.ctx.supabase
+        .from('bundles')
+        .delete()
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', bundle.id as string);
+      if (undoErr) {
+        void reportError(new Error('A bundle whose components failed could not be removed'), {
+          tag: 'bundles.create.undo',
+          organizationId: this.ctx.organizationId,
+          extra: { bundleId: bundle.id, detail: undoErr.message },
+        });
+      }
+      throw new ServiceError('internal_error', cErr.message);
+    }
 
     await audit(
       {
@@ -573,23 +606,34 @@ export class BundlesService {
       if (patch.components.length === 0) {
         throw new ServiceError('validation_error', 'A bundle needs at least one component');
       }
-      // Replace the component set wholesale — simplest correct path.
-      const { error: dErr } = await this.ctx.supabase
-        .from('bundle_components')
-        .delete()
-        .eq('bundle_id', id);
-      if (dErr) throw new ServiceError('internal_error', dErr.message);
-
+      assertDistinctComponents(patch.components);
+      // Write the new set first, then drop the rows left out of it (L10). The
+      // old delete-then-insert left a bundle with NO components when the
+      // insert failed; now a failed upsert changes nothing, and a failed
+      // delete leaves the new set plus rows that were to be dropped.
       const payload = patch.components.map((c) => ({
         bundle_id: id,
         item_id: c.itemId,
         quantity: c.quantity,
         is_optional: c.isOptional ?? false,
       }));
-      const { error: iErr } = await this.ctx.supabase
+      const { error: uErr } = await this.ctx.supabase
         .from('bundle_components')
-        .insert(payload);
-      if (iErr) throw new ServiceError('internal_error', iErr.message);
+        .upsert(payload, { onConflict: 'bundle_id,item_id' });
+      if (uErr) throw new ServiceError('internal_error', uErr.message);
+
+      const keep = payload.map((p) => p.item_id);
+      // The ids go into a PostgREST filter string, so only uuids get there.
+      if (!keep.every((itemId) => UUID_SHAPE.test(itemId))) {
+        throw new ServiceError('validation_error', 'Invalid component item');
+      }
+      const { error: dErr } = await this.ctx.supabase
+        .from('bundle_components')
+        .delete()
+        .eq('bundle_id', id)
+        // in-list-bound: one bundle's components; the bundle actions cap them at 100
+        .not('item_id', 'in', `(${keep.join(',')})`);
+      if (dErr) throw new ServiceError('internal_error', dErr.message);
     }
 
     await audit(
