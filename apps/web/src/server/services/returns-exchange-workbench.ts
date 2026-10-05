@@ -150,6 +150,9 @@ type OverviewFacts = {
   replacement_order_id: string | null;
   released_early: boolean | null;
   counter: boolean | null;
+  /** The view's newest replacement (the live one when there is one): status and what it still owes. */
+  replacement_status?: string | null;
+  replacement_owed?: number | string | null;
 };
 
 export type ReplacementRow = {
@@ -172,7 +175,7 @@ export async function readExchangeTier2(
   const [ovRes, repRes] = await Promise.all([
     ctx.supabase
       .from('return_overview')
-      .select('kind, exchange_status, replacement_order_id, released_early, counter')
+      .select('kind, exchange_status, replacement_order_id, released_early, counter, replacement_status, replacement_owed')
       .eq('organization_id', ctx.organizationId)
       .eq('id', returnId)
       .maybeSingle(),
@@ -370,7 +373,14 @@ export function buildExchangeView(input: {
   return {
     kind,
     status,
-    statusLabel: exchangeStatusStaffLabel(status, { returnStatus: input.returnStatus }),
+    // Desk check F9: a replacement closed with part never sent says so.
+    statusLabel: exchangeStatusStaffLabel(status, {
+      returnStatus: input.returnStatus,
+      replacementStatus: input.overview?.replacement_status ?? null,
+      replacementOwed: input.overview?.replacement_owed === undefined || input.overview?.replacement_owed === null
+        ? null
+        : num(input.overview.replacement_owed),
+    }),
     lines,
     replacement,
     history: input.replacements

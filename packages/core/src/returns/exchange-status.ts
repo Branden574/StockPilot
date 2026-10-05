@@ -76,11 +76,35 @@ export interface ExchangeStatusFacts {
   denied?: boolean;
   /** At `requested`: advice from free stock (brief 8 "Replacement available"). */
   replacementShort?: boolean | null;
+  /** The replacement shown (the live one, else the newest): its order status. */
+  replacementStatus?: string | null;
+  /** What that replacement still owes (requested minus handed over). */
+  replacementOwed?: number | null;
 }
+
+/**
+ * Desk check F9: a replacement closed with something never sent (closed as
+ * delivered-partial from its backorder, or its remainder cancelled with the
+ * RMA) reads in plain words, never as a full hand-over.
+ */
+export function replacementPartlySent(facts: ExchangeStatusFacts): boolean {
+  return (
+    (facts.replacementOwed ?? 0) > 0 && (facts.replacementStatus === 'completed' || facts.replacementStatus === 'cancelled')
+  );
+}
+
+const PARTLY_SENT_STATUSES: readonly ExchangeStatus[] = ['completed', 'handed_over_return_open', 'handed_over_return_cancelled'];
 
 /** The staff label with its refinements. */
 export function exchangeStatusStaffLabel(status: ExchangeStatus, facts: ExchangeStatusFacts = {}): string {
   if (status === 'cancelled' && (facts.denied || facts.returnStatus === 'denied')) return 'Exchange declined';
+  if (PARTLY_SENT_STATUSES.includes(status) && replacementPartlySent(facts)) {
+    if (status === 'completed') return 'Exchange completed; part of the replacement was not sent';
+    if (status === 'handed_over_return_cancelled') return 'Part of the replacement handed over, the rest not sent; return cancelled';
+    return facts.returnStatus === 'received'
+      ? 'Part of the replacement handed over, the rest not sent; return not processed'
+      : 'Part of the replacement handed over, the rest not sent; return not received';
+  }
   if (status === 'handed_over_return_open' && facts.returnStatus === 'received') {
     return 'Replacement handed over; return not processed';
   }
@@ -97,6 +121,9 @@ export function exchangeStatusStaffLabel(status: ExchangeStatus, facts: Exchange
  * status speaks).
  */
 export function exchangeRequesterSentence(status: ExchangeStatus, facts: ExchangeStatusFacts = {}): string | null {
+  if (PARTLY_SENT_STATUSES.includes(status) && replacementPartlySent(facts)) {
+    return 'Part of your replacement was handed over. The rest will not be sent.';
+  }
   switch (status) {
     case 'none':
       return null;

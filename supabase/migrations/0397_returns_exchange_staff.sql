@@ -2192,7 +2192,9 @@ $$;
 -- message covers it, so never "Order approved" plus "Exchange approved"),
 -- cancellation (the RMA function's service sends one explaining message),
 -- the picking statuses, and, for a unit received at the counter, ready for
--- pickup. Staff are never pinged for a replacement.
+-- pickup. Staff are never pinged for a replacement. A replacement completed
+-- with something never sent (closed as delivered-partial) says so in plain
+-- words (desk check F9).
 create function public._notify_replacement_order_changes()
 returns trigger
 language plpgsql
@@ -2248,9 +2250,15 @@ begin
       v_title := 'Part of your replacement was handed over';
       v_body := 'The rest will follow.';
     else
-      -- completed: ungated, as the original body's completion ping.
+      -- completed: ungated, as the original body's completion ping. Closed
+      -- with something never sent (delivered-partial; desk check F9) says so.
       v_pref_ok := true;
-      if v_rma.status = 'closed' then
+      if exists (select 1 from public.order_request_lines l
+                  where l.order_request_id = new.id
+                    and coalesce(l.quantity_requested, 0) > coalesce(l.quantity_fulfilled, 0)) then
+        v_title := 'Your replacement order was closed';
+        v_body := 'Part of it was handed over. The rest will not be sent.';
+      elsif v_rma.status = 'closed' then
         v_title := 'Your exchange is complete';
         v_body := 'Your replacement was handed over and your return is done.';
       else
@@ -2495,7 +2503,7 @@ comment on function public.tg_order_request_lines_replacement_guard() is
 comment on function public.tg_order_requests_replacement_status() is
   'RX-2 (plan 3.6.5; C-5), the return-first gate and the cancel guard for replacement orders: into pick_slip_generated never while the RMA is cancelled or denied (P0001 replacement_return_cancelled, detail the RMA number; desk check F3), otherwise only when the RMA is received or closed or a released_early decision names this order (P0001 replacement_waiting_for_return, detail the RMA number); into cancelled or denied only under the transaction-bound stockpilot.return_exchange flag (42501 replacement_cancel_via_return). Reads the RMA and the release by key and takes NO row lock (an RMA cancel holds the RMA and then waits for the order; generatePickSlip holds the order). SECURITY DEFINER (a picker without returns access is judged by the same facts), EXECUTE for nobody.';
 comment on function public._notify_replacement_order_changes() is
-  'RX-2 (plan 3.6.7): the requester pings of a replacement order, with _notify_order_request_changes'' type strings, link and preference gates, reworded, and the RMA in the metadata: staged for pickup or delivery, in transit, backordered, completed ("Your exchange is complete" once the RMA is closed). Silent on insert, approval, cancellation, denial and the picking statuses, and on ready for pickup after a counter receipt. Staff are never pinged for a replacement. SECURITY DEFINER, no EXECUTE.';
+  'RX-2 (plan 3.6.7): the requester pings of a replacement order, with _notify_order_request_changes'' type strings, link and preference gates, reworded, and the RMA in the metadata: staged for pickup or delivery, in transit, backordered, completed ("Your exchange is complete" once the RMA is closed; "Your replacement order was closed" with "the rest will not be sent" when it closed with something never sent, desk check F9). Silent on insert, approval, cancellation, denial and the picking statuses, and on ready for pickup after a counter receipt. Staff are never pinged for a replacement. SECURITY DEFINER, no EXECUTE.';
 comment on function public.tg_returns_api_guard() is
   'RX-1 guard (BEFORE INSERT OR UPDATE on returns, API roles only): an insert only at requested, source internal, with no stamps and no requester name or email, requested_by the caller, for an order of the RMA''s own organization the caller can see (P0002 order_not_found) in a warehouse the caller may write (42501 warehouse_write), completed or delivered (P0001 order_not_returnable); the RMA number is the server''s; a status edge only with its own stamps, naming the caller, at now(); never on an RMA that carries an exchange (42501 return_exchange_through_rpc, RX-2); never into closed (42501 return_close_through_rpc); otherwise 42501 return_insert_through_rpc or return_stamp_forged. The update policy already limits an edge to returns:manage and write access to the order''s warehouse. SECURITY INVOKER, no EXECUTE.';
 

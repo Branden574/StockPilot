@@ -120,6 +120,8 @@ type OverviewRow = {
   exchange_status: string | null;
   released_early: boolean | null;
   lines: Array<{ line_id: string; item_id: string; quantity: number | string }> | null;
+  replacement_status?: string | null;
+  replacement_owed?: number | string | null;
 };
 
 type ItemRow = {
@@ -156,7 +158,9 @@ export async function loadReplacementInfo(
   const [overviewRes, decisionsRes] = await Promise.all([
     ctx.supabase
       .from('return_overview')
-      .select('id, return_number, status, order_request_id, order_number, replacement_order_id, exchange_status, released_early, lines')
+      .select(
+        'id, return_number, status, order_request_id, order_number, replacement_order_id, exchange_status, released_early, lines, replacement_status, replacement_owed',
+      )
       .eq('organization_id', ctx.organizationId)
       .eq('id', returnId)
       .maybeSingle(),
@@ -240,7 +244,12 @@ export async function loadReplacementInfo(
     originalOrderNumber: ov?.order_number ?? null,
     live,
     exchangeStatus,
-    exchangeStatusLabel: exchangeStatusStaffLabel(exchangeStatus, { returnStatus }),
+    // Desk check F9: a replacement closed with part never sent says so.
+    exchangeStatusLabel: exchangeStatusStaffLabel(exchangeStatus, {
+      returnStatus,
+      replacementStatus: ov?.replacement_status ?? null,
+      replacementOwed: ov?.replacement_owed === undefined || ov?.replacement_owed === null ? null : num(ov.replacement_owed),
+    }),
     waitingForReturn,
     returnClosed,
     releasedEarly,

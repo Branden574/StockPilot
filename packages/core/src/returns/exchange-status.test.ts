@@ -55,6 +55,36 @@ describe('exchange status', () => {
     expect(exchangeStatusStaffLabel('requested', {})).toBe('Exchange requested');
   });
 
+  // Desk check F9: a replacement closed with something never sent (its
+  // backorder closed as delivered-partial, or its remainder cancelled with
+  // the RMA) never reads as a full hand-over.
+  it('words a replacement closed with part never sent, for staff and the requester', () => {
+    const closedPartial = { replacementStatus: 'completed', replacementOwed: 1 };
+    expect(exchangeStatusStaffLabel('completed', closedPartial)).toBe('Exchange completed; part of the replacement was not sent');
+    expect(exchangeStatusStaffLabel('handed_over_return_open', closedPartial)).toBe(
+      'Part of the replacement handed over, the rest not sent; return not received',
+    );
+    expect(exchangeStatusStaffLabel('handed_over_return_open', { ...closedPartial, returnStatus: 'received' })).toBe(
+      'Part of the replacement handed over, the rest not sent; return not processed',
+    );
+    expect(exchangeStatusStaffLabel('handed_over_return_cancelled', { replacementStatus: 'cancelled', replacementOwed: 1 })).toBe(
+      'Part of the replacement handed over, the rest not sent; return cancelled',
+    );
+    expect(exchangeRequesterSentence('handed_over_return_cancelled', { replacementStatus: 'cancelled', replacementOwed: 1 })).toBe(
+      'Part of your replacement was handed over. The rest will not be sent.',
+    );
+    // Handed over in full: the plain words stay.
+    expect(exchangeStatusStaffLabel('completed', { replacementStatus: 'completed', replacementOwed: 0 })).toBe('Exchange completed');
+    expect(exchangeStatusStaffLabel('handed_over_return_cancelled', { replacementStatus: 'completed', replacementOwed: 0 })).toBe(
+      'Replacement handed over; return cancelled',
+    );
+    expect(exchangeRequesterSentence('completed', { replacementStatus: 'completed', replacementOwed: 0 })).toBe('Exchange completed.');
+    // A backorder still on its way is not "not sent".
+    expect(exchangeStatusStaffLabel('partly_handed_over', { replacementStatus: 'backordered', replacementOwed: 1 })).toBe(
+      'Partly handed over; rest on backorder',
+    );
+  });
+
   it('gives no requester sentence for a plain return, and one for every exchange code', () => {
     expect(exchangeRequesterSentence('none')).toBeNull();
     for (const s of EXCHANGE_STATUSES.filter((x) => x !== 'none')) expect(exchangeRequesterSentence(s)).toBeTruthy();

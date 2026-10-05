@@ -378,7 +378,7 @@ describe('buildReturnListPage', () => {
     ]);
     // RX-2 appends kind, exchange_status and the replacement number after 0393's two.
     expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(
-      /requested_by, deleted_users, kind, exchange_status, replacement_order_number$/,
+      /requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed$/,
     );
   });
 

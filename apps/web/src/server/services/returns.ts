@@ -335,6 +335,8 @@ async function loadOriginalExchangeLines(
     kind: string | null;
     exchange_status: string | null;
     replacement_order_number: number | null;
+    replacement_status?: string | null;
+    replacement_owed?: number | string | null;
     exchange_lines: Array<{
       status: string;
       requested_item_id: string | null;
@@ -347,7 +349,7 @@ async function loadOriginalExchangeLines(
     const rows = await fetchAllRowsByIds<Ov>(returnIds, (batch) => (from, to) =>
       client
         .from('return_overview')
-        .select('id, status, kind, exchange_status, replacement_order_number, exchange_lines')
+        .select('id, status, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed, exchange_lines')
         .eq('organization_id', organizationId)
         .eq('kind', 'exchange')
         .in('id', batch)
@@ -386,7 +388,12 @@ async function loadOriginalExchangeLines(
     );
     for (const r of rows) {
       const status = parseExchangeStatus(r.exchange_status);
-      const words = exchangeStatusStaffLabel(status, { returnStatus: r.status });
+      // Desk check F9: a replacement closed with part never sent says so.
+      const words = exchangeStatusStaffLabel(status, {
+        returnStatus: r.status,
+        replacementStatus: r.replacement_status ?? null,
+        replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
+      });
       const sentences: string[] = [];
       for (const x of r.exchange_lines ?? []) {
         if (x.status === 'declined' || x.status === 'cancelled') continue;

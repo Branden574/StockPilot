@@ -89,6 +89,7 @@
 --   M28 the replacement cancel accepts a missing revision                -> R6
 --   M29 the creation never logs its exchange requests                    -> C1, K4
 --   M30 Keep as return only leaves the lines cancelled                   -> X6
+--   M31 a replacement closed with part never sent reads handed over      -> N9
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -99,7 +100,7 @@
 
 begin;
 
-select plan(100);
+select plan(101);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -1676,6 +1677,13 @@ select is(
     where o.replacement_for_return_id is not null and n.user_id is distinct from o.requester_user_id),
   '0',
   'N8: no staff member is ever pinged for a replacement order');
+select is(
+  (select string_agg(n.type || '|' || n.title || '|' || n.body, ',' order by n.type)
+     from public.notifications n where n.metadata->>'order_request_id' = :'oK5R'),
+  'order_request.backordered|Part of your replacement was handed over|The rest will follow.,'
+  || 'order_request.completed|Your replacement order was closed|Part of it was handed over. The rest will not be sent.,'
+  || 'order_request.staged_for_pickup|Your replacement is ready|Ready for pickup.',
+  'N9: a replacement closed as delivered-partial (here by its RMA''s cancel, K5) tells the requester in plain words that the rest will not be sent, never "handed over" (desk check F9)');
 
 -- ══ V. The exchange status CASE ═══════════════════════════════════════════
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1)) as "rNone" \gset

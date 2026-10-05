@@ -363,7 +363,8 @@ export function buildReturnPayload(input: {
 // ── RX-2: the original order's exchange lines ─────────────────────────────
 
 /** The return_overview columns the exchange lines need (one batched read per order). */
-export const ORDER_RETURNS_EXCHANGE_SELECT = 'id, status, kind, exchange_status, replacement_order_number, exchange_lines';
+export const ORDER_RETURNS_EXCHANGE_SELECT =
+  'id, status, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed, exchange_lines';
 
 export interface RawExchangeOverviewRow {
   id: string;
@@ -371,6 +372,9 @@ export interface RawExchangeOverviewRow {
   kind: string | null;
   exchange_status: string | null;
   replacement_order_number: number | null;
+  /** The view's newest replacement: status and what it still owes (desk check F9). */
+  replacement_status?: string | null;
+  replacement_owed?: number | string | null;
   exchange_lines: {
     status: string;
     requested_item_id: string | null;
@@ -417,7 +421,12 @@ export function exchangeLinesByReturn(
   const out = new Map<string, string[]>();
   for (const r of rows) {
     if (r.kind !== 'exchange') continue;
-    const words = exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), { returnStatus: r.status });
+    // Desk check F9: a replacement closed with part never sent says so.
+    const words = exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), {
+      returnStatus: r.status,
+      replacementStatus: r.replacement_status ?? null,
+      replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
+    });
     const sentences: string[] = [];
     for (const x of r.exchange_lines ?? []) {
       if (x.status === 'declined' || x.status === 'cancelled') continue;

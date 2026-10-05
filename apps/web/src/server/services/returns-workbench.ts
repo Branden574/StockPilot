@@ -820,6 +820,8 @@ type OverviewRow = {
   kind?: string | null;
   exchange_status?: string | null;
   replacement_order_number?: number | null;
+  replacement_status?: string | null;
+  replacement_owed?: number | string | null;
 };
 
 export async function buildReturnListPage(ctx: ServiceContext, query: ReturnListQuery): Promise<ReturnListPage> {
@@ -834,7 +836,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
   let req = ctx.supabase
     .from('return_overview')
     .select(
-      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number',
+      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed',
     )
     .eq('organization_id', ctx.organizationId);
   if (filter.statuses) {
@@ -940,7 +942,12 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
         exchangeStatus: parseExchangeStatus(r.exchange_status ?? 'none'),
         exchangeStatusLabel:
           r.kind === 'exchange'
-            ? exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), { returnStatus: r.status })
+            ? exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), {
+                returnStatus: r.status,
+                // Desk check F9: a replacement closed with part never sent says so.
+                replacementStatus: r.replacement_status ?? null,
+                replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
+              })
             : null,
         replacementOrderNumber: r.replacement_order_number ?? null,
       };
