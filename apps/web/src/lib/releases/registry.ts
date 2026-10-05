@@ -34,7 +34,8 @@ export const RELEASES: Release[] = [
     // a DRAFT until the web deploy is live and phones report launching the
     // OTA that carries the phone half; the follow-up that publishes it sets
     // the real publishedAt and re-reads these words against what shipped.
-    // Dated after the phone ordering drafts and above them (newest first).
+    // Dated after the order submission draft (PO-2), the only other draft,
+    // and above it (newest first).
     // Each entry says only what the code does, and is told to the people who
     // can see the change: the permission or module the change sits behind.
     // Every user-visible change in the slice has a line (owner rule
@@ -47,6 +48,24 @@ export const RELEASES: Release[] = [
     // drew nothing; only the console showed the refusal), the cron log line,
     // the phone's Orders read before sign-in, and the catalog removal at an
     // involuntary sign-out.
+    //
+    // Review (2026-10-05) also left out, as nobody reaches them: the refusal
+    // of a component list naming one item twice (the bundle form already
+    // refuses a second add, and it is the only writer), the read-back that
+    // keeps two bundle saves at once from leaving a bundle empty, and the
+    // words of a closed order's slip refusal (the order page offers no slip
+    // then; only a stale tab or a typed address shows them, as raw JSON).
+    // The Settings role pill shipped with security slice A3 (#321), and that
+    // release (account-deletion-everyone-2026-10, published on 2026-10-05 in
+    // #323) tells it in What to do, so this one does not.
+    //
+    // PUBLISH GATE (review 2026-10-05): the sentence about Try again while
+    // offline (1.33) was never seen on a device. The simulator shares the
+    // Mac's network and cannot go offline, so only foreground-tick.test.ts
+    // covers it. Publish it only after the airplane-mode check on hardware
+    // at the OTA walk (a rentals detail offline: Try again stays put for 2
+    // minutes); if that check cannot run, take the sentence and its
+    // whyItMatters clause out first.
     status: 'draft',
     title: 'Fixes across orders, items, bundles, receiving and the mobile app',
     summary:
@@ -85,11 +104,10 @@ export const RELEASES: Release[] = [
         area: 'Bundles',
         title: 'A failed save no longer leaves a bundle without its components',
         whatChanged:
-          "Saving a bundle's components no longer removes the old ones before the new ones are saved, and a new bundle whose components cannot be saved is removed again, for managers as well as admins. A component list that names one item twice is refused with: Each item can be in a bundle only once.",
-        whyItMatters:
-          'When saving the components failed part way, the bundle was left with no components. Naming one item twice failed the save part way.',
+          "Saving a bundle's components no longer removes the old ones before the new ones are saved, and a new bundle whose components cannot be saved is removed again, for managers as well as admins.",
+        whyItMatters: 'When saving the components failed part way, the bundle was left with no components.',
         howItAffectsYou:
-          'If a save fails, the bundle still has its components, and a new bundle is not left behind. Try again. To use more of one item, raise its quantity instead of adding it twice.',
+          'If a save fails, the bundle still has its components, and a new bundle is not left behind. Try again.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['bundles:manage'], modules: ['bundles'] },
       },
@@ -111,7 +129,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Cancel your own order request in the mobile app',
         whatChanged:
-          'While an order request you placed is waiting for approval, you can cancel it from its screen in the app, with an optional reason. People who approve orders can cancel an open order in the app, as on the web.',
+          'While an order request you placed is waiting for approval, you can cancel it from its screen in the app, with an optional reason. People who approve orders can now cancel an open order in the app too, with Cancel order.',
         whyItMatters:
           'Cancelling needed the web. And on the web, Cancel request showed on your own order after it was approved, then was refused.',
         howItAffectsYou:
@@ -169,10 +187,10 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "Clearer words on an order's screens",
         whatChanged:
-          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can view the audit log can see this order's history. A slip of a cancelled, denied or backordered order says why it is not available, and the delivery request notes after placing an order use the full width.",
+          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can view the audit log can see this order's history. The delivery request notes after placing an order use the full width.",
         whyItMatters:
-          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot view the audit log. A slip of a closed order asked you to generate it first, which could not be done. The notes sat in a narrow column.',
-        howItAffectsYou: 'No change to what you can do, or to who may print a slip.',
+          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot view the audit log. The notes sat in a narrow column.',
+        howItAffectsYou: 'No change to what you can do.',
         whatToDo: 'No action needed.',
         audience: { modules: ['orders'] },
       },
@@ -182,7 +200,7 @@ export const RELEASES: Release[] = [
         area: 'Receiving',
         title: 'Receive more than ordered in the app, with a note',
         whatChanged:
-          'When you enter more than is left to receive on a PO in the app, it asks you to confirm instead of refusing, as the web does. You can also add a note to the receipt. A draft PO no longer shows the hint about posting a receipt.',
+          'When you enter more than is left to receive on a PO in the app, it now asks you to confirm instead of refusing. The web already accepts it and shows how many are over ordered, and each line in the app now says so under Variance too. You can also add a note to the receipt. A draft PO, or one with nothing left to receive, no longer shows the note field or the hint about posting a receipt.',
         whyItMatters: 'Suppliers sometimes ship more than ordered, and the app could not record it.',
         howItAffectsYou: 'Tap Receive anyway to post the receipt as entered.',
         whatToDo: 'No action needed.',
@@ -204,11 +222,11 @@ export const RELEASES: Release[] = [
         id: 'everyday-fixes',
         category: 'fixed',
         area: 'Web and app',
-        title: "Your role in the app, the What's New notice, Delete account and Try again",
+        title: "The What's New notice, Delete account, the dashboard and Try again",
         whatChanged:
-          "Settings in the app shows your role beside your name, as the Team list names it, such as MANAGER or STAFF. On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. A refused Delete account says why inside the dialog, and when you are the only owner the dialog links to the Team page. In the app, while offline, Try again no longer turns into a spinner every minute. With Orders turned off, the new order page says so, as the Orders page does.",
+          "On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. On the web, a refused Delete account says why inside the dialog, and when you are the only owner the dialog links to the Team page. With Orders turned off, the new order page says so. The dashboard's orders waiting for signature card shows only to people who approve orders, whose list it opens. In the app, while offline, Try again no longer turns into a spinner every minute.",
         whyItMatters:
-          'Settings showed Owner for everyone. The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog, where its Team page link could not be pressed. Offline, the app retried every minute and showed loading each time. The new order page opened with Orders off.',
+          "The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog, where its Team page link could not be pressed. The new order page opened with Orders off. Everyone saw the whole organization's count on that card, and it opened their own requests. Offline, the app retried every minute and showed loading each time.",
         howItAffectsYou:
           'No change to what you can do. When the connection comes back, the app tries again at once, and Try again works as before.',
         whatToDo: 'No action needed.',

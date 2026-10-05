@@ -4300,7 +4300,7 @@ describe('the small fixes release (slice 1)', () => {
     for (const phrase of [
       'archived item',                            // 1.1
       'duplicated item',                          // 1.2
-      'Each item can be in a bundle only once.',  // 1.5, F1
+      'a new bundle whose components cannot be saved is removed again', // 1.5, F1
       'Cancel request',                           // 1.8, 1.31, F3
       'Physical signature',                       // 1.9
       'Waiting for signature',                    // 1.10
@@ -4310,18 +4310,18 @@ describe('the small fixes release (slice 1)', () => {
       'emailed at the address on their profile',  // 1.13
       'SO-000049',                                // 1.14
       'Timeline',                                 // 1.15
-      'cancelled, denied or backordered',         // 1.17
       'delivery request notes',                   // 1.18
       "What's New notice",                        // 1.19
       'Delete account',                           // 1.20
       'held for other orders',                    // 1.22, 1.23
       'not yet confirmed by email',               // 1.25
       'PICKING',                                  // 1.26
-      'Settings in the app shows your role',      // 1.27
       'Add a note form',                          // 1.29
       'add a note to the receipt',                // 1.32
-      'draft PO no longer shows the hint',        // 1.30
+      'no longer shows the note field or the hint about posting a receipt', // 1.30, review
       'Try again no longer turns into a spinner', // 1.33
+      'card shows only to people who approve orders', // F10, review
+      'says so under Variance', // review: the phone's variance caption
     ]) {
       expect(text, phrase).toContain(phrase);
     }
@@ -4329,7 +4329,10 @@ describe('the small fixes release (slice 1)', () => {
 
   it('quotes the words the code shows', () => {
     const text = readerText(release()).join(' ');
-    expect(text).toContain(BUNDLE_DUPLICATE_COMPONENT);
+    // Review (2026-10-05): nobody can reach the duplicate refusal (the bundle
+    // form, the only writer, refuses a second add first), so it is not told.
+    expect(text).not.toContain(BUNDLE_DUPLICATE_COMPONENT);
+    expect(text).not.toMatch(/adding it twice|names one item twice/);
     const timeline = readFileSync(
       resolve(__dirname, '../../components/orders/order-timeline.tsx'),
       'utf8',
@@ -4339,17 +4342,56 @@ describe('the small fixes release (slice 1)', () => {
     expect(text).toContain(sentence);
   });
 
-  // 1.27 shipped with security slice A3 (#321): the Settings pill shows the
-  // role in the Team list's words (apps/mobile/src/lib/role-pill.ts), not
-  // the web's role names, so the entry quotes the pill's own words.
-  it("names the app's role pill in the words the pill shows", () => {
-    const entry = release().entries.find((e) => e.id === 'everyday-fixes')!;
-    const pill = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/role-pill.ts'), 'utf8');
-    for (const word of ['MANAGER', 'STAFF']) {
-      expect(pill).toContain(`label: '${word}'`);
-      expect(entry.whatChanged).toContain(word);
-    }
-    expect(entry.whatChanged).not.toMatch(/Warehouse User|web's words/);
+  // 1.27 shipped with security slice A3 (#321), and A3's release, published
+  // on 2026-10-05 (#323), tells it in What to do (pinned in the A3 block
+  // above): this one must not announce it a release late.
+  it("leaves the app's role pill to the account deletion release that shipped it", () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/shows your (own )?role|Owner for everyone|instead of OWNER/);
+    const a3 = RELEASES.find((r) => r.id === 'account-deletion-everyone-2026-10')!;
+    expect(a3.status).toBe('published');
+    expect(a3.entries[0]!.whatToDo).toContain('Settings then shows your own role instead of OWNER.');
+  });
+
+  // Review (2026-10-05): the web receive dialog never asks; it takes an
+  // over-receipt and captions the variance. Only the phone asks.
+  it('never says the web asks before an over-receipt', () => {
+    const entry = release().entries.find((e) => e.id === 'app-receive-more-than-ordered')!;
+    expect(entry.whatChanged).not.toMatch(/as the web does/);
+    expect(entry.whatChanged).toContain('The web already accepts it and shows how many are over ordered');
+    const dialog = readFileSync(resolve(__dirname, '../../components/po/po-receive-dialog.tsx'), 'utf8');
+    expect(dialog).not.toMatch(/more than ordered\?/);
+    expect(dialog).toContain('over ordered');
+  });
+
+  // Review (2026-10-05): everyday-fixes is told to phones too, so a web-only
+  // change says so; and the phone's approver action is Cancel order, not the
+  // web's Cancel request, so the cancel entry names it.
+  it('says which changes are on the web, and names the app\'s own cancel words', () => {
+    const everyday = release().entries.find((e) => e.id === 'everyday-fixes')!;
+    expect(everyday.whatChanged).toContain('On the web, a refused Delete account says why inside the dialog');
+    const cancel = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
+    expect(cancel.whatChanged).not.toMatch(/as on the web/);
+    expect(cancel.whatChanged).toContain('with Cancel order');
+    const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/order-cancel-action.ts'), 'utf8');
+    expect(phone).toContain("label: 'Cancel order'");
+  });
+
+  // Review (2026-10-05): a closed order's slip refusal is reached only from a
+  // stale tab or a typed address, as raw JSON, so it is not told.
+  it('does not announce the slip refusal words', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/\bslips?\b/i);
+  });
+
+  // Review (2026-10-05): the offline Try again sentence was never seen on a
+  // device (the simulator cannot go offline). The release carries the gate
+  // until the hardware check at the OTA walk; publishing removes it.
+  it('holds the offline Try again sentence behind the hardware check while it is a draft', () => {
+    const source = readFileSync(resolve(__dirname, './registry.ts'), 'utf8');
+    expect(release().status).toBe('draft');
+    expect(source).toContain('PUBLISH GATE (review 2026-10-05)');
+    expect(source).toContain('airplane-mode check on hardware');
   });
 
   it('offers Cancel only with orders:request, as the entry says (desk check F3)', () => {
