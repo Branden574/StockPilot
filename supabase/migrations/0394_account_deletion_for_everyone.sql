@@ -94,6 +94,15 @@
 -- ERRORS: P0001 (last_owner, from the trigger), 42501 and 22023 (transfer, as
 -- before), 55P03 (the prelude). No function here raises 40001 or 40P01
 -- (PostgREST retries those forever; 0367).
+--
+-- RE-APPLY: the revert kit (stockpilot-work sec-orders/revert/A3-revert.sql)
+-- never drops a deleted_users column, and keeps a relaxed column's
+-- *_deleted_chk while a deleted person's null remains. So the columns are
+-- added "if not exists" and each *_deleted_chk is dropped "if exists" before
+-- it is added: on a first apply both are no-ops (the names are free in
+-- production; R0 checks it), and after the kit this same text applies again
+-- unedited, copied into the next free migration number (the revert lab
+-- proves it).
 
 set lock_timeout = '900ms';
 
@@ -456,7 +465,7 @@ comment on constraint order_requests_delivery_target_chk on public.order_request
 
 -- ═══ 3. The marker on the two log tables (no key change) ══════════════════
 
-alter table public.stock_movements add column deleted_users jsonb;
+alter table public.stock_movements add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.stock_movements
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('user_id');
@@ -465,7 +474,7 @@ create trigger zzz_deleted_users_upd before update on public.stock_movements
                      or (old.user_id is not null and new.user_id is null))
   execute function public.tg_mark_deleted_users('user_id');
 
-alter table public.audit_logs add column deleted_users jsonb;
+alter table public.audit_logs add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.audit_logs
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('user_id');
@@ -481,7 +490,8 @@ alter table public.approvals
   add constraint approvals_requested_by_fkey foreign key (requested_by)
     references public.user_profiles(id) on delete set null,
   alter column requested_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists approvals_requested_by_deleted_chk,
   add constraint approvals_requested_by_deleted_chk
     check ((requested_by is not null) <> coalesce(deleted_users ? 'requested_by', false));
 create trigger zzz_deleted_users_ins before insert on public.approvals
@@ -498,7 +508,8 @@ alter table public.cycle_count_ai_scans
   add constraint cycle_count_ai_scans_created_by_fkey foreign key (created_by)
     references public.user_profiles(id) on delete set null,
   alter column created_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists cycle_count_ai_scans_created_by_deleted_chk,
   add constraint cycle_count_ai_scans_created_by_deleted_chk
     check ((created_by is not null) <> coalesce(deleted_users ? 'created_by', false)),
   drop constraint cc_ai_scans_confirm_chk,
@@ -520,7 +531,8 @@ alter table public.po_imports
   add constraint po_imports_uploaded_by_fkey foreign key (uploaded_by)
     references public.user_profiles(id) on delete set null,
   alter column uploaded_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists po_imports_uploaded_by_deleted_chk,
   add constraint po_imports_uploaded_by_deleted_chk
     check ((uploaded_by is not null) <> coalesce(deleted_users ? 'uploaded_by', false));
 create trigger zzz_deleted_users_ins before insert on public.po_imports
@@ -537,7 +549,8 @@ alter table public.putaway_moves
   add constraint putaway_moves_performed_by_fkey foreign key (performed_by)
     references public.user_profiles(id) on delete set null,
   alter column performed_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists putaway_moves_performed_by_deleted_chk,
   add constraint putaway_moves_performed_by_deleted_chk
     check ((performed_by is not null) <> coalesce(deleted_users ? 'performed_by', false));
 create trigger zzz_deleted_users_ins before insert on public.putaway_moves
@@ -553,7 +566,8 @@ alter table public.receipts
   add constraint receipts_received_by_fkey foreign key (received_by)
     references public.user_profiles(id) on delete set null,
   alter column received_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists receipts_received_by_deleted_chk,
   add constraint receipts_received_by_deleted_chk
     check ((received_by is not null) <> coalesce(deleted_users ? 'received_by', false));
 create trigger zzz_deleted_users_ins before insert on public.receipts
@@ -569,7 +583,8 @@ alter table public.size_count_training_samples
   add constraint size_count_training_samples_captured_by_fkey foreign key (captured_by)
     references public.user_profiles(id) on delete set null,
   alter column captured_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists size_count_training_samples_captured_by_deleted_chk,
   add constraint size_count_training_samples_captured_by_deleted_chk
     check ((captured_by is not null) <> coalesce(deleted_users ? 'captured_by', false));
 create trigger zzz_deleted_users_ins before insert on public.size_count_training_samples
@@ -587,7 +602,8 @@ alter table public.organization_invites
   add constraint organization_invites_invited_by_fkey foreign key (invited_by)
     references public.user_profiles(id) on delete set null,
   alter column invited_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists organization_invites_invited_by_deleted_chk,
   add constraint organization_invites_invited_by_deleted_chk
     check ((invited_by is not null) <> coalesce(deleted_users ? 'invited_by', false));
 create trigger zzz_deleted_users_ins before insert on public.organization_invites
@@ -602,7 +618,8 @@ create trigger zzz_deleted_users_upd before update on public.organization_invite
 -- (NOT NULL) is kept: the platform audit still says who acted.
 alter table public.platform_admin_audit
   alter column actor_user_id drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists platform_admin_audit_actor_user_id_deleted_chk,
   add constraint platform_admin_audit_actor_user_id_deleted_chk
     check ((actor_user_id is not null) <> coalesce(deleted_users ? 'actor_user_id', false));
 create trigger zzz_deleted_users_ins before insert on public.platform_admin_audit
@@ -632,7 +649,7 @@ alter table public.returns
     references public.user_profiles(id) on delete set null,
   add constraint returns_requested_by_fkey foreign key (requested_by)
     references public.user_profiles(id) on delete set null,
-  add column deleted_users jsonb;
+  add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.returns
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('approved_by', 'closed_by', 'denied_by', 'received_by', 'requested_by');
@@ -652,7 +669,7 @@ alter table public.uom_conversions
     references public.user_profiles(id) on delete set null,
   add constraint uom_conversions_created_by_fkey foreign key (created_by)
     references public.user_profiles(id) on delete set null,
-  add column deleted_users jsonb;
+  add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.uom_conversions
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('approved_by', 'created_by');
@@ -666,7 +683,7 @@ alter table public.org_connections
   drop constraint org_connections_created_by_fkey,
   add constraint org_connections_created_by_fkey foreign key (created_by)
     references public.user_profiles(id) on delete set null,
-  add column deleted_users jsonb;
+  add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.org_connections
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('created_by');
@@ -679,7 +696,7 @@ alter table public.organization_modules
   drop constraint organization_modules_enabled_by_fkey,
   add constraint organization_modules_enabled_by_fkey foreign key (enabled_by)
     references public.user_profiles(id) on delete set null,
-  add column deleted_users jsonb;
+  add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.organization_modules
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('enabled_by');
@@ -692,7 +709,7 @@ alter table public.carrier_shipments
   drop constraint carrier_shipments_purchased_by_fkey,
   add constraint carrier_shipments_purchased_by_fkey foreign key (purchased_by)
     references public.user_profiles(id) on delete set null,
-  add column deleted_users jsonb;
+  add column if not exists deleted_users jsonb;
 create trigger zzz_deleted_users_ins before insert on public.carrier_shipments
   for each row when (new.deleted_users is not null)
   execute function public.tg_mark_deleted_users('purchased_by');
@@ -735,7 +752,8 @@ alter table public.schedule_events
   add constraint schedule_events_updated_by_fkey foreign key (updated_by)
     references auth.users(id) on delete set null,
   alter column created_by drop not null,
-  add column deleted_users jsonb,
+  add column if not exists deleted_users jsonb,
+  drop constraint if exists schedule_events_created_by_deleted_chk,
   add constraint schedule_events_created_by_deleted_chk
     check ((created_by is not null) <> coalesce(deleted_users ? 'created_by', false));
 create trigger zzz_deleted_users_ins before insert on public.schedule_events
