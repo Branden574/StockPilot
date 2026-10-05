@@ -67,7 +67,6 @@ export interface WarehouseAddress {
 export interface WarehouseDetail {
   id: string;
   organization_id: string;
-  charter_id: string | null;
   name: string;
   code: string;
   address: WarehouseAddress | null;
@@ -194,12 +193,17 @@ export class WarehousesService {
    * manager_user_id → user_profiles). RLS gates whether the row is returned at
    * all; if the user can't see it we throw `not_found` so callers can map to
    * a 404 without leaking existence.
+   *
+   * Only columns the table has: a warehouse's charters live in
+   * warehouse_charters (0008 dropped warehouses.charter_id), and selecting the
+   * dropped column made PostgREST refuse every read (42703), so the detail
+   * page errored on every load until 2026-10-05.
    */
   async get(id: string): Promise<WarehouseDetail> {
     const { data, error } = await this.ctx.supabase
       .from('warehouses')
       .select(
-        `id, organization_id, charter_id, name, code, address,
+        `id, organization_id, name, code, address,
          contact_name, contact_email, contact_phone, manager_user_id,
          status, notes, created_at, updated_at,
          manager:user_profiles!manager_user_id (id, full_name, email, avatar_url)`,
@@ -218,7 +222,6 @@ export class WarehousesService {
     return {
       id: r.id as string,
       organization_id: r.organization_id as string,
-      charter_id: (r.charter_id as string | null) ?? null,
       name: r.name as string,
       code: r.code as string,
       address: (r.address as WarehouseAddress | null) ?? null,
