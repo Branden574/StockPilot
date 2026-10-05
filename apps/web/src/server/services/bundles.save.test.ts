@@ -19,7 +19,12 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
-import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import {
+  makeServiceContext,
+  makeSupabaseStub,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 import { BundlesService } from './bundles';
 
@@ -124,10 +129,9 @@ function rlsBundlesDelete(role: 'owner' | 'admin' | 'manager') {
   };
 }
 
-function createService(
-  role: 'owner' | 'admin' | 'manager',
-  adminDelete: Parameters<typeof makeSupabaseStub>[0][string],
-) {
+type DeleteAnswer = QueryResult | ((call: MockCall) => QueryResult);
+
+function createService(role: 'owner' | 'admin' | 'manager', adminDelete: DeleteAnswer) {
   const stub = makeSupabaseStub({
     'bundles.insert': { data: { id: 'b-new' }, error: null },
     'bundle_components.insert': { data: null, error: { message: 'connection lost' } },
@@ -146,7 +150,7 @@ describe('BundlesService.create: components', () => {
   it.each(['manager', 'admin', 'owner'] as const)(
     'removes the bundle it just made when its components cannot be saved, for a %s',
     async (role) => {
-      const { stub, admin, svc } = createService(role, (call) => ({
+      const { stub, admin, svc } = createService(role, (call: MockCall) => ({
         data: call.methods.includes('select') ? [{ id: 'b-new' }] : null,
         error: null,
       }));
@@ -172,7 +176,7 @@ describe('BundlesService.create: components', () => {
   );
 
   it('reports when the undo removed no row, so an empty bundle never stays silently', async () => {
-    const { svc } = createService('manager', (call) => ({
+    const { svc } = createService('manager', (call: MockCall) => ({
       data: call.methods.includes('select') ? [] : null,
       error: null,
     }));
