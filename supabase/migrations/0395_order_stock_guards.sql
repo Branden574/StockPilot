@@ -75,14 +75,15 @@
 --   7. L11  order_request_lines_insert also refuses a kit (is_bundle) item.
 --   8. L86  the requester's "approved" notification (in the app and as the
 --           push, which carries the notification's body) says "Part of your
---           order is held; the rest is waiting for stock." when any item is
---           held for less than the order still owes (approve_partial), "Nothing
---           is held yet; your order is waiting for stock." when approve_partial
---           could hold nothing at all (it approves anyway; production has one
---           such order, approved 2026-06-30), and keeps "Stock has been
---           reserved." otherwise. approve_partial and approve_order_request
---           write their holds before the status, so the AFTER trigger reads
---           them.
+--           order is reserved; the rest is waiting for stock." when any item
+--           is held for less than the order still owes (approve_partial),
+--           "Nothing is reserved yet; your order is waiting for stock." when
+--           approve_partial could hold nothing at all (it approves anyway;
+--           production has one such order, approved 2026-06-30), and keeps
+--           "Stock has been reserved." otherwise: one verb for the requester,
+--           as the approval email says it. approve_partial and
+--           approve_order_request write their holds before the status, so the
+--           AFTER trigger reads them.
 --
 -- WHO CHANGES TODAY (production, read-only, 2026-10-05): open orders at a
 -- user-client edge outside a scoped approver's warehouses 0; open orders with
@@ -507,7 +508,7 @@ comment on function public.confirm_physical_signature(uuid, text) is
   'Records a paper signature at hand-over (0248): the same hand-over accounting as confirm_order_signature, no image. Who: a manager by role, or the assigned driver while they are still a member of the order''s organization and the Orders module is on (0395).';
 
 -- ═══ L86. The approved notification says when only part is held ═══
--- _notify_order_request_changes: restated from 0265_notify_order_request_created_pref.sql; md5(prosrc) a223ae83810149728156b8e299c7425e -> 8d9de81d81de84af3e2589e6044506bf.
+-- _notify_order_request_changes: restated from 0265_notify_order_request_created_pref.sql; md5(prosrc) a223ae83810149728156b8e299c7425e -> 438e676429dda6fb9d2b8faee8d6dd59.
 CREATE OR REPLACE FUNCTION public._notify_order_request_changes()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -635,7 +636,8 @@ begin
         v_body := 'Stock has been reserved.';
         -- S2 (L86): approve_partial holds only what is free, which may be
         -- nothing. Say so when any item is held for less than the order
-        -- still owes for it, and say nothing is held when no hold is.
+        -- still owes for it, and say nothing is reserved yet when no hold
+        -- is. The requester's word is "reserved", as above.
         if exists (
           select 1
             from public.order_request_lines l
@@ -653,9 +655,9 @@ begin
                       where r.order_request_id = new.id
                         and r.released_at is null
                         and r.quantity > 0) then
-            v_body := 'Part of your order is held; the rest is waiting for stock.';
+            v_body := 'Part of your order is reserved; the rest is waiting for stock.';
           else
-            v_body := 'Nothing is held yet; your order is waiting for stock.';
+            v_body := 'Nothing is reserved yet; your order is waiting for stock.';
           end if;
         end if;
       when 'denied' then

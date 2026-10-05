@@ -137,7 +137,10 @@ function humanDetails(
       break;
     }
     case 'order_request.approved':
-      lines.push('Stock reserved — the order entered the fulfillment pipeline.');
+      // approve_partial records this event too, and may reserve only part of
+      // the order or nothing, so the line claims no reservation (small fixes
+      // slice 2 review).
+      lines.push('Approved — the order entered the fulfillment pipeline.');
       break;
     case 'order_request.denied':
       lines.push('The request was declined; nothing was reserved.');

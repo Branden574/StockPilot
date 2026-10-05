@@ -4911,18 +4911,40 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     const file = readdirSync(dir).filter((f) => f.endsWith('_order_stock_guards.sql'));
     expect(file).toHaveLength(1);
     const migration = readFileSync(resolve(dir, file[0]!), 'utf8');
-    expect(migration).toContain("v_body := 'Part of your order is held; the rest is waiting for stock.';");
-    expect(entry.whatChanged).toContain('"Part of your order is held; the rest is waiting for stock."');
+    // Review (2026-10-05): one verb for the requester. A full approval has
+    // always said "Stock has been reserved." and the email says "reserved",
+    // so the two new sentences say "reserved" too (they said "held", the
+    // approver's word).
+    expect(migration).toContain("v_body := 'Part of your order is reserved; the rest is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Part of your order is reserved; the rest is waiting for stock."');
     // An approval that held nothing has its own sentence, quoted exactly too.
-    expect(migration).toContain("v_body := 'Nothing is held yet; your order is waiting for stock.';");
-    expect(entry.whatChanged).toContain('"Nothing is held yet; your order is waiting for stock."');
+    expect(migration).toContain("v_body := 'Nothing is reserved yet; your order is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Nothing is reserved yet; your order is waiting for stock."');
+    expect(migration).toContain("v_body := 'Stock has been reserved.';");
+    expect(migration).not.toMatch(/v_body := '[^']*\bheld\b/);
     // The email's count, as the email prints it ("6 of 8 units"), and its
-    // nothing-held sentence.
+    // nothing-held sentence: the notification's own words.
     expect(entry.whatChanged).toContain('for example 6 of 8');
     const email = readFileSync(resolve(__dirname, '../email/order-requests.ts'), 'utf8');
     expect(email).toContain("'Nothing is reserved yet; your order is waiting for stock.'");
     expect(entry.whatChanged).toContain('or that nothing is reserved yet');
-    expect(text).not.toMatch(/\bbook\b|every unit is held for you|filled automatically|as soon as stock arrives/i);
+    // What the requester reads uses one verb: the What's New says "reserved".
+    expect(text).not.toMatch(/\bheld\b/);
+    expect(text).not.toMatch(/\bbook\b|filled automatically|as soon as stock arrives/i);
     expect(entry.whatToDo).toBe('No action needed.');
+  });
+
+  // Review (2026-10-05): "because the rest is not in stock yet" was wrong when
+  // units are on the shelf but held for other orders (approve_partial holds
+  // what is FREE), and "the order page shows where each item stands" is true
+  // only for approvers, pickers and buyers: a requester's order page shows one
+  // sentence (readinessAudience 'requester'), and the entry is told to every
+  // requester.
+  it('claims no cause it cannot know and nothing the requester\'s order page does not show', () => {
+    const entry = release().entries[0]!;
+    expect(entry.whatChanged).toContain("because the rest isn't available yet");
+    expect(entry.whatChanged).not.toMatch(/not in stock/i);
+    expect(entry.howItAffectsYou).not.toMatch(/order page|where each item stands/i);
+    expect(entry.howItAffectsYou).toContain('The rest stays on your order.');
   });
 });
