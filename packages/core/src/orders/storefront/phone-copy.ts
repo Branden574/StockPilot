@@ -185,7 +185,8 @@ export function restoredCartChangedCopy(counts: {
     );
   }
   if (parts.length === 0) return null;
-  return `Since this cart was saved, ${parts.join(', and ')}. They are marked in your cart.`;
+  const marked = counts.notOrderable + counts.overAvailable === 1 ? 'It is' : 'They are';
+  return `Since this cart was saved, ${parts.join(', and ')}. ${marked} marked in your cart.`;
 }
 
 // ── Success ─────────────────────────────────────────────────────────────────

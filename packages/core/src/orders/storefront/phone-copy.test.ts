@@ -70,7 +70,14 @@ describe('the templated sentences', () => {
   it('the restored-cart notice says what changed, and nothing when nothing did', () => {
     expect(phone.restoredCartChangedCopy({ notOrderable: 0, overAvailable: 0 })).toBeNull();
     expect(phone.restoredCartChangedCopy({ notOrderable: 1, overAvailable: 0 })).toBe(
-      "Since this cart was saved, 1 item can't be ordered from here anymore. They are marked in your cart.",
+      "Since this cart was saved, 1 item can't be ordered from here anymore. It is marked in your cart.",
+    );
+    // Simulator walk D8: one change is "It", never "They".
+    expect(phone.restoredCartChangedCopy({ notOrderable: 0, overAvailable: 1 })).toBe(
+      'Since this cart was saved, 1 line asks for more than is available now. It is marked in your cart.',
+    );
+    expect(phone.restoredCartChangedCopy({ notOrderable: 1, overAvailable: 1 })).toBe(
+      "Since this cart was saved, 1 item can't be ordered from here anymore, and 1 line asks for more than is available now. They are marked in your cart.",
     );
     expect(phone.restoredCartChangedCopy({ notOrderable: 2, overAvailable: 1 })).toBe(
       "Since this cart was saved, 2 items can't be ordered from here anymore, and 1 line asks for more than is available now. They are marked in your cart.",
