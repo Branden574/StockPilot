@@ -93,6 +93,14 @@ export async function GET(req: Request) {
     // → organizations. Per-section flags are filtered AT RENDER TIME so
     // each user's digest reflects only the sections they're subscribed to.
     // Paginated via fetchAllRows to avoid the silent 1000-row PostgREST cap.
+    //
+    // The embed NAMES its foreign key: organization_members has two to
+    // user_profiles (user_id, and invited_by), and PostgREST refuses an embed
+    // that names neither with HTTP 300 PGRST201. Without the hint this pull
+    // failed every Monday and no digest was ever sent. A recipient's
+    // memberships are the rows whose user_id is the recipient. The hint does
+    // not rename the embed, so the accepted_at filter below still says
+    // `organization_members`.
     type RecipientRow = {
       id: string;
       email: string;
@@ -119,7 +127,7 @@ export async function GET(req: Request) {
         digest_section_low_stock,
         digest_section_open_pos,
         digest_section_cycle_counts,
-        organization_members!inner (
+        organization_members!organization_members_user_id_fkey!inner (
           organization_id,
           accepted_at,
           organizations:organization_id (id, name)
