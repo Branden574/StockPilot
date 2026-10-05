@@ -45,6 +45,7 @@ import {
 } from '@stockpilot/core';
 
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
+import { BUNDLE_DUPLICATE_COMPONENT } from '@/lib/bundles/component-set';
 import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 
 import { LEGACY_ANNOUNCEMENTS } from './legacy-announcements.fixture';
@@ -4240,14 +4241,19 @@ describe('the small fixes release (slice 1)', () => {
     const published: Release = { ...release(), status: 'published' };
     const ids = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
       visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
-    // Everyone: the account and web app fixes only.
-    expect(ids('viewer', [], [])).toEqual(['app-settings-role', 'whats-new-card-clear', 'delete-account-reason']);
+    // Everyone: the grouped fixes for every member only.
+    expect(ids('viewer', [], [])).toEqual(['everyday-fixes']);
     // An approver with Orders, Inventory and Receiving on sees the order and stock fixes.
     const approver = ids('manager', ['orders:request', 'orders:approve', 'items:update', 'stock:adjust'], ['orders', 'inventory', 'receiving']);
     expect(approver).toContain('waiting-for-signature-link');
     expect(approver).toContain('clearer-stock-lines');
     expect(approver).toContain('app-receive-more-than-ordered');
+    expect(approver).toContain('app-exception-sheet-closes-cleanly');
     expect(approver).not.toContain('auto-delete-keeps-stock');
+    // Bundles: those who manage bundles, with the module on.
+    expect(approver).not.toContain('bundle-components-saved-whole');
+    expect(ids('manager', ['bundles:manage'], ['inventory', 'bundles'])).toContain('bundle-components-saved-whole');
+    expect(ids('manager', ['bundles:manage'], ['inventory'])).not.toContain('bundle-components-saved-whole');
     // Auto-delete is for those who may delete items, with Inventory on.
     expect(ids('admin', ['items:delete'], ['inventory'])).toContain('auto-delete-keeps-stock');
     // A requester is told about cancelling, not the approver's filter.
@@ -4259,5 +4265,65 @@ describe('the small fixes release (slice 1)', () => {
   it('never says "book" for the recorded quantity', () => {
     const text = JSON.stringify(release()).toLowerCase();
     expect(text).not.toMatch(/\bbook\b/);
+  });
+
+  // Desk check F4: a transfer between locations keeps the stock on record, so
+  // the item is still kept; only stock adjusted to zero or written off, with
+  // nothing held, lets the daily run delete it (archive-cleanup.ts).
+  it('says auto-delete waits for the stock to be adjusted to zero or written off, not moved', () => {
+    const entry = release().entries.find((e) => e.id === 'auto-delete-keeps-stock')!;
+    expect(entry.howItAffectsYou).not.toMatch(/moved/);
+    expect(entry.howItAffectsYou).toContain('adjusted to zero or written off, and nothing is held for it');
+  });
+
+  // Desk check F5 (owner rule 2026-09-25: every user-visible change gets a
+  // line). The release holds at most 12 entries, so the smaller ones are
+  // grouped; each change in the slice that a person can see is named here.
+  it('has a line for every user-visible change in the slice', () => {
+    expect(release().entries).toHaveLength(12);
+    const text = readerText(release()).join(' ');
+    for (const phrase of [
+      'archived item',                            // 1.1
+      'duplicated item',                          // 1.2
+      'Each item can be in a bundle only once.',  // 1.5, F1
+      'Cancel request',                           // 1.8, 1.31, F3
+      'Physical signature',                       // 1.9
+      'Waiting for signature',                    // 1.10
+      'the new order page says so',               // 1.11
+      'what was handed over is recorded',         // 1.12
+      'SO-000049',                                // 1.14
+      'Timeline',                                 // 1.15
+      'cancelled, denied or backordered',         // 1.17
+      'delivery request notes',                   // 1.18
+      "What's New notice",                        // 1.19
+      'Delete account',                           // 1.20
+      'held for other orders',                    // 1.22, 1.23
+      'not yet confirmed by email',               // 1.25
+      'PICKING',                                  // 1.26
+      'Settings in the app shows your role',      // 1.27
+      'Add a note form',                          // 1.29
+      'add a note to the receipt',                // 1.32
+      'draft PO no longer shows the hint',        // 1.30
+      'Try again no longer turns into a spinner', // 1.33
+    ]) {
+      expect(text, phrase).toContain(phrase);
+    }
+  });
+
+  it('quotes the words the code shows', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).toContain(BUNDLE_DUPLICATE_COMPONENT);
+    const timeline = readFileSync(
+      resolve(__dirname, '../../components/orders/order-timeline.tsx'),
+      'utf8',
+    );
+    const sentence = "Only people who can see activity can see this order's history.";
+    expect(timeline).toContain(JSON.stringify(sentence));
+    expect(text).toContain(sentence);
+  });
+
+  it('offers Cancel only with orders:request, as the entry says (desk check F3)', () => {
+    const entry = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
+    expect(entry.howItAffectsYou).toContain('Cancel is offered only to people allowed to request orders');
   });
 });

@@ -37,10 +37,20 @@ export const RELEASES: Release[] = [
     // Dated after the phone ordering drafts and above them (newest first).
     // Each entry says only what the code does, and is told to the people who
     // can see the change: the permission or module the change sits behind.
+    // Every user-visible change in the slice has a line (owner rule
+    // 2026-09-25). A release holds at most 12 entries, so the smaller ones
+    // are grouped by who can see them: approvers' order fixes, order fixes
+    // for everyone with Orders, and fixes for everyone. Left out as not
+    // visible: the receipt lock order, the maintenance photo row's writer,
+    // photo signing past 1000 paths (it was slower, never missing), a photo
+    // read that loses its body, the shipping panel with Shipping off (it
+    // drew nothing; only the console showed the refusal), the cron log line,
+    // the phone's Orders read before sign-in, and the catalog removal at an
+    // involuntary sign-out.
     status: 'draft',
-    title: 'Fixes across orders, items, receiving and the mobile app',
+    title: 'Fixes across orders, items, bundles, receiving and the mobile app',
     summary:
-      'Order emails, the sign page and printouts use the order number. In the mobile app you can cancel your own order request while it waits for approval, and receive more than ordered after a confirm. Auto-delete keeps archived items that still have stock, and removing a photo from a duplicated item keeps the other item\'s photo.',
+      'Order emails, the sign page and printouts use the order number. In the mobile app you can cancel your own order request while it waits for approval, and receive more than ordered after a confirm. Auto-delete keeps archived items that still have stock, removing a photo from a duplicated item keeps the other item\'s photo, and a failed save no longer leaves a bundle without its components.',
     publishedAt: '2026-10-13T17:10:00Z',
     entries: [
       {
@@ -53,7 +63,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "Archive anyway keeps an item's stock, so an archived item could still have stock on record, and deleting it made that stock disappear with the item.",
         howItAffectsYou:
-          'An archived item that still has stock stays in Archived. Once its stock is adjusted or moved away, the daily run deletes it as before.',
+          'An archived item that still has stock stays in Archived. Once its stock is adjusted to zero or written off, and nothing is held for it, the daily run deletes it as before.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:delete'], modules: ['inventory'] },
       },
@@ -68,6 +78,20 @@ export const RELEASES: Release[] = [
         howItAffectsYou: 'A photo you remove or replace changes only the item you are on.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'bundle-components-saved-whole',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'A failed save no longer leaves a bundle without its components',
+        whatChanged:
+          "Saving a bundle's components no longer removes the old ones before the new ones are saved, and a new bundle whose components cannot be saved is removed again, for managers as well as admins. A component list that names one item twice is refused with: Each item can be in a bundle only once.",
+        whyItMatters:
+          'When saving the components failed part way, the bundle was left with no components. Naming one item twice failed the save part way.',
+        howItAffectsYou:
+          'If a save fails, the bundle still has its components, and a new bundle is not left behind. Try again. To use more of one item, raise its quantity instead of adding it twice.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['bundles:manage'], modules: ['bundles'] },
       },
       {
         id: 'order-number-everywhere',
@@ -91,7 +115,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Cancelling needed the web. And on the web, Cancel request showed on your own order after it was approved, then was refused.',
         howItAffectsYou:
-          'The app asks before it cancels. Once your order is approved, only someone who approves orders can cancel it, so neither the app nor the web offers you Cancel request then.',
+          'The app asks before it cancels. Once your order is approved, only someone who approves orders can cancel it, so neither the app nor the web offers you Cancel request then. Cancel is offered only to people allowed to request orders, since only they can cancel.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
       },
@@ -111,11 +135,13 @@ export const RELEASES: Release[] = [
         id: 'waiting-for-signature-link',
         category: 'fixed',
         area: 'Orders',
-        title: 'Waiting for signature opens the right orders',
+        title: 'Waiting for signature, Physical signature and the app Orders list',
         whatChanged:
-          "The dashboard's orders waiting for signature opens the orders list filtered to orders staged for pickup or in transit, named Waiting for signature, with a link back to all active orders.",
-        whyItMatters: 'It opened the Needs approval tab.',
-        howItAffectsYou: 'The list shows exactly the orders the dashboard counted.',
+          "The dashboard's orders waiting for signature opens the orders list filtered to orders staged for pickup or in transit, named Waiting for signature, with a link back to all active orders. On the web, Physical signature is offered only to a Manager or Super Admin, or to the order's assigned driver, as in the app. The app's Orders list no longer shows public order requests that are not yet confirmed by email, as the web does.",
+        whyItMatters:
+          'The dashboard link opened the Needs approval tab. A staff member who approves orders was offered Physical signature and then refused. The app listed requests the web leaves out.',
+        howItAffectsYou:
+          'The list shows exactly the orders the dashboard counted. Collect signature is unchanged. A public request shows in both lists once it is confirmed and waits for approval.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
       },
@@ -139,24 +165,14 @@ export const RELEASES: Release[] = [
         id: 'app-order-status-words',
         category: 'fixed',
         area: 'Orders',
-        title: "The app's order screen names its status in words",
+        title: "Clearer words on an order's screens",
         whatChanged:
-          "The top of an order's screen in the app shows its status in the same words as the Orders list, such as PICKING, instead of a code such as PICKING IN PROGRESS.",
-        whyItMatters: 'The code did not match the words used everywhere else.',
-        howItAffectsYou: 'No change to what you can do.',
+          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can see activity can see this order's history. A slip of a cancelled, denied or backordered order says why it is not available, and the delivery request notes after placing an order use the full width.",
+        whyItMatters:
+          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot see activity. A slip of a closed order asked you to generate it first, which could not be done. The notes sat in a narrow column.',
+        howItAffectsYou: 'No change to what you can do, or to who may print a slip.',
         whatToDo: 'No action needed.',
         audience: { modules: ['orders'] },
-      },
-      {
-        id: 'app-settings-role',
-        category: 'fixed',
-        area: 'Account',
-        title: 'Settings in the app shows your role',
-        whatChanged:
-          'Settings in the app shows your role beside your name, in the words the web uses, for example Manager or Warehouse User.',
-        whyItMatters: 'It showed Owner for everyone.',
-        howItAffectsYou: 'No change to what you can do.',
-        whatToDo: 'No action needed.',
       },
       {
         id: 'app-receive-more-than-ordered',
@@ -171,25 +187,28 @@ export const RELEASES: Release[] = [
         audience: { anyPermission: ['stock:adjust'], modules: ['receiving'] },
       },
       {
-        id: 'whats-new-card-clear',
+        id: 'app-exception-sheet-closes-cleanly',
         category: 'fixed',
-        area: 'Web app',
-        title: "The What's New notice no longer covers the end of a page",
+        area: 'Inventory',
+        title: 'Exception sheets in the app close without a flash',
         whatChanged:
-          "While the What's New notice is showing, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of the notice.",
-        whyItMatters: 'The notice sat over them, so they could not be reached without closing it.',
-        howItAffectsYou: 'Scroll to the end of the page as usual.',
+          "In the app, closing an exception's Acknowledge or Confirm this count sheet no longer shows the Add a note form for a moment while the sheet slides away.",
+        whyItMatters: 'The wrong form appeared as the sheet closed, which looked like something else had opened.',
+        howItAffectsYou: 'No change to what you can do. Each sheet still opens blank.',
         whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'] },
       },
       {
-        id: 'delete-account-reason',
+        id: 'everyday-fixes',
         category: 'fixed',
-        area: 'Account',
-        title: 'A refused Delete account says why in the dialog',
+        area: 'Web and app',
+        title: "Your role in the app, the What's New notice, Delete account and Try again",
         whatChanged:
-          'If deleting your account is refused, for example because you are the only owner of an organization with other members, the reason shows inside the dialog.',
-        whyItMatters: 'The reason showed only in a message behind the dialog.',
-        howItAffectsYou: 'Read the reason, then close the dialog or try again.',
+          "Settings in the app shows your role beside your name, in the web's words, such as Manager or Warehouse User. On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. A refused Delete account says why inside the dialog. In the app, while offline, Try again no longer turns into a spinner every minute. With Orders turned off, the new order page says so, as the Orders page does.",
+        whyItMatters:
+          'Settings showed Owner for everyone. The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog. Offline, the app retried every minute and showed loading each time. The new order page opened with Orders off.',
+        howItAffectsYou:
+          'No change to what you can do. When the connection comes back, the app tries again at once, and Try again works as before.',
         whatToDo: 'No action needed.',
       },
     ],
