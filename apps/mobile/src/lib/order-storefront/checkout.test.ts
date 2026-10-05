@@ -318,11 +318,16 @@ describe('what the server would refuse is refused here first (desk check F11)', 
   });
 
   it('the someone-new form: Use this person only for what the server accepts, saying why once both are typed', () => {
-    expect(someoneNewCheck('', '')).toEqual({ canUse: false, message: null });
-    expect(someoneNewCheck('Bee', '')).toEqual({ canUse: false, message: null });
-    expect(someoneNewCheck('Bee', 'bee@')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
-    expect(someoneNewCheck('x'.repeat(121), 'bee@orgb.example')).toEqual({ canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY });
-    expect(someoneNewCheck(' Bee ', ' bee@orgb.example ')).toEqual({ canUse: true, message: null });
+    // PO-4 review: the dimmed action always says why to VoiceOver (its hint),
+    // and on screen once either field has been typed in.
+    const incomplete = { canUse: false, message: SUBMIT_ON_BEHALF_INCOMPLETE_COPY, hint: SUBMIT_ON_BEHALF_INCOMPLETE_COPY };
+    const invalid = { canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY, hint: ORDER_ON_BEHALF_INVALID_COPY };
+    expect(someoneNewCheck('', '')).toEqual({ canUse: false, message: null, hint: SUBMIT_ON_BEHALF_INCOMPLETE_COPY });
+    expect(someoneNewCheck('Bee', '')).toEqual(incomplete);
+    expect(someoneNewCheck('  ', 'bee@orgb.example')).toEqual(incomplete);
+    expect(someoneNewCheck('Bee', 'bee@')).toEqual(invalid);
+    expect(someoneNewCheck('x'.repeat(121), 'bee@orgb.example')).toEqual(invalid);
+    expect(someoneNewCheck(' Bee ', ' bee@orgb.example ')).toEqual({ canUse: true, message: null, hint: undefined });
   });
 });
 

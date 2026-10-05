@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, TextInput, View, type LayoutChangeEvent } from 'react-native';
 
 import {
   AVAILABILITY_LABELS,
@@ -9,7 +9,6 @@ import {
   CHECKOUT_NEEDED_BY_CLEAR_COPY,
   CHECKOUT_RECENT_COPY,
   CHECKOUT_REQUESTERS_FAILED_COPY,
-  CHECKOUT_REQUESTERS_NONE_COPY,
   CHECKOUT_REQUESTER_SEARCH_COPY,
   CHECKOUT_USE_PERSON_COPY,
   KIT_EACH_KIT_HOLDS_COPY,
@@ -63,9 +62,17 @@ import {
 } from '@/lib/order-needed-by';
 import { someoneNewCheck, wallClockIso } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
-import { earmarkLabel, matchRequesters, quantityFromField, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
+import {
+  earmarkLabel,
+  matchRequesters,
+  quantityFromField,
+  requesterListNote,
+  siteAddressLines,
+  siteLabel,
+} from '@/lib/order-storefront/setup';
 import { pickQtyFieldWidthFor, PICK_QTY_MAX_FONT_SIZE_MULTIPLIER } from '@/lib/pick-qty-field';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
+import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
 
 import { RadioRow, SmallAction } from './controls';
@@ -363,14 +370,25 @@ export function RequesterSheet({
   const [name, setName] = React.useState(current?.name ?? '');
   const [email, setEmail] = React.useState(current?.email ?? '');
   const people = requesters?.status === 'ok' ? matchRequesters(requesters.people, query) : [];
-  // What the route would refuse is refused here first (desk check F11).
+  const listNote = requesterListNote({ people: requesters?.status === 'ok' ? requesters.people.length : 0, matched: people.length });
+  // What the route would refuse is refused here first (desk check F11); the
+  // dimmed action says why (PO-4 review).
   const check = someoneNewCheck(name, email);
+  // The field being typed in stays in view above the keyboard and the footer
+  // (PO-4 review: Email sat hidden under the footer's edge), and Name's return
+  // moves to Email.
+  const [attachBody, kb] = useSheetKeyboard();
+  const emailRef = React.useRef<TextInput | null>(null);
+  const nameSpan = React.useRef<{ top: number; height: number } | null>(null);
+  const emailSpan = React.useRef<{ top: number; height: number } | null>(null);
+  const spanOf = (e: LayoutChangeEvent) => ({ top: e.nativeEvent.layout.y, height: e.nativeEvent.layout.height });
   const inputStyle = [styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }];
   return (
     <StorefrontSheet
       visible
       title={STOREFRONT_FOR_COPY}
       onClose={onClose}
+      keyboard={[attachBody, kb]}
       footer={
         // The someone-new action and its reason stay above the keyboard: at
         // the bottom of the body they were cut off by its edge while the
@@ -385,7 +403,7 @@ export function RequesterSheet({
             label={CHECKOUT_USE_PERSON_COPY}
             variant="primary"
             disabled={!check.canUse}
-            hint={check.message ?? undefined}
+            hint={check.hint}
             onPress={() => onPick({ name: name.trim(), email: email.trim() })}
           />
         </>
@@ -412,9 +430,9 @@ export function RequesterSheet({
             maxFontSizeMultiplier={INPUT_CAP}
             style={inputStyle}
           />
-          {people.length === 0 ? (
+          {listNote ? (
             <Body size={13} color={c.ink3}>
-              {CHECKOUT_REQUESTERS_NONE_COPY}
+              {listNote}
             </Body>
           ) : (
             people.map((p) => (
@@ -429,33 +447,50 @@ export function RequesterSheet({
           )}
         </>
       )}
-      <Mono size={11} color={c.ink4} upper tracking={0.12}>
-        {STOREFRONT_SOMEONE_NEW_COPY}
-      </Mono>
-      <FieldLabel>{CHECKOUT_NAME_LABEL_COPY}</FieldLabel>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        placeholder={STOREFRONT_ON_BEHALF_NAME_PLACEHOLDER_COPY}
-        placeholderTextColor={c.ink4}
-        autoCapitalize="words"
-        accessibilityLabel={CHECKOUT_NAME_LABEL_COPY}
-        maxFontSizeMultiplier={INPUT_CAP}
-        style={inputStyle}
-      />
-      <FieldLabel>{CHECKOUT_EMAIL_LABEL_COPY}</FieldLabel>
-      <TextInput
-        value={email}
-        onChangeText={setEmail}
-        placeholder={STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY}
-        placeholderTextColor={c.ink4}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="email-address"
-        accessibilityLabel={CHECKOUT_EMAIL_LABEL_COPY}
-        maxFontSizeMultiplier={INPUT_CAP}
-        style={inputStyle}
-      />
+      <View onLayout={kb.onNoteBlockLayout} style={{ gap: 12 }}>
+        <Mono size={11} color={c.ink4} upper tracking={0.12}>
+          {STOREFRONT_SOMEONE_NEW_COPY}
+        </Mono>
+        <FieldLabel>{CHECKOUT_NAME_LABEL_COPY}</FieldLabel>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          onLayout={(e) => {
+            nameSpan.current = spanOf(e);
+          }}
+          onFocus={() => kb.onFieldFocus(nameSpan.current)}
+          onBlur={kb.onNoteBlur}
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => emailRef.current?.focus()}
+          placeholder={STOREFRONT_ON_BEHALF_NAME_PLACEHOLDER_COPY}
+          placeholderTextColor={c.ink4}
+          autoCapitalize="words"
+          accessibilityLabel={CHECKOUT_NAME_LABEL_COPY}
+          maxFontSizeMultiplier={INPUT_CAP}
+          style={inputStyle}
+        />
+        <FieldLabel>{CHECKOUT_EMAIL_LABEL_COPY}</FieldLabel>
+        <TextInput
+          ref={emailRef}
+          value={email}
+          onChangeText={setEmail}
+          onLayout={(e) => {
+            emailSpan.current = spanOf(e);
+          }}
+          onFocus={() => kb.onFieldFocus(emailSpan.current)}
+          onBlur={kb.onNoteBlur}
+          returnKeyType="done"
+          placeholder={STOREFRONT_ON_BEHALF_EMAIL_PLACEHOLDER_COPY}
+          placeholderTextColor={c.ink4}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          accessibilityLabel={CHECKOUT_EMAIL_LABEL_COPY}
+          maxFontSizeMultiplier={INPUT_CAP}
+          style={inputStyle}
+        />
+      </View>
     </StorefrontSheet>
   );
 }

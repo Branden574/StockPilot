@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { OrderCatalogAnswer } from '@stockpilot/core';
+import { CHECKOUT_REQUESTERS_NONE_COPY, CHECKOUT_REQUESTERS_NO_MATCH_COPY, type OrderCatalogAnswer } from '@stockpilot/core';
 
 import {
   PHOTO_REFRESH_MS,
@@ -12,6 +12,7 @@ import {
   matchRequesters,
   photosNeedRefresh,
   quantityFromField,
+  requesterListNote,
   requesterRowValue,
   siteAddressLines,
   siteLabel,
@@ -145,5 +146,15 @@ describe('the quantity sheet’s field (PO-4 review)', () => {
     expect(quantityFromField('7', 10)).toBe(7);
     expect(quantityFromField('007', 10)).toBe(7);
     expect(quantityFromField('99', 10)).toBe(10);
+  });
+});
+
+// PO-4 review: "Nobody yet. Enter someone new." also showed when a search
+// matched nobody, untrue when recent requesters exist.
+describe('the For sheet’s recent list says what is true (PO-4 review)', () => {
+  it('nobody yet only when there is nobody; a search with no match says so; matches say nothing', () => {
+    expect(requesterListNote({ people: 0, matched: 0 })).toBe(CHECKOUT_REQUESTERS_NONE_COPY);
+    expect(requesterListNote({ people: 5, matched: 0 })).toBe(CHECKOUT_REQUESTERS_NO_MATCH_COPY);
+    expect(requesterListNote({ people: 5, matched: 2 })).toBeNull();
   });
 });

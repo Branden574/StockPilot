@@ -141,14 +141,24 @@ export function submitBlockedBy(input: {
   return null;
 }
 
-/** The someone-new form's "Use this person": only for a name and email the
- *  route accepts (core isOrderOnBehalfValid); once both are typed and they
- *  are not, core's on-behalf words say why (desk check F11). */
-export function someoneNewCheck(name: string, email: string): { canUse: boolean; message: string | null } {
-  if (name.trim() === '' || email.trim() === '') return { canUse: false, message: null };
+/** The someone-new form's action: only for a name and email the route
+ *  accepts (core isOrderOnBehalfValid, desk check F11). While it is dimmed
+ *  its hint always says why, and so does a line on screen once either field
+ *  has been typed in (PO-4 review): both are needed, or what is typed is not
+ *  what the server takes. */
+export function someoneNewCheck(
+  name: string,
+  email: string,
+): { canUse: boolean; message: string | null; hint: string | undefined } {
+  const named = name.trim() !== '';
+  const mailed = email.trim() !== '';
+  if (!named && !mailed) return { canUse: false, message: null, hint: SUBMIT_ON_BEHALF_INCOMPLETE_COPY };
+  if (!named || !mailed) {
+    return { canUse: false, message: SUBMIT_ON_BEHALF_INCOMPLETE_COPY, hint: SUBMIT_ON_BEHALF_INCOMPLETE_COPY };
+  }
   return isOrderOnBehalfValid({ name, email })
-    ? { canUse: true, message: null }
-    : { canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY };
+    ? { canUse: true, message: null, hint: undefined }
+    : { canUse: false, message: ORDER_ON_BEHALF_INVALID_COPY, hint: ORDER_ON_BEHALF_INVALID_COPY };
 }
 
 /** Checkout's For row. Offered to someone who may order on behalf (the

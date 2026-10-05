@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Body } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { MIN_TAP, storefrontLayout } from '@/lib/order-storefront/layout';
+import type { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -41,6 +42,7 @@ export function StorefrontSheet({
   onClose,
   busy = false,
   footer,
+  keyboard,
   children,
 }: {
   visible: boolean;
@@ -48,6 +50,9 @@ export function StorefrontSheet({
   onClose: () => void;
   busy?: boolean;
   footer?: React.ReactNode;
+  /** A sheet with fields to type in: its body keeps the focused field in
+   *  view above the keyboard (lib/use-sheet-keyboard.ts; PO-4 review). */
+  keyboard?: ReturnType<typeof useSheetKeyboard>;
   children: React.ReactNode;
 }) {
   const { c, mode } = useTheme();
@@ -117,6 +122,11 @@ export function StorefrontSheet({
               </Pressable>
             </View>
             <ScrollView
+              ref={keyboard?.[0]}
+              onScroll={keyboard?.[1].onBodyScroll}
+              scrollEventThrottle={16}
+              onLayout={keyboard?.[1].onBodyLayout}
+              onContentSizeChange={keyboard?.[1].onBodyContentSizeChange}
               style={{ maxHeight: layout.sheetMaxHeight, flexShrink: 1 }}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="on-drag"

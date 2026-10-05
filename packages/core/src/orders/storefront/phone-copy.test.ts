@@ -81,6 +81,14 @@ describe('the templated sentences', () => {
     );
   });
 
+  // PO-4 review: the For sheet's footer action reads as the sheet's confirm,
+  // but Myself and a recent person apply on tap: it names someone new; and a
+  // search that matched nobody is not "Nobody yet".
+  it('the For sheet’s words', () => {
+    expect(phone.CHECKOUT_USE_PERSON_COPY).toBe('Order for someone new');
+    expect(phone.CHECKOUT_REQUESTERS_NO_MATCH_COPY).toBe('Nobody matches that. Enter someone new.');
+  });
+
   it('the on-behalf sentence starts with the server refusal’s words (slice D)', async () => {
     const { ORDER_ON_BEHALF_NOT_PERMITTED_COPY } = await import('../place-order');
     expect(phone.SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY.startsWith(ORDER_ON_BEHALF_NOT_PERMITTED_COPY)).toBe(true);

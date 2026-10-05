@@ -114,9 +114,13 @@ export const CHECKOUT_REQUESTER_SEARCH_COPY = 'Search by name or email';
 export const CHECKOUT_REQUESTERS_FAILED_COPY =
   "Recent requesters couldn't be loaded. You can still enter someone new.";
 export const CHECKOUT_REQUESTERS_NONE_COPY = 'Nobody yet. Enter someone new.';
+/** A search of the recent requesters that matched nobody (there are some). */
+export const CHECKOUT_REQUESTERS_NO_MATCH_COPY = 'Nobody matches that. Enter someone new.';
 export const CHECKOUT_NAME_LABEL_COPY = 'Name';
 export const CHECKOUT_EMAIL_LABEL_COPY = 'Email';
-export const CHECKOUT_USE_PERSON_COPY = 'Order for them';
+/** The For sheet's footer action for the someone-new fields (Myself and a
+ *  recent person apply on a tap). */
+export const CHECKOUT_USE_PERSON_COPY = 'Order for someone new';
 export const CHECKOUT_NEEDED_BY_CLEAR_COPY = 'Clear';
 export const CHECKOUT_NEEDED_BY_ZONE_UNREADABLE_COPY =
   "Your organization's time zone couldn't be read, so a needed-by date can't be chosen here. You can still place the order.";

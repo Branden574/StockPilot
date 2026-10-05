@@ -1,4 +1,6 @@
 import {
+  CHECKOUT_REQUESTERS_NONE_COPY,
+  CHECKOUT_REQUESTERS_NO_MATCH_COPY,
   ORDER_CATALOG_STALE_AFTER_SECONDS,
   STOREFRONT_MYSELF_COPY,
   clampQty,
@@ -114,6 +116,14 @@ export function quantityFromField(text: string, available: number): number | nul
   const digits = text.replace(/[^0-9]/g, '');
   if (digits === '') return null;
   return clampQty(Number.parseInt(digits, 10), available);
+}
+
+/** What the recent requesters' list says when it shows nobody: nobody yet
+ *  only when there is nobody; a search that matched nobody says so (PO-4
+ *  review). */
+export function requesterListNote(input: { people: number; matched: number }): string | null {
+  if (input.matched > 0) return null;
+  return input.people === 0 ? CHECKOUT_REQUESTERS_NONE_COPY : CHECKOUT_REQUESTERS_NO_MATCH_COPY;
 }
 
 /** Who the order is for, as the For row shows it. */

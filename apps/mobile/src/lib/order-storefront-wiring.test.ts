@@ -577,7 +577,8 @@ describe('the success screen never comes back for an order already seen (desk ch
 describe('the someone-new form refuses first what the server would refuse (desk check F11)', () => {
   it('Use this person follows the tested check and says why', () => {
     expect(sheets).toContain('const check = someoneNewCheck(name, email);');
-    expect(sheets).toMatch(/label=\{CHECKOUT_USE_PERSON_COPY\}\s+variant="primary"\s+disabled=\{!check\.canUse\}\s+hint=\{check\.message \?\? undefined\}/);
+    // The hint always says why it is dimmed (PO-4 review).
+    expect(sheets).toMatch(/label=\{CHECKOUT_USE_PERSON_COPY\}\s+variant="primary"\s+disabled=\{!check\.canUse\}\s+hint=\{check\.hint\}/);
     expect(sheets).toMatch(/\{check\.message \? \(\s*<Body size=\{13\} color=\{ACCENT\.crit\}>\s*\{check\.message\}/);
     expect(sheets).not.toContain("disabled={name.trim() === '' || email.trim() === ''}");
   });
@@ -679,7 +680,7 @@ describe('For’s Order for them stays above the keyboard (simulator walk D6)', 
     const fn = sheets.slice(sheets.indexOf('export function RequesterSheet('));
     const body = fn.slice(0, fn.indexOf('\nexport function ') > 0 ? fn.indexOf('\nexport function ') : undefined);
     const open = flat(body.slice(body.indexOf('<StorefrontSheet'), body.indexOf('<RadioRow')));
-    expect(open).toMatch(/<StorefrontSheet visible title=\{STOREFRONT_FOR_COPY\} onClose=\{onClose\} footer=\{/);
+    expect(open).toMatch(/<StorefrontSheet visible title=\{STOREFRONT_FOR_COPY\} onClose=\{onClose\} (keyboard=\{\[attachBody, kb\]\} )?footer=\{/);
     expect(open).toContain('label={CHECKOUT_USE_PERSON_COPY}');
     expect(open).toContain('{check.message ? (');
     const inBody = flat(body.slice(body.indexOf('<RadioRow')));
@@ -842,5 +843,35 @@ describe('a refused line and its catalog row say why (PO-4 review)', () => {
     expect(catalog).toContain('refusal={refusalFor(row.item)}');
     expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable, refusal })}');
     expect(itemRow).toMatch(/\{refusal \?\? STOREFRONT_LINE_NOT_ORDERABLE_COPY\}/);
+  });
+});
+
+// PO-4 review (walk shot D6-iphone-reverified-footer-above-keyboard.png): with
+// the keyboard up, Email sat hidden under the footer edge; Name's return key
+// did not move to Email; the list said "Nobody yet" for a search with no
+// match. Mutations caught: the body not wired to the keyboard helper, a field
+// not revealed on focus, Name's return not moving on, the list note bypassed.
+describe('the For sheet keeps the field being typed in view and moves from Name to Email (PO-4 review)', () => {
+  const fn = sheets.slice(sheets.indexOf('export function RequesterSheet('), sheets.indexOf('export function NeededBySheet('));
+  const frame = codeOnly(read(SHEET_FRAME));
+  it('the sheet’s body scrolls through the keyboard helper, and the someone-new block sits directly in it', () => {
+    expect(fn).toContain('const [attachBody, kb] = useSheetKeyboard();');
+    expect(fn).toContain('keyboard={[attachBody, kb]}');
+    expect(fn).toMatch(/<View onLayout=\{kb\.onNoteBlockLayout\} style=\{\{ gap: 12 \}\}>\s*<Mono[^>]*>\s*\{STOREFRONT_SOMEONE_NEW_COPY\}/);
+    expect(flat(frame)).toContain('ref={keyboard?.[0]} onScroll={keyboard?.[1].onBodyScroll} scrollEventThrottle={16} onLayout={keyboard?.[1].onBodyLayout} onContentSizeChange={keyboard?.[1].onBodyContentSizeChange}');
+  });
+  it('each field is revealed when it takes focus; Name’s return moves to Email', () => {
+    expect(fn).toContain('onFocus={() => kb.onFieldFocus(nameSpan.current)}');
+    expect(fn).toContain('onFocus={() => kb.onFieldFocus(emailSpan.current)}');
+    expect(fn).toContain('returnKeyType="next"');
+    expect(fn).toContain('submitBehavior="submit"');
+    expect(fn).toContain('onSubmitEditing={() => emailRef.current?.focus()}');
+    expect(fn).toContain('onBlur={kb.onNoteBlur}');
+    const hook = codeOnly(read('src/lib/use-sheet-keyboard.ts'));
+    expect(flat(hook)).toContain('onFieldFocus: (span: { top: number; height: number } | null) => { if (span) revealer.fieldLaid(span.top, span.height); revealer.focus(); },');
+  });
+  it('the recent list’s note comes from the tested helper', () => {
+    expect(fn).toContain('const listNote = requesterListNote({ people: requesters?.status === \'ok\' ? requesters.people.length : 0, matched: people.length });');
+    expect(fn).not.toMatch(/people\.length === 0 \? \(\s*<Body size=\{13\} color=\{c\.ink3\}>\s*\{CHECKOUT_REQUESTERS_NONE_COPY\}/);
   });
 });
