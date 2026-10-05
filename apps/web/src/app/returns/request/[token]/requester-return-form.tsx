@@ -52,10 +52,13 @@ export function RequesterReturnForm({ token, lines, requesterName }: RequesterRe
   const [hp, setHp] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [done, setDone] = React.useState(false);
-  // One idempotency key per body (returns RX-1): a resend of the SAME body
-  // (a lost answer, a double tap) replays the same RMA; a changed body gets a
-  // new key, so an edit after a refusal is never read as a conflict.
-  const keyRef = React.useRef<{ fingerprint: string; key: string } | null>(null);
+  // One idempotency key per page load (returns RX-1 review, as the staff
+  // dialog and the phone sheet): a resend after a lost answer, even with an
+  // edited body, is the same request, so it replays the RMA that was made or
+  // is refused as a conflict; it never makes a second pending RMA that holds
+  // return budget. A refused create rolls its key back with it, so an edit
+  // after a refusal is accepted under the same key.
+  const keyRef = React.useRef<string | null>(null);
 
   function toggle(lineId: string) {
     setSelected((prev) => ({ ...prev, [lineId]: !prev[lineId] }));
@@ -86,17 +89,14 @@ export function RequesterReturnForm({ token, lines, requesterName }: RequesterRe
         quantity: quantities[l.orderRequestLineId] ?? l.quantityRemaining,
       })),
     };
-    const fingerprint = JSON.stringify(payload);
-    if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) {
-      keyRef.current = { fingerprint, key: randomRequestUuid() };
-    }
+    keyRef.current ??= randomRequestUuid();
 
     setSubmitting(true);
     try {
       const res = await fetch('/api/v1/public/returns', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...payload, hp, idempotencyKey: keyRef.current.key }),
+        body: JSON.stringify({ ...payload, hp, idempotencyKey: keyRef.current }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;

@@ -34,18 +34,22 @@ import {
   alreadyClosedSentence,
   alreadyReceivedSentence,
   availableReturnActions,
+  choiceNeededSentence,
   choiceToDecision,
   formatOrderNumber,
   isChoiceOffered,
   liveChoice,
+  plannedSentence,
   preselectedChoice,
   processLabelFor,
   qtyReturningLabel,
+  returnLineLabel,
   RETURN_ACTION_LABELS,
   RETURN_REASON_MAX,
   RETURNS_COPY,
   returnReasonLabel,
   sameChoice,
+  unreadDestinationChoice,
   whenProcessedSentence,
   type RestockChoice,
   type ReturnAction,
@@ -70,7 +74,9 @@ type Mode = 'idle' | 'change_destination';
  * cards (photo, name, size, SKU, quantity, inbound state), the approval
  * review (disposition, then destination per plan 3.5 with the original rack
  * preselected when proven and valid), processing (revalidated live; the
- * button stays disabled until every choice is one the server offers now),
+ * button stays disabled until every choice is one the server offers now: a
+ * planned rack that is gone opens with no destination and a sentence naming
+ * the line and why, never a quiet Staging; plan 3.5.4),
  * one next-step bar from core's availableReturnActions, and the chain.
  *
  * Every write goes through ONE server action calling ONE database function;
@@ -121,10 +127,24 @@ export function ReturnWorkbench({
     itemIsHere,
   });
 
+  // A line with no destination answer (the read failed) has nothing chosen:
+  // nothing is sent for it (review fix; never a silent Staging).
   const choiceFor = (l: ReturnWorkbenchLine): RestockChoice =>
-    choices[l.id] ?? (l.restock ? preselectedChoice(l.restock) : { disposition: l.disposition, target: null, locationId: null });
+    choices[l.id] ?? (l.restock ? preselectedChoice(l.restock) : unreadDestinationChoice(l.disposition));
 
-  const allOffered = openLines.every((l) => isChoiceOffered(l.restock!, choiceFor(l)));
+  const unappliedLines = wb.lines.filter((l) => !l.applied);
+  const allOffered =
+    !wb.destinationsUnavailable && unappliedLines.every((l) => (l.restock ? isChoiceOffered(l.restock, choiceFor(l)) : false));
+  const lineLabel = (l: ReturnWorkbenchLine): string => returnLineLabel(l.item.name ?? 'Deleted item', l.item.variant);
+  // Why the send buttons are disabled: one sentence per line that needs a
+  // destination, naming it ("New Hire Shirt, M: Original rack is no longer
+  // available: 31-C (archived). Choose a destination.").
+  const choiceProblems = wb.destinationsUnavailable
+    ? [RETURNS_COPY.destinationsUnavailable]
+    : openLines.flatMap((l) => {
+        const c = choiceFor(l);
+        return c.needsChoice ? [choiceNeededSentence(lineLabel(l), c.needsChoice)] : [];
+      });
 
   function setChoice(lineId: string, next: RestockChoice) {
     setChoices((prev) => ({ ...prev, [lineId]: next }));
@@ -142,16 +162,19 @@ export function ReturnWorkbench({
       router.refresh();
       return;
     }
-    adopt(res.data.workbench as Workbench);
+    const next = res.data.workbench as Workbench;
+    adopt(next);
     for (const step of res.data.ran) {
       if (step.outcome === 'refused') {
         toast.error(step.message ?? 'This step could not be completed.');
       } else if (step.outcome === 'already') {
+        // "Already closed by Dana": the answer's workbench names who acted
+        // (someone else did), never the screen's stale copy (review fix).
         toast.message(
           step.step === 'process'
-            ? alreadyClosedSentence(wb.return.closedByName, null)
+            ? alreadyClosedSentence(next.return.closedByName, null)
             : step.step === 'receive'
-              ? alreadyReceivedSentence(wb.return.receivedByName, null)
+              ? alreadyReceivedSentence(next.return.receivedByName, null)
               : 'Already approved.',
         );
       } else {
@@ -170,7 +193,8 @@ export function ReturnWorkbench({
   }
 
   async function approve() {
-    const lines = wb.lines.filter((l) => !l.applied).map((l) => choiceToDecision(l.id, choiceFor(l)));
+    if (!allOffered) return;
+    const lines = unappliedLines.map((l) => choiceToDecision(l.id, choiceFor(l)));
     await runSteps(['approve'], { approve: { lines }, receiveNow: itemIsHere }, 'approve');
   }
 
@@ -179,6 +203,7 @@ export function ReturnWorkbench({
   }
 
   async function processReturn() {
+    if (!allOffered) return;
     // Only destinations changed at processing travel with the close (C-9).
     const changed = openLines
       .filter((l) => !planMatches(l, choiceFor(l)))
@@ -187,6 +212,7 @@ export function ReturnWorkbench({
   }
 
   async function saveDestinations() {
+    if (!allOffered) return;
     const changed = openLines
       .filter((l) => !planMatches(l, choiceFor(l)))
       .map((l) => choiceToDecision(l.id, choiceFor(l)));
@@ -282,6 +308,8 @@ export function ReturnWorkbench({
     a === 'process' && processLabel ? processLabel.button : RETURN_ACTION_LABELS[a];
   const primaryDisabled = (a: ReturnAction): boolean =>
     busy !== null || ((a === 'process' || a === 'approve' || a === 'approve_and_receive') && !allOffered);
+  const secondaryDisabled = (a: ReturnAction): boolean =>
+    busy !== null || (a === 'change_destination' && wb.destinationsUnavailable);
 
   return (
     <div className="space-y-6">
@@ -303,7 +331,7 @@ export function ReturnWorkbench({
           <Link href={`/dashboard/orders/${r.orderRequestId}`} className="text-foreground font-medium hover:underline">
             {formatOrderNumber(r.orderNumber) ?? r.orderRequestId.slice(0, 8)}
           </Link>
-          {r.requesterName ? <> · {r.requesterName}</> : null}
+          {r.requesterName || r.requesterEmail ? <> · {r.requesterName ?? r.requesterEmail}</> : null}
           {r.warehouseName ? <> · {r.warehouseName}</> : null}
           {r.reasonCode ? <> · {returnReasonLabel(r.reasonCode)}</> : null}
         </p>
@@ -318,7 +346,7 @@ export function ReturnWorkbench({
           </Button>
         ) : null}
         {actions.secondary.map((a) => (
-          <Button key={a} variant={a === 'deny' ? 'destructive' : 'outline'} onClick={() => onAction(a)} disabled={busy !== null}>
+          <Button key={a} variant={a === 'deny' ? 'destructive' : 'outline'} onClick={() => onAction(a)} disabled={secondaryDisabled(a)}>
             {a === 'change_destination' && mode === 'change_destination' ? 'Keep destination' : RETURN_ACTION_LABELS[a]}
           </Button>
         ))}
@@ -344,6 +372,13 @@ export function ReturnWorkbench({
         {!actions.primary && !actions.readOnlyReason && actions.secondary.length === 0 ? (
           <p className="text-muted-foreground text-sm">No further steps for this return.</p>
         ) : null}
+        {wb.viewer.canManageReturns && choiceProblems.length > 0 && (actions.primary || actions.secondary.length > 0) ? (
+          <ul className="text-destructive basis-full space-y-0.5 text-sm" role="status" aria-label="Choose a destination">
+            {choiceProblems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        ) : null}
       </section>
 
       {r.status === 'requested' && wb.viewer.canManageReturns ? (
@@ -353,7 +388,7 @@ export function ReturnWorkbench({
             <li>{RETURNS_COPY.approveNothingMoves}</li>
             {openLines.map((l) => {
               const p = processLabelFor(l.restock!, choiceFor(l));
-              return <li key={l.id}>{whenProcessedSentence(p.destination)}</li>;
+              return <li key={l.id}>{whenProcessedSentence(p.destination, lineLabel(l))}</li>;
             })}
           </ul>
         </section>
@@ -395,10 +430,10 @@ export function ReturnWorkbench({
                     itemLabel={name}
                   />
                 ) : l.restock ? (
-                  <p className="text-muted-foreground text-sm">{plannedSummary(l)}</p>
+                  <p className="text-muted-foreground text-sm">{plannedSentence(l.restock, lineLabel(l))}</p>
                 ) : null}
                 {r.status === 'received' && l.restock ? (
-                  <p className="text-muted-foreground text-xs">{processingHint(l, choiceFor(l))}</p>
+                  <p className="text-muted-foreground text-xs">{processingHint(l, choiceFor(l), lineLabel(l))}</p>
                 ) : null}
               </div>
             </article>
@@ -469,7 +504,11 @@ export function ReturnWorkbench({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Deny this return?</DialogTitle>
-            <DialogDescription>Nothing moves. {RETURNS_COPY.denyReasonHelp}</DialogDescription>
+            <DialogDescription>
+              Nothing moves.{' '}
+              {/* Only a requester's RMA tells anyone (review fix): a staff RMA notifies nobody. */}
+              {r.source === 'requester' ? RETURNS_COPY.denyReasonHelp : RETURNS_COPY.denyReasonHelpInternal}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="return-deny-reason">{RETURNS_COPY.denyReasonLabel}</Label>
@@ -548,16 +587,11 @@ function planMatches(l: ReturnWorkbenchLine, choice: RestockChoice): boolean {
   return sameChoice(liveChoice(l.restock ?? { plan: null, disposition: l.disposition }), choice);
 }
 
-function plannedSummary(l: ReturnWorkbenchLine): string {
-  const choice = l.restock ? preselectedChoice(l.restock) : null;
-  if (!choice || !l.restock) return '';
-  return whenProcessedSentence(processLabelFor(l.restock, choice).destination);
-}
-
-function processingHint(l: ReturnWorkbenchLine, choice: RestockChoice): string {
+function processingHint(l: ReturnWorkbenchLine, choice: RestockChoice, label: string): string {
   const p = processLabelFor(l.restock!, choice);
   if (p.destination.kind === 'rack') return RETURNS_COPY.processToRackHint(p.destination.rack);
   if (p.destination.kind === 'staging') return RETURNS_COPY.processToStagingHint;
+  if (p.destination.kind === 'choose') return whenProcessedSentence(p.destination, label);
   return RETURNS_COPY.processScrapHint;
 }
 

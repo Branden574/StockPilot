@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { RestockOptionsLine } from '@stockpilot/core';
+import type { RestockOptionsLine, RestockSource } from '@stockpilot/core';
 
 const runSteps = vi.hoisted(() => vi.fn());
 const planAction = vi.hoisted(() => vi.fn());
@@ -18,13 +18,18 @@ vi.mock('next/link', async () => {
   const React = await import('react');
   return { default: ({ href, children }: { href: string; children: React.ReactNode }) => React.createElement('a', { href }, children) };
 });
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() } }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), message: vi.fn() }));
+vi.mock('sonner', () => ({ toast }));
 
 import { RestockDestinationPicker } from './restock-destination-picker';
 import { ReturnWorkbench } from './return-workbench';
 
 const R31 = '44444444-4444-4444-8444-444444444444';
 const R32 = '55555555-5555-4555-8555-555555555555';
+
+function src(locationId: string, name: string, remaining: number, valid = true, reason: string | null = null, over: Partial<RestockSource> = {}): RestockSource {
+  return { locationId, name, kind: 'rack', type: 'shelf', drawn: remaining, restored: 0, remaining, cap: remaining, valid, reason, writable: true, ...over };
+}
 
 function opts(over: Partial<RestockOptionsLine> = {}): RestockOptionsLine {
   return {
@@ -36,7 +41,7 @@ function opts(over: Partial<RestockOptionsLine> = {}): RestockOptionsLine {
     plan: null,
     case: 'single_source',
     notRecordedReason: null,
-    sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: true, reason: null }],
+    sources: [src(R31, '31-C', 1)],
     offerOriginal: true,
     offerSourceIds: [],
     preselect: 'original',
@@ -76,6 +81,7 @@ function bench(status: string, line: Partial<RestockOptionsLine> | null = {}, ov
     revision: status === 'requested' ? 0 : 1,
     planSeq: 4,
     createdOnCounter: false,
+    destinationsUnavailable: false,
     lines: [
       {
         id: 'l1',
@@ -116,8 +122,8 @@ describe('RestockDestinationPicker (C1 to C4)', () => {
       case: 'full_remainder',
       quantity: 3,
       sources: [
-        { locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: true, reason: null },
-        { locationId: R32, name: '32-A', kind: 'rack', type: 'shelf', drawn: 2, restored: 0, remaining: 2, valid: true, reason: null },
+        src(R31, '31-C', 1),
+        src(R32, '32-A', 2),
       ],
     });
     render(<RestockDestinationPicker line={line} choice={{ disposition: 'restock', target: 'original', locationId: null }} onChange={noop} itemLabel="Shirt" />);
@@ -133,8 +139,8 @@ describe('RestockDestinationPicker (C1 to C4)', () => {
       preselect: 'staging',
       offerSourceIds: [R32],
       sources: [
-        { locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: true, reason: null },
-        { locationId: R32, name: '32-A', kind: 'rack', type: 'shelf', drawn: 3, restored: 0, remaining: 3, valid: true, reason: null },
+        src(R31, '31-C', 1),
+        src(R32, '32-A', 3),
       ],
     });
     render(<RestockDestinationPicker line={line} choice={{ disposition: 'restock', target: 'staging', locationId: null }} onChange={onChange} itemLabel="Shirt" />);
@@ -155,11 +161,11 @@ describe('RestockDestinationPicker (C1 to C4)', () => {
   it('a rack that failed revalidation is disabled with its reason', () => {
     const line = opts({
       offerOriginal: false,
-      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: false, reason: 'archived' }],
+      sources: [src(R31, '31-C', 1, false, 'archived')],
     });
     render(<RestockDestinationPicker line={line} choice={{ disposition: 'restock', target: 'staging', locationId: null }} onChange={noop} itemLabel="Shirt" />);
     expect(screen.getByLabelText('Return to original rack: 31-C')).toBeDisabled();
-    expect(screen.getByText('Original rack is no longer available. (archived)')).toBeInTheDocument();
+    expect(screen.getByText('Original rack is no longer available: 31-C (archived).')).toBeInTheDocument();
   });
 
   it('scrap hides the destination group (brief 10); "Damaged" only adds "Inspect before choosing."', () => {
@@ -199,21 +205,32 @@ describe('ReturnWorkbench states', () => {
     expect(screen.getByRole('button', { name: 'Cancel return' })).toBeInTheDocument();
   });
 
-  it('received: the process button names the rack; a rack no longer offered keeps it disabled until Staging is chosen', () => {
+  it('received: the process button names the rack while the planned rack is still offered', () => {
     render(<ReturnWorkbench workbench={bench('received', { plan: { disposition: 'restock', target: 'original', locationId: null, basis: 'single_source', seq: 4 } })} />);
     expect(screen.getByRole('button', { name: 'Return to 31-C' })).toBeEnabled();
     expect(screen.getByText('Put it back on 31-C now. StockPilot records it there when you tap this.')).toBeInTheDocument();
   });
 
-  it('received with a failed revalidation: Staging preselected, the rack disabled, processing goes to Staging in the same call', async () => {
+  it('received with a failed revalidation: NO destination is chosen, the button stays disabled with the line and the reason, until Staging is chosen (plan 3.5.4, review)', async () => {
     runSteps.mockResolvedValue({ ok: true, data: { ran: [{ step: 'process', outcome: 'done' }], workbench: bench('closed') } });
     const failed = {
       plan: { disposition: 'restock' as const, target: 'original' as const, locationId: null, basis: 'single_source', seq: 4 },
       offerOriginal: false,
-      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: false, reason: 'archived' }],
+      sources: [src(R31, '31-C', 1, false, 'archived')],
     };
     render(<ReturnWorkbench workbench={bench('received', failed)} />);
     expect(screen.getByLabelText('Return to original rack: 31-C')).toBeDisabled();
+    // Nothing is preselected: neither the rack nor Staging.
+    expect(screen.getByLabelText('Leave in Staging')).not.toBeChecked();
+    const process = screen.getByRole('button', { name: 'Process return' });
+    expect(process).toBeDisabled();
+    expect(
+      screen.getAllByText('Walk New Hire Shirt, M: Original rack is no longer available: 31-C (archived). Choose a destination.').length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(process);
+    expect(runSteps).not.toHaveBeenCalled();
+    // Choosing Staging is a real choice: the button names it and sends it.
+    fireEvent.click(screen.getByLabelText('Leave in Staging'));
     const btn = screen.getByRole('button', { name: 'Leave in Staging' });
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
@@ -221,6 +238,80 @@ describe('ReturnWorkbench states', () => {
     expect(runSteps.mock.calls[0]![0]).toMatchObject({
       body: { steps: ['process'], expectedPlanSeq: 4, process: { lines: [{ returnLineId: 'l1', disposition: 'restock', restock: { target: 'staging' } }] } },
     });
+  });
+
+  it('two lines, one rack gone: Process return stays disabled and names only the gone line (review)', () => {
+    const plan = { disposition: 'restock' as const, target: 'original' as const, locationId: null, basis: 'single_source', seq: 4 };
+    const good = { ...opts({ returnLineId: 'l1', plan }) };
+    const gone = { ...opts({ returnLineId: 'l2', itemId: 'i2', plan, offerOriginal: false, sources: [src(R32, '32-A', 1, false, 'moved_warehouse')] }) };
+    const wb = bench('received', {}, {
+      lines: [
+        { id: 'l1', orderRequestLineId: 'ol1', itemId: 'i1', quantity: 1, disposition: 'restock', applied: false, item: { name: 'Shirt', sku: null, variant: 'Size M', deleted: false, imageUrl: null, thumbUrl: null }, restock: good, legs: [], inboundState: 'Received' },
+        { id: 'l2', orderRequestLineId: 'ol2', itemId: 'i2', quantity: 1, disposition: 'restock', applied: false, item: { name: 'Cap', sku: null, variant: null, deleted: false, imageUrl: null, thumbUrl: null }, restock: gone, legs: [], inboundState: 'Received' },
+      ],
+    });
+    render(<ReturnWorkbench workbench={wb} />);
+    expect(screen.getByRole('button', { name: 'Process return' })).toBeDisabled();
+    expect(screen.getAllByText('Cap: Original rack is no longer available: 32-A (moved to another warehouse). Choose a destination.').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Shirt, M: /)).not.toBeInTheDocument();
+  });
+
+  it('approved with a planned rack gone: the summary says why, never "goes into Staging" (review)', () => {
+    const failed = {
+      plan: { disposition: 'restock' as const, target: 'original' as const, locationId: null, basis: 'single_source', seq: 4 },
+      offerOriginal: false,
+      sources: [src(R31, '31-C', 1, false, 'archived')],
+    };
+    render(<ReturnWorkbench workbench={bench('approved', failed)} />);
+    expect(screen.getAllByText('Walk New Hire Shirt, M: Original rack is no longer available: 31-C (archived). Choose a destination.').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/goes into Staging/)).not.toBeInTheDocument();
+  });
+
+  it('requested: "What happens" names each line, so two lines never read the same (review)', () => {
+    const wb = bench('requested', {}, {
+      lines: [
+        { id: 'l1', orderRequestLineId: 'ol1', itemId: 'i1', quantity: 1, disposition: 'restock', applied: false, item: { name: 'Shirt', sku: null, variant: 'Size M', deleted: false, imageUrl: null, thumbUrl: null }, restock: opts({ returnLineId: 'l1', case: 'not_recorded', sources: [], offerOriginal: false, preselect: 'staging' }), legs: [], inboundState: 'Waiting' },
+        { id: 'l2', orderRequestLineId: 'ol2', itemId: 'i2', quantity: 1, disposition: 'restock', applied: false, item: { name: 'Cap', sku: null, variant: null, deleted: false, imageUrl: null, thumbUrl: null }, restock: opts({ returnLineId: 'l2', case: 'not_recorded', sources: [], offerOriginal: false, preselect: 'staging' }), legs: [], inboundState: 'Waiting' },
+      ],
+    });
+    render(<ReturnWorkbench workbench={wb} />);
+    expect(screen.getByText('Nothing moves now. The returned item stays out until the return is processed.')).toBeInTheDocument();
+    expect(screen.getByText('When processed, Shirt, M goes into Staging.')).toBeInTheDocument();
+    expect(screen.getByText('When processed, Cap goes into Staging.')).toBeInTheDocument();
+  });
+
+  it('a destination read that failed: Approve and Change destination are disabled with "Reload", and nothing is sent (review)', () => {
+    render(<ReturnWorkbench workbench={bench('requested', null, { destinationsUnavailable: true })} />);
+    const approve = screen.getByRole('button', { name: 'Approve return' });
+    expect(approve).toBeDisabled();
+    expect(screen.getByText("Couldn't load where the returned item goes. Reload.")).toBeInTheDocument();
+    fireEvent.click(approve);
+    expect(runSteps).not.toHaveBeenCalled();
+  });
+
+  it('"Already closed by" names the person from the answer, not the screen\'s stale copy (review)', async () => {
+    const after = bench('closed', null);
+    (after as unknown as { return: { closedByName: string } }).return.closedByName = 'Dana Keeler';
+    runSteps.mockResolvedValue({ ok: true, data: { ran: [{ step: 'process', outcome: 'already' }], workbench: after } });
+    render(<ReturnWorkbench workbench={bench('received', { plan: { disposition: 'restock', target: 'original', locationId: null, basis: 'single_source', seq: 4 } })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Return to 31-C' }));
+    await waitFor(() => expect(toast.message).toHaveBeenCalledWith('Already closed by Dana Keeler.'));
+  });
+
+  it('the deny dialog says the requester hears nothing of the reason only on a requester\'s RMA; the header shows an email-only requester (review)', () => {
+    const { unmount } = render(<ReturnWorkbench workbench={bench('requested')} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(screen.getByText(/The reason is kept on the return. Nobody is notified./)).toBeInTheDocument();
+    expect(screen.queryByText(/The requester is told/)).not.toBeInTheDocument();
+    unmount();
+    const wb = bench('requested');
+    const ret = (wb as unknown as { return: Record<string, unknown> }).return;
+    ret.source = 'requester';
+    ret.requesterEmail = 'pat@example.com';
+    render(<ReturnWorkbench workbench={wb} />);
+    expect(screen.getByText(/pat@example\.com/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(screen.getByText(/The requester is told the request was declined, never the reason./)).toBeInTheDocument();
   });
 
   it('closed, denied and cancelled offer nothing; a reader without returns:manage sees why', () => {
