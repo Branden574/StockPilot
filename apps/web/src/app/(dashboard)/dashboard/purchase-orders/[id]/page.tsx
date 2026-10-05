@@ -336,6 +336,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 checklists={checklists}
                 canRecordChecklist={gate.canRecordChecklist}
                 poId={id}
+                canReceive={canReceive}
               />
             </DetailSection>
           </div>

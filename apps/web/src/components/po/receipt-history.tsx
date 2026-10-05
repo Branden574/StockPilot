@@ -107,6 +107,12 @@ interface ReceiptHistoryProps {
   canRecordChecklist?: boolean;
   /** The purchase order, to refresh it after a start. */
   poId?: string;
+  /**
+   * Whether the page offers Receive items to this person now (the page's
+   * canReceive). The empty card names that button only then (desk check
+   * F10): staff and viewers no longer see it.
+   */
+  canReceive?: boolean;
 }
 
 /**
@@ -122,6 +128,7 @@ export function ReceiptHistory({
   checklists,
   canRecordChecklist = false,
   poId,
+  canReceive = false,
 }: ReceiptHistoryProps) {
   const linesByReceipt = React.useMemo(() => {
     const m = new Map<string, ReceiptLineRow[]>();
@@ -136,8 +143,9 @@ export function ReceiptHistory({
   if (receipts.length === 0) {
     return (
       <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
-        No receipts yet. Use the &quot;Receive items&quot; button on the line items above to record
-        what was received — partial deliveries are fine.
+        {canReceive
+          ? 'No receipts yet. Use the "Receive items" button on the line items above to record what was received — partial deliveries are fine.'
+          : 'No receipts yet.'}
       </p>
     );
   }

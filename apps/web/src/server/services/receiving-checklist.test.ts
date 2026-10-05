@@ -740,7 +740,7 @@ describe('getRun', () => {
     expect(view.about).toEqual({
       unitsReceived: 5,
       lineCount: 2,
-      warehouseName: 'Main',
+      warehouse: { kind: 'ok', value: 'Main' },
       stockOwner: { kind: 'ok', value: [] },
       billTo: { kind: 'ok', value: null },
       stillToCome: { kind: 'ok', value: 1 },
@@ -774,11 +774,20 @@ describe('getRun', () => {
       { 'purchase_order_items.select': { data: null, error: { message: 'x' } } },
       'stillToCome',
     ],
+    // Desk check F10(d): the warehouse read's error was never read, so the
+    // "Received into" line silently went missing.
+    [
+      'the warehouse read fails',
+      { 'warehouses.select': { data: null, error: { message: 'x' } } },
+      'warehouse',
+    ],
   ])('%s: unavailable', async (_l, over, field) => {
     const view = await new ReceivingChecklistService(ctxFor(base(over as Served).client)).getRun(
       RUN,
     );
-    expect(view.about[field as 'stockOwner' | 'stillToCome']).toEqual({ kind: 'unavailable' });
+    expect(view.about[field as 'stockOwner' | 'stillToCome' | 'warehouse']).toEqual({
+      kind: 'unavailable',
+    });
   });
 
   it('a charter read that fails is "didn\'t load", for the stock owner and the bill-to', async () => {

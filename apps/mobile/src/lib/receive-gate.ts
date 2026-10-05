@@ -172,7 +172,10 @@ export type ReceiveFooter =
 /**
  * The footer. A draft shows none (and the screen makes no gate request for
  * one). Post receipt appears ONLY on a known yes; stock:adjust alone is never
- * enough (staff hold it by default).
+ * enough (staff hold it by default). Someone who cannot post is told a
+ * manager posts receipts only while something is left to receive; with
+ * nothing to receive there is no footer for them (the web's rule; desk check
+ * F10).
  */
 export function receiveFooter(input: {
   reviewOnly: boolean;
@@ -189,7 +192,9 @@ export function receiveFooter(input: {
       : { kind: 'unknown', text: RECEIVE_GATE_UNKNOWN_COPY, retry: true };
   }
   if (!receiveGateFromFacts(gate.facts, false).canPostReceipt) {
-    return { kind: 'manager_posts', text: RECEIVE_MANAGER_POSTS_COPY };
+    return input.anyReceivable
+      ? { kind: 'manager_posts', text: RECEIVE_MANAGER_POSTS_COPY }
+      : { kind: 'none' };
   }
   return {
     kind: 'post',

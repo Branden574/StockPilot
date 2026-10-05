@@ -138,7 +138,10 @@ describe('receivingGate', () => {
       'Only a manager can post a receipt. A manager posts receipts.',
     );
     expect(RECEIVE_GATE_CHECKING_COPY).toBe('Checking who can post receipts…');
-    expect(RECEIVE_GATE_OFFLINE_COPY).toContain(RECEIVE_MANAGER_POSTS_COPY);
+    // Desk check F10(c): shown to anyone offline with nothing remembered, a
+    // manager included, so it never says who posts.
+    expect(RECEIVE_GATE_OFFLINE_COPY).toBe('Posting needs a connection.');
+    expect(RECEIVE_GATE_OFFLINE_COPY).not.toContain(RECEIVE_MANAGER_POSTS_COPY);
     expect(RECEIVE_GATE_UNKNOWN_COPY).toMatch(/^Could not check/);
   });
 });

@@ -86,10 +86,15 @@ describe('reading the answers', () => {
     expect(v.run).toMatchObject({ id: IDS.runB, revision: 3, status: 'in_progress' });
     expect(v.run.results).toEqual({ s1: { value: 'pass' }, s3: { value: 12 } });
     expect(v.version.procedure).toEqual({ id: IDS.proc, title: 'Receiving SOP' });
+    expect(v.about.warehouse).toEqual({ kind: 'ok', value: 'Main' });
     expect(v.about.stockOwner).toEqual({ kind: 'ok', value: ['North Charter'] });
     expect(v.about.billTo).toEqual({ kind: 'unavailable' });
     expect(v.about.stillToCome).toEqual({ kind: 'ok', value: 2 });
     expect(v.canRecord).toBe(true);
+    // Desk check F10(d): a warehouse that did not load arrives as such.
+    const failed = runAnswer();
+    (failed.run.about as Record<string, unknown>).warehouse = { kind: 'unavailable' };
+    expect(parseReceivingRun(failed).about.warehouse).toEqual({ kind: 'unavailable' });
     expect(v.timeZone).toBe('America/Los_Angeles');
   });
 
@@ -105,6 +110,12 @@ describe('reading the answers', () => {
       'a claim of an unknown kind',
       (r: ReturnType<typeof runAnswer>) => {
         (r.run.about as Record<string, unknown>).stockOwner = { kind: 'none' };
+      },
+    ],
+    [
+      'the warehouse as a bare name (not a claim)',
+      (r: ReturnType<typeof runAnswer>) => {
+        (r.run.about as Record<string, unknown>).warehouse = 'Main';
       },
     ],
     [

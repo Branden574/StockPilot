@@ -107,6 +107,23 @@ beforeEach(() => {
   });
 });
 
+// Desk check F10(a): staff and viewers no longer see Receive items, so the
+// empty Receipts card names it only to someone it is offered to.
+describe('no receipts yet', () => {
+  it('names Receive items only where the page offers it', () => {
+    const view = render(
+      <ReceiptHistory receipts={[]} lines={[]} items={{}} canReverse={false} canReceive />,
+    );
+    expect(screen.getByText(/No receipts yet\./).textContent).toContain('Receive items');
+    view.unmount();
+    render(
+      <ReceiptHistory receipts={[]} lines={[]} items={{}} canReverse={false} canReceive={false} />,
+    );
+    const empty = screen.getByText(/No receipts yet\./);
+    expect(empty.textContent).toBe('No receipts yet.');
+  });
+});
+
 describe('receipt cards: checklist chips and actions', () => {
   it('reads each state in words, and offers what the person may do', () => {
     renderHistory(CHECKS, true);

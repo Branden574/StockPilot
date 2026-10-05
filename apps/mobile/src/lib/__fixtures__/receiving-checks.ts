@@ -121,7 +121,7 @@ export function runAnswer() {
       about: {
         unitsReceived: 48,
         lineCount: 3,
-        warehouseName: 'Main',
+        warehouse: { kind: 'ok', value: 'Main' },
         stockOwner: { kind: 'ok', value: ['North Charter'] },
         billTo: { kind: 'unavailable' },
         stillToCome: { kind: 'ok', value: 2 },

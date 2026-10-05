@@ -187,6 +187,8 @@ describe('PO detail page: who is offered Receive', () => {
     expect(screen.queryByTestId('receive-dialog')).toBeNull();
     expect(screen.getByText(RECEIVE_MANAGER_POSTS_COPY)).toBeTruthy();
     expect(historyProps.value?.canRecordChecklist).toBe(false);
+    // Desk check F10(a): the empty Receipts card does not name Receive items.
+    expect(historyProps.value?.canReceive).toBe(false);
   });
 
   it('a manager who can post sees Receive items, with the live checklist and the recorder flag', async () => {
@@ -204,6 +206,7 @@ describe('PO detail page: who is offered Receive', () => {
     // An ordered PO takes a receipt: the dialog shows its button
     // (po-detail-posted-panel.test.tsx covers a PO the post completes).
     expect(dialogProps.value?.receivable).toBe(true);
+    expect(historyProps.value?.canReceive).toBe(true);
     expect(historyProps.value?.checklists).toEqual(checks.value);
     expect(historyProps.value?.poId).toBe('po-1');
   });

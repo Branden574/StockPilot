@@ -165,7 +165,8 @@ export interface ReceivingRunView {
   about: {
     unitsReceived: number;
     lineCount: number;
-    warehouseName: string | null;
+    /** The receipt's warehouse name; ok null = none could be named. */
+    warehouse: AboutClaim<string | null>;
     /** Charter names on the received items now; [] = none set. */
     stockOwner: AboutClaim<string[]>;
     /** The PO's bill-to charter; null = none set. */
@@ -555,6 +556,19 @@ export class ReceivingChecklistService {
     for (const r of [versionRes, newestRes, receiptRes, reversalRes, poRes]) {
       if (r.error) throw new ServiceError('internal_error', postgrestErrorText(r.error, r));
     }
+    // "Received into" is a claim the page makes: a read that failed says it
+    // did not load, never drops the line in silence (pattern #28, desk check
+    // F10).
+    let warehouse: AboutClaim<string | null>;
+    if (warehouseRes.error) {
+      reportDegradedRead('receiving_checklist.warehouse', warehouseRes.error);
+      warehouse = { kind: 'unavailable' };
+    } else {
+      warehouse = {
+        kind: 'ok',
+        value: (warehouseRes.data as { name?: string } | null)?.name ?? null,
+      };
+    }
     const version = versionRes.data as VersionRow | null;
     const receipt = receiptRes.data as {
       id: string;
@@ -586,7 +600,6 @@ export class ReceivingChecklistService {
     const stockOwner = await this.stockOwnerClaim(itemIds, items);
     const newest = (newestRes.data as { version_number: number } | null)?.version_number ?? null;
     const lite = this.runLite(run, names);
-    const warehouseName = (warehouseRes.data as { name?: string } | null)?.name ?? null;
 
     return {
       run: {
@@ -619,7 +632,7 @@ export class ReceivingChecklistService {
       about: {
         unitsReceived: receiptLines.reduce((s, l) => s + Number(l.qty_received_base || 0), 0),
         lineCount: receiptLines.length,
-        warehouseName,
+        warehouse,
         stockOwner,
         billTo,
         stillToCome,

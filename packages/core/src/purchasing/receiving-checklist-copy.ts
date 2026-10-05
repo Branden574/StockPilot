@@ -62,6 +62,7 @@ export const RECEIVING_CHECKLIST_COPY = {
   receivedOnReceipt: (units: number, lines: number) =>
     `Received on this receipt: ${qty(units)} ${plural(units, 'unit', 'units')} on ${count(lines)} ${plural(lines, 'line', 'lines')}.`,
   receivedInto: (warehouse: string) => `Received into: Staging at ${warehouse}.`,
+  receivedIntoUnavailable: "Warehouse didn't load",
   stockOwner: (names: readonly string[]) => `Stock owner on these items now: ${names.join(', ')}`,
   stockOwnerNone: 'No stock owner set on these items',
   stockOwnerUnavailable: "Stock owner didn't load",
@@ -203,7 +204,8 @@ export function receivingRunAboutLines(
   about: {
     unitsReceived: number;
     lineCount: number;
-    warehouseName: string | null;
+    /** The receipt's warehouse; ok null = none named (no line, no claim). */
+    warehouse: Claim<string | null>;
     stockOwner: Claim<readonly string[]>;
     billTo: Claim<string | null>;
     stillToCome: Claim<number>;
@@ -214,7 +216,11 @@ export function receivingRunAboutLines(
   const out: ReceivingRunLine[] = [
     { text: c.receivedOnReceipt(about.unitsReceived, about.lineCount), tone: 'plain' },
   ];
-  if (about.warehouseName) out.push({ text: c.receivedInto(about.warehouseName), tone: 'plain' });
+  if (about.warehouse.kind === 'unavailable') {
+    out.push({ text: c.receivedIntoUnavailable, tone: 'plain' });
+  } else if (about.warehouse.value) {
+    out.push({ text: c.receivedInto(about.warehouse.value), tone: 'plain' });
+  }
   out.push({
     text:
       about.stockOwner.kind === 'unavailable'

@@ -92,7 +92,7 @@ export interface PhoneReceivingRun {
   about: {
     unitsReceived: number;
     lineCount: number;
-    warehouseName: string | null;
+    warehouse: AboutClaim<string | null>;
     stockOwner: AboutClaim<string[]>;
     billTo: AboutClaim<string | null>;
     stillToCome: AboutClaim<number>;
@@ -270,7 +270,7 @@ export function parseReceivingRun(res: unknown): PhoneReceivingRun {
     about: {
       unitsReceived: num(about.unitsReceived),
       lineCount: num(about.lineCount),
-      warehouseName: strOrNull(about.warehouseName),
+      warehouse: claim(about.warehouse, strOrNull),
       stockOwner: claim(about.stockOwner, (x) => list(x).map(str)),
       billTo: claim(about.billTo, strOrNull),
       stillToCome: claim(about.stillToCome, num),

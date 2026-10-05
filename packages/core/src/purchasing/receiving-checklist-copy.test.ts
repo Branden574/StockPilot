@@ -206,7 +206,7 @@ describe("a run's About and status lines (one set for the web and the phone)", (
   const about = {
     unitsReceived: 48,
     lineCount: 3,
-    warehouseName: 'Main',
+    warehouse: { kind: 'ok' as const, value: 'Main' as string | null },
     stockOwner: { kind: 'ok' as const, value: ['North Charter'] },
     billTo: { kind: 'ok' as const, value: 'South Charter' as string | null },
     stillToCome: { kind: 'ok' as const, value: 2 },
@@ -227,15 +227,17 @@ describe("a run's About and status lines (one set for the web and the phone)", (
     const lines = receivingRunAboutLines(
       {
         ...about,
-        warehouseName: null,
+        warehouse: { kind: 'unavailable' },
         stockOwner: { kind: 'unavailable' },
         billTo: { kind: 'unavailable' },
         stillToCome: { kind: 'unavailable' },
       },
       false,
     ).map((l) => l.text);
+    // Desk check F10(d): the warehouse that did not load is said too.
     expect(lines).toEqual([
       C.receivedOnReceipt(48, 3),
+      C.receivedIntoUnavailable,
       C.stockOwnerUnavailable,
       C.billToUnavailable,
       C.stillToComeUnavailable,
@@ -252,6 +254,13 @@ describe("a run's About and status lines (one set for the web and the phone)", (
     expect(none).toContain(C.stockOwnerNone);
     expect(none).toContain(C.nothingToCome);
     expect(none.some((t) => t.startsWith('Bill-to'))).toBe(false);
+    // A warehouse the answer did not name: no line, and no claim.
+    const noWarehouse = receivingRunAboutLines(
+      { ...about, warehouse: { kind: 'ok', value: null } },
+      false,
+    ).map((l) => l.text);
+    expect(noWarehouse.some((t) => t.startsWith('Received into'))).toBe(false);
+    expect(noWarehouse).not.toContain(C.receivedIntoUnavailable);
   });
 
   it('a failed check adds the reverse hint, marked as a warning', () => {

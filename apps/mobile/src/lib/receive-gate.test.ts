@@ -216,6 +216,15 @@ describe('the quantities and the footer', () => {
     }
   });
 
+  // Desk check F10(b): with nothing left to receive there is no receipt to
+  // post, so nobody is told who posts one (the web says it only while the PO
+  // is receivable too).
+  it('with nothing left to receive, staff and viewers see no footer', () => {
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(footer(known(role), { anyReceivable: false })).toEqual({ kind: 'none' });
+    }
+  });
+
   it('a manager who can post sees Post receipt, as before', () => {
     expect(footer(known('manager'))).toEqual({
       kind: 'post',

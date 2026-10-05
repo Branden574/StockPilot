@@ -63,5 +63,9 @@ export const RECEIVE_GATE_CHECKING_COPY = 'Checking who can post receipts…';
 /** The phone footer when the check failed: it offers to check again. */
 export const RECEIVE_GATE_UNKNOWN_COPY = 'Could not check who can post receipts.';
 
-/** The phone footer offline with nothing known: posting needs a connection. */
-export const RECEIVE_GATE_OFFLINE_COPY = `Posting needs a connection. ${RECEIVE_MANAGER_POSTS_COPY}`;
+/**
+ * The phone footer offline with nothing known: posting needs a connection.
+ * Only that: a manager opening the app offline sees it too, so it never says
+ * who posts (desk check F10).
+ */
+export const RECEIVE_GATE_OFFLINE_COPY = 'Posting needs a connection.';

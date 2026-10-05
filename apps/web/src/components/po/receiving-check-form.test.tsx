@@ -67,7 +67,7 @@ function view(
     about: {
       unitsReceived: 48,
       lineCount: 3,
-      warehouseName: 'Main',
+      warehouse: { kind: 'ok', value: 'Main' },
       stockOwner: { kind: 'ok', value: ['North Charter'] },
       billTo: { kind: 'ok', value: 'South Charter' },
       stillToCome: { kind: 'ok', value: 2 },
@@ -112,12 +112,14 @@ describe('ReceivingCheckForm', () => {
         view={view({
           about: {
             ...view().about,
+            warehouse: { kind: 'unavailable' },
             stockOwner: { kind: 'unavailable' },
             stillToCome: { kind: 'unavailable' },
           },
         })}
       />,
     );
+    expect(screen.getByText(C.receivedIntoUnavailable)).toBeTruthy();
     expect(screen.getByText(C.stockOwnerUnavailable)).toBeTruthy();
     expect(screen.queryByText(C.stockOwnerNone)).toBeNull();
     expect(screen.getByText(C.stillToComeUnavailable)).toBeTruthy();
