@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
  * Mobile (and Bearer) "Create return" on a completed order: the same service
  * call as the web action, RMAService.createFromOrder, which creates the
  * header, the lines and the created decision in ONE database transaction
- * (create_return_request, migration 0395) after the returns module,
+ * (create_return_request, migration 0394) after the returns module,
  * returns:manage and write access to the order's warehouse.
  *
  * Body: core's create schema (whole units, 1 to 100 lines, at most 10,000 a

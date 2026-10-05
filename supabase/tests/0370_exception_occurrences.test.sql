@@ -1055,7 +1055,7 @@ select is(pg_temp.ps(:'phantom', :'stA'), null::timestamptz,
 
 -- process_return_disposition: restock lands in Staging (new holding: now);
 -- scrap is +n then -n from Staging (a stocked holding keeps its age).
--- RX-1 (0395): the received fixtures are written by the owner (an API role may
+-- RX-1 (0394): the received fixtures are written by the owner (an API role may
 -- no longer insert past 'requested'); the manager still runs the dispositions.
 insert into public.returns (id, organization_id, order_request_id, status) values
   (:retRR, :orgA, :ordW, 'received'),

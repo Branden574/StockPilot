@@ -871,7 +871,7 @@ select is(
   (select string_agg(x.fn || '=' || (x.stripped = x.want)::text || ':' || x.shapes_ok::text, ',' order by x.fn)
      from (
        select v.fn, v.want,
-              -- RX-1 (0395) restated process_return_disposition with ten lines
+              -- RX-1 (0394) restated process_return_disposition with ten lines
               -- tagged -- RX-1 (plan 3.4); both tags are stripped, and its expected
               -- value is 0373's body minus the manager-role line those lines replace.
               md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1)[^\n]*', '', 'g')) as stripped,

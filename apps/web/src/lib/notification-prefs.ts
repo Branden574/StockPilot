@@ -37,7 +37,7 @@ export const NOTIFICATION_PREF_KEYS = [
   // Requester-facing close-out ping (Maintenance Resolved spec §7) — fires
   // once when a manage-holder marks the requester's own request resolved.
   'push_maintenance_resolved',
-  // Returns RX-1 (0395): the staff "new return request" ping for returns a
+  // Returns RX-1 (0394): the staff "new return request" ping for returns a
   // requester asked for (token page, portal, member). Default on.
   'push_return_requested',
 ] as const;

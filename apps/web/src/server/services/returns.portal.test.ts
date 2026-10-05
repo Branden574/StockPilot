@@ -161,7 +161,7 @@ describe('loadPortalReturnContext (customer-own-order scoping)', () => {
   });
 });
 
-describe('createPortalReturn (create_requester_return_request, 0395)', () => {
+describe('createPortalReturn (create_requester_return_request, 0394)', () => {
   it("rejects a cross-customer / foreign order id with not_found (never calls the function)", async () => {
     const stub = makeStub({ 'order_requests.select': { data: [], error: null } });
     await expect(createPortalReturn(stub.client, SCOPE, VALID_INPUT)).rejects.toMatchObject({

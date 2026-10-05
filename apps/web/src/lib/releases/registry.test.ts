@@ -3777,8 +3777,8 @@ describe('account deletion for every member (slice A3) is held as a draft', () =
 });
 
 /**
- * Returns RX-1 (migration 0395: gated return functions, Original rack): held
- * as a DRAFT until 0395 is pushed and verified, the web deploy is READY, the
+ * Returns RX-1 (migration 0394: gated return functions, Original rack): held
+ * as a DRAFT until 0394 is pushed and verified, the web deploy is READY, the
  * OTA with the phone's Returns screens is published and the Demo Co walk
  * passed (returns plan 10.1). Pinned by id, never by index. RX-5 publishes it,
  * sets the real publishedAt, re-reads its words against what shipped and

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0395 (returns RX-1). The push runs the whole
+# Lock footprint of migration 0394 (returns RX-1). The push runs the whole
 # file as one batch, so every table lock a statement takes is held until the
 # file commits. ALTER POLICY and CREATE POLICY take ACCESS EXCLUSIVE on their
 # table, and on this image (supautils 3.4.0) supautils also takes ACCESS
@@ -55,17 +55,17 @@
 #
 # The migration sessions ALWAYS roll back, so the script changes nothing but
 # its own fixture rows (removed at the start, the end and by the EXIT trap).
-# It needs the pre-0395 head. LOCAL stack only (docker container
+# It needs the pre-0394 head. LOCAL stack only (docker container
 # supabase_db_stockpilot). Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0395_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0394_migration_lock_footprint.sh
 
 set -uo pipefail
 
 CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-MIG="$REPO/supabase/migrations/0395_returns_lifecycle_original_rack.sql"
+MIG="$REPO/supabase/migrations/0394_returns_lifecycle_original_rack.sql"
 TMP="$(mktemp -d)"
 BG=()
 
@@ -114,24 +114,24 @@ HEAD_NOW="$(q "select max(version) from supabase_migrations.schema_migrations")"
 HAS_FN="$(q "select count(*) from pg_proc where proname = 'close_return'")"
 echo "local head $HEAD_NOW; close_return present: $HAS_FN"
 if [ "$HAS_FN" != "0" ]; then
-  echo "needs the pre-0395 head (supabase db reset --local --version <the migration before 0395>, then the QA reseed)"
+  echo "needs the pre-0394 head (supabase db reset --local --version <the migration before 0394>, then the QA reseed)"
   exit 1
 fi
 POL_BEFORE="$(q "select md5(string_agg(policyname || coalesce(qual, '') || coalesce(with_check, ''), '' order by policyname)) from pg_policies where tablename in ('returns', 'return_lines')")"
 
 cleanup_rows
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0395-lock-mgr@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0395 Lock Org', '0395-lock');
+insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0394-lock-mgr@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0394 Lock Org', '0394-lock');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$MGR', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0395 Lock Main', 'WH-0395-LK', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0394 Lock Main', 'WH-0394-LK', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0395-LK', 10, 'active');
+  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0394-LK', 10, 'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
   values ('$ORD', '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values ('$LINE', '$ORD', '$ITEM', 1, 1);
 insert into public.returns (id, organization_id, order_request_id, return_number, status, source)
-  values ('$RMA', '$ORG', '$ORD', 'RMA-LOCK-0395', 'requested', 'internal');
+  values ('$RMA', '$ORG', '$ORD', 'RMA-LOCK-0394', 'requested', 'internal');
 SQL
 
 # The file in three parts: before the prelude, the prelude, the rest.
@@ -213,16 +213,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0395-lock-file-%'"
+ where a.application_name like '0394-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0395-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0394-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0395-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0394-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   local samples=0 sleeping=0 held=0 r
@@ -264,7 +264,7 @@ run_behind 3b-short-returns-reader "select count(*) from public.returns;" 0.6 ap
 
 # ── 4 and 5. The two deadlock shapes, each already holding its first lock ─
 shape() { # shape <label> <first lock sql> <second step sql>
-  local label="$1" app="0395-lock-shape-$1"
+  local label="$1" app="0394-lock-shape-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\ncommit;\nselect 'SHAPE_DONE';\n" "$app" "$2" "$3" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$label.s.out" 2>&1 &
   local sp=$!
@@ -299,14 +299,14 @@ shape "5-item-then-rma" \
 
 # ── 6. While the file holds its locks, readers wait only for the hold ─────
 {
-  echo "set application_name = '0395-lock-migration-6';"
+  echo "set application_name = '0394-lock-migration-6';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/6m.out" 2> "$TMP/6m.err" &
 BG+=("$!")
-if ! wait_sleeping 0395-lock-migration-6; then
+if ! wait_sleeping 0394-lock-migration-6; then
   bad "6: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/6m.err")"
 else
   t0="$(now_ms)"
@@ -338,10 +338,10 @@ sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s
 if grep -q 'do \$lock\$' "$TMP/no-prelude.sql" || [ "$(grep -c "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql")" != "2" ]; then
   bad "7: could not build the no-prelude control file"
 else
-  printf "set application_name = '0395-lock-control';\nbegin;\nupdate public.inventory_items set updated_at = updated_at where id = '%s';\nselect pg_sleep(1.5);\nupdate public.returns set notes = notes where id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$ITEM" "$RMA" \
+  printf "set application_name = '0394-lock-control';\nbegin;\nupdate public.inventory_items set updated_at = updated_at where id = '%s';\nselect pg_sleep(1.5);\nupdate public.returns set notes = notes where id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$ITEM" "$RMA" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.s.out" 2>&1 &
   sp=$!
-  if wait_sleeping 0395-lock-control; then
+  if wait_sleeping 0394-lock-control; then
     { echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.m.out" 2> "$TMP/7.m.err"
     wait "$sp"
     S40="$(grep -c '40P01' "$TMP/7.s.out" || true)"
@@ -363,7 +363,7 @@ FN_AFTER="$(q "select count(*) from pg_proc where proname in ('close_return', 'a
 TBL_AFTER="$(q "select count(*) from pg_class where relname in ('return_decisions', 'return_overview')")"
 POL_AFTER="$(q "select md5(string_agg(policyname || coalesce(qual, '') || coalesce(with_check, ''), '' order by policyname)) from pg_policies where tablename in ('returns', 'return_lines')")"
 if [ "$HEAD_AFTER" = "$HEAD_NOW" ] && [ "$FN_AFTER" = "0" ] && [ "$TBL_AFTER" = "0" ] && [ "$POL_AFTER" = "$POL_BEFORE" ]; then
-  ok "the stack is unchanged (head $HEAD_NOW, no 0395 function or table, the RMA policies as before)"
+  ok "the stack is unchanged (head $HEAD_NOW, no 0394 function or table, the RMA policies as before)"
 else
   bad "the stack changed under the script (head $HEAD_AFTER, functions $FN_AFTER, tables $TBL_AFTER, policies changed: $([ "$POL_AFTER" = "$POL_BEFORE" ] && echo no || echo yes))"
 fi

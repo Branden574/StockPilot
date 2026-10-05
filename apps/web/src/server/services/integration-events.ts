@@ -46,7 +46,7 @@ export const INTEGRATION_EVENT_TYPES = [
   'return.approved',
   'return.closed',
   'return.denied',
-  // Returns RX-1 (0395).
+  // Returns RX-1 (0394).
   'return.received',
   'return.cancelled',
   'cycle_count.completed',

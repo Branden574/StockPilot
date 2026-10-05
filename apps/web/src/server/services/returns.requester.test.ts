@@ -219,7 +219,7 @@ describe('loadRequesterReturnContext (where the token is found, 0389 and 0392)',
   });
 });
 
-describe('createRequesterReturn (create_requester_return_request, 0395)', () => {
+describe('createRequesterReturn (create_requester_return_request, 0394)', () => {
   function refusal(hint: string, code = 'P0001') {
     return { 'rpc:create_requester_return_request': { data: null, error: { code, hint, message: hint, details: null } } };
   }

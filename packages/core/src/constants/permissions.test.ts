@@ -94,7 +94,7 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('movements:edit_notes')).toBe(true);
   });
 
-  it('includes returns:manage (every RMA write gates on has_permission since 0395) so a grant is end-to-end', () => {
+  it('includes returns:manage (every RMA write gates on has_permission since 0394) so a grant is end-to-end', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('returns:manage')).toBe(true);
   });
 });

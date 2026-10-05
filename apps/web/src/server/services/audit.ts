@@ -383,7 +383,7 @@ export type AuditEvent =
   | 'return.received'
   | 'return.closed'
   | 'return.cancelled'
-  // Returns RX-1 (0395): a destination plan appended (approval, the planner or
+  // Returns RX-1 (0394): a destination plan appended (approval, the planner or
   // the close), and a close refused because a planned rack failed its
   // revalidation (nothing moved; written after the failure).
   | 'return.disposition_planned'

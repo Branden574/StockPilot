@@ -40,14 +40,14 @@ import {
 } from './returns-workbench';
 
 /**
- * Returns / RMA service (returns RX-1, migration 0395).
+ * Returns / RMA service (returns RX-1, migration 0394).
  *
  *   requested ──approve──▶ approved ──receive──▶ received ──close──▶ closed
  *       │                     │
  *       ├──deny──▶ denied     └──cancel──▶ cancelled
  *       └──cancel──▶ cancelled
  *
- * EVERY TRANSITION IS A DATABASE FUNCTION (0395). create_return_request,
+ * EVERY TRANSITION IS A DATABASE FUNCTION (0394). create_return_request,
  * approve_return (optionally receiving at the counter), deny_return,
  * receive_return, cancel_return, plan_return_dispositions and close_return
  * gate in their own bodies (signed in; a member; the returns module;

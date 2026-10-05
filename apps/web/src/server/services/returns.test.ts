@@ -9,7 +9,7 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
 import type { ModuleId } from '@stockpilot/core';
 
 /**
- * RMAService over the 0395 database functions (returns RX-1). The service
+ * RMAService over the 0394 database functions (returns RX-1). The service
  * never writes a return table: every transition is one RPC, its refusals are
  * mapped by hint (core return-error-map), and audit, the integration event,
  * the outbox and the requester notifications run only for the call that
@@ -17,7 +17,7 @@ import type { ModuleId } from '@stockpilot/core';
  *
  * The 0153/0154 SQL body pins that lived here (G8) are gone: the restated
  * disposition body and its reverse-replace proof are pinned in pgTAP
- * (supabase/tests/0395_returns_lifecycle_original_rack.test.sql A20/A21,
+ * (supabase/tests/0394_returns_lifecycle_original_rack.test.sql A20/A21,
  * and 0373 P3).
  */
 

@@ -1,5 +1,5 @@
 /**
- * MIGRATION GUARDS for returns RX-1 (0395, renumbered at push time; found by
+ * MIGRATION GUARDS for returns RX-1 (0394, renumbered at push time; found by
  * its suffix).
  *
  *   1. ledger.return_line_sources classifies an original location with the

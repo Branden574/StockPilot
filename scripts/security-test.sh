@@ -655,7 +655,7 @@ PGTAP_TESTS=(
   # the marker's write overhead on the log tables (ordinary writes never call
   # it) is scripts/db-concurrency/0393_marker_write_overhead.sh.
   supabase/tests/0393_account_deletion_for_everyone.test.sql
-  # Returns RX-1 (0395, INV-C6): every RMA transition runs through a gated
+  # Returns RX-1 (0394, INV-C6): every RMA transition runs through a gated
   # SECURITY DEFINER function (signed in, member, Returns module,
   # returns:manage, warehouse write) and the four write policies follow
   # returns:manage, so a manager revoked by override is refused by the
@@ -667,9 +667,9 @@ PGTAP_TESTS=(
   # only for a location the pick provenance proves and is revalidated under
   # lock at the close. The ledger helpers are INVOKER with no API EXECUTE.
   # The close, approve and plan races are
-  # scripts/db-concurrency/0395_return_close_races.sh; the lock footprint is
-  # scripts/db-concurrency/0395_migration_lock_footprint.sh.
-  supabase/tests/0395_returns_lifecycle_original_rack.test.sql
+  # scripts/db-concurrency/0394_return_close_races.sh; the lock footprint is
+  # scripts/db-concurrency/0394_migration_lock_footprint.sh.
+  supabase/tests/0394_returns_lifecycle_original_rack.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1018,7 +1018,7 @@ WEB_TESTS=(
   src/server/loaders/orders-kits.test.ts
   src/server/loaders/orders-frequently-ordered.test.ts
 
-  # Returns RX-1 (0395): RMAService calls only the gated functions, checks
+  # Returns RX-1 (0394): RMAService calls only the gated functions, checks
   # the module, the MFA floor and returns:manage before any write, maps every
   # refusal by hint (never raw database text), and writes audit, outbox and
   # webhooks only on a real change. The v1 routes answer cookie and Bearer
@@ -1129,7 +1129,7 @@ MOBILE_TESTS=(
   # never sees Mark in transit (owner decision O3, default).
   src/lib/order-manager-actions.test.ts
 
-  # Returns RX-1 (0395): every return action is online only (no outbox kind
+  # Returns RX-1 (0394): every return action is online only (no outbox kind
   # exists for a return, queue.ts kinds pinned), the next-step bar follows
   # the server's viewer booleans, never a role, and the client sends the
   # caller's Bearer token to the gated routes only.
@@ -1161,7 +1161,7 @@ CORE_TESTS=(
   # are generated from.
   src/orders/place-order.test.ts
   src/orders/place-order.parity.test.ts
-  # Returns RX-1 (0395): the actions a viewer is offered follow the server's
+  # Returns RX-1 (0394): the actions a viewer is offered follow the server's
   # booleans (returns:manage, warehouse write), the request schemas share
   # their case table with the pgTAP file, and every database hint maps to
   # its own words, specific before general, never by message text.

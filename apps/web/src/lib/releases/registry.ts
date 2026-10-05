@@ -246,8 +246,8 @@ export const RELEASES: Release[] = [
   {
     id: 'returns-original-rack-2026-10',
     revision: 1,
-    // Returns RX-1 (migration 0395: every return runs through gated server
-    // functions; Original rack). Held as a DRAFT until 0395 is pushed and
+    // Returns RX-1 (migration 0394: every return runs through gated server
+    // functions; Original rack). Held as a DRAFT until 0394 is pushed and
     // verified, the web deploy is READY, the OTA with the phone screens is
     // published and the Demo Co walk passed (returns plan 10.1 R5-R8); RX-5
     // publishes it, sets the real publishedAt and re-reads these words

@@ -158,7 +158,7 @@ set local role to 'authenticated';
 --   Σ item_stock_levels = quantity_on_hand = 103
 -- ═════════════════════════════════════════════════════════════════════════════
 
--- RX-1 (0395): the received fixture is written by the owner (an API role may
+-- RX-1 (0394): the received fixture is written by the owner (an API role may
 -- no longer insert past 'requested'); the assertions are unchanged.
 reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
@@ -226,7 +226,7 @@ select is(
 --   Σ item_stock_levels = quantity_on_hand = 120
 -- ═════════════════════════════════════════════════════════════════════════════
 
--- RX-1 (0395): the received fixture is written by the owner (an API role may
+-- RX-1 (0394): the received fixture is written by the owner (an API role may
 -- no longer insert past 'requested'); the assertions are unchanged.
 reset role;
 insert into public.returns (id, organization_id, order_request_id, status)

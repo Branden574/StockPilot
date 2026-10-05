@@ -1,4 +1,4 @@
--- 0395_returns_lifecycle_original_rack.sql
+-- 0394_returns_lifecycle_original_rack.sql
 --
 -- RETURNS AND EXCHANGES, SLICE RX-1 (owner GO 2026-10-02, "implement it safely
 -- and properly"; plan stockpilot-work/returns-exchange/plan.md section 4 RX-1;
@@ -108,7 +108,7 @@
 -- subtransaction releases what it took, and the next attempt starts after 50
 -- to 150 ms holding nothing, up to 40 attempts; then 55P03 and nothing is
 -- applied. No later statement locks a new table, so the file never waits
--- while holding a lock (scripts/db-concurrency/0395_migration_lock_footprint.sh).
+-- while holding a lock (scripts/db-concurrency/0394_migration_lock_footprint.sh).
 -- lock_timeout is 5s for the file and 900ms after the prelude (below the 1s
 -- deadlock_timeout), so an unforeseen wait fails this file, never a user's
 -- transaction. Push off-peak.

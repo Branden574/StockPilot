@@ -122,7 +122,7 @@ insert into public.inventory_items
 -- order_requests_delivery_target_chk (0110) then demands a delivery_charter_id.
 -- A returns test doesn't care about delivery, so 'pickup' (which the check
 -- requires to have NO charter) is the minimal valid choice.
--- RX-1 (0395, review fix): a raw RMA (the old tab's create, which INVARIANTS
+-- RX-1 (0394, review fix): a raw RMA (the old tab's create, which INVARIANTS
 -- 3 to 5 use as authenticated) is accepted only for a handed-over order, the
 -- create functions' and the old service's rule, so the returns' own order is
 -- 'completed' (the cancel test keeps its separate 'in_transit' order). Every
@@ -160,7 +160,7 @@ set local "request.jwt.claim.sub" to 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
--- RX-1 (0395): an API role may no longer insert a return past 'requested' (the
+-- RX-1 (0394): an API role may no longer insert a return past 'requested' (the
 -- returns API guard, G2), so the received fixtures are written by the owner;
 -- every assertion below is unchanged.
 
@@ -366,7 +366,7 @@ select is(
 
 -- DELETE of the applied return is denied by the RESTRICTIVE no-delete policy:
 -- the statement affects ZERO rows (RLS filters it out), so the return survives.
--- RX-1 (0395) revoked DELETE on returns from authenticated, so the attempt now
+-- RX-1 (0394) revoked DELETE on returns from authenticated, so the attempt now
 -- raises instead of reaching no row; the RESTRICTIVE policy stays as insurance.
 do $$ begin
   delete from public.returns where id = 'a5555551-5555-5555-5555-555555555555';

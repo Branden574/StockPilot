@@ -583,7 +583,7 @@ actually fire.
 
 ### INV-C6 — every RMA transition runs through a gated function; the database follows `returns:manage`
 
-- **Invariant** (0395, returns RX-1): the RMA tables answer to the
+- **Invariant** (0394, returns RX-1): the RMA tables answer to the
   `returns:manage` permission, not to a role.
   - **Writes.** The `returns_insert`, `returns_update`, `return_lines_insert`
     and `return_lines_update` policies test
@@ -702,7 +702,7 @@ actually fire.
     A requester whose account was deleted (the order's
     `requester_deleted_at`) is sent no return message, in the app or by
     email, not even at an address the order kept.
-- **Why it matters**: before 0395 any member with an admin or manager role
+- **Why it matters**: before 0394 any member with an admin or manager role
   could PATCH an RMA straight to `closed` without the close's stock step,
   forge another person's approval, flip `return_lines.applied`, or insert an
   RMA already `received`, and `anon` kept Supabase's default table
@@ -722,7 +722,7 @@ actually fire.
   audit, outbox and webhooks only on `changed: true`. The list reads
   `return_overview` (security_invoker, so the caller's RLS applies) behind
   `returns:read` or `returns:manage`.
-- **Tested at**: [`0395_returns_lifecycle_original_rack.test.sql`](../../supabase/tests/0395_returns_lifecycle_original_rack.test.sql)
+- **Tested at**: [`0394_returns_lifecycle_original_rack.test.sql`](../../supabase/tests/0394_returns_lifecycle_original_rack.test.sql)
   A (grants, the eight columns, function posture, the view's column order),
   B (unauthenticated, anon, foreign, module off, revoked by override for
   every function and for the raw policies, granted staff with and without
@@ -736,7 +736,7 @@ actually fire.
   (regression, organization deletion); each break named "Mutation:" in the
   file is caught by the test before it. The 0359 census (tests 15, 17, 18),
   INV-25 and the 0367 class guard cover the new functions.
-  `scripts/db-concurrency/0395_return_close_races.sh` proves the close,
+  `scripts/db-concurrency/0394_return_close_races.sh` proves the close,
   approve and plan races across two sessions. App side:
   `returns.test.ts`, `returns.requester.test.ts`, `returns.portal.test.ts`,
   the `/api/v1/returns` route tests and core `return-actions.test.ts`,

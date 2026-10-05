@@ -853,8 +853,8 @@ select is(
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
-  -- Re-pinned by 0395 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
-  -- process_return_disposition restated (header, owner and ACL unchanged; 0395
+  -- Re-pinned by 0394 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
+  -- process_return_disposition restated (header, owner and ACL unchanged; 0394
   -- A20 proves the edit) and four SECURITY INVOKER return helpers with no API
   -- EXECUTE added. revise_order_needed_by calls none of them. Same computation
   -- as 0385 Z2's re-pin (re-derived 2026-10-05 after the desk-check fixes

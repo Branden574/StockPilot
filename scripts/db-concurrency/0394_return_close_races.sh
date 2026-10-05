@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0395 (returns RX-1: every RMA transition
+# Two-session proof for migration 0394 (returns RX-1: every RMA transition
 # through a gated function; Original rack). pgTAP runs in ONE session, so it
 # cannot show what the RMA functions do while another session holds the RMA
 # row, a rack row or the create key (returns plan 3.7, items 1 to 5, both
@@ -53,11 +53,11 @@
 #      (Checks 8 run last, over every session's output.)
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
-# with 0395 applied. Fixtures are committed under the 03951111-... namespace
+# with 0394 applied. Fixtures are committed under the 03951111-... namespace
 # and removed at the start, at the end and by the EXIT trap. Exit status 0 =
 # every check passed.
 #
-# Usage: bash scripts/db-concurrency/0395_return_close_races.sh
+# Usage: bash scripts/db-concurrency/0394_return_close_races.sh
 
 set -uo pipefail
 
@@ -174,7 +174,7 @@ trap 'exit 129' HUP
 cleanup || exit 1
 
 if [ "$(q "select count(*) from pg_proc where proname = 'close_return' and pronamespace = 'public'::regnamespace")" != "1" ]; then
-  echo "0395 is not applied on this stack (no public.close_return)"; exit 1
+  echo "0394 is not applied on this stack (no public.close_return)"; exit 1
 fi
 
 # as_user <application_name|-> <user> <statements> [end]: one transaction as
@@ -206,16 +206,16 @@ as_su() {
 # its rack (recorded draws), the paper signature hands the order over.
 if ! "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR',  '0395-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0395-2s-mgr2@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0395 Two Session Org', '0395-two-session');
+  ('$MGR',  '0394-2s-mgr@test.local',  '{}'::jsonb),
+  ('$MGR2', '0394-2s-mgr2@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0394 Two Session Org', '0394-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR', 'manager', now()),
   ('$ORG', '$MGR2', 'manager', now());
 insert into public.organization_modules (organization_id, module_id, enabled, tier, settings)
 values ('$ORG', 'returns', true, 'optional', '{}'::jsonb)
 on conflict (organization_id, module_id) do update set enabled = true;
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0395 2S Main', 'WH-0395-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0394 2S Main', 'WH-0394-2S', 'active');
 insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at) values
   ('$R1', '$ORG', '$WH', '31-C', 'shelf', 'rack', now() - interval '30 minutes'),
   ('$RA', '$ORG', '$WH', '32-A', 'shelf', 'rack', now() - interval '29 minutes'),
@@ -223,14 +223,14 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
   ('$RC', '$ORG', '$WH', '34-C', 'shelf', 'rack', now() - interval '27 minutes');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, primary_location_id) values
-  ('$IT',   '$ORG', '$WH', '0395-2S',    '2S return shirt',         20, 'active', 'none', '$R1'),
-  ('$IT4A', '$ORG', '$WH', '0395-2S-4A', '2S return shirt archive', 2,  'active', 'none', '$RA'),
-  ('$IT4B', '$ORG', '$WH', '0395-2S-4B', '2S return shirt archive2', 2, 'active', 'none', '$RB'),
-  ('$IT5A', '$ORG', '$WH', '0395-2S-5A', '2S return shirt key',     2,  'active', 'none', '$R1'),
-  ('$IT5B', '$ORG', '$WH', '0395-2S-5B', '2S return shirt cap',     2,  'active', 'none', '$R1'),
-  ('$IT4C', '$ORG', '$WH', '0395-2S-4C', '2S return shirt closed wh', 2, 'active', 'none', '$RC'),
-  ('$IT9',  '$ORG', '$WH', '0395-2S-9',  '2S return shirt raw line', 4, 'active', 'none', '$R1'),
-  ('$IT9B', '$ORG', '$WH', '0395-2S-9B', '2S return shirt raw line 2', 4, 'active', 'none', '$R1');
+  ('$IT',   '$ORG', '$WH', '0394-2S',    '2S return shirt',         20, 'active', 'none', '$R1'),
+  ('$IT4A', '$ORG', '$WH', '0394-2S-4A', '2S return shirt archive', 2,  'active', 'none', '$RA'),
+  ('$IT4B', '$ORG', '$WH', '0394-2S-4B', '2S return shirt archive2', 2, 'active', 'none', '$RB'),
+  ('$IT5A', '$ORG', '$WH', '0394-2S-5A', '2S return shirt key',     2,  'active', 'none', '$R1'),
+  ('$IT5B', '$ORG', '$WH', '0394-2S-5B', '2S return shirt cap',     2,  'active', 'none', '$R1'),
+  ('$IT4C', '$ORG', '$WH', '0394-2S-4C', '2S return shirt closed wh', 2, 'active', 'none', '$RC'),
+  ('$IT9',  '$ORG', '$WH', '0394-2S-9',  '2S return shirt raw line', 4, 'active', 'none', '$R1'),
+  ('$IT9B', '$ORG', '$WH', '0394-2S-9B', '2S return shirt raw line 2', 4, 'active', 'none', '$R1');
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup');
@@ -305,14 +305,14 @@ receive_now() {
 race() {
   local tag="$1" au="$2" a="$3" aend="$4" bu="$5" b="$6"
   if [ "$au" = "-" ]; then
-    ( as_su "0395-race-$tag-A" "$a
+    ( as_su "0394-race-$tag-A" "$a
 select pg_sleep(3);" "$aend" > "$TMP/$tag.A.out" ) &
   else
-    ( as_user "0395-race-$tag-A" "$au" "$a
+    ( as_user "0394-race-$tag-A" "$au" "$a
 select pg_sleep(3);" "$aend" > "$TMP/$tag.A.out" ) &
   fi
   local pid=$!
-  wait_for "0395-race-$tag-A" Timeout PgSleep || bad "$tag: session A never reached its pg_sleep"
+  wait_for "0394-race-$tag-A" Timeout PgSleep || bad "$tag: session A never reached its pg_sleep"
   local t0; t0=$(now_ms)
   if [ "$bu" = "-" ]; then
     as_su - "$b" > "$TMP/$tag.B.out"
@@ -449,10 +449,10 @@ check "6: nothing moved; the RMA stays received; the live plan is Staging" "$(( 
 
 # ═══ 7. A lock held past lock_timeout ═════════════════════════════════════
 echo "== 7. the RMA row held past 5 s"
-( as_user "0395-long-A" "$MGR" "$(close_sql "$R")
+( as_user "0394-long-A" "$MGR" "$(close_sql "$R")
 select pg_sleep(7);" > "$TMP/long.A.out" ) &
 PID=$!
-wait_for "0395-long-A" Timeout PgSleep || bad "7: session A never reached its pg_sleep"
+wait_for "0394-long-A" Timeout PgSleep || bad "7: session A never reached its pg_sleep"
 T0=$(now_ms)
 as_user - "$MGR2" "$(close_sql "$R")" > "$TMP/long.B.out"
 T1=$(now_ms)
