@@ -176,6 +176,29 @@ describe('buildExchangeView', () => {
     expect(partly.replacement?.class).toBe('handed_over');
   });
 
+  // Desk check F2: resumed into picking after a part hand-over, it stays
+  // handed over, so the workbench offers neither Change nor Cancel replacement.
+  it('a backorder resumed into picking after a part hand-over is still handed_over: no change or cancel offered', () => {
+    const resumed = view({
+      rawLines: [line({ status: 'approved', approved_item_id: 'l', approved_quantity: 2, replacement_order_request_id: 'o-new' })],
+      replacements: [repl({ status: 'pick_slip_generated' })],
+      overview: { kind: 'exchange', exchange_status: 'in_progress', replacement_order_id: 'o-new', released_early: true, counter: false },
+      detail: { lines: [{ id: 'ol1', item_id: 'l', quantity_requested: 2, quantity_fulfilled: 1 }], heldByItem: new Map([['l', 1]]), racksByItem: new Map() },
+    });
+    expect(resumed.replacement?.class).toBe('handed_over');
+    const actions = availableReturnActions({
+      status: 'approved',
+      exchangeStatus: resumed.status,
+      hasExchange: true,
+      replacementClass: resumed.replacement!.class,
+      hasApprovedExchange: resumed.hasApprovedExchange,
+      viewerCanManageReturns: true,
+      viewerCanApproveOrders: true,
+    });
+    expect([actions.primary, ...actions.secondary]).not.toContain('cancel_replacement');
+    expect([actions.primary, ...actions.secondary]).not.toContain('change_replacement');
+  });
+
   it('the kill switch reaches the workbench (no "Add a replacement" while off)', () => {
     expect(view().createEnabled).toBe(true);
     vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');

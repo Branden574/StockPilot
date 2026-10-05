@@ -206,7 +206,35 @@ describe('replacementClassOf (the SQL _return_replacement_class)', () => {
     ['cancelled', false, 'none'],
     ['denied', false, 'none'],
     [null, false, 'none'],
+    // Desk check F2: a backorder resumed into picking again (or picked
+    // again) after part was handed over is still handed over: Cancel and
+    // Change replacement would let a new replacement send those units twice.
+    ['pick_slip_generated', true, 'handed_over'],
+    ['picking_in_progress', true, 'handed_over'],
+    ['picking_complete', true, 'handed_over'],
+    ['packing_slip_generated', true, 'handed_over'],
+    ['staged_for_pickup', true, 'handed_over'],
+    ['staged_for_delivery', true, 'handed_over'],
+    ['in_transit', true, 'handed_over'],
+    ['cancelled', true, 'none'],
   ] as const)('%s (handed over %s) is %s', (status, handed, cls) => {
     expect(replacementClassOf(status, handed)).toBe(cls);
+  });
+
+  it('a resumed partial hand-over offers neither Change nor Cancel replacement (desk check F2)', () => {
+    for (const status of ['approved', 'received', 'closed'] as const) {
+      const a = availableReturnActions({
+        status,
+        exchangeStatus: 'in_progress',
+        hasExchange: true,
+        replacementClass: replacementClassOf('pick_slip_generated', true),
+        hasApprovedExchange: true,
+        viewerCanManageReturns: true,
+        viewerCanApproveOrders: true,
+      });
+      const all = [a.primary, ...a.secondary];
+      expect(all, status).not.toContain('cancel_replacement');
+      expect(all, status).not.toContain('change_replacement');
+    }
   });
 });

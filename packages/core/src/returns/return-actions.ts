@@ -81,19 +81,27 @@ export type ReturnAction =
 
 /**
  * What a live replacement is (plan 3.3.5), the SQL `_return_replacement_class`:
- * undrawn (nothing picked out of stock yet), drawn (picked, not handed over:
- * a cancel restocks the picked batch to Staging), handed_over, or none.
+ * undrawn (nothing picked out of stock yet, nothing handed over), drawn
+ * (picked, not handed over: a cancel restocks the picked batch to Staging),
+ * handed_over (completed, or anything handed over at all), or none.
  */
 export type ReplacementClass = 'undrawn' | 'drawn' | 'handed_over' | 'none';
 
 const DRAWN_STATUSES: readonly string[] = ['picking_complete', 'packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'in_transit'];
 const UNDRAWN_STATUSES: readonly string[] = ['pending_approval', 'approved', 'pick_slip_generated', 'picking_in_progress', 'backordered'];
 
-/** The class of a replacement order from its status and whether anything was handed over. */
+/**
+ * The class of a replacement order from its status and whether anything was
+ * handed over. Anything handed over makes it handed_over WHATEVER the status
+ * (desk check F2): a backorder, or one resumed into picking again. Neither
+ * "Change replacement" nor "Cancel replacement" is offered for it, and the
+ * database refuses both (replacement_handed_over), so a new replacement can
+ * never send those units a second time.
+ */
 export function replacementClassOf(status: string | null | undefined, anythingHandedOver = false): ReplacementClass {
   if (!status || status === 'cancelled' || status === 'denied') return 'none';
   if (status === 'completed') return 'handed_over';
-  if (status === 'backordered' && anythingHandedOver) return 'handed_over';
+  if (anythingHandedOver) return 'handed_over';
   if (DRAWN_STATUSES.includes(status)) return 'drawn';
   if (UNDRAWN_STATUSES.includes(status)) return 'undrawn';
   return 'none';

@@ -40,6 +40,9 @@
 -- X.  X-1: cancelling a picked, staged or in-transit replacement from the RMA
 --     restocks the picked batch to Staging; a handed-over one is refused.
 --     C-1: a new replacement after a replacement cancel.
+-- Z.  A replacement handed over in part (desk check F2): a backorder, and the
+--     same resumed into picking, is never cancelled or changed from the RMA;
+--     a forced re-issue sends only what is left of the returned quantity.
 -- R.  Early release: gates, reason, replay, the gate opens, a substituted
 --     order needs its own (D10).
 -- G.  G1 approve and receive at the counter; G9 add a replacement.
@@ -73,6 +76,8 @@
 --   M18 the requester options keep a hidden item                         -> Y1
 --   M19 the issue copies the original's notes                            -> H5
 --   M20 the issue drops a deleted requester's stamp                      -> H4
+--   M21 the class counts a part hand-over only on a backorder            -> Z2
+--   M22 the re-issue ignores what earlier replacements handed over       -> Z3
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -83,7 +88,7 @@
 
 begin;
 
-select plan(90);
+select plan(93);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -137,6 +142,7 @@ select plan(90);
 \set rSame   '\'03970000-0000-0000-0000-000000000e18\''
 \set r2XL    '\'03970000-0000-0000-0000-000000000e19\''
 \set r3XL    '\'03970000-0000-0000-0000-000000000e1a\''
+\set pX      '\'03970000-0000-0000-0000-000000000e1b\''
 \set oE2E    '\'03970000-0000-0000-0000-000000000101\''
 \set oG      '\'03970000-0000-0000-0000-000000000102\''
 \set oShort  '\'03970000-0000-0000-0000-000000000103\''
@@ -155,6 +161,7 @@ select plan(90);
 \set oMute   '\'03970000-0000-0000-0000-000000000110\''
 \set oCnt    '\'03970000-0000-0000-0000-000000000111\''
 \set oOrd    '\'03970000-0000-0000-0000-000000000112\''
+\set oPh     '\'03970000-0000-0000-0000-000000000113\''
 \set lE2E    '\'03970000-0000-0000-0000-000000000201\''
 \set lG      '\'03970000-0000-0000-0000-000000000202\''
 \set lG2     '\'03970000-0000-0000-0000-000000000203\''
@@ -173,6 +180,7 @@ select plan(90);
 \set lZ      '\'03970000-0000-0000-0000-000000000210\''
 \set lMute   '\'03970000-0000-0000-0000-000000000211\''
 \set lCnt    '\'03970000-0000-0000-0000-000000000212\''
+\set lPh     '\'03970000-0000-0000-0000-000000000213\''
 \set nobody  '\'03970000-0000-0000-0000-0000000009ff\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -644,14 +652,14 @@ select is(
                      ',' order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('_return_exchange_requester_options', '_return_exchange_item_ok', '_return_replacement_summary',
-                        '_return_replacement_class', '_return_replacement_cancel_order', '_return_exchange_reason',
+                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_replacement_cancel_order', '_return_exchange_reason',
                         '_return_exchange_quantity', '_return_replacement_issue', '_return_exchange_create',
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
                         '_notify_replacement_order_changes', 'tg_returns_api_guard')),
   '_notify_replacement_order_changes:true:false,_return_exchange_approve:false:false,_return_exchange_create:false:false,'
-  || '_return_exchange_item_ok:false:false,_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,'
+  || '_return_exchange_fulfilled:false:false,_return_exchange_item_ok:false:false,_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,'
   || '_return_exchange_quantity:false:false,_return_exchange_reason:false:false,_return_exchange_replay:false:false,'
   || '_return_exchange_requester_options:false:false,_return_replacement_cancel_order:false:false,'
   || '_return_replacement_class:false:false,_return_replacement_issue:true:false,_return_replacement_summary:false:false,'
@@ -662,7 +670,7 @@ select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname collate "C"), '')
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('_return_exchange_requester_options', '_return_exchange_item_ok', '_return_replacement_summary',
-                        '_return_replacement_class', '_return_replacement_cancel_order', '_return_exchange_reason',
+                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_replacement_cancel_order', '_return_exchange_reason',
                         '_return_exchange_quantity', '_return_replacement_issue', '_return_exchange_create',
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
@@ -1204,6 +1212,76 @@ select is(
   || (select status from public.order_requests where id = :'oX1') || ':' || pg_temp.xs(:'rX1', :mgr),
   'true:reissue:3:true:1:approved/3:cancelled:waiting_for_return',
   'X4: after a replacement cancel, "Issue a new replacement" creates and holds a new order, the lines approved again at the next revision; the new order needs its own release (C-1, D10)');
+
+-- ══ Z. A replacement handed over in part (desk check F2) ═════════════════
+-- oPh: a completed order of 4 Mediums; pX: a replacement item with one unit
+-- on 12-B (no group, no reorder point). rPh returns 2 Mediums for 2 pX,
+-- approved on backorder (1 held), released, picked (1), handed over (1): a
+-- backorder with 1 of 2 handed over.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type, primary_location_id)
+values (:pX, :orgA, :whA, '0397-PX', 'Walk Part Shirt', 1, 7, 'active', 'none', :r12B);
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type)
+values (:oPh, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
+values (:lPh, :oPh, :gM, 4, 4);
+select pg_temp.mk(:mgr, :oPh, pg_temp.xbody(:lPh, 2, jsonb_build_object('itemId', :pX))) as "rPh" \gset
+select pg_temp.approve(:mgr, :'rPh', pg_temp.xdec(:'rPh', 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb)) as "jPh" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rPh')) as "jPhr" \gset
+select pg_temp.live(:'rPh') as "oPhR" \gset
+select pg_temp.pick(:mgr, :'oPhR') as "phPick" \gset
+select pg_temp.stage(:mgr, :'oPhR') as "phStage" \gset
+select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oPhR')) as "phSign" \gset
+select is(
+  ((:'jPh'::jsonb)->'replacement'->>'short') || ':' || :'phPick' || ':' || :'phStage' || ':' || :'phSign' || ':'
+  || (select trim_scale(sum(l.quantity_fulfilled))::text from public.order_request_lines l where l.order_request_id = :'oPhR') || ':'
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Changed my mind')$q$,
+       :'rPh', pg_temp.rev(:'rPh')))) || ':'
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Another item', 'backorder')$q$,
+       :'rPh', pg_temp.rev(:'rPh'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rPh'), 'itemId', :gL))::text))) || ':'
+  || pg_temp.xs(:'rPh', :mgr),
+  'true:picking_complete:ok:1:backordered:1:P0001:replacement_handed_over:P0001:replacement_handed_over:partly_handed_over',
+  'Z1: a replacement handed over in part (a backorder with 1 of 2 handed over) is neither cancelled nor changed from the RMA (desk check F2)');
+-- Stock arrives (+1 on 12-B) and the backorder is resumed into picking.
+do $$
+begin
+  perform public.adjust_stock('03970000-0000-0000-0000-000000000e1b'::uuid, 1, 'add',
+                              '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+end $$;
+select pg_temp.call_as('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oPhR')) as "phResume" \gset
+select is(
+  :'phResume' || ':' || pg_temp.holds(:'oPhR')::text || ':'
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Changed my mind')$q$,
+       :'rPh', pg_temp.rev(:'rPh')))) || ':'
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Another item', 'backorder')$q$,
+       :'rPh', pg_temp.rev(:'rPh'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rPh'), 'itemId', :gL))::text))) || ':'
+  || pg_temp.xs(:'rPh', :mgr) || ':' || pg_temp.balanced(:pX)::text,
+  'pick_slip_generated:1:P0001:replacement_handed_over:P0001:replacement_handed_over:in_progress:true',
+  'Z2: resumed into picking it is still handed over in part: Cancel replacement and Change replacement are refused, so no new replacement sends the handed-over unit again (desk check F2)');
+-- A forced cancel of that order (the exchange flag raised by hand; no
+-- function does this any more) leaves the lines cancelled. A re-issue then
+-- sends only what is left of the 2 returned after the 1 handed over, and
+-- asking for 2 is refused (undone: try_rpc).
+create function pg_temp.zforce(p_order uuid, p_rma uuid) returns text language sql immutable as $$
+  select format($q$select set_config('request.jwt.claim.sub', '03970000-0000-0000-0000-0000000000a1', true);
+                   select set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
+                   select public.cancel_order_request(%L, 'Forced');
+                   select set_config('stockpilot.return_exchange', '', true);
+                   update public.return_exchange_lines set status = 'cancelled' where return_id = %L and status = 'approved'$q$,
+                p_order, p_rma)
+$$;
+select is(
+  (select coalesce(j->>'changed', pg_temp.err(j)) || ':' || coalesce(j->>'mode', '-') || ':'
+          || coalesce(j->'replacement'->'lines'->0->>'requested', 'none')
+     from (select pg_temp.try_rpc('authenticated', :mgr,
+             format($q$select public.change_return_replacement(%L, %s, '[]'::jsonb, 'Issue the rest', 'backorder')$q$, :'rPh', pg_temp.rev(:'rPh')),
+             pg_temp.zforce(:'oPhR', :'rPh')) as j) x)
+  || '|' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr,
+             format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Issue it all again', 'backorder')$q$,
+                    :'rPh', pg_temp.rev(:'rPh'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rPh'), 'quantity', 2))::text),
+             pg_temp.zforce(:'oPhR', :'rPh'))),
+  'true:reissue:1|P0001:exchange_quantity_exceeds_return',
+  'Z3: after a forced cancel of a replacement that handed 1 of 2 over, a new replacement carries only the 1 left of the returned quantity, and asking for 2 is refused (desk check F2: never more out than returned)');
 
 -- ══ R. Early release ══════════════════════════════════════════════════════
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rRel" \gset
