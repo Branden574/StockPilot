@@ -852,17 +852,29 @@ select is(
   'reverse_receipt|false|{search_path=public}|postgres|true|false|true\n'
   'transfer_stock|false|{search_path=public}|postgres|true|false|true',
   'P1: the ten keep their SECURITY mode, SET clauses, owner and who may EXECUTE them (production''s ACLs, read 2026-10-05: the wrappers stay INVOKER, so row level security still applies to the bodies they call)');
+-- Keyed on the words each comment must carry, not on the migration's number,
+-- so the push-time renumber cannot break it.
 select is(
-  (select string_agg(p.proname || '=' || (coalesce(obj_description(p.oid, 'pg_proc'), '') ~ '0396')::text, ', ' order by p.proname collate "C")
-     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and p.proname in ('adjust_stock', 'assemble_bundle', 'cancel_order_request', 'confirm_physical_signature',
-                        'post_cycle_count', 'post_receipt_v2', 'reopen_picking', 'reverse_receipt',
-                        'tg_inventory_items_no_delete_with_stock', 'transfer_stock')),
+  (select string_agg(p.proname || '=' || (position(e.says in coalesce(obj_description(p.oid, 'pg_proc'), '')) > 0)::text,
+                     ', ' order by p.proname collate "C")
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     join (values ('adjust_stock', 'needs stock:adjust (42501 forbidden, hint permission)'),
+                  ('assemble_bundle', 'needs bundles:manage (42501 forbidden, hint permission)'),
+                  ('cancel_order_request', 'only while it is pending approval (42501 forbidden, hint requester_pending_only)'),
+                  ('confirm_physical_signature', 'while they are still a member of the order''s organization and the Orders module is on'),
+                  ('post_cycle_count', 'needs stock:adjust (42501 forbidden, hint permission)'),
+                  ('post_receipt_v2', 'needs stock:adjust (42501 forbidden, hint permission)'),
+                  ('reopen_picking', 'its movements carry reference_type order_request and the order id'),
+                  ('reverse_receipt', 'needs stock:adjust (42501 forbidden, hint permission)'),
+                  ('tg_inventory_items_no_delete_with_stock', '(23514, hint item_holds_stock)'),
+                  ('transfer_stock', 'needs stock:transfer (42501 forbidden, hint permission)')) e(fn, says)
+       on e.fn = p.proname
+    where n.nspname = 'public'),
   'adjust_stock=true, assemble_bundle=true, cancel_order_request=true, confirm_physical_signature=true, '
   'post_cycle_count=true, post_receipt_v2=true, reopen_picking=true, reverse_receipt=true, '
   'tg_inventory_items_no_delete_with_stock=true, transfer_stock=true',
-  'P2: each function 0396 changes or adds says in its comment what it now enforces');
+  'P2: each function the slice changes or adds says in its comment what it now enforces, in the words of the rule (not the migration number)');
 
 -- ══ N. N1: the requester cancels only while the order is pending ══════════
 select is(
