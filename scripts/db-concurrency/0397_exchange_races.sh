@@ -129,7 +129,7 @@ change_sql()  { printf "select 'R=' || public.change_return_replacement('%s', %s
 cancel_repl_sql() { printf "select 'R=' || public.cancel_return_replacement('%s', %s, 'Race cancel replacement')::text;" "$1" "$2"; }
 pick_sql()    { printf "select 'R=' || (public.complete_picking('%s')).status;" "$1"; }
 # The web's generatePickSlip: a compare-and-set update as the member.
-slip_sql()    { printf "select 'S=' || count(*) from (update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_at = now(), pick_slip_generated_by = auth.uid() where id = '%s' and status = 'approved' returning 1) u;" "$1"; }
+slip_sql()    { printf "with u as (update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_at = now(), pick_slip_generated_by = auth.uid() where id = '%s' and status = 'approved' returning 1) select 'S=' || count(*) from u;" "$1"; }
 
 # wait_for <application_name> <wait_event_type> [wait_event]: until that
 # session waits on it.
@@ -146,12 +146,18 @@ wait_for() {
 }
 
 cleanup() {
+  # One statement removes the RMAs, the order lines and the orders: a
+  # replacement order references its RMA (NO ACTION) while the RMA references
+  # its original order, so neither side can go first; the key checks run at
+  # the end of the statement, as an organization delete's do.
   if ! "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
-delete from public.returns where organization_id = '$ORG';
 delete from public.idempotency_keys where organization_id = '$ORG';
 delete from public.stock_reservations where organization_id = '$ORG';
-delete from public.order_request_lines where order_request_id in (select id from public.order_requests where organization_id = '$ORG');
-delete from public.order_requests where organization_id = '$ORG';
+with r as (delete from public.returns where organization_id = '$ORG' returning 1),
+     l as (delete from public.order_request_lines
+            where order_request_id in (select id from public.order_requests where organization_id = '$ORG') returning 1),
+     o as (delete from public.order_requests where organization_id = '$ORG' returning 1)
+select (select count(*) from r) + (select count(*) from l) + (select count(*) from o);
 delete from public.organizations where id = '$ORG';
 delete from auth.users where id in ('$MGR', '$MGR2');
 SQL
@@ -159,7 +165,7 @@ SQL
     echo "cleanup failed:"; cat "$TMP/cleanup.err"; return 1
   fi
   local left
-  left="$("${PSQL[@]}" -c "select (select count(*) from public.returns where organization_id = '$ORG') + (select count(*) from public.return_decisions where organization_id = '$ORG') + (select count(*) from public.stock_movements where organization_id = '$ORG') + (select count(*) from public.inventory_items where organization_id = '$ORG')")"
+  left="$("${PSQL[@]}" -c "select (select count(*) from public.returns where organization_id = '$ORG') + (select count(*) from public.return_decisions where organization_id = '$ORG') + (select count(*) from public.stock_movements where organization_id = '$ORG') + (select count(*) from public.inventory_items where organization_id = '$ORG') + (select count(*) from public.order_requests where organization_id = '$ORG')")"
   if [ "$left" != "0" ]; then echo "cleanup left $left fixture rows"; return 1; fi
 }
 
