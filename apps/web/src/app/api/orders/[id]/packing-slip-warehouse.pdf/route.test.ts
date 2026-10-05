@@ -249,3 +249,21 @@ describe('GET /api/orders/[id]/packing-slip-warehouse.pdf', () => {
     expect(qrUrl()).toBe(`https://stockpilotusa.com/orders/sign/${RAW}`);
   });
 });
+
+// L132: a cancelled or backordered order's slip says why it is unavailable,
+// not "Generate packing slips first."
+describe('GET /api/orders/[id]/packing-slip-warehouse.pdf — closed and backordered orders (L132)', () => {
+  it('a cancelled order is 409 order_closed; a backordered one 409 order_backordered', async () => {
+    signIn({ role: 'manager' });
+    get.mockResolvedValue({ ...detail(DIGEST), request: { ...detail(DIGEST).request, status: 'cancelled' } });
+    let res = await call();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe('order_closed');
+
+    get.mockResolvedValue({ ...detail(DIGEST), request: { ...detail(DIGEST).request, status: 'backordered' } });
+    res = await call();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe('order_backordered');
+    expect(render).not.toHaveBeenCalled();
+  });
+});

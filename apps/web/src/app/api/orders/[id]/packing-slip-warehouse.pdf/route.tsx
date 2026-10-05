@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { closedOrderSlipAnswer } from '@/lib/orders/slip-availability';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { handOverMfaBlock, mayHandOverOrder, signatureLinkToken } from '@/server/lib/order-secrets';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -62,6 +63,10 @@ export async function GET(
         { status: 403 },
       );
     }
+    // A closed or backordered order says why its slip is unavailable, never
+    // "Generate ... first", which nobody could do (L132).
+    const closed = closedOrderSlipAnswer(detail.request.status);
+    if (closed) return NextResponse.json(closed, { status: 409 });
     if (!VISIBLE_STATUSES.includes(detail.request.status)) {
       return NextResponse.json(
         { error: 'not_yet_generated', message: 'Generate packing slips first.' },
