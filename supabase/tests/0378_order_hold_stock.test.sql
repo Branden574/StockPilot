@@ -270,7 +270,13 @@ insert into public.order_request_lines
   (:ordCh, :iChY, 10, 0, '2026-09-01 10:00:00+00'),
   (:ordCh, :iChX, 6,  0, '2026-09-01 10:00:01+00');
 -- The deleted and the moved item were fine when their lines were added.
+-- Changed on purpose by 0395 (L15): an item that holds stock can no longer be
+-- soft-deleted, so this models a row deleted before 0395 (production keeps 11
+-- such items, left as history: owner decision Q4) by switching the guard off
+-- for this one statement.
+alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set deleted_at = now() where id = :iDel;
+alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock;
 
 insert into public.rentals (id, organization_id, warehouse_id, borrower_name, expected_return_at, status)
 values (:rentR, :orgA, :whA, 'Borrower 0378', now() + interval '7 days', 'out');

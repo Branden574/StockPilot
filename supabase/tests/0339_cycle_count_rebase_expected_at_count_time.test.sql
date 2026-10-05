@@ -431,7 +431,13 @@ update public.item_stock_levels set quantity = 18 where item_id = :itemL1 and lo
 update public.inventory_items set warehouse_id = :whB where id = :itemW;
 
 -- D: the item was soft-deleted after being counted.
+-- Changed on purpose by 0395 (L15): an item that holds stock can no longer be
+-- soft-deleted, so this models a row deleted before 0395 (production keeps 11
+-- such items, left as history: owner decision Q4) by switching the guard off
+-- for this one statement.
+alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set deleted_at = now() where id = :itemD;
+alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock;
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 5. GUARDS (0327 carried + new), before the legit post.

@@ -1402,8 +1402,13 @@ select is(
                   format($q$update public.locations set kind = null, type = 'room' where id = %L$q$, :r41)) as j) x)
   || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
                   format($q$update public.warehouses set status = 'inactive' where id = %L$q$, :whA)) as j) x)
+  -- Changed on purpose by 0395 (L15): an item that holds stock can no longer
+  -- be soft-deleted, so the deleted item is a row deleted before 0395
+  -- (production keeps 11, Q4): the guard is off for this one statement.
   || ',' || (select (pg_temp.detail(j)->>'rule') from (select pg_temp.try_rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rV'),
-                  format('update public.inventory_items set deleted_at = now() where id = %L', :itV)) as j) x),
+                  format('alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock; '
+                         'update public.inventory_items set deleted_at = now() where id = %L; '
+                         'alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock', :itV)) as j) x),
   'received,moved_warehouse,not_a_placement,warehouse_inactive,item_deleted',
   'I5: a rack moved to another warehouse, turned into a Site, in a closed warehouse, or a deleted item: each refuses the close with its rule');
 -- Every refusal the close answers carries a hint (desk check F7): the
@@ -1693,24 +1698,36 @@ select is(
        ('public.caller_can_read_item(uuid)',                          '80523d2cc0fafe7fc6b3599903d7f014'),
        ('public.tg_return_lines_enforce_fulfilled_cap()',             '3e990eca8496cb8bfaaa7bf22de858d0'),
        ('public._validate_return_status_transition()',                '70ba38342279e582b380bbeaf0adbe10'),
-       ('public._notify_order_request_changes()',                     'a223ae83810149728156b8e299c7425e'),
+       -- Re-pinned by 0395 (was a223ae83810149728156b8e299c7425e): the approved
+       -- notification says when only part is held (0395 R4); RX-1 reads no
+       -- notification text.
+       ('public._notify_order_request_changes()',                     '8d9de81d81de84af3e2589e6044506bf'),
        ('public._validate_order_request_status_transition()',         'dee8cd4782ec83abdb31a2b48fcd4ef2'),
        ('public.tg_order_requests_insert_guard()',                    'caf69f8a23d03b9bfa6ea87a9cf94077'),
        ('public.tg_order_request_lines_guard()',                      'd899924c0f8fc1dfae4e8be7bd4c5cad'),
        ('public.create_order_request(jsonb,jsonb)',                   '4d65cef6c569a8c2c699fd9d5c8b77d5'),
        ('public.assign_order_request_number()',                       '03097df3cded3d0ea42676855abc6a25'),
        ('public.complete_picking(uuid)',                              'b8f1ef1fb01efa5c04c916c178129541'),
-       ('public.confirm_physical_signature(uuid,text)',               'f7a14a46d2c70f635c3da844c786ce67'),
+       -- Re-pinned by 0395 (was f7a14a46d2c70f635c3da844c786ce67): the driver
+       -- branch also requires a member with Orders on (0395 R3); the hand-over
+       -- accounting is unchanged.
+       ('public.confirm_physical_signature(uuid,text)',               'c0d1c11d31dd86e072f05b72f299535c'),
        ('public._notify_recipients(uuid)',                            '679e6193e3dbe5644055e835e8209043'),
        ('public._dispatch_push_for_notification()',                   '17f00da160feb6a7d6609cca4fb6337e'),
        ('public.has_permission(uuid,text)',                           'cc0accdad7e2fdf4f88aa82aa887e85f'),
        ('public.user_can_access_inventory(uuid,uuid,uuid,text)',      '8a214b77e32a052ca3bf07a2be39a8ae'),
        ('public.is_org_member(uuid)',                                 '76492a6556e9f6a7c33d942aa9726f9f'),
        ('public.approve_partial(uuid)',                               '40ca0878733b08a649773fe9b7efd4e0'),
-       ('public.cancel_order_request(uuid,text)',                     '47cabcd1fe4f52fb7b2b6b6b64b68da1'),
+       -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester's
+       -- window and the restock link (0395 R1); the linked restocks are 'return'
+       -- movements, which the pick reads ('transfer', quantity < 0) never match.
+       ('public.cancel_order_request(uuid,text)',                     '535fc49935f15adc8d7dfa78836a06af'),
        ('public.hold_order_stock(uuid)',                              '3b0691d604823164daaa7f248616f00f'),
        ('public.order_readiness_facts(uuid)',                         '2f3fb057bacda8143377ecd9c2c5e6e2'),
-       ('public.reopen_picking(uuid,text)',                           '293ce0e76d195bb13105cfd1c067de82'),
+       -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82): its movements
+       -- carry the order (0395 R2); they put stock back (quantity > 0), which the
+       -- pick reads never match, and the reopened rule still reads the reason.
+       ('public.reopen_picking(uuid,text)',                           '14e49293fa670dc2e05a1c1b6930bce5'),
        ('public.resume_fulfillment(uuid)',                            '2e2d5aab1db5392250879bfa9ff4bccd'),
        ('public.order_items_orderable(uuid,uuid[])',                  'b4df95d74e32850923a430769f96f246')
      ) x(sig, want)

@@ -1277,7 +1277,8 @@ select is(
 -- Changed on purpose by 0395 (N1; was the requester, u_stf): the person who
 -- placed an order may cancel it only while it is pending approval, so the
 -- picked order is cancelled by a manager, as the app has always required.
--- The restock this suite checks (D16) does not depend on who cancels.
+-- The restock rows D16 reads record the canceller's scope, so they read
+-- manager now (in_scope for the staff requester before).
 set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
 select lives_ok(format($$select public.cancel_order_request(%L, 'D17 cancel')$$, :ordP), 'D15: a manager cancels the picked order');
@@ -1285,7 +1286,7 @@ reset role;
 select is(
   (select string_agg(pg_temp.rows(m.id), ' / ' order by m.id)
      from public.stock_movements m where m.item_id = :itP and m.movement_type = 'return'),
-  '1:SA:2:increment:in_scope / 1:SA:2:increment:in_scope',
+  '1:SA:2:increment:manager / 1:SA:2:increment:manager',
   'D16: one increment row per restocked line, at WA Staging');
 
 -- D17: reverse_receipt draws staging_first.
