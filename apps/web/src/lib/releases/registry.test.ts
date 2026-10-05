@@ -3524,14 +3524,17 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is the only draft, at the top above every published release (the three releases of 2026-10-05 and slices B and D are below it), dated after every release', () => {
+  it('is a draft above every published release (the three releases of 2026-10-05 and slices B and D are below it), below only the small fixes draft, dated after every release but that one', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
-    // above the newest published release, dated after every release.
+    // above the newest published release, dated after every published
+    // release. Re-pinned by the small fixes (slice 1, 2026-10-05; was: the
+    // only draft, at the top): their draft is dated later and sits above it.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(0);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([ID]);
+    expect(at).toBe(1);
+    expect(RELEASES[0]?.id).toBe('small-fixes-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['small-fixes-2026-10', ID]);
     for (const id of [
       'phone-place-order-2026-10',
       'returns-original-rack-2026-10',
@@ -3544,7 +3547,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(RELEASES[i]?.status, id).toBe('published');
     }
     expect(RELEASES[at + 1]?.id).toBe('phone-place-order-2026-10');
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'small-fixes-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -3634,11 +3637,13 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it('is the newest published release (pinned by id): only PO-2\'s draft sits above it, returns RX-1\'s a minute below it', () => {
+  it('is the newest published release (pinned by id): only the small fixes\' and PO-2\'s drafts sit above it, returns RX-1\'s a minute below it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual(['order-submit-once-2026-10']);
+    // Re-pinned by the small fixes (slice 1, 2026-10-05; was: only PO-2's
+    // draft): their draft is dated later and sits above PO-2's.
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual(['small-fixes-2026-10', 'order-submit-once-2026-10']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4213,5 +4218,46 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     );
     expect(mig).toContain("if not public.has_permission(v_org, 'returns:manage') then");
     expect(mig).toContain("if not public.user_can_access_inventory(v_user, v_wh, null, 'write') then");
+  });
+});
+
+// Small fixes slice 1 (followups triage 2026-10-05): a DRAFT until the web
+// deploy is live and phones launch the OTA. Each entry is told only to the
+// people who can see its change.
+describe('the small fixes release (slice 1)', () => {
+  const ID = 'small-fixes-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+
+  it('is the newest entry, a draft, dated after every release', () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(release().status).toBe('draft');
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('tells each change only to the people who can see it', () => {
+    const published: Release = { ...release(), status: 'published' };
+    const ids = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    // Everyone: the account and web app fixes only.
+    expect(ids('viewer', [], [])).toEqual(['app-settings-role', 'whats-new-card-clear', 'delete-account-reason']);
+    // An approver with Orders, Inventory and Receiving on sees the order and stock fixes.
+    const approver = ids('manager', ['orders:request', 'orders:approve', 'items:update', 'stock:adjust'], ['orders', 'inventory', 'receiving']);
+    expect(approver).toContain('waiting-for-signature-link');
+    expect(approver).toContain('clearer-stock-lines');
+    expect(approver).toContain('app-receive-more-than-ordered');
+    expect(approver).not.toContain('auto-delete-keeps-stock');
+    // Auto-delete is for those who may delete items, with Inventory on.
+    expect(ids('admin', ['items:delete'], ['inventory'])).toContain('auto-delete-keeps-stock');
+    // A requester is told about cancelling, not the approver's filter.
+    const requester = ids('staff', ['orders:request'], ['orders']);
+    expect(requester).toContain('cancel-own-order-request');
+    expect(requester).not.toContain('waiting-for-signature-link');
+  });
+
+  it('never says "book" for the recorded quantity', () => {
+    const text = JSON.stringify(release()).toLowerCase();
+    expect(text).not.toMatch(/\bbook\b/);
   });
 });

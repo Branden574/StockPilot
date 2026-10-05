@@ -28,6 +28,173 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'small-fixes-2026-10',
+    revision: 1,
+    // Small fixes slice 1 (followups triage 2026-10-05, no migration). Held as
+    // a DRAFT until the web deploy is live and phones report launching the
+    // OTA that carries the phone half; the follow-up that publishes it sets
+    // the real publishedAt and re-reads these words against what shipped.
+    // Dated after the phone ordering drafts and above them (newest first).
+    // Each entry says only what the code does, and is told to the people who
+    // can see the change: the permission or module the change sits behind.
+    status: 'draft',
+    title: 'Fixes across orders, items, receiving and the mobile app',
+    summary:
+      'Order emails, the sign page and printouts use the order number. In the mobile app you can cancel your own order request while it waits for approval, and receive more than ordered after a confirm. Auto-delete keeps archived items that still have stock, and removing a photo from a duplicated item keeps the other item\'s photo.',
+    publishedAt: '2026-10-13T17:10:00Z',
+    entries: [
+      {
+        id: 'auto-delete-keeps-stock',
+        category: 'improved',
+        area: 'Items',
+        title: 'Auto-delete keeps archived items that still have stock on record',
+        whatChanged:
+          'When automatic deletion of archived items is on, an archived item is deleted after the retention period only once it holds nothing: no stock on record, no stock on any location and nothing held for an order or a rental.',
+        whyItMatters:
+          "Archive anyway keeps an item's stock, so an archived item could still have stock on record, and deleting it made that stock disappear with the item.",
+        howItAffectsYou:
+          'An archived item that still has stock stays in Archived. Once its stock is adjusted or moved away, the daily run deletes it as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:delete'], modules: ['inventory'] },
+      },
+      {
+        id: 'duplicate-item-photos-kept',
+        category: 'fixed',
+        area: 'Items',
+        title: "Removing a photo from a duplicated item keeps the other item's photo",
+        whatChanged:
+          'A duplicated item shares its photo files with the item it was copied from. Removing the photo from one of them on the web, or replacing it in the mobile app, no longer deletes the files the other item still shows.',
+        whyItMatters: 'The other item lost its photo.',
+        howItAffectsYou: 'A photo you remove or replace changes only the item you are on.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'order-number-everywhere',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order emails, the sign page and printouts use the order number',
+        whatChanged:
+          'Order email subjects, the sign page, the printed order and the notices sent after a partial hand-over now name an order by its number, for example SO-000049, the number you see in the app.',
+        whyItMatters: 'They used a different code, such as WO-1A2B3C4D, that matched nothing in the app.',
+        howItAffectsYou: 'The number in an email or on a printout is the one on the order page.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'cancel-own-order-request',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Cancel your own order request in the mobile app',
+        whatChanged:
+          'While an order request you placed is waiting for approval, you can cancel it from its screen in the app, with an optional reason. People who approve orders can cancel an open order in the app, as on the web.',
+        whyItMatters:
+          'Cancelling needed the web. And on the web, Cancel request showed on your own order after it was approved, then was refused.',
+        howItAffectsYou:
+          'The app asks before it cancels. Once your order is approved, only someone who approves orders can cancel it, so neither the app nor the web offers you Cancel request then.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'sign-page-partial-handover',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The sign page says what was handed over',
+        whatChanged:
+          'After a hand-over that leaves items owed, the sign page says what was handed over is recorded and the rest stays on backorder.',
+        whyItMatters: 'It said the order was completed, although the order was backordered.',
+        howItAffectsYou: 'When a hand-over completes the order, the page says so, as before.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'waiting-for-signature-link',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Waiting for signature opens the right orders',
+        whatChanged:
+          "The dashboard's orders waiting for signature opens the orders list filtered to orders staged for pickup or in transit, named Waiting for signature, with a link back to all active orders.",
+        whyItMatters: 'It opened the Needs approval tab.',
+        howItAffectsYou: 'The list shows exactly the orders the dashboard counted.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'clearer-stock-lines',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Clearer stock lines on an order',
+        whatChanged:
+          'A line short because the stock on the shelf is held for other orders or rentals now says so, for example: 10 on the shelf are held for other orders. A draft PO that other orders already need part of says how much it covers for this order and how much of it they need.',
+        whyItMatters:
+          'The line said Nothing is on order, which hid why it was short, and a draft PO was counted in full for this order although other orders needed part of it.',
+        howItAffectsYou: 'You see these lines on the order page on the web and in the app.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'app-order-status-words',
+        category: 'fixed',
+        area: 'Orders',
+        title: "The app's order screen names its status in words",
+        whatChanged:
+          "The top of an order's screen in the app shows its status in the same words as the Orders list, such as PICKING, instead of a code such as PICKING IN PROGRESS.",
+        whyItMatters: 'The code did not match the words used everywhere else.',
+        howItAffectsYou: 'No change to what you can do.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'app-settings-role',
+        category: 'fixed',
+        area: 'Account',
+        title: 'Settings in the app shows your role',
+        whatChanged:
+          'Settings in the app shows your role beside your name, in the words the web uses, for example Manager or Warehouse User.',
+        whyItMatters: 'It showed Owner for everyone.',
+        howItAffectsYou: 'No change to what you can do.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'app-receive-more-than-ordered',
+        category: 'improved',
+        area: 'Receiving',
+        title: 'Receive more than ordered in the app, with a note',
+        whatChanged:
+          'When you enter more than is left to receive on a PO in the app, it asks you to confirm instead of refusing, as the web does. You can also add a note to the receipt. A draft PO no longer shows the hint about posting a receipt.',
+        whyItMatters: 'Suppliers sometimes ship more than ordered, and the app could not record it.',
+        howItAffectsYou: 'Tap Receive anyway to post the receipt as entered.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['receiving'] },
+      },
+      {
+        id: 'whats-new-card-clear',
+        category: 'fixed',
+        area: 'Web app',
+        title: "The What's New notice no longer covers the end of a page",
+        whatChanged:
+          "While the What's New notice is showing, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of the notice.",
+        whyItMatters: 'The notice sat over them, so they could not be reached without closing it.',
+        howItAffectsYou: 'Scroll to the end of the page as usual.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'delete-account-reason',
+        category: 'fixed',
+        area: 'Account',
+        title: 'A refused Delete account says why in the dialog',
+        whatChanged:
+          'If deleting your account is refused, for example because you are the only owner of an organization with other members, the reason shows inside the dialog.',
+        whyItMatters: 'The reason showed only in a message behind the dialog.',
+        howItAffectsYou: 'Read the reason, then close the dialog or try again.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
