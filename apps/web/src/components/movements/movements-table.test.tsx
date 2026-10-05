@@ -29,6 +29,7 @@ function row(over: Partial<MovementDisplayRow> = {}): MovementDisplayRow {
     note: null,
     noteEditable: true,
     createdAt: '2026-09-01T12:00:00.000Z',
+    createdAtLabel: 'Sep 1, 2026, 5:00 AM',
     itemName: 'Copy Paper Case',
     itemSku: 'PAP-CASE-01',
     actorLabel: 'Avery Stone',
@@ -82,6 +83,36 @@ describe('MovementsTable columns', () => {
   it('prints the on-hand After figure', () => {
     render(<MovementsTable rows={[row({ newQuantity: 1250 })]} />);
     expect(cellsFor('Copy Paper Case')[4]!.textContent).toBe('1,250');
+  });
+});
+
+// L7 (owner decision Q1): the When cell prints the time the server page made
+// in the ORGANIZATION's zone (toDisplayRow, core formatMovementWhen). It used to
+// be <LocalDateTime>, the viewer's zone, filled in after hydration. One cell
+// for both page modes, so one pin. The label is a Tokyo time no test runner
+// shares, so a viewer-zone rendering beside it would be a second date.
+describe('MovementsTable When column (organization zone, L7)', () => {
+  it('prints the org-zone time it is handed under the relative time, and no other absolute time', () => {
+    render(
+      <MovementsTable
+        rows={[row({ createdAt: '2026-10-05T05:30:00.000Z', createdAtLabel: 'Oct 5, 2026, 2:30 PM' })]}
+      />,
+    );
+    const when = cellsFor('Copy Paper Case')[0]!;
+    expect(within(when).getByText('Oct 5, 2026, 2:30 PM')).toBeInTheDocument();
+    expect(screen.getAllByText(/, 2026, /)).toHaveLength(1);
+  });
+
+  // The page leaves the label null only when core's formatter cannot read the
+  // time; the cell then prints the relative time alone, never a guessed
+  // absolute one in the viewer's zone.
+  it('a row with no label prints no absolute time rather than a guess', () => {
+    render(
+      <MovementsTable rows={[row({ createdAt: '2026-10-05T05:30:00.000Z', createdAtLabel: null })]} />,
+    );
+    const when = cellsFor('Copy Paper Case')[0]!;
+    expect(when.querySelectorAll('span')).toHaveLength(0);
+    expect(screen.queryAllByText(/, 2026, /)).toHaveLength(0);
   });
 });
 

@@ -22,7 +22,9 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { knownZoneFor, nextKnownOrgZone, type KnownOrgZone } from '@/lib/known-org-zone';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
+import { readOrgTimeZone } from '@/lib/order-readiness';
 import {
   canPlaceStagingRow,
   isStagingStale,
@@ -164,22 +166,34 @@ export default function StagingScreen() {
   // WarehousesService.listNames() uses (status = 'active'), NOT from the drawer
   // switcher's list: that one keeps inactive warehouses so you can still switch
   // to them, and feeding it here made an inactive warehouse print a name on the
-  // phone and a truncated UUID in the browser for the same row. This is the
-  // ONLY Supabase read on this screen and it is a display map, never the
-  // worklist — the worklist must stay the shared service's answer.
+  // phone and a truncated UUID in the browser for the same row. These are the
+  // ONLY Supabase reads on this screen, and both are display facts (the names
+  // and the org's zone below), never the worklist — the worklist must stay the
+  // shared service's answer.
   const [warehouseNames, setWarehouseNames] = React.useState<Record<string, string>>({});
+  // The organization's time zone, read once beside the names: the history
+  // sheet prints movement times in it (L7, owner decision Q1), like counts and
+  // orders. Null until it arrives, when unset, or when the read fails: core's
+  // default zone. Kept per organization (nextKnownOrgZone), so a workspace
+  // switch never prints in the previous organization's zone.
+  const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
+  const orgTimeZone = knownZoneFor(knownZone, orgId);
   React.useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
     void (async () => {
-      const { data } = await supabase
-        .from('warehouses')
-        .select('id, name, status')
-        .eq('organization_id', orgId)
-        .eq('status', 'active')
-        .order('name', { ascending: true });
+      const [{ data }, zone] = await Promise.all([
+        supabase
+          .from('warehouses')
+          .select('id, name, status')
+          .eq('organization_id', orgId)
+          .eq('status', 'active')
+          .order('name', { ascending: true }),
+        readOrgTimeZone(supabase, orgId),
+      ]);
       if (cancelled) return;
       setWarehouseNames(stagingWarehouseNameMap((data ?? []) as StagingWarehouseOption[]));
+      setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
     })();
     return () => {
       cancelled = true;
@@ -457,6 +471,7 @@ export default function StagingScreen() {
           itemName={viewingHistory.name}
           itemSku={viewingHistory.sku}
           onClose={() => setViewingHistory(null)}
+          timeZone={orgTimeZone}
         />
       ) : null}
     </View>

@@ -30,6 +30,7 @@ function rows(): MovementDisplayRow[] {
       note: null,
       noteEditable: true,
       createdAt: '2026-09-01T12:00:00.000Z',
+      createdAtLabel: 'Sep 1, 2026, 5:00 AM',
       itemName: 'Lanyard',
       itemSku: 'LAN-01',
       actorLabel: 'Avery Stone',

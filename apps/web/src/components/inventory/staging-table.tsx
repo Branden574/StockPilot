@@ -117,6 +117,12 @@ export interface StagingTableProps {
    * The filters' own empty state is unaffected.
    */
   hideEmptyState?: boolean;
+  /**
+   * The organization's time zone, which the page reads: each row's movement
+   * history prints its times in it (L7, owner decision Q1). Absent prints
+   * core's documented default zone, never the viewer's.
+   */
+  timeZone?: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -274,6 +280,7 @@ export function StagingTable({
   canMintDestination = true,
   activeItemType,
   hideEmptyState = false,
+  timeZone,
 }: StagingTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -790,6 +797,7 @@ export function StagingTable({
                           itemId={row.itemId}
                           itemName={row.name}
                           itemSku={row.sku}
+                          timeZone={timeZone}
                           trigger={
                             <Button
                               size="sm"

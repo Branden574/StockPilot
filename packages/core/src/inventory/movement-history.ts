@@ -31,9 +31,10 @@
  *  3. Reversal pairs are marked, because in the owner's real data most of the
  *     receive_po volume on this SKU is received-then-reversed pairs that net to
  *     zero; a reader who cannot see that misreads the whole history.
- *  4. Timestamps are returned as RAW ISO and formatted by each surface in the
- *     VIEWER's timezone (web: <LocalDateTime>; mobile: toLocaleString). This
- *     module deliberately does no date formatting.
+ *  4. Timestamps are returned as RAW ISO. Every surface formats them with
+ *     formatMovementWhen (./movement-when.ts) in the ORGANIZATION's time zone
+ *     (owner decision Q1, 2026-10-05; L7: they used to print in the viewer's
+ *     zone). This module itself does no date formatting.
  *  5. No actor is rendered as no actor — never "System" dressed up as a person.
  */
 
@@ -45,7 +46,7 @@ export interface ItemHistoryMovement {
   /** stock_movements.id */
   id: string;
   /** RAW ISO timestamp (stock_movements.created_at). Surfaces format it in the
-   *  viewer's timezone — see rule 4 above. */
+   *  organization's time zone — see rule 4 above. */
   at: string;
   /** stock_movements.movement_type, verbatim. */
   movementType: string;
@@ -301,7 +302,7 @@ export interface FormattedHistoryMovement {
   actorLabel: string | null;
   /** Second-fact email, or null. */
   actorEmailLabel: string | null;
-  /** RAW ISO — formatted by the surface in the VIEWER's timezone (rule 4). */
+  /** RAW ISO — formatted by the surface in the organization's zone (rule 4). */
   whenIso: string;
   /** The operator's typed words, or null (rule 2). */
   noteLabel: string | null;

@@ -21,6 +21,7 @@ import { PerfUseful } from '@/components/perf/perf-useful';
 import { Button } from '@/components/ui/button';
 import { Pagination } from '@/components/ui/pagination';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import {
   buildMovementsQueryString,
@@ -31,7 +32,13 @@ import {
 import { MovementsService, type MovementWithItem } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
-import { can, isReceiptNoteSentinel, userMovementNote } from '@stockpilot/core';
+import {
+  can,
+  formatMovementWhen,
+  isReceiptNoteSentinel,
+  resolveOrgTimezone,
+  userMovementNote,
+} from '@stockpilot/core';
 
 // The tab says what the page is: "Stock movements · StockPilot" through the
 // (dashboard) layout's title template. With no title of its own the tab read
@@ -81,7 +88,7 @@ function orderHref(orderRefId: string | null | undefined): string | null {
  * mapping and the one MovementsTable, so the server-paged ledger and the
  * instant ledger can no longer print the same movement differently.
  */
-function toDisplayRow(m: MovementWithItem): MovementDisplayRow {
+function toDisplayRow(m: MovementWithItem, timeZone: string): MovementDisplayRow {
   return {
     id: m.id as string,
     movementType: m.movement_type as string,
@@ -98,6 +105,9 @@ function toDisplayRow(m: MovementWithItem): MovementDisplayRow {
     // — never expose the add/edit affordance on them.
     noteEditable: !isReceiptLineNote(m.notes),
     createdAt: m.created_at as string,
+    // When it happened, in the ORGANIZATION's zone (L7), made here on the
+    // server for both modes: see the page's timeZone.
+    createdAtLabel: formatMovementWhen(m.created_at as string, timeZone),
     itemName: m.item?.name ?? null,
     itemSku: m.item?.sku ?? null,
     actorLabel: movementActorLabel(m),
@@ -167,11 +177,22 @@ export default async function MovementsPage({
   // match for these filters" — see the empty-state branching below.
   const hasActiveFilters = Boolean(search || typeFilter || since || until);
 
-  const [movementsSvc, warehouseFilter] = await Promise.all([
+  const [movementsSvc, warehouseFilter, orgRow] = await Promise.all([
     MovementsService.forCurrentUser(),
     getActiveWarehouseFilter(),
+    // The org's zone, request-cached (normally already in hand from the
+    // request context). A failed read never fails the ledger: it prints in
+    // core's documented default zone.
+    getOrgRowForRequest(ctx.organizationId).catch(() => null),
   ]);
   const warehouseId = warehouseFilter ?? undefined;
+  // MOVEMENT TIMES IN THE ORGANIZATION'S ZONE (owner decision Q1, 2026-10-05;
+  // L7), like counts, exceptions and orders. Both modes print through
+  // MovementsTable's When cell, which used <LocalDateTime>, the viewer's zone,
+  // filled in after hydration. The text is now made HERE, once, on the server
+  // (toDisplayRow), and both tables are handed it as a string, so the server
+  // and the browser cannot print two different days.
+  const timeZone = resolveOrgTimezone(orgRow?.timezone);
 
   // Instant mode: when the whole warehouse-scoped ledger fits under the cap,
   // load it all and let the client filter + page with zero latency (like
@@ -199,7 +220,7 @@ export default async function MovementsPage({
   let totalPages: number | undefined;
 
   if (instant) {
-    instantRows = speculativeAll.map(toDisplayRow);
+    instantRows = speculativeAll.map((m) => toDisplayRow(m, timeZone));
   } else {
     // One extra row detects a next page even if the count is unavailable; the
     // count drives the numbered pager. Server-side search + type/date here.
@@ -346,7 +367,7 @@ export default async function MovementsPage({
           )
         ) : (
           <MovementsTable
-            rows={visible.map(toDisplayRow)}
+            rows={visible.map((m) => toDisplayRow(m, timeZone))}
             canEditNotes={canEditNotes}
             footer={
               <Pagination

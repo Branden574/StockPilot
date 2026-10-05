@@ -56,8 +56,10 @@ import { useTheme } from '@/lib/use-theme';
  *    out of @stockpilot/core's formatHistoryMovement — the ONE formatter both
  *    surfaces call — so the phone and the browser read identically.
  *
- * The one thing this file formats is the timestamp, in the VIEWER's timezone
- * (formatHistoryWhen, matching web's <LocalDateTime> option-for-option).
+ * The one thing this file formats is the timestamp, in the ORGANIZATION's
+ * zone (formatHistoryWhen, core's formatMovementWhen: the web dialog's words;
+ * L7). The screen that opens the sheet reads the zone and hands it in, so the
+ * sheet still makes no read of its own.
  *
  * Everything testable lives in src/lib/item-history.ts; this file is fetch +
  * paint, pinned by item-history-wiring.test.ts.
@@ -68,6 +70,7 @@ export function ItemHistorySheet({
   itemName,
   itemSku,
   onClose,
+  timeZone,
 }: {
   visible: boolean;
   itemId: string;
@@ -76,6 +79,9 @@ export function ItemHistorySheet({
   itemName: string;
   itemSku: string;
   onClose: () => void;
+  /** The organization's time zone, read by the screen (L7). Null or absent
+   *  prints core's documented default zone, never the device's. */
+  timeZone?: string | null;
 }) {
   const { mode } = useTheme();
   return (
@@ -123,6 +129,7 @@ export function ItemHistorySheet({
           itemName={itemName}
           itemSku={itemSku}
           onClose={onClose}
+          timeZone={timeZone}
         />
       </View>
     </Modal>
@@ -135,12 +142,14 @@ function ItemHistorySheetContent({
   itemName,
   itemSku,
   onClose,
+  timeZone,
 }: {
   visible: boolean;
   itemId: string;
   itemName: string;
   itemSku: string;
   onClose: () => void;
+  timeZone?: string | null;
 }) {
   const { c } = useTheme();
   // The list is capped as a FRACTION of the screen, not at a fixed 460pt: on a
@@ -277,6 +286,9 @@ function ItemHistorySheetContent({
 
       <FlatList
         data={loading ? [] : rows}
+        // The zone can arrive after the rows (the screen reads it once); a
+        // FlatList re-renders its rows only when data or extraData change.
+        extraData={timeZone}
         keyExtractor={(m) => m.id}
         style={{ maxHeight: listMaxHeight }}
         contentContainerStyle={styles.list}
@@ -302,7 +314,7 @@ function ItemHistorySheetContent({
             </View>
           )
         }
-        renderItem={({ item }) => <MovementRow row={item} />}
+        renderItem={({ item }) => <MovementRow row={item} timeZone={timeZone} />}
         ListFooterComponent={
           !loading && hasMore ? (
             <View style={{ paddingTop: 12 }}>
@@ -356,10 +368,10 @@ function ItemHistorySheetContent({
  * placeholder, no em dash, no "System" standing in for an absent actor. That is
  * the whole truthfulness contract: say nothing you cannot support.
  */
-function MovementRow({ row }: { row: ItemHistoryMovement }) {
+function MovementRow({ row, timeZone }: { row: ItemHistoryMovement; timeZone?: string | null }) {
   const { c } = useTheme();
   const f = formatHistoryMovement(row);
-  const when = formatHistoryWhen(f.whenIso);
+  const when = formatHistoryWhen(f.whenIso, timeZone);
   const amount = historyAmountLines(f);
 
   // The amount in the mode's tones (accent for stock in, refusal red for

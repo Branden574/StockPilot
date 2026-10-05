@@ -22,6 +22,9 @@ const calls = vi.hoisted(() => ({
   tableProps: null as Record<string, unknown> | null,
   orderFactoryFails: false,
   locations: [] as Record<string, unknown>[],
+  orgRow: { timezone: 'Asia/Tokyo' } as Record<string, unknown> | null,
+  orgRowFails: false,
+  orgRowReads: [] as string[],
 }));
 
 vi.mock('@/server/services/inventory', () => ({
@@ -51,6 +54,13 @@ vi.mock('@/server/services/order-requests', () => ({
         },
       };
     },
+  },
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: async (organizationId: string) => {
+    calls.orgRowReads.push(organizationId);
+    if (calls.orgRowFails) throw new Error('getOrgRowForRequest: read failed');
+    return calls.orgRow;
   },
 }));
 vi.mock('@/lib/warehouse-filter', () => ({
@@ -97,7 +107,15 @@ const B = '00000000-0000-4000-8000-00000000000b';
 const ORDER = '0f0f0f0f-0000-4000-8000-000000000001';
 
 async function renderSection(filter: StagingFilterParse, itemType?: 'book' | 'non-book') {
-  render(await StagingTableSection({ itemType, filter, canPlace: true, canMintDestination: true }));
+  render(
+    await StagingTableSection({
+      itemType,
+      filter,
+      canPlace: true,
+      canMintDestination: true,
+      organizationId: 'org-1',
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -109,6 +127,9 @@ beforeEach(() => {
   calls.tableProps = null;
   calls.orderFactoryFails = false;
   calls.locations = [];
+  calls.orgRow = { timezone: 'Asia/Tokyo' };
+  calls.orgRowFails = false;
+  calls.orgRowReads = [];
 });
 
 describe('Staging page data path: ?item and ?order (F2-3)', () => {
@@ -280,5 +301,24 @@ describe('Staging Place destinations: the warehouse Site (L121)', () => {
     // The row's own type travels, so the dialogs can say "(site)".
     expect(map['wh-home']![0]).toMatchObject({ id: 'site-mdc', name: 'Main Distribution Center', kind: '', type: 'warehouse' });
     expect(map['wh-home']![2]).toMatchObject({ id: 'r-1a', kind: 'rack', type: 'shelf', rackNumber: '1', rackRow: 'A' });
+  });
+});
+
+// L7 (owner decision Q1): the staging row's movement history prints its times
+// in the ORGANIZATION's zone. The section reads the zone beside the worklist
+// and hands it to the table (and so to the history dialog); a failed read
+// never fails the page and uses core's documented default.
+describe('Staging: the organization zone for the movement history (L7)', () => {
+  it("reads the org's zone and hands it to the table", async () => {
+    await renderSection(parseStagingItemFilter({}));
+    expect(calls.orgRowReads).toEqual(['org-1']);
+    expect(calls.tableProps).toMatchObject({ timeZone: 'Asia/Tokyo' });
+  });
+
+  it("a failed read still renders, in core's default zone", async () => {
+    calls.orgRowFails = true;
+    await renderSection(parseStagingItemFilter({}));
+    expect(screen.getByTestId('staging-table')).toBeInTheDocument();
+    expect(calls.tableProps).toMatchObject({ timeZone: 'America/Los_Angeles' });
   });
 });

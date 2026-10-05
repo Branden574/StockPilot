@@ -141,3 +141,27 @@ describe('MovementsInstantTable amount column', () => {
     expect(deltaCellFor('Silent Item').textContent).toBe('—');
   });
 });
+
+// L7 (owner decision Q1): the time each movement prints is the ORGANIZATION's,
+// formatted on the server (dashboard/movements/page.tsx) and handed in as text.
+// The table used to render <LocalDateTime>, the viewer's zone, after hydration.
+// The label below is a Tokyo time no test runner shares, so a viewer-zone
+// rendering beside it would be a second, different date.
+describe('MovementsInstantTable — movement times (L7)', () => {
+  it('prints the org-zone time it is handed, and no viewer-zone time', () => {
+    const rows = makeRows(1).map((r) => ({
+      ...r,
+      createdAt: '2026-10-05T05:30:00.000Z',
+      createdAtLabel: 'Oct 5, 2026, 2:30 PM',
+    }));
+    render(<MovementsInstantTable rows={rows} />);
+    expect(screen.getByText('Oct 5, 2026, 2:30 PM')).toBeInTheDocument();
+    expect(screen.getAllByText(/, 2026, /)).toHaveLength(1);
+  });
+
+  it('a row with no label prints no absolute time rather than a guess', () => {
+    const rows = makeRows(1).map((r) => ({ ...r, createdAtLabel: null }));
+    render(<MovementsInstantTable rows={rows} />);
+    expect(screen.queryAllByText(/, 2026, /)).toHaveLength(0);
+  });
+});

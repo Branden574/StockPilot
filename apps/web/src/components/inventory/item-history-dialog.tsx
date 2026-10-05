@@ -30,11 +30,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { LocalDateTime } from '@/components/ui/local-datetime';
 import { cn, formatRelative } from '@/lib/utils';
 
 import {
   formatHistoryMovement,
+  formatMovementWhen,
   type ItemHistoryMovement,
   type ItemHistoryPage,
 } from '@stockpilot/core';
@@ -59,9 +59,11 @@ import {
  * incident. All wording comes from the shared @stockpilot/core formatter for
  * the same reason; this file adds only icons, layout and date rendering.
  *
- * Timestamps: raw ISO from the service, rendered through <LocalDateTime> so the
- * viewer sees THEIR timezone (a server-rendered toLocaleString would print
- * Vercel's UTC). Same treatment as the item activity feed.
+ * Timestamps: raw ISO from the service, printed in the ORGANIZATION's time zone
+ * (core formatMovementWhen; owner decision Q1, 2026-10-05, L7), the same words
+ * as the phone's item history sheet. They used to print in the viewer's zone
+ * (<LocalDateTime>). The page hands the zone in; the rows arrive after a
+ * client-side fetch, so there is no server render to disagree with.
  */
 
 /** One request's worth of rows. Not a guess at any server cap: the service
@@ -74,6 +76,12 @@ interface ItemHistoryDialogProps {
   itemName: string;
   itemSku: string;
   trigger: React.ReactNode;
+  /**
+   * The organization's time zone (`organizations.timezone`), read by the page.
+   * Absent or null (a read that failed) prints core's documented default zone,
+   * never the viewer's.
+   */
+  timeZone?: string | null;
 }
 
 /**
@@ -133,6 +141,7 @@ export function ItemHistoryDialog({
   itemName,
   itemSku,
   trigger,
+  timeZone,
 }: ItemHistoryDialogProps) {
   const [open, setOpen] = React.useState(false);
   // The record currently being READ. Starts at the row the caller clicked and
@@ -358,6 +367,7 @@ export function ItemHistoryDialog({
           <Timeline className="-mx-1 px-1">
             {rows.map((row) => {
               const f = formatHistoryMovement(row);
+              const when = formatMovementWhen(f.whenIso, timeZone);
               const Icon = iconFor(row.movementType);
               const counterpartId = row.reversal?.counterpartMovementId ?? null;
               return (
@@ -411,10 +421,10 @@ export function ItemHistoryDialog({
                       <span aria-hidden className="mx-1.5">
                         ·
                       </span>
-                      {/* Relative for scanability + the exact viewer-local
-                          date and time, same as the activity feed. */}
+                      {/* Relative for scanability + the exact date and time
+                          in the organization's zone (L7), the phone's words. */}
                       <time dateTime={f.whenIso}>{formatRelative(f.whenIso)}</time>
-                      <LocalDateTime iso={f.whenIso} prefix=" · " />
+                      {when && <span>{` · ${when}`}</span>}
                       {f.routeLabel && (
                         <>
                           <span aria-hidden className="mx-1.5">

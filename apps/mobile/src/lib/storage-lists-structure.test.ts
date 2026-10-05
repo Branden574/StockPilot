@@ -401,7 +401,7 @@ describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () =
     expect(code).not.toContain("from '@/components/ui/card'");
     expect(code).toContain('data={rows}');
     expect(code).toContain(
-      "renderItem={(m, i) => ( <LedgerRow m={m} first={i === 0} last={i === rows.length - 1} onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })} /> )}",
+      "renderItem={(m, i) => ( <LedgerRow m={m} first={i === 0} last={i === rows.length - 1} timeZone={timeZone} onPress={() => router.push({ pathname: '/item/[id]', params: { id: m.item_id } })} /> )}",
     );
   });
 

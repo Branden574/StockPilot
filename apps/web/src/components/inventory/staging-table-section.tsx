@@ -1,5 +1,6 @@
 import {
   describeStagingItemFilter,
+  resolveOrgTimezone,
   STAGING_FILTER_EMPTY_COPY,
   stagingFilterInvalidCopy,
   stagingRowsForOrderWarehouse,
@@ -8,6 +9,7 @@ import {
 
 import { StagingTable } from '@/components/inventory/staging-table';
 import { IntentLink } from '@/components/ui/intent-link';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import {
   toDestinationOption,
   type DestinationLocationRow,
@@ -65,11 +67,14 @@ export async function StagingTableSection({
   filter,
   canPlace,
   canMintDestination,
+  organizationId,
 }: {
   itemType: 'book' | 'non-book' | undefined;
   filter: StagingFilterParse;
   canPlace: boolean;
   canMintDestination: boolean;
+  /** The page's org, for the zone the movement history prints in (L7). */
+  organizationId: string;
 }) {
   const itemFilter = filter.state === 'ok' ? filter.filter : null;
   const orderId = itemFilter?.orderId ?? null;
@@ -83,7 +88,7 @@ export async function StagingTableSection({
     itemFilter ? Promise.resolve<string | null>(null) : getActiveWarehouseFilter(),
   ]);
 
-  const [worklist, allLocations, warehouses, orderLink] = await Promise.all([
+  const [worklist, allLocations, warehouses, orderLink, orgRow] = await Promise.all([
     inventorySvc.stagedWorklist(
       itemFilter
         ? { itemType, itemIds: itemFilter.itemIds }
@@ -96,7 +101,12 @@ export async function StagingTableSection({
           .then((svc) => svc.orderLinkLabel(orderId))
           .catch((): OrderLink => ({ state: 'failed' }))
       : Promise.resolve<OrderLink | null>(null),
+    // The org's zone for the rows' movement history (L7: the organization's
+    // zone, like counts and orders). Request-cached; a failed read never fails
+    // the page and prints in core's documented default zone.
+    getOrgRowForRequest(organizationId).catch(() => null),
   ]);
+  const timeZone = resolveOrgTimezone(orgRow?.timezone);
 
   // The order's warehouse, when the order was read: the rows its pick can use.
   const narrowed =
@@ -250,6 +260,7 @@ export async function StagingTableSection({
         activeItemType={itemType ?? 'all'}
         // A filtered list says it is empty once, in the chip above.
         hideEmptyState={chip !== null}
+        timeZone={timeZone}
       />
     </div>
   );

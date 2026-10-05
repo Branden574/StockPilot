@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatHistoryMovement } from '@stockpilot/core';
+import { formatHistoryMovement, formatMovementWhen } from '@stockpilot/core';
 
 import {
   appendHistoryMovements,
@@ -479,30 +479,30 @@ describe('historyAmountLines', () => {
 });
 
 describe('formatHistoryWhen', () => {
-  it('renders the absolute local date AND time, not a relative phrase', () => {
-    const iso = '2026-07-22T21:42:19.250842+00:00';
-    // Option-for-option identical to web's <LocalDateTime>
-    // (apps/web/src/components/ui/local-datetime.tsx), so the browser and the
-    // phone print the same instant the same way.
-    expect(formatHistoryWhen(iso)).toBe(
-      new Date(iso).toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
-    );
+  // L7 (owner decision Q1, 2026-10-05): the ORGANIZATION's zone, like counts,
+  // exceptions and orders, and the same words as the web dialog: both call
+  // core's formatMovementWhen. 21:42 UTC on 22 July is 06:42 on 23 July in
+  // Tokyo and 14:42 on 22 July in Los Angeles.
+  const iso = '2026-07-22T21:42:19.250842+00:00';
+
+  it('renders the absolute date AND time in the organization’s zone, not a relative phrase', () => {
+    expect(formatHistoryWhen(iso, 'Asia/Tokyo')).toBe('Jul 23, 2026, 6:42 AM');
+    expect(formatHistoryWhen(iso, 'UTC')).toBe('Jul 22, 2026, 9:42 PM');
+    expect(formatHistoryWhen(iso, 'Asia/Tokyo')).toBe(formatMovementWhen(iso, 'Asia/Tokyo'));
     // A clock time and a year are the two things the owner asked for.
-    expect(formatHistoryWhen(iso)).toMatch(/:/);
-    expect(formatHistoryWhen(iso)).toMatch(/\d{4}/);
+    expect(formatHistoryWhen(iso, 'UTC')).toMatch(/:/);
+    expect(formatHistoryWhen(iso, 'UTC')).toMatch(/\d{4}/);
+  });
+
+  it('a zone that has not arrived prints core’s documented default, never the device’s zone', () => {
+    expect(formatHistoryWhen(iso, null)).toBe('Jul 22, 2026, 2:42 PM');
   });
 
   it('renders NOTHING for a value that is not a date', () => {
     // "Invalid Date" on the screen that exists to answer "on what date and
     // time" would be worse than the em dash that started this.
-    expect(formatHistoryWhen('')).toBeNull();
-    expect(formatHistoryWhen('not-a-date')).toBeNull();
+    expect(formatHistoryWhen('', 'UTC')).toBeNull();
+    expect(formatHistoryWhen('not-a-date', 'UTC')).toBeNull();
   });
 });
 

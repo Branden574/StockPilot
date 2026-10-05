@@ -45,6 +45,7 @@ export * from './inventory/display-units';
 export * from './inventory/movement-history';
 export * from './inventory/movement-note-sentinel';
 export * from './inventory/movement-order-ref';
+export * from './inventory/movement-when';
 export * from './inventory/items-csv-import';
 export * from './sports/import-results';
 export * from './sports/required-attributes';
