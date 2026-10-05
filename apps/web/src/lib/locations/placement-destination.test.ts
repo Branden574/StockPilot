@@ -9,6 +9,7 @@ import {
   destinationIsRecordedStorage,
   destinationLabel,
   destinationMatchesOption,
+  destinationOptionLabel,
   destinationPhrase,
   destinationPosition,
   destinationRackLabel,
@@ -16,6 +17,7 @@ import {
   fieldsAreRackOnly,
   fieldsFromOption,
   isCrateChoice,
+  isSiteOption,
   newDestinationProblem,
   newDestinationReady,
   seedDestinationFields,
@@ -314,6 +316,55 @@ describe('destinationPhrase — reads as English in a success sentence', () => {
         option: crateOption({ name: 'Old Crate', crateColor: null, crateNumber: null }),
       }),
     ).toBe('into Old Crate');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L121 — PUT STAGED STOCK BACK ON A SITE
+//
+// A cancelled pick restocks to Staging, and a warehouse whose stock sits on its
+// Site (no racks: Demo's Main Distribution Center) could not clear Staging from
+// any screen. The Place lists now offer the warehouse's Site. A Site is
+// `kind` NULL with a site-ish `type` (core isSiteLocation); a NULL-kind row
+// typed shelf/bin is a legacy PLACEMENT, not a Site, so the type decides.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('a Site among the Place destinations (L121)', () => {
+  const site = option({
+    id: 'site-mdc',
+    name: 'Main Distribution Center',
+    kind: '',
+    type: 'warehouse',
+    rackNumber: null,
+    rackRow: null,
+  });
+  const room = option({ id: 'site-room', name: 'Back Room', kind: '', type: 'room', rackNumber: null, rackRow: null });
+  const legacyShelf = option({ id: 'shelf-3', name: 'Shelf 3', kind: '', type: 'shelf', rackNumber: null, rackRow: null });
+
+  it('a NULL-kind warehouse or room is a Site; a NULL-kind legacy shelf, a rack and a crate are not', () => {
+    expect(isSiteOption(site)).toBe(true);
+    expect(isSiteOption(room)).toBe(true);
+    expect(isSiteOption(legacyShelf)).toBe(false);
+    expect(isSiteOption(option())).toBe(false);
+    expect(isSiteOption(crateOption())).toBe(false);
+  });
+
+  it('the list says a Site is one, so it never reads as a rack; every other row keeps its name', () => {
+    expect(destinationOptionLabel(site)).toBe('Main Distribution Center (site)');
+    expect(destinationOptionLabel(room)).toBe('Back Room (site)');
+    expect(destinationOptionLabel(option())).toBe('22-B');
+    expect(destinationOptionLabel(crateOption())).toBe('Blue #4');
+    expect(destinationOptionLabel(legacyShelf)).toBe('Shelf 3');
+  });
+
+  it('the success sentence puts the stock AT the Site, never "onto rack <site>"', () => {
+    expect(destinationPhrase({ mode: 'existing', option: site })).toBe('at Main Distribution Center');
+    expect(destinationPhrase({ mode: 'existing', option: room })).toBe('at Back Room');
+  });
+
+  it('picking a Site fills nothing, and the blank boxes still name the Site by id', () => {
+    expect(fieldsFromOption(site)).toEqual(EMPTY_DESTINATION_FIELDS);
+    expect(destinationFromFields(EMPTY_DESTINATION_FIELDS, site)).toEqual({ mode: 'existing', option: site });
   });
 });
 

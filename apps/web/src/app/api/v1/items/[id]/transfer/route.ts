@@ -1,4 +1,4 @@
-import { newLocationFieldsShape, planNewLocation, refineNewLocation } from '@stockpilot/core';
+import { isSiteLocation, newLocationFieldsShape, planNewLocation, refineNewLocation } from '@stockpilot/core';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -34,7 +34,9 @@ export const dynamic = 'force-dynamic';
  *
  * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack),
  *         acknowledgedCrateChanges?, acknowledgedRackChanges? }
- *   - toLocationId: an existing rack/crate in your org.
+ *   - toLocationId: an existing location in your org other than Staging: a
+ *     rack or crate, Unplaced, or a Site (the phone's put-away offers the
+ *     warehouse's Site since L121; a put-away onto it keeps the rack label).
  *   - newRack: a RACK ({ rackNumber, rackRow? }) or a CRATE ({ crateNumber,
  *     crateColor?, rackNumber?, rackRow? }) — a crate SITS ON a rack, so the
  *     rack pair alongside crate fields is that crate's POSITION and both are
@@ -207,6 +209,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // rack/crate behind. See the web actions' resolveNewLocation for the full
     // reasoning; this route mirrors it.
     let pendingNewRack: Parameters<LocationsService['findRackOrCrate']>[0] | null = null;
+    // Set only for an EXISTING destination: a rack or crate is all this route
+    // ever mints. See the stamp below (L121).
+    let destIsSite = false;
     if (body.newRack) {
       if (!srcLoc?.warehouse_id) {
         return NextResponse.json(
@@ -275,7 +280,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // dual-org member) and yields a clean 400 rather than a generic RPC 500.
       const { data: destLoc } = await ctx.supabase
         .from('locations')
-        .select('id, kind, rack_number, rack_row, crate_color, crate_number, name')
+        .select('id, kind, type, rack_number, rack_row, crate_color, crate_number, name')
         .eq('id', body.toLocationId!)
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -310,6 +315,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
       toLocationId = destLoc.id;
       dest = toPlaceDest(destLoc as Record<string, unknown>);
+      // The warehouse's SITE (kind NULL, a site-ish type) is a destination the
+      // phone's put-away now offers (L121). `type` is read for this: a legacy
+      // NULL-kind shelf/bin is a placement, not a Site.
+      destIsSite = isSiteLocation({ type: destLoc.type ?? null, kind: destLoc.kind ?? null });
     }
 
     // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
@@ -367,11 +376,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // summary describe the same physical place and writing one without the
     // other publishes a self-contradicting row. Same narrowing, same helper, as
     // transferStockAction.
+    //
+    // NEVER ONTO A SITE (L121), again as placeStockAction: the Site's NAME is not
+    // a rack label, and writing it over bin_location (the label every pick slip
+    // prints) is the "items went under rack DC4" confusion. Stock put back on
+    // the Site keeps the label naming the rack the rest of the item is on.
     // Best-effort: stock is already placed, so a stamp failure never fails here.
     if (
-      srcLoc?.kind === 'staging' ||
-      srcLoc?.kind === 'unplaced' ||
-      isPositionedCrate(dest)
+      !destIsSite &&
+      (srcLoc?.kind === 'staging' || srcLoc?.kind === 'unplaced' || isPositionedCrate(dest))
     ) {
       await svc.stampPlacementBin([id], dest);
     }

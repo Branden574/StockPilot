@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
+import { callArgs, makeSupabaseStub, type MockCall, type SupabaseStub } from '@/test/supabase-mock';
 
 // unstable_cache/revalidateTag: the actions under test import the
 // inventory-list loader (cache invalidation helper), whose module graph
@@ -365,5 +365,123 @@ describe('placeStockAction', () => {
     if (!result.ok) expect(result.error.message).toMatch(/warehouse not found in your organization/i);
     expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L121 — PUT STAGED STOCK BACK ON A SITE.
+//
+// A cancelled pick restocks to Staging; a warehouse whose stock sits on its
+// Site (no racks) could not put it back. Place now offers the Site, and the
+// stock moves through the same transfer_stock path. What must NOT happen is the
+// label stamp: stampPlacementBin would write the Site's NAME ("Main
+// Distribution Center", "DC4") over bin_location, the rack label every pick
+// slip prints, and a Site name in the rack column is the "items went under rack
+// DC4" confusion of 2026-09-24. A Site is kind NULL with a site-ish type; a
+// NULL-kind row typed shelf/bin is a legacy PLACEMENT and keeps its stamp, so
+// the destination read must carry `type`. The answer below hands back only the
+// columns the query SELECTED, as PostgREST does, so a read that forgets `type`
+// fails here instead of quietly treating every NULL-kind row as a Site.
+// ---------------------------------------------------------------------------
+
+function installProjectingContext(row: Record<string, unknown>): SupabaseStub {
+  const stub = makeSupabaseStub({
+    'locations.select': (call: MockCall) => {
+      const columns = String(callArgs(call, 'select')?.[0] ?? '')
+        .split(',')
+        .map((c) => c.trim());
+      return {
+        data: Object.fromEntries(Object.entries(row).filter(([key]) => columns.includes(key))),
+        error: null,
+      };
+    },
+    'warehouses.select': { data: { id: WAREHOUSE_ID }, error: null },
+  });
+  ctxRef.ctx = {
+    organizationId: ORG_ID,
+    userId: 'user-test',
+    role: 'admin',
+    mfaRequired: false,
+    mfaSatisfied: true,
+    enabledModules: new Set(),
+    supabase: stub.client,
+  };
+  return stub;
+}
+
+const SITE_ROW = {
+  id: EXISTING_LOC,
+  warehouse_id: WAREHOUSE_ID,
+  kind: null,
+  type: 'warehouse',
+  name: 'Main Distribution Center',
+  rack_number: null,
+  rack_row: null,
+  crate_color: null,
+  crate_number: null,
+};
+
+describe('placeStockAction onto a Site (L121)', () => {
+  it('moves the staged stock onto the Site and keeps the rack label: no stamp', async () => {
+    installProjectingContext(SITE_ROW);
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 1,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+    expect(result.ok).toBe(true);
+    expect(mockTransferStock).toHaveBeenCalledWith({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      toLocationId: EXISTING_LOC,
+      quantity: 1,
+      notes: undefined,
+    });
+    expect(mockStampPlacementBin).not.toHaveBeenCalled();
+    // A book's crate summary still follows the holdings, as on every move.
+    expect(mockSyncBookCrate).toHaveBeenCalledOnce();
+  });
+
+  it('a room is a Site too', async () => {
+    installProjectingContext({ ...SITE_ROW, type: 'room', name: 'Back Room' });
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 1,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+    expect(result.ok).toBe(true);
+    expect(mockStampPlacementBin).not.toHaveBeenCalled();
+  });
+
+  it('a NULL-kind legacy SHELF is a placement, decided by its type: still stamped', async () => {
+    installProjectingContext({ ...SITE_ROW, type: 'shelf', name: 'Shelf 3' });
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 1,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+    expect(result.ok).toBe(true);
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_ID],
+      expect.objectContaining({ kind: null, name: 'Shelf 3' }),
+    );
+  });
+
+  it('a rack is stamped exactly as before', async () => {
+    installProjectingContext({ ...SITE_ROW, kind: 'rack', type: 'shelf', name: '1-A', rack_number: '1', rack_row: 'A' });
+    const result = await placeStockAction({
+      itemId: ITEM_ID,
+      fromLocationId: FROM_LOC,
+      quantity: 1,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+    expect(result.ok).toBe(true);
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_ID],
+      expect.objectContaining({ kind: 'rack', rackNumber: '1', rackRow: 'A', name: '1-A' }),
+    );
   });
 });

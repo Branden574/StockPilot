@@ -23,6 +23,7 @@ import {
   bulkCreateSizedVariantsSchema,
   createItemSchema,
   err,
+  isSiteLocation,
   newLocationFieldsShape,
   ok,
   planNewLocation,
@@ -1105,6 +1106,8 @@ export async function placeStockAction(
     // Set only on the "+ New" branch, and only while the row is still
     // hypothetical — see resolveNewLocation.
     let pendingNewRack: (NewLocationFields & { warehouseId: string }) | null = null;
+    // Set only on the existing-location branch: a Site is never minted here.
+    let destIsSite = false;
 
     if ('existingLocationId' in data.destination) {
       // TENANT-ISOLATION GUARD: transfer_stock only verifies the ITEM's org, and
@@ -1132,6 +1135,11 @@ export async function placeStockAction(
       // Crate metadata comes from THIS row, read moments ago — not from
       // anything the client sent about the destination.
       dest = toPlaceDest(loc as Record<string, unknown>);
+      // The warehouse's SITE is a destination too (L121): kind NULL with a
+      // site-ish type, decided by the ONE classifier. A NULL kind alone is not
+      // enough — a legacy NULL-kind shelf/bin is a placement — which is why
+      // PLACE_DEST_COLUMNS reads `type`.
+      destIsSite = isSiteLocation({ type: loc.type ?? null, kind: loc.kind ?? null });
     } else {
       const n = data.destination.newRack;
       // TENANT-ISOLATION GUARD: verify the warehouse belongs to the caller's
@@ -1187,8 +1195,13 @@ export async function placeStockAction(
       quantity: data.quantity,
       notes: data.notes,
     });
-    // Stamp the placement label now that the stock physically sits here.
-    await invSvc.stampPlacementBin([data.itemId], dest);
+    // Stamp the placement label now that the stock physically sits here —
+    // except on a SITE (L121). stampPlacementBin would write the Site's NAME
+    // over bin_location, the rack label every pick slip and packing slip
+    // prints, and a Site name read as a rack is the "items went under rack DC4"
+    // confusion (2026-09-24). Stock put back on the Site joins the rest of the
+    // item there; the label still names the rack the item's placed stock is on.
+    if (!destIsSite) await invSvc.stampPlacementBin([data.itemId], dest);
     // Re-synchronize the book crate SUMMARY from the holdings that now exist.
     // The stock has already moved, so a failure here is reported, never
     // rolled back — see syncBookCratePlacement's contract. `verified` is the
@@ -1334,6 +1347,8 @@ export async function bulkPlaceStockAction(
     let toLocationId: string | null;
     let dest: PlaceDest;
     let pendingNewRack: (NewLocationFields & { warehouseId: string }) | null = null;
+    // The warehouse's SITE (L121) — same rule as placeStockAction.
+    let destIsSite = false;
     if ('existingLocationId' in data.destination) {
       const { data: loc } = await ctx.supabase
         .from('locations')
@@ -1350,6 +1365,7 @@ export async function bulkPlaceStockAction(
       }
       toLocationId = loc.id;
       dest = toPlaceDest(loc as Record<string, unknown>);
+      destIsSite = isSiteLocation({ type: loc.type ?? null, kind: loc.kind ?? null });
     } else {
       const n = data.destination.newRack;
       const { data: wh } = await ctx.supabase
@@ -1448,8 +1464,9 @@ export async function bulkPlaceStockAction(
       // Never throws, and bounded by its per-INSERT deadline.
       if (transferAudits.length > 0) await auditMany(transferAudits, ctx);
     }
-    // One label-stamp for every item that actually landed on the destination.
-    await invSvc.stampPlacementBin(placedItemIds, dest);
+    // One label-stamp for every item that actually landed on the destination —
+    // none onto a SITE, whose name is not a rack label (see placeStockAction).
+    if (!destIsSite) await invSvc.stampPlacementBin(placedItemIds, dest);
     // ...and one crate-summary reconciliation for the same set. Items that
     // FAILED to transfer are deliberately excluded: their stock never moved,
     // so nothing about their crate changed.

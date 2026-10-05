@@ -13,6 +13,7 @@ import {
   type DestinationLocationRow,
   type DestinationOption,
 } from '@/lib/locations/destination-option';
+import { isSiteLocation } from '@/lib/locations/groups';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -27,9 +28,9 @@ type OrderLink = Awaited<ReturnType<OrderRequestsService['orderLinkLabel']>>;
 
 /**
  * The Staging page's data and table: an async Server Component that streams
- * behind the page's <Suspense>. Fetches the staged worklist and the rack/crate
- * locations (grouped by warehouse_id), then passes serializable props to the
- * 'use client' <StagingTable>.
+ * behind the page's <Suspense>. Fetches the staged worklist and the Place
+ * destinations (racks, crates and Sites, grouped by warehouse_id), then passes
+ * serializable props to the 'use client' <StagingTable>.
  *
  * PUT AWAY FROM AN ORDER (F2-3). `filter` is the page's `?item=` (repeatable)
  * and `?order=`, parsed by core parseStagingItemFilter. With a usable filter
@@ -112,8 +113,17 @@ export async function StagingTableSection({
     warehouseNames[w.id] = w.name;
   }
 
-  // Build a map of warehouseId → rack/crate destinations for that warehouse.
-  // The PlaceFromStagingDialog only needs rack and crate kinds.
+  // Build a map of warehouseId → Place destinations for that warehouse: its
+  // racks and crates, and its SITE(s).
+  //
+  // THE SITE (L121). A cancelled pick restocks to Staging, and a warehouse whose
+  // stock sits on its Site (no racks: Demo's Main Distribution Center; L4L's
+  // no-rack items on DC4) had no screen that could put it back. A Site is
+  // kind NULL with a site-ish type — never backfill that kind — so the ONE
+  // classifier decides (isSiteLocation): a NULL-kind row typed shelf/bin is a
+  // legacy placement and stays out, as do the Staging/Unplaced buckets. Sites
+  // come first in each list: one or two of them, ahead of 48 racks. Placing onto
+  // a Site keeps the item's rack label (placeStockAction).
   //
   // Each destination carries its rack/crate COLUMNS (migration 0188), not just
   // {id, name, kind}: dropping them is why the put-away dialog could never show
@@ -122,8 +132,11 @@ export async function StagingTableSection({
   // not a substitute — "Blue #42" is a dedupe key, and parsing a crate back out
   // of it would break the moment someone renames a crate.
   const destinationsByWarehouse = new Map<string, DestinationOption[]>();
-  for (const loc of allLocations) {
-    if (loc.kind !== 'rack' && loc.kind !== 'crate') continue;
+  const sitesFirst = [
+    ...allLocations.filter((loc) => isSiteLocation(loc)),
+    ...allLocations.filter((loc) => loc.kind === 'rack' || loc.kind === 'crate'),
+  ];
+  for (const loc of sitesFirst) {
     const wid = (loc.warehouse_id as string | null) ?? '__none__';
     if (!destinationsByWarehouse.has(wid)) {
       destinationsByWarehouse.set(wid, []);

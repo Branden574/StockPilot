@@ -21,6 +21,8 @@ vi.mock('@/server/actions/inventory', () => ({
 }));
 vi.mock('sonner', () => ({ toast: mockToast }));
 
+import type { DestinationOption } from '@/lib/locations/destination-option';
+
 import { PlaceFromStagingDialog } from './place-from-staging-dialog';
 
 // The warehouse from the 2026-07-23 incident: 1-A and 10-A exist, no 100-A.
@@ -88,7 +90,7 @@ function renderBookDialog(
   opts: {
     bookStorage?: BookStorageInfo | null;
     availableQuantity?: number;
-    destinations?: typeof DESTINATIONS;
+    destinations?: DestinationOption[];
   } = {},
 ) {
   return render(
@@ -1282,5 +1284,74 @@ describe('PlaceFromStagingDialog — book crate controls', () => {
     expect(mockToast.warning).toHaveBeenCalledWith(
       'The Outsiders was placed, but its crate label was left as it was and may now be wrong — nobody was asked about clearing it.',
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L121 — BACK ONTO THE WAREHOUSE SITE
+//
+// A cancelled pick restocks to Staging, and a warehouse whose stock sits on its
+// Site (no racks: Demo's Main Distribution Center) had no way to put it back.
+// The Staging page now hands the Site in with the racks and crates. It reads as
+// a Site, never as a rack, and the request names it by id.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('PlaceFromStagingDialog — the warehouse Site (L121)', () => {
+  const SITE_OPTION = {
+    id: 'site-mdc',
+    name: 'Main Distribution Center',
+    kind: '',
+    type: 'warehouse',
+    rackNumber: null,
+    rackRow: null,
+    crateColor: null,
+    crateNumber: null,
+  };
+  const WITH_SITE = [SITE_OPTION, ...DESTINATIONS];
+
+  it('lists the Site as one, says stock can go onto it, and places there by id', async () => {
+    const user = userEvent.setup();
+    render(
+      <PlaceFromStagingDialog
+        itemId="item-1"
+        itemName="Trail Runner"
+        itemType="asset"
+        sourceLocationId="stg-1"
+        sourceKind="staging"
+        warehouseId="wh-1"
+        warehouseName="Main Warehouse"
+        availableQuantity={1}
+        destinations={WITH_SITE}
+      />,
+    );
+    await openDialog(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into a rack or crate, or onto a site\. Available/i);
+    await chooseDestination(user, 'Main Distribution Center (site)');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 1 unit of Trail Runner at Main Distribution Center.');
+  });
+
+  it('with no Site in the list the description is unchanged', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await openDialog(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into a rack or crate\. Available/i);
+    expect(screen.getByRole('dialog')).not.toHaveTextContent(/onto a site/i);
+  });
+
+  it('a BOOK picks the Site from the shortcut list: the boxes blank and the request goes by id', async () => {
+    const user = userEvent.setup();
+    renderBookDialog({ bookStorage: null, destinations: WITH_SITE, availableQuantity: 1 });
+    await openDialog(user);
+    await user.click(screen.getByRole('combobox', { name: /existing rack, crate or site/i }));
+    await user.click(await screen.findByRole('option', { name: 'Main Distribution Center (site)' }));
+    expect(screen.getByLabelText(/^rack number$/i)).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: /place stock/i }));
+
+    expect(mockPlaceStockAction.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 1 copy of The Outsiders at Main Distribution Center.');
   });
 });

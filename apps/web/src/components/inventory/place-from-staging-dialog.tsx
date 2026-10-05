@@ -56,11 +56,13 @@ import {
   destinationFromFields,
   destinationIsRecordedStorage,
   destinationLabel,
+  destinationOptionLabel,
   destinationPhrase,
   destinationPosition,
   EMPTY_DESTINATION_FIELDS,
   fieldsFromOption,
   isCrateChoice,
+  isSiteOption,
   newDestinationProblem,
   newDestinationReady,
   planNewDestination,
@@ -186,6 +188,9 @@ export function PlaceFromStagingDialog({
   const isBook = itemType === 'book';
   const isNew = !isBook && destId === NEW_RACK_SENTINEL;
   const selectedDestination = destinations.find((d) => d.id === destId) ?? null;
+  // The warehouse's Site is offered beside its racks and crates (L121); the
+  // copy says so only when one is in the list.
+  const offersSite = destinations.some(isSiteOption);
 
   // Reset form state whenever the dialog opens — and for a BOOK, seed the four
   // fields from its recorded storage. "Where it already lives" is the default
@@ -710,7 +715,8 @@ export function PlaceFromStagingDialog({
           <DialogTitle>Place from {sourceLabel.toLowerCase()}</DialogTitle>
           <DialogDescription>
             Move <span className="font-medium text-foreground">{itemName}</span> from{' '}
-            {sourceLabel.toLowerCase()} into a rack or crate. Available:{' '}
+            {sourceLabel.toLowerCase()} into a rack or crate{offersSite ? ', or onto a site' : ''}.
+            Available:{' '}
             <span className="tabular-nums">{availableQuantity}</span>.
           </DialogDescription>
         </DialogHeader>
@@ -733,7 +739,11 @@ export function PlaceFromStagingDialog({
             <>
               {/* Existing-location shortcut — FILLS the four fields below. */}
               <div className="space-y-1.5">
-                <Label id="place-existing-label">Pick an existing rack / crate (optional)</Label>
+                <Label id="place-existing-label">
+                  {offersSite
+                    ? 'Pick an existing rack, crate or site (optional)'
+                    : 'Pick an existing rack / crate (optional)'}
+                </Label>
                 <Select value={destId} onValueChange={pickExisting}>
                   <SelectTrigger aria-labelledby="place-existing-label">
                     <SelectValue placeholder="Fill in from an existing location" />
@@ -741,7 +751,7 @@ export function PlaceFromStagingDialog({
                   <SelectContent>
                     {destinations.map((d) => (
                       <SelectItem key={d.id} value={d.id}>
-                        {d.name}
+                        {destinationOptionLabel(d)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -776,7 +786,7 @@ export function PlaceFromStagingDialog({
                   <SelectContent>
                     {destinations.map((d) => (
                       <SelectItem key={d.id} value={d.id}>
-                        {d.name}
+                        {destinationOptionLabel(d)}
                       </SelectItem>
                     ))}
                     <SelectItem value={NEW_RACK_SENTINEL}>+ New rack / crate</SelectItem>

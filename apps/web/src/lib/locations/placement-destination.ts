@@ -20,6 +20,7 @@ import {
   formatRackPosition,
   getCrateColor,
   hasRackPosition,
+  isSiteLocation,
   normalizeRackFields,
   planNewLocation,
   type BookStorageInfo,
@@ -161,6 +162,29 @@ export function destinationCrate(dest: ChosenDestination): {
   }
 }
 
+/**
+ * IS THIS EXISTING DESTINATION A SITE? (L121)
+ *
+ * The Staging page offers the warehouse's Site beside its racks and crates, so
+ * stock a cancelled pick sent back to Staging can return to where the rest of
+ * the item sits. A Site has no kind (NULL, spelt '' on a DestinationOption) and
+ * a site-ish type; the ONE classifier is core's isSiteLocation. A NULL-kind row
+ * typed shelf/bin is a legacy placement, not a Site — the type decides.
+ */
+export function isSiteOption(option: DestinationOption): boolean {
+  return isSiteLocation({ type: option.type ?? null, kind: option.kind || null });
+}
+
+/**
+ * How a destination list names a row. A Site says it is one, so "Main
+ * Distribution Center" or "DC4" never reads as a rack in a list of racks (the
+ * 2026-09-24 "items went under rack DC4" confusion). Every other row keeps its
+ * own name.
+ */
+export function destinationOptionLabel(option: DestinationOption): string {
+  return isSiteOption(option) ? `${option.name} (site)` : option.name;
+}
+
 /** True when the destination is a crate rather than a rack. */
 export function isCrateChoice(dest: ChosenDestination): boolean {
   if (dest.mode === 'existing') return dest.option.kind === 'crate';
@@ -224,6 +248,8 @@ export function destinationLabel(dest: ChosenDestination): string {
  * it: "gray BIN" is five different bins in this warehouse.
  */
 export function destinationPhrase(dest: ChosenDestination): string {
+  // A Site is not a rack: the stock is AT it (L121).
+  if (dest.mode === 'existing' && isSiteOption(dest.option)) return `at ${dest.option.name}`;
   const crate = destinationCrate(dest);
   if (isCrateChoice(dest) || crate.number || crate.color) {
     const color = formatCrateColorLabel(crate.color);

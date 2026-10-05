@@ -21,6 +21,7 @@ const calls = vi.hoisted(() => ({
   rows: [{ itemId: 'x', warehouseId: 'wh-home' }] as unknown[],
   tableProps: null as Record<string, unknown> | null,
   orderFactoryFails: false,
+  locations: [] as Record<string, unknown>[],
 }));
 
 vi.mock('@/server/services/inventory', () => ({
@@ -34,7 +35,7 @@ vi.mock('@/server/services/inventory', () => ({
   },
 }));
 vi.mock('@/server/services/locations', () => ({
-  LocationsService: { forCurrentUser: async () => ({ list: async () => [] }) },
+  LocationsService: { forCurrentUser: async () => ({ list: async () => calls.locations }) },
 }));
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: { forCurrentUser: async () => ({ listNames: async () => [] }) },
@@ -107,6 +108,7 @@ beforeEach(() => {
   calls.rows = [{ itemId: 'x', warehouseId: 'wh-home' }];
   calls.tableProps = null;
   calls.orderFactoryFails = false;
+  calls.locations = [];
 });
 
 describe('Staging page data path: ?item and ?order (F2-3)', () => {
@@ -240,5 +242,43 @@ describe('Staging page data path: ?item and ?order (F2-3)', () => {
     cleanup();
     await renderSection(parseStagingItemFilter({ item: A }));
     expect(calls.tableProps!.rows).toHaveLength(2);
+  });
+});
+
+// L121: a cancelled pick restocks to Staging, and a warehouse whose stock sits
+// on its Site (no racks) could not put it back from any screen. Place now
+// offers the warehouse's Site(s). A Site is kind NULL with a site-ish type (core
+// isSiteLocation); a NULL-kind row typed shelf/bin is a legacy placement and the
+// system buckets are never destinations.
+describe('Staging Place destinations: the warehouse Site (L121)', () => {
+  const loc = (over: Record<string, unknown>) => ({
+    warehouse_id: 'wh-home',
+    rack_number: null,
+    rack_row: null,
+    crate_color: null,
+    crate_number: null,
+    ...over,
+  });
+
+  it("offers the warehouse's Sites first, then its racks and crates; never Staging, Unplaced or a legacy shelf", async () => {
+    calls.locations = [
+      loc({ id: 'r-1a', name: '1-A', kind: 'rack', type: 'shelf', rack_number: '1', rack_row: 'A' }),
+      loc({ id: 'site-mdc', name: 'Main Distribution Center', kind: null, type: 'warehouse' }),
+      loc({ id: 'c-blue4', name: 'Blue #4', kind: 'crate', type: 'bin', crate_color: 'blue', crate_number: '4' }),
+      loc({ id: 'site-room', name: 'Back Room', kind: null, type: 'room' }),
+      loc({ id: 'stg', name: 'Staging', kind: 'staging', type: 'warehouse' }),
+      loc({ id: 'unp', name: 'Unplaced', kind: 'unplaced', type: 'warehouse' }),
+      loc({ id: 'shelf-old', name: 'Shelf 3', kind: null, type: 'shelf', warehouse_id: null }),
+      loc({ id: 'site-annex', name: 'Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-other' }),
+    ];
+    await renderSection(parseStagingItemFilter({}));
+    const map = calls.tableProps!.destinationsMap as Record<string, Array<Record<string, unknown>>>;
+    expect(map['wh-home']!.map((d) => d.id)).toEqual(['site-mdc', 'site-room', 'r-1a', 'c-blue4']);
+    expect(map['wh-other']!.map((d) => d.id)).toEqual(['site-annex']);
+    // The legacy shelf has no warehouse and is no Site: nothing is offered for it.
+    expect(map['__none__']).toBeUndefined();
+    // The row's own type travels, so the dialogs can say "(site)".
+    expect(map['wh-home']![0]).toMatchObject({ id: 'site-mdc', name: 'Main Distribution Center', kind: '', type: 'warehouse' });
+    expect(map['wh-home']![2]).toMatchObject({ id: 'r-1a', kind: 'rack', type: 'shelf', rackNumber: '1', rackRow: 'A' });
   });
 });

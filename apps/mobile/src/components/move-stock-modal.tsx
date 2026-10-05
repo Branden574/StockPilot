@@ -46,6 +46,10 @@ import {
 } from '@/lib/move-stock-form';
 import {
   destinationAllowedForSource,
+  destinationKindsOrFilter,
+  moveDestinationGroup,
+  moveDestinationLabel,
+  offeredDestinationOrder,
   placementDestinationsForSource,
 } from '@/components/move-stock-destinations';
 import { transferStock, type NewRack } from '@/lib/stock-api';
@@ -425,10 +429,20 @@ export function MoveStockModal({
       const resolved = resolveMoveSource(hs, { putAwaySourceLocationId });
       const scope = moveDestinationScope(resolved);
 
-      // Destination candidates: real placement locations (racks/crates), plus
-      // the per-warehouse Unplaced bucket IN FREE-FORM MODE ONLY. Never
-      // Staging. The server allows exactly this pair (see the note in POST
-      // /api/v1/items/[id]/transfer).
+      // Destination candidates: real placement locations (racks/crates), the
+      // warehouse's SITE(S), plus the per-warehouse Unplaced bucket IN
+      // FREE-FORM MODE ONLY. Never Staging. The server allows exactly these
+      // (see the note in POST /api/v1/items/[id]/transfer).
+      //
+      // ═══ THE SITE (L121) ═══
+      //
+      // A cancelled pick restocks to Staging, and a warehouse whose stock sits
+      // on its Site (no racks) could not put it back from any screen. Stock
+      // waiting for put-away may now go back onto the Site; which source may go
+      // where is decided at render (placementDestinationsForSource). A Site has
+      // NO kind, so it is read with the NULL-kind rows (a bare .in('kind', …)
+      // can never return one, pattern #23), and the legacy NULL-kind shelves
+      // and bins among them are dropped by the shared classifier, from `type`.
       //
       // ═══ WHY UNPLACED IS HERE, AND WHY NOT IN PUT-AWAY ═══
       //
@@ -440,10 +454,11 @@ export function MoveStockModal({
       //
       // PUT-AWAY DOES NOT. It is reached from the Staging worklist's Place with
       // a FIXED source, and its whole contract is that the stock lands on a
-      // placement; letting Place resolve to "no rack" would drain the worklist
-      // without shelving anything, which is a different bug from the one being
-      // fixed. `putAwaySourceLocationId` is the mode signal — it is only ever
-      // set by that worklist.
+      // placement or back on the warehouse's Site (a real place the rest of the
+      // item sits, L121); letting Place resolve to the Unplaced bucket would
+      // drain the worklist without putting anything anywhere, which is a
+      // different bug from the one being fixed. `putAwaySourceLocationId` is
+      // the mode signal — it is only ever set by that worklist.
       //
       // Staging is out of both: stock arriving there reads as an unprocessed
       // receipt.
@@ -461,11 +476,11 @@ export function MoveStockModal({
         // can FILL a book's four destination fields rather than only name a row.
         let destQuery = supabase
           .from('locations')
-          .select('id, name, kind, warehouse_id, rack_number, rack_row, crate_color, crate_number')
+          .select('id, name, kind, type, warehouse_id, rack_number, rack_row, crate_color, crate_number')
           .eq('organization_id', organizationId)
           .is('deleted_at', null)
-          // in-list-bound: destinationKinds is a 2- or 3-element literal (above)
-          .in('kind', destinationKinds);
+          // The listed kinds (a 2- or 3-element literal, above) OR a NULL kind.
+          .or(destinationKindsOrFilter(destinationKinds));
         if (scope.kind === 'warehouse') {
           destQuery = destQuery.eq('warehouse_id', scope.warehouseId);
         }
@@ -476,16 +491,18 @@ export function MoveStockModal({
           id: String(d.id),
           name: typeof d.name === 'string' ? d.name : 'Location',
           kind: typeof d.kind === 'string' ? d.kind : null,
+          type: str(d.type),
           warehouseId: str(d.warehouse_id),
           rackNumber: str(d.rack_number),
           rackRow: str(d.rack_row),
           crateColor: str(d.crate_color),
           crateNumber: str(d.crate_number),
         }));
-        // Unplaced FIRST, not buried at "U" in a 48-rack alphabetical list —
-        // the whole point is that the non-destructive way off a rack is the
-        // easy one to reach.
-        ds = [...ds.filter((d) => d.kind === 'unplaced'), ...ds.filter((d) => d.kind !== 'unplaced')];
+        // Only the rows the picker offers (the legacy NULL-kind shelves go),
+        // Unplaced FIRST and then the Sites, not buried at "U" or "M" in a
+        // 48-rack alphabetical list — the non-destructive way off a rack and
+        // the way back onto the Site are the easy ones to reach.
+        ds = offeredDestinationOrder(ds);
       }
 
       // The BOOK's recorded storage — the seed for the four fields. The
@@ -601,6 +618,9 @@ export function MoveStockModal({
   // and must say so — an operator looking for the safe way off a rack should
   // find it named in the heading, not only in a chip.
   const offersUnplaced = destChoices.some((d) => d.kind === 'unplaced');
+  // Put-away (and staged stock in free-form Move) is offered the warehouse's
+  // Site (L121), and the heading names it the same way.
+  const offersSite = destChoices.some((d) => moveDestinationGroup(d) === 'site');
   // STOCK THIS MEMBER CANNOT MOVE (0371): what the item holds in warehouses
   // they cannot see. The empty state names it instead of "no stock in any
   // location", and a non-empty FROM list says the rest is elsewhere. The same
@@ -1058,15 +1078,19 @@ export function MoveStockModal({
                       ? isBook
                         ? 'TO RACK, CRATE, OR UNPLACED — TAP TO FILL IN'
                         : 'TO RACK, CRATE, OR UNPLACED'
-                      : isBook
-                        ? 'TO RACK / CRATE — TAP TO FILL IN'
-                        : 'TO RACK / CRATE'}
+                      : offersSite
+                        ? isBook
+                          ? 'TO RACK, CRATE, OR SITE — TAP TO FILL IN'
+                          : 'TO RACK, CRATE, OR SITE'
+                        : isBook
+                          ? 'TO RACK / CRATE — TAP TO FILL IN'
+                          : 'TO RACK / CRATE'}
                   </Mono>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {destChoices.map((d) => (
                       <SheetChip
                         key={d.id}
-                        label={d.name}
+                        label={moveDestinationLabel(d)}
                         // For a BOOK a chip is a shortcut that FILLS the four
                         // fields; it stays lit only while the fields still
                         // equal it (bookDest resolves to it by id).

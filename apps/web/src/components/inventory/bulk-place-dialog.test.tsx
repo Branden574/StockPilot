@@ -806,3 +806,69 @@ describe('BulkPlaceDialog — book crates', () => {
     );
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// L121 — "Place selected" back onto the warehouse SITE. The Staging page hands
+// the Site in with the racks and crates; it reads as a Site and is sent by id.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('BulkPlaceDialog — the warehouse Site (L121)', () => {
+  const WITH_SITE = {
+    'wh-1': [
+      {
+        id: 'site-mdc',
+        name: 'Main Distribution Center',
+        kind: '',
+        type: 'warehouse',
+        rackNumber: null,
+        rackRow: null,
+        crateColor: null,
+        crateNumber: null,
+      },
+      ...DESTINATIONS_MAP['wh-1'],
+    ],
+  };
+
+  function renderWithSite(rows: BulkPlaceRow[]) {
+    return render(
+      <BulkPlaceDialog
+        rows={rows}
+        destinationsMap={WITH_SITE}
+        warehouseNames={{ 'wh-1': 'Main Warehouse' }}
+        onPlaced={() => {}}
+        trigger={<button>Place selected</button>}
+      />,
+    );
+  }
+
+  it('a MIXED selection lists the Site as one, says so, and places there by id', async () => {
+    const user = userEvent.setup();
+    renderWithSite(MIXED);
+    await open(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into one rack or crate, or onto a site\./i);
+    await chooseDestination(user, 'Main Distribution Center (site)');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+    expect(mockToast.success).toHaveBeenCalledWith('Placed 2 items at Main Distribution Center.');
+  });
+
+  it('an ALL-BOOKS selection picks the Site from the shortcut list', async () => {
+    const user = userEvent.setup();
+    renderWithSite(ROWS);
+    await open(user);
+    await user.click(screen.getByRole('combobox', { name: /existing rack, crate or site/i }));
+    await user.click(await screen.findByRole('option', { name: 'Main Distribution Center (site)' }));
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+
+    expect(mockBulkPlace.mock.calls[0]![0].destination).toEqual({ existingLocationId: 'site-mdc' });
+  });
+
+  it('with no Site in the list the description is unchanged', async () => {
+    const user = userEvent.setup();
+    renderDialog(MIXED);
+    await open(user);
+    expect(screen.getByRole('dialog')).toHaveTextContent(/into one rack or crate\./i);
+    expect(screen.getByRole('dialog')).not.toHaveTextContent(/onto a site/i);
+  });
+});

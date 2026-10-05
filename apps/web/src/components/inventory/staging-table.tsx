@@ -90,7 +90,8 @@ interface StagedRow {
 
 export interface StagingTableProps {
   rows: StagedRow[];
-  /** Plain-object map: warehouseId → rack/crate destinations. '__none__' key
+  /** Plain-object map: warehouseId → Place destinations (its Sites, then its
+   *  racks and crates; L121). '__none__' key
    *  holds destinations not tied to any warehouse. */
   destinationsMap: Record<string, DestinationOption[]>;
   /** warehouseId → display name. Rows whose warehouse isn't in this map
