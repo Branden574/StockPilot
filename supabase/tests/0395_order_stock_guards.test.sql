@@ -1,4 +1,4 @@
--- supabase/tests/0396_order_stock_guards.test.sql
+-- supabase/tests/0395_order_stock_guards.test.sql
 -- pgTAP proof for migration 0396 (small fixes, slice 2): order and stock
 -- guards the web app applied, now applied by the database for every caller.
 -- Written to fail against the pre-0396 head (0392, or whatever merged

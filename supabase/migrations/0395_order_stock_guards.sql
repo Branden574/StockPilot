@@ -1,4 +1,4 @@
--- 0396_order_stock_guards.sql
+-- 0395_order_stock_guards.sql
 --
 -- Small fixes, slice 2 (stockpilot-work/six/small-fixes-plan-2026-10-05.md):
 -- order and stock guards the web app already applied, now applied by the
@@ -102,7 +102,7 @@
 -- waits while holding one and is never part of a deadlock. lock_timeout 900ms
 -- (below deadlock_timeout) bounds anything unforeseen. Stock writes and order
 -- writes queue for the few milliseconds the file holds. Push off-peak.
--- scripts/db-concurrency/0396_migration_lock_footprint.sh measures it.
+-- scripts/db-concurrency/0395_migration_lock_footprint.sh measures it.
 --
 -- DATA SAFETY: no row changes. The file restates bodies, comments and two
 -- policies and adds one trigger.
@@ -273,7 +273,7 @@ end;
 $function$;
 
 comment on function public.cancel_order_request(uuid, text) is
-  'Cancel an order request. Restocks the current staged batch (quantity_picked) ONLY when the order status says those units are actually out of quantity_on_hand: picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit. A mid-pick (picking_in_progress) order has not drawn yet, and a reopen_picking order has already had its draw returned — restocking either would invent stock. quantity_picked is cleared either way; quantity_fulfilled is never restocked. The status classification is exhaustive over order_requests_status_check: an unrecognised status raises unclassified_order_status_for_restock rather than defaulting to skip-the-restock, because a skipped restock destroys stock silently while a refused cancel is retryable. Since 0396: the person who placed the order may cancel it only while it is pending approval (42501 forbidden, hint requester_pending_only); someone with orders:approve cancels it at any open status; the restock movements carry reference_type order_request and the order id.';
+  'Cancel an order request. Restocks the current staged batch (quantity_picked) ONLY when the order status says those units are actually out of quantity_on_hand: picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit. A mid-pick (picking_in_progress) order has not drawn yet, and a reopen_picking order has already had its draw returned — restocking either would invent stock. quantity_picked is cleared either way; quantity_fulfilled is never restocked. The status classification is exhaustive over order_requests_status_check: an unrecognised status raises unclassified_order_status_for_restock rather than defaulting to skip-the-restock, because a skipped restock destroys stock silently while a refused cancel is retryable. Since 0395: the person who placed the order may cancel it only while it is pending approval (42501 forbidden, hint requester_pending_only); someone with orders:approve cancels it at any open status; the restock movements carry reference_type order_request and the order id.';
 
 -- ═══ L115. reopen_picking: its movements linked ═══
 -- reopen_picking: restated from 0390_approval_follows_permission.sql; md5(prosrc) 293ce0e76d195bb13105cfd1c067de82 -> 14e49293fa670dc2e05a1c1b6930bce5.
@@ -426,7 +426,7 @@ end;
 $function$;
 
 comment on function public.reopen_picking(uuid, text) is
-  'Manager override: rewind a picked/packed (pre-signature) order to picking_in_progress to fix a miscount. Reverses complete_picking''s stock draw (adjust_stock +quantity_picked into the item''s Unplaced bucket, so the units stay drawable by the re-pick), restores the reservations released by this picking cycle, preserves quantity_picked + assigned_picker_id, clears packing-slip/token fields. Refuses when signed_at is set. Reason required. Since 0396 its movements carry reference_type order_request and the order id.';
+  'Manager override: rewind a picked/packed (pre-signature) order to picking_in_progress to fix a miscount. Reverses complete_picking''s stock draw (adjust_stock +quantity_picked into the item''s Unplaced bucket, so the units stay drawable by the re-pick), restores the reservations released by this picking cycle, preserves quantity_picked + assigned_picker_id, clears packing-slip/token fields. Refuses when signed_at is set. Reason required. Since 0395 its movements carry reference_type order_request and the order id.';
 
 -- ═══ L129b. confirm_physical_signature: the driver is still a member, with Orders on ═══
 -- confirm_physical_signature: restated from 0248_physical_signature.sql; md5(prosrc) f7a14a46d2c70f635c3da844c786ce67 -> c0d1c11d31dd86e072f05b72f299535c.
@@ -504,7 +504,7 @@ end;
 $function$;
 
 comment on function public.confirm_physical_signature(uuid, text) is
-  'Records a paper signature at hand-over (0248): the same hand-over accounting as confirm_order_signature, no image. Who: a manager by role, or the assigned driver while they are still a member of the order''s organization and the Orders module is on (0396).';
+  'Records a paper signature at hand-over (0248): the same hand-over accounting as confirm_order_signature, no image. Who: a manager by role, or the assigned driver while they are still a member of the order''s organization and the Orders module is on (0395).';
 
 -- ═══ L86. The approved notification says when only part is held ═══
 -- _notify_order_request_changes: restated from 0265_notify_order_request_created_pref.sql; md5(prosrc) a223ae83810149728156b8e299c7425e -> 8d9de81d81de84af3e2589e6044506bf.
@@ -751,7 +751,7 @@ end;
 $function$;
 
 comment on function public.adjust_stock(uuid, numeric, text, uuid, text, text, text) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.adjust_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.adjust_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- transfer_stock: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 849690c9313d2d8abfc70eb2b3120d90 -> a95dbf8d8fc9e0450aa5a2d733197843.
 CREATE OR REPLACE FUNCTION public.transfer_stock(p_item_id uuid, p_from_location_id uuid, p_to_location_id uuid, p_quantity numeric, p_notes text DEFAULT NULL::text)
@@ -788,7 +788,7 @@ end;
 $function$;
 
 comment on function public.transfer_stock(uuid, uuid, uuid, numeric, text) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.transfer_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:transfer (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.transfer_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs stock:transfer (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- post_cycle_count: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) ecc566f4079270480df1d9504358ea73 -> b6b00e4d720aad8032a76ec122c4612c.
 CREATE OR REPLACE FUNCTION public.post_cycle_count(p_cycle_count_id uuid)
@@ -824,7 +824,7 @@ end;
 $function$;
 
 comment on function public.post_cycle_count(uuid) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_cycle_count as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_cycle_count as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- assemble_bundle: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 7b3f769cb33ef6767557e0b9c4377ddb -> bcc4fbe7461ba3c02b5e0c2d18988fcf.
 CREATE OR REPLACE FUNCTION public.assemble_bundle(p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_notes text DEFAULT NULL::text)
@@ -863,7 +863,7 @@ end;
 $function$;
 
 comment on function public.assemble_bundle(uuid, numeric, uuid, text) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.assemble_bundle as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs bundles:manage (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.assemble_bundle as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs bundles:manage (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- post_receipt_v2: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) efc01e2e0ea98531c92c7db27f17695c -> 15f5db367d297a58acc1065bae4ffe69.
 CREATE OR REPLACE FUNCTION public.post_receipt_v2(p_purchase_order_id uuid, p_warehouse_id uuid, p_lines jsonb, p_idempotency_key text, p_request_hash text, p_notes text DEFAULT NULL::text)
@@ -900,7 +900,7 @@ end;
 $function$;
 
 comment on function public.post_receipt_v2(uuid, uuid, jsonb, text, text, text) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_receipt_v2 as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_receipt_v2 as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- reverse_receipt: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) e277d737103a5cb561860c229f6631e7 -> f2f13dc2951ad3a5de4aaf034487cac9.
 CREATE OR REPLACE FUNCTION public.reverse_receipt(p_receipt_id uuid, p_reason text)
@@ -936,7 +936,7 @@ end;
 $function$;
 
 comment on function public.reverse_receipt(uuid, text) is
-  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.reverse_receipt as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
+  'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.reverse_receipt as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0395 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
 -- ═══ L15. An item that holds stock is never soft-deleted ═══
 -- SECURITY DEFINER on purpose: the holdings are read past the caller's row
@@ -971,7 +971,7 @@ $$;
 revoke all on function public.tg_inventory_items_no_delete_with_stock() from public, anon, authenticated, service_role;
 
 comment on function public.tg_inventory_items_no_delete_with_stock() is
-  'BEFORE UPDATE OF deleted_at guard (0396): refuses a soft delete (deleted_at null -> set) of an item whose quantity_on_hand is not 0 or that has any non-zero item_stock_levels row, for every role (23514, hint item_holds_stock). Reads only; SECURITY DEFINER so holdings the caller cannot see still count.';
+  'BEFORE UPDATE OF deleted_at guard (0395): refuses a soft delete (deleted_at null -> set) of an item whose quantity_on_hand is not 0 or that has any non-zero item_stock_levels row, for every role (23514, hint item_holds_stock). Reads only; SECURITY DEFINER so holdings the caller cannot see still count.';
 
 -- ═══ The lock prelude (see LOCKS above) ═══
 -- Every table lock the trigger and the two ALTER POLICY statements take, at
@@ -1042,7 +1042,7 @@ alter policy order_request_lines_insert on public.order_request_lines
          and ii.warehouse_id = r.warehouse_id
          -- 0363: the service's ship gate (loadEditableOrderHeader).
          and r.status not in ('in_transit', 'completed', 'denied', 'cancelled')
-         -- 0396: never a kit (the service and place_order_request refuse one).
+         -- 0395: never a kit (the service and place_order_request refuse one).
          and not coalesce(ii.is_bundle, false)
     )
   );

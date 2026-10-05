@@ -686,8 +686,8 @@ PGTAP_TESTS=(
   # a paper signature by the driver needs a member with Orders on; no kit line;
   # the partial-approval notification. Every restated body is production's
   # with its added block removed. The lock footprint is
-  # scripts/db-concurrency/0396_migration_lock_footprint.sh.
-  supabase/tests/0396_order_stock_guards.test.sql
+  # scripts/db-concurrency/0395_migration_lock_footprint.sh.
+  supabase/tests/0395_order_stock_guards.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
