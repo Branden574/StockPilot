@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -65,6 +66,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         { error: e.code, message: e.message },
         { status: serviceErrorStatus(e.code) },
       );
+    }
+    // The warehouse check (write access to the order's warehouse) throws
+    // ForbiddenError, a separate class from ServiceError: a refusal with a
+    // sentence for the picker, as the transition and lines routes answer it,
+    // never a reported 500 (small fixes slice 2 review).
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
     }
     void reportError(e, { tag: 'api.v1.orders.pick_line' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

@@ -85,4 +85,20 @@ describe('POST /api/v1/orders/[id]/pick-line', () => {
     const res = await POST(req({ lineId: LINE, quantity: 1 }), { params });
     expect(res.status).toBe(403);
   });
+
+  // Small fixes slice 2 review: recordPickedLine asks write access to the
+  // order's warehouse, and that refusal is a ForbiddenError (lib/auth/warehouse),
+  // not a ServiceError. This route answered it 500 with no message and reported
+  // it as an error, where the transition and lines routes answer 403.
+  it('maps the warehouse refusal (ForbiddenError) to 403 with its sentence, never a reported 500', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce({ userId: 'u1', organizationId: 'o1' } as never);
+    const { ForbiddenError } = await import('@/lib/auth/warehouse');
+    const { ORDER_WAREHOUSE_WRITE_REFUSED_COPY } = await import('@stockpilot/core');
+    recordPickedLine.mockRejectedValueOnce(new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY));
+    const res = await POST(req({ lineId: LINE, quantity: 1 }), { params });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
+    const { reportError } = await import('@/lib/error-reporter');
+    expect(reportError).not.toHaveBeenCalled();
+  });
 });
