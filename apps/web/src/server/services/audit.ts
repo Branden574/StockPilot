@@ -396,6 +396,8 @@ export type AuditEvent =
   | 'return.replacement_issued'
   | 'return.replacement_cancelled'
   | 'return.replacement_released'
+  // ... and closed as a return only after a replacement cancel (desk check F9).
+  | 'return.replacement_declined'
   // ... and on the replacement order's own trail (its timeline): released
   // before the return, and the returned item received (the gate opened).
   | 'order_request.released_early'

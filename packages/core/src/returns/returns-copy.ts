@@ -121,6 +121,10 @@ export const RETURNS_COPY = {
   exchangeKillSwitch: 'Exchanges are turned off right now. Request a return only.',
   releaseEarlyReasonLabel: 'Reason for releasing early (required)',
   cancelReplacementReasonLabel: 'Reason for cancelling the replacement (required)',
+  // Desk check F9: after a replacement cancel, the exchange ends for good.
+  closeAsReturnOnlyHelp: 'No new replacement is issued. The return goes on as a return only.',
+  closeAsReturnOnlyReasonLabel: 'Reason for keeping the return only (required)',
+  closedAsReturnOnly: 'Kept as a return only.',
   cancelReturnReasonRequired: 'Reason (required: the exchange was approved)',
   getReplacementReadyHelp: 'Prints the pick slip, picks, prints the packing slips and stages it. Stops before the signature.',
   changeOrCancelHere: 'Change or cancel this replacement from its RMA.',

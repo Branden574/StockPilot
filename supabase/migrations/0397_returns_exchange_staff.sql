@@ -51,7 +51,9 @@
 --      a new replacement after a replacement cancel), cancel_return_replacement
 --      (including a picked, staged or in-transit one: the picked batch goes
 --      back to Staging through cancel_order_request's own drawn branch),
---      release_return_replacement_early, return_exchange_candidates (staff
+--      decline_return_replacement ("Close as return only" after a
+--      replacement cancel, desk check F9), release_return_replacement_early
+--      (it names the order the caller saw, F7), return_exchange_candidates (staff
 --      search under the caller's RLS), return_exchange_options (the requester
 --      tier, service role only), return_exchange_flags (the release and
 --      counter facts the list view needs, for any member).
@@ -1401,6 +1403,12 @@ begin
     if v_spent > 0 then
       raise exception 'replacement_handed_over' using errcode = 'P0001', hint = 'replacement_handed_over';
     end if;
+    if v_mode = 'reissue' and exists (select 1 from public.return_exchange_lines xl
+                                       where xl.return_id = p_return_id and xl.status = 'declined'
+                                         and xl.approved_item_id is not null) then
+      -- Kept as a return only since this screen was drawn (desk check F9).
+      raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed';
+    end if;
     raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'no_exchange_lines';
   end if;
 
@@ -1614,6 +1622,95 @@ begin
   return jsonb_build_object('changed', true, 'returnId', p_return_id, 'status', v_status, 'revision', v_rev + 1,
                             'cancelledOrderId', v_live.id, 'drawn', v_class = 'drawn',
                             'inTransit', v_live.status = 'in_transit');
+end;
+$$;
+
+-- Keep the return only, after a replacement cancel (desk check F9): every
+-- exchange line a replacement cancel left cancelled is declined for good, so
+-- an RMA (closed or not) stops inviting "Issue a new replacement". A reason
+-- of 1 to 1,000 characters is recorded on each exchange_declined decision.
+-- The RMA approved, received or closed (P0001 invalid_status_transition);
+-- the revision the caller saw is required (22023 return_invalid without it,
+-- P0001 return_changed when stale). No cancelled line answers {changed:
+-- false}. Moves nothing; no order is touched, so the returns gates apply
+-- (returns:manage and write access to the order's warehouse), as for
+-- declining an exchange at approval.
+create function public.decline_return_replacement(p_return_id uuid, p_expected_revision integer, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+set lock_timeout = '5s'
+as $$
+declare
+  v_user    uuid := auth.uid();
+  v_org     uuid;
+  v_wh      uuid;
+  v_status  text;
+  v_rev     integer;
+  v_reason  text;
+  v_count   integer := 0;
+  v_xl      record;
+begin
+  if v_user is null then
+    raise exception 'unauthenticated' using errcode = '42501', hint = 'unauthenticated';
+  end if;
+  select r.organization_id, o.warehouse_id into v_org, v_wh
+    from public.returns r join public.order_requests o on o.id = r.order_request_id
+   where r.id = p_return_id;
+  if v_org is null or not public.is_org_member(v_org) then
+    raise exception 'return_not_found' using errcode = 'P0002', hint = 'return_not_found';
+  end if;
+  if not public.module_enabled(v_org, 'returns') then
+    raise exception 'module_disabled' using errcode = 'P0001', hint = 'module_disabled';
+  end if;
+  if not public.has_permission(v_org, 'returns:manage') then
+    raise exception 'returns_manage' using errcode = '42501', hint = 'returns_manage';
+  end if;
+  if not public.user_can_access_inventory(v_user, v_wh, null, 'write') then
+    raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
+  end if;
+  v_reason := public._return_exchange_reason(p_reason, 1000);
+  if p_expected_revision is null then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'expectedRevision';
+  end if;
+
+  select r.status into v_status from public.returns r where r.id = p_return_id for update;
+  if v_status not in ('approved', 'received', 'closed') then
+    raise exception 'invalid_status_transition' using errcode = 'P0001', hint = 'invalid_status_transition',
+      detail = v_status;
+  end if;
+  select coalesce(max(d.revision), 0) into v_rev
+    from public.return_decisions d
+   where d.return_id = p_return_id
+     and d.kind in ('approved', 'replacement_changed', 'replacement_cancelled', 'cancelled');
+  if v_rev <> p_expected_revision then
+    raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed', detail = v_rev::text;
+  end if;
+
+  -- The items the decisions below name, FOR UPDATE in id order (desk check F4).
+  perform public._return_lock_items(
+    v_org,
+    array(select coalesce(xl.approved_item_id, xl.requested_item_id) from public.return_exchange_lines xl
+           where xl.return_id = p_return_id and xl.status = 'cancelled'),
+    false);
+  for v_xl in
+    select xl.id, xl.return_line_id, coalesce(xl.approved_item_id, xl.requested_item_id) as item_id,
+           coalesce(xl.approved_quantity, xl.requested_quantity) as quantity
+      from public.return_exchange_lines xl
+     where xl.return_id = p_return_id and xl.status = 'cancelled'
+     order by xl.id
+  loop
+    update public.return_exchange_lines set status = 'declined' where id = v_xl.id;
+    insert into public.return_decisions (organization_id, return_id, return_line_id, exchange_line_id, kind, channel,
+                                         item_id, quantity, reason, actor_user_id, actor_kind)
+    values (v_org, p_return_id, v_xl.return_line_id, v_xl.id, 'exchange_declined', 'staff',
+            v_xl.item_id, v_xl.quantity, v_reason, v_user, 'staff');
+    v_count := v_count + 1;
+  end loop;
+
+  return jsonb_build_object('changed', v_count > 0, 'returnId', p_return_id, 'status', v_status,
+                            'revision', v_rev, 'declined', v_count);
 end;
 $$;
 
@@ -1877,8 +1974,9 @@ $$;
 -- fields never change; status edges requested -> approved, declined or
 -- cancelled; approved -> approved (a newer revision) or cancelled;
 -- cancelled -> approved (a new replacement, C-1) only while the RMA is
--- approved, received or closed; declined is final; a replacement named is
--- this RMA's, and its line carries the approved item.
+-- approved, received or closed, or declined (kept as a return only after a
+-- replacement cancel, desk check F9); declined is final; a replacement named
+-- is this RMA's, and its line carries the approved item.
 create function public.tg_return_exchange_lines_validate()
 returns trigger
 language plpgsql
@@ -1946,7 +2044,7 @@ begin
        (old.status = 'requested' and new.status in ('approved', 'declined', 'cancelled'))
     or (old.status = 'approved' and new.status = 'approved' and new.revision > old.revision)
     or (old.status = 'approved' and new.status = 'cancelled')
-    or (old.status = 'cancelled' and new.status = 'approved')) then
+    or (old.status = 'cancelled' and new.status in ('approved', 'declined'))) then
     raise exception 'exchange_line_invalid' using errcode = 'P0001', hint = 'exchange_line_invalid',
       detail = format('status %s -> %s', old.status, new.status);
   end if;
@@ -2330,12 +2428,14 @@ revoke all on function public.tg_returns_api_guard() from public, anon, authenti
 revoke all on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) from public, anon, authenticated, service_role;
 revoke all on function public.cancel_return_replacement(uuid, integer, text) from public, anon, authenticated, service_role;
 revoke all on function public.release_return_replacement_early(uuid, uuid, text) from public, anon, authenticated, service_role;
+revoke all on function public.decline_return_replacement(uuid, integer, text) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_candidates(uuid, uuid, text, integer) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_options(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_flags(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) to authenticated;
 grant execute on function public.cancel_return_replacement(uuid, integer, text) to authenticated;
 grant execute on function public.release_return_replacement_early(uuid, uuid, text) to authenticated;
+grant execute on function public.decline_return_replacement(uuid, integer, text) to authenticated;
 grant execute on function public.return_exchange_candidates(uuid, uuid, text, integer) to authenticated;
 grant execute on function public.return_exchange_options(uuid) to service_role;
 grant execute on function public.return_exchange_flags(uuid) to authenticated, service_role;
@@ -2374,6 +2474,8 @@ comment on function public.change_return_replacement(uuid, integer, jsonb, text,
   'RX-2 (plan 3.3.5; brief 22; C-1): substitution, or a new replacement after a replacement cancel. p_lines [{exchangeLineId, itemId?, quantity?}] changes approved lines (the others keep theirs); p_reason 1 to 1,000 characters (P0001 reason_required); p_when_short refuse or backorder; p_replacement {fulfillmentType?, deliveryCharterId?} overrides the fulfilment. RMA approved, received or closed (P0001 invalid_status_transition); revision current (P0001 return_changed). The live replacement is locked after the RMA and classified: undrawn is cancelled (holds released, nothing restocked) and a new order created and held in one transaction; drawn gives P0001 replacement_already_drawn; handed over (anything handed over, a resumed backorder included) P0001 replacement_handed_over; none, with lines cancelled by a replacement cancel, issues a new one. Every line sends at most its returned quantity minus what this RMA''s replacements already handed over for it (_return_exchange_fulfilled; desk check F2): the default quantity is capped there, a larger one is P0001 exchange_quantity_exceeds_return, a line with nothing left is not re-issued, and when nothing is left at all P0001 replacement_handed_over. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), returns and orders modules (P0001 module_disabled), returns:manage (42501 returns_manage), orders:approve (42501 orders_approve), write access to the original order''s warehouse (42501 warehouse_write). Idempotent on (RMA, expected revision), scope return_replacement_change: the same change replays, another P0001 return_changed. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.cancel_return_replacement(uuid, integer, text) is
   'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. The expected revision is required (22023 return_invalid without it); a stale one gives P0001 return_changed (desk check F7). The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+comment on function public.decline_return_replacement(uuid, integer, text) is
+  'RX-2 (desk check F9): keep the return only after a replacement cancel: every exchange line a replacement cancel left cancelled is declined for good (exchange_declined decisions with the reason, 1 to 1,000 characters, P0001 reason_required), so the RMA stops inviting a new replacement; no cancelled line answers changed false. RMA approved, received or closed (P0001 invalid_status_transition); the expected revision is required (22023 return_invalid) and must be current (P0001 return_changed). Moves nothing and touches no order. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), the returns module (P0001 module_disabled), returns:manage (42501 returns_manage), write access to the original order''s warehouse (42501 warehouse_write). Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.release_return_replacement_early(uuid, uuid, text) is
   'RX-2 (brief 24; plan 3.3.5): a manager releases the live replacement for picking before the returned item arrives, with a reason of 1 to 500 characters (P0001 reason_required), only while the RMA is approved and the replacement approved (P0001 replacement_not_waiting otherwise). p_order_id is the replacement the caller saw (null: none); any other live replacement is P0001 return_changed (desk check F7). Appends released_early naming that order (a substituted order needs its own release, D10). An existing release of the live order replays; an RMA already received or closed answers changed false, reason not_needed. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.return_exchange_candidates(uuid, uuid, text, integer) is
@@ -2383,7 +2485,7 @@ comment on function public.return_exchange_options(uuid) is
 comment on function public.return_exchange_flags(uuid) is
   'RX-2: the exchange facts the list view reads from the staff-only decision log, for any member of the RMA''s organization (or the service role): releasedEarly (the live replacement), counter (received at the counter), revision. No reason, name or rack. Null for anyone else. STABLE, SECURITY DEFINER, EXECUTE to authenticated and service_role.';
 comment on function public.tg_return_exchange_lines_validate() is
-  'RX-2 (plan 3.1.3), BEFORE INSERT OR UPDATE on return_exchange_lines, every role (defence in depth: only the RX-2 functions write it): items, RMA and line in one organization; quantities at most the returned quantity (P0001 exchange_quantity_exceeds_return); the request fields never change (42501 exchange_request_immutable); status edges requested -> approved, declined or cancelled, approved -> approved at a newer revision or cancelled, cancelled -> approved only while the RMA is approved, received or closed; a replacement named is this RMA''s and its line carries the approved item (P0001 exchange_line_invalid). SECURITY INVOKER, no EXECUTE.';
+  'RX-2 (plan 3.1.3), BEFORE INSERT OR UPDATE on return_exchange_lines, every role (defence in depth: only the RX-2 functions write it): items, RMA and line in one organization; quantities at most the returned quantity (P0001 exchange_quantity_exceeds_return); the request fields never change (42501 exchange_request_immutable); status edges requested -> approved, declined or cancelled, approved -> approved at a newer revision or cancelled, cancelled -> approved only while the RMA is approved, received or closed, or cancelled -> declined (kept as a return only, desk check F9); a replacement named is this RMA''s and its line carries the approved item (P0001 exchange_line_invalid). SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_decisions_exchange_requested() is
   'RX-2 (desk check F9), AFTER INSERT on return_decisions WHEN kind = created: logs the new RMA''s exchange_requested decisions right after its created decision (one per requested exchange line the log does not name yet, in order-line order, with the created decision''s channel and actor), so the log reads created first; _return_create_core (RX-1, frozen) runs the exchange hook before it appends created. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_requests_replacement_link() is

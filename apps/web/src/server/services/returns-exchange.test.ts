@@ -437,6 +437,40 @@ describe('cancelReplacement (cancel_return_replacement)', () => {
   });
 });
 
+// Desk check F9: "Close as return only" after a replacement cancel.
+describe('declineReplacement (decline_return_replacement)', () => {
+  it('closes the cancelled lines as return only with the revision and reason, audits once; nothing to close writes nothing', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:decline_return_replacement': { data: { changed: true, status: 'closed', revision: 2, declined: 1 }, error: null },
+    });
+    const answer = await svc.declineReplacement(RET_ID, { expectedRevision: 2, reason: 'Refund instead' });
+    expect(stub.rpcCalls[0]).toEqual({
+      name: 'decline_return_replacement',
+      args: { p_return_id: RET_ID, p_expected_revision: 2, p_reason: 'Refund instead' },
+    });
+    expect(answer).toEqual({ changed: true, status: 'closed', revision: 2, declined: 1 });
+    expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.replacement_declined']);
+
+    vi.clearAllMocks();
+    const none = svcFor({ 'rpc:decline_return_replacement': { data: { changed: false, status: 'closed', revision: 2, declined: 0 }, error: null } });
+    expect(await none.svc.declineReplacement(RET_ID, { expectedRevision: 2, reason: 'x' })).toMatchObject({ changed: false, declined: 0 });
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('the revision and a reason are required before the call; a stale revision is the database\'s return_changed', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:decline_return_replacement': { data: null, error: { code: 'P0001', hint: 'return_changed', message: 'return_changed' } },
+    });
+    for (const body of [{ reason: 'x' }, { expectedRevision: 2, reason: '' }]) {
+      const e = await svc.declineReplacement(RET_ID, body).catch((x: unknown) => x);
+      expect((e as ServiceError).code).toBe('validation_error');
+    }
+    expect(stub.rpcCalls).toEqual([]);
+    const stale = await svc.declineReplacement(RET_ID, { expectedRevision: 1, reason: 'x' }).catch((x: unknown) => x);
+    expect((stale as ServiceError).details?.reason).toBe('return_changed');
+  });
+});
+
 describe('releaseEarly (release_return_replacement_early)', () => {
   it('releases with the reason, audits once and pings the order page', async () => {
     const { stub, svc } = svcFor({

@@ -290,6 +290,12 @@ function buildSchemas() {
 
   const releaseEarly = z.object({ orderId: uuid, reason: requiredReason(RETURN_RELEASE_REASON_MAX) });
 
+  // Desk check F9: "Close as return only" after a replacement cancel.
+  const declineReplacement = z.object({
+    expectedRevision: z.number().int().min(0),
+    reason,
+  });
+
   const candidates = z.object({
     line: uuid,
     q: z
@@ -354,6 +360,7 @@ function buildSchemas() {
     changeReplacement,
     cancelReplacement,
     releaseEarly,
+    declineReplacement,
     candidates,
     prepare,
     exchangeDecision,
@@ -381,6 +388,7 @@ export type ReturnExchangeDecision = z.output<ReturnSchemas['exchangeDecision']>
 export type ReturnChangeReplacementRequest = z.output<ReturnSchemas['changeReplacement']>;
 export type ReturnCancelReplacementRequest = z.output<ReturnSchemas['cancelReplacement']>;
 export type ReturnReleaseEarlyRequest = z.output<ReturnSchemas['releaseEarly']>;
+export type ReturnDeclineReplacementRequest = z.output<ReturnSchemas['declineReplacement']>;
 export type ReturnCandidatesQuery = z.output<ReturnSchemas['candidates']>;
 export type ReturnPrepareRequest = z.output<ReturnSchemas['prepare']>;
 

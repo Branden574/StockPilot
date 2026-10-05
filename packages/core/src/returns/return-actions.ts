@@ -32,10 +32,12 @@
  *                                                 ready), Cancel replacement
  *   approved    partly_handed_over      Receive | Open replacement, Cancel
  *   approved    handed_over_return_open Receive | Cancel (a reason)
- *   approved    replacement_cancelled   Receive | Issue a new replacement, Cancel
+ *   approved    replacement_cancelled   Receive | Issue a new replacement, Close as return
+ *                                                 only, Cancel
  *   received    ready_to_pick           Get replacement ready | Process return,
  *                                                 Change replacement, Cancel replacement
- *   received    replacement_cancelled   Process return | Issue a new replacement
+ *   received    replacement_cancelled   Process return | Issue a new replacement, Close
+ *                                                 as return only
  *   received    anything else           Process return | Change destination, Open
  *                                                 replacement, Cancel replacement (not
  *                                                 handed over)
@@ -46,8 +48,14 @@
  *   closed      in_progress, ready_for_pickup, out_for_delivery
  *                                       Open replacement (Hand over when ready) |
  *                                                 Cancel replacement
- *   closed      replacement_cancelled   Issue a new replacement
+ *   closed      replacement_cancelled   Issue a new replacement | Close as return only
  *   closed, denied, cancelled: anything else (none)
+ *
+ * "Close as return only" (desk check F9) declines the lines a replacement
+ * cancel left cancelled, for good: the exchange then reads declined and
+ * nothing more is offered. It touches no order, so it needs returns:manage
+ * only, like declining an exchange at approval; without order approval it
+ * becomes the primary action of a closed RMA.
  *
  * Every replacement action needs order approval (viewerCanApproveOrders);
  * without it the exchange is read-only with "Approving the replacement needs
@@ -77,7 +85,8 @@ export type ReturnAction =
   | 'issue_replacement'
   | 'open_replacement'
   | 'hand_over'
-  | 'get_replacement_ready';
+  | 'get_replacement_ready'
+  | 'close_as_return_only';
 
 /**
  * What a live replacement is (plan 3.3.5), the SQL `_return_replacement_class`:
@@ -193,7 +202,7 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
         case 'handed_over_return_open':
           return { primary: 'receive', secondary: ['cancel'] };
         case 'replacement_cancelled':
-          return { primary: 'receive', secondary: ['issue_replacement', 'cancel'] };
+          return { primary: 'receive', secondary: ['issue_replacement', 'close_as_return_only', 'cancel'] };
         default:
           // declined (or a state with no replacement): the return alone.
           return { primary: 'receive', secondary: ['change_destination', 'cancel'] };
@@ -203,7 +212,7 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
         case 'ready_to_pick':
           return { primary: 'get_replacement_ready', secondary: ['process', 'change_replacement', 'cancel_replacement'] };
         case 'replacement_cancelled':
-          return { primary: 'process', secondary: ['issue_replacement'] };
+          return { primary: 'process', secondary: ['issue_replacement', 'close_as_return_only'] };
         case 'declined':
           return { primary: 'process', secondary: ['change_destination'] };
         default:
@@ -222,7 +231,7 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
         case 'partly_handed_over':
           return { primary: 'open_replacement', secondary: [] };
         case 'replacement_cancelled':
-          return { primary: 'issue_replacement', secondary: [] };
+          return { primary: 'issue_replacement', secondary: ['close_as_return_only'] };
         default:
           return { primary: null, secondary: [] };
       }
@@ -295,6 +304,7 @@ export const RETURN_ACTION_LABELS: Record<ReturnAction, string> = {
   open_replacement: RETURNS_COPY.openReplacement,
   hand_over: RETURNS_COPY.handOver,
   get_replacement_ready: RETURNS_COPY.getReplacementReady,
+  close_as_return_only: RETURNS_COPY.closeAsReturnOnly,
 };
 
 /** The label in context: an exchange's approval reads "Approve return & exchange". */

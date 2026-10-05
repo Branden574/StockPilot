@@ -73,7 +73,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The replacement order waits for the returned item',
         whatChanged:
-          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager uses Release replacement before return is received with a reason. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, Issue a new replacement.',
+          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager uses Release replacement before return is received with a reason. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
         whyItMatters: 'Nothing goes out twice: the replacement is picked only once the item it replaces is back, or a manager says so.',
         howItAffectsYou:
           'The orders list marks these orders Exchange. Cancelling a replacement that was already picked puts the picked items back in Staging on record. Cancelling the whole return also cancels a replacement not yet handed over; if part of it was handed over, the rest is not sent.',

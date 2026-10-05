@@ -356,6 +356,17 @@ export function cancelReturnReplacement(
 }
 
 /**
+ * "Close as return only" after a replacement cancel (desk check F9): the
+ * exchange ends for good. The revision the screen shows is required.
+ */
+export function declineReturnReplacement(
+  id: string,
+  body: { expectedRevision: number; reason: string },
+): Promise<ReplacementAnswer<{ changed: boolean; declined: number }>> {
+  return replacementCall(id, '/decline', body);
+}
+
+/**
  * Release the replacement order the screen shows (desk check F7): after a
  * substitution or a re-issue the server answers return_changed rather than
  * releasing an order the user has not seen.

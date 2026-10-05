@@ -485,6 +485,15 @@ export interface ReturnReplacementCancelAnswer {
   inTransit: boolean;
 }
 
+/** RX-2: decline_return_replacement's answer ("Close as return only", desk check F9). */
+export interface ReturnDeclineReplacementAnswer {
+  changed: boolean;
+  status: ReturnStatus;
+  revision: number | null;
+  /** How many exchange lines were closed as return only. */
+  declined: number;
+}
+
 /** RX-2: release_return_replacement_early's answer. */
 export interface ReturnReleaseEarlyAnswer {
   changed: boolean;
@@ -1363,6 +1372,47 @@ export class RMAService {
         event: 'replacement_cancelled',
         source: facts.source,
       });
+    }
+    return result;
+  }
+
+  /**
+   * "Close as return only" after a replacement cancel (desk check F9): the
+   * lines the cancel left cancelled are declined for good, so the RMA stops
+   * inviting a new replacement. Needs a reason and the revision the caller
+   * saw. No order is touched and nothing moves; no cancelled line answers
+   * changed false.
+   */
+  async declineReplacement(id: string, raw: unknown): Promise<ReturnDeclineReplacementAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('declineReplacement', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'reason_required' });
+    const facts = await this.factsInActiveOrg(id);
+    const { data, error } = await this.ctx.supabase.rpc('decline_return_replacement', {
+      p_return_id: id,
+      p_expected_revision: parsed.value.expectedRevision,
+      p_reason: parsed.value.reason,
+    });
+    if (error) throw returnRpcError(error);
+    const answer = asObject(data);
+    const result: ReturnDeclineReplacementAnswer = {
+      changed: answer.changed === true,
+      status: (str(answer.status) ?? 'approved') as ReturnStatus,
+      revision: num(answer.revision),
+      declined: num(answer.declined) ?? 0,
+    };
+    if (result.changed) {
+      await audit(
+        {
+          event: 'return.replacement_declined',
+          entityType: 'return',
+          entityId: id,
+          warehouseId: facts.warehouseId,
+          reason: parsed.value.reason,
+          extra: { declined: result.declined },
+        },
+        this.ctx,
+      );
     }
     return result;
   }

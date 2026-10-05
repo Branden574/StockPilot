@@ -6313,6 +6313,7 @@ describe('exchanges on returns (returns RX-2) is held as a draft', () => {
       RETURNS_COPY.releaseEarly,
       RETURNS_COPY.cancelReplacement,
       RETURNS_COPY.issueNewReplacement,
+      RETURNS_COPY.closeAsReturnOnly,
       RETURNS_COPY.itemIsHere,
       RETURNS_COPY.approveAndReceive,
       RETURNS_COPY.processReturn,

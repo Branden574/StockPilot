@@ -76,9 +76,9 @@ const TABLE: Row[] = [
   ['approved', 'out_for_delivery', 'drawn', 'receive', ['hand_over', 'cancel_replacement']],
   ['approved', 'partly_handed_over', 'handed_over', 'receive', ['open_replacement', 'cancel']],
   ['approved', 'handed_over_return_open', 'handed_over', 'receive', ['cancel']],
-  ['approved', 'replacement_cancelled', 'none', 'receive', ['issue_replacement', 'cancel']],
+  ['approved', 'replacement_cancelled', 'none', 'receive', ['issue_replacement', 'close_as_return_only', 'cancel']],
   ['received', 'ready_to_pick', 'undrawn', 'get_replacement_ready', ['process', 'change_replacement', 'cancel_replacement']],
-  ['received', 'replacement_cancelled', 'none', 'process', ['issue_replacement']],
+  ['received', 'replacement_cancelled', 'none', 'process', ['issue_replacement', 'close_as_return_only']],
   ['received', 'declined', 'none', 'process', ['change_destination']],
   ['received', 'in_progress', 'drawn', 'process', ['change_destination', 'open_replacement', 'cancel_replacement']],
   ['received', 'ready_for_pickup', 'drawn', 'process', ['change_destination', 'hand_over', 'cancel_replacement']],
@@ -90,7 +90,7 @@ const TABLE: Row[] = [
   ['closed', 'ready_for_pickup', 'drawn', 'hand_over', ['cancel_replacement']],
   ['closed', 'out_for_delivery', 'drawn', 'hand_over', ['cancel_replacement']],
   ['closed', 'partly_handed_over', 'handed_over', 'open_replacement', []],
-  ['closed', 'replacement_cancelled', 'none', 'issue_replacement', []],
+  ['closed', 'replacement_cancelled', 'none', 'issue_replacement', ['close_as_return_only']],
   ['closed', 'completed', 'handed_over', null, []],
   ['closed', 'declined', 'none', null, []],
   ['denied', 'cancelled', 'none', null, []],
@@ -219,6 +219,36 @@ describe('replacementClassOf (the SQL _return_replacement_class)', () => {
     ['cancelled', true, 'none'],
   ] as const)('%s (handed over %s) is %s', (status, handed, cls) => {
     expect(replacementClassOf(status, handed)).toBe(cls);
+  });
+
+  // Desk check F9: after a replacement cancel the exchange can end for good,
+  // so even a closed RMA stops inviting a new replacement; without order
+  // approval (no new order can be issued) it is the closed RMA's primary.
+  it('a cancelled replacement can be closed as return only; without order approval that is the closed RMA\'s primary', () => {
+    const base = {
+      exchangeStatus: 'replacement_cancelled' as const,
+      hasExchange: true,
+      replacementClass: 'none' as const,
+      hasApprovedExchange: true,
+      viewerCanManageReturns: true,
+    };
+    expect(availableReturnActions({ ...base, status: 'closed', viewerCanApproveOrders: true })).toEqual({
+      primary: 'issue_replacement',
+      secondary: ['close_as_return_only'],
+      readOnlyReason: null,
+    });
+    expect(availableReturnActions({ ...base, status: 'closed', viewerCanApproveOrders: false })).toEqual({
+      primary: 'close_as_return_only',
+      secondary: [],
+      readOnlyReason: NO_ORDERS,
+    });
+    expect(RETURN_ACTION_LABELS.close_as_return_only).toBe('Close as return only');
+    // Once closed as return only the exchange reads declined: nothing more is offered on a closed RMA.
+    expect(availableReturnActions({ ...base, status: 'closed', exchangeStatus: 'declined', viewerCanApproveOrders: true })).toEqual({
+      primary: null,
+      secondary: [],
+      readOnlyReason: null,
+    });
   });
 
   it('a resumed partial hand-over offers neither Change nor Cancel replacement (desk check F2)', () => {

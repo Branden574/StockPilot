@@ -39,7 +39,8 @@
 --     both.
 -- X.  X-1: cancelling a picked, staged or in-transit replacement from the RMA
 --     restocks the picked batch to Staging; a handed-over one is refused.
---     C-1: a new replacement after a replacement cancel.
+--     C-1: a new replacement after a replacement cancel; "Keep as return
+--     only" ends the exchange for good (desk check F9).
 -- Z.  A replacement handed over in part (desk check F2): a backorder, and the
 --     same resumed into picking, is never cancelled or changed from the RMA;
 --     a forced re-issue sends only what is left of the returned quantity.
@@ -87,6 +88,7 @@
 --   M27 the release ignores the order the caller saw                     -> R6
 --   M28 the replacement cancel accepts a missing revision                -> R6
 --   M29 the creation never logs its exchange requests                    -> C1, K4
+--   M30 Keep as return only leaves the lines cancelled                   -> X6
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -97,7 +99,7 @@
 
 begin;
 
-select plan(98);
+select plan(100);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -654,8 +656,9 @@ select is(
                      || ':' || pg_get_userbyid(p.proowner), ',' order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('change_return_replacement', 'cancel_return_replacement', 'release_return_replacement_early',
-                        'return_exchange_candidates', 'return_exchange_options', 'return_exchange_flags')),
+                        'return_exchange_candidates', 'return_exchange_options', 'return_exchange_flags', 'decline_return_replacement')),
   'cancel_return_replacement:true:true:false:false:false:postgres,change_return_replacement:true:true:false:false:false:postgres,'
+  || 'decline_return_replacement:true:true:false:false:false:postgres,'
   || 'release_return_replacement_early:true:true:false:false:false:postgres,return_exchange_candidates:false:true:false:false:false:postgres,'
   || 'return_exchange_flags:true:true:false:true:false:postgres,return_exchange_options:true:false:false:true:false:postgres',
   'A3: the three exchange RPCs are SECURITY DEFINER with EXECUTE for authenticated only; the staff search is SECURITY INVOKER (the caller''s RLS); the requester options are the service role''s alone; the view''s flags read is members and the service role; none for anon or PUBLIC');
@@ -692,7 +695,7 @@ select is(
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
                         '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested',
-                        'change_return_replacement',
+                        'change_return_replacement', 'decline_return_replacement',
                         'cancel_return_replacement', 'release_return_replacement_early', 'return_exchange_candidates',
                         'return_exchange_options', 'return_exchange_flags')
       and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c where c = 'search_path=public, pg_temp'))
@@ -701,9 +704,9 @@ select is(
                      order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('change_return_replacement', 'cancel_return_replacement', 'release_return_replacement_early',
-                        '_return_replacement_issue')),
+                        '_return_replacement_issue', 'decline_return_replacement')),
   '|_return_replacement_issue:lock_timeout=5s,cancel_return_replacement:lock_timeout=5s,'
-  || 'change_return_replacement:lock_timeout=5s,release_return_replacement_early:lock_timeout=5s',
+  || 'change_return_replacement:lock_timeout=5s,decline_return_replacement:lock_timeout=5s,release_return_replacement_early:lock_timeout=5s',
   'A5: every RX-2 function pins search_path = public, pg_temp, and every writer waits at most 5s for a lock (55P03, retryable)');
 select is(
   (select coalesce(string_agg(p.proname, ','), '')
@@ -1259,6 +1262,34 @@ select is(
   || (select status from public.order_requests where id = :'oX1') || ':' || pg_temp.xs(:'rX1', :mgr),
   'true:reissue:3:true:1:approved/3:cancelled:waiting_for_return',
   'X4: after a replacement cancel, "Issue a new replacement" creates and holds a new order, the lines approved again at the next revision; the new order needs its own release (C-1, D10)');
+
+-- Desk check F9: after a replacement cancel, "Keep as return only" ends the
+-- exchange for good, so even a closed RMA stops inviting a new replacement.
+select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX5" \gset
+select pg_temp.approve(:mgr, :'rX5', pg_temp.xdec(:'rX5')) as "jX5a" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Wrong size picked')$q$, :'rX5', pg_temp.rev(:'rX5'))) as "jX5c" \gset
+select pg_temp.rev(:'rX5') as "x5Rev" \gset
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.decline_return_replacement(%L, %s, 'Return only')$q$, :'rX5', :'x5Rev'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.decline_return_replacement(%L, %s, 'Return only')$q$, :'rX5', :'x5Rev'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.decline_return_replacement(%L, null, 'Return only')$q$, :'rX5'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.decline_return_replacement(%L, %s, '  ')$q$, :'rX5', :'x5Rev'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.decline_return_replacement(%L, %s, 'Return only')$q$, :'rX5', :'x5Rev'::int - 1))) || ','
+  || coalesce(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.decline_return_replacement(%L, %s, 'Return only')$q$, :'rX5', :'x5Rev'))->>'changed', 'error'),
+  '42501:unauthenticated,42501:returns_manage,22023:return_invalid,P0001:reason_required,P0001:return_changed,true',
+  'X5: keeping the return only needs a manager of returns (not order approval: no order is touched), a reason and the revision the caller saw (desk check F9)');
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.decline_return_replacement(%L, %s, 'The requester wants a refund instead')$q$, :'rX5', :'x5Rev')) as "jX5d" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.decline_return_replacement(%L, %s, 'Again')$q$, :'rX5', :'x5Rev')) as "jX5d2" \gset
+select is(
+  ((:'jX5d'::jsonb)->>'changed') || ':' || ((:'jX5d'::jsonb)->>'declined') || ':' || ((:'jX5d2'::jsonb)->>'changed') || ':'
+  || (select string_agg(status, ',') from public.return_exchange_lines where return_id = :'rX5') || ':'
+  || pg_temp.xs(:'rX5', :mgr) || ':'
+  || (select count(*)::text from public.order_requests where replacement_for_return_id = :'rX5' and status not in ('cancelled', 'denied')) || ':'
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, '[]'::jsonb, 'Issue it again', 'refuse')$q$,
+       :'rX5', pg_temp.rev(:'rX5')))) || ':'
+  || (select d.reason from public.return_decisions d where d.return_id = :'rX5' and d.kind = 'exchange_declined' order by d.seq desc limit 1),
+  'true:1:false:declined:declined:0:P0001:return_changed:The requester wants a refund instead',
+  'X6: "Keep as return only" declines the cancelled lines for good with its reason: the exchange reads declined, a second press changes nothing, and a stale "Issue a new replacement" is refused return_changed (desk check F9)');
 
 -- ══ Z. A replacement handed over in part (desk check F2) ═════════════════
 -- oPh: a completed order of 4 Mediums; pX: a replacement item with one unit

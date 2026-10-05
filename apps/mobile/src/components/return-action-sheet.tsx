@@ -43,6 +43,7 @@ import {
   cancelReturn,
   cancelReturnReplacement,
   changeReturnReplacement,
+  declineReturnReplacement,
   denyReturn,
   describeReturnError,
   getReturnCandidates,
@@ -91,7 +92,9 @@ export type ReturnSheetMode =
   | 'release'
   | 'cancel_replacement'
   | 'change_replacement'
-  | 'issue_replacement';
+  | 'issue_replacement'
+  // Desk check F9: the exchange ends for good after a replacement cancel.
+  | 'close_as_return_only';
 
 type AddState = { itemId: string | null; label: string | null; quantity: number; free: number | null } | null;
 
@@ -230,6 +233,7 @@ function SheetContent({
     mode === 'cancel_replacement' ||
     mode === 'change_replacement' ||
     mode === 'issue_replacement' ||
+    mode === 'close_as_return_only' ||
     (mode === 'cancel' && ex.hasApprovedExchange);
   const reasonMax = mode === 'release' ? RETURN_RELEASE_REASON_MAX : RETURN_REASON_MAX;
   const reasonValid = reasonRequired ? reasonCount >= 1 && reasonCount <= reasonMax : reasonCount <= reasonMax;
@@ -283,7 +287,9 @@ function SheetContent({
                   ? RETURNS_COPY.changeReplacement
                   : mode === 'issue_replacement'
                     ? RETURNS_COPY.issueNewReplacement
-                    : 'Cancel this return?';
+                    : mode === 'close_as_return_only'
+                      ? `${RETURNS_COPY.closeAsReturnOnly}?`
+                      : 'Cancel this return?';
   const cta =
     mode === 'approve'
       ? itemIsHere
@@ -305,7 +311,9 @@ function SheetContent({
                   ? RETURNS_COPY.changeReplacement
                   : mode === 'issue_replacement'
                     ? RETURNS_COPY.issueNewReplacement
-                    : RETURNS_COPY.cancelReturn;
+                    : mode === 'close_as_return_only'
+                      ? RETURNS_COPY.closeAsReturnOnly
+                      : RETURNS_COPY.cancelReturn;
 
   async function submit(whenShort: 'refuse' | 'backorder' = 'refuse') {
     if (!canSubmit) return;
@@ -328,6 +336,11 @@ function SheetContent({
           message: releaseOutcomeLine(res.answer),
           workbench: res.workbench,
         });
+        return;
+      }
+      if (mode === 'close_as_return_only') {
+        const res = await declineReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText });
+        onDone({ message: res.answer.changed ? RETURNS_COPY.closedAsReturnOnly : 'Nothing to close.', workbench: res.workbench });
         return;
       }
       if (mode === 'cancel_replacement') {
@@ -601,6 +614,11 @@ function SheetContent({
               </View>
             ) : null}
 
+            {mode === 'close_as_return_only' ? (
+              <Body size={13.5} color={c.ink3}>
+                {RETURNS_COPY.closeAsReturnOnlyHelp}
+              </Body>
+            ) : null}
             {mode === 'cancel_replacement' && ex.replacement?.class === 'drawn' ? (
               <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
                 {RETURNS_COPY.cancelDrawnReplacement}
@@ -702,6 +720,8 @@ function reasonFieldLabel(mode: ReturnSheetMode, hasApprovedExchange: boolean): 
       return RETURNS_COPY.releaseEarlyReasonLabel;
     case 'cancel_replacement':
       return RETURNS_COPY.cancelReplacementReasonLabel;
+    case 'close_as_return_only':
+      return RETURNS_COPY.closeAsReturnOnlyReasonLabel;
     default:
       return RETURNS_COPY.replacementReasonLabel;
   }

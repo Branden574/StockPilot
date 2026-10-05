@@ -198,6 +198,10 @@ export function ReturnWorkbenchView({
       case 'issue_replacement':
         setSheet('issue_replacement');
         return;
+      // Desk check F9: the exchange ends for good after a replacement cancel.
+      case 'close_as_return_only':
+        setSheet('close_as_return_only');
+        return;
       case 'get_replacement_ready':
         void prepare();
         return;

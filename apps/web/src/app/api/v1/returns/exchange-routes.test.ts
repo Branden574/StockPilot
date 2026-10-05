@@ -10,6 +10,7 @@ import { RMAService } from '@/server/services/returns';
 import { GET as orderCandidatesGET } from '../orders/[id]/exchange-candidates/route';
 import { GET as candidatesGET } from './[id]/candidates/route';
 import { POST as cancelReplacementPOST } from './[id]/replacement/cancel/route';
+import { POST as declinePOST } from './[id]/replacement/decline/route';
 import { POST as preparePOST } from './[id]/replacement/prepare/route';
 import { POST as releasePOST } from './[id]/replacement/release/route';
 import { POST as changePOST } from './[id]/replacement/route';
@@ -170,6 +171,34 @@ describe('POST /replacement/cancel, /release, /prepare', () => {
     expect(noRevision.status).toBe(400);
     expect(releaseEarly).not.toHaveBeenCalled();
     expect(cancelReplacement).not.toHaveBeenCalled();
+  });
+
+  // Desk check F9: "Close as return only" after a replacement cancel.
+  it('decline (Close as return only) takes the revision and a reason; either missing is refused before the service', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const declineReplacement = vi.fn(async () => ({ changed: true, status: 'closed', revision: 2, declined: 1 }));
+    service({ declineReplacement, workbench });
+    const ok = await declinePOST(
+      req(`/api/v1/returns/${RET}/replacement/decline`, { method: 'POST', json: { expectedRevision: 2, reason: 'Refund instead' } }),
+      params(),
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('cache-control')).toBe('private, no-store');
+    expect((await ok.json()).answer).toEqual({ changed: true, status: 'closed', revision: 2, declined: 1 });
+    expect(declineReplacement).toHaveBeenCalledWith(RET, { expectedRevision: 2, reason: 'Refund instead' });
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const noRevision = await declinePOST(
+      req(`/api/v1/returns/${RET}/replacement/decline`, { method: 'POST', json: { reason: 'Refund instead' } }),
+      params(),
+    );
+    expect(noRevision.status).toBe(400);
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const noReason = await declinePOST(
+      req(`/api/v1/returns/${RET}/replacement/decline`, { method: 'POST', json: { expectedRevision: 2, reason: ' ' } }),
+      params(),
+    );
+    expect(noReason.status).toBe(400);
+    expect(declineReplacement).toHaveBeenCalledTimes(1);
   });
 
   it('prepare takes an empty body and answers the steps; an unknown field is refused', async () => {

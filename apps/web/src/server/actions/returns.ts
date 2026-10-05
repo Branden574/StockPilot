@@ -6,6 +6,7 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError } from '@/server/services/context';
 import {
   RMAService,
+  type ReturnDeclineReplacementAnswer,
   type ReturnPlanAnswer,
   type ReturnPrepareAnswer,
   type ReturnReleaseEarlyAnswer,
@@ -234,6 +235,24 @@ export async function cancelReturnReplacementAction(input: {
       revalidatePath('/dashboard/staging');
       await revalidateInventoryListForCurrentOrg();
     }
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** "Close as return only" after a replacement cancel (desk check F9): /replacement/decline's twin. */
+export async function declineReturnReplacementAction(input: {
+  id: string;
+  body: unknown;
+}): Promise<ActionResult<{ answer: ReturnDeclineReplacementAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('declineReplacement', input.body);
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'reason_required' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.declineReplacement(input.id, parsed.value);
+    revalidateReplacement(input.id, []);
     return ok({ answer, workbench: await svc.workbench(input.id) });
   } catch (e) {
     return toResult(e);

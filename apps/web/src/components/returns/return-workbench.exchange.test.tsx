@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const runSteps = vi.hoisted(() => vi.fn());
 const releaseAction = vi.hoisted(() => vi.fn());
 const cancelReplacementAction = vi.hoisted(() => vi.fn());
+const declineAction = vi.hoisted(() => vi.fn());
 const candidatesAction = vi.hoisted(() => vi.fn(async () => ({ ok: true, data: { siblings: [], matches: [] } })));
 vi.mock('@/server/actions/returns', () => ({
   runReturnStepsAction: runSteps,
@@ -22,6 +23,7 @@ vi.mock('@/server/actions/returns', () => ({
   buyReturnLabelAction: vi.fn(),
   releaseReturnReplacementAction: releaseAction,
   cancelReturnReplacementAction: cancelReplacementAction,
+  declineReturnReplacementAction: declineAction,
   changeReturnReplacementAction: vi.fn(),
   prepareReturnReplacementAction: vi.fn(),
   returnExchangeCandidatesAction: candidatesAction,
@@ -265,6 +267,39 @@ describe('an approved exchange waiting for the returned item', () => {
     await waitFor(() =>
       // Desk check F7: the release names the replacement the workbench shows.
       expect(releaseAction).toHaveBeenCalledWith({ id: RET, orderId: 'repl-1', reason: 'Swap at delivery: the driver collects the returned item.' }),
+    );
+  });
+
+  // Desk check F9: after a replacement cancel the exchange can end for good,
+  // so a closed RMA stops inviting "Issue a new replacement".
+  it('a cancelled replacement on a closed RMA: Close as return only asks a reason and sends the revision', async () => {
+    const cancelled = {
+      ...WAITING,
+      status: 'replacement_cancelled',
+      statusLabel: 'Replacement cancelled: issue a new one or close as return only',
+      lines: [exchangeLine({ status: 'cancelled', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: ITEM_L })],
+      replacement: { ...WAITING.replacement, status: 'cancelled', live: false, class: 'none' },
+    };
+    declineAction.mockResolvedValue({
+      ok: true,
+      data: {
+        answer: { changed: true, status: 'closed', revision: 2, declined: 1 },
+        workbench: bench('closed', { ...cancelled, status: 'declined', statusLabel: 'Exchange declined' }),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('closed', cancelled, { revision: 2 })} />);
+    expect(screen.getByRole('button', { name: 'Issue a new replacement' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close as return only' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('No new replacement is issued. The return goes on as a return only.')).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: 'Close as return only' });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('Reason for keeping the return only (required)'), {
+      target: { value: 'The requester wants a refund instead' },
+    });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(declineAction).toHaveBeenCalledWith({ id: RET, body: { expectedRevision: 2, reason: 'The requester wants a refund instead' } }),
     );
   });
 

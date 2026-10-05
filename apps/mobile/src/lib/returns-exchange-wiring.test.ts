@@ -34,6 +34,8 @@ describe('the workbench', () => {
       ['cancel_replacement', "setSheet('cancel_replacement')"],
       ['change_replacement', "setSheet('change_replacement')"],
       ['issue_replacement', "setSheet('issue_replacement')"],
+      // Desk check F9: the exchange ends for good after a replacement cancel.
+      ['close_as_return_only', "setSheet('close_as_return_only')"],
       ['get_replacement_ready', 'void prepare()'],
     ] as const) {
       expect(view).toMatch(new RegExp(`case '${action}':\\s*${effect.replace(/[()]/g, '\\$&')};`));
@@ -88,6 +90,16 @@ describe('online only', () => {
     expect(sheet).toContain('const shownOrderId = shown?.live ? shown.orderId : null;');
     expect(sheet).toContain('releaseReturnReplacement(id, shownOrderId, reasonText)');
     expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
+  });
+
+  // Desk check F9: "Close as return only" sends the revision the sheet shows
+  // and a reason, through its own plain request (never queued).
+  it('Close as return only sends the shown revision and a reason', () => {
+    const client = code(read('src/lib/returns-api.ts'));
+    expect(client).toContain('export function declineReturnReplacement(');
+    expect(client).toContain("return replacementCall(id, '/decline', body);");
+    expect(sheet).toContain('declineReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
+    expect(sheet).toMatch(/mode === 'close_as_return_only' \|\|/);
   });
 });
 

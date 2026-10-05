@@ -566,6 +566,58 @@ export function CancelReplacementDialog({
   );
 }
 
+/**
+ * "Close as return only" after a replacement cancel (desk check F9): the
+ * exchange ends for good and the return goes on as a return only. A reason
+ * is required (kept on the return, never shown to the requester).
+ */
+export function CloseAsReturnOnlyDialog({
+  open,
+  onOpenChange,
+  busy,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  busy: boolean;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = React.useState('');
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (busy) return;
+        onOpenChange(v);
+        if (!v) setReason('');
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{RETURNS_COPY.closeAsReturnOnly}?</DialogTitle>
+          <DialogDescription>{RETURNS_COPY.closeAsReturnOnlyHelp}</DialogDescription>
+        </DialogHeader>
+        <ReasonField
+          id="close-as-return-only-reason"
+          label={RETURNS_COPY.closeAsReturnOnlyReasonLabel}
+          help={RETURNS_COPY.replacementReasonHelp}
+          value={reason}
+          onChange={setReason}
+        />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Keep it open
+          </Button>
+          <Button onClick={() => onConfirm(reason.trim())} disabled={busy || !reason.trim()}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {RETURNS_COPY.closeAsReturnOnly}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export interface ChangeLineInput {
   exchangeLineId: string;
   orderRequestLineId: string;

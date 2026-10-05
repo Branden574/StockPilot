@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import {
   AddReplacement,
   CancelReplacementDialog,
+  CloseAsReturnOnlyDialog,
   ChangeReplacementDialog,
   ReleaseEarlyDialog,
   ReplacementOrderSection,
@@ -39,6 +40,7 @@ import {
   cancelReturnAction,
   cancelReturnReplacementAction,
   changeReturnReplacementAction,
+  declineReturnReplacementAction,
   denyReturnAction,
   planReturnDispositionsAction,
   prepareReturnReplacementAction,
@@ -180,6 +182,7 @@ export function ReturnWorkbench({
   const [shortDetail, setShortDetail] = React.useState<unknown>(null);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [cancelReplacementOpen, setCancelReplacementOpen] = React.useState(false);
+  const [returnOnlyOpen, setReturnOnlyOpen] = React.useState(false);
   const [changeMode, setChangeMode] = React.useState<'change' | 'issue' | null>(null);
   const [changeShort, setChangeShort] = React.useState<unknown>(null);
   const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? { kind: 'as_requested' };
@@ -341,6 +344,14 @@ export function ReturnWorkbench({
     if (afterReplacement(res, 'Replacement cancelled.')) setCancelReplacementOpen(false);
   }
 
+  // Desk check F9: after a replacement cancel the exchange ends for good.
+  async function closeAsReturnOnly(reason: string) {
+    setBusy('close_as_return_only');
+    const res = await declineReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } });
+    setBusy(null);
+    if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly)) setReturnOnlyOpen(false);
+  }
+
   async function changeReplacement(body: {
     lines: Array<{ exchangeLineId: string; itemId: string | null; quantity: number }>;
     reason: string;
@@ -481,6 +492,9 @@ export function ReturnWorkbench({
         return;
       case 'cancel_replacement':
         setCancelReplacementOpen(true);
+        return;
+      case 'close_as_return_only':
+        setReturnOnlyOpen(true);
         return;
       case 'change_replacement':
         setChangeShort(null);
@@ -911,6 +925,12 @@ export function ReturnWorkbench({
             drawn={ex.replacement?.class === 'drawn'}
             inTransit={ex.replacement?.status === 'in_transit'}
             onConfirm={cancelReplacement}
+          />
+          <CloseAsReturnOnlyDialog
+            open={returnOnlyOpen}
+            onOpenChange={setReturnOnlyOpen}
+            busy={busy === 'close_as_return_only'}
+            onConfirm={closeAsReturnOnly}
           />
           <ChangeReplacementDialog
             key={changeMode ?? 'closed'}
