@@ -116,7 +116,7 @@ export default function OrderPlaced() {
         : null,
     [placed, ready, itemMap, sites],
   );
-  const context = placed ? successContextFor(placed, live) : null;
+  const context = React.useMemo(() => (placed ? successContextFor(placed, live) : null), [placed, live]);
   const warehouseName = context?.warehouseName ?? '';
 
   const emailInput = React.useMemo(

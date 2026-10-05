@@ -722,7 +722,7 @@ describe('checkout says why when the storefront is not usable, never a spinner t
 // live answer again.
 describe('the success screen draws from what was true when it was placed (PO-4 review)', () => {
   it('one context, taken at placed (the live answer only when none was taken), feeds the approve gate, the reference line and the email', () => {
-    expect(placed).toContain('const context = placed ? successContextFor(placed, live) : null;');
+    expect(placed).toContain('const context = React.useMemo(() => (placed ? successContextFor(placed, live) : null), [placed, live]);');
     expect(placed).toContain("const warehouseName = context?.warehouseName ?? '';");
     expect(placed).toContain('const canApprove = context?.canApproveOrders ?? false;');
     expect(placed).toMatch(/successEmailInput\(\{ placed, context \}\)/);
