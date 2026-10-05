@@ -188,7 +188,10 @@ describe('startOfOrgDay where midnight does not exist', () => {
         if (got !== truth) expect({ z, day: today, got }).toEqual({ z, day: today, got: truth });
       }
     }
-  });
+    // 8 zones x 365 days x a binary search over minutes: well past vitest's
+    // 5 s default on a loaded CI runner, where it timed out twice (L71). The
+    // sweep is the point, so it gets the time instead of fewer days.
+  }, 30_000);
 });
 
 /**
