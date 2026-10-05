@@ -64,6 +64,7 @@ export default async function OrderSignPage({
     requester_name: string | null;
     requester_email: string | null;
     requester_user_id: string | null;
+    requester_deleted_at: string | null;
     fulfillment_type: 'pickup' | 'delivery';
     warehouse_id: string;
     delivery_charter_id: string | null;
@@ -73,7 +74,7 @@ export default async function OrderSignPage({
     admin,
     token,
     'id, organization_id, status, requester_name, requester_email, requester_user_id, ' +
-      'fulfillment_type, warehouse_id, delivery_charter_id, ' +
+      'requester_deleted_at, fulfillment_type, warehouse_id, delivery_charter_id, ' +
       'signature_token_expires_at, signed_at',
   );
   if (!match) notFound();
@@ -99,7 +100,11 @@ export default async function OrderSignPage({
   // row — so when requester_user_id is set and the row columns are
   // blank, hydrate from the profile so the signature page can pre-fill.
   let resolvedRequesterName = order.requester_name;
-  let resolvedRequesterEmail = order.requester_email;
+  // The collector pre-fills the signer email with this, and the signer receipt
+  // goes to whatever address is submitted. A requester who deleted their
+  // account is never emailed again (A3), so their kept address is not offered
+  // as the default (the person signing types their own).
+  let resolvedRequesterEmail = order.requester_deleted_at ? null : order.requester_email;
 
   if (order.requester_user_id && (!resolvedRequesterName || !resolvedRequesterEmail)) {
     const { data: profile } = await admin

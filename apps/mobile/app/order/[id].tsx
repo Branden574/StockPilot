@@ -69,6 +69,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
+import { signerEmailDefault } from '@/lib/deleted-user-labels';
 import {
   claimPicking,
   commitPartialFulfilment,
@@ -266,6 +267,9 @@ interface OrderHeader {
    *  requester-or-approver (OrderRequestsService.addLines), so the screen needs
    *  the id itself, not just the rendered label. */
   requesterUserId: string | null;
+  /** order_requests.requester_deleted_at (0388): the requester deleted their
+   *  account, so their kept address is never the signer default (A3). */
+  requesterDeletedAt: string | null;
   orgLabel: string | null;
   warehouseName: string | null;
   /** The ORDER's warehouse. Added lines must be stocked HERE — not at the
@@ -1161,7 +1165,7 @@ export default function OrderDetail() {
         // phone would compose a visibly thinner email than the web page does for
         // the same order.
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
-         signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
+         requester_deleted_at, signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
          needed_by, notes, delivery_charter_id,
          warehouse:warehouses!warehouse_id (name),
@@ -1420,6 +1424,7 @@ export default function OrderDetail() {
         requesterName: (r.requester_name as string | null) ?? null,
         requesterEmail: (r.requester_email as string | null) ?? null,
         requesterUserId: (r.requester_user_id as string | null) ?? null,
+        requesterDeletedAt: (r.requester_deleted_at as string | null) ?? null,
         orgLabel: (r.requester_org_label as string | null) ?? null,
         warehouseName: whObj?.name ?? null,
         warehouseId: (r.warehouse_id as string | null) ?? null,
@@ -3773,7 +3778,7 @@ export default function OrderDetail() {
           onSuccess={() => void load()}
           signatureToken={order.signatureToken}
           defaultName={order.requesterName ?? ''}
-          defaultEmail={order.requesterEmail ?? ''}
+          defaultEmail={signerEmailDefault(order)}
         />
       ) : null}
 

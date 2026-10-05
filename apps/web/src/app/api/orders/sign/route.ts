@@ -487,6 +487,16 @@ export async function POST(req: NextRequest) {
   // user_profiles row. Every requester-facing notice below uses THIS, never
   // the raw column — internal requesters have a NULL email column.
   const requester = await resolveRequesterContact(admin, order);
+  // A3: a requester who deleted their account is never emailed again. The
+  // phone pre-fills the signer email with the address the order kept (every
+  // installed bundle does), so a signer email equal to that kept address gets
+  // no signer receipt either: the server cannot tell an accepted default from
+  // a typed one, and the rule is "never".
+  const signerIsDeletedRequester =
+    Boolean(order.requester_deleted_at) &&
+    (order.requester_email ?? '').trim().toLowerCase() !== '' &&
+    parsed.data.signerEmail.trim().toLowerCase() ===
+      (order.requester_email ?? '').trim().toLowerCase();
 
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the
@@ -565,7 +575,7 @@ export async function POST(req: NextRequest) {
       // transactional receipt (matching the completed path's semantics).
       const signerIsRequester =
         parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
-      if (!signerIsRequester || requesterEmailOptedOut) {
+      if (!signerIsDeletedRequester && (!signerIsRequester || requesterEmailOptedOut)) {
         try {
           // es `partial-receipt` template: external-recipient receipt from
           // "<supplier> via StockPilot" — the signer may not be a StockPilot
@@ -628,7 +638,7 @@ export async function POST(req: NextRequest) {
           name: requester.name,
         });
       }
-      if (!recipients.has(parsed.data.signerEmail.toLowerCase())) {
+      if (!signerIsDeletedRequester && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
         recipients.set(parsed.data.signerEmail.toLowerCase(), {
           email: parsed.data.signerEmail,
           name: parsed.data.signerName,

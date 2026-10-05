@@ -7,6 +7,7 @@ import {
   actorText,
   isRowPersonDeleted,
   receiverText,
+  signerEmailDefault,
 } from './deleted-user-labels';
 
 /**
@@ -74,5 +75,29 @@ describe('DELETE_ACCOUNT_CONFIRM_COPY (Settings)', () => {
     expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('make another member the owner on the web first');
     expect(DELETE_ACCOUNT_CONFIRM_COPY).toContain('This cannot be undone.');
     expect(DELETE_ACCOUNT_CONFIRM_COPY.toLowerCase()).not.toMatch(/\bbook\b/);
+  });
+});
+
+describe('signerEmailDefault (A3 desk check F-1 sweep)', () => {
+  // The signature pad pre-fills the signer email, and the signer receipt goes
+  // to whatever is submitted: a deleted requester's kept address is never the
+  // default (A3: a deleted requester is never emailed again).
+  it("offers the order's requester email while the requester's account exists", () => {
+    expect(signerEmailDefault({ requesterEmail: 'pat@example.org', requesterDeletedAt: null })).toBe(
+      'pat@example.org',
+    );
+  });
+
+  it('offers nothing once the requester deleted their account', () => {
+    expect(
+      signerEmailDefault({
+        requesterEmail: 'pat@example.org',
+        requesterDeletedAt: '2026-10-04T12:00:00.000Z',
+      }),
+    ).toBe('');
+  });
+
+  it('offers nothing when the order kept no address', () => {
+    expect(signerEmailDefault({ requesterEmail: null, requesterDeletedAt: null })).toBe('');
   });
 });

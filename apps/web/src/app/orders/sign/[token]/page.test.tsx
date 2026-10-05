@@ -34,8 +34,14 @@ vi.mock('@/server/lib/sign-page-session', () => ({
 }));
 
 vi.mock('@/components/orders/signature-collector', () => ({
-  SignatureCollector: ({ token, summary }: { token: string; summary: { id: string } }) => (
-    <p data-collector={token} data-order={summary.id} />
+  SignatureCollector: ({
+    token,
+    summary,
+  }: {
+    token: string;
+    summary: { id: string; requesterEmail: string | null };
+  }) => (
+    <p data-collector={token} data-order={summary.id} data-email={summary.requesterEmail ?? ''} />
   ),
 }));
 
@@ -47,7 +53,7 @@ const LEGACY = '4f'.repeat(32);
 const ORDER_ID = '0a000000-0000-4000-8000-000000000390';
 const ORG = 'org-l4l';
 
-function admin(column: string | null, side: string | null) {
+function admin(column: string | null, side: string | null, requesterDeletedAt: string | null = null) {
   return makeSupabaseStub({
     'order_requests.select': servedLikePostgrest([
       {
@@ -57,6 +63,7 @@ function admin(column: string | null, side: string | null) {
         requester_name: 'Reggie',
         requester_email: 'reggie@example.com',
         requester_user_id: null,
+        requester_deleted_at: requesterDeletedAt,
         fulfillment_type: 'pickup',
         warehouse_id: 'wh-1',
         delivery_charter_id: null,
@@ -120,6 +127,21 @@ describe('/orders/sign/[token]', () => {
     verifiedSessionUserIdWithoutRefresh.mockResolvedValue('member-1');
     isActiveOrgMember.mockResolvedValue(true);
     expect(await open(DIGEST)).toContain(`data-collector="${DIGEST}"`);
+  });
+
+  it('pre-fills the signer email with the address the order kept (the requester usually signs)', async () => {
+    expect(await open(RAW)).toContain('data-email="reggie@example.com"');
+  });
+
+  it('A3: never pre-fills the address of a requester who deleted their account', async () => {
+    // The signer receipt goes to whatever address is submitted, so a pre-filled
+    // copy would email a deleted requester (A3: never emailed again) whenever
+    // the person at the door accepts the default. The kept copy itself stays.
+    adminHolder.client = admin(DIGEST, RAW, '2026-10-04T12:00:00.000Z').client;
+    const html = await open(RAW);
+    expect(html).toContain(`data-collector="${RAW}"`);
+    expect(html).toContain('data-email=""');
+    expect(html).not.toContain('reggie@example.com');
   });
 
   it('an unknown or malformed token: the same not-found', async () => {

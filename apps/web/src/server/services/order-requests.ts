@@ -3835,6 +3835,15 @@ export class OrderRequestsService {
     // Post-hand-over notifications — identical outcomes to the sign route.
     try {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
+      // A requester who deleted their account is never emailed again (A3), not
+      // even at the address the order kept: the backorder notices below gate
+      // only on `requesterEmail && !emailOptedOut`, and a deleted requester has
+      // no id whose preferences could opt them out. The RPC returns the whole
+      // row, so the marker is on it (requesterAccountDeleted reads it only for
+      // a narrow row). Same rule as the sign route's resolveRequesterContact.
+      const requesterGone = await this.requesterAccountDeleted(row);
+      const noticeEmail = requesterGone ? null : (row.requester_email ?? null);
+      const noticeName = requesterGone ? null : (row.requester_name ?? null);
       // Requester opt-out read needs the service client: the caller's RLS
       // can't see another user's notification_preferences row.
       let emailOptedOut = false;
@@ -3866,8 +3875,8 @@ export class OrderRequestsService {
           organizationId: this.ctx.organizationId,
           orderId: id,
           requesterUserId: row.requester_user_id ?? null,
-          requesterEmail: row.requester_email ?? null,
-          requesterName: row.requester_name ?? null,
+          requesterEmail: noticeEmail,
+          requesterName: noticeName,
           appUrl,
           provided: totalFulfilled,
           requested: totalRequested,
@@ -3886,8 +3895,8 @@ export class OrderRequestsService {
             organizationId: this.ctx.organizationId,
             orderId: id,
             requesterUserId: row.requester_user_id ?? null,
-            requesterEmail: row.requester_email ?? null,
-            requesterName: row.requester_name ?? null,
+            requesterEmail: noticeEmail,
+            requesterName: noticeName,
             appUrl,
             emailOptedOut,
             // Display-only: how many units the remainder batch carried.
@@ -4399,7 +4408,11 @@ export class OrderRequestsService {
     defer(() => syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId));
 
     // Zendesk shell: a denied order is an "order problem" ticket (best-effort).
+    // The connector makes requesterEmail the ticket's requester, and Zendesk
+    // emails a ticket's requester, so a requester who deleted their account
+    // (A3: never emailed again) is left off the ticket.
     try {
+      const requesterGone = await this.requesterAccountDeleted(row);
       await this.ctx.supabase.rpc('publish_outbox', {
         p_org_id: this.ctx.organizationId,
         p_topic: 'order.problem',
@@ -4407,8 +4420,8 @@ export class OrderRequestsService {
         p_aggregate_id: id,
         p_payload: {
           orderRequestId: id,
-          requesterEmail: row.requester_email,
-          requesterName: row.requester_name,
+          requesterEmail: requesterGone ? null : row.requester_email,
+          requesterName: requesterGone ? null : row.requester_name,
           reason,
         },
         p_dedupe_key: `order.problem:${id}`,

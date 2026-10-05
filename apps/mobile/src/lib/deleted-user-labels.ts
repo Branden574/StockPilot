@@ -59,6 +59,22 @@ export function receiverText(
 }
 
 /**
+ * The signature pad's default signer email: the address the order kept, so the
+ * requester who usually signs need not type it. Never the address of a
+ * requester who deleted their account (0388 requester_deleted_at): the signer
+ * receipt goes to whatever is submitted, and a deleted requester is never
+ * emailed again (A3). The server refuses that receipt too, for old bundles.
+ * requester_deleted_at exists since 0388, so this needs no 0394 deploy order.
+ */
+export function signerEmailDefault(order: {
+  requesterEmail: string | null;
+  requesterDeletedAt: string | null;
+}): string {
+  if (order.requesterDeletedAt) return '';
+  return order.requesterEmail ?? '';
+}
+
+/**
  * The Settings "Delete your account?" text (A3 plan 9.5). Ownership moves on
  * the web Team page only (O-A3-8), so the last-owner line points there.
  */

@@ -327,6 +327,71 @@ describe('POST /api/orders/sign — internal requester contact resolution', () =
     expect(String(firstSelect)).toContain('requester_deleted_at');
     expect(admin.fromCalls).not.toContain('user_profiles');
   });
+
+  // A3 desk check F-1 sweep: the phone pre-fills the signer email with the
+  // address the order kept (old bundles included), and the signer receipt goes
+  // to whatever address is submitted. When that address is the deleted
+  // requester's kept one, no receipt goes out either.
+  const deletedOrder = {
+    ...INTERNAL_ORDER,
+    requester_user_id: null,
+    requester_email: 'gone@x.com',
+    requester_name: 'Gone',
+    requester_deleted_at: '2026-10-04T12:00:00.000Z',
+  };
+
+  it("no completion receipt to the deleted requester's kept address when it is the signer email", async () => {
+    adminHolder.client = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: deletedOrder, error: null },
+      'order_requests.select.single': { data: { ...deletedOrder, status: 'completed' }, error: null },
+      'order_request_lines.select': { data: [{ quantity_fulfilled: 0 }], error: null },
+      'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
+    }).client;
+
+    const res = await POST(request('Gone@X.com'));
+    expect(res.status).toBe(200);
+    expect(sentTo()).toEqual([]);
+  });
+
+  it("no partial receipt to the deleted requester's kept address when it is the signer email", async () => {
+    let lineCall = 0;
+    adminHolder.client = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: deletedOrder, error: null },
+      'order_requests.select.single': { data: { ...deletedOrder, status: 'backordered' }, error: null },
+      'order_request_lines.select': (): QueryResult => {
+        lineCall += 1;
+        return lineCall === 1
+          ? { data: [{ quantity_fulfilled: 0 }], error: null }
+          : { data: [{ quantity_requested: 5, quantity_fulfilled: 2 }], error: null };
+      },
+      'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
+    }).client;
+
+    const res = await POST(request('gone@x.com'));
+    expect(res.status).toBe(200);
+    expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+  });
+
+  it('another signer on a deleted requester\'s order still gets the partial receipt', async () => {
+    let lineCall = 0;
+    adminHolder.client = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: deletedOrder, error: null },
+      'order_requests.select.single': { data: { ...deletedOrder, status: 'backordered' }, error: null },
+      'order_request_lines.select': (): QueryResult => {
+        lineCall += 1;
+        return lineCall === 1
+          ? { data: [{ quantity_fulfilled: 0 }], error: null }
+          : { data: [{ quantity_requested: 5, quantity_fulfilled: 2 }], error: null };
+      },
+      'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
+    }).client;
+
+    await POST(request('bob@site.org'));
+    expect(sendPartialReceiptEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'bob@site.org' }),
+    );
+  });
 });
 
 describe('POST /api/orders/sign — reads after the signature is recorded', () => {

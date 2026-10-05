@@ -4,15 +4,25 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
-const { sendMock, reportErrorMock, prefsResult } = vi.hoisted(() => ({
+const { sendMock, resendMock, reportErrorMock, prefsResult } = vi.hoisted(() => ({
   sendMock: vi.fn(async () => {}),
+  // The hand-over notices (order-handover-notify.ts) send through Resend
+  // directly, not through sendOrderRequestEmail.
+  resendMock: vi.fn(async (_args: { to: string }) => ({ id: 'email-1' })),
   reportErrorMock: vi.fn(async () => {}),
   prefsResult: { value: { data: null as unknown, error: null as unknown } },
 }));
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
+vi.mock('./notifications', () => ({ createNotification: vi.fn(async () => {}) }));
 vi.mock('@/lib/email/order-requests', () => ({ sendOrderRequestEmail: sendMock }));
+vi.mock('@/lib/email/resend', () => ({ sendEmail: resendMock }));
+vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderChanged: vi.fn(async () => {}) }));
+// The return prompt makes its own deleted-requester decision (return-prompt.test.ts).
+vi.mock('@/server/email/return-prompt', () => ({
+  maybeSendReturnPrompt: vi.fn(async () => ({ sent: false, reason: 'requester_deleted' })),
+}));
 vi.mock('@/lib/error-reporter', () => ({
   reportError: reportErrorMock,
   isNextControlFlowError: () => false,
@@ -168,5 +178,128 @@ describe('order status email: a deleted requester is never emailed (A3)', () => 
     prefsResult.value = { data: { email_order_status_changed: false }, error: null };
     await notify(svc(live), { ...base, requester_user_id: 'u-live', requester_email: null });
     expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+/** Let the deferred tail work (defer() falls back to fire-and-forget in vitest) run. */
+async function flushDeferred(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+describe('paper hand-over notices: a deleted requester is never emailed (A3 desk check F-1)', () => {
+  // confirm_physical_signature returns the whole order_requests row, so the
+  // marker is on it. Before the fix the paper path passed requester_email
+  // straight to the backorder notices, whose only gate is
+  // `requesterEmail && !emailOptedOut`, and emailOptedOut stays false for a
+  // row with no requester id.
+  const deletedRow = {
+    ...base,
+    requester_user_id: null,
+    requester_email: 'pat@example.org',
+    requester_deleted_at: '2026-10-04T12:00:00.000Z',
+  };
+
+  function paperStub(row: Record<string, unknown>) {
+    return makeSupabaseStub({
+      'rpc:confirm_physical_signature': { data: row, error: null },
+      // Read twice (prior shipped, then the totals): 2 of 5 already shipped.
+      'order_request_lines.select': {
+        data: [{ quantity_requested: 5, quantity_fulfilled: 2 }],
+        error: null,
+      },
+    });
+  }
+
+  it('backordered: no partial-fulfilment email to the kept address', async () => {
+    const stub = paperStub({ ...deletedRow, status: 'backordered' });
+    await svc(stub).confirmPhysicalSignature('ord-1', 'Dock Signer');
+    await flushDeferred();
+    expect(resendMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('remainder handed over (completed after a backorder): no backorder-shipped email', async () => {
+    const stub = paperStub({ ...deletedRow, status: 'completed' });
+    await svc(stub).confirmPhysicalSignature('ord-1', 'Dock Signer');
+    await flushDeferred();
+    expect(resendMock).not.toHaveBeenCalled();
+    // The completion receipt goes through notifyEmail, which already skips them.
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('a public-link requester (marker null) still gets the partial-fulfilment email', async () => {
+    const stub = paperStub({
+      ...base,
+      status: 'backordered',
+      requester_user_id: null,
+      requester_email: 'guest@example.org',
+      requester_deleted_at: null,
+    });
+    await svc(stub).confirmPhysicalSignature('ord-1', 'Dock Signer');
+    await flushDeferred();
+    expect(resendMock).toHaveBeenCalledTimes(1);
+    expect(resendMock).toHaveBeenCalledWith(expect.objectContaining({ to: 'guest@example.org' }));
+  });
+
+  it('a public-link requester (marker null) still gets the backorder-shipped email', async () => {
+    const stub = paperStub({
+      ...base,
+      status: 'completed',
+      requester_user_id: null,
+      requester_email: 'guest@example.org',
+      requester_deleted_at: null,
+    });
+    await svc(stub).confirmPhysicalSignature('ord-1', 'Dock Signer');
+    await flushDeferred();
+    expect(resendMock).toHaveBeenCalledWith(expect.objectContaining({ to: 'guest@example.org' }));
+  });
+});
+
+describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 desk check F-1 sweep)', () => {
+  // The Zendesk connector makes the payload's requesterEmail the ticket's
+  // requester, and Zendesk's default triggers email the requester when a
+  // ticket is created. So the outbox payload is an email path too.
+  function denyStub(row: Record<string, unknown>) {
+    return makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'order_requests.update': { data: row, error: null },
+    });
+  }
+
+  function outboxPayload(stub: ReturnType<typeof makeSupabaseStub>): Record<string, unknown> {
+    const call = stub.rpcCalls.find((c) => c.name === 'publish_outbox');
+    expect(call).toBeDefined();
+    return (call?.args as { p_payload: Record<string, unknown> }).p_payload;
+  }
+
+  it('omits the kept address and name when requester_deleted_at is set', async () => {
+    const stub = denyStub({
+      ...base,
+      status: 'denied',
+      requester_user_id: null,
+      requester_email: 'pat@example.org',
+      requester_deleted_at: '2026-10-04T12:00:00.000Z',
+    });
+    await svc(stub).deny('ord-1', 'Out of stock');
+    await flushDeferred();
+    const payload = outboxPayload(stub);
+    expect(payload.requesterEmail).toBeNull();
+    expect(payload.requesterName).toBeNull();
+    expect(payload.reason).toBe('Out of stock');
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a public-link requester on the ticket (marker null)', async () => {
+    const stub = denyStub({
+      ...base,
+      status: 'denied',
+      requester_user_id: null,
+      requester_email: 'guest@example.org',
+      requester_deleted_at: null,
+    });
+    await svc(stub).deny('ord-1', 'Out of stock');
+    const payload = outboxPayload(stub);
+    expect(payload.requesterEmail).toBe('guest@example.org');
+    expect(payload.requesterName).toBe('Pat Example');
   });
 });
