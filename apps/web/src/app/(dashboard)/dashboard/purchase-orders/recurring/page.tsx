@@ -25,9 +25,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Pro+ gated; requires `purchase_orders` module + `purchase_orders:manage`.
  * Lists recurring PO templates and renders the create/edit panel.
  *
- * An optional `?seed=<poId>` query param is NOT used here — the "Make
- * recurring" button fetches the seed client-side and passes it as a prop
- * (see recurring-template-seed-button.tsx).
+ * "Make recurring" on a PO opens this page as `?from=<poId>`. The server
+ * reads nothing for it: the button fetched the seed and stored it in the
+ * tab's sessionStorage, and RecurringTemplatesSeedLoader opens the create
+ * form with it, only for the PO that `from` names
+ * (lib/purchase-orders/recurring-seed.ts).
  */
 export default async function RecurringPosPage() {
   const moduleAccess = await checkModuleAccess('purchase_orders');

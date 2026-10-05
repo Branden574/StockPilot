@@ -46,7 +46,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'The weekly digest email goes out, and fixes for warehouses, recurring orders and rentals',
     summary:
-      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order works again, and a rental for a member records the member's own name.",
+      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order opens a new recurring order filled in from it, and a rental for a member records the member's own name.",
     publishedAt: '2026-10-13T17:20:00Z',
     entries: [
       {
@@ -88,15 +88,21 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
       },
       {
+        // Needs BOTH halves live: the seed read (this release's branch) and
+        // the hand-off that opens the form filled in (fix/recurring-seed-and-
+        // hydration; the form never opened before it, since 2026-06-18). Not
+        // "again": the seed read failed from its first commit, so Make
+        // recurring never worked. The name is left blank and is required, so
+        // the words say name, review and save.
         id: 'make-recurring-works',
         category: 'fixed',
         area: 'Purchase orders',
-        title: 'Make recurring works again on a purchase order',
+        title: 'Make recurring works on a purchase order',
         whatChanged:
-          "Make recurring on a purchase order failed with an error. It works again: it opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
+          "Make recurring on a purchase order failed with an error. It now opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
         whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
         howItAffectsYou:
-          'On a purchase order, Make recurring takes you to Recurring purchase orders with the new one ready to review and save.',
+          'On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
       },
