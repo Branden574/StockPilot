@@ -69,7 +69,15 @@ describe('the 0396 refusal words', () => {
       expect(s).toMatch(/^[A-Z].*\.$/);
       expect(s).not.toMatch(/_|forbidden|42501|23514|\bbook\b/i);
     }
-    expect(ITEM_HOLDS_STOCK_COPY).toContain('stock on record');
+    // What makes the item deletable, as the trigger decides it: nothing on
+    // record and nothing on any location. Moving stock keeps it on the item,
+    // so a move is never offered; and an item with 0 on record can still
+    // hold stock on a location, so the sentence never says "still has stock
+    // on record".
+    expect(ITEM_HOLDS_STOCK_COPY).toBe(
+      'This item still holds stock, so it cannot be deleted. It can be deleted once it has no stock on record and none on any location: adjust its stock to zero or write it off first.',
+    );
+    expect(ITEM_HOLDS_STOCK_COPY).not.toMatch(/\bmove\b|still has stock on record/i);
     expect(ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).toBe(
       'Only a pending order can be cancelled by the person who placed it. Ask someone who approves orders to cancel it.',
     );

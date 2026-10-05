@@ -18,7 +18,7 @@ import { ServiceError } from '../context';
  *   requester_pending_only -> 403 forbidden, the cancel window sentence
  *   permission             -> 403 forbidden, "<Action> needs the <label>
  *                             permission." for the action this call site is
- *   item_holds_stock       -> 400 validation_error, the stock-on-record sentence
+ *   item_holds_stock       -> 400 validation_error, the holds-stock sentence
  *
  * The phone shows these sentences: it reaches every one of these actions
  * through the API, whose routes forward a ServiceError's message.

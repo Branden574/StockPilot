@@ -962,7 +962,7 @@ begin
     raise exception 'item_holds_stock'
       using errcode = '23514',
             hint    = 'item_holds_stock',
-            detail  = 'An item with stock on record, or stock held on a location, is not deleted. Remove or move its stock first.';
+            detail  = 'An item is deleted only once it has no stock on record and none on any location. Adjust its stock to zero or write it off first.';
   end if;
   return new;
 end;

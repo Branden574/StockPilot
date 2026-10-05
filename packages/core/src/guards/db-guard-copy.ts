@@ -24,8 +24,13 @@ import { PERMISSION_META, type Permission } from '../constants/permissions';
 export const ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY =
   'Only a pending order can be cancelled by the person who placed it. Ask someone who approves orders to cancel it.';
 
+/**
+ * The database refuses the delete while the item has stock on record or a
+ * non-zero holding on any location, so the sentence says exactly that. Moving
+ * stock keeps it on the item, so a move is not offered.
+ */
 export const ITEM_HOLDS_STOCK_COPY =
-  'This item still has stock on record, so it cannot be deleted. Remove or move its stock first.';
+  'This item still holds stock, so it cannot be deleted. It can be deleted once it has no stock on record and none on any location: adjust its stock to zero or write it off first.';
 
 /** The ledger actions 0396 gates, each with the permission the app asks first. */
 export type DbPermissionAction =

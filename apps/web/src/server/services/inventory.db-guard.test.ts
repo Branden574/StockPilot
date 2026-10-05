@@ -99,7 +99,7 @@ describe('InventoryService.transferStock — the stock:transfer refusal from the
 });
 
 describe('InventoryService.softDelete — an item that holds stock (0396 L15)', () => {
-  it('says the item still has stock on record when the database refuses the delete', async () => {
+  it('says the item still holds stock, and what makes it deletable, when the database refuses the delete', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: ITEM, error: null },
       'item_stock_levels.select': { data: [], error: null },
