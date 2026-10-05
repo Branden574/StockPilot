@@ -191,6 +191,27 @@ describe('MovementsService.list', () => {
     expect(rows[0]!.item).toBeNull();
   });
 
+  // 0394: an actor who deleted their account leaves user_id null and the
+  // row's deleted_users marker records user_id.
+  it('flags actorDeleted only for a null user_id stamped in deleted_users, and selects the marker', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          { id: 'd1', movement_type: 'adjust', user_id: null, deleted_users: { user_id: '2026-11-04T00:00:00+00:00' }, item: null, actor: null },
+          { id: 'd2', movement_type: 'adjust', user_id: null, deleted_users: null, item: null, actor: null },
+          { id: 'd3', movement_type: 'adjust', user_id: 'u1', deleted_users: null, item: null, actor: null },
+        ],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows.map((r) => r.actorDeleted)).toEqual([true, false, false]);
+    const selectArg = String(stub.chainArgs.get('stock_movements.select')?.[0]?.[0] ?? '');
+    expect(selectArg).toContain('deleted_users');
+  });
+
   // ── Issues 3 + 4 (mig 0231): moved_quantity passthrough + receipt_line map ──
 
   it('passes moved_quantity through for transfer rows (and null on old rows)', async () => {
@@ -603,6 +624,42 @@ describe('MovementsService.exportRows', () => {
         notes: null,
         actorEmail: 'alice@x.com',
       },
+    ]);
+  });
+
+  it('writes "Deleted user" in the actor cell for a stamped row, and leaves a system row blank (O-A3-12)', async () => {
+    const base = {
+      movement_type: 'adjust',
+      quantity_change: 1,
+      previous_quantity: 1,
+      new_quantity: 2,
+      from_location_id: null,
+      to_location_id: null,
+      reference_type: null,
+      reference_id: null,
+      reason: null,
+      notes: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+      item_id: 'item-1',
+      item: { id: 'item-1', name: 'Widget', sku: 'W1' },
+      actor: null,
+    };
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          { ...base, id: 'm-del', user_id: null, deleted_users: { user_id: '2026-11-04T00:00:00+00:00' } },
+          { ...base, id: 'm-sys', user_id: null, deleted_users: null },
+        ],
+        error: null,
+        count: 2,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.exportRows();
+    expect(rows.map((r) => [r.id, r.actorEmail])).toEqual([
+      ['m-del', 'Deleted user'],
+      ['m-sys', null],
     ]);
   });
 

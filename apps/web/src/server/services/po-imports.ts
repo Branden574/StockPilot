@@ -83,7 +83,11 @@ import type {
 export interface PoImportRow {
   id: string;
   organization_id: string;
-  uploaded_by: string;
+  /** null once the uploader deleted their account (0394; see deleted_users). */
+  uploaded_by: string | null;
+  /** 0394: {uploaded_by|approved_by: when} for people who deleted their
+   *  account; poImportUploaderLabel reads it ("Deleted user"). */
+  deleted_users?: unknown;
   source_type: ParseSourceType | 'xlsx' | 'manual' | 'scan';
   extraction_confidence: number | null;
   extraction_model: string | null;
@@ -255,7 +259,7 @@ export class PoImportsService {
          file_name, display_name, file_mime_type, file_size, storage_path, sha256, status,
          parse_error, approved_po_id, created_at, updated_at,
          extraction_confidence, extraction_model,
-         reimported_from_id, superseded_at`,
+         reimported_from_id, superseded_at, deleted_users`,
       )
       .eq('organization_id', this.ctx.organizationId);
     if (params.statuses && params.statuses.length > 0) {

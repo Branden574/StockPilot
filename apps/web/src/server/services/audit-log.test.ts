@@ -139,3 +139,26 @@ describe('AuditLogService.list date bounds (SP-042)', () => {
     expect(chain).not.toContain('lte');
   });
 });
+
+// 0394: an actor who deleted their account leaves user_id null and the row's
+// deleted_users marker records user_id; the page says "Deleted user".
+describe('AuditLogService.list deleted actors (0394)', () => {
+  it('selects the marker and flags only a null user_id stamped in deleted_users', async () => {
+    const stub = makeSupabaseStub({
+      'audit_logs.select': {
+        data: [
+          { id: 'a1', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: null, deleted_users: { user_id: '2026-11-04T00:00:00+00:00' }, actor: null },
+          { id: 'a2', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: null, deleted_users: null, actor: null },
+          { id: 'a3', event: 'stock.adjusted', metadata: {}, ip: null, created_at: '2026-11-04T00:00:00Z', user_id: 'u1', deleted_users: null, actor: { id: 'u1', full_name: 'Doua', email: null, avatar_url: null } },
+        ],
+        error: null,
+        count: 3,
+      },
+    });
+    ctxHolder.current = makeServiceContext(stub.client, { role: 'manager' });
+    const svc = await AuditLogService.forCurrentUser();
+    const { rows } = await svc.list();
+    expect(rows.map((r) => r.actorDeleted)).toEqual([true, false, false]);
+    expect(String(stub.chainArgs.get('audit_logs.select')?.[0]?.[0] ?? '')).toContain('deleted_users');
+  });
+});

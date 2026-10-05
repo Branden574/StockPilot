@@ -315,7 +315,7 @@ export default async function PoImportsPage({
                       >
                         {formatOrgDate(i.created_at, { dateStyle: 'medium' }, tz)}
                       </time>
-                      <UploadedByLine label={poImportUploaderLabel(uploaders, i.uploaded_by)} />
+                      <UploadedByLine label={poImportUploaderLabel(uploaders, i.uploaded_by, i.deleted_users)} />
                     </TableCell>
                   </TableRow>
                 ))}

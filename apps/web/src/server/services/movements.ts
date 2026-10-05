@@ -4,6 +4,8 @@ import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import {
   collectLegacyRefIdsByKind,
+  DELETED_USER_LABEL,
+  isDeletedPerson,
   legacyOrderRefId,
   movementOrderRefId,
   resolveMovementRefReason,
@@ -62,8 +64,12 @@ export interface MovementWithItem {
   item: { id: string; name: string; sku: string } | null;
   /** Full name (or email fallback) of the user who triggered the movement.
       null when the row was written by a system process (e.g. a trigger
-      with no auth.uid context). */
+      with no auth.uid context), or when the actor deleted their account. */
   actor: { id: string; fullName: string | null; email: string | null } | null;
+  /** The actor deleted their account (migration 0394): user_id is null and
+      the row's deleted_users marker records user_id. Renders "Deleted user"
+      instead of "System" (lib/movements/actor-label). */
+  actorDeleted: boolean;
 }
 
 /** One flattened row for the Movements CSV export — see
@@ -91,6 +97,8 @@ export interface MovementExportRow {
    *  list() applies. */
   reason: string | null;
   notes: string | null;
+  /** The actor's email; "Deleted user" when the actor deleted their account
+   *  (0394, O-A3-12: the existing cell, no new column); null for a system row. */
   actorEmail: string | null;
 }
 
@@ -145,7 +153,7 @@ export class MovementsService {
         `
         id, movement_type, quantity_change, previous_quantity, new_quantity,
         moved_quantity, from_location_id, to_location_id, reason, notes, created_at,
-        item_id, user_id, reference_type, reference_id,
+        item_id, user_id, reference_type, reference_id, deleted_users,
         ${itemEmbed},
         actor:user_profiles!user_id (id, full_name, email)
       `,
@@ -252,7 +260,12 @@ export class MovementsService {
             email: actorRaw.email ?? null,
           }
         : null;
-      return { ...r, reason, order_ref_id, item, actor } as MovementWithItem;
+      const actorDeleted = isDeletedPerson(
+        (r.user_id as string | null) ?? null,
+        r.deleted_users,
+        'user_id',
+      );
+      return { ...r, reason, order_ref_id, item, actor, actorDeleted } as MovementWithItem;
     });
   }
 
@@ -355,7 +368,7 @@ export class MovementsService {
           `
           id, movement_type, quantity_change, previous_quantity, new_quantity,
           from_location_id, to_location_id, reference_type, reference_id,
-          reason, notes, created_at, item_id, user_id,
+          reason, notes, created_at, item_id, user_id, deleted_users,
           ${itemEmbed},
           actor:user_profiles!user_id (id, full_name, email)
         `,
@@ -473,7 +486,14 @@ export class MovementsService {
         referenceId: (r.reference_id as string | null) ?? legacyOrderId,
         reason,
         notes: (r.notes as string | null) ?? null,
-        actorEmail: actorRaw?.email ?? null,
+        // O-A3-12: an actor who deleted their account reads "Deleted user" in
+        // the existing actor cell (no new column); an unstamped null stays
+        // blank, as for a system row.
+        actorEmail:
+          actorRaw?.email ??
+          (isDeletedPerson((r.user_id as string | null) ?? null, r.deleted_users, 'user_id')
+            ? DELETED_USER_LABEL
+            : null),
       };
     });
 

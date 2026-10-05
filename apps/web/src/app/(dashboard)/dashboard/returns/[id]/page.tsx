@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { returnRequesterLabel } from '@/lib/people/deleted-person-labels';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
@@ -52,6 +53,10 @@ export default async function ReturnDetailPage({
   } catch {
     notFound();
   }
+  // The requester as the return recorded them (a public request snapshots the
+  // order's name); a member who asked and has since deleted their account
+  // reads "Deleted user" (0394: requested_by null and stamped).
+  const requesterLabel = returnRequesterLabel(detail);
 
   // Resolve item name/sku for each line. Items are org-scoped under RLS, so
   // this read can only return items in the caller's org. A return's lines
@@ -256,10 +261,10 @@ export default async function ReturnDetailPage({
                 <dt className="text-muted-foreground">Source</dt>
                 <dd className="text-right capitalize">{detail.source}</dd>
               </div>
-              {detail.requester_name && (
+              {requesterLabel && (
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted-foreground">Requester</dt>
-                  <dd className="text-right">{detail.requester_name}</dd>
+                  <dd className="text-right">{requesterLabel}</dd>
                 </div>
               )}
               {detail.requester_email && (

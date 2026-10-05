@@ -163,6 +163,30 @@ describe('ScheduleService distributed flag', () => {
     expect(rows.find((r) => r.id === uuid(149, 'e'))?.bundleDistributed).toBe(true);
   });
 
+  // 0394: a creator who deleted their account leaves created_by null and the
+  // row's deleted_users stamp; the entry page reads "Created by Deleted user".
+  it('names a deleted creator "Deleted user" and leaves an unknown creator blank', async () => {
+    const stub = makeSupabaseStub({
+      'schedule_events.select': {
+        data: [
+          { ...events[0], id: uuid(1, 'd'), created_by: null, deleted_users: { created_by: '2026-11-04T00:00:00+00:00' } },
+          { ...events[0], id: uuid(2, 'd'), created_by: uuid(2, 'u'), deleted_users: null },
+        ],
+        error: null,
+      },
+      'bundle_distributions.select': { data: [], error: null },
+      'user_profiles.select': { data: [], error: null },
+    });
+    const rows = await new ScheduleService(ctxFor(stub.client)).listInRange(
+      new Date('2026-09-01'),
+      new Date('2026-10-01'),
+    );
+    expect(rows.map((r) => [r.createdBy, r.createdByName])).toEqual([
+      [null, 'Deleted user'],
+      [uuid(2, 'u'), null],
+    ]);
+  });
+
   it('a calendar still renders, unflagged and reported, when the distribution read fails', async () => {
     const stub = makeSupabaseStub({
       'schedule_events.select': { data: events, error: null },

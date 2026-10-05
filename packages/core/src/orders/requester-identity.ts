@@ -37,6 +37,8 @@
  * warehouse phone call is not.
  */
 
+import { DELETED_USER_LABEL } from '../people/deleted-user';
+
 /**
  * The denormalized column if it holds anything usable, else the joined
  * profile's value, else null.
@@ -65,9 +67,10 @@ export function resolveRequesterIdentity(
 
 /**
  * The requester label for an order whose requester deleted their account.
- * Owner decision O-A2-1 (2026-10-03): plain words, no name.
+ * Owner decision O-A2-1 (2026-10-03): plain words, no name. Since 0394 every
+ * deleted person reads the same words (people/deleted-user).
  */
-export const DELETED_REQUESTER_LABEL = 'Deleted user';
+export const DELETED_REQUESTER_LABEL = DELETED_USER_LABEL;
 
 /**
  * Whether an order's requester deleted their account, read from the ROW's own

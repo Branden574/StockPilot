@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
+import { movementActorLabel } from '@/lib/movements/actor-label';
 import {
   buildMovementsQueryString,
   parseFromDateParam,
@@ -159,7 +160,7 @@ export default async function MovementsPage({
       createdAt: m.created_at as string,
       itemName: m.item?.name ?? null,
       itemSku: m.item?.sku ?? null,
-      actorLabel: m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System'),
+      actorLabel: movementActorLabel(m),
       actorEmail: m.actor?.fullName && m.actor?.email ? m.actor.email : null,
     }));
   } else {
@@ -314,8 +315,7 @@ export default async function MovementsPage({
                 // transfer rows have none → em dash, never a misleading 0.
                 const isTransfer = m.movement_type === 'transfer';
                 const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
-                const actorLabel =
-                  m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System');
+                const actorLabel = movementActorLabel(m);
                 return (
                   <TableRow key={m.id as string}>
                     <TableCell className="text-xs text-muted-foreground">

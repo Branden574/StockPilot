@@ -11,6 +11,7 @@ import {
 
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { orderTimelineActor } from '@/lib/people/deleted-person-labels';
 import { createClient } from '@/lib/supabase/server';
 
 interface Props {
@@ -26,6 +27,8 @@ interface AuditRow {
   event: string;
   created_at: string;
   user_id: string | null;
+  /** 0394: {user_id: when} once the actor deleted their account. */
+  deleted_users: unknown;
   metadata: Record<string, unknown> | null;
 }
 
@@ -253,7 +256,7 @@ export async function OrderTimeline({ orderId, organizationId, timeZone }: Props
   const [{ data }, { data: auth }] = await Promise.all([
     supabase
       .from('audit_logs')
-      .select('id, event, created_at, user_id, metadata')
+      .select('id, event, created_at, user_id, deleted_users, metadata')
       .eq('organization_id', organizationId)
       .or(`event.like.order_request.%,event.like.order.%`)
       .filter('metadata->>entity_id', 'eq', orderId)
@@ -290,8 +293,9 @@ export async function OrderTimeline({ orderId, organizationId, timeZone }: Props
       {rows.map((row) => {
         const label = eventLabel(row.event, row.metadata);
         const profile = row.user_id ? usersById.get(row.user_id) ?? null : null;
-        const actor =
-          profile?.full_name ?? profile?.email ?? (row.user_id ? 'Unknown user' : 'Public');
+        // An event with no user is a public-link step ("Public"), unless its
+        // marker records that the actor deleted their account (0394).
+        const actor = orderTimelineActor(profile, row);
         const details = humanDetails(row.event, row.metadata, actor, zone);
         return (
           <li key={row.id} className="relative">

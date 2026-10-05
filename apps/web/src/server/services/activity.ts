@@ -9,6 +9,8 @@ import {
   legacyOrderRefId,
   resolveMovementRefReason,
   userMovementNote,
+  DELETED_USER_LABEL,
+  isDeletedUserRef,
 } from '@stockpilot/core';
 
 import { ServiceContext, ServiceError, withContext } from './context';
@@ -84,7 +86,8 @@ export interface ActivityEvent {
    * `isMovementNoteEditable`.
    */
   noteEditable: boolean;
-  /** Display name of the actor (or "System") if attribution missing. */
+  /** Display name of the actor; "Deleted user" when they deleted their account
+   *  (0394), "System" when the row names no user. */
   actor: string;
   actorEmail: string | null;
   /**
@@ -215,18 +218,22 @@ const ACTOR_EMBED = 'actor:user_profiles!user_id (id, full_name, email)';
 type EmbeddedActor = { full_name?: string | null; email?: string | null } | null;
 
 /**
- * The display attribution for one row: "System" when the row has no user,
- * "Unknown" when it names a user whose profile the caller cannot see (or that
- * no longer exists), otherwise full name, falling back to email. Byte-for-byte
- * the mapping the separate profile lookup applied. A to-one embed arrives as an
- * object, but PostgREST can hand back a one-element array when it cannot prove
- * the relationship is to-one, so both shapes are read (as audit-log.ts does).
+ * The display attribution for one row: "Deleted user" when the row has no user
+ * and its deleted_users marker records that the actor deleted their account
+ * (migration 0394), "System" when the row has no user otherwise, "Unknown"
+ * when it names a user whose profile the caller cannot see, otherwise full
+ * name, falling back to email. A to-one embed arrives as an object, but
+ * PostgREST can hand back a one-element array when it cannot prove the
+ * relationship is to-one, so both shapes are read (as audit-log.ts does).
  */
 function actorOf(
   uid: string | null,
   embedded: EmbeddedActor | EmbeddedActor[] | undefined,
+  marks?: unknown,
 ): { name: string; email: string | null } {
-  if (!uid) return { name: 'System', email: null };
+  if (!uid) {
+    return { name: isDeletedUserRef(marks, 'user_id') ? DELETED_USER_LABEL : 'System', email: null };
+  }
   const p = Array.isArray(embedded) ? (embedded[0] ?? null) : (embedded ?? null);
   if (!p) return { name: 'Unknown', email: null };
   return {
@@ -551,7 +558,7 @@ export class ActivityService {
     let movementsQuery = this.ctx.supabase
       .from('stock_movements')
       .select(
-        `id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id, ${ACTOR_EMBED}`,
+        `id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id, deleted_users, ${ACTOR_EMBED}`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('item_id', itemId);
@@ -573,7 +580,7 @@ export class ActivityService {
 
     let auditQuery = this.ctx.supabase
       .from('audit_logs')
-      .select(`id, event, metadata, created_at, user_id, ${ACTOR_EMBED}`)
+      .select(`id, event, metadata, created_at, user_id, deleted_users, ${ACTOR_EMBED}`)
       .eq('organization_id', this.ctx.organizationId)
       // Extracted-text equality so Postgres can use the
       // audit_logs_org_entity_created_idx expression index added in
@@ -670,7 +677,7 @@ export class ActivityService {
     const referenceLabelById = await referenceLabelsPromise;
 
     const movementEvents: ActivityEvent[] = movementRows.map((m) => {
-      const a = actorOf(m.user_id as string | null, m.actor);
+      const a = actorOf(m.user_id as string | null, m.actor, m.deleted_users);
       const rawReason = (m.reason as string | null) ?? null;
       const rawNotes = (m.notes as string | null) ?? null;
       const isReceiptLine = rawReason === 'receipt_line';
@@ -735,7 +742,7 @@ export class ActivityService {
     });
 
     const auditEvents: ActivityEvent[] = auditRows.map((row) => {
-      const a = actorOf(row.user_id as string | null, row.actor);
+      const a = actorOf(row.user_id as string | null, row.actor, row.deleted_users);
       const meta = (row.metadata as Record<string, unknown> | null) ?? {};
       const reason = (meta.reason as string | null) ?? null;
       return {

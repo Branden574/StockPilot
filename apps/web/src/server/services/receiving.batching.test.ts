@@ -191,4 +191,25 @@ describe('listForPurchaseOrder with 250 receipts', () => {
     );
     expect(tags()).toEqual(['receiving.receiver_names']);
   });
+
+  // 0394: a receiver who deleted their account leaves received_by null and a
+  // deleted_users stamp (select('*') carries it). The history and the PO PDF
+  // read received_by_name.
+  it('names a receiver who deleted their account "Deleted user", never "Unknown"', async () => {
+    const stub = makeSupabaseStub({
+      'receipts.select': {
+        data: [
+          { id: uuid(1, 'r'), received_by: null, deleted_users: { received_by: '2026-11-04T00:00:00+00:00' } },
+          { id: uuid(2, 'r'), received_by: null, deleted_users: null },
+        ],
+        error: null,
+      },
+      'receipt_lines.select': { data: [], error: null },
+      'user_profiles.select': { data: [], error: null },
+    });
+    const out = await new ReceivingService(makeServiceContext(stub.client)).listForPurchaseOrder(
+      'po-1',
+    );
+    expect(out.receipts.map((r) => r.received_by_name)).toEqual(['Deleted user', 'Unknown']);
+  });
 });

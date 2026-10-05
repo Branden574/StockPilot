@@ -272,6 +272,21 @@ describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-L
     expect(opening.actorName).toBeNull();
     expect(opening.actorEmail).toBeNull();
   });
+
+  // 0394: rule 5's one exception. A row whose marker records that its actor
+  // deleted their account was written by a person: "Deleted user".
+  it('names an actor who deleted their account "Deleted user" (the row is stamped), unlike a system write', async () => {
+    const stamped = {
+      ...REAL_MOVEMENTS[0]!,
+      id: 'del-1',
+      user_id: null,
+      actor: null,
+      deleted_users: { user_id: '2026-11-04T00:00:00+00:00' },
+    };
+    const page = await svcFor(stubFor([stamped])).itemMovementHistory({ itemId: ITEM });
+    expect(page.rows[0]!.actorName).toBe('Deleted user');
+    expect(page.rows[0]!.actorEmail).toBeNull();
+  });
 });
 
 describe('InventoryService.itemMovementHistory — rule 2: no internal tokens, no UUIDs', () => {

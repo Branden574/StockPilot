@@ -96,7 +96,7 @@ export default async function PoImportDetailPage({
         </div>
         <p className="text-muted-foreground mt-1 text-xs">
           Source file: {header.file_name} · Uploaded by{' '}
-          {poImportUploaderLabel(uploaders, header.uploaded_by)}
+          {poImportUploaderLabel(uploaders, header.uploaded_by, header.deleted_users)}
         </p>
         {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
             it changes how everything below it should be read, so it must not

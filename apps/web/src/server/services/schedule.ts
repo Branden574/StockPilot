@@ -14,6 +14,7 @@ import {
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
+import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
 import type {
   CreateScheduleEventInput,
   ScheduleStatus,
@@ -40,7 +41,10 @@ export interface ScheduleEventRow {
   bundleDistributed: boolean;
   /** Linked order (auto-created events, mig 0255) — null for manual events. */
   orderRequestId: string | null;
-  createdBy: string;
+  /** null once the creator deleted their account (0394). */
+  createdBy: string | null;
+  /** The creator's name; "Deleted user" once they deleted their account
+   *  (0394, the row's deleted_users stamp); null when it cannot be read. */
   createdByName: string | null;
   createdAt: string;
   updatedAt: string;
@@ -55,7 +59,7 @@ const SELECT_COLUMNS = `
   id, organization_id, title, starts_at, ends_at, all_day,
   location_text, warehouse_id, requester_name, details, status,
   bundle_id, bundle_quantity, bundle_warehouse_id, order_request_id,
-  created_by, updated_by, created_at, updated_at,
+  created_by, updated_by, created_at, updated_at, deleted_users,
   warehouse:warehouses!warehouse_id (name)
 `;
 
@@ -95,7 +99,7 @@ function mapRow(
 ): ScheduleEventRow {
   const wh = raw.warehouse as { name?: string } | { name?: string }[] | null | undefined;
   const warehouseName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
-  const createdBy = raw.created_by as string;
+  const createdBy = (raw.created_by as string | null) ?? null;
   const id = raw.id as string;
   return {
     id,
@@ -117,7 +121,11 @@ function mapRow(
     bundleDistributed: distributedEventIds.has(id),
     orderRequestId: (raw.order_request_id as string | null) ?? null,
     createdBy,
-    createdByName: creatorByUserId.get(createdBy) ?? null,
+    createdByName: createdBy
+      ? (creatorByUserId.get(createdBy) ?? null)
+      : isDeletedPerson(createdBy, raw.deleted_users, 'created_by')
+        ? DELETED_USER_LABEL
+        : null,
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };

@@ -7,6 +7,7 @@ import { claudeGenerateJsonString } from './claude';
 import { resolveAiProvider } from './provider';
 import { dataTag, untrustedDeep, untrustedTag } from './untrusted';
 import { env } from '@/lib/env';
+import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { assertPermission, type ServiceContext } from '@/server/services/context';
@@ -860,9 +861,8 @@ const recentMovementsTool: ToolExecutor = {
       createdAt: m.created_at,
       itemName: dataTag(m.item?.name ?? null),
       itemSku: m.item?.sku ?? null,
-      actor: dataTag(
-        m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System'),
-      ),
+      // "Deleted user" (0394) is our own words, still tagged with the rest.
+      actor: dataTag(movementActorLabel(m)),
     }));
   },
 };
@@ -2566,7 +2566,7 @@ const getMovementsTool: ToolExecutor = {
       createdAt: m.created_at,
       itemName: dataTag(m.item?.name ?? null),
       itemSku: m.item?.sku ?? null,
-      actor: dataTag(m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System')),
+      actor: dataTag(movementActorLabel(m)),
     }));
   },
 };

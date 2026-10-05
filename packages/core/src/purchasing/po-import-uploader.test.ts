@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PO_IMPORT_UPLOADER_DELETED,
   PO_IMPORT_UPLOADER_FORMER_MEMBER,
   PO_IMPORT_UPLOADER_UNAVAILABLE,
   PO_IMPORT_UPLOADER_UNKNOWN,
@@ -45,6 +46,22 @@ describe('poImportUploaderLabel', () => {
   it('says "—" when the lookup failed, never "Former member" for everyone', () => {
     expect(poImportUploaderLabel(null, 'u1')).toBe(PO_IMPORT_UPLOADER_UNAVAILABLE);
     expect(PO_IMPORT_UPLOADER_UNAVAILABLE).toBe('—');
+  });
+
+  // 0394: an uploader who deleted their account leaves the import with
+  // uploaded_by null and a deleted_users stamp for that column.
+  it("says 'Deleted user' for a null uploader stamped in the row's deleted_users, before every other branch", () => {
+    const marks = { uploaded_by: '2026-11-04T18:22:05+00:00' };
+    expect(poImportUploaderLabel(profiles({}), null, marks)).toBe(PO_IMPORT_UPLOADER_DELETED);
+    expect(poImportUploaderLabel(null, null, marks)).toBe('Deleted user');
+    expect(PO_IMPORT_UPLOADER_DELETED).toBe('Deleted user');
+  });
+
+  it('ignores a stamp for another column, a malformed marker, and a marker on a row that still names someone', () => {
+    const m = profiles({ u1: { full_name: 'Doua Vang', email: null } });
+    expect(poImportUploaderLabel(m, null, { approved_by: '2026-11-04T18:22:05+00:00' })).toBe(PO_IMPORT_UPLOADER_UNKNOWN);
+    expect(poImportUploaderLabel(m, null, ['uploaded_by'])).toBe(PO_IMPORT_UPLOADER_UNKNOWN);
+    expect(poImportUploaderLabel(m, 'u1', { uploaded_by: '2026-11-04T18:22:05+00:00' })).toBe('Doua Vang');
   });
 
   it('never returns the raw id', () => {

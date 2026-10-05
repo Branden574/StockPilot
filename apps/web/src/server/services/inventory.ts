@@ -40,6 +40,8 @@ import type {
   BookStorageInfo,
 } from '@stockpilot/core';
 import {
+  DELETED_USER_LABEL,
+  isDeletedPerson,
   BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION,
   BOOK_RACK_CLEAR_REQUIRES_CONFIRMATION,
   bookCrateAcknowledgementIndex,
@@ -8852,7 +8854,7 @@ export class InventoryService {
             `
             id, movement_type, quantity_change, previous_quantity, new_quantity,
             moved_quantity, from_location_id, to_location_id, reason, notes,
-            created_at, user_id,
+            created_at, user_id, deleted_users,
             actor:user_profiles!user_id (id, full_name, email)
           `,
           )
@@ -9057,8 +9059,14 @@ export class InventoryService {
         | undefined;
       const actorRaw = Array.isArray(actorField) ? (actorField[0] ?? null) : (actorField ?? null);
       // Rule 5: a row with no user_id was written by a trigger/system process.
-      // It gets NO actor — never "System" dressed up as a person.
-      const actorName = actorRaw ? (actorRaw.full_name?.trim() || actorRaw.email || null) : null;
+      // It gets NO actor — never "System" dressed up as a person. The one
+      // exception is a row whose marker records that its actor deleted their
+      // account (0394): that was a person, shown as "Deleted user".
+      const actorName = actorRaw
+        ? (actorRaw.full_name?.trim() || actorRaw.email || null)
+        : isDeletedPerson((r.user_id as string | null) ?? null, r.deleted_users, 'user_id')
+          ? DELETED_USER_LABEL
+          : null;
       // Only surface the email when it is a genuinely second fact.
       const actorEmail =
         actorRaw?.email && actorRaw.email !== actorName ? actorRaw.email : null;
