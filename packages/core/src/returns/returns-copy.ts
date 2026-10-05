@@ -225,3 +225,9 @@ export function staffNewRequestBody(
 export function againstOrderLabel(orderNumber: number | null, orderId: string): string {
   return `Against order ${formatOrderNumber(orderNumber) ?? orderId.slice(0, 8).toUpperCase()}`;
 }
+
+/** The Staging worklist's source for a unit a return restocked there:
+ *  "Returned (RMA-20261005-ABC123)" (plan RX-1, inventory.ts worklist). */
+export function stagingReturnedSourceLabel(returnNumber: string | null): string {
+  return returnNumber ? `Returned (${returnNumber})` : 'Returned';
+}

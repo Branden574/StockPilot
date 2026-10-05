@@ -1,23 +1,16 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The returns surfaces show which order a return is filed AGAINST. `returns`
-// holds only the FK order_request_id, so both pages used to print the raw UUID
-// prefix — a pre-SO handle that disagreed with the SO-###### number the order
-// page itself renders. These tests pin the contract: print
-// formatOrderNumber(order_number) when the parent order has a number, and fall
-// back to the id prefix when it does not (legacy orders predate order_number).
+// The returns surfaces show which order a return is filed AGAINST, as the
+// SO-###### handle the order page prints, falling back to the id prefix for
+// legacy orders without a number (returns RX-1: the list reads
+// return_overview's order_number, the workbench its hinted order embed).
 
 const ORDER_ID = '11111111-1111-4111-8111-111111111111';
 
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({
-    organizationId: 'org-1',
-    userId: 'u1',
-    role: 'manager',
-  })),
+  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: 'manager' })),
 }));
-
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
@@ -25,96 +18,108 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
-
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+  checkModuleAccess: vi.fn(async (m: string) => ({ enabled: m === 'returns', canManage: true })),
 }));
-vi.mock('@/components/dashboard/module-not-enabled', () => ({
-  ModuleNotEnabled: () => null,
-}));
-
-// Item name/sku lookup on the detail page — empty is fine, the lines table is
-// not what these tests assert.
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => {
-    const chain: Record<string, unknown> = {};
-    const self = new Proxy(chain, {
-      get(_t, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => resolve({ data: [], error: null });
-        }
-        return () => self;
-      },
-    });
-    return { from: () => self };
-  }),
-}));
-
+vi.mock('@/components/dashboard/module-not-enabled', () => ({ ModuleNotEnabled: () => null }));
 vi.mock('@/server/services/shipping', () => ({
-  ShippingService: {
-    forCurrentUser: vi.fn(async () => ({ getReturnLabel: vi.fn(async () => null) })),
-  },
+  ShippingService: { forCurrentUser: vi.fn(async () => ({ getReturnLabel: vi.fn(async () => null) })) },
 }));
-vi.mock('@/components/returns/return-actions-panel', () => ({
-  ReturnActionsPanel: () => null,
+vi.mock('@/server/actions/returns', () => ({
+  runReturnStepsAction: vi.fn(),
+  denyReturnAction: vi.fn(),
+  cancelReturnAction: vi.fn(),
+  planReturnDispositionsAction: vi.fn(),
+  buyReturnLabelAction: vi.fn(),
 }));
 
-const returnsList = vi.fn(async () => [] as unknown[]);
-const returnsGet = vi.fn(async () => ({}) as unknown);
+const listPage = vi.fn(async (..._a: unknown[]) => ({}) as unknown);
+const workbench = vi.fn(async (..._a: unknown[]) => ({}) as unknown);
 vi.mock('@/server/services/returns', () => ({
-  RMAService: {
-    forCurrentUser: vi.fn(async () => ({ list: returnsList, get: returnsGet })),
-  },
+  RMAService: { forCurrentUser: vi.fn(async () => ({ listPage, workbench })) },
 }));
 
 import ReturnsPage from './page';
 import ReturnDetailPage from './[id]/page';
 
-const LIST_ROW = {
-  id: 'ret-1',
-  organization_id: 'org-1',
-  order_request_id: ORDER_ID,
-  return_number: 'RMA-20260726-ABCDEF',
-  status: 'requested' as const,
-  source: 'internal' as const,
-  reason_code: 'damaged' as const,
-  created_at: '2026-07-26T00:00:00Z',
-};
+function row(orderNumber: number | null) {
+  return {
+    id: 'ret-1',
+    returnNumber: 'RMA-20260726-ABCDEF',
+    status: 'requested',
+    source: 'internal',
+    reasonCode: 'damaged',
+    orderRequestId: ORDER_ID,
+    orderNumber,
+    requesterName: null,
+    requesterEmail: null,
+    createdAt: '2026-07-26T00:00:00Z',
+    approvedAt: null,
+    waitingDays: null,
+    lineCount: 1,
+    unitCount: 1,
+    items: [],
+    moreItems: 0,
+    type: 'return',
+  };
+}
 
-const DETAIL_ROW = {
-  ...LIST_ROW,
-  notes: null,
-  denial_reason: null,
-  requester_email: null,
-  requester_name: null,
-  approved_at: null,
-  received_at: null,
-  closed_at: null,
-  denied_at: null,
-  lines: [] as unknown[],
-};
+function bench(orderNumber: number | null) {
+  return {
+    organizationId: 'org-1',
+    return: {
+      id: 'ret-1',
+      returnNumber: 'RMA-20260726-ABCDEF',
+      status: 'closed',
+      source: 'internal',
+      reasonCode: null,
+      notes: null,
+      denialReason: null,
+      orderRequestId: ORDER_ID,
+      orderNumber,
+      warehouseId: null,
+      warehouseName: null,
+      requesterName: null,
+      requesterEmail: null,
+      createdAt: '2026-07-26T00:00:00Z',
+      approvedAt: null,
+      receivedAt: null,
+      closedAt: null,
+      deniedAt: null,
+      requestedByName: null,
+      approvedByName: null,
+      receivedByName: null,
+      closedByName: null,
+      deniedByName: null,
+    },
+    revision: 1,
+    planSeq: 0,
+    createdOnCounter: false,
+    lines: [],
+    decisions: [],
+    chain: [],
+    viewer: { canManageReturns: true, canApproveOrders: true, canReadDecisions: true },
+    actions: { primary: null, secondary: [], readOnlyReason: null },
+  };
+}
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 
 const listArgs = { searchParams: Promise.resolve({}) };
 const detailArgs = { params: Promise.resolve({ id: 'ret-1' }) };
 
 describe('returns list — order column', () => {
   it('prints the SO number when the parent order has one', async () => {
-    returnsList.mockResolvedValueOnce([{ ...LIST_ROW, order_number: 49 }]);
+    listPage.mockResolvedValueOnce({ organizationId: 'org-1', filter: 'all', q: '', rows: [row(49)], nextCursor: null, pageSize: 25 });
     render(await ReturnsPage(listArgs));
-    expect(screen.getByRole('link', { name: 'SO-000049' })).toHaveAttribute(
-      'href',
-      `/dashboard/orders/${ORDER_ID}`,
-    );
+    expect(screen.getByRole('link', { name: 'SO-000049' })).toHaveAttribute('href', `/dashboard/orders/${ORDER_ID}`);
     expect(screen.queryByText(ORDER_ID.slice(0, 8))).not.toBeInTheDocument();
   });
 
   it('falls back to the order id prefix when order_number is null', async () => {
-    returnsList.mockResolvedValueOnce([{ ...LIST_ROW, order_number: null }]);
+    listPage.mockResolvedValueOnce({ organizationId: 'org-1', filter: 'all', q: '', rows: [row(null)], nextCursor: null, pageSize: 25 });
     render(await ReturnsPage(listArgs));
     expect(screen.getByRole('link', { name: ORDER_ID.slice(0, 8) })).toBeInTheDocument();
   });
@@ -122,19 +127,14 @@ describe('returns list — order column', () => {
 
 describe('returns detail — "Against order …"', () => {
   it('prints the SO number when the parent order has one', async () => {
-    returnsGet.mockResolvedValueOnce({ ...DETAIL_ROW, order_number: 1234 });
+    workbench.mockResolvedValueOnce(bench(1234));
     render(await ReturnDetailPage(detailArgs));
-    expect(screen.getByRole('link', { name: 'order SO-001234' })).toHaveAttribute(
-      'href',
-      `/dashboard/orders/${ORDER_ID}`,
-    );
+    expect(screen.getByRole('link', { name: 'SO-001234' })).toHaveAttribute('href', `/dashboard/orders/${ORDER_ID}`);
   });
 
   it('falls back to the order id prefix when order_number is null', async () => {
-    returnsGet.mockResolvedValueOnce({ ...DETAIL_ROW, order_number: null });
+    workbench.mockResolvedValueOnce(bench(null));
     render(await ReturnDetailPage(detailArgs));
-    expect(
-      screen.getByRole('link', { name: `order ${ORDER_ID.slice(0, 8)}` }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: ORDER_ID.slice(0, 8) })).toBeInTheDocument();
   });
 });

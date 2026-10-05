@@ -683,7 +683,37 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
     // 100 per batch: one `.in()` past ~215 uuids answers 414 locally and past
     // ~395 fails in production; the old 300-id chunk passed the local limit.
     for (const a of inArgs) expect((a[1] as string[]).length).toBeLessThanOrEqual(100);
-    expect(inArgs.map((a) => (a[1] as string[]).length)).toEqual([100, 100, 100, 100, 100, 1]);
+    // Two reads batch the same way: the receive_po source, then (returns
+    // RX-1) the return restocks into Staging.
+    expect(inArgs.map((a) => (a[1] as string[]).length)).toEqual([100, 100, 100, 100, 100, 1, 100, 100, 100, 100, 100, 1]);
+  });
+
+  it('returns RX-1: a return restocked into Staging after the last posted receipt is the source ("Returned (RMA-…)")', async () => {
+    const levels = [stagedRow(1)];
+    const item = levels[0]!.item_id as string;
+    const RET = '99999999-9999-4999-8999-999999999999';
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': { data: levels, error: null },
+      'stock_movements.select': (call) => {
+        const isReturn = call.args.some((a) => a[0] === 'movement_type' && a[1] === 'return');
+        return isReturn
+          ? { data: [{ item_id: item, created_at: '2026-10-05T10:00:00Z', reference_id: RET }], error: null }
+          : { data: [], error: null };
+      },
+      'returns.select': { data: [{ id: RET, return_number: 'RMA-20261005-ABC123' }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const row = (await svc.stagedWorklist()).find((r) => r.itemId === item)!;
+    expect(row.sourceReturnId).toBe(RET);
+    expect(row.sourceReturnNumber).toBe('RMA-20261005-ABC123');
+    expect(row.sourcePoNumber).toBeNull();
+    expect(row.receivedAt).toBe('2026-10-05T10:00:00Z');
+    // Only Staging restocks count: the read excludes rack legs and scrap.
+    const returnRead = (stub.chainArgsAll.get('stock_movements.select') ?? []).find((args) =>
+      args.some((a) => a[0] === 'movement_type' && a[1] === 'return'),
+    )!;
+    expect(returnRead).toContainEqual(['to_location_id', null]);
+    expect(returnRead).toContainEqual(['reason', 'Return restock %']);
   });
 });
 

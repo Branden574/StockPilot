@@ -11,6 +11,7 @@ import {
   renderPartialFulfilledEmail,
   renderPartialReceiptEmail,
   renderReturnPromptEmail,
+  renderReturnUpdateEmail,
 } from './fulfillment';
 
 import type { FulfillmentLineItem, PrefFooterUrls, RenderedEmail } from './fulfillment';
@@ -654,5 +655,66 @@ describe('senders + delivery helpers', () => {
       expect(d.headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
       expect(d.urls.unsubscribe).toContain('/unsubscribe?e=');
     }
+  });
+});
+
+describe('return-update (returns RX-1)', () => {
+  const base = {
+    returnNumber: 'RMA-20261005-ABC123',
+    orderNumber: 'SO-000103',
+    recipientFirstName: 'Pat Lee',
+    recipientEmail: 'pat@example.com',
+    viewUrl: 'https://app.example.com/returns/request/tok',
+    urls: URLS,
+  };
+
+  it.each([
+    ['request_received', 'Return RMA-20261005-ABC123: request received', 'We received your return request.'],
+    ['approved', 'Return RMA-20261005-ABC123: approved', 'Your return was approved.'],
+    ['received', 'Return RMA-20261005-ABC123: item received', 'We received your returned item.'],
+    ['denied', 'Return RMA-20261005-ABC123: declined', 'Your return request was declined.'],
+    ['cancelled', 'Return RMA-20261005-ABC123: cancelled', 'Your return request was cancelled.'],
+  ] as const)('%s: subject, headline, CTA and text', (event, subject, lead) => {
+    const r = renderReturnUpdateEmail({ ...base, event });
+    expect(r.subject).toBe(subject);
+    expect(r.preheader.startsWith(lead)).toBe(true);
+    expect(r.html).toContain(lead);
+    expect(r.html).toContain('View your return');
+    expect(r.html).toContain('https://app.example.com/returns/request/tok');
+    expect(r.html).toContain('Hi Pat —');
+    expect(r.text).toContain(lead);
+    expect(r.text).toContain('View your return: https://app.example.com/returns/request/tok');
+    expect(() => assertEmailWeight(r.html)).not.toThrow();
+  });
+
+  it('never names a rack, Staging, a disposition, a reason or a staff member', () => {
+    for (const event of ['request_received', 'approved', 'received', 'denied', 'cancelled'] as const) {
+      const r = renderReturnUpdateEmail({ ...base, event });
+      for (const out of [r.html, r.text, r.subject, r.preheader]) {
+        expect(out).not.toMatch(/\brack\b|staging|scrap|restock|disposition/i);
+        expect(out).not.toMatch(/\bbooks?\b/i);
+      }
+    }
+  });
+
+  it('without a link it drops the CTA, and falls back to the order handle', () => {
+    const r = renderReturnUpdateEmail({ ...base, event: 'denied', viewUrl: null, returnNumber: null });
+    expect(r.html).not.toContain('View your return');
+    expect(r.subject).toBe('Return SO-000103: declined');
+    expect(r.text).not.toContain('View your return');
+    expect(r.html).not.toMatch(/undefined|null|\{\{/);
+  });
+
+  it('escapes merge values', () => {
+    const r = renderReturnUpdateEmail({ ...base, event: 'approved', recipientFirstName: '<b>x</b>', returnNumber: 'RMA-<1>' });
+    expect(r.html).not.toContain('<b>x</b>');
+    expect(r.html).not.toContain('RMA-<1>');
+  });
+
+  it('uses the registry row (pref footer, no motion)', () => {
+    const def = esEmailById('return-update');
+    expect(def.category).toBe('pref');
+    expect(def.motionAsset).toBeNull();
+    expect(def.from).toBe(FULFILLMENT_ORDERS_FROM);
   });
 });

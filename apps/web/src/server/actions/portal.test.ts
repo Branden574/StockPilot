@@ -111,6 +111,9 @@ describe('requestPortalReturnAction', () => {
       organizationId: 'org-1',
       customerId: 'cust-1',
       orderRequestId: ORDER_ID,
+      // The portal user, from the server-resolved context (recorded on the
+      // created decision, 0395).
+      portalUserId: 'user-1',
     });
     expect(input).toEqual({
       reasonCode: 'damaged',

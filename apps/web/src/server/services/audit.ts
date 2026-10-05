@@ -383,6 +383,11 @@ export type AuditEvent =
   | 'return.received'
   | 'return.closed'
   | 'return.cancelled'
+  // Returns RX-1 (0395): a destination plan appended (approval, the planner or
+  // the close), and a close refused because a planned rack failed its
+  // revalidation (nothing moved; written after the failure).
+  | 'return.disposition_planned'
+  | 'return.restock_location_unavailable'
   // Recurring PO templates — time-based standing orders (Task 3).
   | 'recurring_po_template.created'
   | 'recurring_po_template.updated'

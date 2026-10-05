@@ -17,6 +17,8 @@ import { Textarea } from '@/components/ui/textarea';
 
 import type { ReturnableLine } from '@/server/services/returns';
 
+import { randomRequestUuid } from '@stockpilot/core';
+
 const REASON_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'damaged', label: 'Damaged' },
   { value: 'wrong_item', label: 'Wrong item' },
@@ -50,6 +52,10 @@ export function RequesterReturnForm({ token, lines, requesterName }: RequesterRe
   const [hp, setHp] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [done, setDone] = React.useState(false);
+  // One idempotency key per body (returns RX-1): a resend of the SAME body
+  // (a lost answer, a double tap) replays the same RMA; a changed body gets a
+  // new key, so an edit after a refusal is never read as a conflict.
+  const keyRef = React.useRef<{ fingerprint: string; key: string } | null>(null);
 
   function toggle(lineId: string) {
     setSelected((prev) => ({ ...prev, [lineId]: !prev[lineId] }));
@@ -71,21 +77,26 @@ export function RequesterReturnForm({ token, lines, requesterName }: RequesterRe
       return;
     }
 
+    const payload = {
+      token,
+      reasonCode: reasonCode || undefined,
+      notes: notes.trim() || undefined,
+      lines: picked.map((l) => ({
+        orderRequestLineId: l.orderRequestLineId,
+        quantity: quantities[l.orderRequestLineId] ?? l.quantityRemaining,
+      })),
+    };
+    const fingerprint = JSON.stringify(payload);
+    if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) {
+      keyRef.current = { fingerprint, key: randomRequestUuid() };
+    }
+
     setSubmitting(true);
     try {
       const res = await fetch('/api/v1/public/returns', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          token,
-          reasonCode: reasonCode || undefined,
-          notes: notes.trim() || undefined,
-          hp,
-          lines: picked.map((l) => ({
-            orderRequestLineId: l.orderRequestLineId,
-            quantity: quantities[l.orderRequestLineId] ?? l.quantityRemaining,
-          })),
-        }),
+        body: JSON.stringify({ ...payload, hp, idempotencyKey: keyRef.current.key }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;

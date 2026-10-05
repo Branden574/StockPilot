@@ -808,3 +808,116 @@ export function renderReturnPromptEmail(p: ReturnPromptParams): RenderedEmail {
 
   return { subject, preheader, html, text };
 }
+
+// ── 5 · Return Update (`return-update`, returns RX-1) ───────────────
+
+/** What happened to the requester's return. */
+export type ReturnUpdateEvent = 'request_received' | 'approved' | 'received' | 'denied' | 'cancelled';
+
+export interface ReturnUpdateParams {
+  event: ReturnUpdateEvent;
+  /** "RMA-20261005-ABC123"; the order handle stands in when it is missing. */
+  returnNumber: string | null;
+  /** "SO-000103", or null for a legacy order with no number. */
+  orderNumber: string | null;
+  recipientFirstName?: string | null;
+  recipientEmail: string;
+  /** The requester's own page for this order (token page or portal), or null. */
+  viewUrl: string | null;
+  urls: PrefFooterUrls;
+}
+
+/**
+ * Per event: the subject's summary, the badge, the headline and the one
+ * sentence (core's returns copy: no rack, no disposition, no reason text,
+ * no staff name ever reaches a requester).
+ */
+const RETURN_UPDATE_WORDS: Record<
+  ReturnUpdateEvent,
+  { summary: string; badge: string; lead: string; sentence: string }
+> = {
+  request_received: {
+    summary: 'request received',
+    badge: 'Request received',
+    lead: 'We received your return request.',
+    sentence: 'The warehouse will review it and let you know.',
+  },
+  approved: {
+    summary: 'approved',
+    badge: 'Approved',
+    lead: 'Your return was approved.',
+    sentence: 'Bring or send the item back as arranged with the warehouse.',
+  },
+  received: {
+    summary: 'item received',
+    badge: 'Item received',
+    lead: 'We received your returned item.',
+    sentence: 'Thank you. Nothing else is needed from you for this return.',
+  },
+  denied: {
+    summary: 'declined',
+    badge: 'Declined',
+    lead: 'Your return request was declined.',
+    sentence: 'Contact the warehouse if you have questions about this request.',
+  },
+  cancelled: {
+    summary: 'cancelled',
+    badge: 'Cancelled',
+    lead: 'Your return request was cancelled.',
+    sentence: 'Contact the warehouse if you have questions about this request.',
+  },
+};
+
+export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
+  const def = esEmailById('return-update');
+  const words = RETURN_UPDATE_WORDS[p.event];
+  const handle = p.returnNumber ?? p.orderNumber ?? 'your return';
+  const subject = def.subject({ returnNumber: handle, summary: words.summary });
+  const preheader = def.preheader({ sentence: `${words.lead} ${words.sentence}` });
+  const hi = greeting(p.recipientFirstName);
+  const against = p.orderNumber ? ` from order ${strong(escapeHtml(p.orderNumber))}` : '';
+  const body = `${hi} an update on return ${strong(escapeHtml(handle))}${against}. ${escapeHtml(words.sentence)}`;
+
+  const rows = [
+    brandStrip({ tag: def.tag }),
+    section(
+      '36px 36px 24px',
+      `${statusPill({ variant: def.badge.variant, label: def.badge.label({ label: words.badge }) })}
+      ${headline({ lead: escapeHtml(words.lead) })}
+      ${bodyText(body)}`,
+    ),
+    ...(p.viewUrl
+      ? [
+          section(
+            '0 36px 30px',
+            ctaRow({ primary: { label: def.cta, href: p.viewUrl } }),
+          ),
+          section('0 36px 24px', linkFallback(p.viewUrl)),
+        ]
+      : []),
+    footer({
+      kind: def.footer,
+      reasonHtml: `Updates on a return requested for orders placed by ${escapeHtml(p.recipientEmail)}.`,
+      urls: p.urls,
+    }),
+  ].join('\n    ');
+
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: escapeHtml(preheader),
+    styles: { darkPills: ['info'] },
+    rows,
+  });
+
+  const text = [
+    greetingText(p.recipientFirstName),
+    '',
+    words.lead,
+    `Return ${handle}${p.orderNumber ? ` from order ${p.orderNumber}` : ''}. ${words.sentence}`,
+    ...(p.viewUrl ? ['', `${def.cta}: ${p.viewUrl}`] : []),
+    '',
+    prefFooterText(`Updates on a return requested for orders placed by ${p.recipientEmail}.`, p.urls),
+  ].join('\n');
+
+  return { subject, preheader, html, text };
+}

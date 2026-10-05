@@ -29,6 +29,8 @@ import { createReturnFromOrderAction } from '@/server/actions/returns';
 
 import type { ReturnableLine } from '@/server/services/returns';
 
+import { randomRequestUuid, RETURNS_COPY } from '@stockpilot/core';
+
 interface Props {
   orderId: string;
   lines: ReturnableLine[];
@@ -59,11 +61,21 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
   const [lineState, setLineState] = React.useState<Record<string, LineState>>(() =>
     initialLineState(lines),
   );
+  // "The item is here" (returns RX-1): off by default, switched on only when
+  // the returned item is in hand; the workbench then offers Approve and
+  // receive. Never a silent receipt.
+  const [itemIsHere, setItemIsHere] = React.useState(false);
+  // The idempotency key, minted when the dialog opens and kept for the same
+  // body: a double click or a lost answer replays the same RMA; a changed
+  // body (after a refusal) gets a new key.
+  const keyRef = React.useRef<{ fingerprint: string; key: string } | null>(null);
 
   function reset() {
     setReason('');
     setNotes('');
+    setItemIsHere(false);
     setLineState(initialLineState(lines));
+    keyRef.current = null;
   }
 
   function updateLine(id: string, patch: Partial<LineState>) {
@@ -95,8 +107,8 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
       return;
     }
     for (const s of selected) {
-      if (!Number.isFinite(s.quantity) || s.quantity <= 0) {
-        toast.error('Each selected line needs a quantity greater than zero.');
+      if (!Number.isInteger(s.quantity) || s.quantity <= 0) {
+        toast.error('Each selected line needs a whole quantity of at least 1.');
         return;
       }
       if (s.quantity > s.remaining) {
@@ -105,24 +117,31 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
       }
     }
 
-    setBusy(true);
-    const res = await createReturnFromOrderAction({
+    const payload = {
       orderRequestId: orderId,
       reasonCode: reason || undefined,
       notes: notes.trim() ? notes.trim() : undefined,
+      itemIsHere,
       lines: selected.map((s) => ({
         orderRequestLineId: s.orderRequestLineId,
         quantity: s.quantity,
         disposition: s.disposition,
       })),
-    });
+    };
+    const fingerprint = JSON.stringify(payload);
+    if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) {
+      keyRef.current = { fingerprint, key: randomRequestUuid() };
+    }
+
+    setBusy(true);
+    const res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current.key });
     setBusy(false);
 
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Return created.');
+    toast.success(res.data.replay ? 'Return already created.' : 'Return created.');
     setOpen(false);
     router.push(`/dashboard/returns/${res.data.id}`);
   }
@@ -146,10 +165,10 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
         <DialogHeader>
           <DialogTitle>Create a return</DialogTitle>
           <DialogDescription>
-            Pick the lines to return, set a quantity (up to what was fulfilled
-            and not already returned) and a disposition. Restock adds the stock
-            back; scrap writes it off. Inventory only moves when the return is
-            received and closed.
+            Pick the lines to return, set a whole quantity (up to what was handed
+            over and not already returned) and a disposition. You choose where a
+            restocked item goes when you approve. Nothing moves until the return
+            is received and processed.
           </DialogDescription>
         </DialogHeader>
 
@@ -238,6 +257,21 @@ export function CreateReturnDialog({ orderId, lines }: Props) {
               </Select>
             </div>
           </div>
+
+          <label className="flex items-start gap-2 rounded-lg border p-3 text-sm">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={itemIsHere}
+              checked={itemIsHere}
+              onChange={(e) => setItemIsHere(e.target.checked)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <span>
+              <span className="font-medium">{RETURNS_COPY.itemIsHere}</span>
+              <span className="text-muted-foreground block text-xs">{RETURNS_COPY.itemIsHereHelp}</span>
+            </span>
+          </label>
 
           <div className="space-y-1.5">
             <Label htmlFor="return-notes">Notes</Label>

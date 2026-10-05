@@ -1,4 +1,7 @@
+import { headers } from 'next/headers';
 
+import { checkRateLimit } from '@/lib/rate-limit';
+import { RETURN_PAGE_VIEWS_PER_IP_PER_HOUR, returnPageIpBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadRequesterReturnContext } from '@/server/services/returns';
 
@@ -38,6 +41,19 @@ export default async function RequesterReturnPage({
 }) {
   const { token } = await params;
   if (!token) return <ReturnLinkInvalid />;
+
+  // Per-IP limit on the page itself (returns RX-1), fail-closed like the
+  // submit: a token-guessing crawl stops here before any lookup.
+  const h = await headers();
+  const xff = process.env.VERCEL === '1' ? h.get('x-forwarded-for') : null;
+  const ip = xff?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown';
+  const limit = await checkRateLimit(
+    returnPageIpBucketKey(ip),
+    RETURN_PAGE_VIEWS_PER_IP_PER_HOUR,
+    60 * 60 * 1000,
+    'closed',
+  );
+  if (!limit.allowed) return <ReturnLinkBusy />;
 
   const admin = createAdminClient();
   const ctx = await loadRequesterReturnContext(admin, token);
@@ -120,6 +136,30 @@ function ReturnLinkInvalid() {
         <p className="text-muted-foreground mt-10 text-center text-[11px]">
           Powered by StockPilot
         </p>
+      </main>
+    </div>
+  );
+}
+
+/** Too many page views from one address in an hour. */
+function ReturnLinkBusy() {
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
+        <header className="border-border mb-8 border-b pb-6">
+          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
+            Return request
+          </div>
+          <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
+            Too many requests
+          </h1>
+        </header>
+        <div className="border-border bg-card rounded-2xl border p-6 text-center">
+          <p className="text-muted-foreground mx-auto max-w-[52ch] text-sm leading-relaxed">
+            This page was opened too many times from your network in the last hour. Wait a while and
+            open your return link again.
+          </p>
+        </div>
       </main>
     </div>
   );

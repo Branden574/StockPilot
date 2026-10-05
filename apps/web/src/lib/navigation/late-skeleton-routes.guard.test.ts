@@ -102,6 +102,9 @@ describe('routes that rely on the late skeleton', () => {
       'purchase-orders/loading.tsx',
       'rentals/loading.tsx',
       'reports/loading.tsx',
+      // returns RX-1: the workbench's page-shaped skeleton (it used to inherit
+      // the list's table rows).
+      'returns/[id]/loading.tsx',
       'returns/loading.tsx',
       'schedule/loading.tsx',
       'settings/loading.tsx',
