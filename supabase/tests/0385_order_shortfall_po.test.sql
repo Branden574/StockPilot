@@ -1105,7 +1105,15 @@ select is(
   -- (2026-10-04; order_request_id carries the same four); verify on the
   -- stack.
   '0384 column grants (order_requests, schedule_events)|fa3db41769cc505a531cca8d3d61c409|212\n'
-  'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
+  -- Re-pinned by 0395 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
+  -- process_return_disposition restated (md5 7c7edfe53e60e754e9bd47c76266cb7a,
+  -- header, owner and ACL unchanged; its reverse-replace proof is 0395 A20)
+  -- and four SECURITY INVOKER helpers with no API EXECUTE added
+  -- (return_line_sources, return_line_plans_original, return_line_restock_legs,
+  -- return_restock_original). F2-5's function calls none of them. Computed from
+  -- production's own ledger rows (which reproduce the old pin exactly) with those
+  -- five rows changed, under production's collation (2026-10-04); verify on the stack.
+  'ledger.*|817dc7bdb8170180476ba5e4fe325d4b|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are

@@ -853,7 +853,12 @@ select is(
   '0381 photo functions|cf3324efe7b21cab2352568f0b600675|5\n'
   '0381 photo policies|7e259c299ec06a104c10121f80c143e7|8\n'
   '0382 book functions|860fa55515d74980ce1c1d0a4a6f3e18|6\n'
-  'ledger.*|8b442829be30fd47ab5cfef87da6a962|14\n'
+  -- Re-pinned by 0395 (returns RX-1; was 8b442829be30fd47ab5cfef87da6a962|14):
+  -- process_return_disposition restated (header, owner and ACL unchanged; 0395
+  -- A20 proves the edit) and four SECURITY INVOKER return helpers with no API
+  -- EXECUTE added. revise_order_needed_by calls none of them. Same computation
+  -- as 0385 Z2's re-pin; verify on the stack.
+  'ledger.*|817dc7bdb8170180476ba5e4fe325d4b|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier
