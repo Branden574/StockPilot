@@ -15,9 +15,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { dbPermissionRefusedCopy } from '@stockpilot/core';
+
 import { PoAttachments } from '@/components/po-attachments';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
+import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { receiverText } from '@/lib/deleted-user-labels';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
@@ -32,7 +35,9 @@ import {
   type PoRunGroup,
 } from '@/lib/po-size-run';
 import { supabase } from '@/lib/supabase';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from '@/lib/po-draft-review';
 import {
   OVER_RECEIPT_CONFIRM_LABEL,
@@ -398,15 +403,27 @@ export default function PoReceiveScreen() {
   // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
   // no Post receipt, and its lines one by one (no receiving runs).
   const reviewOnly = poIsReviewOnly(header?.status);
+  // Receiving follows stock:adjust, the permission the receipt route asserts
+  // (and, since 0395, the database's own receipt function): the screen used
+  // to offer Scan, the quantities and Post receipt to everyone who can read
+  // purchase orders, viewers included, and every post was refused (small
+  // fixes slice 2 review). Without it the PO reads like a draft does, and a
+  // notice says why in the words the server's refusal maps to. Cosmetic: the
+  // route refuses on its own.
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  const canReceive = showWriteCtaForRole(role, permissions, 'stock:adjust');
+  const readOnly = reviewOnly || !canReceive;
+  const hasOutstanding = lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   // A receipt can be posted only while a line has something left to receive:
   // the footer's Post receipt, the Notes that go with a receipt and the
   // attachment hint about posting one all follow it (a fully received PO
   // showed a Notes field whose note could never be sent; review 2026-10-05).
   const receivable =
-    !reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
+    !readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   const blocks = React.useMemo(
-    () => buildPoBlocks(lines, reviewOnly ? {} : groups),
-    [lines, groups, reviewOnly],
+    () => buildPoBlocks(lines, readOnly ? {} : groups),
+    [lines, groups, readOnly],
   );
 
   function setField(lineId: string, field: keyof DraftLine, value: string) {
@@ -671,7 +688,7 @@ export default function PoReceiveScreen() {
                 {labelForStatus(header?.status ?? '')}
               </Text>
             </View>
-            {reviewOnly ? null : (
+            {readOnly ? null : (
               <Pressable
                 onPress={openScanner}
                 style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
@@ -687,6 +704,11 @@ export default function PoReceiveScreen() {
             {reviewOnly ? (
               <View style={styles.partNotice}>
                 <Text style={styles.partNoticeText}>{PO_DRAFT_REVIEW_COPY}</Text>
+              </View>
+            ) : null}
+            {!reviewOnly && !canReceive && hasOutstanding ? (
+              <View style={styles.partNotice}>
+                <Text style={styles.partNoticeText}>{dbPermissionRefusedCopy('receipt_post')}</Text>
               </View>
             ) : null}
             {groupsDegraded ? (
@@ -771,12 +793,14 @@ export default function PoReceiveScreen() {
                       {reviewOnly ? null : (
                         <>
                           <Metric label="Already" value={l.quantity_received} />
-                          <Metric
-                            label="Variance"
-                            value={variance}
-                            tone={variance < 0 ? 'danger' : 'primary'}
-                            caption={remaining > 0 ? varianceCaption(variance) : undefined}
-                          />
+                          {readOnly ? null : (
+                            <Metric
+                              label="Variance"
+                              value={variance}
+                              tone={variance < 0 ? 'danger' : 'primary'}
+                              caption={remaining > 0 ? varianceCaption(variance) : undefined}
+                            />
+                          )}
                         </>
                       )}
                     </View>
@@ -784,7 +808,7 @@ export default function PoReceiveScreen() {
                       <Text style={styles.fullyReceived}>
                         ✓ Fully received — nothing left to receive on this line.
                       </Text>
-                    ) : (
+                    ) : readOnly ? null : (
                       <View style={styles.qtyRow}>
                         <View style={styles.qtyField}>
                           <Text style={styles.qtyLabel}>Received now</Text>
@@ -890,7 +914,7 @@ export default function PoReceiveScreen() {
             <PoAttachments poId={id} />
           </ScrollView>
 
-          {reviewOnly ? null : (
+          {readOnly ? null : (
             <View style={styles.footer}>
               <Pressable
                 onPress={postReceipt}

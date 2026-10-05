@@ -137,8 +137,10 @@ describe('po/[id].tsx wiring', () => {
   // be sent. It shows only when a line has something left to receive, the
   // same rule as the footer's Post receipt.
   it('the Notes field shows only when a receipt can be posted, by the footer\'s own rule', () => {
+    // Re-pinned by the small fixes slice 2 review (was !reviewOnly): a
+    // reader without stock:adjust cannot post a receipt either (readOnly).
     expect(screen).toMatch(
-      /const receivable =\s*!reviewOnly && lines\.some\(\(l\) => l\.quantity_ordered - l\.quantity_received > 0\);/,
+      /const receivable =\s*!readOnly && lines\.some\(\(l\) => l\.quantity_ordered - l\.quantity_received > 0\);/,
     );
     expect(screen).toMatch(/\{receivable \? \(\s*<View style=\{styles\.notesBlock\}>/);
     expect(screen).toMatch(/disabled=\{posting \|\| !receivable\}/);

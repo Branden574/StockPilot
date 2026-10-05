@@ -536,10 +536,12 @@ export default function ItemDetail() {
   const canWriteSerials = role !== null && role !== 'viewer';
   // Transfer / put-away gate — mirrors the web dialog's 'stock:transfer'
   // requirement. Cosmetic only; the /api/v1/items/[id]/transfer route
-  // re-asserts stock:transfer inside InventoryService.transferStock.
+  // re-asserts stock:transfer inside InventoryService.transferStock, and
+  // since 0395 the database refuses a direct call too. The permission alone
+  // decides, as for stock:adjust below: a manager whose stock:transfer was
+  // revoked was offered it by role and refused (small fixes slice 2 review).
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
-  const canTransfer =
-    isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
+  const canTransfer = showWriteCtaForRole(role, permissions, 'stock:transfer');
   // THE 'stock:adjust' gate for this screen: the quick adjust, "Adjust with
   // reason" and "Remove from rack" all derive from it (each adds its own
   // item-state condition below). It used to be two rules that disagreed; see

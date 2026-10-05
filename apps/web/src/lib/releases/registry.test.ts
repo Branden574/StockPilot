@@ -13,6 +13,7 @@ import {
   DELETED_USER_LABEL,
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
+  dbPermissionRefusedCopy,
   describeShortPickLines,
   EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
@@ -4849,34 +4850,67 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
   // see). Staff meet it as approvers (orders:approve) and as pickers
   // (items:update: Claim, Release and Complete picking on the phone), so the
   // entry is theirs.
-  it('is told to whoever can place an order request; the warehouse words only to staff who approve or pick', () => {
+  // Review (2026-10-05): the slice also stops offering receiving (web Receive
+  // items, phone Scan / quantities / Post receipt, web Reverse) to readers
+  // without stock:adjust, and the phone's Transfer to a manager without
+  // stock:transfer, so the release covers the slice and each entry carries
+  // its own audience (as the slice 1 release does): no release-level
+  // audience, and a reader sees the release only when an entry is theirs.
+  it('tells each entry to who can see it: requesters, staff who approve or pick, and readers of purchase orders', () => {
     const r = release();
-    expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
-    expect(r.entries.map((e) => e.id)).toEqual(['order-partial-approval-held', 'order-other-warehouse-words']);
+    expect(r.audience).toBeUndefined();
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'order-partial-approval-held',
+      'order-other-warehouse-words',
+      'receiving-follows-permission',
+    ]);
     for (const entry of r.entries) {
       expect(entry.category, entry.id).toBe('fixed');
-      expect(entry.area, entry.id).toBe('Orders');
       expect(entry.link, entry.id).toBeUndefined();
     }
-    expect(r.entries[0]!.audience).toBeUndefined();
+    expect(r.entries.map((e) => e.area)).toEqual(['Orders', 'Orders', 'Receiving']);
+    expect(r.entries[0]!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
     expect(r.entries[1]!.audience).toEqual({
       roles: ['staff'],
       anyPermission: ['orders:approve', 'items:update'],
       modules: ['orders'],
     });
+    expect(r.entries[2]!.audience).toEqual({ anyPermission: ['purchase_orders:read'], modules: ['receiving'] });
     const published: Release = { ...r, status: 'published' };
-    const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
-    expect(entriesFor('viewer', ['orders:request'])).toBe(1);
-    expect(entriesFor('staff', ['orders:request', 'orders:approve'])).toBe(2);
-    expect(entriesFor('staff', ['orders:request', 'items:update'])).toBe(2);
-    expect(entriesFor('staff', ['members:read'])).toBe(0);
-    // Owners, admins and managers with Orders on: the partial-approval entry
-    // only, never a refusal their role cannot meet.
-    expect(entriesFor('owner', [...PERMISSIONS])).toBe(1);
-    expect(entriesFor('admin', [...PERMISSIONS])).toBe(1);
-    expect(entriesFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toBe(1);
-    expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+    const idsFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(idsFor('viewer', ['orders:request'])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('staff', ['orders:request', 'orders:approve'])).toEqual([
+      'order-partial-approval-held',
+      'order-other-warehouse-words',
+    ]);
+    expect(idsFor('staff', ['orders:request', 'items:update'])).toHaveLength(2);
+    expect(idsFor('staff', ['members:read'])).toEqual([]);
+    // Owners, admins and managers with Orders on: never a warehouse refusal
+    // their role cannot meet.
+    expect(idsFor('owner', [...PERMISSIONS])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('admin', [...PERMISSIONS])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('owner', [...PERMISSIONS], [])).toEqual([]);
+    // Receiving: anyone who reads purchase orders where Receiving is on (a
+    // viewer reads them by default), with or without Orders.
+    expect(idsFor('viewer', ['orders:request', 'purchase_orders:read'], ['orders', 'purchase_orders', 'receiving'])).toEqual([
+      'order-partial-approval-held',
+      'receiving-follows-permission',
+    ]);
+    expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders', 'receiving'])).toEqual(['receiving-follows-permission']);
+    expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders'])).toEqual([]);
+  });
+
+  it("says receiving follows the permission it needs, in the server's words, and that nothing changes in who can receive", () => {
+    const entry = release().entries.find((e) => e.id === 'receiving-follows-permission')!;
+    expect(entry.whatChanged).toContain(`"${dbPermissionRefusedCopy('receipt_post')}"`);
+    for (const word of ['Receive items', 'Post receipt', 'Scan', 'Reverse', 'Transfer', 'Adjust on-hand', 'Transfer stock']) {
+      expect(entry.whatChanged, word).toContain(word);
+    }
+    expect(entry.howItAffectsYou).toContain('Nothing changes in who can receive');
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|stock:adjust|database/i);
   });
 
   it('quotes the warehouse refusal as the order service says it, names the actions, and says Cancel now follows it', () => {

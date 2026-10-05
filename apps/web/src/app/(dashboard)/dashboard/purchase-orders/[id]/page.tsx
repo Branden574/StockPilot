@@ -35,7 +35,7 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
-import { can, isManagerOrAbove } from '@stockpilot/core';
+import { can, dbPermissionRefusedCopy, isManagerOrAbove } from '@stockpilot/core';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -112,12 +112,22 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     (location?.warehouse_id as string | null | undefined) ?? null;
 
   const status = po.status as string;
-  const canReceive =
+  const receivableHere =
     (status === 'ordered' ||
       status === 'expected_inbound' ||
       status === 'partially_received') &&
     warehouseId !== null;
-  const canReverse = isManagerOrAbove(ctx.role);
+  // Receiving and reversing a receipt ask stock:adjust (ReceivingService
+  // asserts it; since 0395 the database's receipt functions refuse a direct
+  // call without it too). This page offered Receive items to everyone who can
+  // read purchase orders, viewers included, and Reverse to every manager by
+  // role, and each was then refused (small fixes slice 2 review). Without
+  // the permission the page says why, in the words the server's refusal maps
+  // to, where the receiving hint would be.
+  const canAdjustStock = can(ctx, 'stock:adjust');
+  const canReceive = receivableHere && canAdjustStock;
+  const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
+  const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
 
   const lineRows = lines.map((l) => {
     const item = itemsById.get(l.item_id as string);
@@ -224,6 +234,9 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 <p className="text-muted-foreground mt-1 text-xs">
                   Items arrived? Use “Receive items” to record what was received.
                 </p>
+              )}
+              {receiveRefusal && (
+                <p className="text-muted-foreground mt-1 text-xs">{receiveRefusal}</p>
               )}
             </div>
             {canReceive && warehouseId && (

@@ -485,10 +485,16 @@ describe('the PO screen opens a draft read-only', () => {
   // sentence missing.
   it('a draft shows no Scan, no quantities and no Post receipt, and says where it is ordered', () => {
     expect(po).toContain('const reviewOnly = poIsReviewOnly(header?.status);');
-    expect(po).toMatch(/buildPoBlocks\(lines, reviewOnly \? \{\} : groups\)/);
-    expect(po).toMatch(/\{reviewOnly \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
+    // Re-pinned by the small fixes slice 2 review (was: reviewOnly at each
+    // of these): Scan, the size runs, the quantities and the footer follow
+    // readOnly, a draft OR a reader without stock:adjust
+    // (stock-permission-ctas-wiring.test.ts pins the permission half).
+    expect(po).toContain('const readOnly = reviewOnly || !canReceive;');
+    expect(po).toMatch(/buildPoBlocks\(lines, readOnly \? \{\} : groups\)/);
+    expect(po).toMatch(/\{readOnly \? null : \(\s*<Pressable\s+onPress=\{openScanner\}/);
     expect(po).toMatch(/\{reviewOnly \? null : remaining === 0 \? \(/);
-    expect(po).toMatch(/\{reviewOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
+    expect(po).toMatch(/\) : readOnly \? null : \(\s*<View style=\{styles\.qtyRow\}>/);
+    expect(po).toMatch(/\{readOnly \? null : \(\s*<View style=\{styles\.footer\}>/);
     expect(po).toMatch(/\{reviewOnly \? \(\s*<View style=\{styles\.partNotice\}>\s*<Text style=\{styles\.partNoticeText\}>\{PO_DRAFT_REVIEW_COPY\}<\/Text>/);
     expect(po).toContain("if (s === 'draft') return 'Draft';");
   });

@@ -260,25 +260,28 @@ export const RELEASES: Release[] = [
     // reserved, or that nothing is reserved yet, instead of "every unit is
     // reserved" (review, 2026-10-05: "reserved", the requester's word in the
     // full approval's notification and in the email; the sentences said
-    // "held", the approver's word). Held as a DRAFT until 0395 is
-    // pushed and the web deploy with the email variant is live (the push text
-    // comes from the database, so no phone update is needed); the follow-up
-    // that publishes it sets the real publishedAt and re-reads these words
-    // against what shipped. The rest of the slice (the database refusing what
-    // the app already refused) is not visible to anyone using the app as
-    // intended, so it has no entry. Who is told: anyone who can place an
-    // order request (Orders on, orders:request, which every role holds by
-    // default), since the requester is who receives both messages. It sits
-    // below the small fixes (slice 1) draft and phone ordering PO-2's draft,
-    // dated before them and after every published release (it can ship
-    // before or after them; the publishing follow-up keeps the order newest
-    // first).
+    // "held", the approver's word). Held as a DRAFT until 0395 is pushed, the
+    // web deploy is live and phones report launching the OTA that carries
+    // the phone half (Post receipt, Transfer and the needed-by sentence; the
+    // push text comes from the database); the follow-up that publishes it
+    // sets the real publishedAt and re-reads these words against what
+    // shipped. The database refusing what the app already refused is not
+    // visible to anyone using the app as intended, so it has no entry.
+    //
+    // Review (2026-10-05): the slice's review fixes are visible too (the one
+    // sentence for an order in another warehouse, Cancel following it, and
+    // receiving offered only to readers with stock:adjust), so the release
+    // covers the slice and, as the slice 1 release does, each entry carries
+    // its own audience and the release none: a reader sees the release only
+    // when an entry is theirs. It sits below the small fixes (slice 1) draft
+    // and phone ordering PO-2's draft, dated before them and after every
+    // published release (it can ship before or after them; the publishing
+    // follow-up keeps the order newest first).
     status: 'draft',
-    title: 'A partly approved order says what is reserved',
+    title: 'Clearer order approvals and refusals, and receiving for those who can',
     summary:
-      'When only part of your order request, or none of it, can be reserved for you yet, the notification and the approval email now say so, instead of saying every unit is reserved.',
+      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. An order in a warehouse you don't work in says so in plain words, and receiving is offered only to people who can receive stock.",
     publishedAt: '2026-10-10T17:10:00Z',
-    audience: { anyPermission: ['orders:request'], modules: ['orders'] },
     entries: [
       {
         id: 'order-partial-approval-held',
@@ -296,6 +299,9 @@ export const RELEASES: Release[] = [
           'Both used to say every unit was reserved even when only part was, so you could expect the whole order when only part of it was set aside for you.',
         howItAffectsYou: 'Nothing changes in how orders are approved or picked. The rest stays on your order.',
         whatToDo: 'No action needed.',
+        // The requester receives both messages: anyone who can place an
+        // order request (Orders on, orders:request, every role by default).
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
       },
       {
         // Test stage (local walk): an approver assigned to some warehouses
@@ -321,6 +327,31 @@ export const RELEASES: Release[] = [
           'If you approve orders, Cancel now follows the same rule as Approve: you can cancel an order only in a warehouse you work in. An order you placed yourself can still be cancelled while it waits for approval.',
         whatToDo: 'No action needed.',
         audience: { roles: ['staff'], anyPermission: ['orders:approve', 'items:update'], modules: ['orders'] },
+      },
+      {
+        // Review (2026-10-05): receiving asks stock:adjust (the receipt
+        // service, and since 0395 the database), but the web PO page offered
+        // Receive items to everyone who can read purchase orders and Reverse
+        // to every manager by role, and the phone PO screen offered Scan, the
+        // quantities and Post receipt the same way: in production 9 viewers
+        // and 1 staff member without stock:adjust, each refused with "Missing
+        // permission". The phone's Transfer also showed for a manager whose
+        // stock:transfer was revoked (0 in production). Told to everyone who
+        // reads purchase orders where Receiving is on, since that is where the
+        // note appears; Transfer rides along (managers read purchase orders).
+        id: 'receiving-follows-permission',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Receiving shows only to people who can receive',
+        whatChanged:
+          'On a purchase order, Receive items on the web, and Scan, the quantities and Post receipt in the mobile app, now show only if you have the Adjust on-hand permission, which receiving needs. Without it, the purchase order lists what was ordered and received and says "Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it." Reverse on a receipt follows the same permission. In the mobile app, Transfer on an item now follows the Transfer stock permission for managers too.',
+        whyItMatters:
+          'Everyone who could open a purchase order was offered receiving, and the receipt was then refused with "Missing permission".',
+        howItAffectsYou:
+          'Nothing changes in who can receive: only people who could post a receipt see the buttons now.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
     ],
   },
