@@ -192,9 +192,12 @@ describe('the warehouse Site as a put-away destination (L121)', () => {
     expect(bookDestination(fields, SITE_DEST)).toEqual({ mode: 'existing', destination: SITE_DEST });
   });
 
-  it('orders Unplaced first, then the Sites, then the racks and crates as read', () => {
+  it('orders Unplaced first, then the racks and crates as read, then the Sites', () => {
+    // Sites come LAST (slice 3 review, F3): the owner's 2026-09-24 direction is
+    // that stock with no rack lands in Unplaced and L4L's DC4 Site stays a
+    // label, so the Site must not be the first put-away chip.
     const ordered = offeredDestinationOrder([DESTS[1]!, LEGACY_SHELF, SITE_DEST, DESTS[2]!, DESTS[0]!, ROOM_DEST]);
-    expect(ordered.map((d) => d.id)).toEqual(['unp-1', 'site-mdc', 'site-room', 'rack-1', 'crate-1']);
+    expect(ordered.map((d) => d.id)).toEqual(['unp-1', 'rack-1', 'crate-1', 'site-mdc', 'site-room']);
   });
 });
 

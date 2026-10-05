@@ -125,17 +125,21 @@ export function destinationKindsOrFilter(kinds: readonly string[]): string {
 /**
  * The rows the read returned, as the picker lists them: only the groups it
  * offers (a legacy NULL-kind shelf or bin is dropped), Unplaced first, then the
- * Sites, then the racks and crates in the order read (by name). The safe way
- * off a rack and the way back onto a Site each sit at the top instead of being
- * buried in a 48-rack alphabetical list. The two never show together: Unplaced
- * is for stock on a placement, the Site for stock awaiting put-away.
+ * racks and crates in the order read (by name), then the Sites. The safe way
+ * off a rack sits at the top instead of being buried in a 48-rack alphabetical
+ * list. The Sites come LAST (slice 3 review, F3): put-away means shelving, and
+ * the owner's 2026-09-24 direction is that stock with no rack lands in Unplaced
+ * and L4L's DC4 Site stays a label, so the Site must not be the first chip a
+ * put-away offers. Unplaced and the Site never show together: Unplaced is for
+ * stock on a placement, the Site for stock awaiting put-away. The web Staging
+ * lists use the same order (staging-table-section.tsx).
  */
 export function offeredDestinationOrder<T extends Pick<MoveDestination, 'kind' | 'type'>>(
   destinations: readonly T[],
 ): T[] {
   const rank = (d: T) => {
     const group = moveDestinationGroup(d);
-    return group === 'unplaced' ? 0 : group === 'site' ? 1 : 2;
+    return group === 'unplaced' ? 0 : group === 'site' ? 2 : 1;
   };
   return destinations
     .filter((d) => moveDestinationGroup(d) !== null)

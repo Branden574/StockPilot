@@ -501,9 +501,10 @@ export function MoveStockModal({
           crateNumber: str(d.crate_number),
         }));
         // Only the rows the picker offers (the legacy NULL-kind shelves go),
-        // Unplaced FIRST and then the Sites, not buried at "U" or "M" in a
-        // 48-rack alphabetical list — the non-destructive way off a rack and
-        // the way back onto the Site are the easy ones to reach.
+        // Unplaced FIRST, not buried at "U" in a 48-rack alphabetical list (the
+        // non-destructive way off a rack is the easy one to reach), and the
+        // Sites LAST, after the racks and crates: put-away means shelving, and
+        // a Site stays a label (owner, 2026-09-24; slice 3 review F3).
         ds = offeredDestinationOrder(ds);
       }
 

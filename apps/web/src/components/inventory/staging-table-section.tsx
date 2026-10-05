@@ -131,9 +131,15 @@ export async function StagingTableSection({
   // no-rack items on DC4) had no screen that could put it back. A Site is
   // kind NULL with a site-ish type — never backfill that kind — so the ONE
   // classifier decides (isSiteLocation): a NULL-kind row typed shelf/bin is a
-  // legacy placement and stays out, as do the Staging/Unplaced buckets. Sites
-  // come first in each list: one or two of them, ahead of 48 racks. Placing onto
-  // a Site keeps the item's rack label (placeStockAction).
+  // legacy placement and stays out, as do the Staging/Unplaced buckets. Placing
+  // onto a Site keeps the item's rack label (placeStockAction).
+  //
+  // SITES COME LAST, after the racks and crates (slice 3 review, F3). Put-away
+  // means shelving: the owner's 2026-09-24 direction is that stock with no rack
+  // lands in Unplaced and L4L's DC4 Site stays a label (67 items were moved off
+  // it to rack 31-C). A Site at the top of the list would make "DC4 (site)" the
+  // first of 87 options, and a mis-pick clears the worklist without shelving
+  // anything. The phone's chips follow the same order (offeredDestinationOrder).
   //
   // Each destination carries its rack/crate COLUMNS (migration 0188), not just
   // {id, name, kind}: dropping them is why the put-away dialog could never show
@@ -142,11 +148,11 @@ export async function StagingTableSection({
   // not a substitute — "Blue #42" is a dedupe key, and parsing a crate back out
   // of it would break the moment someone renames a crate.
   const destinationsByWarehouse = new Map<string, DestinationOption[]>();
-  const sitesFirst = [
-    ...allLocations.filter((loc) => isSiteLocation(loc)),
+  const racksThenSites = [
     ...allLocations.filter((loc) => loc.kind === 'rack' || loc.kind === 'crate'),
+    ...allLocations.filter((loc) => isSiteLocation(loc)),
   ];
-  for (const loc of sitesFirst) {
+  for (const loc of racksThenSites) {
     const wid = (loc.warehouse_id as string | null) ?? '__none__';
     if (!destinationsByWarehouse.has(wid)) {
       destinationsByWarehouse.set(wid, []);

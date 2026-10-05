@@ -12691,7 +12691,8 @@ describe('the small fixes release (slice 3)', () => {
   // L121: the words the lists show, and the label the code keeps.
   it("names the Site as the lists do, and says the rack label is not replaced by the Site's name", () => {
     const e = entry('put-staged-stock-back-on-site');
-    expect(e.whatChanged).toContain('marked (site)');
+    expect(e.whatChanged).toContain('marked (site), after its racks and crates');
+    expect(e.whatChanged).not.toContain('above its racks and crates');
     expect(e.whatChanged).toContain("the item's rack label is not replaced by the Site's name");
     expect(read('../locations/placement-destination.ts')).toContain('`${option.name} (site)`');
     expect(read('../../../../mobile/src/components/move-stock-destinations.ts')).toContain('`${destination.name} (site)`');

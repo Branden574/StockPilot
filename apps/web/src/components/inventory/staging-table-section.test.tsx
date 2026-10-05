@@ -281,7 +281,10 @@ describe('Staging Place destinations: the warehouse Site (L121)', () => {
     ...over,
   });
 
-  it("offers the warehouse's Sites first, then its racks and crates; never Staging, Unplaced or a legacy shelf", async () => {
+  it("offers the warehouse's racks and crates first, then its Sites; never Staging, Unplaced or a legacy shelf", async () => {
+    // Sites come LAST (slice 3 review, F3): the owner's 2026-09-24 direction is
+    // that stock with no rack lands in Unplaced and L4L's DC4 Site stays a
+    // label, so the Site must not be the first of 87 put-away options.
     calls.locations = [
       loc({ id: 'r-1a', name: '1-A', kind: 'rack', type: 'shelf', rack_number: '1', rack_row: 'A' }),
       loc({ id: 'site-mdc', name: 'Main Distribution Center', kind: null, type: 'warehouse' }),
@@ -294,13 +297,13 @@ describe('Staging Place destinations: the warehouse Site (L121)', () => {
     ];
     await renderSection(parseStagingItemFilter({}));
     const map = calls.tableProps!.destinationsMap as Record<string, Array<Record<string, unknown>>>;
-    expect(map['wh-home']!.map((d) => d.id)).toEqual(['site-mdc', 'site-room', 'r-1a', 'c-blue4']);
+    expect(map['wh-home']!.map((d) => d.id)).toEqual(['r-1a', 'c-blue4', 'site-mdc', 'site-room']);
     expect(map['wh-other']!.map((d) => d.id)).toEqual(['site-annex']);
     // The legacy shelf has no warehouse and is no Site: nothing is offered for it.
     expect(map['__none__']).toBeUndefined();
     // The row's own type travels, so the dialogs can say "(site)".
-    expect(map['wh-home']![0]).toMatchObject({ id: 'site-mdc', name: 'Main Distribution Center', kind: '', type: 'warehouse' });
-    expect(map['wh-home']![2]).toMatchObject({ id: 'r-1a', kind: 'rack', type: 'shelf', rackNumber: '1', rackRow: 'A' });
+    expect(map['wh-home']![2]).toMatchObject({ id: 'site-mdc', name: 'Main Distribution Center', kind: '', type: 'warehouse' });
+    expect(map['wh-home']![0]).toMatchObject({ id: 'r-1a', kind: 'rack', type: 'shelf', rackNumber: '1', rackRow: 'A' });
   });
 });
 
