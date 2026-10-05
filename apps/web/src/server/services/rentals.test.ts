@@ -42,6 +42,7 @@ vi.mock('@/lib/auth/warehouse', () => ({
 
 import { RentalsService } from './rentals';
 import { audit } from './audit';
+import { ServiceError } from './context';
 import { sendRentalReturnedEmail } from '@/lib/email/rentals';
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 
@@ -62,6 +63,8 @@ interface MakeCtxOpts {
   rentalUpdateError?: { message: string } | null;
   /** Member full_name for borrower-name auto-fill */
   memberFullName?: string | null;
+  /** Error the borrower-name read answers with (an outage, a timeout). */
+  memberReadError?: { message: string; code?: string };
   /** inventory_items rows for is_rental validation */
   inventoryItems?: Array<{
     id: string;
@@ -313,7 +316,9 @@ function makeCtx(opts: MakeCtxOpts = {}) {
                     read.filters.push([col2, val2]);
                     return {
                       maybeSingle: async () =>
-                        embedsProfile && !namesRelationship
+                        opts.memberReadError
+                          ? { data: null, error: opts.memberReadError }
+                          : embedsProfile && !namesRelationship
                           ? {
                               data: null,
                               error: {
@@ -483,6 +488,30 @@ describe('RentalsService.create', () => {
       },
     ]);
     expect(rpcCalls[0]!.args.p_borrower_name).toBe('Alice Smith');
+  });
+
+  it("refuses the rental when the member borrower's profile read fails, instead of keeping the name the client sent", async () => {
+    // The failure that hid PGRST201 here for months: the read's error was
+    // dropped, so ANY refused read (an outage, a timeout, a future embed
+    // error) silently stored whatever name the client sent for a member.
+    const { ctx, rpcCalls } = makeCtx({
+      memberFullName: 'Alice Smith',
+      memberReadError: { message: 'canceling statement due to statement timeout', code: '57014' },
+    });
+    const svc = new RentalsService(ctx);
+    const err = await svc
+      .create({
+        ...validCreateInput,
+        borrowerUserId: '00000000-0000-0000-0000-000000000050',
+        borrowerName: 'Fallback Name',
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    // internal_error: the real ServiceError shows a generic message and keeps
+    // this text server-side (internalDetail); the mock above passes it through.
+    expect((err as { code: string }).code).toBe('internal_error');
+    expect((err as Error).message).toContain('statement timeout');
+    expect(rpcCalls).toEqual([]);
   });
 
   it('keeps the provided borrowerName when borrowerUserId is null', async () => {

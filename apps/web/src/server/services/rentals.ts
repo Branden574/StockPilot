@@ -227,12 +227,20 @@ export class RentalsService {
     // borrower's profile is the one this member row's user_id points at.
     let borrowerName = input.borrowerName;
     if (input.borrowerUserId) {
-      const { data: member } = await this.ctx.supabase
+      const memberRes = await this.ctx.supabase
         .from('organization_members')
         .select('user:user_profiles!organization_members_user_id_fkey(full_name)')
         .eq('user_id', input.borrowerUserId)
         .eq('organization_id', this.ctx.organizationId)
         .maybeSingle();
+      // A FAILED read refuses the rental. Dropping this error is what hid the
+      // PGRST201 for months: every read failed and the rental silently kept
+      // the name the client sent. No row (not a member here, or a profile the
+      // caller may not read) still keeps the sent name, as before.
+      if (memberRes.error) {
+        throw new ServiceError('internal_error', postgrestErrorText(memberRes.error, memberRes));
+      }
+      const member = memberRes.data;
       const memberFullName = (
         member as { user?: { full_name?: string | null } | null } | null
       )?.user?.full_name;
