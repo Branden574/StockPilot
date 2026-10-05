@@ -606,7 +606,28 @@ export class MaintenanceAttachmentsService {
     const width = clean.width ?? sniffed.width;
     const height = clean.height ?? sniffed.height;
 
-    const { data: row, error } = await this.ctx.supabase
+    // The row is written with the SERVICE ROLE (L40), so the attachments
+    // INSERT policy can later be dropped: through it a requester could insert
+    // a row straight into the table, naming an upload that skipped every check
+    // above. The service role skips that policy too, so this call restates
+    // what it enforced:
+    //   - uploaded_by = the caller: written from ctx below, never an input;
+    //   - module on: assertModuleEnabled at the top of finalize;
+    //   - kind allowed for the caller: validateKind ('resolution' needs
+    //     maintenance_requests:manage);
+    //   - request open, and the caller its requester or a manage-holder:
+    //     assertParentOwnedAndOpen, run AGAIN here, just before the write,
+    //     because the request may have closed while the photo was processed
+    //     (the policy checked it at insert time). A refusal here cleans up
+    //     the upload like every other refusal.
+    try {
+      await this.assertParentOwnedAndOpen(requestId);
+    } catch (recheckErr) {
+      if (recheckErr instanceof ServiceError) return refuse(recheckErr, false);
+      throw recheckErr;
+    }
+
+    const { data: row, error } = await admin
       .from('maintenance_request_attachments')
       .insert({
         organization_id: this.ctx.organizationId,
@@ -634,8 +655,7 @@ export class MaintenanceAttachmentsService {
       throw new ServiceError('conflict', ALREADY_RECORDED);
     }
     if (error || !row) {
-      // An RLS-rejected metadata insert (e.g. the request closed between the
-      // guard above and this write) leaves an orphan object — roll it back
+      // A failed metadata insert leaves an orphan object — roll it back
       // rather than leave storage holding a file no row will ever reference.
       // Through `refuse`, which looks first: an answer lost after the row was
       // written (or no error and no row) must not delete a recorded photo.

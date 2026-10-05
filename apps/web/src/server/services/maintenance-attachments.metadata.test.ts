@@ -261,6 +261,12 @@ function setup(
   const user = makeSupabaseStub({
     'maintenance_requests.select': { data: OPEN_REQUEST, error: null },
     'maintenance_request_attachments.select': { data: null, error: null, count: opts.live ?? 0 },
+  });
+  const serve = servedLikePostgrest(() => table);
+  let looks = 0;
+  // The row is written with the service role since L40, so the insert
+  // answers on the admin client.
+  const admin = makeSupabaseStub({
     'maintenance_request_attachments.insert': (call) => {
       const row = call.args[0]![0] as Record<string, unknown>;
       inserted.push(row);
@@ -276,10 +282,6 @@ function setup(
       table.push(row);
       return { data: { id: 'att-1' }, error: null };
     },
-  });
-  const serve = servedLikePostgrest(() => table);
-  let looks = 0;
-  const admin = makeSupabaseStub({
     'maintenance_request_attachments.select': (call) => {
       looks += 1;
       if (opts.recorded === 'error' || (opts.lookFailsFrom !== undefined && looks >= opts.lookFailsFrom)) {
