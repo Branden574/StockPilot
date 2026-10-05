@@ -1213,7 +1213,11 @@ actually fire.
     purchase order, stock row, attachment or notification.
     `post_receipt_v2`, `reverse_receipt`, `recompute_po_status` and the
     receipt guards are unchanged (their md5s are pinned in the 0398 suite,
-    Z1/Z2).
+    Z1/Z2). Posting or reversing a receipt never fails because of the
+    checklist: a start's new run holds KEY SHARE on the receipt and the
+    purchase order until it commits, so a post on that purchase order or a
+    reversal of that receipt can wait those milliseconds, then goes through
+    (`0398_checklist_races.sh` sections 7 to 9).
   - **Account deletion** (0393's pattern, the A3 rule for a new person
     column): `published_by`, `retired_by`, `started_by` and `completed_by`
     are ON DELETE SET NULL to `user_profiles`, each table carries

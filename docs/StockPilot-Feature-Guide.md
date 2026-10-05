@@ -246,7 +246,7 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 **Who posts:** a manager (or above) who can adjust stock. On the web, **Receive items** shows only for them; in the mobile app, **Post receipt**, **Scan** and the quantity fields work only for them. Everyone else sees "A manager posts receipts."
 
 ### Receiving checklist
-**Purpose:** a short, optional check recorded for a delivery after its receipt posts: did the packing slip match, did the boxes arrive undamaged, how many boxes came. It records what a person checked; it never changes stock, the receipt or the purchase order, and a receipt never waits for it.
+**Purpose:** a short, optional check recorded for a delivery after its receipt posts: did the packing slip match, did the boxes arrive undamaged, how many boxes came. It records what a person checked; it never changes stock, the receipt or the purchase order, and a receipt posts without it (posting never fails because of it).
 
 **How to set it up:** **Purchase orders → Receiving checklist** (also a card on **Procedures**; in the mobile app, the list icon on the Receive tab or the row on Procedures). A manager who can manage purchase orders starts from the suggested steps or a blank list. Each step is answered **Pass, Fail or Not applicable**, with **a number**, or with **a short answer**, and can be marked required (up to 20 steps). An optional procedure can be linked as the instructions. **Publish version N** turns it on; publishing a change makes a new version, and checklists already started keep the steps they started with. **Turn off** stops new receipts offering it; recorded checklists stay on their receipts.
 

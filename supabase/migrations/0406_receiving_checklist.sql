@@ -9,9 +9,11 @@
 -- A manager publishes a short checklist for deliveries. After a receipt posts,
 -- or later from its receipt card, a manager records a run of it: what a person
 -- checked for that receipt (Pass, Fail or Not applicable, a count, a short
--- text, notes). It is optional: posting a receipt never waits for it, and it
--- records observations only. It writes no stock, no receipt, no purchase
--- order, no exception, no hold and no email.
+-- text, notes). It is optional: posting or reversing a receipt never fails
+-- because of it (a post can wait a moment for a checklist start on the same
+-- purchase order to commit, a reversal for one on that receipt; see LOCKS),
+-- and it records observations only. It writes no stock, no receipt, no
+-- purchase order, no exception, no hold and no email.
 --
 -- ── WHAT IT ADDS ───────────────────────────────────────────────────────────
 --   1. checklist_versions: one frozen version per publish. The steps are
@@ -106,8 +108,16 @@
 -- KEY UPDATE (a start inserting a run that references it only takes KEY
 -- SHARE, so it never waits on a publish); checklist_run_save takes the run
 -- FOR UPDATE; receiving_check_start inserts ON CONFLICT (receipt_id) DO
--- NOTHING and reads the winner. lock_timeout 5s on every function, below
--- the API roles' 8 s statement timeout.
+-- NOTHING and reads the winner. Until it commits, its new run's keys hold
+-- KEY SHARE on the receipt and the purchase order, and the frozen ledger
+-- bodies begin with FOR UPDATE on the purchase order (post_receipt_v2) and
+-- on the receipt (reverse_receipt): a post on that purchase order, or a
+-- reversal of that receipt, waits those milliseconds and then goes through.
+-- Neither ever fails because of the checklist, and no lock order between
+-- them can deadlock (the start takes the receipt, then the purchase order;
+-- a post never needs an older receipt). The race script's sections 7 to 9
+-- prove it. lock_timeout 5s on every function, below the API roles' 8 s
+-- statement timeout.
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- 42501, P0002, 22023 and P0001 only, each with a stable hint the app maps

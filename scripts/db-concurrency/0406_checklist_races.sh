@@ -28,13 +28,28 @@
 #      on the live version, which the publish's FOR NO KEY UPDATE does not
 #      block: neither waits for the other (no lock edge), and the run keeps
 #      the version it started on.
+#   Posting and reversing never fail because of the checklist; they can wait
+#   a moment for a checklist start to commit (desk check F6). A start's new
+#   run checks its keys with KEY SHARE on the receipt and the purchase order
+#   until it commits, and the frozen ledger bodies begin with FOR UPDATE on
+#   the purchase order (post_receipt_v2) and on the receipt (reverse_receipt):
+#   7. A start held open against a post on the same purchase order: the post
+#      waits for the start to commit, then posts; the run is intact.
+#   8. A start held open on a receipt against reverse_receipt of that
+#      receipt: the reversal waits, then reverses; the run is intact and
+#      stays on the reversed receipt.
+#   9. A post held open against a start on another receipt of the same
+#      purchase order: the start waits for the post to commit, then makes its
+#      run.
 #   No session ever sees 40001 or 40P01.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0398 applied. Fixtures are committed under the 03981111-... namespace
-# (a receipt row inserted directly by postgres: the receipt guard holds API
-# roles only, and no stock moves) and removed at the start and the end. Exit
-# status 0 = every check passed.
+# (receipt rows inserted directly by postgres for sections 1 to 6: the
+# receipt guard holds API roles only, and no stock moves; sections 7 to 9 post
+# and reverse for real, as a manager, on a second purchase order) and removed
+# at the start, at the end and by the EXIT trap (the organization's delete
+# takes the stock rows the posts wrote). Exit status 0 = every check passed.
 #
 # Usage: bash scripts/db-concurrency/0398_checklist_races.sh
 
@@ -59,9 +74,13 @@ WH='03981111-0000-0000-0000-0000000000b1'
 IT='03981111-0000-0000-0000-0000000000c1'
 PO='03981111-0000-0000-0000-0000000000d1'
 LN='03981111-0000-0000-0000-0000000000d2'
+PO2='03981111-0000-0000-0000-0000000000d3'
+LN2='03981111-0000-0000-0000-0000000000d4'
 R1='03981111-0000-0000-0000-0000000000e1'
 R2='03981111-0000-0000-0000-0000000000e2'
 R3='03981111-0000-0000-0000-0000000000e3'
+R4='03981111-0000-0000-0000-0000000000e4'
+R5='03981111-0000-0000-0000-0000000000e5'
 STEPS='[{"kind": "check", "label": "Packing slip matches this purchase order", "required": true}, {"kind": "count", "label": "Number of boxes received"}]'
 
 FAILS=0
@@ -75,20 +94,25 @@ has() { grep -cF -- "$1" "$2"; }
 now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 
 cleanup() {
+  # Receipts go first (reversal rows before the receipts they reverse; their
+  # lines cascade), then the purchase orders; the organization's delete takes
+  # the rest, the stock rows sections 7 to 9 posted included (the 0394 race
+  # script's pattern).
   if ! "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
 drop function if exists public._probe_check_start_noconflict(uuid);
 delete from public.checklist_runs where organization_id = '$ORG';
 delete from public.checklist_versions where organization_id = '$ORG';
+delete from public.receipts where organization_id = '$ORG' and status = 'reversal';
 delete from public.receipts where organization_id = '$ORG';
+delete from public.idempotency_keys where organization_id = '$ORG';
 delete from public.purchase_order_items where organization_id = '$ORG';
 delete from public.purchase_orders where organization_id = '$ORG';
-delete from public.inventory_items where organization_id = '$ORG';
 delete from public.organizations where id = '$ORG';
 delete from auth.users where id in ('$MGR', '$MGR2');
 SQL
   then echo "cleanup failed:"; cat "$TMP/cleanup.err"; return 1; fi
   local left
-  left="$(q "select (select count(*) from public.receipts where organization_id = '$ORG') + (select count(*) from public.checklist_versions where organization_id = '$ORG') + (select count(*) from public.organizations where id = '$ORG')")"
+  left="$(q "select (select count(*) from public.receipts where organization_id = '$ORG') + (select count(*) from public.checklist_versions where organization_id = '$ORG') + (select count(*) from public.organizations where id = '$ORG') + (select count(*) from public.stock_movements where organization_id = '$ORG') + (select count(*) from public.inventory_items where organization_id = '$ORG')")"
   if [ "$left" != "0" ]; then echo "cleanup left $left fixture rows"; return 1; fi
 }
 
@@ -117,6 +141,14 @@ insert into public.receipts (id, organization_id, purchase_order_id, warehouse_i
   ('$R1', '$ORG', '$PO', '$WH', 'R-0398-2S-1', 'posted', '$MGR', md5('r1')),
   ('$R2', '$ORG', '$PO', '$WH', 'R-0398-2S-2', 'posted', '$MGR', md5('r2')),
   ('$R3', '$ORG', '$PO', '$WH', 'R-0398-2S-3', 'posted', '$MGR', md5('r3'));
+-- Sections 7 to 9: a second, ordered purchase order that real posts land on,
+-- with two receipts of its own to start checklists on.
+insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO2', '$ORG', 'X0398-2S-PO2', 'ordered');
+insert into public.purchase_order_items (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost)
+  values ('$LN2', '$ORG', '$PO2', '$IT', 10, 0, 1);
+insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash) values
+  ('$R4', '$ORG', '$PO2', '$WH', 'R-0398-2S-4', 'posted', '$MGR', md5('r4')),
+  ('$R5', '$ORG', '$PO2', '$WH', 'R-0398-2S-5', 'posted', '$MGR', md5('r5'));
 SQL
 then echo "fixture setup failed"; cleanup; exit 1; fi
 
@@ -138,6 +170,17 @@ publish() { # publish <expected or null> <client id> <title> [out]: the version 
     "${4:-(v.version).id}" "$ORG" "$3" "$STEPS" "$e" "$2"
 }
 start() { printf "public.receiving_check_start('%s')" "$1"; }
+post() { # post <key>: one unit on PO2's line, as the app posts it (post_receipt_v2), the receipt id
+  printf "(select v.id from public.post_receipt_v2('%s', '%s', '%s'::jsonb, '%s', '%s') v)" \
+    "$PO2" "$WH" "[{\"po_line_id\": \"$LN2\", \"qty_received\": 1, \"qty_accepted\": 1, \"qty_rejected\": 0, \"unit_cost\": 1}]" \
+    "$1" "hash-$1"
+}
+reverse() { # reverse <receipt>: reverse_receipt, the reversal row's id
+  printf "(select v.id from public.reverse_receipt('%s', 'Race reversal') v)" "$1"
+}
+run_of() { # run_of <receipt>: its runs' count, status and revision
+  q "select count(*) || '/' || coalesce(min(status), '-') || '/' || coalesce(min(revision)::text, '-') from public.checklist_runs where receipt_id = '$1'"
+}
 save() { # save <run> <revision> <save id> <results json>
   printf "(select (v.run).revision || '/' || (v.run).results::text from public.checklist_run_save('%s', '%s'::jsonb, null, %s, '%s', false) v)" \
     "$1" "$4" "$2" "$3"
@@ -263,6 +306,42 @@ check "6b: the start made its run on version 3, the live one when it read" \
   "$(q "select v.version_number from public.checklist_runs r join public.checklist_versions v on v.id = r.version_id where r.receipt_id = '$R3'")" "3"
 check "6c: the publish made version 4" "$(has 'B=' "$TMP/startpub.B.out")" "1"
 no_retryable "6d" "$TMP/startpub.A.out" "$TMP/startpub.B.out"
+
+# ═══ 7. A start held open against a post on the same purchase order ═══════
+echo "== 7. a checklist start holds its run open; a post on the same purchase order"
+race startpost "$(start "$R4")" "$(post 0398-2s-post-7)"
+WAITED="$(cat "$TMP/startpost.waited")"
+RP7="$(sed -n 's/^B=//p' "$TMP/startpost.B.out")"
+if [ "$WAITED" -ge 1500 ]; then ok "7a: the post waited for the start to commit ($WAITED ms)"; else bad "7a: the post did not wait ($WAITED ms)"; fi
+check "7b: the start made its run" "$(sed -n 's/^A=//p' "$TMP/startpost.A.out" | grep -c '"created": true')" "1"
+check "7c: the post completed (a receipt, posted)" \
+  "$(q "select status from public.receipts where id = '${RP7:-00000000-0000-0000-0000-000000000000}'")" "posted"
+check "7d: the run is intact (one run, in progress, revision 0)" "$(run_of "$R4")" "1/in_progress/0"
+check "7e: the post landed on the line" "$(q "select quantity_received::int from public.purchase_order_items where id = '$LN2'")" "1"
+no_retryable "7f" "$TMP/startpost.A.out" "$TMP/startpost.B.out"
+
+# ═══ 8. A start held open against reverse_receipt of that receipt ═════════
+echo "== 8. a checklist start on a receipt holds its run open; reverse_receipt of that receipt"
+race startrev "$(start "${RP7:-00000000-0000-0000-0000-000000000000}")" "$(reverse "${RP7:-00000000-0000-0000-0000-000000000000}")"
+WAITED="$(cat "$TMP/startrev.waited")"
+if [ "$WAITED" -ge 1500 ]; then ok "8a: the reversal waited for the start to commit ($WAITED ms)"; else bad "8a: the reversal did not wait ($WAITED ms)"; fi
+check "8b: the start made its run" "$(sed -n 's/^A=//p' "$TMP/startrev.A.out" | grep -c '"created": true')" "1"
+check "8c: the reversal completed (the receipt reversed, one reversal row)" \
+  "$(q "select status || '/' || (select count(*) from public.receipts r where r.reversed_receipt_id = '${RP7:-00000000-0000-0000-0000-000000000000}' and r.status = 'reversal') from public.receipts where id = '${RP7:-00000000-0000-0000-0000-000000000000}'")" "reversed/1"
+check "8d: the run is intact and stays on the reversed receipt" "$(run_of "${RP7:-00000000-0000-0000-0000-000000000000}")" "1/in_progress/0"
+no_retryable "8e" "$TMP/startrev.A.out" "$TMP/startrev.B.out"
+
+# ═══ 9. A post held open against a start ═══════════════════════════════════
+echo "== 9. a post holds the purchase order; a checklist start on another of its receipts"
+race poststart "$(post 0398-2s-post-9)" "$(start "$R5")"
+WAITED="$(cat "$TMP/poststart.waited")"
+RP9="$(sed -n 's/^A=//p' "$TMP/poststart.A.out")"
+if [ "$WAITED" -ge 1500 ]; then ok "9a: the start waited for the post to commit ($WAITED ms)"; else bad "9a: the start did not wait ($WAITED ms)"; fi
+check "9b: the post completed (a receipt, posted)" \
+  "$(q "select status from public.receipts where id = '${RP9:-00000000-0000-0000-0000-000000000000}'")" "posted"
+check "9c: the start made its run" "$(sed -n 's/^B=//p' "$TMP/poststart.B.out" | grep -c '"created": true')" "1"
+check "9d: the run is intact (one run, in progress, revision 0)" "$(run_of "$R5")" "1/in_progress/0"
+no_retryable "9e" "$TMP/poststart.A.out" "$TMP/poststart.B.out"
 
 cleanup || FAILS=$((FAILS + 1))
 if [ "$FAILS" -eq 0 ]; then
