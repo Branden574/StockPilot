@@ -187,7 +187,12 @@ describe('the departure confirm guards every step that takes the order further f
     // The signature pad opens only from collectSignature, and the paper
     // signature only from promptPhysicalSignature.
     expect(code.match(/setSignatureModalVisible\(true\)/g)).toHaveLength(1);
-    expect(code.match(/Alert\.prompt\(/g)).toHaveLength(1);
+    // Two prompts: the paper signature's, and Cancel's reason (L93), each in
+    // its own function.
+    expect(code.match(/Alert\.prompt\(/g)).toHaveLength(2);
+    expect(functionBody(screen, SCREEN_FILE, 'promptPhysicalSignature')).toContain('Alert.prompt(');
+    expect(functionBody(screen, SCREEN_FILE, 'promptCancel')).toContain('Alert.prompt(');
+    expect(functionBody(screen, SCREEN_FILE, 'promptCancel')).not.toContain('confirm_physical_signature');
     expect(functionBody(screen, SCREEN_FILE, 'promptPhysicalSignature')).toContain(
       "{ action: 'confirm_physical_signature', signerName: signer }",
     );

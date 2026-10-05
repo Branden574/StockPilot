@@ -143,6 +143,7 @@ import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/o
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
 import { focusScrollY, orderScreenFocus } from '@/lib/order-focus';
+import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
   describeHoldError,
@@ -1690,6 +1691,24 @@ export default function OrderDetail() {
     setSignatureModalVisible(true);
   }
 
+  // The web's confirm, with its optional reason (iOS's prompt field).
+  function promptCancel(offer: PhoneOrderCancel) {
+    Alert.prompt(
+      offer.confirmTitle,
+      offer.confirmMessage,
+      [
+        { text: offer.keepLabel, style: 'cancel' },
+        {
+          text: offer.confirmLabel,
+          style: 'destructive',
+          onPress: (reason?: string) =>
+            void act({ action: 'cancel', reason: cancelReasonForPost(reason) }, 'cancelorder'),
+        },
+      ],
+      'plain-text',
+    );
+  }
+
   function promptPhysicalSignature() {
     Alert.prompt(
       'Physical signature',
@@ -1945,6 +1964,12 @@ export default function OrderDetail() {
     isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
+  // Cancel (L93): core's orderCancelOffer, the web order page's rule.
+  const cancelOffer = phoneOrderCancel({
+    status: st,
+    canApproveOrders: rpApprove,
+    isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
+  });
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'
@@ -2844,30 +2869,24 @@ export default function OrderDetail() {
                       ),
                     'default',
                   )}
-                  {actionBtn(
-                    'Cancel order',
-                    'cancelorder',
-                    () =>
-                      Alert.alert(
-                        'Cancel this order?',
-                        'The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released.',
-                        [
-                          { text: 'Keep order', style: 'cancel' },
-                          {
-                            text: 'Cancel order',
-                            style: 'destructive',
-                            onPress: () => void act({ action: 'cancel' }, 'cancelorder'),
-                          },
-                        ],
-                      ),
-                    'danger',
-                  )}
                 </>
               ) : null}
               {connectionNotice}
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>
+            </View>
+          ) : null}
+
+          {/* Cancel (L93): the web's rule through core, for an approver at
+              every open status and for the requester while their order
+              waits for approval. Inside the actions section's flow when it
+              shows, on its own otherwise. */}
+          {cancelOffer ? (
+            <View style={{ gap: 8 }}>
+              {hasPipelineActions ? null : <Eyebrow>ORDER</Eyebrow>}
+              {actionBtn(cancelOffer.label, 'cancelorder', () => promptCancel(cancelOffer), 'danger')}
+              {hasPipelineActions ? null : connectionNotice}
             </View>
           ) : null}
 
