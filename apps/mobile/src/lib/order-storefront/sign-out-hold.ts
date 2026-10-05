@@ -307,6 +307,10 @@ export async function checkHeldSubmissions(deps: {
    *  for it. */
   memberOrgIds?: () => Promise<readonly string[] | null>;
   now?: () => number;
+  /** Still the account that started the check (PO-4 review): a check whose
+   *  reads come back after a sign-out changes nothing, so that account's
+   *  next sign-in checks the same keys again. */
+  current?: () => boolean;
 }): Promise<HeldCheckResult> {
   const holds = parseHolds(await deps.store.getItem(orderHoldKey(deps.userId)));
   if (holds.length === 0) return { placed: [], unknown: [], dropped: 0 };
@@ -341,8 +345,23 @@ export async function checkHeldSubmissions(deps: {
     if (check.outcome === 'placed') placed.push(check.label);
     else if (check.outcome === 'gone') dropped += 1;
   }
-  if (done.size > 0) await updateHolds(deps.store, deps.userId, (fresh) => fresh.filter((h) => !done.has(holdId(h))));
+  if (done.size > 0 && (deps.current?.() ?? true)) {
+    await updateHolds(deps.store, deps.userId, (fresh) => fresh.filter((h) => !done.has(holdId(h))));
+  }
   return { placed, unknown, dropped };
+}
+
+/** What the sign-in check says once its reads are back, in order: each
+ *  order found placed, one sentence for the markers dropped, and the held
+ *  keys still unknown that this app run has not offered yet. The caller says
+ *  nothing at all once its account has gone (runtime.ts). */
+export function heldCheckReport(
+  result: HeldCheckResult,
+  offered: ReadonlySet<string>,
+): { sentences: string[]; offers: OrderSubmissionHold[] } {
+  const sentences = result.placed.map((label) => signInHeldPlacedCopy(label));
+  if (result.dropped > 0) sentences.push(SIGN_IN_HELD_DROPPED_COPY);
+  return { sentences, offers: result.unknown.filter((h) => !offered.has(holdId(h))) };
 }
 
 /** What "Don't send it" at sign-in says: not sent; already placed (its

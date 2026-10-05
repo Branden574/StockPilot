@@ -5,11 +5,9 @@ import { Alert, AppState } from 'react-native';
 import {
   ORDER_DONT_SEND_COPY,
   ORDER_SEE_MY_ORDERS_COPY,
-  SIGN_IN_HELD_DROPPED_COPY,
   SIGN_IN_HELD_NOT_NOW_COPY,
   SIGN_IN_HELD_UNCONFIRMED_COPY,
   SIGN_IN_HELD_UNCONFIRMED_TITLE_COPY,
-  signInHeldPlacedCopy,
 } from '@stockpilot/core';
 
 import { accountEpoch } from '../account-epoch';
@@ -18,7 +16,13 @@ import { isOfflineState } from '../exceptions-api';
 import { loadOrgs, useWorkspace } from '../use-workspace';
 import { orderStorefrontApi, orderStore } from './services';
 import { createStorefrontSession, type StorefrontSession, type StorefrontSnapshot } from './session';
-import { checkHeldSubmissions, heldWithdrawSentence, withdrawHeldSubmission, type HoldCheck } from './sign-out-hold';
+import {
+  checkHeldSubmissions,
+  heldCheckReport,
+  heldWithdrawSentence,
+  withdrawHeldSubmission,
+  type HoldCheck,
+} from './sign-out-hold';
 
 /**
  * THE PHONE STOREFRONT'S HOOKS (phone ordering PO-4): the one session of this
@@ -116,6 +120,9 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
 
   React.useEffect(() => {
     if (!userId) return;
+    // Ends with this effect (a sign-out, another account): a run still out
+    // then says nothing and changes nothing (PO-4 review).
+    let cancelled = false;
     const deps = {
       userId,
       store: orderStore,
@@ -126,13 +133,18 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
     const run = async () => {
       if (running.current) return;
       running.current = true;
+      // The account this run checks for: its alerts are said only while it
+      // is still the one signed in (never on the sign-in screen, never to
+      // the next account on a shared phone).
+      const startEpoch = accountEpoch();
+      const current = () => !cancelled && accountEpoch() === startEpoch;
       try {
-        const result = await checkHeldSubmissions(deps);
-        for (const label of result.placed) Alert.alert(signInHeldPlacedCopy(label));
-        if (result.dropped > 0) Alert.alert(SIGN_IN_HELD_DROPPED_COPY);
-        for (const hold of result.unknown) {
+        const result = await checkHeldSubmissions({ ...deps, current });
+        if (!current()) return;
+        const report = heldCheckReport(result, offered.current);
+        for (const sentence of report.sentences) Alert.alert(sentence);
+        for (const hold of report.offers) {
           const id = `${hold.orgId}.${hold.key}`;
-          if (offered.current.has(id)) continue;
           offered.current.add(id);
           Alert.alert(SIGN_IN_HELD_UNCONFIRMED_TITLE_COPY, SIGN_IN_HELD_UNCONFIRMED_COPY, [
             { text: SIGN_IN_HELD_NOT_NOW_COPY, style: 'cancel' },
@@ -143,6 +155,7 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
                 void withdrawHeldSubmission(deps, hold)
                   .catch((): HoldCheck => ({ outcome: 'unknown' }))
                   .then((check) => {
+                    if (!current()) return;
                     // No answer: not counted as offered, so it is asked again.
                     if (check.outcome === 'unknown') offered.current.delete(id);
                     Alert.alert(heldWithdrawSentence(check));
@@ -160,6 +173,9 @@ export function useHeldOrderSubmissions(userId: string | null, onSeeOrders: () =
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') void run();
     });
-    return () => sub.remove();
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [userId]);
 }

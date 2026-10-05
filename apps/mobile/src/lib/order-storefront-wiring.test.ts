@@ -453,8 +453,9 @@ describe('signing out and signing back in', () => {
   it('at sign-in: a dropped marker is said once, Don’t send it always says what happened, and no answer is offered again (F5)', () => {
     const runtime = flat(codeOnly(read('src/lib/order-storefront/runtime.ts')));
     expect(runtime).toContain('memberOrgIds: async () => (await loadOrgs(userId))?.map((o) => o.id) ?? null,');
-    expect(runtime).toContain('if (result.dropped > 0) Alert.alert(SIGN_IN_HELD_DROPPED_COPY);');
-    expect(runtime).toContain("void withdrawHeldSubmission(deps, hold) .catch((): HoldCheck => ({ outcome: 'unknown' })) .then((check) => { if (check.outcome === 'unknown') offered.current.delete(id); Alert.alert(heldWithdrawSentence(check)); }),");
+    // The dropped sentence is the tested report's (heldCheckReport, PO-4 review).
+    expect(runtime).toContain('for (const sentence of report.sentences) Alert.alert(sentence);');
+    expect(runtime).toContain("void withdrawHeldSubmission(deps, hold) .catch((): HoldCheck => ({ outcome: 'unknown' })) .then((check) => { if (!current()) return; if (check.outcome === 'unknown') offered.current.delete(id); Alert.alert(heldWithdrawSentence(check)); }),");
   });
 });
 
@@ -726,5 +727,19 @@ describe('the success screen draws from what was true when it was placed (PO-4 r
     expect(placed).toContain('const canApprove = context?.canApproveOrders ?? false;');
     expect(placed).toMatch(/successEmailInput\(\{ placed, context \}\)/);
     expect(placed).not.toMatch(/ready\?\.viewer\.canApproveOrders|ready\.deliveryRecipients/);
+  });
+});
+
+// PO-4 review: the sign-in check's alerts came after a sign-out that happened
+// while its reads were out. Mutations caught: the cleanup not ending the run,
+// the epoch not compared, an alert before the check, the report bypassed.
+describe('the sign-in check says nothing once its account has gone (PO-4 review)', () => {
+  const runtime = flat(codeOnly(read('src/lib/order-storefront/runtime.ts')));
+  it('each run is bound to the effect and the account epoch it started in, and is silent once either moved', () => {
+    expect(runtime).toContain('let cancelled = false;');
+    expect(runtime).toContain('const startEpoch = accountEpoch(); const current = () => !cancelled && accountEpoch() === startEpoch;');
+    expect(runtime).toContain('const result = await checkHeldSubmissions({ ...deps, current }); if (!current()) return; const report = heldCheckReport(result, offered.current);');
+    expect(runtime).toMatch(/return \(\) => \{ cancelled = true; sub\.remove\(\); \};/);
+    expect(runtime).not.toContain('for (const label of result.placed)');
   });
 });

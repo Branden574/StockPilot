@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   SIGN_IN_HELD_DROPPED_COPY,
+  signInHeldPlacedCopy,
   SIGN_IN_HELD_WITHDRAWN_COPY,
   SIGN_IN_HELD_WITHDRAW_UNANSWERED_COPY,
   initialCartState,
@@ -14,6 +15,7 @@ import {
   ORDER_HOLD_PREFIX,
   checkHeldSubmissions,
   createSignOutOrderSubmissions,
+  heldCheckReport,
   heldWithdrawSentence,
   holdCheckFrom,
   holdFor,
@@ -420,5 +422,35 @@ describe('the marker is changed by a fresh read, never by an old one (PO-4 revie
     release(answer({ organizationId: ORG, outcome: 'withdrawn' }));
     expect(await withdrawing).toEqual({ outcome: 'settled' });
     expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_NEW]);
+  });
+});
+
+// PO-4 review: a sign-in check still waiting on its reads when the person
+// signed out showed its alerts afterwards, on the sign-in screen or to the
+// next account on a shared phone ("Your order request SO-... was placed.").
+describe('a check that ends after its account has gone says nothing and changes nothing (PO-4 review)', () => {
+  it('its marker is left as it was, for that account’s next sign-in', async () => {
+    const store = memory();
+    const raw = serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })])!;
+    store.data.set(orderHoldKey(USER), raw);
+    let signedIn = true;
+    const calls = {
+      status: vi.fn(async () => {
+        signedIn = false;
+        return answer({ organizationId: ORG, outcome: 'placed', order: ORDER });
+      }),
+      withdraw: vi.fn(),
+    };
+    await checkHeldSubmissions({ userId: USER, store, calls, current: () => signedIn });
+    expect(store.data.get(orderHoldKey(USER))).toBe(raw);
+  });
+
+  it('what to say comes from one tested report: the placed orders, one dropped sentence, and offers not made yet', () => {
+    const h1 = holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING });
+    const h2 = { ...h1, key: '55555555-5555-4555-8555-555555555557' };
+    const report = heldCheckReport({ placed: ['SO-000123', null], unknown: [h1, h2], dropped: 2 }, new Set([`${ORG}.${h1.key}`]));
+    expect(report.sentences).toEqual([signInHeldPlacedCopy('SO-000123'), signInHeldPlacedCopy(null), SIGN_IN_HELD_DROPPED_COPY]);
+    expect(report.offers).toEqual([h2]);
+    expect(heldCheckReport({ placed: [], unknown: [], dropped: 0 }, new Set())).toEqual({ sentences: [], offers: [] });
   });
 });
