@@ -212,8 +212,9 @@ export async function getDigestSource(
 //   cycle_counts_select, cycle_count_lines_select, suppliers_select and
 //     locations_select: any member, so counts and supplier names need no check.
 //
-// If one of those policies changes, change its predicate here in the same
-// pull request.
+// If one of those policies or helpers changes, change its predicate here in
+// the same pull request: supabase/tests/digest_reader_policies.test.sql pins
+// their definitions and fails until the hash is re-pinned.
 
 /** has_org_role(org, 'manager') and the manager arm of every helper above. */
 const ALL_WAREHOUSES_ROLES: ReadonlySet<string> = new Set(['owner', 'admin', 'manager']);

@@ -378,6 +378,11 @@ PGTAP_TESTS=(
   # category-scoped viewer get only their readable movements, items and
   # warehouse names; no org B row in an org A answer.
   supabase/tests/0380_report_rpcs_caller_scope.test.sql
+  # The weekly digest's reader (services/digest.ts) restates the SELECT
+  # policies of items, purchase orders and warehouses, and the helpers they
+  # call, for a cron that reads with the service role. Hash pins: a changed
+  # policy or helper fails here until the reader is changed to match.
+  supabase/tests/digest_reader_policies.test.sql
   # Change an order's needed-by (F2-4, 0383): revise_order_needed_by writes
   # the order's needed-by and moves its Schedule event past RLS
   # (schedule_events_update is creator-or-manager, and an approver with an
