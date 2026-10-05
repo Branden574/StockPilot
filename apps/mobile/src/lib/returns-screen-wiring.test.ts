@@ -45,7 +45,8 @@ describe('the list filters', () => {
     const list = code(read('app/(drawer)/returns.tsx'));
     const view = code(read('src/components/return-workbench-view.tsx'));
     expect(list).toMatch(/<ReturnWorkbenchView[^>]*onChanged=\{\(\) => scheduler\.schedule\(\(\) => void load\(\)\)\}/);
-    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(2);
+    // Receive, every sheet's answer, and (RX-2) "Get replacement ready".
+    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(3);
   });
 });
 
@@ -60,9 +61,11 @@ describe('the create sheet and the order screen (returns review)', () => {
   });
 
   it('gives VoiceOver radios with their state, labelled steppers and a labelled Close', () => {
-    expect(sheet.match(/accessibilityRole="radio"/g)?.length).toBe(2);
+    // Disposition, reason and (RX-2) Return only or Exchange per line.
+    expect(sheet.match(/accessibilityRole="radio"/g)?.length).toBe(3);
     expect(sheet).toContain('accessibilityState={{ checked: on, disabled: returnSubmitting }}');
-    expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(2);
+    expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(3);
+    expect(sheet).toContain('accessibilityLabel={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.name}`}');
     expect(sheet).toContain("`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`");
     expect(sheet).toMatch(/accessibilityRole="button"\s+accessibilityLabel="Close"/);
   });

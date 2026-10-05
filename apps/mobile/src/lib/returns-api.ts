@@ -1,9 +1,13 @@
 import {
   mapReturnError,
+  parseExchangeCandidates,
   parseRestockOptions,
   randomRequestUuid,
+  type ExchangeCandidatesAnswer,
   type ExchangeStatus,
   type InboundLeg,
+  type RailStep,
+  type ReplacementClass,
   type RestockOptionsLine,
   type ReturnActions,
   type ReturnLineDecision,
@@ -11,6 +15,9 @@ import {
 } from '@stockpilot/core';
 
 import { api, ApiError } from './api';
+import { NO_EXCHANGE } from './returns-view';
+
+export { NO_EXCHANGE };
 
 /**
  * The phone's returns client (returns RX-1): thin typed wrappers over the
@@ -57,7 +64,11 @@ export interface MobileReturnListRow {
   unitCount: number;
   items: MobileReturnListRowItem[];
   moreItems: number;
-  type: 'return';
+  /** RX-2: a return or an exchange (older servers send 'return' only). */
+  type: 'return' | 'exchange';
+  exchangeStatus?: ExchangeStatus;
+  exchangeStatusLabel?: string | null;
+  replacementOrderNumber?: number | null;
 }
 
 export interface MobileReturnListPage {
@@ -87,6 +98,74 @@ export interface MobileReturnWorkbenchLine {
   restock: RestockOptionsLine | null;
   legs: InboundLeg[];
   inboundState: string;
+}
+
+// ── RX-2: the exchange half (mirrors server/services/returns-exchange-workbench.ts) ──
+
+export interface MobileExchangeItem {
+  name: string | null;
+  sku: string | null;
+  variant: string | null;
+  deleted: boolean;
+  imageUrl: string | null;
+  thumbUrl: string | null;
+}
+
+export interface MobileExchangeLine {
+  id: string;
+  returnLineId: string;
+  status: 'requested' | 'approved' | 'declined' | 'cancelled';
+  requestedItemId: string | null;
+  requestedQuantity: number;
+  requestNote: string | null;
+  requestedByKind: string;
+  requestedItem: MobileExchangeItem | null;
+  requestedFree: number | null;
+  approvedItemId: string | null;
+  approvedQuantity: number | null;
+  approvedItem: MobileExchangeItem | null;
+  approvedFree: number | null;
+  changedByWarehouse: boolean;
+  revision: number;
+}
+
+export interface MobileReplacementLine {
+  orderLineId: string;
+  itemId: string;
+  label: string;
+  item: MobileExchangeItem | null;
+  requested: number;
+  fulfilled: number;
+  held: number;
+  take: string | null;
+}
+
+export interface MobileReplacement {
+  orderId: string;
+  orderNumber: number | null;
+  status: string;
+  fulfillmentType: 'pickup' | 'delivery';
+  live: boolean;
+  class: ReplacementClass;
+  owed: number;
+  held: number;
+  short: boolean;
+  lines: MobileReplacementLine[];
+}
+
+export interface MobileReturnExchange {
+  kind: 'return' | 'exchange';
+  status: ExchangeStatus;
+  statusLabel: string;
+  lines: MobileExchangeLine[];
+  replacement: MobileReplacement | null;
+  history: { orderId: string; orderNumber: number | null; status: string }[];
+  releasedEarly: boolean;
+  release: { byName: string | null; reason: string | null; at: string } | null;
+  counter: boolean;
+  rail: RailStep[];
+  hasApprovedExchange: boolean;
+  createEnabled: boolean;
 }
 
 export interface MobileReturnChainEvent {
@@ -137,8 +216,11 @@ export interface MobileReturnWorkbench {
   chain: MobileReturnChainEvent[];
   viewer: { canManageReturns: boolean; canApproveOrders: boolean; canReadDecisions: boolean };
   actions: ReturnActions;
-  /** RX-2 adds it; absent means 'none'. */
+  /** RX-1 shape; absent means 'none' (RX-2 servers send `exchange`). */
   exchangeStatus?: ExchangeStatus;
+  /** RX-2: the REPLACEMENT column, the rail and the exchange facts
+   *  (normalizeWorkbench fills it; read through returns-view exchangeOf). */
+  exchange?: MobileReturnExchange;
 }
 
 export interface MobileReturnStepResult {
@@ -146,6 +228,8 @@ export interface MobileReturnStepResult {
   outcome: 'done' | 'already' | 'refused';
   reason?: string;
   message?: string;
+  /** RX-2: a refusal's structured detail (replacement_unavailable: [{itemId, needed, available}]). */
+  detail?: unknown;
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
@@ -177,7 +261,8 @@ export function normalizeWorkbench(raw: MobileReturnWorkbench): MobileReturnWork
   });
   const destinationsUnavailable =
     typeof raw.destinationsUnavailable === 'boolean' ? raw.destinationsUnavailable : lines.some((l) => !l.applied && !l.restock);
-  return { ...raw, lines, chain: raw.chain ?? [], destinationsUnavailable };
+  const exchange = raw.exchange ?? { ...NO_EXCHANGE, status: raw.exchangeStatus ?? 'none' };
+  return { ...raw, lines, chain: raw.chain ?? [], destinationsUnavailable, exchange };
 }
 
 // ── Writes (online only) ───────────────────────────────────────────────────
@@ -186,7 +271,12 @@ export interface ReturnStepsBody {
   steps: ('approve' | 'receive' | 'process')[];
   expectedRevision: number | null;
   expectedPlanSeq: number | null;
-  approve?: { lines: ReturnLineDecision[] } | null;
+  approve?: {
+    lines: ReturnLineDecision[];
+    /** RX-2: one decision per requested exchange line, and adds (G9). */
+    exchange?: Record<string, unknown>[];
+    replacement?: { whenShort: 'refuse' | 'backorder' };
+  } | null;
   receiveNow?: boolean;
   process?: { lines: ReturnLineDecision[] } | null;
 }
@@ -226,6 +316,77 @@ export async function planReturnDispositions(
   return api<{ changed: boolean; appended: number; planSeq: number }>(
     `/api/v1/returns/${encodeURIComponent(id)}/dispositions`,
     { method: 'POST', body: { lines } },
+  );
+}
+
+// ── RX-2: the exchange (online only) ────────────────────────────────────────
+
+export interface ReplacementAnswer<A> {
+  answer: A;
+  workbench: MobileReturnWorkbench;
+}
+
+async function replacementCall<A>(id: string, path: string, body: unknown): Promise<ReplacementAnswer<A>> {
+  const res = await api<{ answer: A; workbench: MobileReturnWorkbench }>(
+    `/api/v1/returns/${encodeURIComponent(id)}/replacement${path}`,
+    { method: 'POST', body },
+  );
+  return { answer: res.answer, workbench: normalizeWorkbench(res.workbench) };
+}
+
+/** Change the replacement, or issue a new one after a cancel (C-1). */
+export function changeReturnReplacement(
+  id: string,
+  body: {
+    expectedRevision: number;
+    lines: { exchangeLineId: string; itemId: string | null; quantity: number }[];
+    reason: string;
+    whenShort: 'refuse' | 'backorder';
+  },
+): Promise<ReplacementAnswer<{ changed: boolean; mode: 'substitute' | 'reissue' | null }>> {
+  return replacementCall(id, '', body);
+}
+
+export function cancelReturnReplacement(
+  id: string,
+  body: { expectedRevision: number | null; reason: string },
+): Promise<ReplacementAnswer<{ changed: boolean; drawn: boolean; inTransit: boolean }>> {
+  return replacementCall(id, '/cancel', body);
+}
+
+export function releaseReturnReplacement(
+  id: string,
+  reason: string,
+): Promise<ReplacementAnswer<{ changed: boolean; replay: boolean; notNeeded: boolean; orderId: string | null }>> {
+  return replacementCall(id, '/release', { reason });
+}
+
+export interface MobilePrepareAnswer {
+  orderId: string;
+  ran: { step: string; outcome: 'done' | 'already' | 'refused'; reason?: string; message?: string }[];
+  status: string;
+  fulfillmentType: 'pickup' | 'delivery';
+}
+
+export function prepareReturnReplacement(id: string): Promise<ReplacementAnswer<MobilePrepareAnswer>> {
+  return replacementCall(id, '/prepare', {});
+}
+
+function candidatesPath(base: string, line: string, q: string): string {
+  const params = [`line=${encodeURIComponent(line)}`];
+  if (q.trim().length >= 2) params.push(`q=${encodeURIComponent(q.trim())}`);
+  return `${base}?${params.join('&')}`;
+}
+
+/** The replacement picker for one returned line of an RMA. */
+export async function getReturnCandidates(id: string, line: string, q: string): Promise<ExchangeCandidatesAnswer> {
+  return parseExchangeCandidates(await api<unknown>(candidatesPath(`/api/v1/returns/${encodeURIComponent(id)}/candidates`, line, q)));
+}
+
+/** The same before the RMA exists (the create sheet's Exchange choice). */
+export async function getOrderExchangeCandidates(orderId: string, line: string, q: string): Promise<ExchangeCandidatesAnswer> {
+  return parseExchangeCandidates(
+    await api<unknown>(candidatesPath(`/api/v1/orders/${encodeURIComponent(orderId)}/exchange-candidates`, line, q)),
   );
 }
 

@@ -1,0 +1,122 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+/**
+ * Wiring pins for the phone's exchange (returns RX-2). The mobile suite has
+ * no React Native renderer, so this reads the files and pins what a screen
+ * could otherwise lose silently:
+ *
+ *   - the workbench routes every replacement action (release, change, issue,
+ *     cancel, get ready, open and hand over) and shows the REPLACEMENT side
+ *     beside the returning card on the iPad;
+ *   - every exchange action is ONLINE ONLY: the picker asks nothing offline
+ *     and says so, the sheets' submit follows the live connection, and no
+ *     outbox kind exists for one;
+ *   - the order screen gives a replacement its banner, the return-first gate
+ *     in place of the pick slip and Resume, the early release, no Add items,
+ *     line edits or Cancel, and the create sheet's Exchange choice only while
+ *     exchanges are on;
+ *   - the orders list reads return_overview once per page for its chips.
+ */
+
+const ROOT = path.resolve(__dirname, '../..');
+const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
+const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+describe('the workbench', () => {
+  const view = code(read('src/components/return-workbench-view.tsx'));
+
+  it('routes every replacement action', () => {
+    for (const [action, effect] of [
+      ['release_early', "setSheet('release')"],
+      ['cancel_replacement', "setSheet('cancel_replacement')"],
+      ['change_replacement', "setSheet('change_replacement')"],
+      ['issue_replacement', "setSheet('issue_replacement')"],
+      ['get_replacement_ready', 'void prepare()'],
+    ] as const) {
+      expect(view).toMatch(new RegExp(`case '${action}':\\s*${effect.replace(/[()]/g, '\\$&')};`));
+    }
+    expect(view).toMatch(/case 'open_replacement':\s*case 'hand_over':[\s\S]*?router\.push\(`\/order\/\$\{ex\.replacement\.orderId\}`/);
+  });
+
+  it('shows the REPLACEMENT side beside the returning card (stacked when compact), with a text label', () => {
+    expect(view).toContain("pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }");
+    expect(view).toContain('<Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>');
+    expect(view).toContain('replacementSideLines(x)');
+    expect(view).toContain('replacementOrderLines(wb, wb.viewer.canReadDecisions)');
+  });
+
+  it('labels an exchange approval "Approve return & exchange"', () => {
+    expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
+  });
+});
+
+describe('online only', () => {
+  const picker = code(read('src/components/replacement-picker-list.tsx'));
+  const sheet = code(read('src/components/return-action-sheet.tsx'));
+  const release = code(read('src/components/release-replacement-sheet.tsx'));
+
+  it('the picker asks nothing offline and says it needs a connection', () => {
+    expect(picker).toMatch(/if \(!online\) return;/);
+    expect(picker).toContain('READINESS_NEEDS_CONNECTION_COPY');
+    expect(picker).toContain('const off = disabled || !online;');
+  });
+
+  it('the sheets follow the live connection before anything else', () => {
+    expect(sheet).toMatch(/const disabledReason = !online\s*\?\s*READINESS_NEEDS_CONNECTION_COPY/);
+    expect(release).toMatch(/const disabledReason = !online\s*\?\s*READINESS_NEEDS_CONNECTION_COPY/);
+  });
+
+  it('the exchange calls are plain requests, never queued', () => {
+    const client = code(read('src/lib/returns-api.ts'));
+    for (const fn of ['changeReturnReplacement', 'cancelReturnReplacement', 'releaseReturnReplacement', 'prepareReturnReplacement']) {
+      expect(client).toContain(`export function ${fn}(`);
+    }
+    expect(client).not.toMatch(/from '\.\/(queue|outbox|db|sync)'/);
+    expect(code(read('src/lib/queue.ts'))).not.toMatch(/replacement|exchange/i);
+  });
+});
+
+describe('the order screen', () => {
+  const screen = code(read('app/order/[id].tsx'));
+
+  it('a replacement gets its banner, the gate in place of the pick slip, and the early release', () => {
+    expect(screen).toContain('orderReplacementLines(');
+    expect(screen).toContain('managerActions.generatePickSlip && !order.replacement?.waitingForReturn');
+    expect(screen).toContain('waitingForReturnLine(order.replacement.returnNumber)');
+    expect(screen).toContain('<ReleaseReplacementSheet');
+    expect(screen).toContain('releaseReturnReplacement(order.replacement.returnId, reason)');
+    expect(screen).toContain('{order.replacement?.waitingForReturn ? null : stockGates.resume');
+  });
+
+  it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {
+    expect(screen).toContain('const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder;');
+    expect(screen).toContain('const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder;');
+    // Main's L93 moved Cancel into one offer for every open status (core's
+    // orderCancelOffer); a replacement gets none, as on the web.
+    expect(screen).toContain('const cancelOffer = isReplacementOrder ? null : phoneOrderCancel({');
+    expect(screen).toContain('changeInRmaLabel(order.replacement)');
+  });
+
+  it("the create sheet offers Exchange only while exchanges are on, and the picker asks by order", () => {
+    expect(screen).toContain('{order?.exchangesEnabled && d.quantity > 0 ? (');
+    expect(screen).toContain('getOrderExchangeCandidates(id, l.orderRequestLineId, q)');
+  });
+
+  it('the original order names each exchange from one batched read', () => {
+    expect(screen).toContain(".from('return_overview')");
+    expect(screen).toContain('exchangeLinesByReturn(ovRows,');
+    expect(screen).toContain('(r.exchangeLines ?? []).map(');
+  });
+});
+
+describe('the orders list', () => {
+  it('reads return_overview once per page, only for replacement rows', () => {
+    const list = code(read('src/screens/orders.tsx'));
+    expect(list.match(/\.from\('return_overview'\)/g)?.length).toBe(1);
+    expect(list).toContain('if (replacementReturnIds.length > 0) {');
+    expect(list).toContain('orderExchangeChip(');
+  });
+});

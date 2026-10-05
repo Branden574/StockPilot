@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { unsettledSendsOnDevice } from '@/lib/order-storefront/services';
 import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder } from '@/lib/orders-list';
+import { orderExchangeChip } from '@/lib/returns-view';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -43,6 +44,8 @@ interface OrderRow {
   created_at: string;
   warehouse: { name: string | null } | null;
   lineCount: number;
+  /** Returns RX-2: "Exchange" (and the gate's words) for a replacement order. */
+  exchangeChip: string | null;
 }
 
 /**
@@ -100,7 +103,7 @@ export default function OrdersScreen() {
         // name that internal orders DON'T denormalize onto the row (else they
         // showed "Unknown requester"). RLS lets org members read each other.
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
-         approved_at, delivered_at, created_at,
+         approved_at, delivered_at, created_at, replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          lines:order_request_lines (id)`,
@@ -122,9 +125,33 @@ export default function OrdersScreen() {
       return;
     }
     setFailed(false);
+    // Returns RX-2: the Exchange chip from the order's own column, and the
+    // gate's words from ONE batched return_overview read for the page's
+    // replacement rows (none when the page has none; a failed read leaves
+    // the chip without them).
+    const replacementReturnIds = [
+      ...new Set(
+        (data ?? [])
+          .map((row) => (row as Record<string, unknown>).replacement_for_return_id as string | null | undefined)
+          .filter((v): v is string => typeof v === 'string'),
+      ),
+    ];
+    const overviewByReturn = new Map<string, { replacementOrderId: string | null; exchangeStatus: string | null }>();
+    if (replacementReturnIds.length > 0) {
+      const { data: ov } = await supabase
+        .from('return_overview')
+        .select('id, replacement_order_id, exchange_status')
+        .eq('organization_id', orgId)
+        // in-list-bound: the page's replacement rows (the read is limited to 100 orders)
+        .in('id', replacementReturnIds);
+      for (const o of (ov ?? []) as { id: string; replacement_order_id: string | null; exchange_status: string | null }[]) {
+        overviewByReturn.set(o.id, { replacementOrderId: o.replacement_order_id, exchangeStatus: o.exchange_status });
+      }
+    }
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
+        const replacementFor = (r.replacement_for_return_id as string | null | undefined) ?? null;
         const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
         const whObj = Array.isArray(wh) ? wh[0] : wh;
         const lines = (r.lines as unknown[] | null) ?? [];
@@ -144,6 +171,11 @@ export default function OrdersScreen() {
           created_at: r.created_at as string,
           warehouse: whObj ?? null,
           lineCount: lines.length,
+          exchangeChip: orderExchangeChip(
+            replacementFor,
+            replacementFor ? (overviewByReturn.get(replacementFor) ?? null) : null,
+            r.id as string,
+          ),
         };
       }),
     );
@@ -264,7 +296,10 @@ function OrderCard({ order }: { order: OrderRow }) {
               </Mono>
             ) : null}
           </View>
-          {meta.status === 'default' ? <Pill>{meta.label}</Pill> : <Pill status={meta.status}>{meta.label}</Pill>}
+          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+            {meta.status === 'default' ? <Pill>{meta.label}</Pill> : <Pill status={meta.status}>{meta.label}</Pill>}
+            {order.exchangeChip ? <Pill dot={false}>{order.exchangeChip}</Pill> : null}
+          </View>
         </View>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
           <Mono size={11} tracking={0.04} color={c.ink4}>

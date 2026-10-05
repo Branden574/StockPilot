@@ -25,6 +25,13 @@
 import {
   describeLineFulfilment,
   describeReturnLine,
+  exchangeStatusStaffLabel,
+  itemQuantityLabel,
+  originalExchangeLine,
+  parseExchangeStatus,
+  RETURNS_COPY,
+  returnLineLabel,
+  variantLabel,
   formatOrderReturnSummary,
   ORDER_RETURN_SUMMARY_NOTE,
   orderReturnSummary,
@@ -263,6 +270,10 @@ export function pendingReturnQuantities(returns: readonly OrderReturnView[]): Ma
 export interface ReturnDraftLine {
   quantity: number;
   disposition: ReturnDisposition;
+  /** RX-2: "Return only" (default) or "Exchange for another size or item". */
+  mode?: 'return' | 'exchange';
+  /** RX-2: the replacement chosen in the picker. */
+  exchangeItemId?: string | null;
 }
 
 /** Initial sheet state: nothing selected (qty 0), disposition Restock. */
@@ -286,6 +297,8 @@ export interface CreateReturnBody {
     orderRequestLineId: string;
     quantity: number;
     disposition: ReturnDisposition;
+    /** RX-2: the replacement (its quantity is the line's return quantity). */
+    exchange?: { itemId: string; quantity: number };
   }[];
 }
 
@@ -321,10 +334,14 @@ export function buildReturnPayload(input: {
         error: `Only ${l.quantityRemaining} of "${l.name}" can still be returned.`,
       };
     }
+    if (d?.mode === 'exchange' && !d.exchangeItemId) {
+      return { ok: false, error: `${RETURNS_COPY.chooseReplacement}: ${l.name}` };
+    }
     selected.push({
       orderRequestLineId: l.orderRequestLineId,
       quantity: qty,
       disposition: d?.disposition ?? 'restock',
+      ...(d?.mode === 'exchange' && d.exchangeItemId ? { exchange: { itemId: d.exchangeItemId, quantity: qty } } : {}),
     });
   }
   if (selected.length === 0) {
@@ -341,4 +358,75 @@ export function buildReturnPayload(input: {
       lines: selected,
     },
   };
+}
+
+// ── RX-2: the original order's exchange lines ─────────────────────────────
+
+/** The return_overview columns the exchange lines need (one batched read per order). */
+export const ORDER_RETURNS_EXCHANGE_SELECT = 'id, status, kind, exchange_status, replacement_order_number, exchange_lines';
+
+export interface RawExchangeOverviewRow {
+  id: string;
+  status: string;
+  kind: string | null;
+  exchange_status: string | null;
+  replacement_order_number: number | null;
+  exchange_lines: {
+    status: string;
+    requested_item_id: string | null;
+    requested_quantity: number | string | null;
+    approved_item_id: string | null;
+    approved_quantity: number | string | null;
+  }[] | null;
+}
+
+export interface ExchangeItemRow {
+  id: string;
+  name: string | null;
+  variant_size: string | null;
+  variant_width: string | null;
+  variant_color: string | null;
+  jersey_number: string | null;
+}
+
+/** The item ids the exchange lines name (for the one items read). */
+export function exchangeItemIdsOf(rows: readonly RawExchangeOverviewRow[]): string[] {
+  const ids = new Set<string>();
+  for (const r of rows) for (const x of r.exchange_lines ?? []) {
+    const id = x.approved_item_id ?? x.requested_item_id;
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * Per RMA, "Exchange: Large ×1 → SO-000104 (Waiting for returned item)" (plan
+ * 3.6.9), the same sentences the web's order page prints (core
+ * originalExchangeLine), declined and cancelled lines left out.
+ */
+export function exchangeLinesByReturn(
+  rows: readonly RawExchangeOverviewRow[],
+  items: readonly ExchangeItemRow[],
+): Map<string, string[]> {
+  const label = new Map(
+    items.map((i) => [
+      i.id,
+      returnLineLabel(i.name, variantLabel({ size: i.variant_size, width: i.variant_width, color: i.variant_color, jerseyNumber: i.jersey_number })),
+    ]),
+  );
+  const out = new Map<string, string[]>();
+  for (const r of rows) {
+    if (r.kind !== 'exchange') continue;
+    const words = exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), { returnStatus: r.status });
+    const sentences: string[] = [];
+    for (const x of r.exchange_lines ?? []) {
+      if (x.status === 'declined' || x.status === 'cancelled') continue;
+      const id = x.approved_item_id ?? x.requested_item_id;
+      const qty = Number(x.approved_quantity ?? x.requested_quantity) || 0;
+      const what = id ? itemQuantityLabel(label.get(id) ?? 'Item', qty) : RETURNS_COPY.replacementWarehouseReview;
+      sentences.push(originalExchangeLine(what, x.status === 'approved' ? r.replacement_order_number : null, words));
+    }
+    if (sentences.length > 0) out.set(r.id, sentences);
+  }
+  return out;
 }

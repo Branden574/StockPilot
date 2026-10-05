@@ -11,9 +11,25 @@
  */
 
 import {
+  addReplacementDecision,
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approvalPreviewLines,
+  availableLabel,
   availableReturnActions,
+  changeOrCancelInRmaLabel,
+  exchangeReplacementBanner,
+  exchangeReviewDecision,
+  exchangeReviewProblem,
+  formatOrderNumber as formatSo,
+  releasedBeforeReturnLine,
+  replacementChipState,
+  replacementShortItems,
+  replacementShortLine,
+  returnActionLabel,
+  shortLabel,
+  waitingForReturnLine,
+  type ExchangeReviewState,
   choiceNeededSentence,
   choiceToDecision,
   formatOrderNumber,
@@ -37,11 +53,31 @@ import {
 } from '@stockpilot/core';
 
 import type {
+  MobileExchangeLine,
+  MobilePrepareAnswer,
+  MobileReturnExchange,
   MobileReturnListRow,
   MobileReturnStepResult,
   MobileReturnWorkbench,
   MobileReturnWorkbenchLine,
 } from './returns-api';
+
+/** A workbench from a server before RX-2 has no exchange half. Lives here
+ *  (no react-native import) so the pure helpers stay testable. */
+export const NO_EXCHANGE: MobileReturnExchange = {
+  kind: 'return',
+  status: 'none',
+  statusLabel: 'Return',
+  lines: [],
+  replacement: null,
+  history: [],
+  releasedEarly: false,
+  release: null,
+  counter: false,
+  rail: [],
+  hasApprovedExchange: false,
+  createEnabled: false,
+};
 
 // ── List ───────────────────────────────────────────────────────────────────
 
@@ -98,12 +134,16 @@ export interface WorkbenchActionView extends ReturnActions {
  * answer (no outbox kind exists for one).
  */
 export function workbenchActions(
-  wb: Pick<MobileReturnWorkbench, 'return' | 'viewer' | 'exchangeStatus'>,
+  wb: Pick<MobileReturnWorkbench, 'return' | 'viewer' | 'exchangeStatus'> & { exchange?: MobileReturnExchange },
   input: { itemIsHere: boolean; online: boolean; busy: boolean },
 ): WorkbenchActionView {
+  const ex = exchangeOf(wb);
   const base = availableReturnActions({
     status: wb.return.status,
-    exchangeStatus: wb.exchangeStatus ?? 'none',
+    exchangeStatus: ex.status !== 'none' ? ex.status : (wb.exchangeStatus ?? 'none'),
+    hasExchange: ex.kind === 'exchange',
+    replacementClass: ex.replacement?.class ?? 'none',
+    hasApprovedExchange: ex.hasApprovedExchange,
     viewerCanManageReturns: wb.viewer.canManageReturns,
     viewerCanApproveOrders: wb.viewer.canApproveOrders,
     itemIsHere: input.itemIsHere,
@@ -115,8 +155,8 @@ export function workbenchActions(
   };
 }
 
-export function actionLabel(action: ReturnAction): string {
-  return RETURN_ACTION_LABELS[action];
+export function actionLabel(action: ReturnAction, opts: { hasExchange?: boolean } = {}): string {
+  return opts.hasExchange ? returnActionLabel(action, { hasExchange: true }) : RETURN_ACTION_LABELS[action];
 }
 
 // ── Destinations ───────────────────────────────────────────────────────────
@@ -247,4 +287,230 @@ export function stepOutcomeMessage(
   if (r.step === 'approve') return receiveNow ? 'Approved and received.' : 'Return approved.';
   if (r.step === 'receive') return 'Return received.';
   return 'Return processed.';
+}
+
+// ── RX-2: the exchange ──────────────────────────────────────────────────────
+
+/** The workbench's exchange half (a server before RX-2 sends none). */
+export function exchangeOf(wb: { exchange?: MobileReturnExchange | null }): MobileReturnExchange {
+  return wb.exchange ?? NO_EXCHANGE;
+}
+
+/** The exchange line a returned line asked for, if any. */
+export function exchangeForLine(wb: { exchange?: MobileReturnExchange | null }, returnLineId: string): MobileExchangeLine | null {
+  return exchangeOf(wb).lines.find((x) => x.returnLineId === returnLineId) ?? null;
+}
+
+/** "Walk New Hire Shirt, L" for the replacement the line asked for or was approved. */
+export function replacementLabel(x: MobileExchangeLine): string {
+  const it = x.approvedItem ?? x.requestedItem;
+  return it ? returnLineLabel(it.name, it.variant) : RETURNS_COPY.replacementWarehouseReview;
+}
+
+/** The REPLACEMENT side's lines: what was asked, what the warehouse chose, how many, availability. */
+export function replacementSideLines(x: MobileExchangeLine): { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] {
+  const out: { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] = [];
+  const requested = x.requestedItem ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant) : RETURNS_COPY.replacementWarehouseReview;
+  out.push({ key: 'requested', text: `${RETURNS_COPY.replacementRequested}: ${requested}`, tone: 'ink' });
+  if (x.requestNote) out.push({ key: 'note', text: `${RETURNS_COPY.replacementNoteFromRequester}: ${x.requestNote}`, tone: 'muted' });
+  if (x.approvedItem && x.changedByWarehouse) {
+    out.push({
+      key: 'changed',
+      text: `${RETURNS_COPY.replacementApproved}: ${returnLineLabel(x.approvedItem.name, x.approvedItem.variant)} (${RETURNS_COPY.replacementChangedByWarehouse})`,
+      tone: 'ink',
+    });
+  }
+  out.push({ key: 'qty', text: qtyRequestedText(x.approvedQuantity ?? x.requestedQuantity), tone: 'muted' });
+  if (x.status === 'requested' && x.requestedFree !== null) {
+    const short = x.requestedFree < x.requestedQuantity;
+    out.push({
+      key: 'free',
+      text: short ? shortLabel(x.requestedFree, x.requestedQuantity) : availableLabel(x.requestedFree),
+      tone: short ? 'crit' : 'muted',
+    });
+  }
+  return out;
+}
+
+function qtyRequestedText(n: number): string {
+  return `Qty requested: ${n}`;
+}
+
+/** Why the approval cannot be sent yet: one sentence per exchange line or add that needs a choice. */
+export function exchangeReviewProblems(
+  wb: { exchange?: MobileReturnExchange | null },
+  reviews: Record<string, ExchangeReviewState>,
+  adds: Record<string, { itemId: string | null; quantity: number } | null>,
+): string[] {
+  const out = exchangeOf(wb)
+    .lines.filter((x) => x.status === 'requested')
+    .map((x) => exchangeReviewProblem(x, reviews[x.id] ?? { kind: 'as_requested' }))
+    .filter((p): p is string => p !== null);
+  for (const a of Object.values(adds)) if (a && !a.itemId) out.push(RETURNS_COPY.chooseReplacement);
+  return [...new Set(out)];
+}
+
+/** The approval's exchange decisions (requested lines, then adds). */
+export function exchangeApprovalDecisions(
+  wb: { exchange?: MobileReturnExchange | null },
+  reviews: Record<string, ExchangeReviewState>,
+  adds: Record<string, { itemId: string | null; quantity: number; reason?: string | null } | null>,
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const x of exchangeOf(wb).lines) {
+    if (x.status === 'requested') out.push(exchangeReviewDecision(x, reviews[x.id] ?? { kind: 'as_requested' }));
+  }
+  for (const [lineId, a] of Object.entries(adds)) {
+    const d = a ? addReplacementDecision(lineId, a) : null;
+    if (d) out.push(d);
+  }
+  return out;
+}
+
+/** "What happens when you approve" with the exchange (core approvalPreviewLines). */
+export function exchangeWhatHappens(
+  wb: Pick<MobileReturnWorkbench, 'lines'> & { exchange?: MobileReturnExchange | null },
+  choices: Record<string, RestockChoice>,
+  reviews: Record<string, ExchangeReviewState>,
+  adds: Record<string, { itemId: string | null; label: string | null; quantity: number; free: number | null } | null>,
+  itemIsHere: boolean,
+): { key: string; text: string }[] {
+  const ex = exchangeOf(wb);
+  const labelOf = (lineId: string) => {
+    const l = wb.lines.find((x) => x.id === lineId);
+    return l ? lineLabel(l) : 'Item';
+  };
+  const sentences = approvalPreviewLines({
+    lines: openLines(wb).map((l) => ({
+      returnedLabel: lineLabel(l),
+      destination: processLabelFor(l.restock!, choiceFor(l, choices)).destination,
+    })),
+    exchanges: [
+      ...ex.lines
+        .filter((x) => x.status === 'requested')
+        .map((x) => {
+          const v = reviews[x.id] ?? { kind: 'as_requested' as const };
+          const change = v.kind === 'change';
+          return {
+            returnedLabel: labelOf(x.returnLineId),
+            decision: v.kind === 'decline' ? ('decline' as const) : change && !v.itemId ? ('pending' as const) : ('approve' as const),
+            replacementLabel: change ? v.label : x.requestedItem ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant) : null,
+            quantity: change ? v.quantity : x.requestedQuantity,
+            available: change ? v.free : x.requestedFree,
+          };
+        }),
+      ...Object.entries(adds).flatMap(([lineId, a]) =>
+        a?.itemId
+          ? [{ returnedLabel: labelOf(lineId), decision: 'add' as const, replacementLabel: a.label, quantity: a.quantity, available: a.free }]
+          : [],
+      ),
+    ],
+    itemIsHere,
+  });
+  return sentences.map((text, i) => ({ key: `${i}`, text }));
+}
+
+/** A refused approval's short items as sentences ("Walk New Hire Shirt, L: 0 available, 1 needed."). */
+export function shortSentences(detail: unknown, labelFor: (itemId: string) => string): string[] {
+  const list = Array.isArray(detail) ? replacementShortItems(detail as Record<string, unknown>[]) : [];
+  return list.map((s) => replacementShortLine(labelFor(s.itemId), s.available, s.needed));
+}
+
+/** The label the short sentences use for an item id (the exchange's own items). */
+export function exchangeItemLabel(wb: { exchange?: MobileReturnExchange | null }, itemId: string): string {
+  for (const x of exchangeOf(wb).lines) {
+    if (x.approvedItemId === itemId && x.approvedItem) return returnLineLabel(x.approvedItem.name, x.approvedItem.variant);
+    if (x.requestedItemId === itemId && x.requestedItem) return returnLineLabel(x.requestedItem.name, x.requestedItem.variant);
+  }
+  return 'Item';
+}
+
+/** The replacement order block's lines (SO, reserved per line, the pick hint, the release). */
+export function replacementOrderLines(wb: { exchange?: MobileReturnExchange | null }, canReadDecisions: boolean): { key: string; text: string }[] {
+  const ex = exchangeOf(wb);
+  const out: { key: string; text: string }[] = [];
+  if (!ex.replacement) {
+    if (ex.kind === 'exchange') out.push({ key: 'none', text: RETURNS_COPY.noReplacementYet });
+    return out;
+  }
+  const so = formatSo(ex.replacement.orderNumber) ?? ex.replacement.orderId.slice(0, 8).toUpperCase();
+  out.push({ key: 'so', text: `${RETURNS_COPY.replacementOrderHeading} ${so}${ex.replacement.live ? '' : ' (cancelled)'}` });
+  for (const l of ex.replacement.lines) {
+    out.push({ key: `l-${l.orderLineId}`, text: `${l.label} ×${l.requested} · reserved ${l.held}` });
+    if (l.take) out.push({ key: `t-${l.orderLineId}`, text: l.take });
+  }
+  if (ex.replacement.short) out.push({ key: 'short', text: RETURNS_COPY.notInStock });
+  if (ex.releasedEarly) {
+    out.push({ key: 'released', text: releasedBeforeReturnLine(ex.release?.byName ?? null, canReadDecisions ? (ex.release?.reason ?? null) : null) });
+  }
+  return out;
+}
+
+/** The words after "Get replacement ready" (plan 3.3.8). */
+export function prepareOutcomeMessage(answer: Pick<MobilePrepareAnswer, 'ran' | 'status'>): string {
+  const refused = answer.ran.find((r) => r.outcome === 'refused');
+  if (refused) return refused.message ?? RETURNS_COPY.prepareStopped;
+  if (answer.status === 'staged_for_delivery') return RETURNS_COPY.prepareStagedDelivery;
+  if (answer.status === 'staged_for_pickup') return RETURNS_COPY.prepareStaged;
+  return RETURNS_COPY.prepareUnconfirmed;
+}
+
+/** The list row's exchange words: "Exchange · Replacement reserved. Waiting for returned item · SO-000104". */
+export function returnRowExchange(row: MobileReturnListRow): string | null {
+  if (row.type !== 'exchange') return null;
+  const so = formatSo(row.replacementOrderNumber ?? null);
+  return [RETURNS_COPY.typeExchange, row.exchangeStatusLabel ?? null, so].filter(Boolean).join(' · ');
+}
+
+// ── RX-2: the replacement order on the order screen ─────────────────────────
+
+/** The order route's replacement block (GET /api/v1/orders/[id]); mirrors the web's OrderReplacementInfo. */
+export interface MobileOrderReplacement {
+  returnId: string;
+  returnNumber: string | null;
+  returnStatus: string | null;
+  originalOrderId: string | null;
+  originalOrderNumber: number | null;
+  live: boolean;
+  exchangeStatus: string;
+  exchangeStatusLabel: string;
+  waitingForReturn: boolean;
+  releasedEarly: boolean;
+  release: { byName: string | null; reason: string | null; at: string | null } | null;
+  returnReceived: boolean;
+  revision: number | null;
+  canOpenReturn: boolean;
+  canReleaseEarly: boolean;
+  slipLine: string;
+  driverLine: string | null;
+}
+
+/** The banner's sentences, in order (the RMA link is the screen's, for canOpenReturn). */
+export function orderReplacementLines(
+  info: MobileOrderReplacement,
+  fulfillmentType: 'pickup' | 'delivery' | null,
+): { key: string; text: string }[] {
+  const out = [{ key: 'title', text: exchangeReplacementBanner(info.returnNumber, info.originalOrderNumber) }];
+  if (info.live && info.waitingForReturn) out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber) });
+  if (info.releasedEarly) out.push({ key: 'released', text: releasedBeforeReturnLine(info.release?.byName ?? null, info.release?.reason ?? null) });
+  if (info.live && fulfillmentType === 'delivery' && info.driverLine) out.push({ key: 'driver', text: info.driverLine });
+  if (info.live) out.push({ key: 'change', text: RETURNS_COPY.changeOrCancelHere });
+  return out;
+}
+
+/** "Change or cancel in RMA-…" (the button that opens the RMA). */
+export function changeInRmaLabel(info: Pick<MobileOrderReplacement, 'returnNumber'>): string {
+  return changeOrCancelInRmaLabel(info.returnNumber);
+}
+
+/** The orders list chip: "Exchange" and, for the live replacement, the gate words. */
+export function orderExchangeChip(
+  replacementForReturnId: string | null | undefined,
+  overview: { replacementOrderId: string | null; exchangeStatus: string | null } | null,
+  orderId: string,
+): string | null {
+  if (!replacementForReturnId) return null;
+  const live = overview && overview.replacementOrderId === orderId;
+  const state = live ? replacementChipState(overview.exchangeStatus as never) : null;
+  return state ? `${RETURNS_COPY.typeExchange} · ${state}` : RETURNS_COPY.typeExchange;
 }

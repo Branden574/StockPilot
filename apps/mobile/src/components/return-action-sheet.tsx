@@ -24,20 +24,29 @@ import {
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
   RETURN_REASON_MAX,
+  RETURN_RELEASE_REASON_MAX,
   RETURNS_COPY,
   restockOptionRows,
+  returnLineLabel,
+  type ExchangeReviewState,
   type RestockChoice,
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
   cancelReturn,
+  cancelReturnReplacement,
+  changeReturnReplacement,
   denyReturn,
   describeReturnError,
+  getReturnCandidates,
   planReturnDispositions,
+  releaseReturnReplacement,
+  returnErrorReason,
   runReturnSteps,
   type MobileReturnWorkbench,
   type MobileReturnWorkbenchLine,
@@ -49,10 +58,17 @@ import {
   choiceFor,
   choiceProblems,
   denyHelp,
+  exchangeApprovalDecisions,
+  exchangeItemLabel,
+  exchangeOf,
+  exchangeReviewProblems,
+  exchangeWhatHappens,
   initialChoices,
+  lineLabel,
   openLines,
   processButtonLabel,
   processingHint,
+  shortSentences,
   stepOutcomeMessage,
   whatHappensLines,
 } from '@/lib/returns-view';
@@ -63,7 +79,19 @@ import { useTheme } from '@/lib/use-theme';
 const TITLE_CAP = capTo(16, TYPE_CEILING.display);
 const NOTE_FONT_CAP = capTo(15, TYPE_CEILING.input);
 
-export type ReturnSheetMode = 'approve' | 'process' | 'destination' | 'deny' | 'cancel';
+export type ReturnSheetMode =
+  | 'approve'
+  | 'process'
+  | 'destination'
+  | 'deny'
+  | 'cancel'
+  // RX-2: the replacement.
+  | 'release'
+  | 'cancel_replacement'
+  | 'change_replacement'
+  | 'issue_replacement';
+
+type AddState = { itemId: string | null; label: string | null; quantity: number; free: number | null } | null;
 
 export interface ReturnSheetDone {
   message: string;
@@ -159,6 +187,12 @@ function SheetContent({
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // RX-2: the exchange review at approval, "Add a replacement", the short
+  // refusal's numbers, and the change/issue picks.
+  const [reviews, setReviews] = React.useState<Record<string, ExchangeReviewState>>({});
+  const [adds, setAdds] = React.useState<Record<string, AddState>>({});
+  const [shortDetail, setShortDetail] = React.useState<unknown>(null);
+  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number }>>({});
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
@@ -182,66 +216,163 @@ function SheetContent({
   }
 
   const lines = openLines(wb);
+  const ex = exchangeOf(wb);
   const needsDestinations = mode === 'approve' || mode === 'process' || mode === 'destination';
   const reasonText = reason.trim();
   const reasonCount = Array.from(reasonText).length;
-  const reasonValid =
-    mode === 'deny' ? reasonCount >= 1 && reasonCount <= RETURN_REASON_MAX : mode === 'cancel' ? reasonCount <= RETURN_REASON_MAX : true;
+  // A reason is required to deny, to cancel an RMA whose exchange was
+  // approved, and for every replacement action.
+  const reasonRequired =
+    mode === 'deny' ||
+    mode === 'release' ||
+    mode === 'cancel_replacement' ||
+    mode === 'change_replacement' ||
+    mode === 'issue_replacement' ||
+    (mode === 'cancel' && ex.hasApprovedExchange);
+  const reasonMax = mode === 'release' ? RETURN_RELEASE_REASON_MAX : RETURN_REASON_MAX;
+  const reasonValid = reasonRequired ? reasonCount >= 1 && reasonCount <= reasonMax : reasonCount <= reasonMax;
   const choicesValid = !needsDestinations || allChoicesOffered(wb, choices);
   // One sentence per line that needs a destination, naming it.
   const problems = needsDestinations ? choiceProblems(wb, choices) : [];
+  const canDecideExchange = mode === 'approve' && wb.viewer.canApproveOrders;
+  const exchangeProblems = canDecideExchange ? exchangeReviewProblems(wb, reviews, adds) : [];
+  // The lines a change (approved) or a re-issue (cancelled by a replacement cancel) acts on.
+  const changeLines =
+    mode === 'change_replacement' || mode === 'issue_replacement'
+      ? ex.lines.filter((x) => (mode === 'issue_replacement' ? x.status === 'cancelled' && x.approvedItemId : x.status === 'approved'))
+      : [];
+  const pickFor = (x: (typeof changeLines)[number]) =>
+    picks[x.id] ?? { itemId: x.approvedItemId ?? x.requestedItemId, quantity: x.approvedQuantity ?? x.requestedQuantity };
+  const picksValid = changeLines.every((x) => pickFor(x).itemId);
   const disabledReason = !online
     ? READINESS_NEEDS_CONNECTION_COPY
     : !choicesValid
       ? (problems.join(' ') || RETURNS_COPY.chooseDestination)
-      : !reasonValid
-        ? mode === 'deny'
-          ? RETURNS_COPY.reasonRequired
-          : `At most ${RETURN_REASON_MAX} characters.`
-        : null;
+      : exchangeProblems.length > 0
+        ? exchangeProblems.join(' ')
+        : !picksValid
+          ? RETURNS_COPY.chooseReplacement
+          : !reasonValid
+            ? reasonRequired && reasonCount === 0
+              ? RETURNS_COPY.reasonRequired
+              : `At most ${reasonMax} characters.`
+            : null;
   const canSubmit = disabledReason === null && !submitting;
+  const shortLines = shortSentences(shortDetail, (id) => exchangeItemLabel(wb, id));
+  const loaderFor = (orderRequestLineId: string) => (q: string) => getReturnCandidates(wb.return.id, orderRequestLineId, q);
 
+  const hasExchange = ex.kind === 'exchange';
   const title =
     mode === 'approve'
-      ? RETURNS_COPY.approveReturn
+      ? hasExchange
+        ? RETURNS_COPY.approveReturnAndExchange
+        : RETURNS_COPY.approveReturn
       : mode === 'process'
         ? RETURNS_COPY.processReturn
         : mode === 'destination'
           ? RETURNS_COPY.changeDestination
           : mode === 'deny'
             ? 'Deny this return?'
-            : 'Cancel this return?';
+            : mode === 'release'
+              ? RETURNS_COPY.releaseEarly
+              : mode === 'cancel_replacement'
+                ? `${RETURNS_COPY.cancelReplacement}?`
+                : mode === 'change_replacement'
+                  ? RETURNS_COPY.changeReplacement
+                  : mode === 'issue_replacement'
+                    ? RETURNS_COPY.issueNewReplacement
+                    : 'Cancel this return?';
   const cta =
     mode === 'approve'
       ? itemIsHere
         ? RETURNS_COPY.approveAndReceive
-        : RETURNS_COPY.approveReturn
+        : hasExchange
+          ? RETURNS_COPY.approveReturnAndExchange
+          : RETURNS_COPY.approveReturn
       : mode === 'process'
         ? processButtonLabel(wb, choices)
         : mode === 'destination'
           ? 'Save destination'
           : mode === 'deny'
             ? RETURNS_COPY.deny
-            : RETURNS_COPY.cancelReturn;
+            : mode === 'release'
+              ? RETURNS_COPY.releaseBeforeReturn
+              : mode === 'cancel_replacement'
+                ? RETURNS_COPY.cancelReplacement
+                : mode === 'change_replacement'
+                  ? RETURNS_COPY.changeReplacement
+                  : mode === 'issue_replacement'
+                    ? RETURNS_COPY.issueNewReplacement
+                    : RETURNS_COPY.cancelReturn;
 
-  async function submit() {
+  async function submit(whenShort: 'refuse' | 'backorder' = 'refuse') {
     if (!canSubmit) return;
     Keyboard.dismiss();
     setBusy(true);
     setError(null);
     const id = wb.return.id;
     try {
+      // RX-2: the replacement actions, one route each.
+      if (mode === 'release') {
+        const res = await releaseReturnReplacement(id, reasonText);
+        onDone({
+          message: res.answer.changed ? 'Released for picking.' : res.answer.notNeeded ? 'The return was already received.' : 'Already released.',
+          workbench: res.workbench,
+        });
+        return;
+      }
+      if (mode === 'cancel_replacement') {
+        const res = await cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText });
+        onDone({ message: res.answer.changed ? 'Replacement cancelled.' : 'Nothing to cancel.', workbench: res.workbench });
+        return;
+      }
+      if (mode === 'change_replacement' || mode === 'issue_replacement') {
+        try {
+          const res = await changeReturnReplacement(id, {
+            expectedRevision: wb.revision,
+            lines: changeLines.map((x) => ({ exchangeLineId: x.id, itemId: pickFor(x).itemId, quantity: pickFor(x).quantity })),
+            reason: reasonText,
+            whenShort,
+          });
+          onDone({
+            message: mode === 'issue_replacement' ? 'New replacement issued.' : 'Replacement changed.',
+            workbench: res.workbench,
+          });
+        } catch (e) {
+          if (returnErrorReason(e) === 'replacement_unavailable') {
+            // The numbers first (D19); then "Approve, replacement on backorder".
+            const detail = (e as { details?: { detail?: unknown } }).details?.detail;
+            setShortDetail(detail ?? []);
+          }
+          setError(describeReturnError(e));
+          setBusy(false);
+        }
+        return;
+      }
       if (mode === 'approve' || mode === 'process') {
         const changed = changedDecisions(wb, choices);
+        const exchange = canDecideExchange ? exchangeApprovalDecisions(wb, reviews, adds) : [];
         const res = await runReturnSteps(id, {
           steps: [mode === 'approve' ? 'approve' : 'process'],
           expectedRevision: wb.revision,
           expectedPlanSeq: wb.planSeq,
           ...(mode === 'approve'
-            ? { approve: approvalDecision(wb, choices), receiveNow: itemIsHere }
+            ? {
+                approve: {
+                  ...approvalDecision(wb, choices),
+                  ...(exchange.length > 0 ? { exchange, replacement: { whenShort } } : {}),
+                },
+                receiveNow: itemIsHere,
+              }
             : { process: changed.length > 0 ? { lines: changed } : null }),
         });
         const step = res.ran[0];
+        if (step && step.outcome === 'refused' && step.reason === 'replacement_unavailable') {
+          setShortDetail(step.detail ?? []);
+          setError(stepOutcomeMessage(step, res.workbench, itemIsHere));
+          setBusy(false);
+          return;
+        }
         if (step && step.outcome === 'refused') {
           // The rack went away (or someone else moved first): redraw from the
           // answer and keep the sheet open for another choice.
@@ -270,6 +401,7 @@ function SheetContent({
       }
       const res = await cancelReturn(id, { expectedRevision: wb.revision, reason: reasonText || null });
       onDone({ message: res.changed ? 'Return cancelled.' : 'Already cancelled.', workbench: null });
+      return;
     } catch (e) {
       setError(describeReturnError(e));
       setBusy(false);
@@ -371,26 +503,122 @@ function SheetContent({
                     accessibilityHint={RETURNS_COPY.itemIsHereHelp}
                   />
                 </View>
-                <View
-                  style={{ gap: 4 }}
-                  accessible
-                  accessibilityLabel={whatHappensLines(wb, choices)
-                    .map((t) => t.text)
-                    .join(' ')}
-                >
-                  <FieldLabel>WHAT HAPPENS WHEN YOU APPROVE</FieldLabel>
-                  {whatHappensLines(wb, choices).map((t) => (
-                    <Body key={t.key} size={13.5} muted>
-                      {t.text}
-                    </Body>
-                  ))}
-                </View>
+                {canDecideExchange ? (
+                  <ExchangeReview
+                    wb={wb}
+                    reviews={reviews}
+                    adds={adds}
+                    online={online}
+                    disabled={submitting}
+                    loaderFor={loaderFor}
+                    onReview={(id, next) => {
+                      setReviews((prev) => ({ ...prev, [id]: next }));
+                      setShortDetail(null);
+                      setError(null);
+                    }}
+                    onAdd={(lineId, next) => {
+                      setAdds((prev) => ({ ...prev, [lineId]: next }));
+                      setShortDetail(null);
+                      setError(null);
+                    }}
+                  />
+                ) : null}
+                {(() => {
+                  const happens =
+                    hasExchange || Object.values(adds).some(Boolean)
+                      ? exchangeWhatHappens(wb, choices, reviews, adds, itemIsHere)
+                      : whatHappensLines(wb, choices);
+                  return (
+                    <View style={{ gap: 4 }} accessible accessibilityLabel={happens.map((t) => t.text).join(' ')}>
+                      <FieldLabel>WHAT HAPPENS WHEN YOU APPROVE</FieldLabel>
+                      {happens.map((t) => (
+                        <Body key={t.key} size={13.5} muted>
+                          {t.text}
+                        </Body>
+                      ))}
+                    </View>
+                  );
+                })()}
               </>
             ) : null}
 
-            {mode === 'deny' || mode === 'cancel' ? (
+            {mode === 'change_replacement' || mode === 'issue_replacement'
+              ? changeLines.map((x) => {
+                  const rl = wb.lines.find((l) => l.id === x.returnLineId);
+                  const label = rl ? lineLabel(rl) : 'Item';
+                  const pick = pickFor(x);
+                  return (
+                    <View key={x.id} style={[styles.lineCard, { borderColor: c.hair }]}>
+                      <Body size={14.5} color={c.ink} style={{ fontFamily: FONT.display }}>
+                        {label}
+                      </Body>
+                      <ReplacementPickerList
+                        load={loaderFor(rl?.orderRequestLineId ?? '')}
+                        needed={pick.quantity}
+                        selectedItemId={pick.itemId}
+                        onSelect={(row) => {
+                          setPicks((prev) => ({ ...prev, [x.id]: { ...pick, itemId: row.itemId } }));
+                          setShortDetail(null);
+                        }}
+                        label={label}
+                        online={online}
+                        disabled={submitting}
+                      />
+                    </View>
+                  );
+                })
+              : null}
+
+            {mode === 'release' ? (
+              <View style={{ gap: 8 }}>
+                <Body size={13.5} muted>
+                  {RETURNS_COPY.releaseEarlyConfirm}
+                </Body>
+                {[RETURNS_COPY.releasePresetInPerson, RETURNS_COPY.releasePresetDeliverySwap].map((preset) => (
+                  <Pressable
+                    key={preset}
+                    disabled={submitting}
+                    onPress={() => setReason(preset)}
+                    accessibilityRole="button"
+                    accessibilityLabel={preset}
+                    accessibilityState={{ selected: reason === preset }}
+                    style={[styles.option, { borderColor: reason === preset ? c.ink : c.hair, minHeight: MIN_TAP }]}
+                  >
+                    <Body size={14} color={c.ink}>
+                      {preset}
+                    </Body>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            {mode === 'cancel_replacement' && ex.replacement?.class === 'drawn' ? (
+              <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+                {RETURNS_COPY.cancelDrawnReplacement}
+              </Body>
+            ) : null}
+            {mode === 'cancel_replacement' && ex.replacement?.status === 'in_transit' ? (
+              <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+                {RETURNS_COPY.cancelInTransit}
+              </Body>
+            ) : null}
+
+            {shortLines.length > 0 ? (
+              <View style={{ gap: 6 }} accessibilityRole="alert">
+                {shortLines.map((t) => (
+                  <Body key={t} size={13.5} color={ACCENT.crit}>
+                    {t}
+                  </Body>
+                ))}
+                <Button variant="outline" disabled={!canSubmit} onPress={() => void submit('backorder')}>
+                  {RETURNS_COPY.approveReplacementOnBackorder}
+                </Button>
+              </View>
+            ) : null}
+
+            {mode === 'deny' || mode === 'cancel' || reasonRequired ? (
               <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
-                <FieldLabel>{mode === 'deny' ? RETURNS_COPY.denyReasonLabel.toUpperCase() : RETURNS_COPY.cancelReasonLabel.toUpperCase()}</FieldLabel>
+                <FieldLabel>{reasonFieldLabel(mode, ex.hasApprovedExchange).toUpperCase()}</FieldLabel>
                 {mode === 'deny' ? (
                   <Body size={13} muted>
                     {denyHelp(wb)}
@@ -408,13 +636,21 @@ function SheetContent({
                   maxFontSizeMultiplier={NOTE_FONT_CAP}
                   multiline
                   editable={!submitting}
-                  placeholder={mode === 'deny' ? 'Why the return is denied' : 'Why the return is cancelled (optional)'}
+                  placeholder={
+                    mode === 'deny'
+                      ? 'Why the return is denied'
+                      : mode === 'cancel'
+                        ? reasonRequired
+                          ? 'Why the return is cancelled'
+                          : 'Why the return is cancelled (optional)'
+                        : 'Why'
+                  }
                   placeholderTextColor={c.ink4}
-                  accessibilityLabel={mode === 'deny' ? 'Reason for denying' : 'Reason, optional'}
+                  accessibilityLabel={reasonFieldLabel(mode, ex.hasApprovedExchange)}
                   style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
                 />
-                <Mono size={11} color={reasonCount > RETURN_REASON_MAX ? ACCENT.crit : c.ink4}>
-                  {`${reasonCount.toLocaleString('en-US')} / ${RETURN_REASON_MAX.toLocaleString('en-US')}`}
+                <Mono size={11} color={reasonCount > reasonMax ? ACCENT.crit : c.ink4}>
+                  {`${reasonCount.toLocaleString('en-US')} / ${reasonMax.toLocaleString('en-US')}`}
                 </Mono>
               </View>
             ) : null}
@@ -433,7 +669,7 @@ function SheetContent({
 
           <Button
             block
-            variant={mode === 'deny' || mode === 'cancel' ? 'destructive' : 'primary'}
+            variant={mode === 'deny' || mode === 'cancel' || mode === 'cancel_replacement' ? 'destructive' : 'primary'}
             disabled={!canSubmit}
             accessibilityHint={disabledReason ?? undefined}
             onPress={() => void submit()}
@@ -443,6 +679,174 @@ function SheetContent({
         </View>
       </View>
     </KeyboardAvoidingView>
+  );
+}
+
+/** The reason field's label for each mode that asks one. */
+function reasonFieldLabel(mode: ReturnSheetMode, hasApprovedExchange: boolean): string {
+  switch (mode) {
+    case 'deny':
+      return RETURNS_COPY.denyReasonLabel;
+    case 'cancel':
+      return hasApprovedExchange ? RETURNS_COPY.cancelReturnReasonRequired : RETURNS_COPY.cancelReasonLabel;
+    case 'release':
+      return RETURNS_COPY.releaseEarlyReasonLabel;
+    case 'cancel_replacement':
+      return RETURNS_COPY.cancelReplacementReasonLabel;
+    default:
+      return RETURNS_COPY.replacementReasonLabel;
+  }
+}
+
+/**
+ * RX-2: the approval's exchange review. Per requested exchange line: Approve
+ * as requested, Change replacement… (the picker and a reason when it differs
+ * from the request) or Decline the exchange, return only (a reason). A
+ * return-only line can get "Add a replacement" while exchanges are on.
+ */
+function ExchangeReview({
+  wb,
+  reviews,
+  adds,
+  online,
+  disabled,
+  loaderFor,
+  onReview,
+  onAdd,
+}: {
+  wb: MobileReturnWorkbench;
+  reviews: Record<string, ExchangeReviewState>;
+  adds: Record<string, AddState>;
+  online: boolean;
+  disabled: boolean;
+  loaderFor: (orderRequestLineId: string) => (q: string) => ReturnType<typeof getReturnCandidates>;
+  onReview: (exchangeLineId: string, next: ExchangeReviewState) => void;
+  onAdd: (returnLineId: string, next: AddState) => void;
+}) {
+  const { c } = useTheme();
+  const ex = exchangeOf(wb);
+  return (
+    <View style={{ gap: 10 }}>
+      <FieldLabel>{RETURNS_COPY.replacement}</FieldLabel>
+      {wb.lines.map((l) => {
+        const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
+        const label = lineLabel(l);
+        if (!x) {
+          if (!ex.createEnabled || l.applied) return null;
+          const add = adds[l.id] ?? null;
+          return (
+            <View key={l.id} style={[styles.lineCard, { borderColor: c.hair }]}>
+              <Body size={14} color={c.ink}>
+                {label}
+              </Body>
+              {add ? (
+                <>
+                  <ReplacementPickerList
+                    load={loaderFor(l.orderRequestLineId)}
+                    needed={add.quantity}
+                    selectedItemId={add.itemId}
+                    onSelect={(row, rowLabel) => onAdd(l.id, { ...add, itemId: row.itemId, label: rowLabel, free: row.free })}
+                    label={label}
+                    online={online}
+                    disabled={disabled}
+                  />
+                  <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
+                    {RETURNS_COPY.returnOnly}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled || !online}
+                  onPress={() => onAdd(l.id, { itemId: null, label: null, quantity: l.quantity, free: null })}
+                >
+                  {RETURNS_COPY.addReplacement}
+                </Button>
+              )}
+            </View>
+          );
+        }
+        if (x.status !== 'requested') return null;
+        const v = reviews[x.id] ?? { kind: 'as_requested' as const };
+        const requested = x.requestedItem
+          ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant)
+          : RETURNS_COPY.replacementWarehouseReview;
+        return (
+          <View key={x.id} style={[styles.lineCard, { borderColor: c.hair }]}>
+            <Body size={14} color={c.ink}>
+              {label} → {requested}
+            </Body>
+            {x.requestNote ? (
+              <Body size={12.5} muted>
+                {RETURNS_COPY.replacementNoteFromRequester}: {x.requestNote}
+              </Body>
+            ) : null}
+            <View accessibilityRole="radiogroup" accessibilityLabel={`Decision for the replacement of ${label}`} style={{ gap: 6 }}>
+              {(
+                [
+                  ['as_requested', RETURNS_COPY.approveAsRequested],
+                  ['change', RETURNS_COPY.changeReplacementEllipsis],
+                  ['decline', RETURNS_COPY.declineExchange],
+                ] as const
+              ).map(([kind, words]) => {
+                const checked = v.kind === kind;
+                const off = disabled || (kind === 'as_requested' && !x.requestedItemId);
+                return (
+                  <Pressable
+                    key={kind}
+                    disabled={off}
+                    onPress={() =>
+                      onReview(
+                        x.id,
+                        kind === 'as_requested'
+                          ? { kind }
+                          : kind === 'decline'
+                            ? { kind, reason: '' }
+                            : { kind, itemId: null, label: null, free: null, quantity: Math.min(x.requestedQuantity, l.quantity), reason: '' },
+                      )
+                    }
+                    accessibilityRole="radio"
+                    accessibilityLabel={words}
+                    accessibilityState={{ checked, disabled: off }}
+                    style={[styles.option, { borderColor: checked ? c.ink : c.hair, backgroundColor: checked ? c.paper2 : 'transparent', minHeight: MIN_TAP }]}
+                  >
+                    <Body size={14} color={c.ink}>
+                      {words}
+                    </Body>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {v.kind === 'change' ? (
+              <ReplacementPickerList
+                load={loaderFor(l.orderRequestLineId)}
+                needed={v.quantity}
+                selectedItemId={v.itemId}
+                onSelect={(row, rowLabel) => onReview(x.id, { ...v, itemId: row.itemId, label: rowLabel, free: row.free })}
+                label={label}
+                online={online}
+                disabled={disabled}
+              />
+            ) : null}
+            {v.kind === 'change' || v.kind === 'decline' ? (
+              <TextInput
+                value={v.reason}
+                onChangeText={(t) => onReview(x.id, { ...v, reason: t })}
+                editable={!disabled}
+                multiline
+                maxFontSizeMultiplier={NOTE_FONT_CAP}
+                placeholder={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
+                placeholderTextColor={c.ink4}
+                accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
+                accessibilityHint={RETURNS_COPY.replacementReasonHelp}
+                style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink, minHeight: 64 }]}
+              />
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
