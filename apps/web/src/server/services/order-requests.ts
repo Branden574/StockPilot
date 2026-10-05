@@ -450,10 +450,11 @@ function rentalItemNotOrderable(name: string): ServiceError {
  * A kit's pre-assembled stock (inventory_items.is_bundle) is a container built
  * and handed out through Bundles, not stock an order can pick: picking draws
  * placed stock and assembled kits sit in Staging. Every order picker already
- * leaves it out; this is the server's own refusal, so a crafted payload or an
- * old saved cart cannot put one on an order. The database line guard
- * (tg_order_request_lines_guard, 0365) does not refuse it yet: that belongs in
- * the next migration.
+ * leaves it out; this is the server's own refusal, in words, so a crafted
+ * payload or an old saved cart cannot put one on an order. The database
+ * refuses it too: place_order_request (0391) when an order is placed, and
+ * since 0395 (L11) the order_request_lines insert policy on a member's own
+ * client, which addLines writes through.
  */
 function kitStockNotOrderable(name: string): ServiceError {
   return new ServiceError(

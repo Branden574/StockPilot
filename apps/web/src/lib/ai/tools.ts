@@ -2348,7 +2348,7 @@ const cancelOrderTool: ToolExecutor = {
   declaration: {
     name: 'cancelOrder',
     description:
-      "WRITE TOOL — cancels an order. Releases any reservations AND restores any stock that picking already pulled (so net inventory effect is zero). Use only AFTER the user has explicitly confirmed in the previous turn. Permission rules: the requester can self-cancel their OWN order while still in pending_approval; managers / admins / owners can cancel any non-terminal order. Terminal states (completed / denied / cancelled) are rejected by the underlying RPC. Always echo the order id + new status + (if stock was restored) which items came back.",
+      "WRITE TOOL — cancels an order. Releases any reservations AND restores any stock that picking already pulled (so net inventory effect is zero). Use only AFTER the user has explicitly confirmed in the previous turn. Permission rules: the requester can self-cancel their OWN order while still in pending_approval; anyone with the orders:approve permission can cancel any non-terminal order in a warehouse they work in (owners, admins and managers work in every warehouse). Terminal states (completed / denied / cancelled) are rejected by the underlying RPC. Always echo the order id + new status + (if stock was restored) which items came back.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {

@@ -1015,8 +1015,9 @@ export const RELEASES: Release[] = [
     // order (CancelOrderButton); the mobile app only on a backordered order.
     // The removed manager's own-order cancel "while it waits for approval" is
     // the apps' rule (OrderRequestsService.cancel, M7); cancel_order_request
-    // lets a requester cancel at any open status (review finding 3, recorded
-    // as a follow-up).
+    // let a requester cancel at any open status (review finding 3, recorded
+    // as a follow-up) until 0395 (small fixes slice 2, N1), which refuses a
+    // requester past pending approval in the database too.
     status: 'published',
     title: 'Approving orders follows the approve permission',
     summary:
