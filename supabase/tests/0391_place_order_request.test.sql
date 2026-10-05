@@ -965,7 +965,7 @@ select is(
   -- (0396 H1, H2); computed from production's rows plus those terms (the
   -- deparsed shape 0396 predicts); verify on the stack.
   'order_request_lines=5e7d2cb7801930574bdde61feeb39fd8|4\n'
-  'order_requests=3826dd6e73e91a11dfcb3b73c2dc9013|4\n'
+  'order_requests=36246435ba27eadd5c30276ed6ce7bb2|4\n'
   'warehouse_charters=ca05c428fb9052aedb108faa0e8a6048|2\n'
   'warehouses=5b111ddeaec532e9725f0e3968b819bc|2',
   'Z3: the policies of order_requests, order_request_lines, idempotency_keys, warehouses and warehouse_charters (the 0385 Z2 form with role names, so the value is the same locally and in production) equal production''s at build start, after 0390');

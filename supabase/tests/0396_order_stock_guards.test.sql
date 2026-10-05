@@ -44,7 +44,8 @@
 -- A.  L86: the approved notification for a full, a partial, an enough and a
 --     two-lines-one-item approval.
 -- H.  The two policies' text (predicted from production's text plus the
---     added term; verify on the stack), still PERMISSIVE for authenticated.
+--     added term; verify on the stack), still PERMISSIVE for authenticated;
+--     no policy pairs has_org_role with orders:approve (0390 H2's census).
 -- G.  No function here raises 40001 or 40P01.
 -- Z.  Every undone attempt changed nothing.
 --
@@ -63,13 +64,14 @@
 --   M11 delete guard trigger dropped                         -> D1, D2, D5, D6, D7
 --   M12 delete guard ignores holdings                        -> D2
 --   M13 delete guard fires on every deleted_at update        -> D4
---   M14 update policy without the warehouse term             -> W1, W2, W3, H1
---   M15 update policy USING only (WITH CHECK unchanged)      -> W4, H1
+--   M14 update policy without the warehouse term             -> W1, W3, W4, H1, H3
+--   M15 update policy USING only (WITH CHECK unchanged)      -> W4, H1, H3
 --   M16 signature without the membership term                -> R3, S2, S3
 --   M17 signature without the module term                    -> R3, S4
 --   M18 lines policy without the kit term                    -> B1, H2
 --   M19 notify without the partial sentence                  -> R4, A2
 --   M20 notify comparing per line instead of per item        -> R4, A4
+--   M21 update policy with a manager-by-role arm added        -> H1, H3, H4
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt (always undone) or pg_temp.call_as (kept), which switch role
@@ -79,7 +81,7 @@
 
 begin;
 
-select plan(55);
+select plan(56);
 
 \set orgA    '\'03960000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03960000-0000-0000-0000-00000000000b\''
@@ -1007,7 +1009,7 @@ select is(
   pg_temp.each(array['stfAp', 'mgr', 'adm', 'own', 'stf', 'vwr'],
                format($q$update public.order_requests set internal_notes = 'Gate code 12' where id = %L$q$, :oBAppr)),
   'stfAp=ok:0, mgr=ok:1, adm=ok:1, own=ok:1, stf=ok:0, vwr=ok:0',
-  'W3: persona parity with the app''s write access: a manager with no assignment, the admin and the owner reach every warehouse; staff without orders:approve and the viewer match nothing, as before');
+  'W3: persona parity with the app''s write access: a manager with no assignment, the admin and the owner reach every warehouse (through user_can_access_warehouse alone, as the app''s roleSeesEveryWarehouse); staff without orders:approve and the viewer match nothing, as before');
 select is(
   pg_temp.attempt('authenticated', :stfAp, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :oAMove)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :oAMove)),
@@ -1079,10 +1081,10 @@ select is(
   (select coalesce(qual, '') || E'\n' || coalesce(with_check, '')
      from pg_policies where schemaname = 'public' and tablename = 'order_requests' and policyname = 'order_requests_update'),
   '(' || $p$( SELECT has_permission(order_requests.organization_id, 'orders:approve'::text) AS has_permission)$p$
-  || ' AND ' || $t$(( SELECT has_org_role(order_requests.organization_id, 'manager'::text) AS has_org_role) OR ( SELECT user_can_access_warehouse(( SELECT auth.uid() AS uid), order_requests.warehouse_id, 'write'::text) AS user_can_access_warehouse))$t$
+  || ' AND ' || $t$( SELECT user_can_access_warehouse(( SELECT auth.uid() AS uid), order_requests.warehouse_id, 'write'::text) AS user_can_access_warehouse)$t$
   || ')' || E'\n'
   || left($w$(( SELECT has_permission(order_requests.organization_id, 'orders:approve'::text) AS has_permission) AND ( SELECT warehouse_in_org(order_requests.warehouse_id, order_requests.organization_id) AS warehouse_in_org) AND ( SELECT charter_in_org(order_requests.delivery_charter_id, order_requests.organization_id) AS charter_in_org))$w$, -1)
-  || ' AND ' || $t$(( SELECT has_org_role(order_requests.organization_id, 'manager'::text) AS has_org_role) OR ( SELECT user_can_access_warehouse(( SELECT auth.uid() AS uid), order_requests.warehouse_id, 'write'::text) AS user_can_access_warehouse))$t$
+  || ' AND ' || $t$( SELECT user_can_access_warehouse(( SELECT auth.uid() AS uid), order_requests.warehouse_id, 'write'::text) AS user_can_access_warehouse)$t$
   || ')',
   'H1: order_requests_update is production''s text (USING and WITH CHECK) with the warehouse term added and nothing else');
 select is(
@@ -1100,8 +1102,16 @@ select is(
      from pg_policies
     where schemaname = 'public' and policyname in ('order_requests_update', 'order_request_lines_insert')),
   E'order_request_lines.order_request_lines_insert|INSERT|{authenticated}|PERMISSIVE|1148ba4defc9bcae9e744bd8a04dd82c\n'
-  'order_requests.order_requests_update|UPDATE|{authenticated}|PERMISSIVE|236d6e3cdf7ab1199f32b7b456b1bd2a',
+  'order_requests.order_requests_update|UPDATE|{authenticated}|PERMISSIVE|be9f2fbb6ee66d910763de1815365cdd',
   'H3: both policies are still PERMISSIVE, for authenticated, with 0396''s text (pg_policies md5, the 0390 H3 form)');
+select is(
+  (select coalesce(string_agg(tablename || '.' || policyname, ',' order by tablename, policyname), '')
+     from pg_policies
+    where schemaname = 'public'
+      and coalesce(qual, '') || coalesce(with_check, '') ~ 'orders:approve'
+      and coalesce(qual, '') || coalesce(with_check, '') ~ 'has_org_role'),
+  '',
+  'H4: the warehouse term adds no manager-by-role arm: no policy in public names has_org_role together with orders:approve (0390 H2''s census; user_can_access_warehouse already gives an owner, admin or manager every warehouse)');
 
 -- ══ G. Never a retryable error ════════════════════════════════════════════
 select is(

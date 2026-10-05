@@ -732,10 +732,11 @@ select is(
   -- 0116460a0227c2c7b08eb457b8a9c4e0): the lines policy also refuses a kit and the
   -- update policy also requires write access to the order's warehouse (0396 H1-H3,
   -- predicted from production's text plus each term; verify on the stack). The
-  -- role term stays gone (H2 above); the insert policy is unchanged.
+  -- warehouse term is user_can_access_warehouse alone, so the role term stays
+  -- gone (H2 above); the insert policy is unchanged.
   E'order_request_lines.order_request_lines_insert|INSERT|{authenticated}|PERMISSIVE|1148ba4defc9bcae9e744bd8a04dd82c\n'
   'order_requests.order_requests_insert|INSERT|{authenticated}|PERMISSIVE|6d0d5912d9e99a8073ab6b18bbba5385\n'
-  'order_requests.order_requests_update|UPDATE|{authenticated}|PERMISSIVE|236d6e3cdf7ab1199f32b7b456b1bd2a',
+  'order_requests.order_requests_update|UPDATE|{authenticated}|PERMISSIVE|be9f2fbb6ee66d910763de1815365cdd',
   'H3: the three policies are 0390''s text, still PERMISSIVE and for authenticated (pg_policies md5, comparable with production)');
 
 -- ══ Z. Every undone attempt changed nothing ═══════════════════════════════

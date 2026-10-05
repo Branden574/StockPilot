@@ -4452,8 +4452,8 @@ export class OrderRequestsService {
     assertPermission(this.ctx, 'orders:approve');
     // 'write', as every other user-client write to the order (0396, L129a):
     // order_requests_update now requires write access to the order's
-    // warehouse (a manager by role, or user_can_access_warehouse 'write'), so
-    // this gate says the same thing the policy enforces. Owners, admins and
+    // warehouse (user_can_access_warehouse 'write'), so this gate says the
+    // same thing the policy enforces. Owners, admins and
     // managers write every warehouse and staff write exactly the warehouses
     // they read, so the only member this moves is a viewer granted
     // orders:approve, who now gets the read-only refusal instead of a notes

@@ -53,16 +53,21 @@
 --           on record stay as history (owner decision Q4, default); the
 --           trigger fires only on the delete itself, so their other updates
 --           pass.
---   5. L129a order_requests_update, USING and WITH CHECK: also write access to
---           the order's warehouse (a manager by role, or
---           user_can_access_warehouse(..., 'write')), the rule the service
---           applies before deny, pick slip, staging and approve-with-notes.
---           Parity: owner, admin and manager reach every warehouse in both;
---           staff only an assigned one (the 0280 all-warehouses flag keeps an
---           assignment row per warehouse: 0 gaps in production); a viewer
---           never writes. The plan's "warehouse_id is null" arm is left out:
---           the column is NOT NULL. The service's notes editor moves from
---           'read' to 'write' in the same change (only a viewer granted
+--   5. L129a order_requests_update, USING and WITH CHECK: also
+--           user_can_access_warehouse(auth.uid(), warehouse_id, 'write'), the
+--           rule the service applies (requireWarehouseAccess 'write') before
+--           deny, pick slip, staging and approve-with-notes. That helper
+--           (0310's body, equal to production's) answers true for an owner,
+--           admin or manager of the warehouse's organization with no
+--           assignment needed, for staff only on an assigned warehouse, and
+--           never for a viewer; the app's rule is the same. No manager-by-role
+--           arm: has_permission already requires the membership, so such an
+--           arm would admit no one more, and 0390 keeps every policy from
+--           pairing has_org_role with orders:approve (0390 suite H2). The
+--           0280 all-warehouses flag keeps an assignment row per warehouse (0
+--           gaps in production). The plan's "warehouse_id is null" arm is
+--           left out: the column is NOT NULL. The service's notes editor moves
+--           from 'read' to 'write' in the same change (only a viewer granted
 --           orders:approve differed: 0 in production).
 --   6. L129b confirm_physical_signature: the assigned driver must still be a
 --           member of the order's organization, with the Orders module on.
@@ -1030,24 +1035,22 @@ alter policy order_request_lines_insert on public.order_request_lines
   );
 
 -- ═══ L129a. order_requests_update follows the order's warehouse ═══
--- 0390's text with one term added to USING and to WITH CHECK: a manager by
--- role, or write access to the order's warehouse (WITH CHECK: the new row's).
+-- 0390's text with one term added to USING and to WITH CHECK: write access to
+-- the order's warehouse (WITH CHECK: the new row's), as the service asks
+-- (requireWarehouseAccess 'write'). user_can_access_warehouse gives an owner,
+-- admin or manager every warehouse of their organization with no assignment,
+-- so no manager-by-role arm is needed (and 0390 keeps has_org_role out of
+-- every policy that names orders:approve).
 alter policy order_requests_update on public.order_requests
   using (
     ( SELECT public.has_permission(order_requests.organization_id, 'orders:approve') )
-    and (
-      ( SELECT public.has_org_role(order_requests.organization_id, 'manager') )
-      or ( SELECT public.user_can_access_warehouse(( SELECT auth.uid() ), order_requests.warehouse_id, 'write') )
-    )
+    and ( SELECT public.user_can_access_warehouse(( SELECT auth.uid() ), order_requests.warehouse_id, 'write') )
   )
   with check (
     ( SELECT public.has_permission(order_requests.organization_id, 'orders:approve') )
     and ( SELECT public.warehouse_in_org(order_requests.warehouse_id, order_requests.organization_id) )
     and ( SELECT public.charter_in_org(order_requests.delivery_charter_id, order_requests.organization_id) )
-    and (
-      ( SELECT public.has_org_role(order_requests.organization_id, 'manager') )
-      or ( SELECT public.user_can_access_warehouse(( SELECT auth.uid() ), order_requests.warehouse_id, 'write') )
-    )
+    and ( SELECT public.user_can_access_warehouse(( SELECT auth.uid() ), order_requests.warehouse_id, 'write') )
   );
 
 reset lock_timeout;

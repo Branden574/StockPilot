@@ -1140,12 +1140,12 @@ select is(
   -- the local authenticated role's OID (16444, the OID that reproduces the
   -- old pin from the same text); verify on the stack.
   -- Re-pinned by 0396 (was bff8a9854b1856ae3fefe1a3dcf702a8|8): order_requests_update
-  -- (USING and WITH CHECK) also requires a manager by role or write access to
-  -- the order's warehouse; every other term and policy is unchanged. Computed
+  -- (USING and WITH CHECK) also requires write access to the order's warehouse
+  -- (user_can_access_warehouse 'write'); every other term and policy is unchanged. Computed
   -- from production's policy text plus that term (the deparsed shape the 0396
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
-  'order_requests + schedule_events policies|6ac22882c61690faf1be7f991f0fe44b|8\n'
+  'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
   'purchase_orders + purchase_order_items + idempotency_keys policies|4d66c95449ef3c5127f8d19974023c70|6',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');
