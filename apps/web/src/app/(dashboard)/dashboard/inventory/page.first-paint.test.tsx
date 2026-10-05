@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,8 +112,8 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
   useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
 
-// Page chrome that reads request state of its own.
-vi.mock('@/components/ui/archive-view-toggle', () => ({ ArchiveViewToggle: () => null }));
+// Page chrome that reads request state of its own. (The Active / Archived
+// toggle is the real one: the URL probe below follows its Active link.)
 vi.mock('@/components/inventory/rack-filter-dropdown', () => ({ RackFilterDropdown: () => null }));
 vi.mock('@/components/dashboard/scoped-warehouse-notice', () => ({
   ScopedWarehouseNotice: () => null,
@@ -172,7 +172,15 @@ vi.mock('@/lib/supabase/admin', async () => {
             q.table === 'inventory_items' &&
             q.head &&
             !q.filters.some((f) => f.path[0] === 'awaiting_first_receipt');
-          if (datasetHead && h.holdDataset) return h.holdDataset;
+          // Held only when the page STREAMS the dataset behind its first
+          // paint: the cached default view reads its page-1 plan first (the
+          // one read that embeds the holdings). A URL that awaits the dataset
+          // never makes that read, and holding it there would hold the page.
+          const planned = h.log.some(
+            (e) =>
+              e.table === 'inventory_items' && e.select.includes('item_stock_levels(quantity)'),
+          );
+          if (datasetHead && h.holdDataset && planned) return h.holdDataset;
         },
       }),
     ),
@@ -275,6 +283,8 @@ function snapshot(container: HTMLElement) {
     expectedChip: [...container.querySelectorAll('a[aria-pressed]')].map((a) =>
       norm(a.textContent),
     ),
+    /** An empty state's title ("No items yet"), when the page shows one. */
+    headings: [...container.querySelectorAll('h3')].map((n) => norm(n.textContent)),
   };
 }
 
@@ -453,5 +463,134 @@ describe('Items first paint = settled instant view (owner bug 2026-10-05)', () =
     );
     expect(north.total).toBeLessThan(fixture.DEFAULT_VIEW_ROWS);
     expect(settled.showing[0]).toBe(`Showing 1–${north.pageItems.length} of ${north.total}`);
+  });
+});
+
+/* ---- URL probe (review 2026-10-05, finding 1) ------------------------------ */
+
+/** The page's searchParams for a query string (a repeated key is an array). */
+function pageParams(qs: string) {
+  const sp = new URLSearchParams(qs);
+  const out: Record<string, string | string[]> = {};
+  for (const key of new Set(sp.keys())) {
+    const all = sp.getAll(key);
+    out[key] = all.length > 1 ? all : all[0]!;
+  }
+  return out as Awaited<Parameters<typeof InventoryPage>[0]['searchParams']>;
+}
+
+/**
+ * Open a URL the way a refresh does: the server paints, and when the page
+ * streams the dataset behind that paint, it lands and the SAME table adopts it.
+ * `streamed` says whether it did (only the cached default view streams).
+ */
+async function openUrl(qs: string) {
+  nav.set(qs);
+  window.history.replaceState(null, '', qs ? `/dashboard/inventory?${qs}` : '/dashboard/inventory');
+  h.log.length = 0;
+  h.tableProps.length = 0;
+  let releaseDataset!: () => void;
+  h.holdDataset = new Promise<void>((resolve) => {
+    releaseDataset = resolve;
+  });
+  const page = await InventoryPage({ searchParams: Promise.resolve(pageParams(qs)) });
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(page);
+  });
+  const firstPaint = snapshot(view.container);
+  releaseDataset();
+  const table = h.tableProps[h.tableProps.length - 1] as
+    { instantPromise?: Promise<unknown> } | undefined;
+  const streamed = table?.instantPromise;
+  if (streamed) {
+    await act(async () => {
+      await streamed;
+    });
+    view.rerender(page);
+    await act(async () => {});
+  }
+  return { view, firstPaint, settled: snapshot(view.container), streamed: streamed !== undefined };
+}
+
+/** The cached default view's page-1 plan (the one read that embeds holdings). */
+const planReads = () =>
+  h.log.filter(
+    (e) => e.table === 'inventory_items' && e.select.includes('item_stock_levels(quantity)'),
+  );
+
+/**
+ * isDefaultInventoryView decides which URLs get the cached default page (the
+ * planned page 1, re-derived over the streamed dataset once it lands). Every
+ * URL it calls default must mean the default view to the table's derivation
+ * too. ?auto=1 did not: the Archived view's "Auto-archived only" chip narrows
+ * the list to rows the zero-stock job archived, no active row is one, and the
+ * Active toggle kept the parameter, so Active painted its first page and then
+ * emptied. Each URL here must paint what it settles on.
+ */
+describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)', () => {
+  it.each([
+    '',
+    'status=active',
+    'page=1',
+    'sort=updated_desc',
+    'type=product',
+    'stock=',
+    'q=%20%20',
+    'rack=%20',
+    'ref=mail',
+    'auto=0',
+    'auto=1',
+    'status=active&auto=1',
+    'status=archived',
+    'status=archived&auto=1',
+    'expected=1',
+  ])('?%s', async (qs) => {
+    const { firstPaint, settled } = await openUrl(qs);
+    expect(firstPaint).toEqual(settled);
+  });
+
+  it('?auto=1 is not the cached default page: no plan is read and nothing streams', async () => {
+    const { streamed } = await openUrl('auto=1');
+    expect(streamed).toBe(false);
+    expect(planReads()).toEqual([]);
+    // The default view itself still plans and streams.
+    expect((await openUrl('')).streamed).toBe(true);
+    expect(planReads()).toHaveLength(1);
+  });
+
+  // A zero result under Auto-archived only is the table's own "No items match
+  // your filters." row, as when the chip is switched on in the app (the page's
+  // empty-state comment always meant this); a refresh used to say "No items
+  // yet" and offer to add a first item.
+  it.each([
+    ['auto=1', ''],
+    ['status=archived&auto=1', 'status=archived'],
+  ])(
+    '?%s opened as a link shows what the app shows on reaching it from ?%s',
+    async (target, from) => {
+      const start = await openUrl(from);
+      await act(async () => nav.set(target));
+      const inApp = snapshot(start.view.container);
+      start.view.unmount();
+
+      const { firstPaint } = await openUrl(target);
+      expect(firstPaint).toEqual(inApp);
+      expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+      expect(firstPaint.headings).not.toContain('No items yet');
+    },
+  );
+
+  it('Active, from the Auto-archived only view, opens the plain list: the toggle drops auto', async () => {
+    const { view } = await openUrl('status=archived&auto=1');
+    const toggle = within(view.container);
+    expect(toggle.getByRole('tab', { name: 'Active' })).toHaveAttribute(
+      'href',
+      '/dashboard/inventory',
+    );
+    expect(toggle.getByRole('tab', { name: 'Archived' })).toHaveAttribute(
+      'href',
+      '/dashboard/inventory?auto=1&status=archived',
+    );
   });
 });

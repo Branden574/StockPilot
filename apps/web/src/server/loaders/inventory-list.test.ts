@@ -165,6 +165,18 @@ describe('isDefaultInventoryView', () => {
       expect(isDefaultInventoryView({ expected: '' }, 'books')).toBe(false);
     });
 
+    // Review 2026-10-05: ?auto=1 on the Active view was served the cached
+    // default page, while the table's own derivation (and the live path)
+    // narrow to auto-archived rows, which are never active: the list painted
+    // its first page, then emptied once the streamed dataset landed.
+    it('bypasses on ANY ?auto= presence (the Auto-archived only chip — even with the Active status or garbage values)', () => {
+      expect(isDefaultInventoryView({ auto: '1' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ status: 'active', auto: '1' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ auto: '0' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ auto: '' }, 'books')).toBe(false);
+      expect(isDefaultInventoryView({ auto: '1' }, 'books')).toBe(false);
+    });
+
     it('bypasses when a repeated param arrives as an array', () => {
       expect(
         isDefaultInventoryView({ q: ['a', 'b'] as unknown as string }, 'items'),

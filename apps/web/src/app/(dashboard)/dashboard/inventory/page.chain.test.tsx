@@ -589,3 +589,25 @@ describe('Items page: the table starts with the header, not after it', () => {
     expect(unhandled).toEqual([]);
   });
 });
+
+/**
+ * The Archived view's "Auto-archived only" chip (?auto=1) narrows the list to
+ * items the zero-stock job archived (review 2026-10-05). A view it leaves empty
+ * is the table's own "No items match your filters." row, with the chip still
+ * there to switch off, as when it is switched on in the app; it used to be
+ * "No items yet" with an offer to add a first item. The live path (staff) gets
+ * the same answer as the cached one (page.first-paint.test.tsx probes that).
+ */
+describe('Items page: a zero Auto-archived only view', () => {
+  it.each<Record<string, string>>([{ status: 'archived', auto: '1' }, { auto: '1' }])(
+    'staff, %o: the table with nothing in it, not an empty state',
+    async (params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+    },
+  );
+});

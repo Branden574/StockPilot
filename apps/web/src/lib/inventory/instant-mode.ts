@@ -40,10 +40,13 @@
 //   6. Page boundaries — this module paginates GROUP-AWARE (runAwarePages:
 //      a SKU family or size run is never cut), the live server path slices
 //      a fixed 30 rows. That divergence is confined to the views that never
-//      switch modes (staff, viewers, orgs over the cap, dataset failures).
-//      The CACHED default Items view, which paints first and is then
+//      switch modes (staff, viewers, orgs over the cap): each pages one way
+//      only. The CACHED default Items view, which paints first and is then
 //      re-derived here once the full dataset streams in, plans its page 1
 //      with planInstantFirstPage below, so both paints show the same page.
+//      If that dataset fails, the table keeps the planned page 1 and offers
+//      no page 2 (a fixed-slice page 2 would skip or repeat its rows), only
+//      a note to refresh (inventory-table.tsx, plannedPageStranded).
 
 /**
  * Per-view row ceiling for instant mode. Orgs whose (view, warehouse)
@@ -140,10 +143,13 @@ export interface InstantModeState {
   /** 'low' | 'out' from ?stock=; anything else is no stock filter —
    *  mirrors the pages' `params.stock === 'low'` exact comparison. */
   stock: 'low' | 'out' | null;
-  /** ?auto=1 — narrows to auto_archived rows only. Only meaningful
+  /** ?auto=1 — narrows to auto_archived rows only. Meaningful only
    *  paired with status='archived' (the Archived view's "Auto-archived
-   *  only" filter chip); a no-op filter otherwise since active rows
-   *  never carry auto_archived=true (cleared on restore). */
+   *  only" filter chip). NOT a no-op otherwise: active rows never carry
+   *  auto_archived=true (cleared on restore), so with the Active status it
+   *  leaves no row at all, exactly as list() does. That is why any ?auto=
+   *  keeps a URL off the cached default view (isDefaultInventoryView) and
+   *  the Active toggle drops it (review 2026-10-05). */
   autoArchived: boolean;
   /** ?expected=1 — the "Expected" chip view: ONLY rows awaiting their
    *  first receipt (migration 0277), ACROSS lifecycles (status is

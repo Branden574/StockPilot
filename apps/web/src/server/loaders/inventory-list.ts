@@ -207,6 +207,9 @@ export interface InventoryListSearchParamsLike {
   /** '1' = the "Expected" chip view (only items awaiting first receipt,
    *  migration 0277). Any presence bypasses the cached default view. */
   expected?: string;
+  /** '1' = the Archived view's "Auto-archived only" chip (rows the zero-stock
+   *  job archived). Any presence bypasses the cached default view. */
+  auto?: string;
 }
 
 function hasIdFilter(value: string | string[] | undefined): boolean {
@@ -244,6 +247,13 @@ export function isDefaultInventoryView(
   // Any ?expected= presence (the Expected chip view, or garbage) takes
   // the live path — the cached default view only serves the unflagged set.
   if (params.expected !== undefined) return false;
+  // Same for any ?auto= presence (the Archived view's "Auto-archived only"
+  // chip, or garbage). With the Active status it is not a no-op: list() and
+  // the table's own derivation narrow to auto-archived rows, and no active row
+  // is one (the flag is cleared on restore), so the cached default page would
+  // paint rows the table drops the moment it adopts the streamed dataset
+  // (review 2026-10-05: the Active toggle used to carry ?auto=1 over).
+  if (params.auto !== undefined) return false;
   if (hasIdFilter(params.cat) || hasIdFilter(params.loc) || hasIdFilter(params.charter)) {
     return false;
   }
@@ -1500,8 +1510,8 @@ export function deriveInventoryTrends(
  * and this function's sign fan-out. The client fetches the master on
  * demand from the org-scoped /api/items/[id]/image-master route (same
  * 25-day per-path cache → same stable URL). Rows WITHOUT a thumb keep
- * their master/cfThumb inline — it's their only image. The default-view
- * 30-row payload and every server-mode path stay full-fidelity.
+ * their master/cfThumb inline — it's their only image. The default view's
+ * cached page-1 payload and every server-mode path stay full-fidelity.
  */
 export async function resolveInventoryListImages(
   organizationId: string,

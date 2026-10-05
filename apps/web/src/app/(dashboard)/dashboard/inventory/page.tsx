@@ -216,10 +216,13 @@ export default async function InventoryPage({
         <div className="flex flex-wrap items-center gap-2">
           {/* Inventory pages use ?status=active|archived|discontinued|all
               (not ?view=); the toggle reads/writes that param so saved
-              views + deep links keep their existing shape. */}
+              views + deep links keep their existing shape. Active drops
+              the Archived view's "Auto-archived only" chip (?auto=1): no
+              active item is auto-archived, so it would list nothing. */}
           <ArchiveViewToggle
             paramName="status"
             view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+            archivedOnlyParams={['auto']}
           />
           <RackFilterDropdown racks={racks} />
           {canCreate && lifecycleStatus !== 'archived' && (
@@ -438,7 +441,7 @@ async function inventoryTableSection({
   // locally with ZERO server round trips. The SAME pure derivation
   // (lib/inventory/instant-mode.ts) runs here for the empty-state
   // branches and inside the table's SSR pass. The DEFAULT view no longer
-  // enters this branch (`!isDefaultView`): it paints the 30-row server
+  // enters this branch (`!isDefaultView`): it paints the cached page-1
   // payload immediately and STREAMS this dataset instead (unawaited).
   //
   // Coverage boundary: only the view's own item type — a ?type=book|
@@ -468,13 +471,16 @@ async function inventoryTableSection({
   // group-aware, so the page re-shuffled half a second after every refresh.
   // The table instance is preserved (search box / selection survive). The
   // promise NEVER rejects: every failure resolves null → the table stays in
-  // server mode (today's behavior). This replaces the reverted
-  // effect+`.catch` handoff that crashed hydration (recurring bug
-  // pattern #15).
+  // server mode on the planned page, with a note to refresh in place of its
+  // pager (a fixed-slice page 2 would skip or repeat its rows). This
+  // replaces the reverted effect+`.catch` handoff that crashed hydration
+  // (recurring bug pattern #15).
   //
   // Deep links (any data-affecting param → !isDefaultView) keep the
   // AWAITED instant branch below so their SSR HTML reflects the exact URL
-  // state; only the default view streams.
+  // state; only the default view streams. isDefaultInventoryView must
+  // therefore accept only URLs the table's derivation also reads as the
+  // default view (?auto= is not one; page.first-paint.test.tsx probes them).
   const isDefaultView = isDefaultInventoryView(params, 'items');
   const awaitsInstantDataset = useSharedCaches && itemType === 'product' && !isDefaultView;
 
@@ -1047,7 +1053,11 @@ function inventoryEmptyState({
   // just means none of the archived items were system-archived, which is
   // NOT the same as "nothing archived at all" — fall through to the
   // table's plain "No items match your filters." row instead of this
-  // misleading "archive something" CTA.
+  // misleading "archive something" CTA. The "No items yet" branch below
+  // excludes it too: it used to catch this fall-through, so a refresh of a
+  // zero Auto-archived only view offered to add a first item and lost the
+  // chip, while switching the chip on in the app showed the table's row
+  // (review 2026-10-05). The table keeps the chip, so it can be switched off.
   if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
     return (
       <EmptyState
@@ -1058,7 +1068,7 @@ function inventoryEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock) {
+  if (!params.q && !params.stock && params.auto !== '1') {
     return (
       <>
         {/* Renders only while the Items tour runs — gives its "here's a

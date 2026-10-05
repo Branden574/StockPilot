@@ -1868,43 +1868,61 @@ describe('InventoryTable planned first page (streamed default view)', () => {
     expect(screen.queryByRole('button', { name: /jump to page/i })).not.toBeInTheDocument();
   });
 
-  it('when the dataset never comes (it resolves null), the planned numbers stay: they still describe the rows on screen', async () => {
-    const { rerender } = render(
-      <InventoryTable
-        items={[item({ id: 'n1', name: 'Only Row' })]}
-        lookups={EMPTY_LOOKUPS}
-        total={40}
-        pageSize={30}
-        instantPromise={Promise.resolve(null)}
-        firstPage={{
-          pageCount: 2,
-          pageItemCount: 1,
-          distinctSkus: 40,
-          placementRows: 41,
-          skuItemRowCounts: [],
-        }}
-      />,
+  // REWRITTEN (review 2026-10-05). When the dataset never comes, the planned
+  // page stays on screen and its numbers still describe it. Its pager did
+  // not: page 2 is then a server page, which slices a fixed 30 rows by last
+  // update, while the planned page 1 is group-aware (it can stop short and
+  // pull a family's members up from deeper in the list), so a fixed page 2
+  // skipped rows page 1 left out and repeated members it already showed. The
+  // pager gives way to a note to refresh, which streams the dataset again.
+  // (The old version handed each render a NEW promise, so use() never saw it
+  // resolve and the test ran while the dataset was still pending.)
+  const strandedTree = (dataset: Promise<InstantAdoptedPayload | null>, pageCount: number) => (
+    <InventoryTable
+      items={[item({ id: 'n1', name: 'Only Row' })]}
+      lookups={EMPTY_LOOKUPS}
+      total={40}
+      pageSize={30}
+      instantPromise={dataset}
+      firstPage={{
+        pageCount,
+        pageItemCount: 1,
+        distinctSkus: 40,
+        placementRows: 41,
+        skuItemRowCounts: [],
+      }}
+    />
+  );
+
+  it('when the dataset never comes (it resolves null), the planned page and its numbers stay, and a note to refresh replaces the pager', async () => {
+    const dataset = Promise.resolve(null);
+    const { rerender } = render(strandedTree(dataset, 2));
+    // Pending: the planned pager.
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 1 of 2',
     );
     await act(async () => {});
-    rerender(
-      <InventoryTable
-        items={[item({ id: 'n1', name: 'Only Row' })]}
-        lookups={EMPTY_LOOKUPS}
-        total={40}
-        pageSize={30}
-        instantPromise={Promise.resolve(null)}
-        firstPage={{
-          pageCount: 2,
-          pageItemCount: 1,
-          distinctSkus: 40,
-          placementRows: 41,
-          skuItemRowCounts: [],
-        }}
-      />,
-    );
+    // jsdom/React-act quirk (see the adoption tests above): re-render the
+    // IDENTICAL tree so use() reads the settled promise.
+    rerender(strandedTree(dataset, 2));
+    await act(async () => {});
+
+    expect(footerText()).toMatch(/^40 SKUs · 41 rows · /);
+    expect(screen.getByText('Showing 1–1 of 40. Refresh to see more.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /jump to page/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /next/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Only Row' })).toBeInTheDocument();
+  });
+
+  it('a planned page that is the whole list needs no note when the dataset never comes', async () => {
+    const dataset = Promise.resolve(null);
+    const { rerender } = render(strandedTree(dataset, 1));
+    await act(async () => {});
+    rerender(strandedTree(dataset, 1));
     await act(async () => {});
     expect(footerText()).toMatch(/^40 SKUs · 41 rows · /);
-    expect(screen.getAllByText(/^Showing/)[0]).toHaveTextContent('Showing 1–1 of 40');
+    expect(screen.queryByText(/Refresh to see more/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /jump to page/i })).not.toBeInTheDocument();
   });
 
   it('no firstPage (staff, viewers, over-cap orgs): server mode exactly as before', () => {

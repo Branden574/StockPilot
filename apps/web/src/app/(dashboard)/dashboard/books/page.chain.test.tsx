@@ -52,6 +52,7 @@ const m = vi.hoisted(() => ({
   inventoryList: vi.fn(),
   tableProps: vi.fn(),
   notEnabledProps: vi.fn(),
+  toggleProps: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -72,7 +73,12 @@ vi.mock('@/components/books/backfill-covers-button', () => ({ BackfillCoversButt
 vi.mock('@/components/inventory/refresh-book-prices-button', () => ({
   RefreshBookPricesButton: () => null,
 }));
-vi.mock('@/components/ui/archive-view-toggle', () => ({ ArchiveViewToggle: () => null }));
+vi.mock('@/components/ui/archive-view-toggle', () => ({
+  ArchiveViewToggle: (props: Record<string, unknown>) => {
+    m.toggleProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/inventory/rack-filter-dropdown', () => ({ RackFilterDropdown: () => null }));
 vi.mock('@/components/ui/button', () => ({
   Button: ({ children }: { children: unknown }) => children,
@@ -387,4 +393,29 @@ describe('Books page: server chain before rows', () => {
     await flush();
     expect(unhandled).toEqual([]);
   });
+});
+
+/**
+ * The Archived view's "Auto-archived only" chip (?auto=1) narrows the list to
+ * books the zero-stock job archived, and no active book is one (review
+ * 2026-10-05). Active must not keep it, and a view it leaves empty is the
+ * table's own "No items match your filters." row, as when the chip is switched
+ * on in the app, never "No books yet" with an offer to add a first book.
+ */
+describe('Books page: the Auto-archived only parameter', () => {
+  it('the Active toggle drops ?auto= (it only means something on Archived)', async () => {
+    render(await callPage({ status: 'archived', auto: '1' }));
+    expect(m.toggleProps).toHaveBeenCalledWith(
+      expect.objectContaining({ paramName: 'status', archivedOnlyParams: ['auto'] }),
+    );
+  });
+
+  it.each<Record<string, string>>([{ status: 'archived', auto: '1' }, { auto: '1' }])(
+    '%o with no auto-archived book renders the table with nothing in it, not an empty state',
+    async (params) => {
+      render(await callPage(params));
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+    },
+  );
 });

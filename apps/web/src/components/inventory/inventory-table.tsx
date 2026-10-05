@@ -270,13 +270,16 @@ export interface InstantInventoryDataset {
 /**
  * FIRST-ROWS-FIRST STREAMING (React 19 use()): what the page's UNAWAITED
  * dataset promise resolves to. The default manager+ view server-renders
- * immediately from the small 30-row cached payload (server mode), while
- * this full dataset streams behind it over the same RSC response; an
- * invisible <InstantDatasetAdopter> reads it with React.use() and hands
- * it to the (still-mounted) table, which flips into instant mode — SAME
- * component instance, same data, only the delivery order changed. `null`
- * = dataset unavailable (over-cap org or loader failure) → the table
- * stays in server mode, byte-identical to today. The promise NEVER
+ * immediately from the small cached page-1 payload (page 1 of the instant
+ * derivation, planned by the loader; see `firstPage`), while this full
+ * dataset streams behind it over the same RSC response; an invisible
+ * <InstantDatasetAdopter> reads it with React.use() and hands it to the
+ * (still-mounted) table, which flips into instant mode — SAME component
+ * instance, same page, only the delivery order changed. `null` = dataset
+ * unavailable (over-cap org or loader failure) → the table stays in server
+ * mode: an over-cap org's fixed slices as before, and a loader failure
+ * under the planned page keeps that page with a note to refresh in place
+ * of its pager (see `plannedPageStranded`). The promise NEVER
  * rejects (the page resolves null on failure), so nothing in the client
  * path ever calls `.catch` — this is the supported replacement for the
  * reverted `.then().catch()` effect that crashed hydration (recurring
@@ -285,8 +288,8 @@ export interface InstantInventoryDataset {
 export interface InstantAdoptedPayload {
   items: InstantDatasetItem[];
   placement?: Record<string, InstantPlacementLine[]>;
-  /** Full-dataset 14-day series — replaces the 30-row `trends` prop the
-   *  moment instant mode takes over, so every locally-derived page has
+  /** Full-dataset 14-day series — replaces the first page's `trends` prop
+   *  the moment instant mode takes over, so every locally-derived page has
    *  its sparklines ready. */
   trends?: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   view: 'items' | 'books';
@@ -396,7 +399,7 @@ export interface InventoryTableProps {
   /** First-rows-first streaming — see InstantAdoptedPayload. Only the
       manager+ DEFAULT view passes this; deep links pass the awaited
       `instant` prop instead. While it's pending the table runs in server
-      mode over the initial 30 rows; keystrokes take today's server-search
+      mode over the planned page 1; keystrokes take today's server-search
       path until the dataset lands, at which point the SAME (preserved)
       search box re-derives locally over the full dataset. Consumed via
       React.use() in <InstantDatasetAdopter> — NEVER a `.then().catch()`
@@ -408,8 +411,10 @@ export interface InventoryTableProps {
       "Showing 1–N" range and the footer's set-wide SKU and row counts. Until
       the dataset is adopted (or for good, if it resolves null) the table
       prints these instead of server-mode arithmetic over `total`, so the
-      first paint already reads exactly as the settled page. Ignored in
-      instant mode and while a server-mode search is on screen. Absent →
+      first paint already reads exactly as the settled page. If it resolves
+      null, a note to refresh replaces the pager: a server page 2 would be
+      a fixed 30-row slice that skips or repeats rows of this page. Ignored
+      in instant mode and while a server-mode search is on screen. Absent →
       server mode as before (staff/viewer, over-cap orgs, deep links). */
   firstPage?: InstantFirstPage | null;
   /** Server-computed count of ACTIVE items awaiting their first receipt
@@ -606,14 +611,14 @@ function seriesForRow(
 
 /**
  * Invisible dataset adopter (React 19 use()). The default manager+ table
- * mounts in server mode over the fast 30-row payload and the FULL instant
- * dataset arrives as `promise` — an unawaited server promise streamed
- * across the RSC boundary. This leaf reads it with React.use(), which
- * suspends ONLY this leaf (behind the table's own `<Suspense fallback=
- * {null}>`, so the 30 rows stay painted the whole time), then hands the
- * resolved value to the still-mounted table via `onResolve`. Because the
- * table never unmounts, its search box, selection, scroll and every other
- * local state survive the server→instant flip.
+ * mounts in server mode over the cached page-1 payload (the planned page 1)
+ * and the FULL instant dataset arrives as `promise` — an unawaited server
+ * promise streamed across the RSC boundary. This leaf reads it with
+ * React.use(), which suspends ONLY this leaf (behind the table's own
+ * `<Suspense fallback={null}>`, so the first page stays painted the whole
+ * time), then hands the resolved value to the still-mounted table via
+ * `onResolve`. Because the table never unmounts, its search box, selection,
+ * scroll and every other local state survive the server→instant flip.
  *
  * This is the supported replacement for the reverted
  * `instantPromise.then().catch()` effect (recurring bug pattern #15): the
@@ -669,8 +674,8 @@ export function InventoryTable({
   productGroupUnits,
 }: InventoryTableProps) {
   // Performance marker (lib/perf/marks.ts): "the list is useful". A mount-only
-  // effect, so it fires when the INITIAL rows render — the fast 30-row
-  // server-mode payload on the default view — and NOT again when the streamed
+  // effect, so it fires when the INITIAL rows render — the cached page-1
+  // payload on the default view — and NOT again when the streamed
   // instant dataset is adopted below: adoption is a state change on this same
   // mounted instance, never a remount. First rows first is what the person
   // waits for, so it is what gets timed. Covers Items and Books (the books
@@ -679,12 +684,12 @@ export function InventoryTable({
   usePerfUseful();
 
   // ── Streamed-dataset adoption (React 19 use()) ──────────────────────
-  // The default manager+ view mounts in server mode over the fast 30-row
+  // The default manager+ view mounts in server mode over the cached page-1
   // payload while the FULL instant dataset arrives as `instantPromise` —
   // an unawaited server promise streamed across the RSC boundary. The
   // invisible <InstantDatasetAdopter> rendered below reads it with
   // React.use() (suspending ONLY itself, behind a `fallback={null}` — the
-  // 30 rows stay painted) and calls setAdopted with the resolved value.
+  // first page stays painted) and calls setAdopted with the resolved value.
   // Because THIS component instance never unmounts, the search box,
   // selection, scroll and sparkline mode all survive the server→instant
   // flip, and any keystrokes typed during the gap re-derive over the full
@@ -692,12 +697,14 @@ export function InventoryTable({
   // cached rows ARE page 1 of the default derivation because the loader
   // plans them with it, and `firstPage` carries the pager and footer
   // numbers instant mode will print (see `plannedFirstPage` below). `null`
-  // (over-cap org / loader failure) keeps plain server mode. The promise is
+  // (over-cap org / loader failure) keeps server mode (a loader failure
+  // under the planned page: see `plannedPageStranded`). The promise is
   // consumed by use(), NEVER a `.then().catch()` effect — that was the
   // reverted crash (recurring bug pattern #15).
   // `undefined` = the streamed payload hasn't resolved yet; `null` = it
   // resolved to "no dataset" (over-cap org / loader failure) — server
-  // mode is final. The distinction drives `instantPending` below.
+  // mode is final. The distinction drives `instantPending` and
+  // `plannedPageStranded` below.
   const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null | undefined>(undefined);
   const handleAdopt = React.useCallback((payload: InstantAdoptedPayload | null) => {
     setAdopted(payload);
@@ -1356,15 +1363,27 @@ export function InventoryTable({
     }
     return plannedFirstPage?.placementRows ?? null;
   }, [instantView, effectiveInstant, plannedFirstPage]);
+  // THE PLANNED PAGE, STRANDED (review 2026-10-05): the dataset resolved null
+  // (a loader failure) while the planned page is on screen. The page and its
+  // numbers stay (they still describe it), but its pager cannot: page 2 would
+  // be a server page, sliced at a fixed 30 rows by last update, while the
+  // planned page 1 is group-aware (it can stop short of a family that does
+  // not fit, and pulls a family's members up from deeper in the list), so a
+  // fixed page 2 skipped rows page 1 left out and repeated members it already
+  // showed. A plain note to refresh replaces the pager: a refresh streams the
+  // dataset again. A planned page that is the whole list needs no note.
+  const plannedPageStranded =
+    plannedFirstPage !== null && adopted === null && plannedFirstPage.pageCount > 1;
   // Show pagination when there is genuinely more than one page. Instant
   // mode asks the derivation (group-aware page count) rather than
   // `total > pageSize`, which over-counts pages whenever a family runs a
   // page long and would offer a Next that lands on an empty page; the
-  // planned first page brings the same page count.
+  // planned first page brings the same page count (and has no pager once
+  // stranded, see above).
   const showPagination = instantMode
     ? (instantView?.pageCount ?? 1) > 1
     : plannedFirstPage
-      ? plannedFirstPage.pageCount > 1
+      ? plannedFirstPage.pageCount > 1 && !plannedPageStranded
       : !q.trim() && total > pageSize;
 
   // What the table actually renders. Instant mode: the one complete
@@ -1381,8 +1400,8 @@ export function InventoryTable({
   // the memo'd <Sparkline> skip its SVG-path recompute for all 50 rows. This
   // is the fix for the click-lag: a single checkbox toggle no longer rebuilds
   // every visible sparkline.
-  // Adopted streamed payload carries FULL-dataset trends (the 30-row
-  // `trends` prop only covers the initial page); prefer them once present.
+  // Adopted streamed payload carries FULL-dataset trends (the `trends`
+  // prop only covers the initial page); prefer them once present.
   const effectiveTrends = adopted?.trends ?? trends;
   const seriesByItem = React.useMemo(() => {
     const m = new Map<string, number[]>();
@@ -2625,6 +2644,13 @@ export function InventoryTable({
             onNavigate={instantMode ? shallowPush : undefined}
             pendingInstant={instantPending}
           />
+        ) : plannedPageStranded && pageRange ? (
+          // The stranded planned page (see plannedPageStranded): no page
+          // links, which would skip or repeat rows.
+          <p className="text-muted-foreground text-[12px]">
+            Showing {pageRange.startRow}–{pageRange.endRow} of {effectiveTotal}. Refresh to see
+            more.
+          </p>
         ) : (
           <span />
         )}
