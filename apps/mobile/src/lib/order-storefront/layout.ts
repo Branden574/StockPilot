@@ -72,6 +72,14 @@ export function itemRowStacked(fontScale: number): boolean {
   return finite(fontScale, 1) > ROW_STACK_FONT_SCALE;
 }
 
+/** The catalog's title scrolls with the list past the row threshold (desk
+ *  check F8.4, PO-4 review): pinned above the list with the search, at AX5
+ *  with the keyboard up it left less than one row of results. The search
+ *  stays pinned (in the list header it would remount and drop keystrokes). */
+export function catalogTitleInList(fontScale: number): boolean {
+  return itemRowStacked(fontScale);
+}
+
 /** Manager notes in checkout: a fixed height (about five lines) that scrolls
  *  inside itself, where iOS keeps the caret in view. A field that grew with
  *  its text ran under the keyboard and hid the caret and the counter

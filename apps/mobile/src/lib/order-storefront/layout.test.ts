@@ -4,6 +4,7 @@ import {
   CART_COLUMN_WIDTH,
   MIN_TAP,
   SHEET_MAX_WIDTH,
+  catalogTitleInList,
   itemRowStacked,
   kitRowStacked,
   NOTES_FIELD_HEIGHT,
@@ -94,5 +95,17 @@ describe('Manager notes are a fixed height (simulator walk D5)', () => {
   it('taller than the old minimum, short enough that its block shows above the keyboard on an SE-width phone', () => {
     expect(NOTES_FIELD_HEIGHT).toBeGreaterThanOrEqual(96);
     expect(NOTES_FIELD_HEIGHT).toBeLessThanOrEqual(160);
+  });
+});
+
+// PO-4 review / desk check F8.4 (walk shot M23-iphone-iphone-ax5-search-
+// keyboard.png): at AX5 the title and the search were pinned above the list,
+// and with the keyboard up less than one row of results showed.
+describe('the catalog’s title scrolls with the list past the row threshold (PO-4 review, F8.4)', () => {
+  it('pinned at the usual sizes; in the list at the accessibility sizes', () => {
+    expect(catalogTitleInList(1)).toBe(false);
+    expect(catalogTitleInList(1.4)).toBe(false);
+    expect(catalogTitleInList(1.6)).toBe(true);
+    expect(catalogTitleInList(3.1)).toBe(true);
   });
 });

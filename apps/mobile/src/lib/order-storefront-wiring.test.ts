@@ -209,7 +209,9 @@ describe('the list: build #23’s settings, never FlashList, never a ScrollView 
     const search = catalog.indexOf('placeholder={STOREFRONT_SEARCH_PLACEHOLDER_COPY}');
     expect(search).toBeGreaterThan(-1);
     expect(catalog.indexOf('const searchBar = (')).toBeLessThan(search);
-    expect(catalog).toMatch(/\{title\}\s*<\/Display>\s*\{searchBar\}/);
+    // Past the row threshold the title scrolls with the list, the search
+    // stays pinned (PO-4 review, F8.4).
+    expect(catalog).toMatch(/\{titleInList \? null : titleNode\}\s*\{searchBar\}/);
     const searchInput = catalog.slice(catalog.lastIndexOf('<TextInput', search), search + 200);
     expect(searchInput).not.toMatch(/autoFocus/);
     // Uncontrolled (no value=): a busy JS thread never drops a keystroke; the
@@ -935,5 +937,17 @@ describe('storefront text uses colours that meet AA (PO-4 review)', () => {
       }
     }
     expect(controls).not.toContain("variant === 'destructive' ? ACCENT.crit");
+  });
+});
+
+// PO-4 review / F8.4: the title pinned above the list at AX5 left less than
+// one row of results with the keyboard up. Mutations caught: the title always
+// pinned, or the search moved into the list header.
+describe('at the accessibility sizes the catalog’s title scrolls with the list (PO-4 review, F8.4)', () => {
+  it('by the tested rule: in the list header past the threshold, pinned otherwise; the search always pinned', () => {
+    expect(catalog).toContain('const titleInList = catalogTitleInList(fontScale);');
+    const header = catalog.slice(catalog.indexOf('const header = ('), catalog.indexOf('const searchBar = ('));
+    expect(header).toMatch(/\{titleInList \? titleNode : null\}/);
+    expect(header).not.toContain('searchBar');
   });
 });

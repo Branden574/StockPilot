@@ -77,7 +77,7 @@ import {
   sortChipLabel,
 } from '@/lib/order-storefront/a11y';
 import { itemNameFrom } from '@/lib/order-storefront/checkout';
-import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { MIN_TAP, STOREFRONT_GUTTER, catalogTitleInList, storefrontLayout } from '@/lib/order-storefront/layout';
 import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import {
@@ -414,6 +414,14 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
       <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
     </View>
   );
+  // Past the row threshold the title scrolls with the list, so the search and
+  // the keyboard leave room for results (F8.4, PO-4 review).
+  const titleInList = catalogTitleInList(fontScale);
+  const titleNode = (
+    <Display size={30} accessibilityRole="header">
+      {title}
+    </Display>
+  );
 
   if (!snap || snap.setup.status !== 'ready') {
     return (
@@ -451,6 +459,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
 
   const header = (
     <View style={{ gap: 12, paddingBottom: 8 }}>
+      {titleInList ? titleNode : null}
       {target === null ? (
         // One warehouse and nothing locked: a row that shows it, not a
         // dimmed button with no reason (PO-4 review).
@@ -617,9 +626,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         {topBar}
         <View style={{ paddingHorizontal: STOREFRONT_GUTTER, paddingBottom: 10, gap: 12 }}>
-          <Display size={30} accessibilityRole="header">
-            {title}
-          </Display>
+          {titleInList ? null : titleNode}
           {searchBar}
         </View>
       </SafeAreaView>
