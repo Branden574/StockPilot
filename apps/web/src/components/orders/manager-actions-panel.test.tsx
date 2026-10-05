@@ -709,6 +709,27 @@ describe('ManagerActionsPanel — the confirm before an order leaves short (F2-2
     expect(physicalSignature).not.toHaveBeenCalled();
   });
 
+  // Review (2026-10-05): the toast said "order hand-over complete" whatever
+  // the hand-over left; a short one backorders the order. The action now
+  // answers the resulting status and the toast says it.
+  it.each([
+    ['completed', 'Physical signature recorded. The order is marked completed.'],
+    ['backordered', 'Physical signature recorded. What was handed over is recorded. The rest stays on backorder.'],
+  ] as const)('a paper hand-over that leaves the order %s says so', async (status, words) => {
+    const user = userEvent.setup();
+    vi.mocked(toast.success).mockReset();
+    physicalSignature.mockResolvedValue({ ok: true, data: { status } });
+    render(<ManagerActionsPanel {...baseProps({ ...manager, status: 'in_transit', departureLines: PICKED_LINES })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Physical signature' }));
+    await user.type(screen.getByLabelText("Signer's name"), 'Pat Signer');
+    await user.click(screen.getByRole('button', { name: 'Record signature' }));
+
+    expect(physicalSignature).toHaveBeenCalledWith({ id: 'order-1', signerName: 'Pat Signer' });
+    expect(toast.success).toHaveBeenCalledWith(words);
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('hand-over complete'));
+  });
+
   it('"Fix the order" goes nowhere and lands on the first short line', async () => {
     const user = userEvent.setup();
     const row = renderLineRow('line-pens');

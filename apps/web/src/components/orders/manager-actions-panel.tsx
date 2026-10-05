@@ -80,6 +80,7 @@ import {
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
+import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
 interface Props {
@@ -596,7 +597,8 @@ export function ManagerActionsPanel({
       return;
     }
     setPhysicalSigOpen(false);
-    toast.success('Physical signature recorded — order hand-over complete.');
+    // What the hand-over left: completed, or the rest on backorder (review).
+    toast.success(physicalSignatureRecordedMessage(res.data.status));
     router.refresh();
   }
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { alreadySignedMessage, signedOutcome } from './sign-outcome';
+import { alreadySignedMessage, physicalSignatureRecordedMessage, signedOutcome } from './sign-outcome';
 
 /**
  * L87: after a hand-over that left units owed, the sign page said "The order
@@ -70,5 +70,28 @@ describe('alreadySignedMessage', () => {
   it('any other status, or none, claims only the signature', () => {
     expect(alreadySignedMessage('cancelled')).toBe('Thanks. Your signature is recorded.');
     expect(alreadySignedMessage(null)).toBe('Thanks. Your signature is recorded.');
+  });
+});
+
+// Review (2026-10-05): the web's Physical signature always said "Physical
+// signature recorded — order hand-over complete.", while the same paper
+// hand-over on a short order backorders it, the sign page says "The rest stays
+// on backorder." and the requester is emailed "partially fulfilled". The
+// toast now says what the hand-over left, in the sign page's words.
+describe('physicalSignatureRecordedMessage', () => {
+  it('completed: the order is marked completed', () => {
+    expect(physicalSignatureRecordedMessage('completed')).toBe(
+      'Physical signature recorded. The order is marked completed.',
+    );
+  });
+  it('backordered: what was handed over is recorded and the rest stays on backorder', () => {
+    expect(physicalSignatureRecordedMessage('backordered')).toBe(
+      'Physical signature recorded. What was handed over is recorded. The rest stays on backorder.',
+    );
+  });
+  it('a status it cannot tell claims nothing beyond the signature', () => {
+    for (const status of [null, 'in_transit']) {
+      expect(physicalSignatureRecordedMessage(status)).toBe('Physical signature recorded.');
+    }
   });
 });

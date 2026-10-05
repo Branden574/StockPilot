@@ -125,9 +125,9 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The sign page says what was handed over',
         whatChanged:
-          'After a hand-over that leaves items owed, the sign page says what was handed over is recorded and the rest stays on backorder. After a hand-over recorded with Physical signature, a person who placed their own order is emailed at the address on their profile about what was handed over, as after signing on the sign page.',
+          'After a hand-over that leaves items owed, the sign page says what was handed over is recorded and the rest stays on backorder, and so does recording a Physical signature on the web. After a hand-over recorded with Physical signature, a person who placed their own order is emailed at the address on their profile about what was handed over, as after signing on the sign page.',
         whyItMatters:
-          'It said the order was completed, although the order was backordered. After a Physical signature, a person who placed their own order got only the notice in the app.',
+          'The sign page said the order was completed, and Physical signature that the hand-over was complete, although the order was backordered. After a Physical signature, a person who placed their own order got only the notice in the app.',
         howItAffectsYou:
           'When a hand-over completes the order, the page says so, as before. If you turned off the Order completed email in your notification settings, these emails stay off.',
         whatToDo: 'No action needed.',

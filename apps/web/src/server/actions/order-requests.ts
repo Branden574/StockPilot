@@ -763,20 +763,21 @@ const physicalSignatureSchema = z.object({
 /**
  * Record a paper signature at hand-over (manager+ or the assigned driver —
  * the RPC enforces it). Runs the same completed/backordered fork as the
- * digital sign page.
+ * digital sign page, and answers the status it left, so the panel says
+ * whether the order completed or the rest stays on backorder.
  */
 export async function confirmPhysicalSignatureAction(
   input: z.input<typeof physicalSignatureSchema>,
-): Promise<ActionResult<void>> {
+): Promise<ActionResult<{ status: string | null }>> {
   const parsed = physicalSignatureSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Signer name is required');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.confirmPhysicalSignature(parsed.data.id, parsed.data.signerName);
+    const row = await svc.confirmPhysicalSignature(parsed.data.id, parsed.data.signerName);
     revalidatePath('/dashboard/orders');
     revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
-    return ok(undefined);
+    return ok({ status: row?.status ?? null });
   } catch (e) {
     return toResult(e);
   }

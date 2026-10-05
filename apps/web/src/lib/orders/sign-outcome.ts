@@ -53,3 +53,19 @@ export function alreadySignedMessage(status: string | null): string {
   }
   return `Thanks. ${signedOutcome(status).message}`;
 }
+
+/**
+ * What the web's Physical signature says once a paper signature is recorded
+ * (review 2026-10-05). It said "order hand-over complete" whatever the
+ * hand-over left, although confirm_physical_signature runs the same fork as
+ * the sign page: a short hand-over backorders the order (and the requester is
+ * emailed "partially fulfilled"). Its words now follow the status the
+ * action answers, in the sign page's words; a status it cannot tell claims
+ * nothing beyond the signature.
+ */
+export function physicalSignatureRecordedMessage(status: string | null): string {
+  if (status === 'completed' || status === 'backordered') {
+    return `Physical signature recorded. ${signedOutcome(status).message}`;
+  }
+  return 'Physical signature recorded.';
+}
