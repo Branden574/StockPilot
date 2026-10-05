@@ -87,13 +87,14 @@
 -- (ADD COLUMN, ADD CONSTRAINT) and the view return_overview (CREATE OR
 -- REPLACE VIEW; locking a view also locks the tables it reads), SHARE ROW
 -- EXCLUSIVE on organizations, returns, return_lines, inventory_items and
--- order_request_lines (the new foreign keys and triggers), and ACCESS
--- EXCLUSIVE on every table supautils.policy_grants lists for this role
--- (supautils takes those on any CREATE POLICY by postgres). A busy table
--- fails one attempt, its subtransaction releases what it took, and the next
--- attempt starts after 50 to 150 ms holding nothing, up to 40 attempts; then
--- 55P03 and nothing is applied. No later statement locks a new table, so the
--- file never waits while holding a lock
+-- order_request_lines (the new foreign keys and triggers), ACCESS SHARE on
+-- stock_reservations (the new view reads it; the mode blocks no reader or
+-- writer), and ACCESS EXCLUSIVE on every table supautils.policy_grants lists
+-- for this role (supautils takes those on any CREATE POLICY by postgres). A
+-- busy table fails one attempt, its subtransaction releases what it took,
+-- and the next attempt starts after 50 to 150 ms holding nothing, up to 40
+-- attempts; then 55P03 and nothing is applied. No later statement locks a
+-- table the prelude did not, so the file never waits while holding a lock
 -- (scripts/db-concurrency/0397_migration_lock_footprint.sh). lock_timeout is
 -- 5s for the file and 900ms after the prelude. Push off-peak: order readers
 -- wait for the few milliseconds the file holds order_requests.
@@ -2197,7 +2198,9 @@ comment on function public.tg_returns_api_guard() is
 -- Inside DO because the CLI batch is not a transaction block (a top-level LOCK
 -- TABLE refuses there, as 0373 found); the locks last until the batch commits.
 -- Locking the view locks the tables its definition reads (returns,
--- order_requests, return_lines) in the same mode.
+-- order_requests, return_lines) in the same mode. The replaced view also
+-- reads stock_reservations: parsing it takes ACCESS SHARE there, so the
+-- prelude takes that too and nothing below waits for a lock.
 do $lock$
 declare
   v_grants text := nullif(current_setting('supautils.policy_grants', true), '');
@@ -2214,6 +2217,7 @@ begin
       lock table only public.organizations, public.returns, public.return_lines,
                       public.inventory_items, public.order_request_lines
         in share row exclusive mode nowait;
+      lock table only public.stock_reservations in access share mode nowait;
       if v_grants is not null then
         for v_name in
           select jsonb_array_elements_text(coalesce(v_grants::jsonb -> current_user::text, '[]'::jsonb))
