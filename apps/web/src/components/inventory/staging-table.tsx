@@ -666,7 +666,9 @@ export function StagingTable({
                       {/* Received date */}
                       <td className="px-3 py-3">
                         {row.receivedAt ? (
-                          <span className="text-sm" title={row.receivedAt}>
+                          // Rendered on the server, hydrated a minute later:
+                          // tolerate the drift instead of React error #418.
+                          <span className="text-sm" title={row.receivedAt} suppressHydrationWarning>
                             {formatRelative(row.receivedAt)}
                           </span>
                         ) : (

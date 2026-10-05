@@ -186,7 +186,10 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                         <Pencil className="h-3 w-3" />
                       </button>
                     </div>
-                    <div className="text-muted-foreground text-xs">
+                    {/* "active 4 min ago" is rendered on the server and
+                        hydrated moments later, often after the minute rolls
+                        over: tolerate it instead of React error #418. */}
+                    <div className="text-muted-foreground text-xs" suppressHydrationWarning>
                       {s.customName ? `${s.label} · ` : ''}
                       {s.ip ?? 'unknown IP'} · active {formatLastActive(s.lastActiveAt)}
                     </div>

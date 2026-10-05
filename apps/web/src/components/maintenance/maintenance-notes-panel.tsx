@@ -86,7 +86,9 @@ export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames
           {notes.map((n) => (
             <li key={n.id} className="rounded-md bg-muted/40 p-3">
               <p className="whitespace-pre-wrap text-sm">{n.body}</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              {/* The relative time is rendered on the server and hydrated a
+                  minute later: tolerate the drift instead of React error #418. */}
+              <p className="mt-1 text-[11px] text-muted-foreground" suppressHydrationWarning>
                 {(n.authorUserId && authorNames[n.authorUserId]) || 'StockPilot coordinator'} ·{' '}
                 {formatRelative(n.createdAt)}
               </p>

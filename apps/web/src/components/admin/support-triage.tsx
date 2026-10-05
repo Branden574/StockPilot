@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/use-hydrated';
 import { updateSupportTicketAction } from '@/server/actions/support-tickets';
 
 import type { SupportTicketRow, TicketPriority, TicketStatus } from '@/server/services/support-tickets';
@@ -111,6 +112,9 @@ function TicketCard({
   const [priority, setPriority] = React.useState<TicketPriority>(ticket.priority);
   const [notes, setNotes] = React.useState(ticket.adminNotes ?? '');
   const [busy, setBusy] = React.useState(false);
+  // The day it came in is the viewer's; the server's zone (UTC) would print
+  // the next day for an evening ticket (React error #418). Printed once hydrated.
+  const hydrated = useHydrated();
 
   async function save() {
     setBusy(true);
@@ -131,8 +135,8 @@ function TicketCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{ticket.subject}</div>
           <div className="text-muted-foreground truncate text-xs">
-            {ticket.email} · {ticket.category} ·{' '}
-            {new Date(ticket.createdAt).toLocaleDateString()}
+            {ticket.email} · {ticket.category}
+            {hydrated ? ` · ${new Date(ticket.createdAt).toLocaleDateString()}` : null}
           </div>
         </div>
         <Badge variant={ticket.status === 'open' ? 'success' : 'outline'}>

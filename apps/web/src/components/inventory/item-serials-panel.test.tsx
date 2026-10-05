@@ -12,6 +12,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hydrateAcrossClockShift } from '@/test/hydration';
+
 // ── Mock server actions ──────────────────────────────────────────────────────
 const mockList = vi.fn(async (_itemId: string, _page: number) => ({
   ok: true as const,
@@ -166,5 +168,33 @@ describe('ItemSerialsPanel', () => {
     await waitFor(() => {
       expect(mockList).toHaveBeenCalledWith('item-1', 1);
     });
+  });
+});
+
+// An item's page server-renders its serials (item-detail hands the first
+// page in), and each row prints when it was added as a relative time. A
+// minute between the server render and hydration changes the words and React
+// throws error #418; the cell carries suppressHydrationWarning.
+describe('ItemSerialsPanel hydrates across a clock tick', () => {
+  it('the relative time rendered on the server and hydrated a minute later: no hydration error', async () => {
+    const t0 = Date.parse('2026-10-05T21:00:00.000Z');
+    const rows = [{ ...RECEIPT_ROW, createdAt: new Date(t0 - 210_000).toISOString() }];
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <ItemSerialsPanel
+          {...BASE_PROPS}
+          canEditItems={false}
+          initialRows={rows}
+          initialTotal={1}
+        />
+      ),
+      { serverNow: t0, browserNow: t0 + 60_000 },
+    );
+    try {
+      expect(run.html).toContain('3 minutes ago');
+      expect(run.errors).toEqual([]);
+    } finally {
+      run.unmount();
+    }
   });
 });

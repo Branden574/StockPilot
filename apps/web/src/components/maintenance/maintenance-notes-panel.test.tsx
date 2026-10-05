@@ -2,6 +2,8 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hydrateAcrossClockShift } from '@/test/hydration';
+
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: refreshMock, back: vi.fn() }),
@@ -104,5 +106,33 @@ describe('MaintenanceNotesPanel', () => {
       <MaintenanceNotesPanel requestId="r1" canManage notes={NOTES} authorNames={{}} truncated={false} />,
     );
     expect(screen.getByText(/^StockPilot coordinator ·/)).toBeInTheDocument();
+  });
+});
+
+// The maintenance page server-renders the notes, and each one prints a
+// relative time. A minute between the server render and hydration changes the
+// words and React throws error #418; the line carries suppressHydrationWarning.
+describe('MaintenanceNotesPanel hydrates across a clock tick', () => {
+  it('the relative time rendered on the server and hydrated a minute later: no hydration error', async () => {
+    const t0 = Date.parse('2026-10-05T21:00:00.000Z');
+    const notes = [{ ...NOTES[0]!, createdAt: new Date(t0 - 210_000).toISOString() }];
+    const run = await hydrateAcrossClockShift(
+      () => (
+        <MaintenanceNotesPanel
+          requestId="r1"
+          canManage
+          notes={notes}
+          authorNames={{ 'u-1': 'Dana Lee' }}
+          truncated={false}
+        />
+      ),
+      { serverNow: t0, browserNow: t0 + 60_000 },
+    );
+    try {
+      expect(run.html).toContain('3 minutes ago');
+      expect(run.errors).toEqual([]);
+    } finally {
+      run.unmount();
+    }
   });
 });

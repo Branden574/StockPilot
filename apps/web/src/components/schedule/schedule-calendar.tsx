@@ -7,6 +7,7 @@ import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
 import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
+import { useHydrated } from '@/lib/use-hydrated';
 import { cn } from '@/lib/utils';
 
 interface CalendarEvent {
@@ -85,6 +86,12 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const today = React.useMemo(() => new Date(), []);
+  // Which cell an event sits in, and which is today, come from the clock's
+  // LOCAL day: the server's (UTC on Vercel) while it renders, the viewer's in
+  // the browser. An evening event is the next day in UTC, so the server drew
+  // it in another cell (React error #418), and the server's today stayed
+  // marked. Both are drawn once hydrated; the grid itself is the same on both.
+  const hydrated = useHydrated();
 
   // Bucket events by ymd of start date (events spanning multiple days
   // currently render only on their start day — keeps the cells uncluttered;
@@ -178,8 +185,8 @@ export function ScheduleCalendar({ year, month, events, canManage = false }: Pro
         <div className="grid grid-cols-7">
           {cells.map((d, i) => {
             const inMonth = d.getMonth() === month - 1;
-            const isToday = isSameDay(d, today);
-            const dayEvents = byDay.get(ymd(d)) ?? [];
+            const isToday = hydrated && isSameDay(d, today);
+            const dayEvents = hydrated ? (byDay.get(ymd(d)) ?? []) : [];
             const visible = dayEvents.slice(0, 3);
             const overflow = dayEvents.length - visible.length;
             return (

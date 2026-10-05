@@ -34,15 +34,21 @@ export function formatRelative(date: Date | string, now: Date = new Date()) {
   return '';
 }
 
-/** Short calendar date, e.g. "Apr 18". Returns "—" for null/invalid input. */
+/**
+ * Short calendar date, e.g. "Apr 18". Returns "—" for null/invalid input.
+ * Without `timeZone` the day is the RUNTIME's: the server's (UTC on Vercel)
+ * or the viewer's, which differ in the evening west of UTC. Pass 'UTC' for a
+ * date-only value stored as that day's UTC midnight (a PO's expected date).
+ */
 export function formatDateShort(
   date: Date | string | null | undefined,
   locale = 'en-US',
+  timeZone?: string,
 ) {
   if (!date) return '—';
   const d = typeof date === 'string' ? new Date(date) : date;
   if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(d);
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', timeZone }).format(d);
 }
 
 export function slugify(input: string) {

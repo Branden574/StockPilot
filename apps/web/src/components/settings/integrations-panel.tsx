@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   beginConnectAction,
   connectEasyPostAction,
@@ -104,10 +105,17 @@ const STATUS_BADGE: Record<
   disconnected: { label: 'Disconnected', variant: 'outline' },
 };
 
-function formatDate(iso: string | null): string {
+/**
+ * A date and time in the VIEWER's zone and locale. The server's zone (UTC on
+ * Vercel) differs in every hour, so hydrating it threw React error #418; until
+ * `hydrated` (useHydrated) a real date is a non-breaking space that holds the
+ * line, and a missing one is a dash at once.
+ */
+function formatDate(iso: string | null, hydrated: boolean): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return '—';
+  return hydrated ? d.toLocaleString() : '\u00a0';
 }
 
 export function IntegrationsPanel(props: QuickBooksPanelProps) {
@@ -120,6 +128,7 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
   const [connecting, startConnect] = React.useTransition();
   const [disconnecting, startDisconnect] = React.useTransition();
   const [savingMapping, startSaveMapping] = React.useTransition();
+  const hydrated = useHydrated();
 
   // Local form state for the account mapping (controlled inputs).
   const [billExpense, setBillExpense] = React.useState(props.accountIds.billExpense ?? '');
@@ -201,11 +210,11 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
             </div>
             <div>
               <dt className="text-muted-foreground text-xs">Last connected</dt>
-              <dd className="font-medium">{formatDate(props.lastConnectedAt)}</dd>
+              <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground text-xs">Last synced</dt>
-              <dd className="font-medium">{formatDate(props.lastSyncedAt)}</dd>
+              <dd className="font-medium">{formatDate(props.lastSyncedAt, hydrated)}</dd>
             </div>
             {props.lastError && (
               <div className="col-span-2">
@@ -348,7 +357,7 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
                     )}
                   </div>
                   <span className="text-muted-foreground shrink-0 text-xs">
-                    {formatDate(row.completedAt ?? row.createdAt)}
+                    {formatDate(row.completedAt ?? row.createdAt, hydrated)}
                   </span>
                 </li>
               ))}
@@ -411,6 +420,7 @@ function DeadLetterCard({ rows }: { rows: FailedSyncRow[] }) {
 function DeadLetterRow({ row }: { row: FailedSyncRow }) {
   const [replaying, startReplay] = React.useTransition();
   const [replayed, setReplayed] = React.useState(false);
+  const hydrated = useHydrated();
 
   function handleReplay() {
     startReplay(async () => {
@@ -438,7 +448,7 @@ function DeadLetterRow({ row }: { row: FailedSyncRow }) {
           <p className="text-muted-foreground truncate text-xs">External id: {row.externalId}</p>
         )}
         {row.lastError && <p className="text-destructive truncate text-xs">{row.lastError}</p>}
-        <p className="text-muted-foreground text-xs">{formatDate(row.updatedAt ?? row.createdAt)}</p>
+        <p className="text-muted-foreground text-xs">{formatDate(row.updatedAt ?? row.createdAt, hydrated)}</p>
       </div>
       <Button
         type="button"
@@ -468,6 +478,7 @@ function EasyPostCard(props: EasyPostPanelProps) {
   const [connecting, startConnect] = React.useTransition();
   const [disconnecting, startDisconnect] = React.useTransition();
   const [apiKey, setApiKey] = React.useState('');
+  const hydrated = useHydrated();
   const [webhookSecret, setWebhookSecret] = React.useState('');
 
   function handleConnect(e: React.FormEvent) {
@@ -529,7 +540,7 @@ function EasyPostCard(props: EasyPostPanelProps) {
         <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
           <div>
             <dt className="text-muted-foreground text-xs">Last connected</dt>
-            <dd className="font-medium">{formatDate(props.lastConnectedAt)}</dd>
+            <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
           </div>
           {props.lastError && (
             <div className="col-span-2">

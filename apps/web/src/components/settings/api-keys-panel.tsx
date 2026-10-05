@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useHydrated } from '@/lib/use-hydrated';
 import { createApiKeyAction, revokeApiKeyAction } from '@/server/actions/api-keys';
 
 // Read scopes that have live endpoints. (inventory:write exists in the scope
@@ -37,6 +38,10 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
   const [selected, setSelected] = React.useState<Set<string>>(new Set(['inventory:read']));
   const [busy, setBusy] = React.useState(false);
   const [newKey, setNewKey] = React.useState<string | null>(null);
+  // "last used" is a day in the viewer's zone; the server's zone (UTC) would
+  // print the next day for an evening call (React error #418). Printed once
+  // hydrated.
+  const hydrated = useHydrated();
 
   const toggle = (s: string) =>
     setSelected((prev) => {
@@ -178,7 +183,11 @@ export function ApiKeysPanel({ apiKeys }: { apiKeys: PanelApiKey[] }) {
                 </div>
                 <div className="text-muted-foreground mt-1 font-mono text-xs">
                   {k.keyPrefix}…··· · {k.scopes.join(', ')}
-                  {k.lastUsedAt ? ` · last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : ' · never used'}
+                  {k.lastUsedAt
+                    ? hydrated
+                      ? ` · last used ${new Date(k.lastUsedAt).toLocaleDateString()}`
+                      : null
+                    : ' · never used'}
                 </div>
               </div>
               {!k.revokedAt && (

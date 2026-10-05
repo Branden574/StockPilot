@@ -42,6 +42,23 @@ function setZone(zone: string | undefined) {
 }
 
 /**
+ * Runs `fn` with this process in `zone`, then restores the zone: what a
+ * browser there would print, e.g. inZone(LA, () => new Date(at).toLocaleDateString()).
+ */
+export function inZone<T>(zone: string, fn: () => T): T {
+  const previous = process.env.TZ;
+  setZone(zone);
+  try {
+    return fn();
+  } finally {
+    setZone(previous);
+  }
+}
+
+/** The browser zone hydrateAcrossClockShift uses unless told otherwise. */
+export const BROWSER_ZONE = 'America/Los_Angeles';
+
+/**
  * Renders `render()` on the server side of `shift`, puts the HTML in the
  * document, then hydrates a fresh `render()` over it on the browser side, and
  * returns what React reported. The zone and fake clock are restored before
@@ -64,7 +81,7 @@ export async function hydrateAcrossClockShift(
     container.innerHTML = html;
     document.body.appendChild(container);
 
-    setZone(shift.browserZone ?? 'America/Los_Angeles');
+    setZone(shift.browserZone ?? BROWSER_ZONE);
     vi.setSystemTime(shift.browserNow);
     const errors: unknown[] = [];
     const consoleError = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {

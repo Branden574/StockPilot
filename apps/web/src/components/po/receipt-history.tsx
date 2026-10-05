@@ -141,12 +141,17 @@ function ReceiptCard({
               LocalDateTime renders CLIENT-side on purpose: this component is
               SSR'd, and a toLocaleString() computed on the server prints the
               container's timezone (UTC on Vercel). suppressHydrationWarning
-              used to sit here, which made that worse — it told React to KEEP
-              the server text, so a 9:47 AM receipt read "4:47 PM" forever.
+              used to sit on this span, which made that worse — it told React
+              to KEEP the server text, so a 9:47 AM receipt read "4:47 PM"
+              forever. It now sits on the relative <time> alone, whose server
+              words stay right to within the minute that passes before
+              hydration (React error #418 otherwise).
               Same order and prefix as the activity feed so timestamps read
               identically across the app. */}
           <span className="text-muted-foreground text-xs">
-            <time dateTime={receipt.received_at}>{formatRelative(receipt.received_at)}</time>
+            <time dateTime={receipt.received_at} suppressHydrationWarning>
+              {formatRelative(receipt.received_at)}
+            </time>
             <LocalDateTime iso={receipt.received_at} prefix=" · " />
           </span>
           {receipt.received_by_name && (

@@ -484,7 +484,11 @@ export function RecurringTemplatesPanel({
                               ? `(cap ${formatCurrency(tpl.max_auto_send_cents / 100)})`
                               : ''}
                           </p>
-                          <p className="text-muted-foreground text-xs">
+                          {/* The server renders "next ..." and "last ran ..."
+                              before the browser hydrates them; a minute
+                              between the two changes the words. Tolerate it
+                              instead of React error #418. */}
+                          <p className="text-muted-foreground text-xs" suppressHydrationWarning>
                             {rawLines.length} line{rawLines.length !== 1 ? 's' : ''} ·{' '}
                             {formatCurrency(tplTotal)} · next{' '}
                             {formatRelative(tpl.next_run_at)}

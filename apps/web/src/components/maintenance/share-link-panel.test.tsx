@@ -1,6 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { BROWSER_ZONE, hydrateAcrossClockShift, inZone } from '@/test/hydration';
 
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -176,5 +178,30 @@ describe('ShareLinkPanel (mig 0330 — show-once)', () => {
       await userEvent.click(await screen.findByRole('button', { name: /Copy URL/ }));
       expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(GENERATED_URL);
     });
+  });
+});
+
+// The maintenance page server-renders this panel, and "Expires ..." printed
+// the day with toLocaleDateString(): the server's zone (UTC on Vercel) while
+// it renders, the viewer's while the browser hydrates. A link expiring at UTC
+// midnight is the day before in Los Angeles, so React threw error #418. The
+// day is printed once the page has hydrated.
+describe('ShareLinkPanel hydrates with the server in UTC and the browser in Los Angeles', () => {
+  it("prints the viewer's expiry day once hydrated, never the server's, with no hydration error", async () => {
+    const t0 = Date.parse('2026-10-06T03:00:00.000Z');
+    const run = await hydrateAcrossClockShift(
+      () => <ShareLinkPanel requestId="r1" status={STATUS} canRevoke={true} />,
+      { serverNow: t0, browserNow: t0 + 60_000 },
+    );
+    try {
+      expect(run.errors).toEqual([]);
+      expect(run.html).not.toContain(
+        inZone('UTC', () => new Date(STATUS.expiresAt).toLocaleDateString()),
+      );
+      const viewerDay = inZone(BROWSER_ZONE, () => new Date(STATUS.expiresAt).toLocaleDateString());
+      expect(within(run.container).getByText(`Expires ${viewerDay}.`)).toBeInTheDocument();
+    } finally {
+      run.unmount();
+    }
   });
 });

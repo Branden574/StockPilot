@@ -522,7 +522,9 @@ export function ItemSerialsPanel({
                       <TableCell className="text-xs">
                         {row.warehouseName ?? <span className="text-muted-foreground">—</span>}
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
+                      {/* Rendered on the server, hydrated a minute later:
+                          tolerate the drift instead of React error #418. */}
+                      <TableCell className="text-muted-foreground text-xs" suppressHydrationWarning>
                         {formatRelative(row.createdAt)}
                       </TableCell>
                       {canEditItems && (
