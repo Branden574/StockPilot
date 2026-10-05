@@ -5,13 +5,13 @@ import { sha256Hex } from '@/lib/token-hash';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
- * Migration 0389: a request's own public track token and its requester return
- * token are written to the service-only order_request_secrets (the public
- * submit and order_return_token_ensure); tokens written earlier are still on
- * the order row until slice C moves them. The public tracker and its
- * live-location route read the side table first and the column second, so a
- * link emailed before or after 0389 keeps working, and the tracker's return
- * link is the side token when there is one.
+ * Migrations 0389 and 0392: a request's own public track token and its
+ * requester return token live in the service-only order_request_secrets (the
+ * public submit and order_return_token_ensure write them there since 0389;
+ * 0392 moved every older one, same value, and nulled the order columns). The
+ * public tracker and its live-location route read the side table only, so a
+ * link emailed before or after 0389 keeps working (its value is in the side
+ * table), and a value left in an order column authorizes nothing.
  */
 
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn(async () => ({ allowed: true })) }));
@@ -115,15 +115,29 @@ describe('public tracker: the request track token, side table first', () => {
     expect((await locate(SIDE_TRACK)).available).toBe(true);
   });
 
-  it('a token written before 0389 (the order column) still opens both, until slice C', async () => {
-    world({ columnTrack: COLUMN_TRACK });
-    expect((await track(COLUMN_TRACK)).status).toBe(200);
-    expect((await locate(COLUMN_TRACK)).available).toBe(true);
+  it('0392: a value left in the order column opens neither (the one 404 / unavailable), and neither route reads the column', async () => {
+    const stub = world({ columnTrack: COLUMN_TRACK });
+    expect(await track(COLUMN_TRACK)).toEqual({ status: 404, json: { error: 'not_found' } });
+    expect(await locate(COLUMN_TRACK)).toEqual({ available: false });
+    const headerReads = stub.chainArgsAll.get('order_requests.select') ?? [];
+    expect(headerReads.length).toBe(2);
+    for (const args of headerReads) {
+      const columns = String(args[0]?.[0] ?? '');
+      expect(columns).not.toContain('public_track_token');
+      expect(columns).not.toContain('return_token');
+    }
   });
 
-  it('a failed side read falls back to the column (what the route read before)', async () => {
+  it('0392: a failed side read is no own token: the one 404, never the column', async () => {
     world({ columnTrack: COLUMN_TRACK, sideError: true });
+    expect(await track(COLUMN_TRACK)).toEqual({ status: 404, json: { error: 'not_found' } });
+    expect(await locate(COLUMN_TRACK)).toEqual({ available: false });
+  });
+
+  it('a token emailed before 0389 opens both once it is in the side table (0392 moved it there, same value)', async () => {
+    world({ sideTrack: COLUMN_TRACK });
     expect((await track(COLUMN_TRACK)).status).toBe(200);
+    expect((await locate(COLUMN_TRACK)).available).toBe(true);
   });
 
   it('a wrong token is the same 404 / unavailable', async () => {
@@ -134,11 +148,14 @@ describe('public tracker: the request track token, side table first', () => {
 });
 
 describe("public tracker: the requester's return link, side table first", () => {
-  it('the side token when there is one, else the legacy column token', async () => {
+  it('the side token; a value left in the order column is never handed out (0392)', async () => {
     world({ sideTrack: SIDE_TRACK, sideReturn: SIDE_RETURN, columnReturn: COLUMN_RETURN });
     expect((await track(SIDE_TRACK)).json.returnPath).toBe(`/returns/request/${SIDE_RETURN}`);
     world({ sideTrack: SIDE_TRACK, columnReturn: COLUMN_RETURN });
-    expect((await track(SIDE_TRACK)).json.returnPath).toBe(`/returns/request/${COLUMN_RETURN}`);
+    const noSideReturn = await track(SIDE_TRACK);
+    expect(noSideReturn.status).toBe(200);
+    expect(noSideReturn.json.returnPath).toBeNull();
+    expect(JSON.stringify(noSideReturn.json)).not.toContain(COLUMN_RETURN);
   });
 
   it("review 4: a read authorized by the org's catalog token or a link token shows the order but no return link", async () => {

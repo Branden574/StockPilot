@@ -88,8 +88,7 @@ export async function GET(
       `id, status, requester_email, requester_name, notes, denied_reason,
        created_at, approved_at, packing_slip_generated_at, staged_at,
        in_transit_at, signed_at, completed_at, cancelled_at,
-       organization_id, warehouse_id, fulfillment_type, return_token,
-       public_track_token`,
+       organization_id, warehouse_id, fulfillment_type`,
     )
     .eq('id', id)
     .maybeSingle();
@@ -114,18 +113,17 @@ export async function GET(
     organization_id: string;
     warehouse_id: string;
     fulfillment_type: 'pickup' | 'delivery';
-    return_token: string | null;
-    public_track_token: string | null;
   };
   const orgId = h.organization_id;
 
-  // The request's own track and return tokens (migration 0389): the
-  // service-only order_request_secrets first (every public submit since
-  // 0389), then the legacy order columns (until slice C moves them). A failed
-  // side read leaves the columns, which is what this route read before.
+  // The request's own track and return tokens live in the service-only
+  // order_request_secrets (written there since 0389; 0392 moved every older
+  // one, same value, and nulled the order columns). A failed side read means
+  // no own token: the read can still be authorized by a catalog or link
+  // token below, and otherwise is the one 404.
   const side = await readOrderSecrets(admin, h.id);
-  const trackToken = (side.ok ? side.secrets?.publicTrackToken : null) ?? h.public_track_token;
-  const returnToken = (side.ok ? side.secrets?.returnToken : null) ?? h.return_token;
+  const trackToken = side.ok ? (side.secrets?.publicTrackToken ?? null) : null;
+  const returnToken = side.ok ? (side.secrets?.returnToken ?? null) : null;
 
   // Token authorization (mig 0330) — three accepted credentials, all
   // scoped to the request's own org, all failing to the same generic 404:

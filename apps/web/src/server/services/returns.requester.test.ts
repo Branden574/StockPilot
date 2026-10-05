@@ -18,8 +18,9 @@ import {
  *   • server-side over-return + durable-budget enforcement — the client's
  *     quantity is NEVER trusted; the cap is quantity_fulfilled -
  *     returned_quantity read off the source line.
- *   • only the token's order is exposed — the load path selects by return_token
- *     and reads only that order's lines (no cross-order data).
+ *   • only the token's order is exposed — the load path finds the token's one
+ *     order in order_request_secrets (0389, 0392) and reads only that order's
+ *     lines (no cross-order data).
  *   • item identity + requester identity are stamped server-side, not taken
  *     from the client.
  */
@@ -53,9 +54,11 @@ const RETURNS_MODULE_ENABLED = {
   error: null,
 };
 
-/** A fully-wired stub for a valid token → returnable order with one line. */
+/** A fully-wired stub for a valid token → returnable order with one line. The
+ *  token lives in order_request_secrets (every return token since 0392). */
 function makeStub(overrides: Record<string, unknown> = {}) {
   return makeSupabaseStub({
+    'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     'organization_modules.select': RETURNS_MODULE_ENABLED,
     'order_request_lines.select': { data: [ORDER_LINE], error: null },
@@ -180,10 +183,11 @@ describe('loadRequesterReturnContext (token validation)', () => {
   });
 });
 
-// Migration 0389: return tokens minted since 0389 live in the service-only
-// order_request_secrets; tokens minted earlier are still on
-// order_requests.return_token until slice C. Both open exactly their order.
-describe('loadRequesterReturnContext (where the token is found, 0389)', () => {
+// Migrations 0389 and 0392: every return token lives in the service-only
+// order_request_secrets (minted there since 0389; 0392 moved the older ones,
+// same value, and nulled order_requests.return_token). It opens exactly its
+// order; the order column is never asked.
+describe('loadRequesterReturnContext (where the token is found, 0389 and 0392)', () => {
   it('a side-table token resolves its order by id, without asking the order column', async () => {
     const stub = makeStub({
       'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
@@ -197,20 +201,18 @@ describe('loadRequesterReturnContext (where the token is found, 0389)', () => {
     expect(JSON.stringify(orderReads)).not.toContain('return_token');
   });
 
-  it('a token minted before 0389 is found on the order column', async () => {
+  it('0392: a token the side table does not hold is a 404 (null), and the order column is never asked', async () => {
     const stub = makeStub({ 'order_request_secrets.select': { data: [], error: null } });
-    const ctx = await loadRequesterReturnContext(stub.client, TOKEN);
-    expect(ctx?.orderRequestId).toBe(ORDER_ID);
-    expect(stub.chainArgsAll.get('order_requests.select')?.[0]).toContainEqual(['return_token', TOKEN]);
+    expect(await loadRequesterReturnContext(stub.client, TOKEN)).toBeNull();
+    expect(stub.fromCalls).not.toContain('order_requests');
   });
 
-  it('a failed side read still tries the column; neither matching is a 404 (null)', async () => {
+  it('0392: a failed side read is a 404 (null), never a column lookup', async () => {
     const stub = makeStub({
       'order_request_secrets.select': { data: null, error: { message: 'down' } },
-      'order_requests.select': { data: [], error: null },
     });
     expect(await loadRequesterReturnContext(stub.client, TOKEN)).toBeNull();
-    expect(stub.fromCalls).toContain('order_requests');
+    expect(stub.fromCalls).not.toContain('order_requests');
   });
 });
 

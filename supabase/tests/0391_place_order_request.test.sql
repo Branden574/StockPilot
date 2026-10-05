@@ -908,8 +908,16 @@ select is(
   'module_enabled(uuid,text)|df3260cbcd15f986798e5377d1e95dce|true|{"search_path=public, pg_temp"}|postgres\n'
   'order_request_top_skus_for_warehouse(uuid,integer,integer)|b06c0674ae4952cf1942649cdd81e81d|false|{search_path=public}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres\n'
-  'tg_order_requests_workflow_guard()|59481b7651dca818a2266a39868db4f0|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077|false|{search_path=public}|postgres\n'
+  -- 0392 re-pin (was 59481b7651dca818a2266a39868db4f0): slices C and E
+  -- restate the guard; place_order_request inserts and never updates an
+  -- order, so the update guard's new rules do not touch it (it runs as
+  -- postgres, which neither guard's secret rule holds).
+  'tg_order_requests_workflow_guard()|55bceafc13d599f8d77d6a4180c28140|false|{search_path=public}|postgres\n'
   'user_can_access_warehouse(uuid,uuid,text)|76b4170f3d393e8a1f293ca3d4895955|true|{search_path=public}|postgres',
   'Z1: the functions place_order_request relies on are the text (production md5 read at build start), SECURITY mode, search_path and owner this build was proven against');
 select is(
@@ -921,7 +929,10 @@ select is(
                     'public._notify_order_request_changes()'::regprocedure, 'public._validate_order_request_status_transition()'::regprocedure,
                     'public.cancel_order_request(uuid, text)'::regprocedure,
                     'public.order_request_top_skus_for_warehouse(uuid, integer, integer)'::regprocedure)),
-  '4af4ea31b970b21b27942ed7f8bb36d1|8',
+  -- Re-pinned by 0392 (was 4af4ea31b970b21b27942ed7f8bb36d1|8): only the
+  -- insert guard's md5 moved (0392 adds the admin-client secret rule); the
+  -- same query with its old md5 substituted gives the old value.
+  '1683653e88f385f3b905640f92f3e6ac|8',
   'Z2: the set fingerprint of the first eight (0385 Z1 form, grants included) equals production''s at build start (it moved from the plan''s 5992f083...|8 only by 0390''s cancel_order_request edit)');
 select is(
   (select string_agg(x.relname || '=' || x.v, E'\n' order by x.relname) from (

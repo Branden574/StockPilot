@@ -818,7 +818,11 @@ select is(
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
   'save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamp with time zone,text,jsonb,uuid[],uuid,boolean)|2b6eefbefb914cc71ecde820f215b477|false|{"search_path=public, pg_temp"}|postgres\n'
   'tg_order_request_lines_guard()|d899924c0f8fc1dfae4e8be7bd4c5cad|false|{search_path=public}|postgres\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false|{search_path=public}|postgres',
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077|false|{search_path=public}|postgres',
   'Z1: the frozen functions (fulfilment, holds, readiness facts, PO, guards, read helper) are the text, SECURITY DEFINER, search_path and owner F2-4 was proven against');
 select is(
   (select string_agg(k || '|' || v, E'\n' order by k) from (

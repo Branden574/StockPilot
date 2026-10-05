@@ -1,7 +1,8 @@
 -- supabase/tests/0387_order_workflow_guard.test.sql
 -- pgTAP proof for migration 0387 (S0): an order is approved, and moved along
 -- every stock-bearing status edge, only by the order RPCs. A signed-in caller
--- keeps the six edges the app writes through the user client.
+-- keeps the six edges the app writes through the user client (four since
+-- 0392, which restates the guard: see 0392_order_secrets_contract.test.sql).
 --
 -- A. Attacks, each as `authenticated` with the attacker's claims, refused with
 --    42501 and the stated hint, and changing nothing:
@@ -23,9 +24,13 @@
 --        guard, the approved_by UPDATE privilege and the transition trigger
 --        still refuse behind it;
 --    A7  every one of the 30 edges the transition trigger allows, each on its
---        own fixture order, as a manager with RETURNING *: the six
---        allowlisted edges go through (A-L4), the other 24 are refused, one
---        TAP line per edge; plus the transition function is still 0289's;
+--        own fixture order, as a manager with RETURNING *: the allowlisted
+--        edges go through (A-L4), the others are refused, one TAP line per
+--        edge; plus the transition function is still 0289's. Re-pinned by
+--        0392: four allowlisted edges, not six (the packing slip and in
+--        transit are RPC-owned since 0389 and 0390), each sent in the app's
+--        exact shape (its stamps with the caller's id, which the restated
+--        guard asks for: plan section 10 item 14);
 --    A8  a raw write of each of the 21 revoked columns, and of the 17 O5
 --        columns, is 42501 permission denied;
 --    A9  anon holds no privilege on order_requests (and is refused reading
@@ -39,7 +44,7 @@
 --         holds stock; AL2 approve_partial (a staff approver) the same;
 --    AL3  is 0384's KO1-KO7 (every user-client order write, exact shapes),
 --         which run in that suite, unchanged;
---    AL4  is the six allowlisted rows of A7;
+--    AL4  is the allowlisted rows of A7 (four since 0392);
 --    AL5  a notes save on an approved order, and one that re-sends the same
 --         status, go through (the edge, never the value);
 --    AL6  deleting an approver's user_profiles row nulls approved_by through
@@ -251,7 +256,10 @@ insert into public.order_request_lines
 
 -- The 30 edges the transition trigger allows (0289, live def 0965a074), each
 -- with its own order at the edge's from-status. Delivery orders carry the
--- charter (order_requests_delivery_target_chk).
+-- charter (order_requests_delivery_target_chk). Re-pinned by 0392 (rows 13
+-- and 23 were true): picking_complete -> packing_slip_generated is
+-- generate_order_packing_slips' (0389) and staged_for_delivery -> in_transit
+-- is mark_order_in_transit's (0390), so the restated guard refuses both raw.
 create temp table edge (n int primary key, from_s text not null, to_s text not null, allowed boolean not null, ord uuid not null);
 insert into edge (n, from_s, to_s, allowed, ord)
 select v.n, v.f, v.t, v.a, ('03870000-0000-0000-0000-0000000e' || lpad(v.n::text, 4, '0'))::uuid
@@ -268,7 +276,7 @@ select v.n, v.f, v.t, v.a, ('03870000-0000-0000-0000-0000000e' || lpad(v.n::text
     (10, 'pick_slip_generated',    'cancelled',              false),
     (11, 'picking_in_progress',    'picking_complete',       false),
     (12, 'picking_in_progress',    'cancelled',              false),
-    (13, 'picking_complete',       'packing_slip_generated', true),
+    (13, 'picking_complete',       'packing_slip_generated', false),
     (14, 'picking_complete',       'picking_in_progress',    false),
     (15, 'picking_complete',       'cancelled',              false),
     (16, 'packing_slip_generated', 'staged_for_pickup',      true),
@@ -278,7 +286,7 @@ select v.n, v.f, v.t, v.a, ('03870000-0000-0000-0000-0000000e' || lpad(v.n::text
     (20, 'staged_for_pickup',      'completed',              false),
     (21, 'staged_for_pickup',      'backordered',            false),
     (22, 'staged_for_pickup',      'cancelled',              false),
-    (23, 'staged_for_delivery',    'in_transit',             true),
+    (23, 'staged_for_delivery',    'in_transit',             false),
     (24, 'staged_for_delivery',    'cancelled',              false),
     (25, 'in_transit',             'completed',              false),
     (26, 'in_transit',             'backordered',            false),
@@ -367,14 +375,26 @@ create function pg_temp.ost(p_id uuid) returns text language sql as $$
   select coalesce((select o.status || '/' || coalesce(o.approved_by::text, 'null') || '/' || (o.approved_at is not null)::text
                      from public.order_requests o where o.id = p_id), 'missing')
 $$;
--- A7, one TAP line per edge.
+-- A7, one TAP line per edge. Re-pinned by 0392 (was `set status = <to>` for
+-- every edge): an allowed edge is sent in the app's exact shape, the deny
+-- with its reason and the pick slip and the staging with their stamps and
+-- the caller's id (services/order-requests.ts), which the restated guard
+-- asks for (item 14); a refused edge is still the bare status write.
 create function pg_temp.edge_tests(p_mgr uuid) returns setof text language plpgsql as $$
-declare e record;
+declare e record; v_set text;
 begin
   for e in select * from edge order by n loop
+    v_set := format('status = %L', e.to_s);
+    if e.allowed then
+      v_set := v_set || case e.to_s
+        when 'denied' then ', denied_reason = ''0387 A7'''
+        when 'pick_slip_generated' then format(', pick_slip_generated_at = now(), pick_slip_generated_by = %L', p_mgr)
+        else format(', staged_at = now(), staged_by = %L', p_mgr)
+      end;
+    end if;
     return next is(
       pg_temp.attempt('authenticated', p_mgr,
-                      format('update public.order_requests set status = %L where id = %L returning *', e.to_s, e.ord)),
+                      format('update public.order_requests set %s where id = %L returning *', v_set, e.ord)),
       case when e.allowed then 'ok:1' else '42501:status_through_rpc_only:order_status_through_rpc_only' end,
       format('A7 %s->%s: %s', e.from_s, e.to_s,
              case when e.allowed
@@ -560,10 +580,13 @@ select is(
      from pg_attribute a
     where a.attrelid = 'public.order_requests'::regclass and a.attnum > 0 and not a.attisdropped
       and has_column_privilege('authenticated', 'public.order_requests', a.attname, 'UPDATE')),
-  'assigned_delivery_at,assigned_delivery_by,assigned_delivery_user_id,created_at,delivery_charter_id,denied_reason,'
-  'in_transit_at,in_transit_by,internal_notes,packing_slip_generated_at,packing_slip_generated_by,pick_slip_generated_at,'
-  'pick_slip_generated_by,signature_token,signature_token_expires_at,staged_at,staged_by,status,warehouse_id',
-  'A9d: authenticated may UPDATE exactly the 19 columns the user client writes plus the owner questions'' three (created_at and warehouse_id: Q4; delivery_charter_id: Q7)');
+  -- Re-pinned by 0392 (was 19 columns, with assigned_delivery_at/by/user_id,
+  -- in_transit_at/by, packing_slip_generated_at/by, signature_token and its
+  -- expiry): slices C and E revoke those nine, which only order RPCs write
+  -- since 0389 and 0390 (0392 suite G2).
+  'created_at,delivery_charter_id,denied_reason,internal_notes,pick_slip_generated_at,pick_slip_generated_by,'
+  'staged_at,staged_by,status,warehouse_id',
+  'A9d: authenticated may UPDATE exactly the columns the user client writes (deny, pick slip, staging, notes) plus the owner questions'' three (created_at and warehouse_id: Q4; delivery_charter_id: Q7): 10 since 0392');
 
 select is(
   (select string_agg(distinct m[1], ',')
@@ -619,8 +642,12 @@ select is(
 select is(
   pg_temp.attempt('service_role', null,
                   format('update public.order_requests set return_token = gen_random_uuid() where id = %L and return_token is null returning return_token', :oRet)),
-  'ok:1',
-  'AL7: the return prompt''s guarded token mint (admin client, service_role) still writes return_token');
+  -- Re-pinned by 0392 (was ok:1): the return prompt mints through
+  -- order_return_token_ensure into order_request_secrets since 0389
+  -- (server/email/return-prompt.ts); 0392's guard refuses this pre-0389
+  -- column write for the admin client (0392 suite G24a).
+  '42501:secret_through_side_table_only:order_secret_through_side_table_only',
+  'AL7: the pre-0389 return-prompt mint shape (admin client, service_role, a return token written to the order row) is refused since 0392: the token lives in order_request_secrets');
 select is(
   pg_temp.attempt('service_role', null,
                   format('update public.order_requests set return_prompt_sent_at = now() where id = %L and return_prompt_sent_at is null returning id', :oRet)),
@@ -748,8 +775,12 @@ select is(
           || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || '|' || has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|'
           || coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a)::text, 'false')
      from pg_proc p where p.oid = to_regprocedure('public.tg_order_requests_workflow_guard()')),
-  '59481b7651dca818a2266a39868db4f0|false|{search_path=public}|postgres|false|false|false',
-  'AL10a: the guard is 0387''s body, SECURITY INVOKER (a DEFINER trigger would always see postgres), search_path pinned, owned by postgres, and not executable by PUBLIC, anon or authenticated');
+  -- Re-pinned by 0392 (was 59481b7651dca818a2266a39868db4f0, 0387's body):
+  -- 0392 restates the guard with four edges, the nine RPC-owned columns and
+  -- the item 14 stamp rules, and refuses a return or track token on the row
+  -- for the API roles and the admin client (0392 suite G); posture unchanged.
+  '55bceafc13d599f8d77d6a4180c28140|false|{search_path=public}|postgres|false|false|false',
+  'AL10a: the guard is 0392''s restated body, SECURITY INVOKER (a DEFINER trigger would always see postgres), search_path pinned, owned by postgres, and not executable by PUBLIC, anon or authenticated');
 select is(
   (select t.tgtype::text || '|' || t.tgenabled::text || '|' || t.tgfoid::regproc::text
      from pg_trigger t where t.tgrelid = 'public.order_requests'::regclass and t.tgname = 'trg_order_requests_workflow_guard'),
@@ -791,8 +822,12 @@ select is(
   -- each gate and nothing else (0390 R1, R2); both still SECURITY DEFINER.
   E'approve_order_request(uuid)|7883f466ae2642cbb4664ebc473e571b|true\n'
   'approve_partial(uuid)|40ca0878733b08a649773fe9b7efd4e0|true\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892|false',
-  'AL10f: approve_order_request and approve_partial are 0390''s bodies and the insert guard is unchanged (0387 edits no body; 0390 removes one gate term from each approval body)');
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077|false',
+  'AL10f: approve_order_request and approve_partial are 0390''s bodies and the insert guard is 0392''s (0387 edits no body; 0390 removes one gate term from each approval body; 0392 adds the admin-client secret rule to the insert guard)');
 
 select is(
   pg_temp.attempt('authenticated', :mgr, format($q$update public.order_requests set status = 'approved' where id = %L$q$, :oL11)),

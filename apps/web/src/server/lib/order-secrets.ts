@@ -7,27 +7,27 @@ import { sha256Hex } from '@/lib/token-hash';
 import { mfaGateError } from '@/server/services/context';
 
 /**
- * ORDER SECRETS (migration 0389, slice B "order secrets, expand").
+ * ORDER SECRETS (migrations 0389 and 0392, slices B and C).
  *
  * Every order bearer secret used to sit raw on `order_requests`, which every
  * member of the organization reads (RLS `is_org_member`, column SELECT on
- * every column, the realtime publication, GET /api/v1/orders/[id]). Since
- * 0389:
+ * every column, the realtime publication, GET /api/v1/orders/[id]). Now:
  *
- *   - a NEW signature token is minted by `generate_order_packing_slips`: the
- *     raw token goes to `order_request_secrets` (service-only: no grant to
- *     anon or authenticated, never published) and the order column holds
+ *   - a signature token is minted by `generate_order_packing_slips` (0389):
+ *     the raw token goes to `order_request_secrets` (service-only: no grant
+ *     to anon or authenticated, never published) and the order column holds
  *     `sha256(raw)` as 64 lowercase hex, the same digest `sha256Hex` makes;
- *   - a NEW return token is minted by `order_return_token_ensure` into the
- *     side table; a NEW public track token is written there by the public
- *     submit.
+ *   - a return token is minted by `order_return_token_ensure` into the side
+ *     table, and the public submit writes its track token there.
  *
- * Tokens minted before 0389 (and by a browser tab still running the previous
- * deployment during the 12-hour skew window) stay raw in the order columns
- * until slice C moves and hashes them. So until C every reader here takes the
- * side table first and the order column second, and a signature token found
- * raw in the column is accepted as a link only when NO side token hashes to
- * it. Slice C removes those fallbacks (plan section 6.4).
+ * 0392 (slice C) finished the move for everything older: every raw signature
+ * token left in the order column was replaced by its digest (the ones that
+ * can still be signed were copied to the side table first), and the return
+ * and track tokens moved to the side table with the same values, so the
+ * order columns are null. So every reader here reads the side table only, a
+ * value that equals the order column is always a digest, and nothing falls
+ * back to an order column any more (plan section 6.4: B's legacy branches are
+ * gone).
  *
  * Every function takes the ADMIN client (service_role): nothing else can
  * read `order_request_secrets`. None of them logs, returns to a member, or
@@ -55,11 +55,10 @@ export const MEMBER_SIGN_LIMIT_PER_HOUR = 60;
 
 /**
  * Attempts per hour on one signature LINK (the raw token of a printed QR or
- * the panel's link, or a legacy raw column), keyed by the hash of the
- * presented value. Applied only once the token matched as a link: the member
- * path (a digest, which every member reads) never counts against it, so a
- * member who cannot hand the order over cannot lock the entitled phones out
- * (desk check F3).
+ * the panel's link), keyed by the hash of the presented value. Applied only
+ * once the token matched as a link: the member path (a digest, which every
+ * member reads) never counts against it, so a member who cannot hand the
+ * order over cannot lock the entitled phones out (desk check F3).
  */
 export const LINK_SIGN_LIMIT_PER_HOUR = 10;
 
@@ -112,42 +111,40 @@ export function sideTokenIsLive(sideRaw: string | null, column: string | null): 
 
 /**
  * The raw signature token to put in a link or a QR for an order whose column
- * holds `column`, or null when the order has none (cleared by reopen or
- * resume, or never minted):
- *   - the side token, when its digest is the column (minted since 0389);
- *   - else the column itself, when no side token hashes to it: a raw token
- *     minted before 0389 or by a pre-deploy tab (until slice C);
- *   - null when the side table could not be read: printing the column then
- *     could put a digest in a QR, which opens nothing for a customer.
+ * holds `column`: the side token, when its digest is the column. Null when
+ * the order has none (cleared by reopen or resume, never minted), when the
+ * side token is stale (its digest is not the column), or when the side table
+ * could not be read: the order column is a digest and is never put in a
+ * link (the sign page would ask for a session). Since 0392 there is no raw
+ * column to fall back to.
  */
 export async function signatureLinkToken(
   admin: SecretsClient,
   orderId: string,
   column: string | null,
-): Promise<{ token: string; source: 'side' | 'legacy_column' } | null> {
+): Promise<string | null> {
   if (!column) return null;
   const read = await readOrderSecrets(admin, orderId);
   if (!read.ok) return null;
   const sideRaw = read.secrets?.signatureToken ?? null;
-  if (sideTokenIsLive(sideRaw, column)) return { token: sideRaw as string, source: 'side' };
-  return { token: column, source: 'legacy_column' };
+  return sideTokenIsLive(sideRaw, column) ? sideRaw : null;
 }
 
 /**
  * How a presented signature token reached its order:
  *   - `link`: sha256(presented) is the column. The presented value is the
- *     raw token from a printed QR or the panel's link (minted since 0389).
- *   - `legacy_link`: the presented value IS the column and no side token
- *     hashes to it: a raw token minted before 0389 or by a pre-deploy tab.
- *     Accepted as a link until slice C hashes those columns.
- *   - `member`: the presented value IS the column and a side token hashes to
- *     it, so it is a DIGEST, readable by every member. It completes the
- *     hand-over only for an entitled signed-in member (the caller checks).
- *     A side table that cannot be read also lands here: the caller then
- *     demands the entitled session (fail closed).
+ *     raw token from a printed QR or the panel's link (minted by
+ *     generate_order_packing_slips, or before 0389 and hashed in place by
+ *     0392).
+ *   - `member`: the presented value IS the column, so it is a DIGEST, which
+ *     every member reads (installed phones post it with their bearer). It
+ *     completes the hand-over only for an entitled signed-in member (the
+ *     caller checks). Since 0392 every column is a digest, so there is no
+ *     third case: B's `legacy_link` (a raw column accepted with no session)
+ *     is gone.
  * The digest passed to confirm_order_signature is always the column value.
  */
-export type SignatureTokenVia = 'link' | 'legacy_link' | 'member';
+export type SignatureTokenVia = 'link' | 'member';
 
 export interface SignatureTokenMatch<Row> {
   via: SignatureTokenVia;
@@ -182,12 +179,7 @@ export async function resolveSignatureToken<Row extends { id: string }>(
     .eq('signature_token', presented)
     .maybeSingle();
   if (byColumn.error || !byColumn.data) return null;
-  const order = byColumn.data as Row;
-
-  const read = await readOrderSecrets(admin, order.id);
-  if (!read.ok) return { via: 'member', order, columnToken: presented };
-  const live = sideTokenIsLive(read.secrets?.signatureToken ?? null, presented);
-  return { via: live ? 'member' : 'legacy_link', order, columnToken: presented };
+  return { via: 'member', order: byColumn.data as Row, columnToken: presented };
 }
 
 /**
@@ -352,7 +344,7 @@ export function handOverLinkWanted(v: {
 /**
  * Did the order capture a signature IMAGE (drives the panel's "View
  * signature")? A digital hand-over always did; the method says so even once
- * slice C moves the image off the order row. A paper signature has no image.
+ * 0393 moves the image off the order row. A paper signature has no image.
  */
 export function hasCapturedSignature(row: {
   signature_method?: string | null;
@@ -362,33 +354,25 @@ export function hasCapturedSignature(row: {
 }
 
 /**
- * The order's return token for a link: the side table first, then the legacy
- * column (an older token may already be in the requester's inbox). A failed
- * side read falls back to the column.
+ * The order's return token for a link (the requester's /returns/request
+ * link): the side table's. Null when the order has none or the read failed
+ * (the link is then left out). The order column is null since 0392.
  */
-export async function resolveReturnToken(
-  admin: SecretsClient,
-  orderId: string,
-  column: string | null,
-): Promise<string | null> {
+export async function resolveReturnToken(admin: SecretsClient, orderId: string): Promise<string | null> {
   const read = await readOrderSecrets(admin, orderId);
-  return (read.ok ? read.secrets?.returnToken : null) ?? column ?? null;
+  return read.ok ? (read.secrets?.returnToken ?? null) : null;
 }
 
-/** The order's public track token: the side table first, then the legacy column. */
-export async function resolveTrackToken(
-  admin: SecretsClient,
-  orderId: string,
-  column: string | null,
-): Promise<string | null> {
+/** The order's public track token: the side table's (the column is null since 0392). */
+export async function resolveTrackToken(admin: SecretsClient, orderId: string): Promise<string | null> {
   const read = await readOrderSecrets(admin, orderId);
-  return (read.ok ? read.secrets?.publicTrackToken : null) ?? column ?? null;
+  return read.ok ? (read.secrets?.publicTrackToken ?? null) : null;
 }
 
 /**
- * The order a requester return token opens: the side table first (tokens
- * minted since 0389), then the legacy column. Null when neither matches or a
- * read failed.
+ * The order a requester return token opens, from the side table (every
+ * return token lives there since 0392). Null when none matches or the read
+ * failed.
  */
 export async function orderIdForReturnToken(
   admin: SecretsClient,
@@ -399,16 +383,8 @@ export async function orderIdForReturnToken(
       .select('order_request_id')
       .eq('return_token', token)
       .maybeSingle();
-    if (!side.error && side.data) {
-      const id = (side.data as { order_request_id?: unknown }).order_request_id;
-      if (typeof id === 'string') return id;
-    }
-    const legacy = await (admin.from('order_requests') as SelectChain)
-      .select('id')
-      .eq('return_token', token)
-      .maybeSingle();
-    if (legacy.error || !legacy.data) return null;
-    const id = (legacy.data as { id?: unknown }).id;
+    if (side.error || !side.data) return null;
+    const id = (side.data as { order_request_id?: unknown }).order_request_id;
     return typeof id === 'string' ? id : null;
   } catch {
     return null;

@@ -52,13 +52,12 @@ export async function GET(
   const admin = createAdminClient();
   const { data: header } = await admin
     .from('order_requests')
-    .select('id, organization_id, requester_email, public_track_token')
+    .select('id, organization_id, requester_email')
     .eq('id', id)
     .maybeSingle();
   const h = header as {
     organization_id: string;
     requester_email: string | null;
-    public_track_token: string | null;
   } | null;
   if (!h || (h.requester_email ?? '').trim().toLowerCase() !== email) {
     return NextResponse.json({ available: false });
@@ -66,11 +65,12 @@ export async function GET(
   const orgId = h.organization_id;
 
   // Same three accepted credentials as the status read (mig 0330): the
-  // request's own track token (the service-only side table first since 0389,
-  // then the legacy column), or a live org/link catalog token compared as
-  // sha256(token) against the hashed at-rest columns.
+  // request's own track token (the service-only side table: 0389 for new
+  // ones, 0392 moved the older ones and nulled the order column), or a live
+  // org/link catalog token compared as sha256(token) against the hashed
+  // at-rest columns.
   const tokenHash = sha256Hex(token);
-  const trackToken = await resolveTrackToken(admin, id, h.public_track_token);
+  const trackToken = await resolveTrackToken(admin, id);
   let authorized = trackToken !== null && token === trackToken;
   if (!authorized) {
     const { data: orgMatch } = await admin

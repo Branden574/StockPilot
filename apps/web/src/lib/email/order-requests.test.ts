@@ -613,12 +613,12 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
   });
 });
 
-// Migration 0389: the public submit writes the request's own track token to
-// the service-only order_request_secrets (the order row every member reads no
-// longer carries it). The Track link of every later status email reads the
-// side table first, then the legacy column (tokens written before 0389,
-// until slice C), then the catalog token a caller holds in hand.
-describe('sendOrderRequestEmail — the Track link carries the request track token (0389)', () => {
+// Migrations 0389 and 0392: the request's own track token lives in the
+// service-only order_request_secrets (the public submit writes it there since
+// 0389; 0392 moved every older one, same value, and nulled the order column).
+// The Track link of every later status email reads the side table, then the
+// catalog token a caller holds in hand; never the order column.
+describe('sendOrderRequestEmail — the Track link carries the request track token (0389, 0392)', () => {
   const SIDE = 'a'.repeat(64);
   const COLUMN = 'b'.repeat(64);
 
@@ -659,7 +659,7 @@ describe('sendOrderRequestEmail — the Track link carries the request track tok
     ]);
   });
 
-  it('a token written before 0389 (the order column), also when the side read fails', async () => {
+  it('0392: a value left in the order column is never put in the link, with no side token or when the side read fails', async () => {
     wireSide(null);
     await sendOrderRequestEmail({
       kind: 'approved',
@@ -668,7 +668,9 @@ describe('sendOrderRequestEmail — the Track link carries the request track tok
       recipientName: 'Jane',
       appUrl: APP_URL,
     });
-    expect(trackLink()).toContain(`&t=${COLUMN}`);
+    expect(trackLink()).not.toBe('');
+    expect(trackLink()).not.toContain(COLUMN);
+    expect(trackLink()).not.toContain('&t=');
     wireSide(null, true);
     await sendOrderRequestEmail({
       kind: 'approved',
@@ -677,7 +679,21 @@ describe('sendOrderRequestEmail — the Track link carries the request track tok
       recipientName: 'Jane',
       appUrl: APP_URL,
     });
-    expect(trackLink()).toContain(`&t=${COLUMN}`);
+    expect(trackLink()).not.toContain(COLUMN);
+    expect(trackLink()).not.toContain('&t=');
+  });
+
+  it('the side token wins over a value left in the order column', async () => {
+    wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow({ public_track_token: COLUMN }),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${SIDE}`);
+    expect(trackLink()).not.toContain(COLUMN);
   });
 
   it('a signed-in or portal requester links elsewhere, and the side table is not read', async () => {

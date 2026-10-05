@@ -25,9 +25,9 @@ export const dynamic = 'force-dynamic';
  * caller's organization as `{ orderId, status, lines }`, the shape the phone's
  * readSignatureOrder returns, with the lines read through the caller's own
  * client (row level security, so a hidden item keeps core's label). A
- * token minted before 0389 (still raw in the column) is matched as the sign
- * route matches it, until slice C. A DIGEST presented here matches nothing
- * (the route hashes again), and every other miss — unknown, another
+ * token minted before 0389 matches too: 0392 hashed every older raw column in
+ * place. A DIGEST presented here matches nothing (the route hashes again),
+ * and every other miss — unknown, another
  * organization, the orders module off — is the same 404. Members can already
  * read every order of their organization; this discloses nothing new.
  */

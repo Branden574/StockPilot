@@ -65,8 +65,8 @@ interface SendInput {
    * practice just the public submit route, whose request body carries it.
    * It can no longer be read from the DB (hashed at rest), so status
    * transition emails omit it; their "Track" CTA `&t=` scope comes from
-   * the request's own track token instead (order_request_secrets since
-   * 0389, else `request.public_track_token`; see requestTrackToken). When absent,
+   * the request's own track token instead (order_request_secrets; see
+   * requestTrackToken). When absent,
    * catalog-linking CTAs (e.g. the cancelled email's "start a new
    * request") degrade to no link rather than a broken one.
    */
@@ -253,7 +253,7 @@ function buildTrackUrl(
   appUrl: string,
   recipientEmail: string,
   publicRequestToken: string | null,
-  /** The request's own track token, resolved by requestTrackToken (0389). */
+  /** The request's own track token, resolved by requestTrackToken (0389, 0392). */
   requestTrackTokenValue: string | null,
 ): string {
   // B2B portal customers are authenticated but have NO dashboard access — send
@@ -270,7 +270,7 @@ function buildTrackUrl(
   // readable at send time and survives catalog-token rotation). The
   // caller-supplied catalog token remains an accepted fallback for the one
   // send that happens while the plaintext is still in hand (the submit
-  // route's confirm email) and for legacy rows without a track token.
+  // route's confirm email) and for rows without a track token.
   const trackToken = requestTrackTokenValue ?? publicRequestToken;
   return trackToken ? `${base}&t=${encodeURIComponent(trackToken)}` : base;
 }
@@ -278,17 +278,17 @@ function buildTrackUrl(
 /**
  * The request's own public track token for a /r/track link, or null when the
  * link does not need one (portal and signed-in requesters link elsewhere).
- * Since migration 0389 the public submit writes it to the service-only
- * order_request_secrets, so it is read there first, then from the legacy
- * order column (tokens minted before 0389, until slice C moves them). Without
- * a service-role key the column is all there is.
+ * It lives in the service-only order_request_secrets (the public submit has
+ * written it there since 0389, and 0392 moved every older one there and
+ * nulled the order column). Without a service-role key, or when the read
+ * fails, the link carries no token (the tracker then asks for it).
  */
 async function requestTrackToken(row: OrderRequestRow): Promise<string | null> {
   if (row.source === 'portal' || row.requester_user_id) return null;
   try {
-    return await resolveTrackToken(createAdminClient(), row.id, row.public_track_token ?? null);
+    return await resolveTrackToken(createAdminClient(), row.id);
   } catch {
-    return row.public_track_token ?? null;
+    return null;
   }
 }
 

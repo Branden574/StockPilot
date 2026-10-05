@@ -5,9 +5,10 @@ import { sha256Hex } from '@/lib/token-hash';
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
- * Migration 0389: the public sign page resolves a token exactly as the POST
- * route does (server/lib/order-secrets). A raw token (a QR or the panel's
- * link) and a raw column minted before 0389 open it with no session. The
+ * Migrations 0389 and 0392: the public sign page resolves a token exactly as
+ * the POST route does (server/lib/order-secrets). A raw token (a QR or the
+ * panel's link, including one printed before 0389, whose column 0392 hashed
+ * in place) opens it with no session. The
  * DIGEST every member reads opens it only for a signed-in member of the
  * order's organization, verified locally WITHOUT refreshing the session (R1:
  * this page cannot persist a refresh; an expired token is no session). Who
@@ -91,10 +92,16 @@ describe('/orders/sign/[token]', () => {
     expect(verifiedSessionUserIdWithoutRefresh).not.toHaveBeenCalled();
   });
 
-  it('a raw column minted before 0389 (no side row) opens it with no session, until slice C', async () => {
-    adminHolder.client = admin(LEGACY, null).client;
+  it('a QR printed before 0389 (its column hashed in place by 0392, no side row) opens it with no session', async () => {
+    adminHolder.client = admin(sha256Hex(LEGACY), null).client;
     expect(await open(LEGACY)).toContain(`data-collector="${LEGACY}"`);
     expect(verifiedSessionUserIdWithoutRefresh).not.toHaveBeenCalled();
+  });
+
+  it('0392: a value equal to the column is a DIGEST even with no side row: no session is the one not-found', async () => {
+    adminHolder.client = admin(LEGACY, null).client;
+    await expect(open(LEGACY)).rejects.toBeInstanceOf(NotFound);
+    expect(verifiedSessionUserIdWithoutRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('the DIGEST with no (or an expired) session: the one not-found', async () => {

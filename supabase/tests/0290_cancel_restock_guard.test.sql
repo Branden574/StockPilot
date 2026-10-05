@@ -416,11 +416,19 @@ select is(
 -- ════════════════════════════════════════════════════════════════════════════
 do $$ begin perform public.partial_pick_line('d0290000-0000-0000-0000-0000000001a2'::uuid, 5); end $$;
 do $$ begin perform public.complete_picking('d0290000-0000-0000-0000-0000000001a1'::uuid); end $$;
+-- Fixture setup moved under reset role by 0392 (it ran as authenticated):
+-- since 0392 the packing slip is generate_order_packing_slips' alone (the
+-- guard refuses the raw picking_complete -> packing_slip_generated edge and
+-- authenticated holds no UPDATE on the packing-slip stamps). The same holds
+-- for H and I below, whose staging writes also come here (the restated guard
+-- asks a raw staging to carry the caller's stamps; these are fixtures).
+reset role;
 update public.order_requests
    set status                    = 'packing_slip_generated',
        packing_slip_generated_at = now(),
        packing_slip_generated_by = :mgr
  where id = :ord_g;
+set local role to 'authenticated';
 
 select is(
   (select status from public.order_requests where id = :ord_g),
@@ -458,12 +466,14 @@ select ok(
 -- ════════════════════════════════════════════════════════════════════════════
 do $$ begin perform public.partial_pick_line('d0290000-0000-0000-0000-0000000001b2'::uuid, 6); end $$;
 do $$ begin perform public.complete_picking('d0290000-0000-0000-0000-0000000001b1'::uuid); end $$;
+reset role;  -- 0392: fixture setup as the superuser (see G)
 update public.order_requests
    set status                    = 'packing_slip_generated',
        packing_slip_generated_at = now(),
        packing_slip_generated_by = :mgr
  where id = :ord_h;
 update public.order_requests set status = 'staged_for_pickup' where id = :ord_h;
+set local role to 'authenticated';
 
 select is(
   (select status from public.order_requests where id = :ord_h),
@@ -492,12 +502,14 @@ select is(
 -- ════════════════════════════════════════════════════════════════════════════
 do $$ begin perform public.partial_pick_line('d0290000-0000-0000-0000-0000000001c2'::uuid, 7); end $$;
 do $$ begin perform public.complete_picking('d0290000-0000-0000-0000-0000000001c1'::uuid); end $$;
+reset role;  -- 0392: fixture setup as the superuser (see G)
 update public.order_requests
    set status                    = 'packing_slip_generated',
        packing_slip_generated_at = now(),
        packing_slip_generated_by = :mgr
  where id = :ord_i;
 update public.order_requests set status = 'staged_for_delivery' where id = :ord_i;
+set local role to 'authenticated';
 
 select is(
   (select status from public.order_requests where id = :ord_i),

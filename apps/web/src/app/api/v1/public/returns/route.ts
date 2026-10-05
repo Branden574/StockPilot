@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  *
  * PUBLIC + UNAUTHENTICATED. Called from `/returns/request/<token>`. The only
  * authorization the requester carries is the per-order `return_token`
- * (order_requests.return_token, 0156). The token scopes to EXACTLY ONE order;
+ * (0156; order_request_secrets.return_token since 0389/0392). The token scopes to EXACTLY ONE order;
  * everything else in the body is treated as hostile and re-validated
  * server-side inside `createRequesterReturn` against the order the token
  * resolves to (durable returned_quantity budget, line belonging, item identity

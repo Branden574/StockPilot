@@ -579,17 +579,28 @@ select is(
   -- clears this suite cares about are untouched.
   'reopen_picking(uuid,text)|293ce0e76d195bb13105cfd1c067de82\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
-  'tg_order_requests_insert_guard()|1b109d535811e9a21c43d01dcc344892\n'
-  'tg_order_requests_workflow_guard()|59481b7651dca818a2266a39868db4f0',
+  -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
+  -- insert guard also refuses an admin-client (service_role) insert carrying
+  -- a return token, a track token or a signature image (0392 suite G23);
+  -- unchanged for the API roles.
+  'tg_order_requests_insert_guard()|caf69f8a23d03b9bfa6ea87a9cf94077\n'
+  -- Re-pinned by 0392 (was 59481b7651dca818a2266a39868db4f0, 0387's body):
+  -- slices C and E restate the guard (four edges, the nine RPC-owned
+  -- columns, the item 14 stamp rules, and no return or track token on the
+  -- row for the admin client either); 0392 suite G proves it.
+  'tg_order_requests_workflow_guard()|55bceafc13d599f8d77d6a4180c28140',
   'P3: the frozen bodies keep their md5 (confirm_order_signature 8afdbb68, the clears as 0390 left them, the transition trigger, the insert guard, the 0387 guard)');
 select is(
   (select string_agg(column_name, ',' order by column_name)
      from information_schema.column_privileges
     where table_schema = 'public' and table_name = 'order_requests' and grantee = 'authenticated' and privilege_type = 'UPDATE'),
-  'assigned_delivery_at,assigned_delivery_by,assigned_delivery_user_id,created_at,delivery_charter_id,denied_reason,'
-  'in_transit_at,in_transit_by,internal_notes,packing_slip_generated_at,packing_slip_generated_by,pick_slip_generated_at,'
-  'pick_slip_generated_by,signature_token,signature_token_expires_at,staged_at,staged_by,status,warehouse_id',
-  'P4: 0389 changes no grant on order_requests: authenticated keeps its 19 UPDATE columns (pins current behaviour: the token columns are revoked in slice C, after the 12-hour skew window)');
+  -- Re-pinned by 0392 (desk check I1 (a); was the 19 columns 0389 left,
+  -- signature_token and its expiry among them): slice C revokes the token
+  -- columns and the packing-slip stamps after the 12-hour skew window, and
+  -- slice E the delivery assignment and in-transit stamps.
+  'created_at,delivery_charter_id,denied_reason,internal_notes,pick_slip_generated_at,pick_slip_generated_by,'
+  'staged_at,staged_by,status,warehouse_id',
+  'P4: 0389 changed no grant on order_requests; since 0392 authenticated holds UPDATE on 10 columns, none of them a token (slice C revoked the token columns after the 12-hour skew window)');
 select is(
   (select count(*)::text from pg_proc p
     where p.oid in ('public.generate_order_packing_slips(uuid)'::regprocedure, 'public.order_return_token_ensure(uuid)'::regprocedure)

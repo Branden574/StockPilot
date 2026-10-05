@@ -111,6 +111,16 @@ select is(
 -- SCENARIO B — confirm_order_signature SHIPS + forks to backordered (owed 50)
 -- Advance A through legal transitions to staged_for_pickup, then hand over.
 -- ════════════════════════════════════════════════════════════════════════════
+-- Moved under reset role by 0392 (fixture setup, not the behaviour under
+-- test; these two writes ran as authenticated): since 0392 the packing slip
+-- is generate_order_packing_slips' alone (the guard refuses the raw
+-- picking_complete -> packing_slip_generated edge) and authenticated holds
+-- no UPDATE on signature_token or its expiry, so the fixture writes them as
+-- the superuser. confirm_order_signature is service_role-only (0112/0120 —
+-- the public sign page hashes the token via a service-role admin client;
+-- never callable by 'authenticated'), so it runs outside the role switch
+-- too, then the role is restored — the 0230 pattern.
+reset role;
 update public.order_requests set status = 'packing_slip_generated' where id = :ord_a;
 update public.order_requests
   set status = 'staged_for_pickup',
@@ -118,11 +128,6 @@ update public.order_requests
       signature_token_expires_at = now() + interval '1 day'
   where id = :ord_a;
 
--- confirm_order_signature is service_role-only (0112/0120 — the public sign
--- page hashes the token via a service-role admin client; never callable by
--- 'authenticated'). Drop the role for this call, then restore it — matching
--- the 0230 pattern of running service-role-only calls outside the role switch.
-reset role;
 do $$
 begin
   perform public.confirm_order_signature('b0244000-0000-0000-0000-0000000000a1'::uuid,
@@ -149,13 +154,14 @@ select is(
 -- SCENARIO C — fully picked → hand-over forks to completed (owed 0)
 -- ════════════════════════════════════════════════════════════════════════════
 do $$ begin perform public.complete_picking('b0244000-0000-0000-0000-0000000000c1'::uuid); end $$;
+-- Moved under reset role by 0392, as in scenario B.
+reset role;
 update public.order_requests set status = 'packing_slip_generated' where id = :ord_c;
 update public.order_requests
   set status = 'staged_for_pickup',
       signature_token = 'tok-c-0244',
       signature_token_expires_at = now() + interval '1 day'
   where id = :ord_c;
-reset role;
 do $$
 begin
   perform public.confirm_order_signature('b0244000-0000-0000-0000-0000000000c1'::uuid,
