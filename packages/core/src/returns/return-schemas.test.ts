@@ -169,9 +169,15 @@ describe('RX-2: the exchange bodies', () => {
     expect(change.ok && change.value).toMatchObject({ reason: 'Navy', whenShort: 'refuse' });
     expect(parseReturnBody('changeReplacement', { expectedRevision: 2, reason: 'Again' }).ok).toBe(true);
     expect(parseReturnBody('changeReplacement', { lines: [], reason: 'x' }).ok).toBe(false);
-    expect(parseReturnBody('cancelReplacement', { reason: 'Changed mind' }).ok).toBe(true);
-    expect(parseReturnBody('releaseEarly', { reason: 'x'.repeat(500) }).ok).toBe(true);
-    expect(parseReturnBody('releaseEarly', { reason: '' }).ok).toBe(false);
+    // Desk check F7: the cancel needs the revision the caller saw and the
+    // release the replacement order it saw.
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'Changed mind' }).ok).toBe(true);
+    expect(parseReturnBody('cancelReplacement', { reason: 'Changed mind' }).ok).toBe(false);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: null, reason: 'Changed mind' }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: L3, reason: 'x'.repeat(500) }).ok).toBe(true);
+    expect(parseReturnBody('releaseEarly', { reason: 'x'.repeat(500) }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: 'not-an-order', reason: 'x' }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: L3, reason: '' }).ok).toBe(false);
   });
 
   it('the candidate search takes a line and a trimmed term; the prepare chain stops at staged', () => {

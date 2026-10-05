@@ -1575,6 +1575,12 @@ begin
     raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
   end if;
   v_reason := public._return_exchange_reason(p_reason, 1000);
+  -- The revision the caller saw is required (desk check F7): after a
+  -- substitution or a re-issue a stale tab gets return_changed, never a
+  -- cancel of a replacement its user has not seen.
+  if p_expected_revision is null then
+    raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'expectedRevision';
+  end if;
 
   select r.status into v_status from public.returns r where r.id = p_return_id for update;
   select o.id, o.status into v_live
@@ -1589,7 +1595,7 @@ begin
     from public.return_decisions d
    where d.return_id = p_return_id
      and d.kind in ('approved', 'replacement_changed', 'replacement_cancelled', 'cancelled');
-  if p_expected_revision is not null and v_rev <> p_expected_revision then
+  if v_rev <> p_expected_revision then
     raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed', detail = v_rev::text;
   end if;
 
@@ -1619,8 +1625,11 @@ $$;
 -- for that order only (a substituted order needs its own release, D10). An
 -- existing release of the live order replays; an RMA already received or
 -- closed answers {changed: false, reason: 'not_needed'}; otherwise P0001
--- replacement_not_waiting.
-create function public.release_return_replacement_early(p_return_id uuid, p_reason text)
+-- replacement_not_waiting. p_order_id is the replacement the caller saw
+-- (null: none): a different live replacement (a substitution or a re-issue
+-- since) is P0001 return_changed, so a stale tab never releases an order its
+-- user has not seen (desk check F7; D10).
+create function public.release_return_replacement_early(p_return_id uuid, p_order_id uuid, p_reason text)
 returns jsonb
 language plpgsql
 security definer
@@ -1664,6 +1673,9 @@ begin
     from public.order_requests o
    where o.replacement_for_return_id = p_return_id and o.status not in ('cancelled', 'denied')
      for update;
+  if v_live.id is distinct from p_order_id then
+    raise exception 'return_changed' using errcode = 'P0001', hint = 'return_changed';
+  end if;
 
   if v_status in ('received', 'closed') then
     return jsonb_build_object('changed', false, 'returnId', p_return_id, 'status', v_status, 'reason', 'not_needed');
@@ -2289,13 +2301,13 @@ revoke all on function public.tg_returns_api_guard() from public, anon, authenti
 
 revoke all on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) from public, anon, authenticated, service_role;
 revoke all on function public.cancel_return_replacement(uuid, integer, text) from public, anon, authenticated, service_role;
-revoke all on function public.release_return_replacement_early(uuid, text) from public, anon, authenticated, service_role;
+revoke all on function public.release_return_replacement_early(uuid, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_candidates(uuid, uuid, text, integer) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_options(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.return_exchange_flags(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) to authenticated;
 grant execute on function public.cancel_return_replacement(uuid, integer, text) to authenticated;
-grant execute on function public.release_return_replacement_early(uuid, text) to authenticated;
+grant execute on function public.release_return_replacement_early(uuid, uuid, text) to authenticated;
 grant execute on function public.return_exchange_candidates(uuid, uuid, text, integer) to authenticated;
 grant execute on function public.return_exchange_options(uuid) to service_role;
 grant execute on function public.return_exchange_flags(uuid) to authenticated, service_role;
@@ -2333,9 +2345,9 @@ comment on function public._return_exchange_replay(uuid, integer) is
 comment on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) is
   'RX-2 (plan 3.3.5; brief 22; C-1): substitution, or a new replacement after a replacement cancel. p_lines [{exchangeLineId, itemId?, quantity?}] changes approved lines (the others keep theirs); p_reason 1 to 1,000 characters (P0001 reason_required); p_when_short refuse or backorder; p_replacement {fulfillmentType?, deliveryCharterId?} overrides the fulfilment. RMA approved, received or closed (P0001 invalid_status_transition); revision current (P0001 return_changed). The live replacement is locked after the RMA and classified: undrawn is cancelled (holds released, nothing restocked) and a new order created and held in one transaction; drawn gives P0001 replacement_already_drawn; handed over (anything handed over, a resumed backorder included) P0001 replacement_handed_over; none, with lines cancelled by a replacement cancel, issues a new one. Every line sends at most its returned quantity minus what this RMA''s replacements already handed over for it (_return_exchange_fulfilled; desk check F2): the default quantity is capped there, a larger one is P0001 exchange_quantity_exceeds_return, a line with nothing left is not re-issued, and when nothing is left at all P0001 replacement_handed_over. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), returns and orders modules (P0001 module_disabled), returns:manage (42501 returns_manage), orders:approve (42501 orders_approve), write access to the original order''s warehouse (42501 warehouse_write). Idempotent on (RMA, expected revision), scope return_replacement_change: the same change replays, another P0001 return_changed. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.cancel_return_replacement(uuid, integer, text) is
-  'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. A stale expected revision gives P0001 return_changed. The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
-comment on function public.release_return_replacement_early(uuid, text) is
-  'RX-2 (brief 24; plan 3.3.5): a manager releases the live replacement for picking before the returned item arrives, with a reason of 1 to 500 characters (P0001 reason_required), only while the RMA is approved and the replacement approved (P0001 replacement_not_waiting otherwise). Appends released_early naming that order (a substituted order needs its own release, D10). An existing release of the live order replays; an RMA already received or closed answers changed false, reason not_needed. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. The expected revision is required (22023 return_invalid without it); a stale one gives P0001 return_changed (desk check F7). The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+comment on function public.release_return_replacement_early(uuid, uuid, text) is
+  'RX-2 (brief 24; plan 3.3.5): a manager releases the live replacement for picking before the returned item arrives, with a reason of 1 to 500 characters (P0001 reason_required), only while the RMA is approved and the replacement approved (P0001 replacement_not_waiting otherwise). p_order_id is the replacement the caller saw (null: none); any other live replacement is P0001 return_changed (desk check F7). Appends released_early naming that order (a substituted order needs its own release, D10). An existing release of the live order replays; an RMA already received or closed answers changed false, reason not_needed. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.return_exchange_candidates(uuid, uuid, text, integer) is
   'RX-2 (plan 3.3.2): the staff replacement search for one line of an order, under the caller''s RLS (SECURITY INVOKER): the returned item''s product-group siblings first (the same size too), then name or SKU matches from two characters over active, orderable items in the order''s warehouse, 30 at most; free stock per item = on hand minus every active hold. Gates: signed in (42501 unauthenticated), the order readable (P0002 order_not_found), returns:manage (42501 returns_manage). STABLE, EXECUTE to authenticated only.';
 comment on function public.return_exchange_options(uuid) is

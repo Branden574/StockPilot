@@ -347,18 +347,25 @@ export function changeReturnReplacement(
   return replacementCall(id, '', body);
 }
 
+/** The revision the screen shows is required (desk check F7): a stale one is return_changed. */
 export function cancelReturnReplacement(
   id: string,
-  body: { expectedRevision: number | null; reason: string },
+  body: { expectedRevision: number; reason: string },
 ): Promise<ReplacementAnswer<{ changed: boolean; drawn: boolean; inTransit: boolean }>> {
   return replacementCall(id, '/cancel', body);
 }
 
+/**
+ * Release the replacement order the screen shows (desk check F7): after a
+ * substitution or a re-issue the server answers return_changed rather than
+ * releasing an order the user has not seen.
+ */
 export function releaseReturnReplacement(
   id: string,
+  orderId: string,
   reason: string,
 ): Promise<ReplacementAnswer<{ changed: boolean; replay: boolean; notNeeded: boolean; orderId: string | null }>> {
-  return replacementCall(id, '/release', { reason });
+  return replacementCall(id, '/release', { orderId, reason });
 }
 
 export interface MobilePrepareAnswer {

@@ -243,10 +243,12 @@ export async function cancelReturnReplacementAction(input: {
 /** Release the replacement before the return is received (brief 24): /replacement/release's twin. */
 export async function releaseReturnReplacementAction(input: {
   id: string;
+  /** The replacement order the screen shows (desk check F7). */
+  orderId: string;
   reason: string;
 }): Promise<ActionResult<{ answer: ReturnReleaseEarlyAnswer; workbench: ReturnWorkbench }>> {
   if (!UUID_RE.test(input?.id ?? '')) return badId();
-  const parsed = parseReturnBody('releaseEarly', { reason: input.reason ?? '' });
+  const parsed = parseReturnBody('releaseEarly', { orderId: input.orderId ?? '', reason: input.reason ?? '' });
   if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'reason_required' });
   try {
     const svc = await RMAService.forCurrentUser();

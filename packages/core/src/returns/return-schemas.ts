@@ -280,12 +280,15 @@ function buildSchemas() {
     replacement: replacementOptions.omit({ whenShort: true }).optional().nullable(),
   });
 
+  // Desk check F7: the cancel names the revision the caller saw, and the
+  // release the replacement order it saw, so a stale tab never acts on a
+  // replacement its user has not seen (the database answers return_changed).
   const cancelReplacement = z.object({
-    expectedRevision: z.number().int().min(0).optional().nullable(),
+    expectedRevision: z.number().int().min(0),
     reason,
   });
 
-  const releaseEarly = z.object({ reason: requiredReason(RETURN_RELEASE_REASON_MAX) });
+  const releaseEarly = z.object({ orderId: uuid, reason: requiredReason(RETURN_RELEASE_REASON_MAX) });
 
   const candidates = z.object({
     line: uuid,

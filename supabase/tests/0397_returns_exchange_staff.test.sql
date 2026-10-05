@@ -84,6 +84,8 @@
 --   M24 the gate lets a cancelled RMA's replacement into picking         -> K6
 --   M25 the on-cancel hook leaves a resumed remainder live               -> K7
 --   M26 the item locks are a no-op (desk check F4)                       -> A10 (and races 11a, 12a)
+--   M27 the release ignores the order the caller saw                     -> R6
+--   M28 the replacement cancel accepts a missing revision                -> R6
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -94,7 +96,7 @@
 
 begin;
 
-select plan(97);
+select plan(98);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -793,7 +795,7 @@ select pg_temp.xl(:'rB0') as "xB0" \gset
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.change_return_replacement(%L, 1, '[]', 'x', 'refuse')$q$, :'rB0'))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', null, format($q$select public.return_exchange_candidates(%L, %L, null, 30)$q$, :oG, :lG))) || ','
   || pg_temp.err(pg_temp.try_rpc('anon', null, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'))) || ','
   || pg_temp.err(pg_temp.try_rpc('anon', null, format($q$select public.return_exchange_flags(%L)$q$, :'rB0'))) || ','
@@ -803,8 +805,8 @@ select is(
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :outZ, format($q$select public.change_return_replacement(%L, 1, '[]', 'x', 'refuse')$q$, :'rB0'))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :outZ, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :outZ, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :nobody))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :outZ, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :nobody, pg_temp.live(:nobody)))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :outZ, format($q$select public.return_exchange_candidates(%L, %L, null, 30)$q$, :oG, :lG))) || ','
   || coalesce(pg_temp.call_as('authenticated', :outZ, format($q$select public.return_exchange_flags(%L)::text$q$, :'rB0')), 'x'),
   'P0002:return_not_found,P0002:return_not_found,P0002:return_not_found,P0002:return_not_found,P0002:order_not_found,null',
@@ -812,7 +814,7 @@ select is(
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'),
      format($q$update public.organization_modules set enabled = false where organization_id = %L and module_id = 'orders'$q$, :orgA))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'),
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')),
      format($q$update public.organization_modules set enabled = false where organization_id = %L and module_id = 'returns'$q$, :orgA))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rBq', pg_temp.xdec(:'rBq')::text),
      format($q$update public.organization_modules set enabled = false where organization_id = %L and module_id = 'orders'$q$, :orgA))),
@@ -820,11 +822,11 @@ select is(
   'B3: with the orders or the returns module off, the exchange functions and an exchange approval answer module_disabled');
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.change_return_replacement(%L, 1, '[]', 'x', 'refuse')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.return_exchange_candidates(%L, %L, null, 30)$q$, :oG, :lG))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.change_return_replacement(%L, 1, '[]', 'x', 'refuse')$q$, :'rB0'))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format('select public.approve_return(%L, 0, %L::jsonb)', :'rBq', pg_temp.xdec(:'rBq')::text))) || ','
   || coalesce(pg_temp.try_rpc('authenticated', :stfRm, format('select public.approve_return(%L, 0, %L::jsonb)', :'rBq',
                 pg_temp.xdec(:'rBq', 'decline', '{"reason":"Not this time"}'::jsonb)::text))->>'status', 'error'),
@@ -833,7 +835,7 @@ select is(
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, format($q$select public.change_return_replacement(%L, 1, '[]', 'x', 'refuse')$q$, :'rB0'))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, format($q$select public.cancel_return_replacement(%L, 1, 'x')$q$, :'rB0'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rB0'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rB0', pg_temp.live(:'rB0')))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, format('select public.approve_return(%L, 0, %L::jsonb)', :'rBq', pg_temp.xdec(:'rBq')::text))),
   '42501:warehouse_write,42501:warehouse_write,42501:warehouse_write,42501:warehouse_write',
   'B5: the grants without write access to the original order''s warehouse are refused warehouse_write (D27)');
@@ -1184,7 +1186,7 @@ select is(
 -- rX1 staged for pickup.
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX1" \gset
 select pg_temp.approve(:mgr, :'rX1', pg_temp.xdec(:'rX1')) as "jX1a" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rX1')) as "jX1r" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX1', pg_temp.live(:'rX1'))) as "jX1r" \gset
 select pg_temp.live(:'rX1') as "oX1" \gset
 select pg_temp.pick(:mgr, :'oX1') as "x1Pick" \gset
 select pg_temp.stage(:mgr, :'oX1') as "x1Stage" \gset
@@ -1204,7 +1206,7 @@ select is(
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX2" \gset
 select pg_temp.approve(:mgr, :'rX2', pg_temp.xdec(:'rX2', 'approve', '{}'::jsonb,
          jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jX2a" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rX2')) as "jX2r" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rX2', pg_temp.live(:'rX2'))) as "jX2r" \gset
 select pg_temp.live(:'rX2') as "oX2" \gset
 select pg_temp.pick(:mgr, :'oX2') as "x2Pick" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oX2')) as "x2Slip" \gset
@@ -1214,7 +1216,7 @@ select pg_temp.held(:gL, :'stA') as "x2StL" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Delivery refused at the door')$q$, :'rX2', pg_temp.rev(:'rX2'))) as "jX2c" \gset
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX3" \gset
 select pg_temp.approve(:mgr, :'rX3', pg_temp.xdec(:'rX3')) as "jX3a" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rX3')) as "jX3r" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX3', pg_temp.live(:'rX3'))) as "jX3r" \gset
 select pg_temp.live(:'rX3') as "oX3" \gset
 select pg_temp.pick(:mgr, :'oX3') as "x3Pick" \gset
 select pg_temp.held(:gL, :'stA') as "x3StL" \gset
@@ -1231,7 +1233,7 @@ select is(
 -- rX4 handed over.
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rX4" \gset
 select pg_temp.approve(:mgr, :'rX4', pg_temp.xdec(:'rX4')) as "jX4a" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rX4')) as "jX4r" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rX4', pg_temp.live(:'rX4'))) as "jX4r" \gset
 select pg_temp.live(:'rX4') as "oX4" \gset
 select pg_temp.pick(:mgr, :'oX4') as "x4Pick" \gset
 select pg_temp.stage(:mgr, :'oX4') as "x4Stage" \gset
@@ -1267,7 +1269,7 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
 values (:lPh, :oPh, :gM, 4, 4);
 select pg_temp.mk(:mgr, :oPh, pg_temp.xbody(:lPh, 2, jsonb_build_object('itemId', :pX))) as "rPh" \gset
 select pg_temp.approve(:mgr, :'rPh', pg_temp.xdec(:'rPh', 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb)) as "jPh" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rPh')) as "jPhr" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rPh', pg_temp.live(:'rPh'))) as "jPhr" \gset
 select pg_temp.live(:'rPh') as "oPhR" \gset
 select pg_temp.pick(:mgr, :'oPhR') as "phPick" \gset
 select pg_temp.stage(:mgr, :'oPhR') as "phStage" \gset
@@ -1328,15 +1330,15 @@ select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', 
 select pg_temp.approve(:mgr, :'rRel', pg_temp.xdec(:'rRel')) as "jRa" \gset
 -- case: release_reason_too_long
 select is(
-  pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rRel'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rRel'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, '   ')$q$, :'rRel'))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L)$q$, :'rRel', repeat('x', 501)))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rBq'))),
+  pg_temp.err(pg_temp.try_rpc('authenticated', :vwr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rRel', pg_temp.live(:'rRel')))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :stfRm, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rRel', pg_temp.live(:'rRel')))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, '   ')$q$, :'rRel', pg_temp.live(:'rRel')))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, %L)$q$, :'rRel', pg_temp.live(:'rRel'), repeat('x', 501)))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rBq', pg_temp.live(:'rBq')))),
   '42501:returns_manage,42501:orders_approve,P0001:reason_required,22023:return_invalid,P0001:replacement_not_waiting',
   'R1: an early release needs returns:manage and orders:approve (requesters never control it, brief 24), a reason of 1 to 500 characters, and a replacement that is waiting');
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rRel')) as "jR1" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Another reason')$q$, :'rRel')) as "jR2" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rRel', pg_temp.live(:'rRel'))) as "jR1" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Another reason')$q$, :'rRel', pg_temp.live(:'rRel'))) as "jR2" \gset
 select is(
   ((:'jR1'::jsonb)->>'changed') || ':' || ((:'jR2'::jsonb)->>'changed') || ':' || ((:'jR2'::jsonb)->>'replay') || ':'
   || (select count(*)::text || '/' || max(d.reason) || '/' || (max(d.order_request_id::text) = pg_temp.live(:'rRel')::text)::text
@@ -1351,6 +1353,7 @@ select is(
                      :mgr, pg_temp.live(:'rRel'))),
   'ready_to_pick:true/ready_to_pick:ok:1',
   'R3: the release opens the gate for that order: the pick slip passes, and a member without returns access reads the same exchange status');
+select pg_temp.live(:'rRel') as "oRelOld" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'Small instead', 'refuse')$q$,
           :'rRel', pg_temp.rev(:'rRel'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rRel'), 'itemId', :gS))::text)) as "jR4" \gset
 select is(
@@ -1360,10 +1363,20 @@ select is(
               :mgr, pg_temp.live(:'rRel'))),
   'substitute:waiting_for_return:P0001:replacement_waiting_for_return:replacement_waiting_for_return',
   'R4: a substituted replacement is a new order and needs its own release (D10)');
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$,
+       :'rRel', :'oRelOld')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, null, 'x')$q$, :'rRel')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, null, 'x')$q$, :'rRel')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'x')$q$, :'rRel', pg_temp.rev(:'rRel') - 1)))
+  || ',' || pg_temp.holds(pg_temp.live(:'rRel'))::text
+  || ',' || (select count(*)::text from public.return_decisions d where d.return_id = :'rRel' and d.kind = 'released_early'),
+  'P0001:return_changed,P0001:return_changed,22023:return_invalid,P0001:return_changed,1,1',
+  'R6: a stale tab never releases or cancels a replacement its user has not seen: the release names the order shown (the substituted one, or none, is return_changed) and the cancel needs the current revision (desk check F7)');
 select pg_temp.call_as('authenticated', :mgr, format('select (public.receive_return(%L))->>''status''', :'rRel')) as "rRelRecv" \gset
 select is(
   :'rRelRecv' || ':'
-  || coalesce(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'x')$q$, :'rRel'))->>'reason', 'none')
+  || coalesce(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'x')$q$, :'rRel', pg_temp.live(:'rRel')))->>'reason', 'none')
   || ':' || pg_temp.xs(:'rRel', :mgr),
   'received:not_needed:ready_to_pick',
   'R5: once the returned item is received a release is not needed (changed false), and the replacement is ready to pick');
@@ -1420,7 +1433,7 @@ select is(
   'K2: cancelling the RMA before the return arrives cancels its replacement and releases the hold in the same transaction (brief 34)');
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rCaH" \gset
 select pg_temp.approve(:mgr, :'rCaH', pg_temp.xdec(:'rCaH')) as "jCaHa" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rCaH')) as "jCaHr" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rCaH', pg_temp.live(:'rCaH'))) as "jCaHr" \gset
 select pg_temp.live(:'rCaH') as "oCaH" \gset
 select pg_temp.pick(:mgr, :'oCaH') as "caHPick" \gset
 select pg_temp.stage(:mgr, :'oCaH') as "caHStage" \gset
@@ -1462,7 +1475,7 @@ begin
   perform pg_temp.approve('03970000-0000-0000-0000-0000000000a1', v_rma::uuid,
                           pg_temp.xdec(v_rma::uuid, 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb));
   perform pg_temp.rpc('authenticated', '03970000-0000-0000-0000-0000000000a1',
-                      format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, v_rma));
+                      format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, v_rma, pg_temp.live(v_rma::uuid)));
   v_live := pg_temp.live(v_rma::uuid);
   v_out := pg_temp.pick('03970000-0000-0000-0000-0000000000a1', v_live) || '/' || pg_temp.stage('03970000-0000-0000-0000-0000000000a1', v_live)
         || '/' || pg_temp.call_as('authenticated', '03970000-0000-0000-0000-0000000000a1',
@@ -1591,7 +1604,7 @@ select is(
   'N4: a delivery replacement says ready for delivery and on the way; its cancellation from the RMA is silent here (the RMA function''s service explains it once)');
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rBo" \gset
 select pg_temp.approve(:mgr, :'rBo', pg_temp.xdec(:'rBo')) as "jBo" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rBo')) as "jBor" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rBo', pg_temp.live(:'rBo'))) as "jBor" \gset
 select pg_temp.live(:'rBo') as "oBo" \gset
 select pg_temp.pick(:mgr, :'oBo') as "boPick" \gset
 select pg_temp.stage(:mgr, :'oBo') as "boStage" \gset
@@ -1613,7 +1626,7 @@ select is(
   'N6: at the counter the requester is standing there: ready for pickup is silent and only "Your exchange is complete" is sent, once the return is closed (G11, D24)');
 select pg_temp.mk(:mgr, :oMute, pg_temp.xbody(:lMute, 1, jsonb_build_object('itemId', :gL))) as "rMu" \gset
 select pg_temp.approve(:mgr, :'rMu', pg_temp.xdec(:'rMu')) as "jMu" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rMu')) as "jMur" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rMu', pg_temp.live(:'rMu'))) as "jMur" \gset
 select pg_temp.pick(:mgr, pg_temp.live(:'rMu')) as "muPick" \gset
 select pg_temp.stage(:mgr, pg_temp.live(:'rMu')) as "muStage" \gset
 select is(
@@ -1635,14 +1648,14 @@ select pg_temp.approve(:mgr, :'rDec', pg_temp.xdec(:'rDec', 'decline', '{"reason
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rOD" \gset
 select pg_temp.approve(:mgr, :'rOD', pg_temp.xdec(:'rOD', 'approve', '{}'::jsonb,
          jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jOD" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rOD')) as "jODr" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rOD', pg_temp.live(:'rOD'))) as "jODr" \gset
 select pg_temp.live(:'rOD') as "oOD" \gset
 select pg_temp.pick(:mgr, :'oOD') as "odPick" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oOD')) as "odSlip" \gset
 update public.order_requests set status = 'staged_for_delivery' where id = :'oOD';
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rIP" \gset
 select pg_temp.approve(:mgr, :'rIP', pg_temp.xdec(:'rIP')) as "jIP" \gset
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, :'rIP')) as "jIPr" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Customer is completing an in-person exchange today.')$q$, :'rIP', pg_temp.live(:'rIP'))) as "jIPr" \gset
 select pg_temp.write_as('authenticated', :mgr,
          format($q$update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_by = %L where id = %L$q$,
                 :mgr, pg_temp.live(:'rIP'))) as "ipSlip" \gset

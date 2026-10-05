@@ -24,6 +24,7 @@ import {
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
   RETURN_REASON_MAX,
+  RETURN_ERROR_WORDS,
   RETURN_RELEASE_REASON_MAX,
   RETURNS_COPY,
   releaseOutcomeLine,
@@ -315,7 +316,14 @@ function SheetContent({
     try {
       // RX-2: the replacement actions, one route each.
       if (mode === 'release') {
-        const res = await releaseReturnReplacement(id, reasonText);
+        // The live replacement this sheet shows (desk check F7).
+        const shown = exchangeOf(wb).replacement;
+        const shownOrderId = shown?.live ? shown.orderId : null;
+        if (!shownOrderId) {
+          setError(RETURN_ERROR_WORDS.returnChanged);
+          return;
+        }
+        const res = await releaseReturnReplacement(id, shownOrderId, reasonText);
         onDone({
           message: releaseOutcomeLine(res.answer),
           workbench: res.workbench,

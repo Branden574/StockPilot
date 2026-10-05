@@ -122,7 +122,9 @@ create_sql()  { printf "select 'R=' || public.create_return_request('%s', '%s'::
 approve_sql() { printf "select 'R=' || public.approve_return('%s', %s, '%s'::jsonb, false)::text;" "$1" "$2" "$3"; }
 cancel_sql()  { printf "select 'R=' || public.cancel_return('%s', %s, 'Race cancel')::text;" "$1" "$2"; }
 receive_sql() { printf "select 'R=' || public.receive_return('%s')::text;" "$1"; }
-release_sql() { printf "select 'R=' || public.release_return_replacement_early('%s', 'Customer is completing an in-person exchange today.')::text;" "$1"; }
+# The release names the replacement the caller saw (desk check F7): here the
+# live one, read in the same transaction before the call.
+release_sql() { printf "select 'R=' || public.release_return_replacement_early('%s', (select o.id from public.order_requests o where o.replacement_for_return_id = '%s' and o.status not in ('cancelled', 'denied')), 'Customer is completing an in-person exchange today.')::text;" "$1" "$1"; }
 change_sql()  { printf "select 'R=' || public.change_return_replacement('%s', %s, '[{\"exchangeLineId\":\"%s\",\"itemId\":\"%s\"}]'::jsonb, 'Race swap', 'refuse', null)::text;" "$1" "$2" "$3" "$4"; }
 cancel_repl_sql() { printf "select 'R=' || public.cancel_return_replacement('%s', %s, 'Race cancel replacement')::text;" "$1" "$2"; }
 pick_sql()    { printf "select 'R=' || (public.complete_picking('%s')).status;" "$1"; }

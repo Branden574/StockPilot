@@ -77,6 +77,18 @@ describe('online only', () => {
     expect(client).not.toMatch(/from '\.\/(queue|outbox|db|sync)'/);
     expect(code(read('src/lib/queue.ts'))).not.toMatch(/replacement|exchange/i);
   });
+
+  // Desk check F7: the release names the replacement the screen shows and
+  // the replacement cancel the revision it shows; the server answers
+  // return_changed for anything newer.
+  it('the release names the shown replacement and the cancel the shown revision', () => {
+    const client = code(read('src/lib/returns-api.ts'));
+    expect(client).toContain("return replacementCall(id, '/release', { orderId, reason });");
+    expect(client).toContain('body: { expectedRevision: number; reason: string },');
+    expect(sheet).toContain('const shownOrderId = shown?.live ? shown.orderId : null;');
+    expect(sheet).toContain('releaseReturnReplacement(id, shownOrderId, reasonText)');
+    expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
+  });
 });
 
 describe('the order screen', () => {
@@ -89,7 +101,8 @@ describe('the order screen', () => {
     expect(screen).toContain('managerActions.generatePickSlip && !replacementPickBlocked(order.replacement)');
     expect(screen).toContain('waitingForReturnLine(order.replacement.returnNumber)');
     expect(screen).toContain('<ReleaseReplacementSheet');
-    expect(screen).toContain('releaseReturnReplacement(order.replacement.returnId, reason)');
+    // Desk check F7: the release names this order (the one the screen shows).
+    expect(screen).toContain('releaseReturnReplacement(order.replacement.returnId, order.id, reason)');
     expect(screen).toContain('{replacementPickBlocked(order.replacement) ? null : stockGates.resume');
   });
 

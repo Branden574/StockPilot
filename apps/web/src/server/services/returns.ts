@@ -1308,7 +1308,7 @@ export class RMAService {
     const live = await this.liveReplacement(id);
     const { data, error } = await this.ctx.supabase.rpc('cancel_return_replacement', {
       p_return_id: id,
-      p_expected_revision: parsed.value.expectedRevision ?? null,
+      p_expected_revision: parsed.value.expectedRevision,
       p_reason: parsed.value.reason,
     });
     if (error) throw returnRpcError(error);
@@ -1379,6 +1379,8 @@ export class RMAService {
     const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('release_return_replacement_early', {
       p_return_id: id,
+      // The replacement the caller saw: another live one is return_changed (F7).
+      p_order_id: parsed.value.orderId,
       p_reason: parsed.value.reason,
     });
     if (error) throw returnRpcError(error);

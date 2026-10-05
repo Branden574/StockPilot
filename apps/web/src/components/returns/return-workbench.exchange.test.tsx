@@ -263,7 +263,8 @@ describe('an approved exchange waiting for the returned item', () => {
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Release before return is received' }));
     await waitFor(() =>
-      expect(releaseAction).toHaveBeenCalledWith({ id: RET, reason: 'Swap at delivery: the driver collects the returned item.' }),
+      // Desk check F7: the release names the replacement the workbench shows.
+      expect(releaseAction).toHaveBeenCalledWith({ id: RET, orderId: 'repl-1', reason: 'Swap at delivery: the driver collects the returned item.' }),
     );
   });
 

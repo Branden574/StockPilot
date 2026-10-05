@@ -275,7 +275,9 @@ export function ManagerActionsPanel({
   async function releaseEarly(reason: string) {
     if (!replacement) return;
     setBusy('release-early');
-    const res = await releaseReturnReplacementAction({ id: replacement.returnId, reason });
+    // This order is the replacement the page shows (desk check F7: a stale
+    // page never releases a newer replacement).
+    const res = await releaseReturnReplacementAction({ id: replacement.returnId, orderId, reason });
     setBusy(null);
     if (!res.ok) {
       toast.error(res.error.message);

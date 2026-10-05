@@ -1068,7 +1068,12 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     const dialog = await screen.findByRole('dialog');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
     await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
-    expect(releaseReplacement).toHaveBeenCalledWith({ id: 'rma-1', reason: 'Customer is completing an in-person exchange today.' });
+    // Desk check F7: the release names this order, the replacement the page shows.
+    expect(releaseReplacement).toHaveBeenCalledWith({
+      id: 'rma-1',
+      orderId: 'order-1',
+      reason: 'Customer is completing an in-person exchange today.',
+    });
   });
 
   it('released or received: the pick slip is back; no release without both permissions', () => {

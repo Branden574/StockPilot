@@ -139,14 +139,37 @@ describe('POST /replacement/cancel, /release, /prepare', () => {
     const releaseEarly = vi.fn(async () => ({ changed: true, orderId: ORDER }));
     service({ releaseEarly, workbench });
     const ok = await releasePOST(
-      req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { reason: 'Customer is completing an in-person exchange today.' } }),
+      req(`/api/v1/returns/${RET}/replacement/release`, {
+        method: 'POST',
+        json: { orderId: ORDER, reason: 'Customer is completing an in-person exchange today.' },
+      }),
       params(),
     );
     expect(ok.status).toBe(200);
-    expect(releaseEarly).toHaveBeenCalledWith(RET, { reason: 'Customer is completing an in-person exchange today.' });
+    expect(releaseEarly).toHaveBeenCalledWith(RET, { orderId: ORDER, reason: 'Customer is completing an in-person exchange today.' });
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
-    const long = await releasePOST(req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { reason: 'x'.repeat(501) } }), params());
+    const long = await releasePOST(
+      req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { orderId: ORDER, reason: 'x'.repeat(501) } }),
+      params(),
+    );
     expect(long.status).toBe(400);
+  });
+
+  // Desk check F7: the release names the replacement the caller saw, and the
+  // replacement cancel the revision; either missing is refused before the
+  // service, and a stale one is the database's 409 return_changed.
+  it('release without the shown order and cancel without the revision are refused before the service', async () => {
+    const releaseEarly = vi.fn();
+    const cancelReplacement = vi.fn();
+    service({ releaseEarly, cancelReplacement, workbench });
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const noOrder = await releasePOST(req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { reason: 'x' } }), params());
+    expect(noOrder.status).toBe(400);
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const noRevision = await cancelReplacementPOST(req(`/api/v1/returns/${RET}/replacement/cancel`, { method: 'POST', json: { reason: 'x' } }), params());
+    expect(noRevision.status).toBe(400);
+    expect(releaseEarly).not.toHaveBeenCalled();
+    expect(cancelReplacement).not.toHaveBeenCalled();
   });
 
   it('prepare takes an empty body and answers the steps; an unknown field is refused', async () => {
@@ -169,7 +192,10 @@ describe('POST /replacement/cancel, /release, /prepare', () => {
       }),
       workbench,
     });
-    const res = await releasePOST(req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { reason: 'x' } }), params());
+    const res = await releasePOST(
+      req(`/api/v1/returns/${RET}/replacement/release`, { method: 'POST', json: { orderId: ORDER, reason: 'x' } }),
+      params(),
+    );
     expect(res.status).toBe(403);
     expect((await res.json()).details).toEqual({ reason: 'aal2_required' });
   });

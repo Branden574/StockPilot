@@ -318,8 +318,12 @@ export function ReturnWorkbench({
   }
 
   async function releaseEarly(reason: string) {
+    // The live replacement the workbench shows (desk check F7): a newer one
+    // since (a substitution or a re-issue) is return_changed, never released.
+    const shownOrderId = ex.replacement?.live ? ex.replacement.orderId : null;
+    if (!shownOrderId) return;
     setBusy('release');
-    const res = await releaseReturnReplacementAction({ id: r.id, reason });
+    const res = await releaseReturnReplacementAction({ id: r.id, orderId: shownOrderId, reason });
     setBusy(null);
     if (res.ok && !res.data.answer.changed) {
       adopt(res.data.workbench as Workbench);

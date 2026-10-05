@@ -1108,7 +1108,8 @@ export default function OrderDetail() {
     setReleaseBusy(true);
     setReleaseError(null);
     try {
-      const res = await releaseReturnReplacement(order.replacement.returnId, reason);
+      // This order is the replacement the screen shows (desk check F7).
+      const res = await releaseReturnReplacement(order.replacement.returnId, order.id, reason);
       setReleaseOpen(false);
       Alert.alert(RETURNS_COPY.releaseBeforeReturn, releaseOutcomeLine(res.answer));
       await load();

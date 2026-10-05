@@ -426,10 +426,13 @@ describe('cancelReplacement (cancel_return_replacement)', () => {
     const { stub, svc } = svcFor({
       'rpc:cancel_return_replacement': { data: { changed: false, status: 'approved', replacement: 'none' }, error: null },
     });
-    expect(await svc.cancelReplacement(RET_ID, { reason: 'x' })).toMatchObject({ changed: false, cancelledOrderId: null });
+    expect(await svc.cancelReplacement(RET_ID, { expectedRevision: 1, reason: 'x' })).toMatchObject({ changed: false, cancelledOrderId: null });
     expect(auditMock).not.toHaveBeenCalled();
-    const e = await svc.cancelReplacement(RET_ID, { reason: '' }).catch((x: unknown) => x);
+    const e = await svc.cancelReplacement(RET_ID, { expectedRevision: 1, reason: '' }).catch((x: unknown) => x);
     expect((e as ServiceError).details?.reason).toBe('reason_required');
+    // Desk check F7: the revision the caller saw is required.
+    const noRevision = await svc.cancelReplacement(RET_ID, { reason: 'x' }).catch((x: unknown) => x);
+    expect((noRevision as ServiceError).code).toBe('validation_error');
     expect(stub.rpcCalls).toHaveLength(1);
   });
 });
@@ -442,9 +445,11 @@ describe('releaseEarly (release_return_replacement_early)', () => {
         error: null,
       },
     });
-    const answer = await svc.releaseEarly(RET_ID, { reason: 'Swap at delivery: the driver collects the returned item.' });
+    const answer = await svc.releaseEarly(RET_ID, { orderId: REPL_ID, reason: 'Swap at delivery: the driver collects the returned item.' });
+    // Desk check F7: the database releases only the replacement the caller saw.
     expect(stub.rpcCalls[0]!.args).toEqual({
       p_return_id: RET_ID,
+      p_order_id: REPL_ID,
       p_reason: 'Swap at delivery: the driver collects the returned item.',
     });
     expect(answer).toMatchObject({ changed: true, orderId: REPL_ID, notNeeded: false });
@@ -460,18 +465,20 @@ describe('releaseEarly (release_return_replacement_early)', () => {
     const notNeeded = svcFor({
       'rpc:release_return_replacement_early': { data: { changed: false, status: 'received', reason: 'not_needed' }, error: null },
     });
-    expect(await notNeeded.svc.releaseEarly(RET_ID, { reason: 'x' })).toMatchObject({ changed: false, notNeeded: true });
+    expect(await notNeeded.svc.releaseEarly(RET_ID, { orderId: REPL_ID, reason: 'x' })).toMatchObject({ changed: false, notNeeded: true });
     const replay = svcFor({
       'rpc:release_return_replacement_early': { data: { changed: false, replay: true, status: 'approved', orderId: REPL_ID }, error: null },
     });
-    expect(await replay.svc.releaseEarly(RET_ID, { reason: 'x' })).toMatchObject({ replay: true, notNeeded: false });
+    expect(await replay.svc.releaseEarly(RET_ID, { orderId: REPL_ID, reason: 'x' })).toMatchObject({ replay: true, notNeeded: false });
     expect(auditMock).not.toHaveBeenCalled();
   });
 
   it('a reason over 500 characters is refused before the call', async () => {
     const { stub, svc } = svcFor({});
-    const e = await svc.releaseEarly(RET_ID, { reason: 'x'.repeat(501) }).catch((x: unknown) => x);
+    const e = await svc.releaseEarly(RET_ID, { orderId: REPL_ID, reason: 'x'.repeat(501) }).catch((x: unknown) => x);
     expect((e as ServiceError).code).toBe('validation_error');
+    const noOrder = await svc.releaseEarly(RET_ID, { reason: 'x' }).catch((x: unknown) => x);
+    expect((noOrder as ServiceError).code).toBe('validation_error');
     expect(stub.rpcCalls).toEqual([]);
   });
 });
