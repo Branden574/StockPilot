@@ -276,11 +276,23 @@ export function describeAddLinesError(e: unknown): string {
 }
 
 /**
- * HTTP status carried by an api() failure — it throws
- * `Error("API <status>: <body>")`. Returns null for a network/timeout error,
- * which never reached the server.
+ * HTTP status carried by an api() failure. Returns null for a network/timeout
+ * error, which never reached the server.
+ *
+ * api() throws an ApiError (lib/api) whose `status` is the response's and whose
+ * message is the server's sentence. This used to parse "API <status>:" off the
+ * message, the shape api() threw when these sheets were written (2026-07-22);
+ * since the typed ApiError (2026-07-31) every refusal (a 403, a 409 floor, a
+ * 400) read as "no answer", so the sheets said "We did not hear back from the
+ * server" and never showed the server's reason (small fixes slice 2 review,
+ * seen on the simulator). Read structurally, by name and a numeric status, so
+ * this pure module does not load the API client. The old text still parses.
  */
 export function addLinesErrorStatus(e: unknown): number | null {
+  if (e instanceof Error && e.name === 'ApiError') {
+    const status = (e as { status?: unknown }).status;
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) return status;
+  }
   const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
   const m = /^API (\d{3}):/.exec(raw);
   if (!m || m[1] === undefined) return null;

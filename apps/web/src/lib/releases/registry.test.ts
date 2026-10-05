@@ -4863,12 +4863,14 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
       'order-partial-approval-held',
       'order-other-warehouse-words',
       'receiving-follows-permission',
+      'app-order-item-refusals',
     ]);
     for (const entry of r.entries) {
       expect(entry.category, entry.id).toBe('fixed');
       expect(entry.link, entry.id).toBeUndefined();
     }
-    expect(r.entries.map((e) => e.area)).toEqual(['Orders', 'Orders', 'Receiving']);
+    expect(r.entries.map((e) => e.area)).toEqual(['Orders', 'Orders', 'Receiving', 'Orders']);
+    expect(r.entries[3]!.audience).toEqual({ anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] });
     expect(r.entries[0]!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
     expect(r.entries[1]!.audience).toEqual({
       roles: ['staff'],
@@ -4879,27 +4881,47 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     const published: Release = { ...r, status: 'published' };
     const idsFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
       visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
-    expect(idsFor('viewer', ['orders:request'])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('viewer', ['orders:request'])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
     expect(idsFor('staff', ['orders:request', 'orders:approve'])).toEqual([
       'order-partial-approval-held',
       'order-other-warehouse-words',
+      'app-order-item-refusals',
     ]);
-    expect(idsFor('staff', ['orders:request', 'items:update'])).toHaveLength(2);
+    expect(idsFor('staff', ['orders:request', 'items:update'])).toHaveLength(3);
     expect(idsFor('staff', ['members:read'])).toEqual([]);
     // Owners, admins and managers with Orders on: never a warehouse refusal
     // their role cannot meet.
-    expect(idsFor('owner', [...PERMISSIONS])).toEqual(['order-partial-approval-held']);
-    expect(idsFor('admin', [...PERMISSIONS])).toEqual(['order-partial-approval-held']);
-    expect(idsFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toEqual(['order-partial-approval-held']);
+    expect(idsFor('owner', [...PERMISSIONS])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
+    expect(idsFor('admin', [...PERMISSIONS])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
+    expect(idsFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toEqual([
+      'order-partial-approval-held',
+      'app-order-item-refusals',
+    ]);
     expect(idsFor('owner', [...PERMISSIONS], [])).toEqual([]);
     // Receiving: anyone who reads purchase orders where Receiving is on (a
     // viewer reads them by default), with or without Orders.
     expect(idsFor('viewer', ['orders:request', 'purchase_orders:read'], ['orders', 'purchase_orders', 'receiving'])).toEqual([
       'order-partial-approval-held',
       'receiving-follows-permission',
+      'app-order-item-refusals',
     ]);
     expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders', 'receiving'])).toEqual(['receiving-follows-permission']);
     expect(idsFor('viewer', ['purchase_orders:read'], ['purchase_orders'])).toEqual([]);
+  });
+
+  // Review-fix walk (iPhone simulator): the phone's add-items and edit-line
+  // sheets read every server refusal as "no answer" (they parsed a message
+  // shape api() stopped throwing on 2026-07-31), so they said they did not hear
+  // back and hid the server's reason. Told to everyone who can change an
+  // order's items in the app: the person who placed it, or an approver.
+  it("says the app now shows why a change to an order's items was refused, and quotes what it said before", () => {
+    const entry = release().entries.find((e) => e.id === 'app-order-item-refusals')!;
+    const sheet = readFileSync(resolve(__dirname, '../../../../mobile/src/components/edit-order-line.ts'), 'utf8');
+    expect(sheet).toContain("'We did not hear back from the server, so this change may already have been applied. '");
+    expect(entry.whyItMatters).toContain('it did not hear back from the server');
+    expect(entry.whatChanged).toMatch(/mobile app/);
+    expect(entry.whatToDo).toContain('close the app completely and open it again');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|ApiError|status code|403|409/i);
   });
 
   it("says receiving follows the permission it needs, in the server's words, and that nothing changes in who can receive", () => {

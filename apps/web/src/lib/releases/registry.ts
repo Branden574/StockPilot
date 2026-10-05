@@ -353,6 +353,27 @@ export const RELEASES: Release[] = [
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
+      {
+        // Review-fix walk (iPhone simulator, 2026-10-05): the app's add-items
+        // and edit-line sheets parsed the HTTP status off the error's text in
+        // a shape api() stopped throwing on 2026-07-31 (typed ApiError), so
+        // every refusal (a quantity below what is already picked, an item not
+        // stocked there, an order in another warehouse) read as no answer:
+        // "We did not hear back from the server ..." and the reason was never
+        // shown. Told to everyone who can change an order's items in the app.
+        id: 'app-order-item-refusals',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The app says why a change to an order’s items was refused',
+        whatChanged:
+          'In the mobile app, when you add items to an order or change or remove a line and the change is refused, the app now shows the reason, for example that units are already picked or that an item is not stocked at that warehouse. A quantity you can fix stays open in the sheet with the reason under it.',
+        whyItMatters:
+          'The app said it did not hear back from the server and that the change might already have been applied, even though the server had answered and nothing had changed.',
+        howItAffectsYou: 'Nothing changes in what you can add or change: only the message is right now.',
+        whatToDo:
+          'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
     ],
   },
   {
