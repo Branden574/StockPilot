@@ -69,7 +69,14 @@ vi.mock('next/link', async () => {
 // only cares about ReportProblemButton's props; what the rest of the page
 // renders is covered elsewhere (or not this task's concern).
 vi.mock('@/components/orders/add-items-dialog', () => ({ AddItemsDialog: () => null }));
-vi.mock('@/components/orders/cancel-order-button', () => ({ CancelOrderButton: () => null }));
+// L85: who is offered Cancel request, recorded.
+const cancelButtonProps = vi.fn();
+vi.mock('@/components/orders/cancel-order-button', () => ({
+  CancelOrderButton: (props: Record<string, unknown>) => {
+    cancelButtonProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/manager-actions-panel', () => ({
   ManagerActionsPanel: (props: Record<string, unknown>) => {
     managerActionsProps(props);
@@ -394,6 +401,38 @@ beforeEach(() => {
   checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
   readinessResult.mockImplementation(async () => READINESS_FAILED);
   canStartCountMock.mockReturnValue(false);
+});
+
+// L85: a requester was offered Cancel request after their order was
+// approved, and the service then refused it. The page now offers it to the
+// requester only while the order waits for approval (core orderCancelOffer);
+// an approver still gets it at every open status.
+describe('orders/[id]: Cancel request (L85)', () => {
+  it('the requester (no approve) is offered it while the order waits for approval', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: ORDER_ID, status: 'pending_approval' }),
+    );
+  });
+
+  it('the requester (no approve) is not offered it once the order is approved', async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }) }));
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+  });
+
+  it('an approver is offered it on an approved order', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }) }));
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+  });
 });
 
 describe('orders/[id]: the order read', () => {

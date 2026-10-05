@@ -94,6 +94,7 @@ export * from './orders/needed-by-words';
 export * from './orders/shortfall-po';
 export * from './orders/place-order';
 export * from './orders/order-line-item-name';
+export * from './orders/order-cancel';
 export * from './rentals/borrower';
 export * from './rentals/emails';
 export * from './time/org-timezone';

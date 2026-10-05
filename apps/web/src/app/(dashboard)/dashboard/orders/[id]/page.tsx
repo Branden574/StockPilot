@@ -63,6 +63,7 @@ import {
   lineOwedUnits,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_RETURN_SUMMARY_NOTE,
+  orderCancelOffer,
   orderLineItemName,
   orderReadinessPhase,
   orderReturnSummary,
@@ -1212,7 +1213,11 @@ export default async function OrderDetailPage({
                 lines={deliveryRequestLines}
               />
             )}
-            {(canApprove || isOwnRequest) && (
+            {/* L85: the service lets the requester cancel only while the
+                order waits for approval; an approver may cancel any open
+                order. core's orderCancelOffer is that rule, shared with the
+                phone. */}
+            {orderCancelOffer({ status: request.status, canApprove, isOwnRequest }) !== null && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
             <ReportProblemButton
