@@ -324,7 +324,7 @@ describe('the cart, the lock and the send', () => {
     for (const src of [catalog, checkout]) {
       expect(src).not.toMatch(/cartReducer\(/);
     }
-    expect(checkout).toMatch(/onPress=\{\(\) => \{\s*notesDraft\.flush\(\);\s*void session\.submit\(offline\);\s*\}\}\s+disabled=\{blockedBy !== null \|\| firstSendOut\}/);
+    expect(checkout).toMatch(/onPress=\{\(\) => \{\s*notesDraft\.flush\(\);\s*void session\.submit\(offline\);\s*\}\}\s+disabled=\{blockedBy !== null \|\| sending\}/);
     expect(checkout).toContain('const blockedBy = session.submitBlockedBy(offline);');
     expect(checkout).toContain('accessibilityHint={blockedBy ?? undefined}');
   });
@@ -949,5 +949,17 @@ describe('at the accessibility sizes the catalog’s title scrolls with the list
     const header = catalog.slice(catalog.indexOf('const header = ('), catalog.indexOf('const searchBar = ('));
     expect(header).toMatch(/\{titleInList \? titleNode : null\}/);
     expect(header).not.toContain('searchBar');
+  });
+});
+
+// PO-4 review: Submit for a cart for someone else stayed pressable on the old
+// answer until the checkout-open read landed. Mutation caught: the wait not
+// applied to the button.
+describe('Submit waits for the answer being read when the cart is for someone else (PO-4 review)', () => {
+  it('disabled and busy while it waits', () => {
+    expect(checkout).toContain('const waitingForAnswer = snap.checkingAnswer && cart.onBehalfOf !== null;');
+    expect(checkout).toContain('const sending = firstSendOut || waitingForAnswer;');
+    expect(checkout).toMatch(/disabled=\{blockedBy !== null \|\| sending\}/);
+    expect(checkout).toContain('accessibilityState={{ disabled: blockedBy !== null || sending, busy: sending }}');
   });
 });

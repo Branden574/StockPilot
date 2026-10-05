@@ -1335,3 +1335,53 @@ describe('a refused item keeps its reason for its line (PO-4 review)', () => {
     expect(snap().refusals.size).toBe(0);
   });
 });
+
+// PO-4 review: openCheckout reads the catalog and the answer together, and
+// until the answer lands Submit judged a cart for someone else by the answer
+// read before. A quick tap or a slow network could still send a cart the
+// server then refuses as on_behalf_not_permitted, final, spending the key.
+describe('a cart for someone else waits for the answer being read before Submit (PO-4 review)', () => {
+  const approver = (): OrderStorefrontAnswer => ({
+    ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>),
+    viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true, canApproveOrders: true },
+  });
+
+  it('while the answer is out nothing is sent; once it lands the cart is judged by it', async () => {
+    api.storefront.mockResolvedValueOnce(approver());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: { name: 'Bee Person', email: 'bee@x.org' } } });
+    let release: (a: OrderStorefrontAnswer) => void = () => undefined;
+    api.storefront.mockImplementationOnce(() => new Promise<OrderStorefrontAnswer>((r) => (release = r)));
+    const opening = session.openCheckout();
+    await vi.waitFor(() => expect(snap().checkingAnswer).toBe(true));
+    await session.submit(false);
+    expect(api.place).not.toHaveBeenCalled();
+    release(storefrontAnswer());
+    await opening;
+    expect(snap().checkingAnswer).toBe(false);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY);
+  });
+
+  it('a cart for Myself does not wait', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    api.storefront.mockImplementationOnce(() => new Promise<OrderStorefrontAnswer>(() => undefined));
+    void session.openCheckout();
+    await vi.waitFor(() => expect(snap().checkingAnswer).toBe(true));
+    await session.submit(false);
+    expect(api.place).toHaveBeenCalledTimes(1);
+  });
+
+  it('a read that fails ends the wait (the answer shown stays, and is the one judged)', async () => {
+    api.storefront.mockResolvedValueOnce(approver());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    session.dispatch({ type: 'set-setup', patch: { onBehalfOf: { name: 'Bee Person', email: 'bee@x.org' } } });
+    api.storefront.mockRejectedValueOnce(new Error('Network request failed'));
+    await session.openCheckout();
+    expect(snap().checkingAnswer).toBe(false);
+    await session.submit(false);
+    expect(api.place).toHaveBeenCalledTimes(1);
+  });
+});

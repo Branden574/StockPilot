@@ -235,6 +235,10 @@ export default function Checkout() {
   const zone = storefrontNeededByZone(ready.orgTimezone);
   const blockedBy = session.submitBlockedBy(offline);
   const firstSendOut = snap.submission.state.phase === 'sending' && snap.submission.state.pending.sends === 1;
+  // A cart for someone else waits for the answer being read (checkout just
+  // opened, or a stale focus): Submit is busy until it lands (PO-4 review).
+  const waitingForAnswer = snap.checkingAnswer && cart.onBehalfOf !== null;
+  const sending = firstSendOut || waitingForAnswer;
   const quantityItem = sheet?.kind === 'quantity' ? snap.itemMap.get(sheet.itemId) : undefined;
   // For follows the answer shown (canOrderOnBehalf, the effective
   // orders:approve): a cart kept for someone else by a person who no longer
@@ -402,17 +406,17 @@ export default function Checkout() {
                     notesDraft.flush();
                     void session.submit(offline);
                   }}
-                  disabled={blockedBy !== null || firstSendOut}
+                  disabled={blockedBy !== null || sending}
                   accessibilityRole="button"
                   accessibilityLabel={REVIEW_SUBMIT_COPY}
                   accessibilityHint={blockedBy ?? undefined}
-                  accessibilityState={{ disabled: blockedBy !== null || firstSendOut, busy: firstSendOut }}
+                  accessibilityState={{ disabled: blockedBy !== null || sending, busy: sending }}
                   style={[
                     styles.submit,
-                    { backgroundColor: c.ink, opacity: blockedBy === null || firstSendOut ? 1 : 0.5 },
+                    { backgroundColor: c.ink, opacity: blockedBy === null || sending ? 1 : 0.5 },
                   ]}
                 >
-                  {firstSendOut ? (
+                  {sending ? (
                     <ActivityIndicator color={c.paper} />
                   ) : (
                     <Body size={15.5} color={c.paper} maxFontSizeMultiplier={ACTION_CAP} style={{ fontFamily: FONT.display }}>

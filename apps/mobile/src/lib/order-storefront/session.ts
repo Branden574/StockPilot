@@ -206,6 +206,10 @@ export interface StorefrontSnapshot {
    *  serverNow: the needed-by picker's "now" (a phone with a wrong clock
    *  never offers a past slot). 0 until read. */
   serverSkewMs: number;
+  /** The storefront answer is being read again (checkout opening, a stale
+   *  focus): a cart for someone else waits for it before Submit, so it is
+   *  judged by what the server says now (PO-4 review). */
+  checkingAnswer: boolean;
 }
 
 /** How a warehouse's send ended, kept for the same account across a
@@ -349,6 +353,8 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   let photoRetryAt: number | null = null;
   let lastMarks: ReadonlySet<string> = NO_MARKS;
   let lastRefusals: ReadonlyMap<string, string> = NO_REFUSALS;
+  /** A storefront read is out (see checkingAnswer). */
+  let answerReading = false;
   /** How a send ended that no screen showed before a workspace switch, by
    *  its draft key, for this account only (PO-4 review, probe P6): shown
    *  when that warehouse opens again, then forgotten. */
@@ -401,6 +407,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       placed,
       lockedWarehouseIds,
       serverSkewMs,
+      checkingAnswer: answerReading,
     };
   }
 
@@ -701,13 +708,18 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
 
   let storefrontRead: { gen: number; promise: Promise<void> } | null = null;
 
-  /** One storefront read at a time per scope: a second ask joins it. */
+  /** One storefront read at a time per scope: a second ask joins it. While
+   *  it is out, a cart for someone else waits before Submit (PO-4 review). */
   function readStorefront(gen: number): Promise<void> {
     if (storefrontRead && storefrontRead.gen === gen) return storefrontRead.promise;
     const promise = readStorefrontNow(gen).finally(() => {
       if (storefrontRead?.promise === promise) storefrontRead = null;
+      answerReading = storefrontRead !== null;
+      publish();
     });
     storefrontRead = { gen, promise };
+    answerReading = true;
+    publish();
     return promise;
   }
 
@@ -986,6 +998,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       if (!cart || !scope || !engine) return;
       if (setup.status !== 'ready') return;
       if (session.submitBlockedBy(offline) !== null) return;
+      // A cart for someone else is judged by the answer being read, never
+      // the one before it: the server's refusal would be final (PO-4 review).
+      if (cart.onBehalfOf && answerReading) return;
       const kitsPart = catalog.answer?.kits;
       const body = buildOrderCreateBody({
         cart,
