@@ -50,7 +50,7 @@ import {
   type WorldImage,
   type WorldItem,
 } from '@/test/item-read-scope';
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { audit } from './audit';
 import type { ServiceContext } from './context';
@@ -97,9 +97,23 @@ function mockPngPrefix(): Uint8Array {
   return b;
 }
 
+/** Rows the service-role client sees in item_images (remove()'s shared-object
+ *  read, L65b). Empty unless a test sets it. */
+let adminImageRows: Array<Record<string, unknown>> = [];
+let adminImageReadError: { message: string } | null = null;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  adminImageRows = [];
+  adminImageReadError = null;
+  const adminDb = makeSupabaseStub({
+    'item_images.select': (call) =>
+      adminImageReadError
+        ? { data: null, error: adminImageReadError }
+        : servedLikePostgrest(adminImageRows)(call),
+  });
   createAdminClientMock.mockReturnValue({
+    from: adminDb.client.from,
     storage: {
       from: () => ({
         createSignedUrl: createSignedUrlMock,
@@ -751,6 +765,80 @@ describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
     await svc.remove('img-1');
 
     expect(remove).toHaveBeenCalledWith(['org-1/items/item-1/x.jpg']);
+  });
+});
+
+// L65b: Duplicate copies an item's photo rows, not its files, so two items'
+// rows can name the same objects (19 paths shared by 43 rows in production).
+// remove() used to delete the objects whatever else named them, breaking the
+// other item's photo. It now leaves an object another row still names; the
+// row itself is still deleted (an orphaned object is harmless).
+describe('ItemImagesService.remove — objects shared with a duplicated item (L65b)', () => {
+  const MASTER = 'org-1/items/item-1/x.jpg';
+  const THUMB = 'org-1/items/item-1/x-thumb.webp';
+
+  function removeStub() {
+    const stub = makeSupabaseStub({
+      'item_images.select': {
+        data: { storage_path: MASTER, thumb_path: THUMB, item_id: 'item-1' },
+        error: null,
+      },
+      'item_images.delete': { data: null, error: null },
+    });
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    stub.client.storage.from = vi.fn(() => ({ remove }));
+    return { stub, remove };
+  }
+
+  it('keeps the master and thumb another item still names, and deletes the row', async () => {
+    adminImageRows = [
+      { id: 'img-1', organization_id: 'org-1', storage_path: MASTER, thumb_path: THUMB },
+      { id: 'img-dup', organization_id: 'org-1', storage_path: MASTER, thumb_path: THUMB },
+    ];
+    const { stub, remove } = removeStub();
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.remove('img-1');
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(stub.chains.has('item_images.delete')).toBe(true);
+  });
+
+  it('removes only the object no other row names', async () => {
+    adminImageRows = [
+      { id: 'img-1', organization_id: 'org-1', storage_path: MASTER, thumb_path: THUMB },
+      { id: 'img-dup', organization_id: 'org-1', storage_path: MASTER, thumb_path: null },
+    ];
+    const { stub, remove } = removeStub();
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.remove('img-1');
+
+    expect(remove).toHaveBeenCalledWith([THUMB]);
+  });
+
+  it('removes both objects when only this row names them, and counts only this org', async () => {
+    adminImageRows = [
+      { id: 'img-1', organization_id: 'org-1', storage_path: MASTER, thumb_path: THUMB },
+      { id: 'img-other-org', organization_id: 'org-2', storage_path: MASTER, thumb_path: THUMB },
+    ];
+    const { stub, remove } = removeStub();
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.remove('img-1');
+
+    expect(remove).toHaveBeenCalledWith([MASTER, THUMB]);
+  });
+
+  it('removes no object when it cannot tell whether another row names it', async () => {
+    adminImageReadError = { message: 'boom' };
+    const { stub, remove } = removeStub();
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.remove('img-1');
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(stub.chains.has('item_images.delete')).toBe(true);
   });
 });
 

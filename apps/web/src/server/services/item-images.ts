@@ -20,6 +20,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { objectsNamedByOtherImageRows } from './lib/item-image-shared-objects';
 import { withStorageSignSlot } from './lib/storage-sign-limiter';
 
 /**
@@ -1086,7 +1087,15 @@ export class ItemImagesService {
     // exists rather than a null the storage client would stringify.
     const objects = [img.storage_path as string];
     if (img.thumb_path) objects.push(img.thumb_path as string);
-    await this.ctx.supabase.storage.from('item-images').remove(objects);
+    // Duplicate copies an item's photo rows, not its files, so another row
+    // may name the same objects (L65b). Removing them would break the other
+    // item's photo, so an object another row still names is left in place;
+    // the row below is deleted either way (an orphaned object is harmless).
+    const shared = await objectsNamedByOtherImageRows(this.ctx.organizationId, imageId, objects);
+    const removable = shared === null ? [] : objects.filter((o) => !shared.has(o));
+    if (removable.length > 0) {
+      await this.ctx.supabase.storage.from('item-images').remove(removable);
+    }
     const { error } = await this.ctx.supabase
       .from('item_images')
       .delete()

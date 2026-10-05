@@ -41,9 +41,10 @@ import type { Database } from '@stockpilot/core';
  *      row exists is anything removed. If the insert fails, the ONLY thing
  *      cleaned up is the object we just uploaded; every existing row and
  *      object is left exactly as it was, so the item keeps the photo it had.
- *   2. DELETE ROWS BEFORE OBJECTS. A failure between them then leaves an
- *      invisible orphan object (nothing reads a bucket it has no row for),
- *      never a row pointing at nothing. The reverse order is failure (b).
+ *   2. DELETE ROWS, NEVER OLD OBJECTS. The old rows go; their objects stay
+ *      as invisible orphans (nothing reads a bucket it has no row for), so no
+ *      row ever points at nothing (failure (b)). The objects are not removed
+ *      at all since L65b: a duplicated item's rows may name the same files.
  *
  * Neither cleanup step can fail the operation: the photo IS saved once the row
  * lands, so cleanup problems come back as `warnings` for the caller to log,
@@ -138,13 +139,11 @@ export async function replacePrimaryPhoto(args: {
     return { ok: true, imageId, warnings };
   }
 
-  const oldPaths = previous.map((r) => r.storage_path).filter((p): p is string => !!p);
-  if (oldPaths.length > 0) {
-    const { error: rmErr } = await supabase.storage.from(ITEM_IMAGES_BUCKET).remove(oldPaths);
-    // Worst case here is an orphan object: no row references it any more, so
-    // nothing renders it and nothing 404s. Surfaced, not fatal.
-    if (rmErr) warnings.push(`previous photo file not removed: ${rmErr.message}`);
-  }
+  // 4) The previous photo's OBJECTS are left in place (L65b). Duplicate copies
+  //    an item's photo rows, not its files, so another item's row may still
+  //    name them, and removing them broke that item's photo. The phone cannot
+  //    see every such row (RLS hides other warehouses' items), so it removes
+  //    nothing; an object no row names is an invisible, harmless orphan.
 
   return { ok: true, imageId, warnings };
 }
