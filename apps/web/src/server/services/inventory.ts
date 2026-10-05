@@ -8747,6 +8747,9 @@ export class InventoryService {
             .eq('reference_type', 'return')
             .is('to_location_id', null)
             .like('reason', 'Return restock %')
+            // Ledger rows only (returns review): a member's direct insert
+            // (via_ledger false) must not relabel a row "Returned (RMA-...)".
+            .eq('via_ledger', true)
             .in('item_id', batch)
             .order('created_at', { ascending: false })
             .order('id')

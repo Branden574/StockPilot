@@ -50,6 +50,8 @@ export interface ChainDecision {
   kind: string;
   channel: string;
   revision: number | null;
+  /** The line a plan is for (names the item in "Destination for ..."). */
+  returnLineId?: string | null;
   disposition: string | null;
   restockTarget: string | null;
   locationName: string | null;
@@ -76,18 +78,31 @@ function numberOf(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function decisionLabel(d: ChainDecision): string | null {
+function decisionLabel(
+  d: ChainDecision,
+  lineLabels: Map<string, string> | undefined,
+  originalRacks: Map<string, string> | undefined,
+): string | null {
   const counter = d.channel === 'counter' ? ' at the counter' : '';
   switch (d.kind) {
     case 'created':
       return d.actorKind === 'staff' ? `Return created by staff${counter}` : 'Return requested by the requester';
-    case 'disposition_planned':
-      if (d.disposition === 'scrap') return 'Destination: Scrap';
-      if (d.restockTarget === 'original') return 'Destination: Return to original rack';
-      if (d.restockTarget === 'source') return `Destination: Return to ${d.locationName ?? 'a chosen rack'}`;
-      return 'Destination: Leave in Staging';
+    case 'disposition_planned': {
+      // "Destination for New Hire Shirt, M: Return to original rack 31-C"
+      // (review fix: name the line and the rack, not just the kind).
+      const item = d.returnLineId ? lineLabels?.get(d.returnLineId) : undefined;
+      const head = item ? `Destination for ${item}` : 'Destination';
+      if (d.disposition === 'scrap') return `${head}: Scrap`;
+      if (d.restockTarget === 'original') {
+        const racks = d.returnLineId ? originalRacks?.get(d.returnLineId) : undefined;
+        return `${head}: Return to original rack${racks ? ` ${racks}` : ''}`;
+      }
+      if (d.restockTarget === 'source') return `${head}: Return to ${d.locationName ?? 'a chosen rack'}`;
+      return `${head}: Leave in Staging`;
+    }
     case 'approved':
-      return d.revision ? `Approved (revision ${d.revision})` : 'Approved';
+      // The revision is internal bookkeeping (review fix): never shown.
+      return 'Approved';
     case 'received':
       return `Received${counter}`;
     case 'closed':
@@ -109,6 +124,10 @@ export function buildReturnChainEvents(input: {
   decisions: ChainDecision[];
   movements: ChainMovement[];
   itemNames: Map<string, string | null>;
+  /** Line id -> "New Hire Shirt, M" (destination events name their line). */
+  lineLabels?: Map<string, string>;
+  /** Line id -> the original rack(s) a plan of "original" means. */
+  originalRacks?: Map<string, string>;
 }): ReturnChainEvent[] {
   const so = formatOrderNumber(input.orderNumber);
   const events: Array<ReturnChainEvent & { order: number }> = [];
@@ -127,15 +146,31 @@ export function buildReturnChainEvents(input: {
     events.push({ at: input.completedAt, kind: 'handed_over', label: `Handed over${so ? ` (${so})` : ''}`, actorName: null, order: order++ });
   }
   for (const d of input.decisions) {
-    const label = decisionLabel(d);
+    const label = decisionLabel(d, input.lineLabels, input.originalRacks);
     if (!label) continue;
     events.push({ at: d.createdAt, kind: d.kind as ReturnChainKind, label, actorName: d.actorName, order: order++ });
+  }
+  // A scrap is written as +q return (no rack) then -q loss in the same close
+  // (net zero). Read as ONE event, "Scrapped", never "Into Staging" first
+  // (review fix): each loss consumes the matching Staging return of its item
+  // and close.
+  const scrapPairs = new Map<string, number>();
+  for (const m of input.movements) {
+    if (m.movementType !== 'loss') continue;
+    const k = `${m.itemId}|${m.createdAt}|${Math.abs(m.quantity)}`;
+    scrapPairs.set(k, (scrapPairs.get(k) ?? 0) + 1);
   }
   for (const m of input.movements) {
     const name = input.itemNames.get(m.itemId) ?? 'item';
     if (m.movementType === 'loss') {
       events.push({ at: m.createdAt, kind: 'scrapped', label: `Scrapped: ${name} ×${Math.abs(m.quantity)}`, actorName: null, order: order++ });
     } else if (m.movementType === 'return' && m.quantity > 0) {
+      const k = `${m.itemId}|${m.createdAt}|${m.quantity}`;
+      const pending = scrapPairs.get(k) ?? 0;
+      if (!m.rack && pending > 0) {
+        scrapPairs.set(k, pending - 1);
+        continue;
+      }
       events.push(
         m.rack
           ? { at: m.createdAt, kind: 'returned_to_rack', label: `Returned to ${m.toLocationName ?? 'a rack'}: ${name} ×${m.quantity}`, actorName: null, order: order++ }
@@ -171,6 +206,9 @@ export async function loadOriginalPicks(
           .eq('reference_id', orderRequestId)
           .eq('movement_type', 'transfer')
           .lt('quantity_change', 0)
+          // The ledger's picks only (review fix): a member's direct insert
+          // (via_ledger false) is no pick of the order.
+          .eq('via_ledger', true)
           .in('item_id', batch)
           .order('id')
           .range(from, to),
@@ -228,7 +266,7 @@ export class ReturnHistoryService {
     const { data: header, error } = await ctx.supabase
       .from('returns')
       .select(
-        'id, order_request_id, order_request:order_requests!order_request_id (order_number, completed_at), lines:return_lines (item_id)',
+        'id, order_request_id, order_request:order_requests!order_request_id (order_number, completed_at), lines:return_lines (id, item_id)',
       )
       .eq('organization_id', ctx.organizationId)
       .eq('id', returnId)
@@ -238,7 +276,7 @@ export class ReturnHistoryService {
     const h = header as {
       order_request_id: string;
       order_request?: { order_number: number | null; completed_at: string | null } | Array<{ order_number: number | null; completed_at: string | null }> | null;
-      lines?: Array<{ item_id: string }> | null;
+      lines?: Array<{ id: string; item_id: string }> | null;
     };
     const order = Array.isArray(h.order_request) ? (h.order_request[0] ?? null) : (h.order_request ?? null);
     const itemIds = [...new Set((h.lines ?? []).map((l) => l.item_id))];
@@ -246,7 +284,7 @@ export class ReturnHistoryService {
     const [decisionsRes, movesRes, items] = await Promise.all([
       ctx.supabase
         .from('return_decisions')
-        .select('seq, kind, channel, revision, disposition, restock_target, location_id, reason, actor_user_id, actor_kind, created_at')
+        .select('seq, kind, channel, revision, return_line_id, disposition, restock_target, location_id, reason, actor_user_id, actor_kind, created_at')
         .eq('organization_id', ctx.organizationId)
         .eq('return_id', returnId)
         .order('seq', { ascending: true }),
@@ -256,6 +294,8 @@ export class ReturnHistoryService {
         .eq('organization_id', ctx.organizationId)
         .eq('reference_type', 'return')
         .eq('reference_id', returnId)
+        // Ledger rows only (review fix; the workbench reads the same way).
+        .eq('via_ledger', true)
         .order('created_at', { ascending: true }),
       itemIds.length > 0
         ? fetchAllRowsByIds<{ id: string; name: string | null }>(itemIds, (batch) => (from, to) =>
@@ -265,7 +305,7 @@ export class ReturnHistoryService {
     ]);
     if (decisionsRes.error) throw new ServiceError('internal_error', decisionsRes.error.message);
     const itemNames = new Map(items.map((i) => [i.id, i.name]));
-    type D = { seq: number; kind: string; channel: string; revision: number | null; disposition: string | null; restock_target: string | null; location_id: string | null; reason: string | null; actor_user_id: string | null; actor_kind: string; created_at: string };
+    type D = { seq: number; kind: string; channel: string; revision: number | null; return_line_id: string | null; disposition: string | null; restock_target: string | null; location_id: string | null; reason: string | null; actor_user_id: string | null; actor_kind: string; created_at: string };
     type M = { item_id: string; movement_type: string; quantity_change: number | string; to_location_id: string | null; created_at: string };
     const decisions = (decisionsRes.data as D[] | null) ?? [];
     const moves = (movesRes.data as M[] | null) ?? [];
@@ -289,17 +329,30 @@ export class ReturnHistoryService {
     ]);
     const userName = new Map(users.map((u) => [u.id, u.full_name?.trim() || u.email || null]));
     const locName = new Map(locs.map((l) => [l.id, l.name]));
+    // A line's name, and the rack(s) its own return legs went to once closed.
+    const lineLabels = new Map((h.lines ?? []).map((l) => [l.id, itemNames.get(l.item_id) ?? 'Item']));
+    const originalRacks = new Map<string, string>();
+    for (const l of h.lines ?? []) {
+      const racks = moves
+        .filter((m) => m.item_id === l.item_id && m.movement_type === 'return' && m.to_location_id)
+        .map((m) => ({ name: locName.get(m.to_location_id!) ?? 'a rack', quantity: numberOf(m.quantity_change) }));
+      const label = racks.length === 1 ? racks[0]!.name : formatRackHoldings(racks);
+      if (label) originalRacks.set(l.id, label);
+    }
 
     return buildReturnChainEvents({
       orderNumber: order?.order_number ?? null,
       completedAt: order?.completed_at ?? null,
       picks,
       itemNames,
+      lineLabels,
+      originalRacks,
       decisions: decisions.map((d) => ({
         seq: numberOf(d.seq),
         kind: d.kind,
         channel: d.channel,
         revision: d.revision,
+        returnLineId: d.return_line_id,
         disposition: d.disposition,
         restockTarget: d.restock_target,
         locationName: d.location_id ? (locName.get(d.location_id) ?? null) : null,

@@ -714,6 +714,9 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
     )!;
     expect(returnRead).toContainEqual(['to_location_id', null]);
     expect(returnRead).toContainEqual(['reason', 'Return restock %']);
+    // Ledger rows only (returns review): a member's direct insert never
+    // relabels a row "Returned (RMA-...)".
+    expect(returnRead).toContainEqual(['via_ledger', true]);
   });
 });
 

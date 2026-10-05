@@ -83,7 +83,7 @@ const OPTIONS = {
       plan: { disposition: 'restock', target: 'original', locationId: null, basis: 'single_source', seq: 7 },
       case: 'single_source',
       notRecordedReason: null,
-      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: true, reason: null }],
+      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, cap: 1, valid: true, reason: null, writable: true }],
       offerOriginal: true,
       offerSourceIds: [],
       preselect: 'original',
@@ -135,7 +135,50 @@ describe('buildReturnWorkbench', () => {
     expect(wb.viewer).toEqual({ canManageReturns: true, canApproveOrders: true, canReadDecisions: true });
     expect(wb.actions).toEqual({ primary: 'receive', secondary: ['change_destination', 'cancel'], readOnlyReason: null });
     expect(wb.chain.map((e) => e.kind)).toEqual(['handed_over', 'created', 'disposition_planned', 'approved']);
-    expect(wb.chain.find((e) => e.kind === 'disposition_planned')!.label).toBe('Destination: Return to original rack');
+    // Review: the destination names the line and the rack; the approval
+    // shows no internal revision number.
+    expect(wb.chain.find((e) => e.kind === 'disposition_planned')!.label).toBe(
+      'Destination for Walk New Hire Shirt, M: Return to original rack 31-C',
+    );
+    expect(wb.chain.find((e) => e.kind === 'approved')!.label).toBe('Approved');
+    expect(wb.destinationsUnavailable).toBe(false);
+  });
+
+  it('reads the RMA\'s movements from the ledger only: a member\'s direct insert is no leg (review)', async () => {
+    const { ctx, stub } = ctxFor({
+      'returns.select': { data: [header([LINE])], error: null },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'stock_movements.select': { data: [], error: null },
+    });
+    await buildReturnWorkbench(ctx as never, RET);
+    const reads = stub.chainArgsAll.get('stock_movements.select') ?? [];
+    // The RMA's own legs and the original order's picks: both ledger rows only.
+    const legs = reads.find((args) => args.some((a) => a[0] === 'reference_type' && a[1] === 'return'))!;
+    const picks = reads.find((args) => args.some((a) => a[0] === 'reference_type' && a[1] === 'order_request'));
+    expect(legs).toContainEqual(['via_ledger', true]);
+    if (picks) expect(picks).toContainEqual(['via_ledger', true]);
+  });
+
+  it('a scrapped line reads as one "Scrapped" event, never "Into Staging" first (review)', async () => {
+    const { ctx } = ctxFor({
+      'returns.select': { data: [header([{ ...LINE, disposition: 'scrap', applied: true }], { status: 'closed' })], error: null },
+      'rpc:return_restock_options': { data: { ...OPTIONS, status: 'closed', lines: [] }, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [{ id: itemId(1), name: 'Shirt', sku: null, deleted_at: null }], error: null },
+      'stock_movements.select': {
+        data: [
+          { item_id: itemId(1), movement_type: 'return', quantity_change: 1, to_location_id: null, created_at: '2026-10-03T00:00:00Z' },
+          { item_id: itemId(1), movement_type: 'loss', quantity_change: -1, to_location_id: null, created_at: '2026-10-03T00:00:00Z' },
+        ],
+        error: null,
+      },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    // (The stub answers every movement read alike; the picks are not this test's.)
+    expect(wb.chain.filter((e) => e.kind !== 'picked' && e.kind !== 'handed_over').map((e) => e.label)).toEqual(['Scrapped: Shirt ×1']);
+    expect(wb.lines[0]!.inboundState).toBe('Scrapped');
   });
 
   it('a manager without write access to the warehouse (or a revoked grant) is read-only; the database decides anyway', async () => {
@@ -189,6 +232,9 @@ describe('buildReturnWorkbench', () => {
     const wb = await buildReturnWorkbench(ctx as never, RET);
     expect(wb.lines[0]!.restock).toBeNull();
     expect(reportError).toHaveBeenCalled();
+    // Review: the screens must not approve or process with no destination
+    // read (that would plan every line to Staging silently).
+    expect(wb.destinationsUnavailable).toBe(true);
   });
 
   it('a closed line reads "Returned to 31-C" from its own movement, and the chain shows the leg', async () => {

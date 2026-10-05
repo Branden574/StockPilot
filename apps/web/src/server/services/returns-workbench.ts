@@ -4,7 +4,9 @@ import {
   availableReturnActions,
   can,
   inboundStateLabel,
+  originalRowLabel,
   parseRestockOptions,
+  returnLineLabel,
   returnListFilter,
   RETURN_LIST_PAGE_SIZE,
   variantLabel,
@@ -119,6 +121,13 @@ export interface ReturnWorkbench {
   planSeq: number;
   /** Created with "The item is here": the workbench offers Approve and receive. */
   createdOnCounter: boolean;
+  /**
+   * True when an unapplied line has no destination answer (the read failed):
+   * the screens then send no approval, process or destination change, and say
+   * "Couldn't load where the returned item goes. Reload." (never a silent
+   * Staging for every line).
+   */
+  destinationsUnavailable: boolean;
   lines: ReturnWorkbenchLine[];
   decisions: ReturnWorkbenchDecision[];
   /** The timeline from the original pick to the close (ReturnHistoryService). */
@@ -418,6 +427,9 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       .eq('reference_id', id)
       // in-list-bound: the two movement types a return writes
       .in('movement_type', ['return', 'loss'])
+      // Ledger rows only: a member may insert a movement naming the RMA
+      // directly (via_ledger false); it is no leg of the return (review fix).
+      .eq('via_ledger', true)
       .order('created_at', { ascending: true }),
     warehouseId
       ? ctx.supabase.from('warehouses').select('id, name').eq('id', warehouseId).maybeSingle()
@@ -526,6 +538,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   const revision = decisionRows.reduce((m, d) => (HEAD_KINDS.has(d.kind) && d.revision ? Math.max(m, d.revision) : m), 0);
   const planSeq = options?.planSeq ?? decisionRows.reduce((m, d) => (d.kind === 'disposition_planned' ? Math.max(m, d.seq) : m), 0);
   const createdOnCounter = decisionRows.some((d) => d.kind === 'created' && d.channel === 'counter');
+  const destinationsUnavailable = lines.some((l) => !l.applied && l.restock === null);
 
   const canManageReturns =
     ctx.enabledModules.has('returns') && can(ctx, 'returns:manage') && writeOk;
@@ -551,11 +564,23 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     actorKind: d.actor_kind,
     createdAt: d.created_at,
   }));
+  // The chain names each destination's line and, for the original rack, its
+  // rack(s): from the destination read while the line is open, else from the
+  // line's own legs once it closed.
+  const lineLabels = new Map(lines.map((l) => [l.id, returnLineLabel(l.item.name, l.item.variant)]));
+  const originalRacks = new Map<string, string>();
+  for (const l of lines) {
+    if (l.restock && (l.restock.case === 'single_source' || l.restock.case === 'full_remainder') && l.restock.sources.length > 0) {
+      originalRacks.set(l.id, originalRowLabel(l.restock).replace(/^Return to original racks?: /, ''));
+    }
+  }
   const chain = buildReturnChainEvents({
     orderNumber: order?.order_number ?? null,
     completedAt: order?.completed_at ?? null,
     picks,
     itemNames,
+    lineLabels,
+    originalRacks,
     decisions: named,
     movements: movements.map((m) => ({
       itemId: m.item_id,
@@ -598,6 +623,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     revision,
     planSeq,
     createdOnCounter,
+    destinationsUnavailable,
     lines,
     decisions: named,
     chain,
