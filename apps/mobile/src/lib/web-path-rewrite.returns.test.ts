@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -98,6 +99,9 @@ describe('an older bundle (the frozen pre-RX-1 table)', () => {
   it('a bare RMA link (no embedded order) would land on Home: that is why staff pushes always carry the dual link', () => {
     expect(frozenRewrite(`/dashboard/returns/${RMA}`)).toBe('/');
   });
+  it('the order it opens is a native route every bundle has (no cold-start shim needed)', () => {
+    expect(existsSync(path.join(__dirname, '..', '..', 'app', 'order', '[id].tsx'))).toBe(true);
+  });
   it('the frozen copy still agrees with the live table for every pre-RX-1 path', () => {
     for (const p of [
       `/dashboard/orders/${ORDER}`,
@@ -109,5 +113,34 @@ describe('an older bundle (the frozen pre-RX-1 table)', () => {
     ]) {
       expect(rewriteWebPath(p)).toBe(frozenRewrite(p));
     }
+  });
+});
+
+// ── How a push link reaches the router (desk check F5) ─────────────────────
+// The dual link must not dead-end on an older bundle on a cold start either.
+// Two facts make that hold, and both are pinned here:
+//   1. A push tap is rewritten in JS by the RUNNING bundle's table before it
+//      is opened (use-push-notifications.ts), so the router is handed a
+//      native path (an older bundle: /order/<original>), never the raw web
+//      path, warm or cold.
+//   2. A raw URL that does reach the router as the initial URL goes through
+//      +native-intent's redirectSystemPath on this expo-router (57.x, the
+//      published bundle's version): getLinkingConfig passes the initial URL
+//      through it with initial: true. If an upgrade drops that, this fails
+//      and the cold-start shims become the only door again.
+describe('a push link reaches the router already rewritten (desk check F5)', () => {
+  it('the tap handler rewrites with the running bundle\'s table, then opens the native path', () => {
+    const src = readFileSync(path.join(__dirname, 'use-push-notifications.ts'), 'utf8');
+    const rewriteAt = src.indexOf('const native = rewriteWebPath(link);');
+    const openAt = src.indexOf("Linking.openURL(`stockpilot://${native.replace(/^\\//, '')}`)");
+    expect(rewriteAt).toBeGreaterThan(0);
+    expect(openAt).toBeGreaterThan(rewriteAt);
+  });
+  it('+native-intent rewrites every incoming path, and this expo-router sends it the initial URL too', () => {
+    const intent = readFileSync(path.join(__dirname, '..', '..', 'app', '+native-intent.ts'), 'utf8');
+    expect(intent).toContain('return rewriteWebPath(path);');
+    const req = createRequire(__filename);
+    const linking = readFileSync(req.resolve('expo-router/build/getLinkingConfig.js'), 'utf8');
+    expect(linking).toContain('redirectSystemPath({ path: initialUrl, initial: true })');
   });
 });
