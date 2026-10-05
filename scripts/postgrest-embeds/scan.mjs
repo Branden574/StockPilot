@@ -14,17 +14,31 @@
  *     arguments are bound to its parameters);
  *   - a parameter of the function holding the select: every call site of
  *     that function is followed (same file, or a file importing it), so a
- *     helper like `read(client, table, columns)` is checked per caller;
+ *     helper like `read(client, table, columns)` is checked per caller. A
+ *     method (a class or object method, or an arrow function held in a
+ *     property) is followed through `this.name(...)` in its own class and
+ *     through EVERY `.name(...)` call with a fitting number of arguments
+ *     anywhere: the scan cannot tell which class an expression is, and
+ *     following a call that is not this method only adds paths to check;
  *   - a query builder kept in a variable (`const q = sb.from('t'); q.select()`).
  * A part it cannot resolve becomes a placeholder name (`__dyn0__`), so the
  * rest of the select is still checked.
  *
+ * WHAT IT REPORTS INSTEAD OF SKIPPING. A call path whose table, select or
+ * builder it cannot resolve is reported as unchecked when an embed could
+ * travel it: its own select has one, or its select is unknown while another
+ * path of the same `.select()` carries one. A select with more alternatives
+ * than it follows (MAX_ALTERNATIVES) is reported as truncated.
+ *
  * COVERAGE. Every string literal that parses as a select containing an embed
- * of a known table (a "select fragment") must be reached from a `.select()`
- * whose table is known. One that is not is reported as unattributed, unless a
- * comment on it or on its declaration names its table:
+ * of a known table (a "select fragment"), alone or with the literals it is
+ * concatenated with, must be reached from a `.select()` whose table is known.
+ * One that is not is reported as unattributed, unless a comment on it or on
+ * its declaration names its table:
  *     // postgrest-from: cycle_count_lines
- * so a select that travels a way the scan cannot follow is still checked.
+ * so a select that travels a way the scan cannot follow is still checked. The
+ * same comment on a `.select()` call names the table of a path whose builder
+ * the scan cannot follow (an rpc, a builder returned by a call).
  *
  * Plain ESM; `typescript` is the only dependency.
  */
@@ -51,7 +65,8 @@ const SOURCE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const DECLARATION_FILE = /\.d\.[cm]?ts$/;
 export const TEST_FILE = /(\.test|\.spec)\.[cm]?[jt]sx?$|\/__tests__\/|\/src\/test\//;
 // A select with more alternatives than this (conditionals multiply) is
-// checked on the first MAX_ALTERNATIVES only; none comes close today.
+// checked on the first MAX_ALTERNATIVES only, and reported as truncated so
+// the guard fails; none comes close today.
 const MAX_ALTERNATIVES = 64;
 const MAX_DEPTH = 6;
 export const ANNOTATION_RE = /postgrest-from:\s*([a-z_][a-z0-9_]*(?:\s*,\s*[a-z_][a-z0-9_]*)*)/;
@@ -162,6 +177,8 @@ export function createScanner({ repoRoot }) {
   /** @type {Map<string, any>} */
   const modules = new Map();
   let placeholderCount = 0;
+  // Set when product() or union() drops alternatives past MAX_ALTERNATIVES.
+  let truncated = false;
 
   function aliasBase(fromFile, spec) {
     const rel = path.relative(repoRoot, fromFile).split(path.sep).join('/');
@@ -388,14 +405,26 @@ export function createScanner({ repoRoot }) {
     const out = [];
     for (const x of a)
       for (const y of b) {
+        if (out.length >= MAX_ALTERNATIVES) {
+          truncated = true;
+          return out;
+        }
         out.push(x + y);
-        if (out.length >= MAX_ALTERNATIVES) return out;
       }
     return out;
   }
 
   function union(...lists) {
-    return [...new Set(lists.flat())].slice(0, MAX_ALTERNATIVES);
+    const all = [...new Set(lists.flat())];
+    if (all.length > MAX_ALTERNATIVES) truncated = true;
+    return all.slice(0, MAX_ALTERNATIVES);
+  }
+
+  /** Whether alternatives were dropped since the last call (and reset). */
+  function takeTruncated() {
+    const was = truncated;
+    truncated = false;
+    return was;
   }
 
   /** The context an argument is read in: the caller's module, with the
@@ -892,6 +921,36 @@ export function createScanner({ repoRoot }) {
     }
   }
 
+  /** `fn` as a method: its name and the class or object literal holding
+   *  it, or null. A method declaration, or an arrow / function expression
+   *  held in a class field or an object property. */
+  function methodOf(fn) {
+    if (ts.isMethodDeclaration(fn) && fn.name && ts.isIdentifier(fn.name)) {
+      return { name: fn.name.text, container: fn.parent };
+    }
+    if (
+      (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+      (ts.isPropertyDeclaration(fn.parent) || ts.isPropertyAssignment(fn.parent)) &&
+      fn.parent.initializer === fn &&
+      ts.isIdentifier(fn.parent.name)
+    ) {
+      return { name: fn.parent.name.text, container: fn.parent.parent };
+    }
+    return null;
+  }
+
+  /** How many arguments a call to `fn` can pass. */
+  function arity(fn) {
+    let required = 0;
+    let max = 0;
+    for (const p of fn.parameters) {
+      if (p.dotDotDotToken) return { required, max: Infinity };
+      max += 1;
+      if (!p.initializer && !p.questionToken) required = max;
+    }
+    return { required, max };
+  }
+
   /** Call sites of the function `fn` (a declaration node) across `mods`. */
   function callSitesOf(fn, fnMod, allMods) {
     if (!callIndex) buildCallIndex(allMods);
@@ -906,20 +965,34 @@ export function createScanner({ repoRoot }) {
     ) {
       name = fn.parent.name.text;
       declNode = fn.parent;
-    } else if (ts.isMethodDeclaration(fn) && fn.name && ts.isIdentifier(fn.name)) {
-      // this.method(...) inside the same class
-      const cls = fn.parent;
-      for (const n of callIndex.get(fnMod)?.get(`.${fn.name.text}`) ?? []) {
-        const callee = unwrap(n.expression);
-        if (callee.expression.kind !== ts.SyntaxKind.ThisKeyword) continue;
-        for (let p = n.parent; p; p = p.parent) {
-          if (p === cls) {
-            sites.push({ call: n, mod: fnMod });
-            break;
+    } else {
+      const method = methodOf(fn);
+      if (method) {
+        // `this.name(...)` counts only inside the method's own class (or
+        // object literal). Any other `.name(...)` is followed by name: the
+        // scan cannot tell which class `new S(ctx)` or `svc` is, and a call
+        // that is not this method only adds paths to check. The argument
+        // count must fit, which leaves most unrelated calls out.
+        const { required, max } = arity(fn);
+        for (const mod of allMods) {
+          for (const n of callIndex.get(mod)?.get(`.${method.name}`) ?? []) {
+            const callee = unwrap(n.expression);
+            if (n.arguments.length < required || n.arguments.length > max) continue;
+            if (callee.expression.kind === ts.SyntaxKind.ThisKeyword) {
+              let inside = false;
+              for (let p = n.parent; p; p = p.parent) {
+                if (p === method.container) {
+                  inside = true;
+                  break;
+                }
+              }
+              if (!inside) continue;
+            }
+            sites.push({ call: n, mod });
           }
         }
+        return sites;
       }
-      return sites;
     }
     if (!name) return sites;
     const isTarget = (decl) => decl === declNode || decl === fn;
@@ -1078,6 +1151,7 @@ export function createScanner({ repoRoot }) {
     annotationFor,
     resolveStrings,
     newCtx,
+    takeTruncated,
   };
 }
 
@@ -1174,13 +1248,28 @@ export function scanRepo({ repoRoot, roots = [], files = null, model }) {
     noRelationship: [],
     unchecked: [],
     viewEmbeds: [],
+    selfEmbeds: [],
     parseErrors: [],
     unattributed: [],
     annotated: [],
+    truncated: [],
     stats: { files: mods.length, selectCalls: 0, sitesWithEmbeds: 0, embeds: 0 },
   };
   const attributed = new Set();
   const seenSites = new Set();
+  const modOf = new Map(mods.map((m) => [m.sf, m]));
+  /** `// postgrest-from:` on the `.select()` statement, or on a literal the
+   *  path read (or its declaration). */
+  const annotationOn = (call, mod, used) => {
+    const own = scanner.annotationFor(call, mod);
+    if (own) return own;
+    for (const lit of used) {
+      const litMod = modOf.get(lit.getSourceFile());
+      const tables = litMod ? scanner.annotationFor(lit, litMod) : null;
+      if (tables) return tables;
+    }
+    return null;
+  };
 
   const record = (where, table, selectText, opaque) => {
     const embeds = checkSelect(model, table, selectText, opaque);
@@ -1197,8 +1286,26 @@ export function scanRepo({ repoRoot, roots = [], files = null, model }) {
       else if (e.status === 'unchecked' && e.reason === 'view') out.viewEmbeds.push(finding);
       else if (e.status === 'unchecked' && e.reason !== 'parent unknown')
         out.unchecked.push(finding);
+      // A table embedded from ITSELF by its name (`locations(...)`,
+      // `locations!parent_id(...)`) returns the rows that point at this one,
+      // the children, not the row this one points at: the "wrong rows with
+      // HTTP 200" class. Listed for a hand check (see relationships.mjs).
+      if (e.status === 'ok' && e.parent !== null && e.target === e.parent) {
+        out.selfEmbeds.push(finding);
+      }
     }
     out.sites.push({ ...where, table, select: selectText, embeds });
+  };
+
+  const hasEmbed = (texts) => (texts ?? []).some((t) => looksLikeEmbedFragment(model, t));
+  const truncatedAt = new Set();
+  /** Report a select whose alternatives were cut at MAX_ALTERNATIVES. */
+  const noteTruncation = (where) => {
+    if (!scanner.takeTruncated()) return;
+    const key = `${where.file}:${where.line}`;
+    if (truncatedAt.has(key)) return;
+    truncatedAt.add(key);
+    out.truncated.push(where);
   };
 
   for (const mod of mods) {
@@ -1206,36 +1313,91 @@ export function scanRepo({ repoRoot, roots = [], files = null, model }) {
       out.stats.selectCalls += 1;
       // The line of `.select(`, not of the chain's first token.
       const pos = mod.sf.getLineAndCharacterOfPosition(call.expression.name.getStart(mod.sf));
-      for (const r of scanner.evaluateSite(call, mod, mods)) {
-        if (r.source?.kind !== 'from' || !r.tables || !r.selects) continue;
-        for (const lit of r.used) attributed.add(lit);
-        for (const table of r.tables) {
-          for (const sel of r.selects) {
-            record(
-              { file: scanner.rel(mod.file), line: pos.line + 1, via: r.via },
-              table,
-              sel,
-              r.opaque,
-            );
+      const site = { file: scanner.rel(mod.file), line: pos.line + 1 };
+      scanner.takeTruncated();
+      const paths = scanner.evaluateSite(call, mod, mods);
+      noteTruncation({ ...site, via: [] });
+      // An embed reaches this `.select()` on some path.
+      const siteHasEmbed = paths.some((r) => hasEmbed(r.selects));
+      for (const r of paths) {
+        const at = { ...site, via: r.via };
+        if (r.source?.kind === 'from' && r.tables && r.selects) {
+          for (const lit of r.used) attributed.add(lit);
+          for (const table of r.tables) {
+            for (const sel of r.selects) record(at, table, sel, r.opaque);
           }
+          continue;
         }
+        // A path whose builder, table or select the scan cannot resolve.
+        // Skipping it is safe only when no embed can travel it: its own
+        // select has none, and its select is known or no other path of this
+        // `.select()` carries one. (A DOM `input.select()`, a column list on
+        // a table chosen at run time.)
+        const own = hasEmbed(r.selects);
+        if (!own && !(r.selects === null && siteHasEmbed)) continue;
+        for (const lit of r.used) attributed.add(lit);
+        // `// postgrest-from: <table>` on the statement, or on the select's
+        // literal, names the table of a builder the scan cannot follow.
+        const named = r.selects ? annotationOn(call, mod, r.used) : null;
+        if (named) {
+          out.annotated.push({ ...at, tables: named });
+          for (const table of named) {
+            for (const sel of r.selects) record(at, table, sel, r.opaque);
+          }
+          continue;
+        }
+        out.unchecked.push({
+          ...at,
+          scope: 'path',
+          table: r.tables ? r.tables.join(' | ') : null,
+          select: (r.selects ?? ['?']).join(' | ').replace(/\s+/g, ' ').trim().slice(0, 200),
+          reason:
+            r.source?.kind === 'rpc'
+              ? 'the builder is an rpc()'
+              : r.source?.kind === 'from'
+                ? r.tables
+                  ? 'its select is not static, and another path of this .select() carries an embed'
+                  : 'its table is not static'
+                : `its builder is not followed (${r.source?.reason ?? 'no .from() found'})`,
+        });
       }
     }
   }
 
+  // Literals no resolved path used. A fragment may be split over literals
+  // joined with `+` (`'x:user_profiles(' + COLS + ')'`), so each literal is
+  // read with the whole concatenation it sits in.
+  const seenConcat = new Set();
   for (const mod of mods) {
     for (const lit of scanner.stringLiterals(mod)) {
       if (attributed.has(lit)) continue;
       const raw = lit.getText(mod.sf);
       if (!raw.includes('(')) continue;
+      const whole = outermostConcatenation(lit);
+      if (whole !== lit) {
+        if (seenConcat.has(whole)) continue;
+        seenConcat.add(whole);
+        if (literalsWithin(whole).some((l) => attributed.has(l))) continue;
+      }
       const ctx = scanner.newCtx(mod);
-      const texts = scanner.resolveStrings(lit, ctx) ?? [];
-      if (!texts.some((t) => looksLikeEmbedFragment(model, t))) continue;
       const pos = mod.sf.getLineAndCharacterOfPosition(lit.getStart(mod.sf));
       const where = { file: scanner.rel(mod.file), line: pos.line + 1, via: [] };
+      scanner.takeTruncated();
+      const texts = scanner.resolveStrings(whole, ctx) ?? [];
+      // Most of these are not selects at all (email markup, report copy),
+      // where dropped alternatives do not matter; a cut select fragment does.
+      const cut = scanner.takeTruncated();
+      if (!texts.some((t) => looksLikeEmbedFragment(model, t))) continue;
+      if (cut && !truncatedAt.has(`${where.file}:${where.line}`)) {
+        truncatedAt.add(`${where.file}:${where.line}`);
+        out.truncated.push(where);
+      }
       const tables = scanner.annotationFor(lit, mod);
       if (!tables) {
-        out.unattributed.push({ ...where, text: raw.replace(/\s+/g, ' ').slice(0, 160) });
+        out.unattributed.push({
+          ...where,
+          text: whole.getText(mod.sf).replace(/\s+/g, ' ').slice(0, 160),
+        });
         continue;
       }
       out.annotated.push({ ...where, tables });
@@ -1244,5 +1406,40 @@ export function scanRepo({ repoRoot, roots = [], files = null, model }) {
       }
     }
   }
+  return out;
+}
+
+/** The `+` concatenation (through parentheses) a literal is part of, or
+ *  the literal itself. */
+function outermostConcatenation(node) {
+  let n = node;
+  for (;;) {
+    const p = n.parent;
+    if (
+      p &&
+      (ts.isParenthesizedExpression(p) ||
+        (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.PlusToken))
+    ) {
+      n = p;
+      continue;
+    }
+    return n;
+  }
+}
+
+/** String-ish literal nodes inside `node` (itself included). */
+function literalsWithin(node) {
+  const out = [];
+  const visit = (n) => {
+    if (
+      ts.isStringLiteral(n) ||
+      ts.isNoSubstitutionTemplateLiteral(n) ||
+      ts.isTemplateExpression(n)
+    ) {
+      out.push(n);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
   return out;
 }

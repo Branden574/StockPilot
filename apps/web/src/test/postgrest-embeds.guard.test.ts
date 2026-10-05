@@ -27,9 +27,15 @@
  *     joins and the call sites of helpers that take the table or the columns
  *     as parameters. Each embed is resolved from its parent table the way
  *     PostgREST resolves it.
- *   - A string literal that looks like a select with an embed but that no
- *     `.select()` with a known table reaches is reported as unattributed, so
- *     a select that travels a way the scan cannot follow is never skipped.
+ *   - A method is followed through `this.name(...)` in its class and every
+ *     `.name(...)` call with a fitting number of arguments anywhere.
+ *   - A call path whose builder, table or select the scan cannot resolve is
+ *     reported as unchecked when an embed could travel it, and a select with
+ *     more alternatives than the scan follows is reported as truncated.
+ *   - A string literal that looks like a select with an embed (alone or with
+ *     the literals it is concatenated with) but that no `.select()` with a
+ *     known table reaches is reported as unattributed, so a select that
+ *     travels a way the scan cannot follow is never skipped.
  *
  * IF THIS FAILS
  *   - "unnamed embed between an ambiguous pair": name the relationship the
@@ -39,11 +45,27 @@
  *     not rename the embed: filters such as `.eq('user_profiles.x', ...)` keep
  *     working.
  *   - "names no relationship": the hint, column or constraint does not join
- *     these two tables (PostgREST answers PGRST200). A table embedding itself
- *     can be named only by its column (`locations!parent_id`).
+ *     these two tables (PostgREST answers PGRST200). For a table embedding
+ *     itself, the constraint name answers PGRST200: embed through the column
+ *     or hint the column (next point).
+ *   - "a table embedded from itself": the two directions of a self foreign
+ *     key read alike and return different rows (PostgREST 14, checked on the
+ *     local stack 2026-10-05). `parent:parent_id(...)` returns the row this
+ *     one points at (the parent; `x:disabled_by(...)` on user_profiles is
+ *     the person who disabled this one), as an object. `locations(...)` and
+ *     `locations!parent_id(...)` return the rows that point at this one (the
+ *     children; `user_profiles!disabled_by(...)` is the people this one
+ *     disabled), as an array. For the parent, embed through the column. For
+ *     the children, list the select in REVIEWED_SELF_EMBEDS below.
  *   - "unattributed": tie the select to its table (pass it straight to
  *     `.from('t').select(...)`), or put `// postgrest-from: <table>` on the
  *     literal or its declaration.
+ *   - "a call path the scan cannot resolve": pass the table and the select
+ *     the scan can follow (a literal, a constant, a helper parameter), or
+ *     put `// postgrest-from: <table>` on the `.select()` statement when the
+ *     builder is one it cannot follow (an rpc, a builder returned by a call).
+ *   - "truncated": the select has more alternatives than the scan follows;
+ *     split it so each `.select()` has fewer.
  *   - "snapshot" or "pgTAP block": regenerate (below); never edit by hand.
  *
  * REGENERATE THE SNAPSHOT after a migration adds, drops or renames a foreign
@@ -72,6 +94,16 @@ const TIMEOUT = 60_000;
  */
 const REVIEWED_VIEW_EMBEDS: Record<string, string> = {};
 
+/**
+ * Embeds of a table from ITSELF by name (`locations(...)`,
+ * `locations!parent_id(...)`): they return the rows that point at this one
+ * (the children), which reads like "the parent" and is not. Each one is
+ * checked by hand and listed here (`file:line parent > path`) with why the
+ * children are what it means. Empty: no select embeds a table from itself
+ * today.
+ */
+const REVIEWED_SELF_EMBEDS: Record<string, string> = {};
+
 interface Finding {
   file: string;
   line: number;
@@ -83,6 +115,7 @@ interface Finding {
   target?: string;
   status?: string;
   reason?: string;
+  scope?: string;
   candidates?: string[];
   message?: string;
   text?: string;
@@ -99,9 +132,11 @@ interface ScanResult {
   noRelationship: Finding[];
   unchecked: Finding[];
   viewEmbeds: Finding[];
+  selfEmbeds: Finding[];
   parseErrors: Finding[];
   unattributed: Finding[];
   annotated: Array<{ file: string; line: number; tables: string[] }>;
+  truncated: Array<{ file: string; line: number }>;
   stats: { files: number; selectCalls: number; sitesWithEmbeds: number; embeds: number };
 }
 interface Snapshot {
@@ -220,8 +255,14 @@ describe('PostgREST embeds in web, phone and core', () => {
   it('every select the scan reads parses, and no embed target or hint is built at run time', () => {
     const problems = [
       ...scan.parseErrors.map((f) => `${where(f)}: ${f.message}`),
-      ...scan.unchecked.map(
-        (f) => `${where(f)}: ${f.parent} -> ${f.path} is not static (${f.reason})`,
+      ...scan.unchecked.map((f) =>
+        f.scope === 'path'
+          ? `${where(f)}: a call path the scan cannot resolve, while an embed could travel it: ${f.reason}; select ${f.select}`
+          : `${where(f)}: ${f.parent} -> ${f.path} is not static (${f.reason})`,
+      ),
+      ...scan.truncated.map(
+        (f) =>
+          `${f.file}:${f.line}: more alternatives than the scan follows (truncated); split the select`,
       ),
     ];
     expect(problems).toEqual([]);
@@ -238,6 +279,11 @@ describe('PostgREST embeds in web, phone and core', () => {
   it('every embed from or into a view has been checked by hand', () => {
     const found = scan.viewEmbeds.map((f) => `${f.file}:${f.line} ${f.parent} > ${f.path}`).sort();
     expect(found).toEqual(Object.keys(REVIEWED_VIEW_EMBEDS).sort());
+  });
+
+  it('every embed of a table from itself by name has been checked by hand (it returns the children)', () => {
+    const found = scan.selfEmbeds.map((f) => `${f.file}:${f.line} ${f.parent} > ${f.path}`).sort();
+    expect(found).toEqual(Object.keys(REVIEWED_SELF_EMBEDS).sort());
   });
 });
 
@@ -318,6 +364,123 @@ describe('the scan itself (planted selects)', () => {
     );
   });
 
+  it('lists a table embedded from itself by name for a hand check, and not the parent embedded through its column', () => {
+    // `locations!parent_id(...)` and `locations(...)` return the CHILDREN (an
+    // array); `parent:parent_id(...)` returns the parent (an object).
+    const r = run({
+      'self.ts': `
+        export const a = (sb: any) => sb.from('locations').select('id, parent:parent_id(id), locations!parent_id(id), locations(id)');
+        export const b = (sb: any) => sb.from('user_profiles').select('id, disabler:disabled_by(id), user_profiles!disabled_by(id)');`,
+    });
+    expect(r.selfEmbeds.map((f) => `${f.file}:${f.line} ${f.parent} > ${f.path}`)).toEqual([
+      'self.ts:2 locations > locations',
+      'self.ts:2 locations > locations',
+      'self.ts:3 user_profiles > user_profiles',
+    ]);
+    expect(r.selfEmbeds.map((f) => f.hints)).toEqual([['parent_id'], [], ['disabled_by']]);
+    expect(flagged(r)).toEqual([]);
+    expect(r.noRelationship).toEqual([]);
+  });
+
+  it('follows a method called from another module through an instance (by name)', () => {
+    // The same constant also reaches a path the scan always followed
+    // (this.list -> notifications, one relationship), so before methods were
+    // followed by name this select was never checked against returns.
+    const r = run({
+      'svc.ts': `
+        export const OK_COLS = 'id, x:user_profiles(full_name)';
+        export class S {
+          constructor(private ctx: any) {}
+          okList() { return this.list(OK_COLS); }
+          list(c: string) { return this.ctx.supabase.from('notifications').select(c); }
+          listReturns(c: string) { return this.ctx.supabase.from('returns').select(c); }
+        }`,
+      'use.ts': `
+        import { OK_COLS, S } from './svc';
+        export const read = (ctx: any) => new S(ctx).listReturns(OK_COLS);`,
+      'arrow.ts': `
+        export class R {
+          constructor(private sb: any) {}
+          read = (cols: string) => this.sb.from('rentals').select(cols);
+        }
+        export const viaArrow = (sb: any) => new R(sb).read('id, borrower:user_profiles(full_name)');`,
+    });
+    expect(flagged(r).sort()).toEqual(
+      [
+        'arrow.ts:4 rentals -> borrower:user_profiles',
+        'svc.ts:7 returns -> x:user_profiles',
+      ].sort(),
+    );
+    expect(r.unattributed).toEqual([]);
+  });
+
+  it('reports a path whose table it cannot read when the select has an embed, even if another path checked it', () => {
+    const r = run({
+      'h.ts': `
+        const COLS = 'id, x:user_profiles(full_name)';
+        export function readUsers(sb: any, table: string) { return sb.from(table).select(COLS); }
+        export const a = (sb: any) => readUsers(sb, 'notifications');
+        export const b = (sb: any, t: string) => readUsers(sb, t);`,
+    });
+    expect(r.unchecked.map((f) => `${f.file}:${f.line} ${f.reason}`)).toEqual([
+      'h.ts:3 its table is not static',
+    ]);
+    expect(flagged(r)).toEqual([]);
+  });
+
+  it('reports a path whose select it cannot read when another path of the same select carries an embed', () => {
+    const r = run({
+      'p.ts': `
+        export function read(sb: any, cols: string) { return sb.from('returns').select(cols); }
+        export const a = (sb: any) => read(sb, 'id, approved_by');
+        export const b = (sb: any) => read(sb, 'id, approver:user_profiles!returns_approved_by_fkey(full_name)');
+        export const c = (sb: any, cols: string) => read(sb, cols);`,
+    });
+    expect(r.unchecked.map((f) => `${f.file}:${f.line} ${f.reason}`)).toEqual([
+      'p.ts:2 its select is not static, and another path of this .select() carries an embed',
+    ]);
+  });
+
+  it('reports an rpc builder carrying an embed, and checks it once its table is named', () => {
+    const bare = run({
+      'rpc.ts': `
+        export const a = (sb: any) => sb.rpc('list_returns').select('id, x:user_profiles(full_name)');`,
+    });
+    expect(bare.unchecked.map((f) => `${f.file}:${f.line} ${f.reason}`)).toEqual([
+      'rpc.ts:2 the builder is an rpc()',
+    ]);
+    expect(bare.unattributed).toEqual([]);
+
+    const named = run({
+      'rpc.ts': `
+        export const a = (sb: any) =>
+          // postgrest-from: returns
+          sb.rpc('list_returns').select('id, x:user_profiles(full_name)');`,
+    });
+    expect(named.unchecked).toEqual([]);
+    expect(flagged(named)).toEqual(['rpc.ts:4 returns -> x:user_profiles']);
+  });
+
+  it('reports a fragment split over concatenated literals that no select reaches', () => {
+    const r = run({
+      'split.ts': `
+        const COLS = 'full_name';
+        export const SEL = 'id, x:user_profiles(' + COLS + ')';`,
+    });
+    expect(r.unattributed.map((f) => `${f.file}:${f.line}`)).toEqual(['split.ts:3']);
+  });
+
+  it('reports a select with more alternatives than it follows', () => {
+    const r = run({
+      'many.ts': `
+        export const q = (sb: any, a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean) =>
+          sb.from('notifications').select(
+            (a ? 'id,' : 'uid,') + (b ? 'x,' : 'y,') + (c ? 'p,' : 'q,') + (d ? 'r,' : 's,') +
+            (e ? 't,' : 'u,') + (f ? 'v,' : 'w,') + (g ? 'user:user_profiles(id)' : 'n'));`,
+    });
+    expect(r.truncated.map((f) => `${f.file}:${f.line}`)).toEqual(['many.ts:3']);
+  });
+
   it('reports a hint that names no relationship, and a self embed named by its constraint', () => {
     const r = run({
       'bad.ts': `
@@ -334,9 +497,20 @@ describe('the scan itself (planted selects)', () => {
     const unattributed = run({
       'frag.ts': `
         export const FRAGMENT = 'id, requester:user_profiles(full_name)';
-        export function use(q: { select(s: string): unknown }) { return q.select(FRAGMENT); }`,
+        export function use(q: { select(s: string): unknown }) { return q.select(FRAGMENT); }
+        export function pass(fn: (s: string) => unknown) { return fn(FRAGMENT); }`,
     });
-    expect(unattributed.unattributed.map((f) => `${f.file}:${f.line}`)).toEqual(['frag.ts:2']);
+    // The .select() whose builder came in as a parameter carries the embed
+    // on a path it cannot resolve.
+    expect(unattributed.unchecked.map((f) => `${f.file}:${f.line} ${f.reason}`)).toEqual([
+      'frag.ts:3 its builder is not followed (builder passed in as a parameter)',
+    ]);
+    // A fragment no .select() reads at all is unattributed.
+    const loose = run({
+      'loose.ts': `
+        export const FRAGMENT = 'id, requester:user_profiles(full_name)';`,
+    });
+    expect(loose.unattributed.map((f) => `${f.file}:${f.line}`)).toEqual(['loose.ts:2']);
 
     const annotated = run({
       'frag.ts': `
@@ -345,6 +519,8 @@ describe('the scan itself (planted selects)', () => {
         export function use(q: { select(s: string): unknown }) { return q.select(FRAGMENT); }`,
     });
     expect(annotated.unattributed).toEqual([]);
-    expect(flagged(annotated)).toEqual(['frag.ts:3 order_requests -> requester:user_profiles']);
+    expect(annotated.unchecked).toEqual([]);
+    // Checked where it is read, with the table its literal names.
+    expect(flagged(annotated)).toEqual(['frag.ts:4 order_requests -> requester:user_profiles']);
   });
 });

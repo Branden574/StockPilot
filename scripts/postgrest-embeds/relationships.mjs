@@ -22,9 +22,18 @@
  *     are all part of J's PRIMARY KEY (a unique constraint is not enough);
  *   - a self-referencing foreign key alone is NOT ambiguous: PostgREST
  *     resolves `locations(...)` embedded from `locations` (200). A table
- *     with two or more self relationships is treated as ambiguous. A self
- *     embed may be named only by its column (`locations!parent_id`,
- *     `parent:parent_id`); the constraint name answers PGRST200.
+ *     with two or more self relationships is treated as ambiguous. Its two
+ *     directions read alike and return DIFFERENT rows, so the guard lists
+ *     every self embed by table name for a hand check:
+ *       `parent:parent_id(...)` (through the column) returns the row this
+ *         one points at, the parent, as an object; on user_profiles,
+ *         `x:disabled_by(...)` is the person who disabled this one;
+ *       `locations(...)` and `locations!parent_id(...)` (the table, with or
+ *         without the column as a hint) return the rows that point at this
+ *         one, the children, as an array; `user_profiles!disabled_by(...)`
+ *         is the people this one disabled.
+ *     The constraint name answers PGRST200. (Read-only GETs, local
+ *     PostgREST 14.5, the production version, 2026-10-05.)
  *
  * Two tables are an AMBIGUOUS PAIR when two or more relationships join them.
  * Every embed between an ambiguous pair must name its relationship, with a
@@ -143,9 +152,11 @@ export function buildRelationshipModel(census) {
    * `origin` (one is what an embed needs). PostgREST accepts a foreign key
    * constraint name, a foreign key column (on either end of a single-column
    * key) or a junction table name. A table embedding ITSELF is narrower:
-   * only the referencing column works (`locations!parent_id`); the
-   * constraint name and the referenced column answer PGRST200 (PostgREST
-   * 14, checked 2026-10-05).
+   * only the referencing column works as a hint (`locations!parent_id`), and
+   * it returns the CHILDREN (the rows whose parent_id is this row); the
+   * parent is `parent:parent_id(...)`, through the column, which resolveEmbed
+   * handles as a column target. The constraint name and the referenced
+   * column answer PGRST200 (PostgREST 14, checked 2026-10-05).
    */
   function hintMatches(origin, target, hint) {
     const rels = relationshipsBetween(origin, target);
