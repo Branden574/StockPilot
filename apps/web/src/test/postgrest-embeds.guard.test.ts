@@ -116,6 +116,7 @@ interface Finding {
   status?: string;
   reason?: string;
   scope?: string;
+  hints?: string[];
   candidates?: string[];
   message?: string;
   text?: string;
