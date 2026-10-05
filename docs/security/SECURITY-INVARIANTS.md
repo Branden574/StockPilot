@@ -1170,6 +1170,81 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
+### INV-C8 — the receiving checklist is written only through its four gated functions; a run is read exactly where its PO is
+
+- **Invariant** (0398, written as 0398 and numbered at push time; F4-1):
+  `checklist_versions` and `checklist_runs` take no write from any API role.
+  - **Grants.** PUBLIC, `anon`, `authenticated` and `service_role` hold no
+    INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES or MAINTAIN on
+    either table; `authenticated` and `service_role` hold SELECT. RLS is on.
+  - **Reads.** `checklist_versions_select`: a member of the organization
+    (`is_org_member`). `checklist_runs_select`: a member AND the run's
+    purchase order is visible to the caller under `purchase_orders_select`
+    (membership, `purchase_orders:read` and, below manager, the warehouse
+    scope), so a run is never readable where its PO is not.
+  - **Writes.** Only `checklist_publish`, `checklist_retire`,
+    `receiving_check_start` and `checklist_run_save`, SECURITY DEFINER with
+    `search_path = public, pg_temp` and `lock_timeout = '5s'`, EXECUTE for
+    `authenticated` only (revoked from PUBLIC, `anon` and `service_role`).
+    Each gates in its body, in this order: signed in (42501
+    `not_authenticated`); the organization taken from the row, never the
+    client, with a non-member answered like a missing row (P0002
+    `receipt_not_found` / `checklist_run_not_found`) or 42501 `not_member`
+    for a publish; the Receiving module on (P0001 `module_disabled`); then
+    the role and permission floor through the private asserts: a publisher
+    is manager or above with `purchase_orders:manage` (42501
+    `not_publisher`), a recorder is manager or above with `stock:adjust`
+    and `purchase_orders:read` (42501 `not_recorder`). The asserts and the
+    two normalisers (`_checklist_*`) hold no EXECUTE for any API role.
+  - **What a run records.** Steps are normalised by the server (keys
+    `s1..sN`, known fields only, 1 to 20 steps of kind check, count or text;
+    photo is refused until F4-2); results must name the run's own version's
+    steps; completing needs every required step and a note on every failed
+    check (22023 `checklist_incomplete`). A version never changes except to
+    be retired, at most one is live per organization and binding, and a run
+    keeps the version it started with. A completed run cannot be saved
+    again (`checklist_run_completed`); a stale revision is refused
+    (`checklist_run_changed`); a resent save or publish id answers the row
+    it made instead of writing twice.
+  - **No other write.** The functions touch no ledger table, receipt,
+    purchase order, stock row, attachment or notification.
+    `post_receipt_v2`, `reverse_receipt`, `recompute_po_status` and the
+    receipt guards are unchanged (their md5s are pinned in the 0398 suite,
+    Z1/Z2).
+  - **Account deletion** (0393's pattern, the A3 rule for a new person
+    column): `published_by`, `retired_by`, `started_by` and `completed_by`
+    are ON DELETE SET NULL to `user_profiles`, each table carries
+    `deleted_users` with the `zzz_deleted_users_ins`/`_upd` pair, and the
+    app reads a stamped null as "Deleted user".
+- **Why it matters**: a checklist records what a person checked for a
+  receipt. If a member could write a run directly, they could complete
+  another person's checklist, change a completed one, or attach a run to a
+  receipt of a PO they cannot see; and a run readable outside its PO's
+  scope would leak a warehouse's deliveries to staff scoped elsewhere.
+- **Enforced by**: the grants, the two SELECT policies and the in-body
+  gates. In the app, `ReceivingChecklistService` checks the same floor first
+  (core `receivingGate`, the predicate the web PO page, the phone and
+  `ReceivingService.postReceipt` share), maps refusals by SQLSTATE and hint
+  only, and reads through the caller's own client, so RLS decides what is
+  visible.
+- **Tested at**: [`0398_receiving_checklist.test.sql`](../../supabase/tests/0398_receiving_checklist.test.sql)
+  A (shape, grants and function posture), P (publish: normalised steps,
+  one live version, stale and replayed publishes, every refusal), S (start),
+  V (save: every refusal through the case table tied to core by `-- case:`
+  markers, stale revisions, replays, completion), R (retire, and what it
+  leaves), L (visibility: runs follow the purchase order's permission and
+  warehouse scope), N (no stock written), D (account deletion keeps the
+  records and stamps the people) and Z (the frozen receipt functions and
+  guards); each break named
+  "Mutation:" in the file is caught by the test before it. The 0359 census,
+  INV-25, the 0367 class guard and 0393's person-key census (K1, K4) cover
+  the new functions and columns. `scripts/db-concurrency/0398_checklist_races.sh`
+  and `0398_migration_lock_footprint.sh` prove the races and the push's
+  lock footprint. App side: `receiving-checklist.test.ts` (service), the
+  `/api/v1/receiving-checks` route tests, core `receiving-gate.test.ts`,
+  `receiving-checklist.test.ts` and `receiving-checklist-copy.test.ts`, and
+  the phone's `receive-gate.test.ts` and `receiving-checks-api.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
