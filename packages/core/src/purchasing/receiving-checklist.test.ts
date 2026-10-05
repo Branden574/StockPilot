@@ -48,40 +48,54 @@ describe('the case table shared with pgTAP', () => {
   it('every core case has exactly one pgTAP marker, and every marker a core case', () => {
     const names = receivingChecklistCases().map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);
-    for (const n of names) expect(markers.filter((m) => m === n), n).toHaveLength(1);
+    for (const n of names)
+      expect(
+        markers.filter((m) => m === n),
+        n,
+      ).toHaveLength(1);
     expect(markers.filter((m) => !names.includes(m))).toEqual([]);
   });
 
-  it.each(receivingChecklistCases().map((c) => [c.name, c] as const))('%s: core agrees', (_name, c) => {
-    if (c.target === 'steps') {
-      const r = normalizeChecklistSteps(c.input);
-      if (c.expect.ok) {
-        expect(r.ok).toBe(true);
-        if (r.ok && c.expect.steps) expect(r.value).toEqual(c.expect.steps);
+  it.each(receivingChecklistCases().map((c) => [c.name, c] as const))(
+    '%s: core agrees',
+    (_name, c) => {
+      if (c.target === 'steps') {
+        const r = normalizeChecklistSteps(c.input);
+        if (c.expect.ok) {
+          expect(r.ok).toBe(true);
+          if (r.ok && c.expect.steps) expect(r.value).toEqual(c.expect.steps);
+        } else {
+          expect(r).toEqual({
+            ok: false,
+            detail: {
+              field: 'steps',
+              reason: c.expect.reason,
+              ...(c.expect.step ? { step: c.expect.step } : {}),
+            },
+          });
+        }
+      } else if (c.target === 'title') {
+        const r = normalizeChecklistTitle(c.input);
+        expect(r).toEqual(
+          c.expect.ok
+            ? { ok: true, value: c.expect.title }
+            : { ok: false, detail: { field: 'title', reason: c.expect.reason } },
+        );
+      } else if (c.target === 'results') {
+        const r = normalizeChecklistResults(CASE_TABLE_STEPS, c.input);
+        expect(r).toEqual(
+          c.expect.ok
+            ? { ok: true, value: c.expect.results }
+            : {
+                ok: false,
+                detail: { field: 'results', key: c.expect.key, reason: c.expect.reason },
+              },
+        );
       } else {
-        expect(r).toEqual({
-          ok: false,
-          detail: { field: 'steps', reason: c.expect.reason, ...(c.expect.step ? { step: c.expect.step } : {}) },
-        });
+        expect(validateRunForCompletion(CASE_TABLE_STEPS, c.input)).toEqual(c.expect);
       }
-    } else if (c.target === 'title') {
-      const r = normalizeChecklistTitle(c.input);
-      expect(r).toEqual(
-        c.expect.ok
-          ? { ok: true, value: c.expect.title }
-          : { ok: false, detail: { field: 'title', reason: c.expect.reason } },
-      );
-    } else if (c.target === 'results') {
-      const r = normalizeChecklistResults(CASE_TABLE_STEPS, c.input);
-      expect(r).toEqual(
-        c.expect.ok
-          ? { ok: true, value: c.expect.results }
-          : { ok: false, detail: { field: 'results', key: c.expect.key, reason: c.expect.reason } },
-      );
-    } else {
-      expect(validateRunForCompletion(CASE_TABLE_STEPS, c.input)).toEqual(c.expect);
-    }
-  });
+    },
+  );
 
   it('the suite publishes the same four steps the result and completion cases use', () => {
     for (const s of CASE_TABLE_STEPS) expect(sql).toContain(s.label);
@@ -106,7 +120,10 @@ describe('text rules match the SQL', () => {
   it('a run note is trimmed, blank is none, and over 1,000 characters is refused', () => {
     expect(normalizeRunNote('  ')).toEqual({ ok: true, value: null });
     expect(normalizeRunNote(null)).toEqual({ ok: true, value: null });
-    expect(normalizeRunNote(` ${'n'.repeat(1000)} `)).toEqual({ ok: true, value: 'n'.repeat(1000) });
+    expect(normalizeRunNote(` ${'n'.repeat(1000)} `)).toEqual({
+      ok: true,
+      value: 'n'.repeat(1000),
+    });
     expect(normalizeRunNote('n'.repeat(1001))).toEqual({
       ok: false,
       detail: { field: 'note', reason: 'run_note_too_long' },
@@ -115,14 +132,26 @@ describe('text rules match the SQL', () => {
 
   it('photo steps are allowed only when asked for (F4-2)', () => {
     expect(normalizeChecklistSteps([SUGGESTED_RECEIVING_PHOTO_STEP]).ok).toBe(false);
-    expect(normalizeChecklistSteps([SUGGESTED_RECEIVING_PHOTO_STEP], { allowPhoto: true })).toEqual({
-      ok: true,
-      value: [{ key: 's1', kind: 'photo', label: 'Photo or scan of the packing slip', help: null, required: false }],
-    });
+    expect(normalizeChecklistSteps([SUGGESTED_RECEIVING_PHOTO_STEP], { allowPhoto: true })).toEqual(
+      {
+        ok: true,
+        value: [
+          {
+            key: 's1',
+            kind: 'photo',
+            label: 'Photo or scan of the packing slip',
+            help: null,
+            required: false,
+          },
+        ],
+      },
+    );
   });
 
   it('a photo step takes no typed answer', () => {
-    const steps = [{ key: 's1', kind: 'photo' as const, label: 'Slip photo', help: null, required: true }];
+    const steps = [
+      { key: 's1', kind: 'photo' as const, label: 'Slip photo', help: null, required: true },
+    ];
     expect(normalizeChecklistResults(steps, { s1: { value: 'x' } })).toEqual({
       ok: false,
       detail: { field: 'results', key: 's1', reason: 'photo_takes_no_value' },
@@ -175,8 +204,23 @@ describe('suggested steps', () => {
 describe('summarizeRun and completion', () => {
   it('counts failed checks, required steps answered and photos', () => {
     expect(
-      summarizeRun(CASE_TABLE_STEPS, { s1: { value: 'fail', note: 'crushed' }, s2: { value: 'fail', note: 'x' }, s3: { value: 0 } }, 2),
-    ).toEqual({ total: 4, answered: 3, requiredTotal: 1, requiredAnswered: 1, failedChecks: 2, linkedPhotos: 2 });
+      summarizeRun(
+        CASE_TABLE_STEPS,
+        {
+          s1: { value: 'fail', note: 'crushed' },
+          s2: { value: 'fail', note: 'x' },
+          s3: { value: 0 },
+        },
+        2,
+      ),
+    ).toEqual({
+      total: 4,
+      answered: 3,
+      requiredTotal: 1,
+      requiredAnswered: 1,
+      failedChecks: 2,
+      linkedPhotos: 2,
+    });
     expect(summarizeRun(CASE_TABLE_STEPS, { s2: { note: 'only a note' } })).toEqual({
       total: 4,
       answered: 0,
@@ -188,8 +232,12 @@ describe('summarizeRun and completion', () => {
   });
 
   it('a note alone is no answer, and Not applicable is one', () => {
-    expect(validateRunForCompletion(CASE_TABLE_STEPS, { s1: { note: 'looked' } }).missing).toEqual(['s1']);
-    expect(isRunCompletable(validateRunForCompletion(CASE_TABLE_STEPS, { s1: { value: 'na' } }))).toBe(true);
+    expect(validateRunForCompletion(CASE_TABLE_STEPS, { s1: { note: 'looked' } }).missing).toEqual([
+      's1',
+    ]);
+    expect(
+      isRunCompletable(validateRunForCompletion(CASE_TABLE_STEPS, { s1: { value: 'na' } })),
+    ).toBe(true);
   });
 });
 
@@ -201,7 +249,13 @@ const V1: ChecklistVersionLite = {
   publishedAt: '2026-10-01T10:00:00Z',
   retiredAt: '2026-10-03T10:00:00Z',
 };
-const V2: ChecklistVersionLite = { ...V1, id: 'v2', versionNumber: 2, publishedAt: '2026-10-03T10:00:00Z', retiredAt: null };
+const V2: ChecklistVersionLite = {
+  ...V1,
+  id: 'v2',
+  versionNumber: 2,
+  publishedAt: '2026-10-03T10:00:00Z',
+  retiredAt: null,
+};
 const run = (over: Partial<ChecklistRunLite>): ChecklistRunLite => ({
   id: 'run1',
   receiptId: 'r1',
@@ -226,14 +280,23 @@ describe('receiptChecklistState', () => {
     const s = receiptChecklistState({
       receipt: receipt(),
       versions: [V1, V2],
-      runs: [run({ status: 'completed', results: { s1: { value: 'fail', note: 'n' } }, completedAt: '2026-10-02T11:00:00Z', completedByName: 'Sam' })],
+      runs: [
+        run({
+          status: 'completed',
+          results: { s1: { value: 'fail', note: 'n' } },
+          completedAt: '2026-10-02T11:00:00Z',
+          completedByName: 'Sam',
+        }),
+      ],
     });
     expect(s).toMatchObject({ kind: 'completed', runId: 'run1', completedByName: 'Sam' });
     expect(s.kind === 'completed' && s.summary.failedChecks).toBe(1);
   });
 
   it('in progress, with who started it and when', () => {
-    expect(receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [run({})] })).toMatchObject({
+    expect(
+      receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [run({})] }),
+    ).toMatchObject({
       kind: 'in_progress',
       startedByName: 'Pat Lee',
       startedAt: '2026-10-02T10:00:00Z',
@@ -241,24 +304,40 @@ describe('receiptChecklistState', () => {
   });
 
   it('not recorded only inside a live window, for posted and reversed receipts', () => {
-    expect(receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [] })).toEqual({ kind: 'not_recorded' });
+    expect(receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [] })).toEqual({
+      kind: 'not_recorded',
+    });
     expect(
-      receiptChecklistState({ receipt: receipt({ status: 'reversed' }), versions: [V1, V2], runs: [] }),
+      receiptChecklistState({
+        receipt: receipt({ status: 'reversed' }),
+        versions: [V1, V2],
+        runs: [],
+      }),
     ).toEqual({ kind: 'not_recorded' });
     // Before the first publish: never nagged.
     expect(
-      receiptChecklistState({ receipt: receipt({ receivedAt: '2026-09-30T09:00:00Z' }), versions: [V1, V2], runs: [] }),
+      receiptChecklistState({
+        receipt: receipt({ receivedAt: '2026-09-30T09:00:00Z' }),
+        versions: [V1, V2],
+        runs: [],
+      }),
     ).toEqual({ kind: 'none' });
     // In a gap after a turn-off with nothing live.
     const off = { ...V2, retiredAt: '2026-10-04T00:00:00Z' };
     expect(
-      receiptChecklistState({ receipt: receipt({ receivedAt: '2026-10-04T09:00:00Z' }), versions: [V1, off], runs: [] }),
+      receiptChecklistState({
+        receipt: receipt({ receivedAt: '2026-10-04T09:00:00Z' }),
+        versions: [V1, off],
+        runs: [],
+      }),
     ).toEqual({ kind: 'none' });
   });
 
   it('reversal rows, drafts and cancelled receipts never show a chip', () => {
     for (const status of ['reversal', 'draft', 'canceled']) {
-      expect(receiptChecklistState({ receipt: receipt({ status }), versions: [V1, V2], runs: [] })).toEqual({
+      expect(
+        receiptChecklistState({ receipt: receipt({ status }), versions: [V1, V2], runs: [] }),
+      ).toEqual({
         kind: 'none',
       });
     }
@@ -266,10 +345,16 @@ describe('receiptChecklistState', () => {
 
   // Mutation caught: a failed read treated as an empty list ("not recorded").
   it('a failed versions or runs read is unavailable, never not recorded', () => {
-    expect(receiptChecklistState({ receipt: receipt(), versions: null, runs: [] })).toEqual({ kind: 'unavailable' });
-    expect(receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: null })).toEqual({ kind: 'unavailable' });
+    expect(receiptChecklistState({ receipt: receipt(), versions: null, runs: [] })).toEqual({
+      kind: 'unavailable',
+    });
+    expect(receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: null })).toEqual({
+      kind: 'unavailable',
+    });
     // A run whose version did not come back cannot be summarised.
-    expect(receiptChecklistState({ receipt: receipt(), versions: [V2], runs: [run({})] })).toEqual({ kind: 'unavailable' });
+    expect(receiptChecklistState({ receipt: receipt(), versions: [V2], runs: [run({})] })).toEqual({
+      kind: 'unavailable',
+    });
   });
 
   it('live windows: published at or before, retired after', () => {
@@ -285,27 +370,94 @@ describe('receiptChecklistState', () => {
 describe('receiptChecklistAction', () => {
   const st = (kind: 'completed' | 'in_progress' | 'not_recorded' | 'none' | 'unavailable') =>
     kind === 'completed'
-      ? receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [run({ status: 'completed', completedAt: 'x', completedByName: 'S' })] })
+      ? receiptChecklistState({
+          receipt: receipt(),
+          versions: [V1, V2],
+          runs: [run({ status: 'completed', completedAt: 'x', completedByName: 'S' })],
+        })
       : kind === 'in_progress'
         ? receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [run({})] })
         : ({ kind } as const);
 
   it('Record only with a live version, a recorder and a posted or reversed receipt', () => {
-    expect(receiptChecklistAction({ state: st('not_recorded'), receiptStatus: 'posted', liveNow: true, canRecord: true })).toBe('record');
-    expect(receiptChecklistAction({ state: st('none'), receiptStatus: 'reversed', liveNow: true, canRecord: true })).toBe('record');
-    expect(receiptChecklistAction({ state: st('not_recorded'), receiptStatus: 'posted', liveNow: false, canRecord: true })).toBeNull();
-    expect(receiptChecklistAction({ state: st('not_recorded'), receiptStatus: 'posted', liveNow: true, canRecord: false })).toBeNull();
-    expect(receiptChecklistAction({ state: st('none'), receiptStatus: 'reversal', liveNow: true, canRecord: true })).toBeNull();
+    expect(
+      receiptChecklistAction({
+        state: st('not_recorded'),
+        receiptStatus: 'posted',
+        liveNow: true,
+        canRecord: true,
+      }),
+    ).toBe('record');
+    expect(
+      receiptChecklistAction({
+        state: st('none'),
+        receiptStatus: 'reversed',
+        liveNow: true,
+        canRecord: true,
+      }),
+    ).toBe('record');
+    expect(
+      receiptChecklistAction({
+        state: st('not_recorded'),
+        receiptStatus: 'posted',
+        liveNow: false,
+        canRecord: true,
+      }),
+    ).toBeNull();
+    expect(
+      receiptChecklistAction({
+        state: st('not_recorded'),
+        receiptStatus: 'posted',
+        liveNow: true,
+        canRecord: false,
+      }),
+    ).toBeNull();
+    expect(
+      receiptChecklistAction({
+        state: st('none'),
+        receiptStatus: 'reversal',
+        liveNow: true,
+        canRecord: true,
+      }),
+    ).toBeNull();
   });
 
   it('Continue for an open run the person may record, View otherwise and for completed runs', () => {
-    expect(receiptChecklistAction({ state: st('in_progress'), receiptStatus: 'posted', liveNow: false, canRecord: true })).toBe('continue');
-    expect(receiptChecklistAction({ state: st('in_progress'), receiptStatus: 'posted', liveNow: true, canRecord: false })).toBe('view');
-    expect(receiptChecklistAction({ state: st('completed'), receiptStatus: 'posted', liveNow: true, canRecord: true })).toBe('view');
+    expect(
+      receiptChecklistAction({
+        state: st('in_progress'),
+        receiptStatus: 'posted',
+        liveNow: false,
+        canRecord: true,
+      }),
+    ).toBe('continue');
+    expect(
+      receiptChecklistAction({
+        state: st('in_progress'),
+        receiptStatus: 'posted',
+        liveNow: true,
+        canRecord: false,
+      }),
+    ).toBe('view');
+    expect(
+      receiptChecklistAction({
+        state: st('completed'),
+        receiptStatus: 'posted',
+        liveNow: true,
+        canRecord: true,
+      }),
+    ).toBe('view');
   });
 
   it('nothing when the state did not load', () => {
-    expect(receiptChecklistAction({ state: st('unavailable'), receiptStatus: 'posted', liveNow: true, canRecord: true })).toBeNull();
+    expect(
+      receiptChecklistAction({
+        state: st('unavailable'),
+        receiptStatus: 'posted',
+        liveNow: true,
+        canRecord: true,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -326,32 +478,40 @@ describe('reading what the database stored', () => {
   });
 
   it('stored results keep only values and notes', () => {
-    expect(parseStoredResults({ s1: { value: 'pass', x: 1 }, s2: 'bad', s3: { note: 'n' }, s4: {} })).toEqual({
+    expect(
+      parseStoredResults({ s1: { value: 'pass', x: 1 }, s2: 'bad', s3: { note: 'n' }, s4: {} }),
+    ).toEqual({
       s1: { value: 'pass' },
       s3: { note: 'n' },
     });
   });
 
   it('an invalid detail keeps only known fields and reasons', () => {
-    expect(parseChecklistInvalidDetail('{"step": 3, "field": "steps", "reason": "label_too_long"}')).toEqual({
+    expect(
+      parseChecklistInvalidDetail('{"step": 3, "field": "steps", "reason": "label_too_long"}'),
+    ).toEqual({
       field: 'steps',
       step: 3,
       reason: 'label_too_long',
     });
-    expect(parseChecklistInvalidDetail({ field: 'results', key: 's2', reason: 'note_too_long' })).toEqual({
+    expect(
+      parseChecklistInvalidDetail({ field: 'results', key: 's2', reason: 'note_too_long' }),
+    ).toEqual({
       field: 'results',
       key: 's2',
       reason: 'note_too_long',
     });
     expect(parseChecklistInvalidDetail('{"field": "steps", "reason": "<script>"}')).toBeNull();
     expect(parseChecklistInvalidDetail('not json')).toBeNull();
-    expect(parseChecklistInvalidDetail({ field: 'results', key: 'DROP TABLE', reason: 'unknown_step' })).toEqual({
+    expect(
+      parseChecklistInvalidDetail({ field: 'results', key: 'DROP TABLE', reason: 'unknown_step' }),
+    ).toEqual({
       field: 'results',
       reason: 'unknown_step',
     });
   });
 
-  it('an incomplete detail keeps only the run\'s own step keys, in step order', () => {
+  it("an incomplete detail keeps only the run's own step keys, in step order", () => {
     expect(
       parseChecklistIncompleteDetail(
         '{"missing": ["s4", "s1", "s99"], "failedWithoutNote": ["s2"], "photoStepsWithoutPhoto": "x"}',
@@ -370,19 +530,50 @@ describe('request bodies', () => {
   const U = '00000000-0000-4000-8000-000000000001';
   it('publish needs a client id and names the version it replaces (null when none)', () => {
     expect(
-      checklistPublishBodySchema.safeParse({ title: 'T', steps: [{ kind: 'check', label: 'x' }], expectedCurrentId: null, clientPublishId: U })
-        .success,
+      checklistPublishBodySchema.safeParse({
+        title: 'T',
+        steps: [{ kind: 'check', label: 'x' }],
+        expectedCurrentId: null,
+        clientPublishId: U,
+      }).success,
     ).toBe(true);
-    expect(checklistPublishBodySchema.safeParse({ title: 'T', steps: [], expectedCurrentId: null }).success).toBe(false);
+    expect(
+      checklistPublishBodySchema.safeParse({ title: 'T', steps: [], expectedCurrentId: null })
+        .success,
+    ).toBe(false);
     expect(
       checklistPublishBodySchema.safeParse({ title: 'T', steps: [], clientPublishId: U }).success,
     ).toBe(false);
   });
 
   it('a save names its revision and a save id, and says whether it completes', () => {
-    expect(checklistSaveBodySchema.safeParse({ results: {}, expectedRevision: 0, saveId: U, complete: false }).success).toBe(true);
-    expect(checklistSaveBodySchema.safeParse({ results: {}, expectedRevision: -1, saveId: U, complete: false }).success).toBe(false);
-    expect(checklistSaveBodySchema.safeParse({ results: {}, expectedRevision: 0, complete: false }).success).toBe(false);
-    expect(checklistSaveBodySchema.safeParse({ results: { s1: { value: { x: 1 } } }, expectedRevision: 0, saveId: U, complete: true }).success).toBe(false);
+    expect(
+      checklistSaveBodySchema.safeParse({
+        results: {},
+        expectedRevision: 0,
+        saveId: U,
+        complete: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      checklistSaveBodySchema.safeParse({
+        results: {},
+        expectedRevision: -1,
+        saveId: U,
+        complete: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      checklistSaveBodySchema.safeParse({ results: {}, expectedRevision: 0, complete: false })
+        .success,
+    ).toBe(false);
+    expect(
+      checklistSaveBodySchema.safeParse({
+        results: { s1: { value: { x: 1 } } },
+        expectedRevision: 0,
+        saveId: U,
+        complete: true,
+      }).success,
+    ).toBe(false);
   });
 });

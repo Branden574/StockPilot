@@ -45,7 +45,8 @@ export const RECEIVING_CHECKLIST_COPY = {
 
   // ── Chips ──
   chipNoFailed: 'Checklist: no failed checks',
-  chipFailed: (n: number) => (n === 1 ? 'Checklist: 1 failed check' : `Checklist: ${count(n)} failed checks`),
+  chipFailed: (n: number) =>
+    n === 1 ? 'Checklist: 1 failed check' : `Checklist: ${count(n)} failed checks`,
   chipInProgress: 'Checklist in progress',
   chipNotRecorded: 'Checklist not recorded',
   chipUnavailable: "Checklist status didn't load",
@@ -68,7 +69,8 @@ export const RECEIVING_CHECKLIST_COPY = {
     `Still to come on this purchase order: ${count(lines)} ${plural(lines, 'line', 'lines')}.`,
   nothingToCome: 'Nothing is still to come on this purchase order.',
   stillToComeUnavailable: "What is still to come didn't load",
-  reverseHint: 'If this receipt was posted in error, a manager can reverse it from Receipts on this purchase order.',
+  reverseHint:
+    'If this receipt was posted in error, a manager can reverse it from Receipts on this purchase order.',
   instructions: (title: string) => `Instructions: ${title}`,
 
   // ── Steps ──
@@ -105,11 +107,13 @@ export const RECEIVING_CHECKLIST_COPY = {
   // ── Errors ──
   incompleteMissing: (labels: readonly string[]) =>
     `Answer every required step before completing: ${labels.join(', ')}.`,
-  incompleteFailedNote: (labels: readonly string[]) => `Add a note to each failed check: ${labels.join(', ')}.`,
+  incompleteFailedNote: (labels: readonly string[]) =>
+    `Add a note to each failed check: ${labels.join(', ')}.`,
   incompletePhoto: (labels: readonly string[]) => `Add a photo or scan for: ${labels.join(', ')}.`,
   runChanged:
     'Someone else saved this checklist after you opened it. Your answers are still on screen. Reload to see the saved version.',
-  runCompletedBy: (name: string) => `This checklist was completed by ${name}. Completed checklists can't be changed.`,
+  runCompletedBy: (name: string) =>
+    `This checklist was completed by ${name}. Completed checklists can't be changed.`,
   runCompleted: "This checklist was already completed. Completed checklists can't be changed.",
   noChecklist: 'There is no receiving checklist turned on.',
   receiptNotCheckable: "Reversal entries don't have a checklist. Open the original receipt.",
@@ -117,23 +121,33 @@ export const RECEIVING_CHECKLIST_COPY = {
   runNotFound: 'That checklist was not found.',
   moduleDisabled: 'Receiving is turned off for this organization.',
   notRecorder: 'Only a manager who can post receipts can record a receiving checklist.',
-  notPublisher: 'Only a manager who can manage purchase orders can publish or turn off the receiving checklist.',
-  publishChanged: 'Someone published a newer version while you were editing. Your edits are still here; reload to compare.',
+  notPublisher:
+    'Only a manager who can manage purchase orders can publish or turn off the receiving checklist.',
+  publishChanged:
+    'Someone published a newer version while you were editing. Your edits are still here; reload to compare.',
   busy: 'The checklist is busy right now. Try again in a moment.',
   offline: 'Checklists need a connection. The receipt itself is already saved.',
   loadFailed: "The checklist didn't load.",
+  loadFailedBody: 'This is usually temporary. Try again in a moment.',
+  tryAgain: 'Try again',
+  /** A request that never came back (the connection dropped): nothing on screen is lost. */
+  didNotGoThrough: "That didn't go through. Check your connection and try again.",
 
   // ── Editor ──
   editorTitle: 'Receiving checklist',
-  editorEmpty: 'No receiving checklist yet. It is offered after a receipt posts and is always optional.',
+  editorEmpty:
+    'No receiving checklist yet. It is offered after a receipt posts and is always optional.',
   startSuggested: 'Start from suggested steps',
   startBlank: 'Start blank',
   publishVersion: (n: number) => `Publish version ${n}`,
+  /** Opens the draft of the next version from the live one (nothing is published yet). */
+  prepareVersion: (n: number) => `Prepare version ${n}`,
   publishConfirm: (n: number) =>
     `Receipts posted from now on offer version ${n}. Checklists already started keep the version they started with.`,
   published: (n: number) => `Version ${n} published.`,
   turnOff: 'Turn off',
-  turnOffConfirm: 'Receipts will stop offering a checklist. Recorded checklists stay on their receipts.',
+  turnOffConfirm:
+    'Receipts will stop offering a checklist. Recorded checklists stay on their receipts.',
   turnedOff: 'The receiving checklist is turned off.',
   liveVersion: (n: number) => `Version ${n} is turned on.`,
   noLiveVersion: 'No receiving checklist is turned on.',
@@ -152,9 +166,11 @@ export const RECEIVING_CHECKLIST_COPY = {
   titleLabel: 'Title',
   procedureLabel: 'Instructions (optional)',
   procedureNone: 'No procedure',
-  readOnlyEditor: 'Only a manager who can manage purchase orders can change the receiving checklist.',
+  readOnlyEditor:
+    'Only a manager who can manage purchase orders can change the receiving checklist.',
   procedureCard: 'Receiving checklist',
-  procedureCardBody: 'The short checklist a manager can record after a receipt posts. Always optional.',
+  procedureCardBody:
+    'The short checklist a manager can record after a receipt posts. Always optional.',
   runsOnVersion: (n: number) => `Recorded on ${count(n)} ${plural(n, 'receipt', 'receipts')}`,
 } as const;
 
@@ -177,7 +193,9 @@ export function receiptChecklistChipText(state: ReceiptChecklistState): string |
 }
 
 /** A tone for the chip, so colour is never the only signal (the text carries it). */
-export function receiptChecklistChipTone(state: ReceiptChecklistState): 'ok' | 'warn' | 'muted' | null {
+export function receiptChecklistChipTone(
+  state: ReceiptChecklistState,
+): 'ok' | 'warn' | 'muted' | null {
   switch (state.kind) {
     case 'completed':
       return state.summary.failedChecks === 0 ? 'ok' : 'warn';
@@ -202,7 +220,11 @@ export function receiptChecklistActionLabel(action: 'record' | 'continue' | 'vie
 
 /** "October 5, 2026 at 3:04 PM" in the organization's time zone. */
 export function checklistWhen(iso: string, tz: string): string {
-  return formatOrgDateTime(iso, { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }, tz);
+  return formatOrgDateTime(
+    iso,
+    { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+    tz,
+  );
 }
 
 /**
@@ -215,13 +237,20 @@ export function lateRecordLabel(receiptAt: string, recordedAt: string, tz: strin
   const b = Date.parse(recordedAt);
   if (Number.isNaN(a) || Number.isNaN(b) || b - a <= 24 * 60 * 60 * 1000) return null;
   const day = (ms: number) => {
-    const s = formatOrgDate(new Date(ms), { year: 'numeric', month: '2-digit', day: '2-digit' }, tz);
+    const s = formatOrgDate(
+      new Date(ms),
+      { year: 'numeric', month: '2-digit', day: '2-digit' },
+      tz,
+    );
     const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     return m ? Date.UTC(Number(m[3]), Number(m[1]) - 1, Number(m[2])) : NaN;
   };
   const da = day(a);
   const db = day(b);
-  const days = Number.isNaN(da) || Number.isNaN(db) ? Math.floor((b - a) / 86_400_000) : Math.round((db - da) / 86_400_000);
+  const days =
+    Number.isNaN(da) || Number.isNaN(db)
+      ? Math.floor((b - a) / 86_400_000)
+      : Math.round((db - da) / 86_400_000);
   return RECEIVING_CHECKLIST_COPY.recordedLate(Math.max(1, days));
 }
 
@@ -239,7 +268,10 @@ function stepWord(n: number | undefined): string {
  * The sentence for a checklist_invalid refusal. `steps` labels result keys
  * (save); publish refusals name the step by its position.
  */
-export function describeChecklistInvalid(detail: ChecklistInvalidDetail, steps: readonly ChecklistStep[] = []): string {
+export function describeChecklistInvalid(
+  detail: ChecklistInvalidDetail,
+  steps: readonly ChecklistStep[] = [],
+): string {
   const at = labelOf(steps, detail.key);
   switch (detail.reason) {
     case 'not_a_list':
@@ -300,7 +332,8 @@ export function describeChecklistIncomplete(
 ): string {
   const parts: string[] = [];
   const names = (keys: readonly string[]) => keys.map((k) => labelOf(steps, k));
-  if (detail.missing.length > 0) parts.push(RECEIVING_CHECKLIST_COPY.incompleteMissing(names(detail.missing)));
+  if (detail.missing.length > 0)
+    parts.push(RECEIVING_CHECKLIST_COPY.incompleteMissing(names(detail.missing)));
   if (detail.failedWithoutNote.length > 0) {
     parts.push(RECEIVING_CHECKLIST_COPY.incompleteFailedNote(names(detail.failedWithoutNote)));
   }
@@ -348,6 +381,7 @@ export function receivingChecklistCopySamples(): string[] {
     c.incompletePhoto(['Photo or scan of the packing slip']),
     c.runCompletedBy('Pat Lee'),
     c.publishVersion(2),
+    c.prepareVersion(3),
     c.publishConfirm(2),
     c.published(2),
     c.liveVersion(2),

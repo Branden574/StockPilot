@@ -30,7 +30,8 @@ import {
  * record"), and claims the product cannot stand behind. A checklist records
  * what a person checked; it never certifies anything.
  */
-const NEVER = /\bbook\b|verified|inspected|certif|complian|approved|\bpassed\b|\bsent\b|ticket|attached/i;
+const NEVER =
+  /\bbook\b|verified|inspected|certif|complian|approved|\bpassed\b|\bsent\b|ticket|attached/i;
 
 const summary = (failedChecks: number) => ({
   total: 4,
@@ -51,7 +52,10 @@ describe('the words', () => {
       RECEIVE_GATE_UNKNOWN_COPY,
       RECEIVE_GATE_OFFLINE_COPY,
       ...CHECKLIST_INVALID_REASONS.map((reason) =>
-        describeChecklistInvalid({ field: 'results', reason, key: 's1', step: 1 }, CASE_TABLE_STEPS),
+        describeChecklistInvalid(
+          { field: 'results', reason, key: 's1', step: 1 },
+          CASE_TABLE_STEPS,
+        ),
       ),
     ];
     expect(all.length).toBeGreaterThan(100);
@@ -61,7 +65,18 @@ describe('the words', () => {
   });
 
   it('the guard itself still catches each word', () => {
-    for (const w of ['book', 'Verified', 'inspected', 'certified', 'compliant', 'approved', 'passed', 'sent', 'ticket', 'attached']) {
+    for (const w of [
+      'book',
+      'Verified',
+      'inspected',
+      'certified',
+      'compliant',
+      'approved',
+      'passed',
+      'sent',
+      'ticket',
+      'attached',
+    ]) {
       expect(NEVER.test(`a ${w} b`), w).toBe(true);
     }
     expect(NEVER.test('Pass')).toBe(false);
@@ -95,10 +110,44 @@ describe('the words', () => {
 
 describe('chips', () => {
   const cases: Array<[ReceiptChecklistState, string | null, string | null]> = [
-    [{ kind: 'completed', runId: 'r', summary: summary(0), completedAt: null, completedByName: null }, 'Checklist: no failed checks', 'ok'],
-    [{ kind: 'completed', runId: 'r', summary: summary(1), completedAt: null, completedByName: null }, 'Checklist: 1 failed check', 'warn'],
-    [{ kind: 'completed', runId: 'r', summary: summary(3), completedAt: null, completedByName: null }, 'Checklist: 3 failed checks', 'warn'],
-    [{ kind: 'in_progress', runId: 'r', summary: summary(0), startedAt: 'x', startedByName: 'P' }, 'Checklist in progress', 'muted'],
+    [
+      {
+        kind: 'completed',
+        runId: 'r',
+        summary: summary(0),
+        completedAt: null,
+        completedByName: null,
+      },
+      'Checklist: no failed checks',
+      'ok',
+    ],
+    [
+      {
+        kind: 'completed',
+        runId: 'r',
+        summary: summary(1),
+        completedAt: null,
+        completedByName: null,
+      },
+      'Checklist: 1 failed check',
+      'warn',
+    ],
+    [
+      {
+        kind: 'completed',
+        runId: 'r',
+        summary: summary(3),
+        completedAt: null,
+        completedByName: null,
+      },
+      'Checklist: 3 failed checks',
+      'warn',
+    ],
+    [
+      { kind: 'in_progress', runId: 'r', summary: summary(0), startedAt: 'x', startedByName: 'P' },
+      'Checklist in progress',
+      'muted',
+    ],
     [{ kind: 'not_recorded' }, 'Checklist not recorded', 'muted'],
     [{ kind: 'unavailable' }, "Checklist status didn't load", 'warn'],
     [{ kind: 'none' }, null, null],
@@ -110,7 +159,9 @@ describe('chips', () => {
 
   // Mutation caught: an unavailable state rendered as "not recorded".
   it('unavailable never reads as not recorded', () => {
-    expect(receiptChecklistChipText({ kind: 'unavailable' })).not.toBe(RECEIVING_CHECKLIST_COPY.chipNotRecorded);
+    expect(receiptChecklistChipText({ kind: 'unavailable' })).not.toBe(
+      RECEIVING_CHECKLIST_COPY.chipNotRecorded,
+    );
   });
 
   it('action labels', () => {
@@ -122,10 +173,15 @@ describe('chips', () => {
 
 describe('times in the organization zone', () => {
   it('completed and started lines read "on <date> at <time>"', () => {
-    expect(checklistWhen('2026-10-05T22:04:00Z', 'America/Los_Angeles')).toBe('October 5, 2026 at 3:04 PM');
-    expect(RECEIVING_CHECKLIST_COPY.completedBy('Pat Lee', checklistWhen('2026-10-05T22:04:00Z', 'America/New_York'))).toBe(
-      'Completed by Pat Lee on October 5, 2026 at 6:04 PM',
+    expect(checklistWhen('2026-10-05T22:04:00Z', 'America/Los_Angeles')).toBe(
+      'October 5, 2026 at 3:04 PM',
     );
+    expect(
+      RECEIVING_CHECKLIST_COPY.completedBy(
+        'Pat Lee',
+        checklistWhen('2026-10-05T22:04:00Z', 'America/New_York'),
+      ),
+    ).toBe('Completed by Pat Lee on October 5, 2026 at 6:04 PM');
   });
 
   it('late recording is labelled only past a day, in calendar days of the zone', () => {
@@ -144,7 +200,10 @@ describe('times in the organization zone', () => {
 describe('refusals', () => {
   it('a checklist_incomplete refusal names the steps by their labels', () => {
     expect(
-      describeChecklistIncomplete({ missing: ['s1'], failedWithoutNote: ['s2'], photoStepsWithoutPhoto: [] }, CASE_TABLE_STEPS),
+      describeChecklistIncomplete(
+        { missing: ['s1'], failedWithoutNote: ['s2'], photoStepsWithoutPhoto: [] },
+        CASE_TABLE_STEPS,
+      ),
     ).toBe(
       'Answer every required step before completing: Packing slip matches this purchase order. Add a note to each failed check: Boxes arrived undamaged.',
     );
@@ -152,15 +211,21 @@ describe('refusals', () => {
 
   it('every checklist_invalid reason has its own sentence', () => {
     for (const reason of CHECKLIST_INVALID_REASONS) {
-      const text = describeChecklistInvalid({ field: 'steps', reason, step: 2, key: 's3' }, CASE_TABLE_STEPS);
+      const text = describeChecklistInvalid(
+        { field: 'steps', reason, step: 2, key: 's3' },
+        CASE_TABLE_STEPS,
+      );
       expect(text.length, reason).toBeGreaterThan(10);
     }
     expect(describeChecklistInvalid({ field: 'steps', reason: 'label_too_long', step: 3 })).toBe(
       'Step 3: the label can be up to 120 characters.',
     );
-    expect(describeChecklistInvalid({ field: 'results', reason: 'count_out_of_range', key: 's3' }, CASE_TABLE_STEPS)).toBe(
-      'Number of boxes received: enter a number from 0 to 1,000,000.',
-    );
+    expect(
+      describeChecklistInvalid(
+        { field: 'results', reason: 'count_out_of_range', key: 's3' },
+        CASE_TABLE_STEPS,
+      ),
+    ).toBe('Number of boxes received: enter a number from 0 to 1,000,000.');
   });
 
   it('progress line', () => {

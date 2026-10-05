@@ -67,14 +67,7 @@ export interface ChecklistAnswer {
 export type ChecklistResults = Record<string, ChecklistAnswer>;
 
 export type ChecklistInvalidField =
-  | 'steps'
-  | 'title'
-  | 'procedure'
-  | 'binding'
-  | 'results'
-  | 'note'
-  | 'saveId'
-  | 'expectedRevision';
+  'steps' | 'title' | 'procedure' | 'binding' | 'results' | 'note' | 'saveId' | 'expectedRevision';
 
 export type ChecklistInvalidReason =
   | 'not_a_list'
@@ -148,7 +141,8 @@ export interface ChecklistIncompleteDetail {
   photoStepsWithoutPhoto: string[];
 }
 
-export type ChecklistCheck<T> = { ok: true; value: T } | { ok: false; detail: ChecklistInvalidDetail };
+export type ChecklistCheck<T> =
+  { ok: true; value: T } | { ok: false; detail: ChecklistInvalidDetail };
 
 const WS = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
 
@@ -166,7 +160,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-const invalid = (detail: ChecklistInvalidDetail): { ok: false; detail: ChecklistInvalidDetail } => ({
+const invalid = (
+  detail: ChecklistInvalidDetail,
+): { ok: false; detail: ChecklistInvalidDetail } => ({
   ok: false,
   detail,
 });
@@ -196,9 +192,11 @@ export function normalizeChecklistSteps(
     if (kind === 'photo' && !opts.allowPhoto) {
       return invalid({ field: 'steps', step, reason: 'photo_not_available' });
     }
-    if (typeof raw.label !== 'string') return invalid({ field: 'steps', step, reason: 'label_required' });
+    if (typeof raw.label !== 'string')
+      return invalid({ field: 'steps', step, reason: 'label_required' });
     const label = trimChecklistText(raw.label);
-    if (checklistTextLength(label) === 0) return invalid({ field: 'steps', step, reason: 'label_required' });
+    if (checklistTextLength(label) === 0)
+      return invalid({ field: 'steps', step, reason: 'label_required' });
     if (checklistTextLength(label) > CHECKLIST_LIMITS.label) {
       return invalid({ field: 'steps', step, reason: 'label_too_long' });
     }
@@ -225,8 +223,10 @@ export function normalizeChecklistSteps(
 /** The title as checklist_publish stores it: trimmed, 1 to 80 characters. */
 export function normalizeChecklistTitle(input: unknown): ChecklistCheck<string> {
   const title = trimChecklistText(typeof input === 'string' ? input : '');
-  if (checklistTextLength(title) === 0) return invalid({ field: 'title', reason: 'title_required' });
-  if (checklistTextLength(title) > CHECKLIST_LIMITS.title) return invalid({ field: 'title', reason: 'title_too_long' });
+  if (checklistTextLength(title) === 0)
+    return invalid({ field: 'title', reason: 'title_required' });
+  if (checklistTextLength(title) > CHECKLIST_LIMITS.title)
+    return invalid({ field: 'title', reason: 'title_too_long' });
   return { ok: true, value: title };
 }
 
@@ -247,7 +247,8 @@ export function normalizeChecklistResults(
     const step = byKey.get(key);
     if (!step) return invalid({ field: 'results', key, reason: 'unknown_step' });
     const answer = input[key];
-    if (!isPlainObject(answer)) return invalid({ field: 'results', key, reason: 'answer_not_an_object' });
+    if (!isPlainObject(answer))
+      return invalid({ field: 'results', key, reason: 'answer_not_an_object' });
     const clean: ChecklistAnswer = {};
     const value = answer.value;
     if (value !== undefined && value !== null) {
@@ -265,7 +266,8 @@ export function normalizeChecklistResults(
         }
         clean.value = value;
       } else if (step.kind === 'text') {
-        if (typeof value !== 'string') return invalid({ field: 'results', key, reason: 'text_not_text' });
+        if (typeof value !== 'string')
+          return invalid({ field: 'results', key, reason: 'text_not_text' });
         const text = trimChecklistText(value);
         if (checklistTextLength(text) > CHECKLIST_LIMITS.text) {
           return invalid({ field: 'results', key, reason: 'text_too_long' });
@@ -325,13 +327,18 @@ export function validateRunForCompletion(
       continue;
     }
     if (s.required && (a === undefined || a.value === undefined)) missing.push(s.key);
-    if (s.kind === 'check' && a?.value === 'fail' && a.note === undefined) failedWithoutNote.push(s.key);
+    if (s.kind === 'check' && a?.value === 'fail' && a.note === undefined)
+      failedWithoutNote.push(s.key);
   }
   return { missing, failedWithoutNote, photoStepsWithoutPhoto };
 }
 
 export function isRunCompletable(d: ChecklistIncompleteDetail): boolean {
-  return d.missing.length === 0 && d.failedWithoutNote.length === 0 && d.photoStepsWithoutPhoto.length === 0;
+  return (
+    d.missing.length === 0 &&
+    d.failedWithoutNote.length === 0 &&
+    d.photoStepsWithoutPhoto.length === 0
+  );
 }
 
 export interface ChecklistRunSummary {
@@ -363,7 +370,14 @@ export function summarizeRun(
     }
     if (s.kind === 'check' && a?.value === 'fail') failedChecks += 1;
   }
-  return { total: steps.length, answered, requiredTotal, requiredAnswered, failedChecks, linkedPhotos };
+  return {
+    total: steps.length,
+    answered,
+    requiredTotal,
+    requiredAnswered,
+    failedChecks,
+    linkedPhotos,
+  };
 }
 
 // ── Displayed state, per receipt ───────────────────────────────────────────
@@ -411,12 +425,17 @@ export type ReceiptChecklistState =
   | { kind: 'unavailable' };
 
 /** The live version (never more than one; the database keeps it so). */
-export function liveChecklistVersion<T extends { retiredAt: string | null }>(versions: readonly T[]): T | null {
+export function liveChecklistVersion<T extends { retiredAt: string | null }>(
+  versions: readonly T[],
+): T | null {
   return versions.find((v) => v.retiredAt === null) ?? null;
 }
 
 /** A version was live at that instant: published at or before it, retired after it. */
-export function versionLiveAt(v: { publishedAt: string; retiredAt: string | null }, at: string): boolean {
+export function versionLiveAt(
+  v: { publishedAt: string; retiredAt: string | null },
+  at: string,
+): boolean {
   const t = Date.parse(at);
   const from = Date.parse(v.publishedAt);
   if (Number.isNaN(t) || Number.isNaN(from) || from > t) return false;
@@ -465,7 +484,9 @@ export function receiptChecklistState(input: {
     };
   }
   if (receipt.status !== 'posted' && receipt.status !== 'reversed') return { kind: 'none' };
-  return versions.some((v) => versionLiveAt(v, receipt.receivedAt)) ? { kind: 'not_recorded' } : { kind: 'none' };
+  return versions.some((v) => versionLiveAt(v, receipt.receivedAt))
+    ? { kind: 'not_recorded' }
+    : { kind: 'none' };
 }
 
 export type ReceiptChecklistAction = 'record' | 'continue' | 'view';
@@ -496,7 +517,11 @@ export function receiptChecklistAction(input: {
 export const SUGGESTED_RECEIVING_STEPS: readonly ChecklistStepDraft[] = [
   { kind: 'check', label: 'Packing slip matches this purchase order', required: true },
   { kind: 'check', label: 'Items and quantities match the packing slip', required: true },
-  { kind: 'check', label: 'Stock owner (charter) on these items is right for this delivery', required: false },
+  {
+    kind: 'check',
+    label: 'Stock owner (charter) on these items is right for this delivery',
+    required: false,
+  },
   { kind: 'check', label: 'Boxes arrived undamaged', required: true },
   { kind: 'count', label: 'Number of boxes received', required: false },
   { kind: 'text', label: 'Anything missing, extra or damaged?', required: false },
@@ -571,7 +596,8 @@ export function parseStoredSteps(raw: unknown): ChecklistStep[] {
     if (!isPlainObject(s)) continue;
     const { key, kind, label, help, required } = s;
     if (typeof key !== 'string' || typeof label !== 'string') continue;
-    if (typeof kind !== 'string' || !(CHECKLIST_STEP_KINDS as readonly string[]).includes(kind)) continue;
+    if (typeof kind !== 'string' || !(CHECKLIST_STEP_KINDS as readonly string[]).includes(kind))
+      continue;
     out.push({
       key,
       kind: kind as ChecklistStepKind,
@@ -590,7 +616,8 @@ export function parseStoredResults(raw: unknown): ChecklistResults {
   for (const [key, a] of Object.entries(raw)) {
     if (!isPlainObject(a)) continue;
     const clean: ChecklistAnswer = {};
-    if (typeof a.value === 'string' || typeof a.value === 'number') clean.value = a.value as ChecklistAnswer['value'];
+    if (typeof a.value === 'string' || typeof a.value === 'number')
+      clean.value = a.value as ChecklistAnswer['value'];
     if (typeof a.note === 'string') clean.note = a.note;
     if (clean.value !== undefined || clean.note !== undefined) out[key] = clean;
   }
@@ -611,14 +638,28 @@ export function parseChecklistInvalidDetail(raw: unknown): ChecklistInvalidDetai
     }
   }
   if (!isPlainObject(v)) return null;
-  const fields: readonly string[] = ['steps', 'title', 'procedure', 'binding', 'results', 'note', 'saveId', 'expectedRevision'];
+  const fields: readonly string[] = [
+    'steps',
+    'title',
+    'procedure',
+    'binding',
+    'results',
+    'note',
+    'saveId',
+    'expectedRevision',
+  ];
   if (typeof v.field !== 'string' || !fields.includes(v.field)) return null;
-  if (typeof v.reason !== 'string' || !(CHECKLIST_INVALID_REASONS as readonly string[]).includes(v.reason)) return null;
+  if (
+    typeof v.reason !== 'string' ||
+    !(CHECKLIST_INVALID_REASONS as readonly string[]).includes(v.reason)
+  )
+    return null;
   const out: ChecklistInvalidDetail = {
     field: v.field as ChecklistInvalidField,
     reason: v.reason as ChecklistInvalidReason,
   };
-  if (typeof v.step === 'number' && Number.isInteger(v.step) && v.step >= 1 && v.step <= 100) out.step = v.step;
+  if (typeof v.step === 'number' && Number.isInteger(v.step) && v.step >= 1 && v.step <= 100)
+    out.step = v.step;
   if (typeof v.key === 'string' && /^s\d{1,3}$/.test(v.key)) out.key = v.key;
   return out;
 }
@@ -655,10 +696,22 @@ export function parseChecklistIncompleteDetail(
 /** A fixed version for the result and completion cases: s1 required check,
  *  s2 check, s3 count, s4 text. The pgTAP suite publishes the same four. */
 export const CASE_TABLE_STEPS: readonly ChecklistStep[] = [
-  { key: 's1', kind: 'check', label: 'Packing slip matches this purchase order', help: null, required: true },
+  {
+    key: 's1',
+    kind: 'check',
+    label: 'Packing slip matches this purchase order',
+    help: null,
+    required: true,
+  },
   { key: 's2', kind: 'check', label: 'Boxes arrived undamaged', help: null, required: false },
   { key: 's3', kind: 'count', label: 'Number of boxes received', help: null, required: false },
-  { key: 's4', kind: 'text', label: 'Anything missing, extra or damaged?', help: null, required: false },
+  {
+    key: 's4',
+    kind: 'text',
+    label: 'Anything missing, extra or damaged?',
+    help: null,
+    required: false,
+  },
 ];
 
 export type ReceivingChecklistCase =
@@ -666,7 +719,9 @@ export type ReceivingChecklistCase =
       name: string;
       target: 'steps';
       input: unknown;
-      expect: { ok: true; steps?: ChecklistStep[] } | { ok: false; reason: ChecklistInvalidReason; step?: number };
+      expect:
+        | { ok: true; steps?: ChecklistStep[] }
+        | { ok: false; reason: ChecklistInvalidReason; step?: number };
     }
   | {
       name: string;
@@ -678,7 +733,9 @@ export type ReceivingChecklistCase =
       name: string;
       target: 'results';
       input: unknown;
-      expect: { ok: true; results: ChecklistResults } | { ok: false; reason: ChecklistInvalidReason; key: string };
+      expect:
+        | { ok: true; results: ChecklistResults }
+        | { ok: false; reason: ChecklistInvalidReason; key: string };
     }
   | {
       name: string;
@@ -753,13 +810,34 @@ export function receivingChecklistCases(): ReceivingChecklistCase[] {
         steps: [
           { key: 's1', kind: 'check', label: 'Slip matches', help: null, required: true },
           { key: 's2', kind: 'count', label: 'Boxes', help: null, required: false },
-          { key: 's3', kind: 'text', label: 'L'.repeat(120), help: 'H'.repeat(300), required: false },
+          {
+            key: 's3',
+            kind: 'text',
+            label: 'L'.repeat(120),
+            help: 'H'.repeat(300),
+            required: false,
+          },
         ],
       },
     },
-    { name: 'title_blank', target: 'title', input: '   ', expect: { ok: false, reason: 'title_required' } },
-    { name: 'title_81', target: 'title', input: 'T'.repeat(81), expect: { ok: false, reason: 'title_too_long' } },
-    { name: 'title_80_trimmed', target: 'title', input: `  ${'T'.repeat(80)}  `, expect: { ok: true, title: 'T'.repeat(80) } },
+    {
+      name: 'title_blank',
+      target: 'title',
+      input: '   ',
+      expect: { ok: false, reason: 'title_required' },
+    },
+    {
+      name: 'title_81',
+      target: 'title',
+      input: 'T'.repeat(81),
+      expect: { ok: false, reason: 'title_too_long' },
+    },
+    {
+      name: 'title_80_trimmed',
+      target: 'title',
+      input: `  ${'T'.repeat(80)}  `,
+      expect: { ok: true, title: 'T'.repeat(80) },
+    },
     {
       name: 'results_unknown_key',
       target: 'results',
@@ -812,7 +890,10 @@ export function receivingChecklistCases(): ReceivingChecklistCase[] {
       name: 'results_partial_ok',
       target: 'results',
       input: { s1: { value: 'pass' }, s3: { value: 12 }, s4: { value: '  one box short  ' } },
-      expect: { ok: true, results: { s1: { value: 'pass' }, s3: { value: 12 }, s4: { value: 'one box short' } } },
+      expect: {
+        ok: true,
+        results: { s1: { value: 'pass' }, s3: { value: 12 }, s4: { value: 'one box short' } },
+      },
     },
     {
       name: 'results_blank_left_out',
@@ -823,10 +904,18 @@ export function receivingChecklistCases(): ReceivingChecklistCase[] {
     {
       name: 'results_limits_ok',
       target: 'results',
-      input: { s2: { value: 'na', note: 'n'.repeat(300) }, s3: { value: 1_000_000 }, s4: { value: 'x'.repeat(500) } },
+      input: {
+        s2: { value: 'na', note: 'n'.repeat(300) },
+        s3: { value: 1_000_000 },
+        s4: { value: 'x'.repeat(500) },
+      },
       expect: {
         ok: true,
-        results: { s2: { value: 'na', note: 'n'.repeat(300) }, s3: { value: 1_000_000 }, s4: { value: 'x'.repeat(500) } },
+        results: {
+          s2: { value: 'na', note: 'n'.repeat(300) },
+          s3: { value: 1_000_000 },
+          s4: { value: 'x'.repeat(500) },
+        },
       },
     },
     {
