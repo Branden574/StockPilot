@@ -600,6 +600,45 @@ export class BundlesService {
     }
   }
 
+  /**
+   * After update()'s upsert and delete, read the set back; unless every item
+   * of this save's set is there, write the set again.
+   *
+   * The two statements are separate calls, so two saves of one bundle can
+   * interleave: A upserts {a}, B upserts {b}, A deletes everything but a, B
+   * deletes everything but b, and the bundle has NO components (review
+   * 2026-10-05, a rolled-back probe as a manager under RLS). assemble_bundle
+   * has no "no components" refusal, so it would then make kits from nothing.
+   * The second write is an upsert ONLY, never another delete: the last
+   * statement of two interleaved saves is then always one of them writing its
+   * whole set, so the bundle is never left empty. It may keep both sets (the
+   * old delete-then-insert's outcome of the same race); both saves are in the
+   * audit log, and the report names the bundle. A failed read-back proves
+   * nothing, so the set is written again then too (the upsert is idempotent).
+   */
+  private async rewriteComponentsIfDropped(
+    bundleId: string,
+    payload: Array<{ bundle_id: string; item_id: string; quantity: number; is_optional: boolean }>,
+  ): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('bundle_components')
+      .select('item_id')
+      .eq('bundle_id', bundleId);
+    const present = new Set(((data ?? []) as Array<{ item_id: string }>).map((r) => r.item_id));
+    const missing = error ? payload.length : payload.filter((p) => !present.has(p.item_id)).length;
+    if (missing === 0) return;
+
+    void reportError(new Error("A bundle's components were written again after a save"), {
+      tag: 'bundles.update.rewritten',
+      organizationId: this.ctx.organizationId,
+      extra: { bundleId, ...(error ? { readFailed: error.message } : { missing }) },
+    });
+    const { error: rErr } = await this.ctx.supabase
+      .from('bundle_components')
+      .upsert(payload, { onConflict: 'bundle_id,item_id' });
+    if (rErr) throw new ServiceError('internal_error', rErr.message);
+  }
+
   async update(id: string, patch: UpdateBundleInput): Promise<BundleDetail> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
@@ -640,7 +679,9 @@ export class BundlesService {
       // Write the new set first, then drop the rows left out of it (L10). The
       // old delete-then-insert left a bundle with NO components when the
       // insert failed; now a failed upsert changes nothing, and a failed
-      // delete leaves the new set plus rows that were to be dropped.
+      // delete leaves the new set plus rows that were to be dropped. The set
+      // is then read back, so a concurrent save's delete cannot leave the
+      // bundle empty (rewriteComponentsIfDropped).
       const payload = patch.components.map((c) => ({
         bundle_id: id,
         item_id: c.itemId,
@@ -665,6 +706,8 @@ export class BundlesService {
         // in-list-bound: one bundle's components; the bundle actions cap them at 100
         .not('item_id', 'in', `(${keep.join(',')})`);
       if (dErr) throw new ServiceError('internal_error', dErr.message);
+
+      await this.rewriteComponentsIfDropped(id, payload);
     }
 
     await audit(

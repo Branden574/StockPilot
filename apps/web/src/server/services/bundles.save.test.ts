@@ -20,6 +20,7 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMoc
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import {
+  callArgs,
   makeServiceContext,
   makeSupabaseStub,
   type MockCall,
@@ -42,11 +43,21 @@ function service(results: Parameters<typeof makeSupabaseStub>[0]) {
 
 beforeEach(() => vi.clearAllMocks());
 
+/** The read-back of a save (select item_id), answered with `items`; every
+ *  other read of bundle_components (get()'s) answers no rows. */
+function readBack(items: string[]) {
+  return (call: MockCall): QueryResult =>
+    callArgs(call, 'select')?.[0] === 'item_id'
+      ? { data: items.map((item_id) => ({ item_id })), error: null }
+      : { data: [], error: null };
+}
+
 describe('BundlesService.update: components', () => {
   it('upserts the new set on (bundle_id, item_id), then deletes only the rows left out of it', async () => {
     const { stub, svc } = service({
       'bundle_components.insert': { data: null, error: null },
       'bundle_components.delete': { data: null, error: null },
+      'bundle_components.select': readBack([A, B]),
     });
 
     await svc.update('b-1', {
@@ -72,6 +83,12 @@ describe('BundlesService.update: components', () => {
     expect(delArgs[2]).toEqual(['item_id', 'in', `(${A},${B})`]);
     // The upsert went first.
     expect(stub.fromCalls.indexOf('bundle_components')).toBeGreaterThan(-1);
+    // Then the set is read back, and with every item of it there nothing is
+    // written again and nothing is reported.
+    const reads = stub.chainArgsAll.get('bundle_components.select') ?? [];
+    expect(reads[0]).toEqual([['item_id'], ['bundle_id', 'b-1']]);
+    expect(stub.chainsAll.get('bundle_components.insert')).toHaveLength(1);
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it('a failed upsert deletes nothing, so the old set stays whole', async () => {
@@ -112,6 +129,139 @@ describe('BundlesService.update: components', () => {
     ).rejects.toMatchObject({ code: 'validation_error' });
     expect(stub.chainsAll.get('bundle_components.insert')).toBeUndefined();
     expect(stub.chainsAll.get('bundle_components.delete')).toBeUndefined();
+  });
+});
+
+/**
+ * Review (2026-10-05): update() writes in two statements, the upsert of the
+ * new set and the delete of the rows left out of it. Two saves of one bundle
+ * whose sets share no item, interleaved as
+ *   A.upsert{a} -> B.upsert{b} -> A.delete(not a) -> B.delete(not b),
+ * left NO components: a rolled-back probe as the QA manager under RLS on the
+ * local stack returned 0, and assemble_bundle, which has no "no components"
+ * refusal, then made kits from nothing. The old delete-then-insert gave the
+ * union. A save now reads its set back after the delete and, unless every
+ * item of it is there, writes the set again: an upsert only, never another
+ * delete, so the last statement of the two saves is always one of them
+ * writing its whole set and the bundle never ends empty.
+ */
+describe('BundlesService.update: a save that interleaves with another', () => {
+  type Row = { bundle_id: string; item_id: string };
+
+  /**
+   * bundle_components as a table. An upsert adds its rows, a delete applies
+   * its own filter, the read-back answers the rows, and `concurrent` runs
+   * once, right after this save's delete: the other save's delete landing in
+   * between.
+   */
+  function table(initial: Row[], concurrent?: (rows: Row[]) => Row[]) {
+    let rows = [...initial];
+    let interleaved = false;
+    const stub = makeSupabaseStub({
+      'bundles.select': { data: { id: 'b-1', phantom_item_id: null }, error: null },
+      'bundle_components.insert': (call) => {
+        const payload = (callArgs(call, 'upsert')?.[0] ?? []) as Row[];
+        for (const p of payload) {
+          if (!rows.some((r) => r.item_id === p.item_id)) rows.push({ bundle_id: p.bundle_id, item_id: p.item_id });
+        }
+        return { data: null, error: null };
+      },
+      'bundle_components.delete': (call) => {
+        const list = String(callArgs(call, 'not')?.[2] ?? '()');
+        const keep = list.replace(/[()]/g, '').split(',');
+        rows = rows.filter((r) => keep.includes(r.item_id));
+        if (concurrent && !interleaved) {
+          interleaved = true;
+          rows = concurrent(rows);
+        }
+        return { data: null, error: null };
+      },
+      'bundle_components.select': (call) => readBack(rows.map((r) => r.item_id))(call),
+    });
+    return {
+      stub,
+      rows: () => rows.map((r) => r.item_id).sort(),
+      svc: new BundlesService(makeServiceContext(stub.client, { role: 'manager' })),
+    };
+  }
+
+  it('writes its set again when a concurrent save dropped it, so the bundle is never left empty, and reports it', async () => {
+    // B saved {B}: its upsert landed before this save's delete, and its
+    // delete (everything but B) lands right after it.
+    const { stub, rows, svc } = table([{ bundle_id: 'b-1', item_id: B }], (r) =>
+      r.filter((x) => x.item_id === B),
+    );
+
+    await svc.update('b-1', { components: [{ itemId: A, quantity: 2 }] });
+
+    // Not empty: this save's set is back.
+    expect(rows()).toEqual([A]);
+    const upserts = stub.chainArgsAll.get('bundle_components.insert') ?? [];
+    expect(upserts).toHaveLength(2);
+    // Upsert only: the second write never deletes, so it cannot empty the
+    // bundle again.
+    expect(stub.chainsAll.get('bundle_components.delete')).toHaveLength(1);
+    expect(upserts[1]?.[0]).toEqual([
+      [{ bundle_id: 'b-1', item_id: A, quantity: 2, is_optional: false }],
+      { onConflict: 'bundle_id,item_id' },
+    ]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'bundles.update.rewritten',
+        organizationId: 'org-test',
+        extra: expect.objectContaining({ bundleId: 'b-1', missing: 1 }),
+      }),
+    );
+  });
+
+  it('with no concurrent save, nothing is written again', async () => {
+    const { stub, rows, svc } = table([{ bundle_id: 'b-1', item_id: B }]);
+
+    await svc.update('b-1', { components: [{ itemId: A, quantity: 2 }] });
+
+    expect(rows()).toEqual([A]);
+    expect(stub.chainsAll.get('bundle_components.insert')).toHaveLength(1);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('writes its set again when the read-back fails (the upsert is idempotent), and reports the failed read', async () => {
+    const { stub, svc } = service({
+      'bundle_components.insert': { data: null, error: null },
+      'bundle_components.delete': { data: null, error: null },
+      'bundle_components.select': (call) =>
+        callArgs(call, 'select')?.[0] === 'item_id'
+          ? { data: null, error: { message: 'timeout' } }
+          : { data: [], error: null },
+    });
+
+    await svc.update('b-1', { components: [{ itemId: A, quantity: 2 }] });
+
+    expect(stub.chainsAll.get('bundle_components.insert')).toHaveLength(2);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'bundles.update.rewritten',
+        extra: expect.objectContaining({ bundleId: 'b-1', readFailed: 'timeout' }),
+      }),
+    );
+  });
+
+  it('answers an error when writing the set again fails', async () => {
+    let upserts = 0;
+    const { svc } = service({
+      'bundle_components.insert': () => {
+        upserts += 1;
+        return { data: null, error: upserts === 1 ? null : { message: 'connection lost' } };
+      },
+      'bundle_components.delete': { data: null, error: null },
+      'bundle_components.select': readBack([]),
+    });
+
+    await expect(svc.update('b-1', { components: [{ itemId: A, quantity: 2 }] })).rejects.toMatchObject({
+      code: 'internal_error',
+    });
   });
 });
 
