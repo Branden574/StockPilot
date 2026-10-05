@@ -206,9 +206,9 @@ export const RELEASES: Release[] = [
         area: 'Web and app',
         title: "Your role in the app, the What's New notice, Delete account and Try again",
         whatChanged:
-          "Settings in the app shows your role beside your name, as the Team list names it, such as MANAGER or STAFF. On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. A refused Delete account says why inside the dialog. In the app, while offline, Try again no longer turns into a spinner every minute. With Orders turned off, the new order page says so, as the Orders page does.",
+          "Settings in the app shows your role beside your name, as the Team list names it, such as MANAGER or STAFF. On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. A refused Delete account says why inside the dialog, and when you are the only owner the dialog links to the Team page. In the app, while offline, Try again no longer turns into a spinner every minute. With Orders turned off, the new order page says so, as the Orders page does.",
         whyItMatters:
-          'Settings showed Owner for everyone. The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog. Offline, the app retried every minute and showed loading each time. The new order page opened with Orders off.',
+          'Settings showed Owner for everyone. The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog, where its Team page link could not be pressed. Offline, the app retried every minute and showed loading each time. The new order page opened with Orders off.',
         howItAffectsYou:
           'No change to what you can do. When the connection comes back, the app tries again at once, and Try again works as before.',
         whatToDo: 'No action needed.',

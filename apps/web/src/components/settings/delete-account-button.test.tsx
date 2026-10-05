@@ -15,52 +15,23 @@ vi.mock('sonner', () => ({
 const deleteOwnAccountAction = vi.hoisted(() => vi.fn());
 vi.mock('@/server/actions/profile', () => ({ deleteOwnAccountAction }));
 
-import { DeleteAccountButton, LAST_OWNER_TOAST_MS, showDeleteAccountError } from './delete-account-button';
+import { DeleteAccountButton } from './delete-account-button';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 /**
- * A3 review 2026-10-05: the last-owner refusal is an instruction the person
- * has to follow (transfer ownership on the Team page). In a default 4 s toast
- * it vanished while the dialog stayed open. It now stays long enough to read
- * and carries a link to the Team page; every other refusal is unchanged.
- */
-describe('showDeleteAccountError', () => {
-  it('keeps the last-owner sentence up for 15 s with a link to the Team page', () => {
-    const openTeam = vi.fn();
-    showDeleteAccountError(
-      { message: 'You are the only owner of Learn4Life. …', details: { reason: 'last_owner' } },
-      openTeam,
-    );
-    expect(LAST_OWNER_TOAST_MS).toBe(15_000);
-    expect(errorMock).toHaveBeenCalledTimes(1);
-    const [message, options] = errorMock.mock.calls[0] as [string, { duration: number; action: { label: string; onClick: () => void } }];
-    expect(message).toBe('You are the only owner of Learn4Life. …');
-    expect(options.duration).toBe(LAST_OWNER_TOAST_MS);
-    expect(options.action.label).toBe('Open the Team page');
-    options.action.onClick();
-    expect(openTeam).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows any other refusal as before (default duration, no action)', () => {
-    const openTeam = vi.fn();
-    showDeleteAccountError({ message: 'Your account could not be deleted right now.', details: undefined }, openTeam);
-    showDeleteAccountError({ message: 'This account is a StockPilot platform admin.', details: { reason: 'platform_admin' } }, openTeam);
-    expect(errorMock.mock.calls).toEqual([
-      ['Your account could not be deleted right now.'],
-      ['This account is a StockPilot platform admin.'],
-    ]);
-    expect(openTeam).not.toHaveBeenCalled();
-  });
-});
-
-/**
  * L112: a refused Delete account (the last owner of an organization with other
  * members) showed its reason only as a toast, which sat behind the dialog that
- * stayed open. The reason now also shows inside the dialog, until it is closed
- * or the person tries again.
+ * stayed open. The reason now shows inside the dialog, until it is closed or
+ * the person tries again.
+ *
+ * Test stage: the A3 review's 15 s toast carried "Open the Team page", but an
+ * open dialog takes every click outside it (the body gets pointer-events: none),
+ * so neither the link nor the toast's close could be pressed, and at 390 px the
+ * toast covered the dialog's buttons. The link now sits in the dialog with the
+ * reason, and a refusal the dialog shows raises no toast.
  */
 const REFUSAL = 'You are the only owner of Demo Co. Make another member the owner first.';
 
@@ -80,7 +51,7 @@ describe('DeleteAccountButton: a refusal', () => {
     });
   });
 
-  it('says why inside the dialog, which stays open, and still toasts with the Team link', async () => {
+  it('says why inside the dialog, which stays open, with the Team page link beside it and no toast', async () => {
     const user = userEvent.setup();
     render(<DeleteAccountButton />);
 
@@ -88,11 +59,12 @@ describe('DeleteAccountButton: a refusal', () => {
 
     expect(within(dialog).getByRole('alert')).toHaveTextContent(REFUSAL);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(errorMock).toHaveBeenCalledWith(
-      REFUSAL,
-      expect.objectContaining({ duration: LAST_OWNER_TOAST_MS }),
-    );
+    expect(errorMock).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Open the Team page' }));
+    expect(push).toHaveBeenCalledWith('/dashboard/team');
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('a plain refusal shows inside the dialog too', async () => {
@@ -106,7 +78,8 @@ describe('DeleteAccountButton: a refusal', () => {
     const dialog = await openAndConfirm(user);
 
     expect(within(dialog).getByRole('alert')).toHaveTextContent('Your account could not be deleted right now.');
-    expect(errorMock).toHaveBeenCalledWith('Your account could not be deleted right now.');
+    expect(within(dialog).queryByRole('button', { name: 'Open the Team page' })).toBeNull();
+    expect(errorMock).not.toHaveBeenCalled();
   });
 
   it('clears the reason when the dialog is opened again', async () => {
