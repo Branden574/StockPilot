@@ -4659,7 +4659,12 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(e.whatChanged).not.toMatch(/no longer shows the note field/);
     expect(e.howItAffectsYou).toBe('Tap Receive anyway to post the receipt as entered.');
     const screen = readFileSync(resolve(__dirname, '../../../../mobile/app/po/[id].tsx'), 'utf8');
-    expect(screen).toContain('!reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);');
+    // Re-pinned by 0395 (small fixes slice 2; was: !reviewOnly): receiving
+    // also needs stock:adjust now, so the screen is read-only for a draft or
+    // for someone who cannot receive, and the note field still shows only on
+    // a PO with something left to receive.
+    expect(screen).toContain('const readOnly = reviewOnly || !canReceive;');
+    expect(screen).toContain('!readOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);');
     const receive = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/po-receive.ts'), 'utf8');
     expect(receive).toContain("export const OVER_RECEIPT_CONFIRM_LABEL = 'Receive anyway';");
   });
