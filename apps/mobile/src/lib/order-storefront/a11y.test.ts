@@ -180,6 +180,8 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       addBlockedHint({ locked: true, notOrderable: false })!,
       addBlockedHint({ locked: false, notOrderable: true })!,
       changeLockedHint(true)!,
+      a11y.kitAddBlockedHint({ locked: false, out: false, full: true })!,
+      addKitLabel('QA New Hire Kit'),
       lineChangeAnnouncement({ itemMap: new Map(), cart: { ...initialCartState({ warehouseId: 'w', fulfillmentType: 'pickup' }), lines: [] } }, 'gone')!,
     ];
     // Every export is walked: a new one must be added above.
@@ -187,7 +189,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
     expect(exported).toEqual(
       [
         'ITEM_ROW_HINT', 'addBlockedHint', 'addItemLabel', 'addKitLabel', 'addedAnnouncement', 'cartBarLabel',
-        'changeLockedHint', 'decreaseKitLabel', 'decreaseLabel', 'increaseBlockedHint', 'increaseKitLabel',
+        'changeLockedHint', 'decreaseKitLabel', 'decreaseLabel', 'increaseBlockedHint', 'increaseKitLabel', 'kitAddBlockedHint',
         'increaseLabel', 'itemRowLabel', 'kitAnnouncement', 'kitRowLabel', 'lineChangeAnnouncement',
         'quantityAnnouncement', 'quantityButtonLabel', 'submittedAnnouncement',
       ].sort(),
@@ -225,5 +227,26 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       visit(sf);
     }
     expect(walked).toBeGreaterThan(0);
+  });
+});
+
+// iPhone simulator walk, 2026-10-05: with the kit's limiting item already in
+// the cart, Add kit was dimmed with nothing said, while its row still read
+// "1 kit available"; and a kit named "... Kit" was read "... Kit kit".
+describe('a dimmed Add kit says why, and a kit is never read "Kit kit" (simulator walk D2)', () => {
+  it('locked: the lock’s words; the cart’s own lines leave no kit: all available stock is in the cart (the web’s title); out of stock or free: nothing', () => {
+    expect(a11y.kitAddBlockedHint({ locked: true, out: false, full: true })).toBe(addBlockedHint({ locked: true, notOrderable: false }));
+    expect(a11y.kitAddBlockedHint({ locked: false, out: false, full: true })).toBe(increaseBlockedHint(true));
+    expect(a11y.kitAddBlockedHint({ locked: false, out: true, full: true })).toBeUndefined();
+    expect(a11y.kitAddBlockedHint({ locked: false, out: false, full: false })).toBeUndefined();
+  });
+  it('a kit whose name already ends in "kit" is not given a second one', () => {
+    expect(addKitLabel('QA New Hire Kit')).toBe('Add one QA New Hire Kit to your cart');
+    expect(a11y.increaseKitLabel('QA New Hire Kit')).toBe('One more QA New Hire Kit');
+    expect(decreaseKitLabel('QA New Hire Kit', 1)).toBe('Take the QA New Hire Kit out of your cart');
+    expect(decreaseKitLabel('Science kit', 2)).toBe('One fewer Science kit');
+    expect(kitAnnouncement('QA New Hire Kit', 0)).toBe('Took the QA New Hire Kit out of your cart.');
+    expect(addKitLabel('Starter')).toBe('Add one Starter kit to your cart');
+    expect(addKitLabel('Toolkit')).toBe('Add one Toolkit kit to your cart');
   });
 });

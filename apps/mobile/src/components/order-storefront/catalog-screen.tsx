@@ -44,6 +44,7 @@ import {
   STOREFRONT_TRUNCATED_COPY,
   availableOf,
   buildQtyMap,
+  kitAvailability,
   kitsInCart,
   kitsLoadFailedCopy,
   maxKits,
@@ -61,6 +62,7 @@ import {
   addItemLabel,
   addedAnnouncement,
   changeLockedHint,
+  kitAddBlockedHint,
   decreaseLabel,
   increaseBlockedHint,
   increaseLabel,
@@ -693,7 +695,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
             <SmallAction
               label={KIT_ADD_COPY}
               variant="primary"
-              hint={addBlockedHint({ locked, notOrderable: false })}
+              hint={kitAddBlockedHint({ locked, out: kitAvailability(sheetKit, snap.itemMap).kits < 1, full: maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) })}
               disabled={locked || maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap)}
               onPress={() => onKit(sheetKit.bundleId, kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) + 1)}
             />

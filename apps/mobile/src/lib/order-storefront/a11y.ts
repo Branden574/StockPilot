@@ -90,14 +90,27 @@ export function kitRowLabel(kit: KitOffer, itemMap: ReadonlyMap<string, Storefro
   if (inCart > 0) parts.push(`${inCart} in your cart`);
   return parts.join(', ');
 }
+/** The kit's name with "kit" after it, unless the name already ends in the
+ *  word (a kit named "New Hire Kit" is never read "New Hire Kit kit"). */
+function kitNamed(name: string): string {
+  return /\bkit$/i.test(name.trim()) ? name : `${name} kit`;
+}
 export function addKitLabel(name: string): string {
-  return `Add one ${name} kit to your cart`;
+  return `Add one ${kitNamed(name)} to your cart`;
 }
 export function increaseKitLabel(name: string): string {
-  return `One more ${name} kit`;
+  return `One more ${kitNamed(name)}`;
 }
 export function decreaseKitLabel(name: string, kits: number): string {
-  return kits <= 1 ? `Take the ${name} kit out of your cart` : `One fewer ${name} kit`;
+  return kits <= 1 ? `Take the ${kitNamed(name)} out of your cart` : `One fewer ${kitNamed(name)}`;
+}
+/** Why Add kit is dimmed: the lock's words, or (the web's title) every kit
+ *  the stock allows is already held by the cart's own lines. A kit out of
+ *  stock says so in its row. */
+export function kitAddBlockedHint(input: { locked: boolean; out: boolean; full: boolean }): string | undefined {
+  if (input.locked) return addBlockedHint({ locked: true, notOrderable: false });
+  if (!input.out && input.full) return increaseBlockedHint(true);
+  return undefined;
 }
 
 /** The cart bar: "Cart, 3 items · 12 units. Check out". */
@@ -114,7 +127,7 @@ export function quantityAnnouncement(name: string, inCart: number): string {
   return inCart > 0 ? `${name}: ${storefrontInCartCopy(inCart)}.` : `Removed ${name} from your cart.`;
 }
 export function kitAnnouncement(name: string, kits: number): string {
-  return kits > 0 ? `${name}: ${kits} ${kits === 1 ? 'kit' : 'kits'} in your cart.` : `Took the ${name} kit out of your cart.`;
+  return kits > 0 ? `${name}: ${kits} ${kits === 1 ? 'kit' : 'kits'} in your cart.` : `Took the ${kitNamed(name)} out of your cart.`;
 }
 /** After a stepper or Remove changed a line: what the line is now, read from
  *  the snapshot after the change (desk check F7.4). An item the catalog

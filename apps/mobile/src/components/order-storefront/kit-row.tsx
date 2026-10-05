@@ -14,12 +14,12 @@ import {
 
 import { Body, Mono } from '@/components/ui/text';
 import {
-  addBlockedHint,
   addKitLabel,
   changeLockedHint,
   decreaseKitLabel,
   increaseBlockedHint,
   increaseKitLabel,
+  kitAddBlockedHint,
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
 import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
@@ -107,7 +107,7 @@ export const KitRow = React.memo(function KitRow({
             label={KIT_ADD_COPY}
             accessibilityLabel={addKitLabel(kit.name)}
             disabled={locked || out || maxInCart < 1}
-            hint={addBlockedHint({ locked, notOrderable: false })}
+            hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}
             onPress={() => onChange(kit.bundleId, 1)}
           />
         )}

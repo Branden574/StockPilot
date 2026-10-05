@@ -512,7 +512,9 @@ describe('VoiceOver hears why, what and how much (desk check F7)', () => {
   it('every dimmed Add, Add kit, stepper, Remove and Clear all says why (F7.1)', () => {
     expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable })}');
     expect(itemRow).toContain('lockHint={changeLockedHint(locked)}');
-    expect(kitRow).toContain('hint={addBlockedHint({ locked, notOrderable: false })}');
+    // The kit's Add kit takes the kit's own hint (simulator walk D2), which
+    // gives the lock's words first.
+    expect(kitRow).toContain('hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}');
     expect(kitRow).toContain('lockHint={changeLockedHint(locked)}');
     expect(cartPanel).toMatch(/label=\{CART_CLEAR_ALL_COPY\} variant="ghost" disabled=\{locked\} hint=\{changeLockedHint\(locked\)\}/);
     expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false })}');
@@ -520,7 +522,7 @@ describe('VoiceOver hears why, what and how much (desk check F7)', () => {
     expect(cartPanel).toMatch(/accessibilityLabel=\{view\.removeLabel\}\s+variant="ghost"\s+disabled=\{locked\}\s+hint=\{changeLockedHint\(locked\)\}/);
     expect(catalog).toContain('lockHint={changeLockedHint(locked)}');
     expect(catalog).toContain('hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}');
-    expect(catalog).toMatch(/label=\{KIT_ADD_COPY\}\s+variant="primary"\s+hint=\{addBlockedHint\(\{ locked, notOrderable: false \}\)\}/);
+    expect(catalog).toMatch(/label=\{KIT_ADD_COPY\}\s+variant="primary"\s+hint=\{kitAddBlockedHint\(\{ locked, /);
   });
 
   it('the row’s one label carries the rank and the can’t-be-ordered mark (F7.2)', () => {
@@ -621,5 +623,13 @@ describe('the kit row follows the tested stacking rule (simulator walk D1)', () 
     const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
     expect(kitRow).toMatch(/const stacked = kitRowStacked\(\{\s*fontScale,\s*rowWidth:/);
     expect(kitRow).not.toContain('itemRowStacked(');
+  });
+});
+
+describe('a dimmed Add kit says why (simulator walk D2)', () => {
+  it('the kit row and the kit details sheet take the tested hint, with full = no kit fits beside the cart', () => {
+    const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
+    expect(flat(kitRow)).toContain('hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}');
+    expect(flat(catalog)).toMatch(/hint=\{kitAddBlockedHint\(\{ locked, out: kitAvailability\(sheetKit, snap\.itemMap\)\.kits < 1, full: /);
   });
 });
