@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -3551,10 +3551,14 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(at).toBe(2);
     expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
     expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by 0396 (was: the Items first-paint and weekly digest drafts
+    // and this one): the partial-approval draft (small fixes slice 2) sits
+    // right below this one and is dated earlier.
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       ID,
+      'order-partial-approval-held-2026-10',
     ]);
     for (const id of [
       'small-fixes-2026-10',
@@ -3568,7 +3572,8 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(i, id).toBeGreaterThan(at);
       expect(RELEASES[i]?.status, id).toBe('published');
     }
-    expect(RELEASES[at + 1]?.id).toBe('small-fixes-2026-10');
+    expect(RELEASES[at + 1]?.id).toBe('order-partial-approval-held-2026-10');
+    expect(RELEASES[at + 2]?.id).toBe('small-fixes-2026-10');
     const above = new Set([ID, 'weekly-digest-and-fixes-2026-10', 'items-list-first-paint-2026-10']);
     for (const r of RELEASES.filter((x) => !above.has(x.id))) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
@@ -3676,13 +3681,16 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // (slice 1, 2026-10-05; was: the newest published release, with only
     // drafts above it): the drafts stay at the top, newest first, and the
     // small fixes, published, sit between them and this one.
+    // Re-pinned by 0396 (was: without it): the partial-approval draft (small
+    // fixes slice 2) sits below PO-2's draft, above the small fixes.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
       'small-fixes-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'draft', 'published']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4335,16 +4343,18 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest and PO-2 drafts sit above it, phone ordering's below it", () => {
+  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest, PO-2 and partial-approval drafts sit above it, phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
     // first-paint (#328), weekly digest fixes' (#326) and PO-2's stay at the
-    // top, dated later.
+    // top, dated later. Re-pinned by 0396 (was: those three): the
+    // partial-approval draft (small fixes slice 2) sits below PO-2's.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
     ]);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
@@ -4788,5 +4798,79 @@ describe('the Items first-paint release', () => {
     expect(text).toContain('No items match your filters');
     expect(text).toContain('Auto-archived only');
     expect(text).toContain('No items yet');
+  });
+});
+
+/**
+ * Small fixes slice 2 (migration 0396, L86): a partly approved order's
+ * notification and approval email say what is held. Held as a DRAFT until
+ * 0396 is pushed and the web deploy with the email variant is live (the push
+ * text comes from the database: no phone update). Pinned by id, never by
+ * index. The publishing follow-up sets 'published' and the real publishedAt,
+ * re-reads the words against what shipped, and flips the first pin here.
+ */
+describe('a partly approved order says what is held (small fixes slice 2) is held as a draft', () => {
+  const ID = 'order-partial-approval-held-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release, dated after every published release and before the drafts above it', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is told to whoever can place an order request, as one fixed Orders entry with no link', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    expect(r.entries.map((e) => e.id)).toEqual(['order-partial-approval-held']);
+    const [entry] = r.entries;
+    expect(entry!.category).toBe('fixed');
+    expect(entry!.area).toBe('Orders');
+    expect(entry!.link).toBeUndefined();
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
+    expect(entriesFor('viewer', ['orders:request'])).toBe(1);
+    expect(entriesFor('staff', ['members:read'])).toBe(0);
+    expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+  });
+
+  it('quotes the notification word for word and the email as it reads, and claims nothing else', () => {
+    const r = release();
+    const entry = r.entries[0]!;
+    const text = readerText(r).join(' ');
+    // The sentence _notify_order_request_changes writes (0396), quoted exactly.
+    // Found by name: the migration's number is fixed only when it is pushed.
+    const dir = resolve(__dirname, '../../../../../supabase/migrations');
+    const file = readdirSync(dir).filter((f) => f.endsWith('_order_stock_guards.sql'));
+    expect(file).toHaveLength(1);
+    const migration = readFileSync(resolve(dir, file[0]!), 'utf8');
+    expect(migration).toContain("v_body := 'Part of your order is held; the rest is waiting for stock.';");
+    expect(entry.whatChanged).toContain('"Part of your order is held; the rest is waiting for stock."');
+    // The email's count, as the email prints it ("6 of 8 units").
+    expect(entry.whatChanged).toContain('for example 6 of 8');
+    expect(text).not.toMatch(/\bbook\b|every unit is held for you|filled automatically|as soon as stock arrives/i);
+    expect(entry.whatToDo).toBe('No action needed.');
   });
 });
