@@ -59,11 +59,11 @@ export const RELEASES: Release[] = [
         area: 'Items',
         title: 'Auto-delete keeps archived items that still have stock on record',
         whatChanged:
-          'When automatic deletion of archived items is on, an archived item is deleted after the retention period only once it holds nothing: no stock on record, no stock on any location and nothing held for an order or a rental.',
+          'When automatic deletion of archived items is on, an archived item is deleted after the retention period only once it holds nothing and nothing is due back to it: no stock on record, no stock on any location, nothing held for an order or a rental, and nothing on an open purchase order, picked for an open order or due back on an open return.',
         whyItMatters:
           "Archive anyway keeps an item's stock, so an archived item could still have stock on record, and deleting it made that stock disappear with the item.",
         howItAffectsYou:
-          'An archived item that still has stock stays in Archived. Once its stock is adjusted to zero or written off, and nothing is held for it, the daily run deletes it as before.',
+          'An archived item that still has stock, or stock due back, stays in Archived. Once its stock is adjusted to zero or written off, nothing is held for it and nothing is due back, the daily run deletes it as before.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:delete'], modules: ['inventory'] },
       },

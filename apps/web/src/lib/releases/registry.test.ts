@@ -4273,7 +4273,22 @@ describe('the small fixes release (slice 1)', () => {
   it('says auto-delete waits for the stock to be adjusted to zero or written off, not moved', () => {
     const entry = release().entries.find((e) => e.id === 'auto-delete-keeps-stock')!;
     expect(entry.howItAffectsYou).not.toMatch(/moved/);
-    expect(entry.howItAffectsYou).toContain('adjusted to zero or written off, and nothing is held for it');
+    expect(entry.howItAffectsYou).toContain('adjusted to zero or written off, nothing is held for it and nothing is due back');
+  });
+
+  // Review (2026-10-05): stock can come back to an item that holds nothing
+  // today (a receipt on an open PO line, a cancel or reopen of a picked
+  // batch, a return), so the run also keeps those items (archive-cleanup.ts
+  // itemIdsStillHolding), and the entry says so.
+  it('names the stock still due back that keeps an archived item', () => {
+    const entry = release().entries.find((e) => e.id === 'auto-delete-keeps-stock')!;
+    expect(entry.whatChanged).toContain(
+      'nothing on an open purchase order, picked for an open order or due back on an open return',
+    );
+    const service = readFileSync(resolve(__dirname, '../../server/services/archive-cleanup.ts'), 'utf8');
+    for (const table of ['purchase_order_items', 'order_request_lines', 'return_lines']) {
+      expect(service).toContain(`.from('${table}')`);
+    }
   });
 
   // Desk check F5 (owner rule 2026-09-25: every user-visible change gets a

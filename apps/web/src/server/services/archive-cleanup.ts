@@ -51,7 +51,10 @@ const PURGE_BATCH_LIMIT = 1000;
  * make that stock vanish with the item (L15). So a candidate must have no
  * stock on record (`quantity_on_hand = 0`, also the update's race guard), no
  * non-zero holding on any location and no open hold (an approved order or a
- * rental still holding it). The rest are kept and counted as `skipped`.
+ * rental still holding it), and no stock still due to come back to it: no
+ * line on an open PO, no picked batch on an open order and no return line not
+ * yet applied (itemIdsStillHolding). The rest are kept and counted as
+ * `skipped`.
  *
  * Org-scoped, race-guarded (re-checks status, deleted_at and the stock on
  * record in the UPDATE), and audited per item so each removal is recoverable.
@@ -69,8 +72,9 @@ export async function purgeExpiredArchivedItems(
   /** Candidates a failed write batch left in place (reported). */
   failed: number;
   /** Items past retention kept because they still hold stock: stock on
-   *  record, a holding on a location, an open hold, or stock that arrived
-   *  during the run. */
+   *  record, a holding on a location, an open hold, stock still due back (an
+   *  open PO line, a picked batch on an open order, an open return), or
+   *  stock that arrived during the run. */
   skipped: number;
 }> {
   const limit = opts.limit ?? PURGE_BATCH_LIMIT;
@@ -105,8 +109,9 @@ export async function purgeExpiredArchivedItems(
     return { deleted: 0, ids: [], truncated: false, failed: 0, skipped: keptForStockOnRecord };
   }
 
-  // Drop any candidate that still holds stock somewhere or is held for an
-  // order or rental. Both reads throw on error (fail closed).
+  // Drop any candidate that still holds stock somewhere, is held for an
+  // order or rental, or has stock still due back to it. Every read throws on
+  // error (fail closed).
   const holding = await itemIdsStillHolding(
     ctx,
     rows.map((r) => r.id),
@@ -201,15 +206,31 @@ async function countKeptForStockOnRecord(ctx: ServiceContext, cutoff: string): P
   }
 }
 
+/** A PO in these statuses can still be received (draft once it is placed), and
+ *  a receipt posts against a deleted item's line (post_receipt_v2). */
+const OPEN_PO_STATUSES = ['draft', 'expected_inbound', 'ordered', 'partially_received'];
+/** An order in these statuses is over: nothing picked for it comes back. */
+const CLOSED_ORDER_STATUSES = '(completed,cancelled,denied)';
+/** A return in these statuses can still be applied, restocking its items. */
+const OPEN_RETURN_STATUSES = ['requested', 'approved', 'received'];
+
 /**
- * Candidate ids that still hold stock: a non-zero holding on any location
- * (item_stock_levels) or an open hold (stock_reservations, released_at null).
- * Batched and paged (one `.in()` of 1000 uuids fails in production). THROWS on
- * a failed read: this decides what may be deleted, so a failure must never
- * read as "holds nothing".
+ * Candidate ids that still hold stock, or that stock may still come back to:
+ *   - a non-zero holding on any location (item_stock_levels);
+ *   - an open hold (stock_reservations, released_at null);
+ *   - a line on an open PO: a receipt posts against a deleted item's line;
+ *   - a picked batch on an open order: complete_picking released its hold,
+ *     and a cancel or a reopen puts it back (adjust_stock);
+ *   - a line not yet applied on an open return: its receipt restocks it.
+ * None of those writers checks deleted_at, and nothing restores a deleted
+ * item, so stock that came back would sit on a deleted item (review
+ * 2026-10-05: a rolled-back probe put 4 units on one). Batched and paged (one
+ * `.in()` of 1000 uuids fails in production). THROWS on a failed read: this
+ * decides what may be deleted, so a failure must never read as "holds
+ * nothing".
  */
 async function itemIdsStillHolding(ctx: ServiceContext, ids: string[]): Promise<Set<string>> {
-  const [holdings, holds] = await Promise.all([
+  const [holdings, holds, poLines, pickedLines, returnLines] = await Promise.all([
     fetchAllRowsByIds<{ item_id: string }>(
       ids,
       (batch) => (from, to) =>
@@ -234,9 +255,49 @@ async function itemIdsStillHolding(ctx: ServiceContext, ids: string[]): Promise<
           .order('id')
           .range(from, to),
     ),
+    fetchAllRowsByIds<{ item_id: string }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('purchase_order_items')
+          .select('item_id, purchase_orders!inner(status)')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .in('purchase_orders.status', OPEN_PO_STATUSES)
+          .order('id')
+          .range(from, to),
+    ),
+    fetchAllRowsByIds<{ item_id: string }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('order_request_lines')
+          .select('item_id, order_requests!inner(organization_id, status)')
+          // order_request_lines has no organization_id: scoped through its order.
+          .eq('order_requests.organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .gt('quantity_picked', 0)
+          .not('order_requests.status', 'in', CLOSED_ORDER_STATUSES)
+          .order('id')
+          .range(from, to),
+    ),
+    fetchAllRowsByIds<{ item_id: string }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('return_lines')
+          .select('item_id, returns!inner(status)')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .eq('applied', false)
+          .in('returns.status', OPEN_RETURN_STATUSES)
+          .order('id')
+          .range(from, to),
+    ),
   ]);
   const out = new Set<string>();
-  for (const r of holdings) out.add(r.item_id);
-  for (const r of holds) out.add(r.item_id);
+  for (const rows of [holdings, holds, poLines, pickedLines, returnLines]) {
+    for (const r of rows) out.add(r.item_id);
+  }
   return out;
 }
