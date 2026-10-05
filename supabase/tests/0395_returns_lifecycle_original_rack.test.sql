@@ -786,6 +786,7 @@ select is(
   pg_temp.err(:'jC4'::jsonb) || ':' || (select count(*)::text from public.returns where order_request_id = :oX),
   'P0001:return_exceeds_fulfilled:1',
   'C4: a line over its durable budget is refused (pending demand counted) and nothing is created');
+-- case: create_exchange_refused
 select pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
      jsonb_build_object('lines', jsonb_build_array(jsonb_build_object('orderRequestLineId', :lX1, 'quantity', 1, 'disposition', 'restock',
                                                                        'exchange', jsonb_build_object('itemId', :itX2, 'quantity', 1))))::text))::text as "jC5" \gset
@@ -815,14 +816,27 @@ select is(
     format($q$insert into public.returns (organization_id, order_request_id, return_number, status) select organization_id, order_request_id, return_number, 'requested' from public.returns where id = %L$q$, :'rG')),
   '23505:-:duplicate key value violates unique constraint "returns_org_number_uniq"',
   'C8: a second RMA with the same number in one organization is refused by the key (the create retries such a collision)');
+-- The shape refusals core's schemas share (packages/core/src/returns/return-schemas.ts):
+-- case: create_quantity_fractional
+-- case: create_quantity_zero
+-- case: create_quantity_over_cap
+-- case: create_too_many_lines
+-- case: create_duplicate_line
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oPend, pg_temp.one(:lPend, 1)::text))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX, pg_temp.one(:lM, 1)::text))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX, pg_temp.one(:lX1, 1.5)::text))) || ','
   || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX, pg_temp.one(:lX1, 0)::text))) || ','
-  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, null)', :oX, pg_temp.one(:lX1, 1)::text))),
-  'P0001:order_not_returnable,22023:return_invalid,22023:return_invalid,22023:return_invalid,22023:idempotency_key_required',
-  'C9: an order not handed over, a line of another order, a fractional or zero quantity and a missing key are refused (G10)');
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, null)', :oX, pg_temp.one(:lX1, 1)::text))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX, pg_temp.one(:lX1, 10001)::text))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
+       (select jsonb_build_object('lines', jsonb_agg(jsonb_build_object('orderRequestLineId', gen_random_uuid(), 'quantity', 1))) from generate_series(1, 101))::text))) || ','
+  || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
+       jsonb_build_object('lines', jsonb_build_array(jsonb_build_object('orderRequestLineId', :lX1, 'quantity', 1),
+                                                     jsonb_build_object('orderRequestLineId', :lX1, 'quantity', 1)))::text))),
+  'P0001:order_not_returnable,22023:return_invalid,22023:return_invalid,22023:return_invalid,22023:idempotency_key_required,'
+  || '22023:return_invalid,22023:return_invalid,22023:return_invalid',
+  'C9: an order not handed over, a line of another order, a fractional, zero or over-10,000 quantity, more than 100 lines, a repeated line and a missing key are refused (G10)');
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
           (pg_temp.one(:lX1, 1) || '{"itemIsHere": true}'::jsonb)::text))->>'returnId') as "rN" \gset
 select is(
@@ -862,6 +876,9 @@ select is(
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oX,
           pg_temp.one(:lX1, 1)::text))->>'returnId') as "rI" \gset
 select id as "rIl" from public.return_lines where return_id = :'rI' \gset
+-- case: approve_no_lines
+-- case: approve_scrap_with_destination
+-- case: approve_unknown_target
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.approve_return(%L, 3, %L::jsonb)', :'rI',
                   pg_temp.dec(:'rIl', 'restock', 'staging')::text))) || ','
@@ -899,15 +916,18 @@ select is(
   || ',' || pg_temp.held(:itX, :'stA')::text || ',' || pg_temp.balanced(:itX)::text,
   'closed,false:closed:true,1,true',
   'D7: a plain Staging restock closes (Staging +1, holdings equal on hand); a second close answers "already closed by"');
+-- case: deny_reason_blank
+-- case: deny_reason_too_long
 select pg_temp.rpc('authenticated', :mgr, format('select public.deny_return(%L, %L)', :'rI', '   '))::text as "jD8a" \gset
+select pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.deny_return(%L, %L)', :'rI', repeat('x', 1001)))) as "eD8" \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.deny_return(%L, %L)', :'rI', 'Not ours'))::text as "jD8b" \gset
 select pg_temp.rpc('authenticated', :mgr, format('select public.deny_return(%L, %L)', :'rI', 'Not ours'))::text as "jD8c" \gset
 select is(
-  pg_temp.err(:'jD8a'::jsonb) || ',' || ((:'jD8b'::jsonb)->>'status') || ',' || ((:'jD8c'::jsonb)->>'changed')
+  pg_temp.err(:'jD8a'::jsonb) || ',' || :'eD8' || ',' || ((:'jD8b'::jsonb)->>'status') || ',' || ((:'jD8c'::jsonb)->>'changed')
   || ',' || (select r.denial_reason || ':' || (r.denied_by = :mgr)::text from public.returns r where r.id = :'rI')
   || ',' || (select string_agg(d.kind || '/' || coalesce(d.reason, '-'), ',' order by d.seq) from public.return_decisions d where d.return_id = :'rI'),
-  'P0001:reason_required,denied,false,Not ours:true,created/-,denied/Not ours',
-  'D8: deny needs a reason (G18), then denies once, and records the reason on the header and the log');
+  'P0001:reason_required,22023:return_invalid,denied,false,Not ours:true,created/-,denied/Not ours',
+  'D8: deny needs a reason of 1 to 1,000 characters (G18), then denies once, and records the reason on the header and the log');
 select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb, true)', :'rN',
           pg_temp.dec((select id from public.return_lines where return_id = :'rN'), 'restock', 'staging')::text))::text as "jD9" \gset
 select is(

@@ -93,6 +93,10 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
   it('includes movements:edit_notes (RPC gate is has_permission) so a grant is end-to-end', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('movements:edit_notes')).toBe(true);
   });
+
+  it('includes returns:manage (every RMA write gates on has_permission since 0395) so a grant is end-to-end', () => {
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('returns:manage')).toBe(true);
+  });
 });
 
 describe('auditor read permissions (0279) defaults', () => {

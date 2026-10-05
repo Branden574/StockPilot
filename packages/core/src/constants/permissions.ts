@@ -409,6 +409,13 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'maintenance_requests:submit',
   'maintenance_requests:read_all',
   'maintenance_requests:manage',
+  // Returns (mig 0395, returns RX-1): every RMA write is a SECURITY DEFINER
+  // function that gates on has_permission(org,'returns:manage') plus write
+  // access to the order's warehouse (create, approve, deny, receive, cancel,
+  // plan, close, and the restated ledger.process_return_disposition); the
+  // four raw write policies follow has_permission too. A grant is fully
+  // effective end-to-end, and a revoke is effective in the database.
+  'returns:manage',
 ]);
 
 /**
