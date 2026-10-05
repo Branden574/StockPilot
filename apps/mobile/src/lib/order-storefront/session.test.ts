@@ -8,6 +8,7 @@ import {
   ORDER_NEEDS_CONNECTION_COPY,
   ORDER_PHONE_TURNED_OFF_COPY,
   STOREFRONT_CART_LOCKED_COPY,
+  STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
   SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
@@ -1333,6 +1334,30 @@ describe('a refused item keeps its reason for its line (PO-4 review)', () => {
     expect(snap().refusals).toBe(before);
     session.dispatch({ type: 'remove', itemId: A });
     expect(snap().refusals.size).toBe(0);
+  });
+});
+
+// Simulator walk D9: the refused item's catalog row kept + (and its count
+// opened the quantity sheet), so a line the server refused could be raised.
+describe('a line marked as not orderable can be lowered or removed, never raised (simulator walk D9)', () => {
+  it('refuses +, Add and a higher quantity in core’s words; - and a lower quantity still work', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 400, code: 'validation_error', details: { reason: 'item_not_orderable', settled: true, items: { [A]: 'rental' }, organizationId: ORG } },
+    });
+    await session.submit(false);
+    expect(session.dispatch({ type: 'inc', itemId: A })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(session.dispatch({ type: 'add', itemId: A })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(session.setQuantity(A, 5)).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(snap().refusal).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(session.dispatch({ type: 'dec', itemId: A })).toBeNull();
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 1 }]);
+    expect([...snap().notOrderable]).toEqual([A]);
+    expect(session.setQuantity(A, 0)).toBeNull();
+    expect(snap().cart?.lines).toEqual([]);
   });
 });
 

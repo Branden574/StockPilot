@@ -30,6 +30,7 @@ import {
   resolveOrgTimezone,
   restoredCartChangedCopy,
   wallClockToInstant,
+  type CartAction,
   type CartState,
   type KitOffer,
   type OrderCreateRequestInput,
@@ -208,6 +209,30 @@ export function refusedItemIds(details: OrderRefusalDetails | null): Set<string>
  *  core's words, as the web does (PO-4 review). */
 export function refusedItemReasons(details: OrderRefusalDetails | null): Map<string, string> {
   return new Map(Object.entries(details?.items ?? {}));
+}
+
+/**
+ * A change that would put more of a line marked as not orderable (refused by
+ * the server's item check, or gone from the catalog) into the cart: +, Add, a
+ * higher quantity, or a kit that adds to it (simulator walk D9). Such a line
+ * can be lowered or removed, never raised. Pure.
+ */
+export function raisesNotOrderable(action: CartAction, cart: CartState, notOrderable: ReadonlySet<string>): boolean {
+  if (notOrderable.size === 0) return false;
+  switch (action.type) {
+    case 'add':
+    case 'inc':
+      return notOrderable.has(action.itemId);
+    case 'set-qty': {
+      if (!notOrderable.has(action.itemId)) return false;
+      const now = cart.lines.find((l) => l.itemId === action.itemId)?.quantity ?? 0;
+      return action.quantity > now;
+    }
+    case 'apply-kit':
+      return action.changes.some((c) => c.delta > 0 && notOrderable.has(c.itemId));
+    default:
+      return false;
+  }
 }
 
 /** Lines no longer in the catalog this account can order from here. */

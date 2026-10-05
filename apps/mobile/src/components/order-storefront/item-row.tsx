@@ -88,12 +88,12 @@ export const ItemRow = React.memo(function ItemRow({
       <Stepper
         quantity={quantity}
         available={available}
-        atMax={quantity >= available}
+        atMax={quantity >= available || notOrderable}
         disabled={locked}
         decLabel={decreaseLabel(item.name, quantity)}
         incLabel={increaseLabel(item.name)}
         countLabel={quantityButtonLabel(item.name, quantity)}
-        incHint={increaseBlockedHint(quantity >= available)}
+        incHint={increaseBlockedHint(quantity >= available, notOrderable)}
         lockHint={changeLockedHint(locked)}
         onDec={() => onDec(item.id)}
         onInc={() => onInc(item.id)}

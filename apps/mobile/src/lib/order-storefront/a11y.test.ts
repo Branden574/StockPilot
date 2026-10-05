@@ -74,6 +74,9 @@ describe('what VoiceOver says', () => {
     expect(quantityButtonLabel('Planner', 3)).toBe('Planner: 3 in your cart. Change the quantity');
     expect(increaseBlockedHint(true)).toBe('All available stock is in your cart');
     expect(increaseBlockedHint(false)).toBeUndefined();
+    // Simulator walk D9: a marked line's + says why it is dimmed.
+    expect(increaseBlockedHint(false, true)).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(increaseBlockedHint(true, true)).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
   });
 
   it('kits', () => {

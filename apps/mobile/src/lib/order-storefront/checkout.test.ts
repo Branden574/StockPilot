@@ -34,6 +34,7 @@ import {
   cartLineView,
   checkoutTotals,
   neededByRowValue,
+  raisesNotOrderable,
   recheckRestoredCart,
   refusedItemIds,
   refusedItemReasons,
@@ -385,5 +386,28 @@ describe('a refused line says why, in core’s words (PO-4 review)', () => {
   it('a refused item the cart cannot name, or a line only left out of the catalog: the generic mark', () => {
     expect(cartLineView({ itemId: A, quantity: 1 }, undefined, true, 'rental').note).toEqual({ kind: 'not_orderable' });
     expect(cartLineView({ itemId: A, quantity: 1 }, item(A, 'Planner', 8), true).note).toEqual({ kind: 'not_orderable' });
+  });
+});
+
+// Simulator walk D9: a line refused by the server (or gone from the catalog)
+// kept + on its catalog row and in Quick view, and the quantity sheet could
+// raise it too. It can be lowered or removed, never raised.
+describe('raisesNotOrderable: a change that puts more of a marked line in the cart (simulator walk D9)', () => {
+  const cart: CartState = { ...initialCartState({ warehouseId: 'w', fulfillmentType: 'pickup' }), lines: [{ itemId: 'a', quantity: 2 }, { itemId: 'b', quantity: 1 }] };
+  const marks = new Set(['a']);
+  it('+, Add and a higher quantity on a marked line', () => {
+    expect(raisesNotOrderable({ type: 'inc', itemId: 'a' }, cart, marks)).toBe(true);
+    expect(raisesNotOrderable({ type: 'add', itemId: 'a' }, cart, marks)).toBe(true);
+    expect(raisesNotOrderable({ type: 'set-qty', itemId: 'a', quantity: 3 }, cart, marks)).toBe(true);
+    expect(raisesNotOrderable({ type: 'apply-kit', bundleId: 'k', changes: [{ itemId: 'b', delta: 1 }, { itemId: 'a', delta: 1 }] }, cart, marks)).toBe(true);
+  });
+  it('lowering, removing, the same quantity and other lines are free', () => {
+    expect(raisesNotOrderable({ type: 'dec', itemId: 'a' }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'remove', itemId: 'a' }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'set-qty', itemId: 'a', quantity: 2 }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'set-qty', itemId: 'a', quantity: 0 }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'inc', itemId: 'b' }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'apply-kit', bundleId: 'k', changes: [{ itemId: 'a', delta: -1 }] }, cart, marks)).toBe(false);
+    expect(raisesNotOrderable({ type: 'inc', itemId: 'a' }, cart, new Set())).toBe(false);
   });
 });

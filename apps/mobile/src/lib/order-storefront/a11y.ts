@@ -101,7 +101,10 @@ export function quantityButtonLabel(name: string, quantity: number): string {
   return `${name}: ${storefrontInCartCopy(quantity)}. Change the quantity`;
 }
 /** Why + is dimmed when everything available is in the cart. */
-export function increaseBlockedHint(atMax: boolean): string | undefined {
+/** Why + is dimmed: a line marked as not orderable (simulator walk D9), or
+ *  every unit available is already in the cart. */
+export function increaseBlockedHint(atMax: boolean, notOrderable = false): string | undefined {
+  if (notOrderable) return STOREFRONT_LINE_NOT_ORDERABLE_COPY;
   return atMax ? CART_ALL_STOCK_IN_CART_COPY : undefined;
 }
 

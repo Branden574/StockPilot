@@ -1,6 +1,7 @@
 import {
   ORDER_NEEDS_CONNECTION_COPY,
   STOREFRONT_CART_LOCKED_COPY,
+  STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
   buildQtyMap,
   cartReducer,
@@ -34,6 +35,7 @@ import {
 import {
   buildOrderCreateBody,
   linesNotInCatalog,
+  raisesNotOrderable,
   recheckRestoredCart,
   refusedItemReasons,
   stockChangedNotice,
@@ -914,6 +916,13 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       const locked = engine?.refuseChange() ?? null;
       if (locked !== null) {
         refusal = action.type === 'add' || action.type === 'apply-kit' ? locked : STOREFRONT_CART_LOCKED_COPY;
+        publish();
+        return refusal;
+      }
+      // A line marked as not orderable can be lowered or removed, never
+      // raised (simulator walk D9).
+      if (raisesNotOrderable(action, cart, snapshot.notOrderable)) {
+        refusal = STOREFRONT_LINE_NOT_ORDERABLE_COPY;
         publish();
         return refusal;
       }

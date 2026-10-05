@@ -246,8 +246,9 @@ describe('accessibility and Dynamic Type', () => {
     expect(itemRow).toContain('decLabel={decreaseLabel(item.name, quantity)}');
     expect(itemRow).toContain('incLabel={increaseLabel(item.name)}');
     expect(itemRow).toContain('countLabel={quantityButtonLabel(item.name, quantity)}');
-    expect(itemRow).toContain('incHint={increaseBlockedHint(quantity >= available)}');
-    expect(itemRow).toContain('atMax={quantity >= available}');
+    // A marked line's + is dimmed too, saying why (simulator walk D9).
+    expect(itemRow).toContain('incHint={increaseBlockedHint(quantity >= available, notOrderable)}');
+    expect(itemRow).toContain('atMax={quantity >= available || notOrderable}');
   });
 
   it('a row is one element with its name, availability, rank, earmark, quantity in the cart and mark', () => {
@@ -745,6 +746,23 @@ describe('the turned-off or refused state says one sentence once (simulator walk
 
   it('checkout never announces a setup message it already said as the outcome', () => {
     expect(checkout).toContain('if (setupMessage && focused && setupMessage !== outcomeText) AccessibilityInfo.announceForAccessibility(setupMessage);');
+  });
+});
+
+// Simulator walk D9: the refused item's catalog row and Quick view kept +.
+// Mutations caught: either stepper's + not dimmed for a marked line, its
+// hint not saying why, the session not refusing a raise.
+describe('a marked line can be lowered or removed from its row and Quick view, never raised (simulator walk D9)', () => {
+  it('the item row and Quick view dim + for a marked line and say why', () => {
+    expect(itemRow).toContain('atMax={quantity >= available || notOrderable}');
+    expect(itemRow).toContain('incHint={increaseBlockedHint(quantity >= available, notOrderable)}');
+    expect(catalog).toContain('atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}');
+    expect(catalog).toContain('incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}');
+  });
+
+  it('the session refuses the raise by the tested helper', () => {
+    const session = codeOnly(read('src/lib/order-storefront/session.ts'));
+    expect(session).toMatch(/if \(raisesNotOrderable\(action, cart, snapshot\.notOrderable\)\) \{\s*refusal = STOREFRONT_LINE_NOT_ORDERABLE_COPY;/);
   });
 });
 

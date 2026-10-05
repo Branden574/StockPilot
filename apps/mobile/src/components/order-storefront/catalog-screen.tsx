@@ -706,12 +706,12 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
               <Stepper
                 quantity={qtyMap.get(sheetItem.id) ?? 0}
                 available={availableOf(sheetItem)}
-                atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem)}
+                atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}
                 disabled={locked}
                 decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
                 incLabel={increaseLabel(sheetItem.name)}
                 countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
-                incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem))}
+                incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}
                 lockHint={changeLockedHint(locked)}
                 onDec={() => onDec(sheetItem.id)}
                 onInc={() => onInc(sheetItem.id)}
