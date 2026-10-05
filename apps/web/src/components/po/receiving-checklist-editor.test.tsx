@@ -23,12 +23,7 @@ vi.mock('@/server/actions/receiving-checklist', () => ({
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-import {
-  moveStep,
-  publishPayload,
-  ReceivingChecklistEditor,
-  stepsFromDrafts,
-} from './receiving-checklist-editor';
+import { ReceivingChecklistEditor } from './receiving-checklist-editor';
 
 import type { ChecklistEditorView } from '@/server/services/receiving-checklist';
 
@@ -238,16 +233,19 @@ describe('ReceivingChecklistEditor', () => {
     expect(screen.queryByRole('button', { name: C.startSuggested })).toBeNull();
   });
 
-  it('moveStep and publishPayload', () => {
-    const steps = stepsFromDrafts([
-      { kind: 'check', label: 'A' },
-      { kind: 'count', label: 'B', help: '  ', required: true },
-    ]);
-    expect(moveStep(steps, 0, -1).map((s) => s.label)).toEqual(['A', 'B']);
-    expect(moveStep(steps, 0, 1).map((s) => s.label)).toEqual(['B', 'A']);
-    expect(publishPayload(steps)).toEqual([
-      { kind: 'check', label: 'A', help: null, required: false },
-      { kind: 'count', label: 'B', help: null, required: true },
-    ]);
+  // pattern #28: a list that did not load is said, never shown as "no procedures".
+  it('procedures that did not load are said in place of the picker', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReceivingChecklistEditor
+        editor={editor({ procedures: null, proceduresUnavailable: true })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: C.startSuggested }));
+    expect(screen.getByText(C.proceduresUnavailable)).toBeTruthy();
+    expect(screen.queryByLabelText(C.procedureLabel)).toBeNull();
   });
+
+  // The row helpers themselves (checklistEditorStepsFrom, moveChecklistStep,
+  // checklistPublishPayload) are tested in core, where the phone uses them too.
 });

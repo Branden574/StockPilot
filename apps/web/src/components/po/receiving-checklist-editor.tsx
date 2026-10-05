@@ -25,12 +25,17 @@ import {
 import {
   CHECKLIST_LIMITS,
   CHECKLIST_PUBLISHABLE_KINDS,
-  checklistWhen,
+  checklistEditorStepsFrom,
+  checklistKindLabel,
+  checklistPublishPayload,
+  checklistVersionMetaLine,
   describeChecklistInvalid,
   normalizeChecklistSteps,
   normalizeChecklistTitle,
   RECEIVING_CHECKLIST_COPY,
+  moveChecklistStep,
   SUGGESTED_RECEIVING_STEPS,
+  type ChecklistEditorStep,
   type ChecklistStepKind,
 } from '@stockpilot/core';
 
@@ -41,61 +46,7 @@ import type {
 
 const C = RECEIVING_CHECKLIST_COPY;
 
-/** A step as the editor holds it; `uid` keys the row only, the server assigns step keys. */
-export interface EditorStep {
-  uid: string;
-  kind: ChecklistStepKind;
-  label: string;
-  help: string;
-  required: boolean;
-}
-
-const KIND_LABEL: Record<ChecklistStepKind, string> = {
-  check: C.kindCheck,
-  count: C.kindCount,
-  text: C.kindText,
-  photo: 'Photo or scan',
-};
-
-let uidSeq = 0;
-const nextUid = () => `step-${(uidSeq += 1)}`;
-
-export function stepsFromDrafts(
-  drafts: ReadonlyArray<{
-    kind: ChecklistStepKind;
-    label: string;
-    help?: string | null;
-    required?: boolean;
-  }>,
-): EditorStep[] {
-  return drafts.map((d) => ({
-    uid: nextUid(),
-    kind: d.kind,
-    label: d.label,
-    help: d.help ?? '',
-    required: d.required === true,
-  }));
-}
-
-/** What publish sends: the steps without the editor's row keys. */
-export function publishPayload(steps: readonly EditorStep[]) {
-  return steps.map((s) => ({
-    kind: s.kind,
-    label: s.label,
-    help: s.help.trim() === '' ? null : s.help,
-    required: s.required,
-  }));
-}
-
-/** Move one step up (-1) or down (+1); out of range leaves the list as it is. */
-export function moveStep(steps: readonly EditorStep[], index: number, by: -1 | 1): EditorStep[] {
-  const to = index + by;
-  if (index < 0 || index >= steps.length || to < 0 || to >= steps.length) return [...steps];
-  const next = [...steps];
-  const [s] = next.splice(index, 1);
-  next.splice(to, 0, s as EditorStep);
-  return next;
-}
+type EditorStep = ChecklistEditorStep;
 
 /**
  * The receiving checklist editor (F4-1): the live version read only, "Start
@@ -130,7 +81,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
     if (from === 'live' && live) {
       setTitle(live.title);
       setSteps(
-        stepsFromDrafts(
+        checklistEditorStepsFrom(
           live.steps.map((s) => ({
             kind: s.kind,
             label: s.label,
@@ -142,11 +93,11 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
       setProcedureId(live.procedureId ?? '');
     } else if (from === 'suggested') {
       setTitle(live?.title ?? 'Receiving checklist');
-      setSteps(stepsFromDrafts(SUGGESTED_RECEIVING_STEPS));
+      setSteps(checklistEditorStepsFrom(SUGGESTED_RECEIVING_STEPS));
       setProcedureId('');
     } else {
       setTitle(live?.title ?? 'Receiving checklist');
-      setSteps(stepsFromDrafts([{ kind: 'check', label: '', required: true }]));
+      setSteps(checklistEditorStepsFrom([{ kind: 'check', label: '', required: true }]));
       setProcedureId('');
     }
     setEditing(true);
@@ -159,7 +110,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
   function localCheck(): string | null {
     const t = normalizeChecklistTitle(title);
     if (!t.ok) return describeChecklistInvalid(t.detail);
-    const r = normalizeChecklistSteps(publishPayload(steps));
+    const r = normalizeChecklistSteps(checklistPublishPayload(steps));
     if (!r.ok) {
       setError({
         message: describeChecklistInvalid(r.detail),
@@ -187,7 +138,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
     if (busy) return;
     const body = {
       title,
-      steps: publishPayload(steps),
+      steps: checklistPublishPayload(steps),
       procedureId: procedureId || null,
       expectedCurrentId: live?.id ?? null,
     };
@@ -347,7 +298,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
                         >
                           {CHECKLIST_PUBLISHABLE_KINDS.map((k) => (
                             <option key={k} value={k}>
-                              {KIND_LABEL[k]}
+                              {checklistKindLabel(k)}
                             </option>
                           ))}
                         </select>
@@ -376,7 +327,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
                       size="icon"
                       aria-label={C.moveStepUp(i + 1)}
                       disabled={i === 0}
-                      onClick={() => setSteps((l) => moveStep(l, i, -1))}
+                      onClick={() => setSteps((l) => moveChecklistStep(l, i, -1))}
                     >
                       <ArrowUp />
                     </Button>
@@ -386,7 +337,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
                       size="icon"
                       aria-label={C.moveStepDown(i + 1)}
                       disabled={i === steps.length - 1}
-                      onClick={() => setSteps((l) => moveStep(l, i, 1))}
+                      onClick={() => setSteps((l) => moveChecklistStep(l, i, 1))}
                     >
                       <ArrowDown />
                     </Button>
@@ -412,12 +363,15 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
             onClick={() =>
               setSteps((l) => [
                 ...l,
-                ...stepsFromDrafts([{ kind: 'check', label: '', required: false }]),
+                ...checklistEditorStepsFrom([{ kind: 'check', label: '', required: false }]),
               ])
             }
           >
             <Plus /> {C.addStep}
           </Button>
+          {editor.proceduresUnavailable && (
+            <p className="text-muted-foreground text-sm">{C.proceduresUnavailable}</p>
+          )}
           {editor.procedures && editor.procedures.length > 0 && (
             <div className="space-y-1">
               <Label htmlFor="checklist-procedure">{C.procedureLabel}</Label>
@@ -534,7 +488,7 @@ function VersionDetails({
         {version.steps.map((s) => (
           <li key={s.key}>
             {s.label}
-            <span className="text-muted-foreground"> · {KIND_LABEL[s.kind]}</span>
+            <span className="text-muted-foreground"> · {checklistKindLabel(s.kind)}</span>
             {s.required && <span className="text-muted-foreground"> · {C.stepRequired}</span>}
             {s.help && <span className="text-muted-foreground block text-xs">{s.help}</span>}
           </li>
@@ -543,13 +497,7 @@ function VersionDetails({
       {version.procedureTitle && (
         <p className="text-muted-foreground">{C.instructions(version.procedureTitle)}</p>
       )}
-      <p className="text-muted-foreground text-xs">
-        Published by {version.publishedByName} on {checklistWhen(version.publishedAt, timeZone)}
-        {version.retiredAt && version.retiredByName
-          ? ` · turned off by ${version.retiredByName} on ${checklistWhen(version.retiredAt, timeZone)}`
-          : ''}
-        {version.runCount !== null ? ` · ${C.runsOnVersion(version.runCount)}` : ''}
-      </p>
+      <p className="text-muted-foreground text-xs">{checklistVersionMetaLine(version, timeZone)}</p>
     </div>
   );
 }

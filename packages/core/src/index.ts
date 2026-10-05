@@ -16,6 +16,7 @@ export * from './purchasing/recurring';
 export * from './purchasing/po-import-uploader';
 export * from './purchasing/receiving-checklist';
 export * from './purchasing/receiving-checklist-copy';
+export * from './purchasing/receiving-checklist-drafts';
 export * from './purchasing/receiving-gate';
 export * from './signature';
 export * from './inventory/size-run';

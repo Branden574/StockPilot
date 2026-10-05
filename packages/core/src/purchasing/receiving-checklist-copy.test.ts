@@ -22,6 +22,10 @@ import {
   receiptChecklistChipText,
   receiptChecklistChipTone,
   receivingChecklistCopySamples,
+  checklistKindLabel,
+  checklistVersionMetaLine,
+  receivingRunAboutLines,
+  receivingRunStatusLines,
   runProgressLine,
 } from './receiving-checklist-copy';
 
@@ -194,6 +198,142 @@ describe('times in the organization zone', () => {
       'Recorded 4 days after the receipt was posted.',
     );
     expect(lateRecordLabel('bad', '2026-10-05T17:00:00Z', tz)).toBeNull();
+  });
+});
+
+describe("a run's About and status lines (one set for the web and the phone)", () => {
+  const C = RECEIVING_CHECKLIST_COPY;
+  const about = {
+    unitsReceived: 48,
+    lineCount: 3,
+    warehouseName: 'Main',
+    stockOwner: { kind: 'ok' as const, value: ['North Charter'] },
+    billTo: { kind: 'ok' as const, value: 'South Charter' as string | null },
+    stillToCome: { kind: 'ok' as const, value: 2 },
+  };
+
+  it('says what is known, the stock owner and the bill-to apart', () => {
+    expect(receivingRunAboutLines(about, false).map((l) => l.text)).toEqual([
+      C.receivedOnReceipt(48, 3),
+      C.receivedInto('Main'),
+      C.stockOwner(['North Charter']),
+      C.billTo('South Charter'),
+      C.stillToCome(2),
+    ]);
+  });
+
+  // pattern #28: a failed read says it did not load, never "none" and never nothing.
+  it('a read that failed says so; "none" only from an answer', () => {
+    const lines = receivingRunAboutLines(
+      {
+        ...about,
+        warehouseName: null,
+        stockOwner: { kind: 'unavailable' },
+        billTo: { kind: 'unavailable' },
+        stillToCome: { kind: 'unavailable' },
+      },
+      false,
+    ).map((l) => l.text);
+    expect(lines).toEqual([
+      C.receivedOnReceipt(48, 3),
+      C.stockOwnerUnavailable,
+      C.billToUnavailable,
+      C.stillToComeUnavailable,
+    ]);
+    const none = receivingRunAboutLines(
+      {
+        ...about,
+        stockOwner: { kind: 'ok', value: [] },
+        billTo: { kind: 'ok', value: null },
+        stillToCome: { kind: 'ok', value: 0 },
+      },
+      false,
+    ).map((l) => l.text);
+    expect(none).toContain(C.stockOwnerNone);
+    expect(none).toContain(C.nothingToCome);
+    expect(none.some((t) => t.startsWith('Bill-to'))).toBe(false);
+  });
+
+  it('a failed check adds the reverse hint, marked as a warning', () => {
+    expect(receivingRunAboutLines(about, true).at(-1)).toEqual({
+      text: C.reverseHint,
+      tone: 'warn',
+    });
+  });
+
+  it('status: started, completed, late, reversed, a newer version and read only, each when it applies', () => {
+    const tz = 'America/Los_Angeles';
+    const base = {
+      run: {
+        status: 'in_progress' as 'in_progress' | 'completed',
+        startedAt: '2026-10-05T17:00:00Z',
+        startedByName: 'Pat Lee',
+        completedAt: null as string | null,
+        completedByName: null as string | null,
+      },
+      receipt: { receivedAt: '2026-10-01T16:00:00Z', reversedAt: '2026-10-06T00:00:00Z' },
+      versionNumber: 1,
+      newerVersionNumber: 3 as number | null,
+      canRecord: false,
+    };
+    expect(receivingRunStatusLines(base, tz).map((l) => l.text)).toEqual([
+      C.startedBy('Pat Lee', 'October 5, 2026 at 10:00 AM'),
+      C.recordedLate(4),
+      C.reversedAfter,
+      C.keepsVersion(3, 1),
+      C.readOnlyNotRecorder,
+    ]);
+    const done = receivingRunStatusLines(
+      {
+        ...base,
+        run: {
+          ...base.run,
+          status: 'completed',
+          completedAt: '2026-10-05T22:04:00Z',
+          completedByName: 'Sam Ortiz',
+        },
+        receipt: { receivedAt: '2026-10-05T16:00:00Z', reversedAt: '2026-10-05T16:30:00Z' },
+        canRecord: true,
+      },
+      tz,
+    );
+    expect(done.map((l) => l.text)).toEqual([
+      C.startedBy('Pat Lee', 'October 5, 2026 at 10:00 AM'),
+      C.completedBy('Sam Ortiz', 'October 5, 2026 at 3:04 PM'),
+      C.reversedBefore,
+    ]);
+    expect(done[1]?.tone).toBe('done');
+  });
+});
+
+describe("the editor's words", () => {
+  it('names each kind of step', () => {
+    expect(checklistKindLabel('check')).toBe('Pass, Fail or Not applicable');
+    expect(checklistKindLabel('count')).toBe('A number');
+    expect(checklistKindLabel('text')).toBe('A short answer');
+    expect(checklistKindLabel('photo')).toBe('Photo or scan');
+  });
+
+  it('says who published a version and when, who turned it off, and its receipts for a publisher', () => {
+    const tz = 'America/Los_Angeles';
+    const v = {
+      publishedByName: 'Pat Lee',
+      publishedAt: '2026-10-01T15:00:00Z',
+      retiredAt: null as string | null,
+      retiredByName: null as string | null,
+      runCount: null as number | null,
+    };
+    expect(checklistVersionMetaLine(v, tz)).toBe(
+      'Published by Pat Lee on October 1, 2026 at 8:00 AM',
+    );
+    expect(
+      checklistVersionMetaLine(
+        { ...v, retiredAt: '2026-10-03T15:00:00Z', retiredByName: 'Sam Ortiz', runCount: 1 },
+        tz,
+      ),
+    ).toBe(
+      'Published by Pat Lee on October 1, 2026 at 8:00 AM · turned off by Sam Ortiz on October 3, 2026 at 8:00 AM · Recorded on 1 receipt',
+    );
   });
 });
 

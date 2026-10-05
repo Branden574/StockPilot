@@ -27,7 +27,7 @@ vi.mock('next/link', async () => {
 });
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-import { ReceivingCheckForm, resultsFromDrafts } from './receiving-check-form';
+import { ReceivingCheckForm } from './receiving-check-form';
 
 import type { ReceivingRunView } from '@/server/services/receiving-checklist';
 
@@ -263,18 +263,14 @@ describe('ReceivingCheckForm', () => {
     expect(screen.getByText(C.keepsVersion(3, 1))).toBeTruthy();
   });
 
-  it('resultsFromDrafts sends a count as a number only when it is whole, so a typo is refused by name', () => {
-    const steps = [...CASE_TABLE_STEPS];
-    expect(resultsFromDrafts(steps, { s3: { value: ' 12 ', note: '' } })).toEqual({
-      s3: { value: 12 },
-    });
-    expect(resultsFromDrafts(steps, { s3: { value: '1.5', note: '' } })).toEqual({
-      s3: { value: '1.5' },
-    });
-    expect(
-      resultsFromDrafts(steps, { s2: { value: '', note: ' ' }, s4: { value: ' text ', note: '' } }),
-    ).toEqual({
-      s4: { value: ' text ' },
-    });
+  // The draft helpers (checklistResultsFromDrafts and friends) are tested in
+  // core, where the phone uses them too; this is the form's use of them.
+  it('a count that is not a whole number is refused by name before anything is sent', async () => {
+    const user = userEvent.setup();
+    render(<ReceivingCheckForm view={view()} />);
+    await user.type(screen.getByRole('textbox', { name: 'Number of boxes received' }), '1.5');
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Number of boxes received');
+    expect(saveReceivingCheckAction).not.toHaveBeenCalled();
   });
 });

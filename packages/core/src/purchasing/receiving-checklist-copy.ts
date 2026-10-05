@@ -5,6 +5,7 @@ import type {
   ChecklistInvalidDetail,
   ChecklistRunSummary,
   ChecklistStep,
+  ChecklistStepKind,
   ReceiptChecklistState,
 } from './receiving-checklist';
 
@@ -69,6 +70,7 @@ export const RECEIVING_CHECKLIST_COPY = {
     `Still to come on this purchase order: ${count(lines)} ${plural(lines, 'line', 'lines')}.`,
   nothingToCome: 'Nothing is still to come on this purchase order.',
   stillToComeUnavailable: "What is still to come didn't load",
+  billToUnavailable: "Bill-to didn't load",
   reverseHint:
     'If this receipt was posted in error, a manager can reverse it from Receipts on this purchase order.',
   instructions: (title: string) => `Instructions: ${title}`,
@@ -133,6 +135,13 @@ export const RECEIVING_CHECKLIST_COPY = {
   /** A request that never came back (the connection dropped): nothing on screen is lost. */
   didNotGoThrough: "That didn't go through. Check your connection and try again.",
 
+  // ── Leaving with unsaved work (phone; the web uses the browser's own prompt) ──
+  leaveTitle: 'Leave without saving?',
+  leaveRunBody: 'Your answers on this checklist are not saved yet.',
+  leaveEditorBody: 'Your changes to the checklist are not published yet.',
+  stay: 'Stay',
+  leave: 'Leave',
+
   // ── Editor ──
   editorTitle: 'Receiving checklist',
   editorEmpty:
@@ -166,6 +175,8 @@ export const RECEIVING_CHECKLIST_COPY = {
   titleLabel: 'Title',
   procedureLabel: 'Instructions (optional)',
   procedureNone: 'No procedure',
+  proceduresUnavailable: "Procedures didn't load",
+  editorOffline: 'The receiving checklist needs a connection.',
   readOnlyEditor:
     'Only a manager who can manage purchase orders can change the receiving checklist.',
   procedureCard: 'Receiving checklist',
@@ -173,6 +184,153 @@ export const RECEIVING_CHECKLIST_COPY = {
     'The short checklist a manager can record after a receipt posts. Always optional.',
   runsOnVersion: (n: number) => `Recorded on ${count(n)} ${plural(n, 'receipt', 'receipts')}`,
 } as const;
+
+/** One line of a run's "About this delivery" or status block, with how it is shown. */
+export interface ReceivingRunLine {
+  text: string;
+  /** warn: the reverse hint; done: the completed line; plain: everything else. */
+  tone: 'plain' | 'warn' | 'done';
+}
+
+type Claim<T> = { kind: 'ok'; value: T } | { kind: 'unavailable' };
+
+/**
+ * "About this delivery", on the web run page and the phone run screen alike.
+ * A read that failed says it did not load, never "none" (pattern #28); the
+ * reverse hint follows any failed check.
+ */
+export function receivingRunAboutLines(
+  about: {
+    unitsReceived: number;
+    lineCount: number;
+    warehouseName: string | null;
+    stockOwner: Claim<readonly string[]>;
+    billTo: Claim<string | null>;
+    stillToCome: Claim<number>;
+  },
+  anyFailedCheck: boolean,
+): ReceivingRunLine[] {
+  const c = RECEIVING_CHECKLIST_COPY;
+  const out: ReceivingRunLine[] = [
+    { text: c.receivedOnReceipt(about.unitsReceived, about.lineCount), tone: 'plain' },
+  ];
+  if (about.warehouseName) out.push({ text: c.receivedInto(about.warehouseName), tone: 'plain' });
+  out.push({
+    text:
+      about.stockOwner.kind === 'unavailable'
+        ? c.stockOwnerUnavailable
+        : about.stockOwner.value.length === 0
+          ? c.stockOwnerNone
+          : c.stockOwner(about.stockOwner.value),
+    tone: 'plain',
+  });
+  if (about.billTo.kind === 'unavailable') {
+    out.push({ text: c.billToUnavailable, tone: 'plain' });
+  } else if (about.billTo.value) {
+    out.push({ text: c.billTo(about.billTo.value), tone: 'plain' });
+  }
+  out.push({
+    text:
+      about.stillToCome.kind === 'unavailable'
+        ? c.stillToComeUnavailable
+        : about.stillToCome.value === 0
+          ? c.nothingToCome
+          : c.stillToCome(about.stillToCome.value),
+    tone: 'plain',
+  });
+  if (anyFailedCheck) out.push({ text: c.reverseHint, tone: 'warn' });
+  return out;
+}
+
+/**
+ * Who started and completed a run, and what the reader should know about it:
+ * recorded late, the receipt reversed before or after, a newer version this
+ * open run does not follow, or that this person may only read it.
+ */
+export function receivingRunStatusLines(
+  input: {
+    run: {
+      status: 'in_progress' | 'completed';
+      startedAt: string;
+      startedByName: string;
+      completedAt: string | null;
+      completedByName: string | null;
+    };
+    receipt: { receivedAt: string; reversedAt: string | null };
+    versionNumber: number;
+    newerVersionNumber: number | null;
+    canRecord: boolean;
+  },
+  tz: string,
+): ReceivingRunLine[] {
+  const c = RECEIVING_CHECKLIST_COPY;
+  const { run, receipt } = input;
+  const out: ReceivingRunLine[] = [
+    { text: c.startedBy(run.startedByName, checklistWhen(run.startedAt, tz)), tone: 'plain' },
+  ];
+  if (run.status === 'completed' && run.completedAt) {
+    out.push({
+      text: c.completedBy(run.completedByName ?? '—', checklistWhen(run.completedAt, tz)),
+      tone: 'done',
+    });
+  }
+  const late = lateRecordLabel(receipt.receivedAt, run.startedAt, tz);
+  if (late) out.push({ text: late, tone: 'plain' });
+  if (receipt.reversedAt) {
+    out.push({
+      text:
+        Date.parse(run.startedAt) < Date.parse(receipt.reversedAt)
+          ? c.reversedAfter
+          : c.reversedBefore,
+      tone: 'plain',
+    });
+  }
+  if (input.newerVersionNumber !== null && run.status !== 'completed') {
+    out.push({
+      text: c.keepsVersion(input.newerVersionNumber, input.versionNumber),
+      tone: 'plain',
+    });
+  }
+  if (run.status !== 'completed' && !input.canRecord) {
+    out.push({ text: c.readOnlyNotRecorder, tone: 'plain' });
+  }
+  return out;
+}
+
+/** What a step asks for, in words (the editor's kind choice and its history). */
+export function checklistKindLabel(kind: ChecklistStepKind): string {
+  const c = RECEIVING_CHECKLIST_COPY;
+  return kind === 'check'
+    ? c.kindCheck
+    : kind === 'count'
+      ? c.kindCount
+      : kind === 'text'
+        ? c.kindText
+        : 'Photo or scan';
+}
+
+/**
+ * "Published by A on <when> · turned off by B on <when> · Recorded on N
+ * receipts" for a version, in the organization's zone; the run count only
+ * when the reader gets one (a publisher).
+ */
+export function checklistVersionMetaLine(
+  v: {
+    publishedByName: string;
+    publishedAt: string;
+    retiredAt: string | null;
+    retiredByName: string | null;
+    runCount: number | null;
+  },
+  tz: string,
+): string {
+  let line = `Published by ${v.publishedByName} on ${checklistWhen(v.publishedAt, tz)}`;
+  if (v.retiredAt && v.retiredByName) {
+    line += ` · turned off by ${v.retiredByName} on ${checklistWhen(v.retiredAt, tz)}`;
+  }
+  if (v.runCount !== null) line += ` · ${RECEIVING_CHECKLIST_COPY.runsOnVersion(v.runCount)}`;
+  return line;
+}
 
 /** "Checklist: N failed checks" and friends, for a state; null means no chip. */
 export function receiptChecklistChipText(state: ReceiptChecklistState): string | null {
@@ -390,6 +548,17 @@ export function receivingChecklistCopySamples(): string[] {
     c.moveStepDown(2),
     c.runsOnVersion(1),
     c.runsOnVersion(5),
+    checklistKindLabel('photo'),
+    checklistVersionMetaLine(
+      {
+        publishedByName: 'Pat Lee',
+        publishedAt: '2026-10-01T15:00:00Z',
+        retiredAt: '2026-10-03T15:00:00Z',
+        retiredByName: 'Sam Ortiz',
+        runCount: 4,
+      },
+      'America/Los_Angeles',
+    ),
   );
   return out;
 }
