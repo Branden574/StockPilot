@@ -246,7 +246,14 @@ export default function ReturnsListScreen() {
             {split ? (
               <View style={[styles.splitDetail, { borderColor: c.hair }]}>
                 {selectedId ? (
-                  <ReturnWorkbenchView key={selectedId} returnId={selectedId} compact />
+                  <ReturnWorkbenchView
+                    key={selectedId}
+                    returnId={selectedId}
+                    compact
+                    // The list sits beside the workbench and is never re-focused:
+                    // reload it after each action so the row's status follows.
+                    onChanged={() => scheduler.schedule(() => void load())}
+                  />
                 ) : (
                   <View style={styles.empty}>
                     <Body muted>Choose a return to see it here.</Body>

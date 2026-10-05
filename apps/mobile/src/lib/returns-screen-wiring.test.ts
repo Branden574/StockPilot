@@ -40,6 +40,13 @@ describe('the list filters', () => {
     expect(chip).toContain('accessibilityState={{ selected: filter === f.id }}');
     expect(list).not.toMatch(/accessibilityRole="tab(list)?"/);
   });
+
+  it('reload beside the iPad workbench after each action (the split list is never re-focused)', () => {
+    const list = code(read('app/(drawer)/returns.tsx'));
+    const view = code(read('src/components/return-workbench-view.tsx'));
+    expect(list).toMatch(/<ReturnWorkbenchView[^>]*onChanged=\{\(\) => scheduler\.schedule\(\(\) => void load\(\)\)\}/);
+    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(2);
+  });
 });
 
 describe('online only', () => {

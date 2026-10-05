@@ -42,7 +42,17 @@ import { useTheme } from '@/lib/use-theme';
  * Cancel open the action sheet. After any answer the screen redraws from the
  * server (the steps route returns the whole workbench).
  */
-export function ReturnWorkbenchView({ returnId, compact = false }: { returnId: string; compact?: boolean }) {
+export function ReturnWorkbenchView({
+  returnId,
+  compact = false,
+  onChanged,
+}: {
+  returnId: string;
+  compact?: boolean;
+  /** Called after an action the server answered, so the iPad split view's
+   *  list (beside this view, never re-focused) reloads the RMA's status. */
+  onChanged?: () => void;
+}) {
   const { c } = useTheme();
   const router = useRouter();
   const offline = isOfflineState(useNetworkState());
@@ -115,6 +125,7 @@ export function ReturnWorkbenchView({ returnId, compact = false }: { returnId: s
       setWb(res.workbench);
       const step = res.ran[0];
       setNotice(step ? stepOutcomeMessage(step, res.workbench, false) : null);
+      onChanged?.();
     } catch (e) {
       setNotice(describeReturnError(e));
     } finally {
@@ -336,6 +347,7 @@ export function ReturnWorkbenchView({ returnId, compact = false }: { returnId: s
             setNotice(done.message);
             if (done.workbench) setWb(done.workbench);
             else void load();
+            onChanged?.();
           }}
         />
       ) : null}
