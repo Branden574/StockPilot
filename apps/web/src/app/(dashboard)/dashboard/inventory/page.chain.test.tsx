@@ -508,6 +508,48 @@ describe('Items page: the table starts with the header, not after it', () => {
     expect(events).not.toContain('dataset:end');
   });
 
+  it('default view: the planned page-1 numbers reach the table together with the streamed dataset', async () => {
+    const firstPage = {
+      pageCount: 2,
+      pageItemCount: 1,
+      distinctSkus: 2,
+      placementRows: 2,
+      skuItemRowCounts: [],
+    };
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [ROW],
+      total: 2,
+      valueOnHand: 10,
+      ...LOOKUPS,
+      trends: {},
+      placement: {},
+      expectedCount: 0,
+      firstPage,
+    }));
+    h.datasetGate = new Promise(() => {}); // never settles
+    render(await callPage());
+    const props = m.tableProps.mock.calls[0]![0] as {
+      firstPage?: unknown;
+      instantPromise?: unknown;
+    };
+    expect(props.instantPromise).toBeInstanceOf(Promise);
+    expect(props.firstPage).toEqual(firstPage);
+  });
+
+  it('staff and deep links get no planned page (server mode, or the awaited dataset)', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect((m.tableProps.mock.calls[0]![0] as { firstPage?: unknown }).firstPage).toBeUndefined();
+
+    m.tableProps.mockClear();
+    h.role = 'manager';
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    const props = m.tableProps.mock.calls[0]![0] as { firstPage?: unknown; instant?: unknown };
+    expect(props).toHaveProperty('instant');
+    expect(props.firstPage).toBeUndefined();
+  });
+
   it('a deep link takes the awaited instant branch and starts no org-wide counting-units read', async () => {
     h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
     // A sort deep link: not the default view, and it filters nothing out.
@@ -546,4 +588,26 @@ describe('Items page: the table starts with the header, not after it', () => {
     await flush();
     expect(unhandled).toEqual([]);
   });
+});
+
+/**
+ * The Archived view's "Auto-archived only" chip (?auto=1) narrows the list to
+ * items the zero-stock job archived (review 2026-10-05). A view it leaves empty
+ * is the table's own "No items match your filters." row, with the chip still
+ * there to switch off, as when it is switched on in the app; it used to be
+ * "No items yet" with an offer to add a first item. The live path (staff) gets
+ * the same answer as the cached one (page.first-paint.test.tsx probes that).
+ */
+describe('Items page: a zero Auto-archived only view', () => {
+  it.each<Record<string, string>>([{ status: 'archived', auto: '1' }, { auto: '1' }])(
+    'staff, %o: the table with nothing in it, not an empty state',
+    async (params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+    },
+  );
 });

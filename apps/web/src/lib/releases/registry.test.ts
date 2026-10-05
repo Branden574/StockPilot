@@ -3536,19 +3536,23 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is a draft above every published release (slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the weekly digest draft, dated after every release but that one', () => {
+  it('is a draft above every published release (slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the Items first-paint and weekly digest drafts, dated after every release but those two', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
     // above the newest published release, dated after every published
     // release. Re-pinned by the weekly digest fixes (2026-10-05): their draft
-    // is dated later and sits above it. Re-pinned by the publishing of the
-    // small fixes (slice 1, 2026-10-05; was: below their draft, at 2): they
-    // are published now, the newest published release, directly below it.
+    // is dated later and sits above it. Re-pinned by the Items first-paint
+    // draft (2026-10-05): it is dated later still and sits at the top.
+    // Re-pinned by the publishing of the small fixes (slice 1, 2026-10-05;
+    // was: below their draft, at 3): they are published now, the newest
+    // published release, directly below it.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(1);
-    expect(RELEASES[0]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(at).toBe(2);
+    expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
+    expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       ID,
     ]);
@@ -3565,7 +3569,8 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(RELEASES[i]?.status, id).toBe('published');
     }
     expect(RELEASES[at + 1]?.id).toBe('small-fixes-2026-10');
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'weekly-digest-and-fixes-2026-10')) {
+    const above = new Set([ID, 'weekly-digest-and-fixes-2026-10', 'items-list-first-paint-2026-10']);
+    for (const r of RELEASES.filter((x) => !above.has(x.id))) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -3666,16 +3671,18 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
-    // the top. Re-pinned by the publishing of the small fixes (slice 1,
-    // 2026-10-05; was: the newest published release, with only drafts above
-    // it): the drafts stay at the top, newest first, and the small fixes,
-    // published, sit between them and this one.
+    // the top. Re-pinned by the Items first-paint draft (2026-10-05): dated
+    // later still, at the top. Re-pinned by the publishing of the small fixes
+    // (slice 1, 2026-10-05; was: the newest published release, with only
+    // drafts above it): the drafts stay at the top, newest first, and the
+    // small fixes, published, sit between them and this one.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
       'small-fixes-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4285,8 +4292,9 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
  * c2e8f017, iOS update 01a10d3f, launched on phones) and the Demo Co
  * production walk (67 checks passed, confirmed by an independent audit) were
  * done. Pinned by id, never by index. This follow-up publishes it, the newest
- * published release; the weekly digest fixes' and PO-2's drafts sit above it.
- * Each entry is told only to the people who can see its change.
+ * published release; the Items first-paint, weekly digest fixes' and PO-2's
+ * drafts sit above it. Each entry is told only to the people who can see its
+ * change.
  */
 describe('the small fixes release (slice 1) is published', () => {
   const ID = 'small-fixes-2026-10';
@@ -4327,12 +4335,14 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("is the newest published release (pinned by id): only the weekly digest's and PO-2's drafts sit above it, phone ordering's below it", () => {
+  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest and PO-2 drafts sit above it, phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    // Drafts go above the newest published release, newest first: the weekly
-    // digest fixes' (#326) and PO-2's stay at the top, dated later.
+    // Drafts go above the newest published release, newest first: the Items
+    // first-paint (#328), weekly digest fixes' (#326) and PO-2's stay at the
+    // top, dated later.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
     ]);
@@ -4651,11 +4661,16 @@ describe('the weekly digest and fixes release', () => {
   const ID = 'weekly-digest-and-fixes-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
 
-  it('is the newest entry, a draft, dated after every release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
+  it('is a draft just below the Items first-paint draft, dated after every release but that one', () => {
+    // Re-pinned by the Items first-paint draft (2026-10-05; was: the newest
+    // entry): it is dated later and sits at the top.
+    expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
+    expect(RELEASES[1]?.id).toBe(ID);
     expect(release().status).toBe('draft');
     expect(release().revision).toBe(1);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.filter(
+      (x) => x.id !== ID && x.id !== 'items-list-first-paint-2026-10',
+    )) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -4685,5 +4700,85 @@ describe('the weekly digest and fixes release', () => {
     const sent = release().entries.find((e) => e.id === 'weekly-digest-sent')!;
     expect(sent.whatToDo).toContain('Email me a weekly inventory digest');
     expect(sent.whatToDo).toContain('Send preview now');
+  });
+});
+
+// Items first paint (owner bug 2026-10-05): a DRAFT until the web deploy is
+// live and the browser walk shows the first page staying as it loads. Web
+// only: the mobile app's Items list draws its page once. Told to whoever can
+// open the Items page, as the page checks it.
+describe('the Items first-paint release', () => {
+  const ID = 'items-list-first-paint-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is the newest entry, a draft no feed carries, dated after every release', () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(
+      ID,
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
+    );
+  });
+
+  it('is told to whoever can open the Items page: items:read, with the Items module', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['items:read'], modules: ['inventory'] });
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'items-list-first-paint',
+      'items-active-after-auto-archived',
+    ]);
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (
+      role: ReleaseViewer['role'],
+      permissions: ReleaseViewer['permissions'],
+      modules: ModuleId[] = ['inventory'],
+    ) =>
+      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries
+        .length ?? 0;
+    expect(entriesFor('manager', ['items:read'])).toBe(2);
+    expect(entriesFor('staff', ['items:read'])).toBe(2);
+    expect(entriesFor('staff', ['orders:request'], ['inventory', 'orders'])).toBe(0);
+    expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+  });
+
+  it('says it plainly: on the web, nothing was ever missing, no timing or number nobody measured, never "book"', () => {
+    const r = release();
+    const text = readerText(r).join(' ');
+    expect(r.summary).toMatch(/^On the web, /);
+    for (const e of r.entries) expect(e.whatChanged, e.id).toMatch(/^On the web, /);
+    expect(r.summary).toContain('Nothing was ever missing');
+    expect(text).toContain('moved to the next page');
+    expect(text).toContain('the rows that moved were on the next page');
+    expect(text).not.toMatch(/\d+(?:\.\d+)? ?(?:ms|seconds?|%)|half a second|faster|quicker/i);
+    expect(text).not.toMatch(/\d{2,}/);
+    expect(text).not.toMatch(/\bbook\b/i);
+  });
+
+  it('quotes the words the Items list shows', () => {
+    const text = readerText(release()).join(' ');
+    const table = readFileSync(
+      resolve(__dirname, '../../components/inventory/inventory-table.tsx'),
+      'utf8',
+    );
+    for (const words of ['Refresh to see', 'No items match your filters.', 'Auto-archived only']) {
+      expect(table, words).toContain(words);
+    }
+    expect(text).toContain('Refresh to see more');
+    expect(text).toContain('No items match your filters');
+    expect(text).toContain('Auto-archived only');
+    expect(text).toContain('No items yet');
   });
 });
