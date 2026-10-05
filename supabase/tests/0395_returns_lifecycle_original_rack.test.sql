@@ -1561,12 +1561,23 @@ select is(
   'L3: 0359 test 17 holds: only the eight wrappers raise the ledger flag (close_return calls the wrapper)');
 select (pg_temp.rpc('authenticated', :outZ, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oZ,
           pg_temp.one(:lZ, 1)::text))->>'returnId') as "rZ" \gset
+-- Any organization with order lines refuses deletion before RX-1 too: 0044's
+-- order_request_lines.item_id is ON DELETE RESTRICT (checked at once, while
+-- the cascade deletes the items before the lines). With only that key set
+-- aside (inside the undone block), the delete passes and the RMAs, lines and
+-- decisions cascade: RX-1's keys add no obstacle.
 select is(
   (select count(*)::text from public.return_decisions where return_id = :'rZ')
+  || ',' || (pg_temp.attempt('postgres', null, format('delete from public.organizations where id = %L', :orgZ))
+             like '23503:%"order_request_lines_item_id_fkey"%')::text
   || ',' || pg_temp.attempt('postgres', null, format('delete from public.organizations where id = %L', :orgZ),
-                            null, format('select count(*)::text from public.returns where id = %L', :'rZ')),
-  '1,ok:1:0',
-  'L4: deleting an organization that holds RMAs and decisions passes (the composite keys cascade; NO ACTION checks at the end)');
+                            'alter table public.order_request_lines drop constraint order_request_lines_item_id_fkey',
+                            format($q$select (select count(*) from public.returns where organization_id = %L) || '/'
+                                             || (select count(*) from public.return_lines where organization_id = %L) || '/'
+                                             || (select count(*) from public.return_decisions where organization_id = %L)$q$,
+                                   :orgZ, :orgZ, :orgZ)),
+  '1,true,ok:1:0/0/0',
+  'L4: an organization delete with RMAs and decisions: only the pre-existing RESTRICT key on order lines refuses it; with that key set aside the RMAs, lines and decisions cascade (RX-1 adds no obstacle)');
 select is(
   (select string_agg(i.sku || '=' || pg_temp.balanced(i.id)::text, ',' order by i.sku collate "C")
      from public.inventory_items i where i.organization_id = :orgA),
