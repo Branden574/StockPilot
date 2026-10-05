@@ -8,10 +8,12 @@ import {
   alreadyClosedSentence,
   alreadyReceivedSentence,
   availableLabel,
+  choiceNeededSentence,
   qtyRequestedLabel,
   qtyReturningLabel,
   RETURNS_COPY,
   returnedToLabel,
+  returnLineLabel,
   returnToOriginalRackLabel,
   returnToOriginalRacksLabel,
   shortLabel,
@@ -39,6 +41,9 @@ function allStrings(): string[] {
     whenProcessedSentence({ kind: 'rack', rack: '31-C' }),
     whenProcessedSentence({ kind: 'staging' }),
     whenProcessedSentence({ kind: 'scrap' }),
+    whenProcessedSentence({ kind: 'rack', rack: '31-C' }, 'New Hire Shirt, M'),
+    whenProcessedSentence({ kind: 'choose', reason: 'Original rack is no longer available: 31-C (archived).' }, 'Cap'),
+    choiceNeededSentence(null, RETURNS_COPY.destinationsUnavailable),
     alreadyReceivedSentence('Dana', '3:04 PM'),
     alreadyClosedSentence(null, null),
     staffNewRequestBody('Pat', 'RMA-20261005-ABC123', 103),
@@ -76,6 +81,25 @@ describe('returns copy', () => {
     expect(RETURNS_COPY.waitingDays(9)).toBe('waiting 9 days');
     expect(alreadyClosedSentence('Dana', '3:04 PM')).toBe('Already closed by Dana at 3:04 PM.');
     expect(alreadyReceivedSentence(null, null)).toBe('Already marked received.');
+  });
+
+  it('never says stock comes back at receipt: it moves only when the return is processed (review)', () => {
+    // Receive moves nothing (approve_return / receive_return never call the
+    // ledger); only Process return does. The phone and web print these.
+    const atReceipt = /(until|once|when|after)\s+(it|the item|the return)\s+(is|was)\s+(approved and\s+)?received\b(?!\s+and processed)/i;
+    expect(allStrings().filter((s) => atReceipt.test(s))).toEqual([]);
+    expect(RETURNS_COPY.approveNothingMoves).toBe('Nothing moves now. The returned item stays out until the return is processed.');
+  });
+
+  it('names the item in "what happens", and asks for a destination when none is valid (review)', () => {
+    expect(whenProcessedSentence({ kind: 'rack', rack: '31-C' }, 'New Hire Shirt, M')).toBe('When processed, New Hire Shirt, M goes back to 31-C.');
+    expect(whenProcessedSentence({ kind: 'staging' })).toBe('When processed, the returned item goes into Staging.');
+    expect(whenProcessedSentence({ kind: 'choose', reason: 'The original locations changed.' }, 'Cap')).toBe(
+      'Cap: The original locations changed. Choose a destination.',
+    );
+    expect(choiceNeededSentence('Cap', RETURNS_COPY.destinationsUnavailable)).toBe("Cap: Couldn't load where the returned item goes. Reload.");
+    expect(returnLineLabel('New Hire Shirt', 'Size M')).toBe('New Hire Shirt, M');
+    expect(returnLineLabel(null, null)).toBe('Item');
   });
 
   it('builds the staff push body from what exists, joined by a middle dot', () => {

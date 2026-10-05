@@ -12,6 +12,7 @@
  *                   "Return to original racks: 31-C ×1 · 32-A ×2"
  *   partial         several, otherwise: Staging preselected, or one actual
  *                   source chosen by a manager, capped at what is still out
+ *                   less the line's returns no rack leg recorded (its cap)
  *   not_recorded    "Original rack unavailable. The original pick location
  *                   was not recorded for this historical order." Staging or
  *                   Scrap only
@@ -21,19 +22,27 @@
  * destination: a scrap line has no destination group at all (brief 10), and
  * the reason "Damaged" never selects scrap by itself (brief 38).
  *
+ * A live plan the server no longer offers (its rack was archived, moved or
+ * closed after approval) is never swapped for Staging on the screen: the
+ * line opens with no destination chosen, says why, and every button that
+ * would send it stays disabled until a valid choice is made (plan 3.5.4).
+ * The same holds for a rack the viewer may not stock (`writable` false).
+ *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
 
 import { formatRackHoldings } from '../inventory/rack-holdings';
 import {
   RETURNS_COPY,
+  whenProcessedSentence,
+  type ProcessDestination,
   returnToOriginalRackLabel,
   returnToOriginalRacksLabel,
   returnToRackButton,
   returnedToLabel,
   upToLabel,
 } from './returns-copy';
-import { restockProblemWords } from './return-error-map';
+import { RETURN_ERROR_WORDS, restockProblemWords } from './return-error-map';
 
 export type RestockCase = 'single_source' | 'full_remainder' | 'partial' | 'not_recorded';
 export type RestockTarget = 'staging' | 'original' | 'source';
@@ -47,8 +56,13 @@ export interface RestockSource {
   drawn: number;
   restored: number;
   remaining: number;
+  /** What a manager may choose here (partial): remaining less the line's
+   *  returns no rack leg recorded. Equals remaining when none. */
+  cap: number;
   valid: boolean;
   reason: string | null;
+  /** Whether THIS viewer may stock the location (the rack leg's own gate). */
+  writable: boolean;
 }
 
 export interface RestockPlan {
@@ -87,6 +101,12 @@ export interface RestockChoice {
   disposition: ReturnDispositionChoice;
   target: RestockTarget | null;
   locationId: string | null;
+  /**
+   * Set when NO destination is chosen yet: the live plan is no longer offered
+   * (or the destinations could not be read). Holds why, for the screen to say.
+   * Such a choice is never offered and never becomes a decision.
+   */
+  needsChoice?: string;
 }
 
 /** One option row the picker renders (radio semantics: exactly one chosen). */
@@ -154,8 +174,10 @@ export function parseRestockOptions(raw: unknown): RestockOptions {
             drawn: num(y.drawn),
             restored: num(y.restored),
             remaining: num(y.remaining),
+            cap: y.cap === undefined || y.cap === null ? num(y.remaining) : num(y.cap),
             valid: y.valid === true,
             reason: str(y.reason),
+            writable: y.writable !== false,
           };
         }),
         offerOriginal: x.offerOriginal === true,
@@ -172,11 +194,56 @@ function sourceName(s: RestockSource): string {
   return s.name ?? 'an unnamed location';
 }
 
-/** "Original rack is no longer available. (archived)" for the first invalid source. */
+/**
+ * "Original rack is no longer available: 31-C (archived)." naming every
+ * source that failed revalidation, so a two-rack line says which one.
+ */
 function noLongerAvailable(sources: readonly RestockSource[]): string {
-  const bad = sources.find((s) => !s.valid);
-  const why = restockProblemWords(bad?.reason ?? null);
-  return why ? `${RETURNS_COPY.originalNoLongerAvailable} ${why}` : RETURNS_COPY.originalNoLongerAvailable;
+  const bad = sources.filter((s) => !s.valid);
+  if (bad.length === 0) return RETURNS_COPY.originalNoLongerAvailable;
+  const named = bad.map((s) => {
+    const why = restockProblemWords(s.reason);
+    return why ? `${sourceName(s)} ${why}` : sourceName(s);
+  });
+  return `${RETURNS_COPY.originalNoLongerAvailable.replace(/\.$/, '')}: ${named.join(', ')}.`;
+}
+
+/** The locations an "original" plan would stock: the one source (C1) or every
+ *  source with units still out (C2). */
+function originalLegSources(line: Pick<RestockOptionsLine, 'case' | 'sources'>): RestockSource[] {
+  if (line.case === 'single_source') return line.sources.slice(0, 1);
+  return line.sources.filter((s) => s.remaining > 0);
+}
+
+/** The original rack(s) may be chosen now, by this viewer. */
+function originalOffered(line: RestockOptionsLine): boolean {
+  return line.offerOriginal && originalLegSources(line).every((s) => s.writable);
+}
+
+/** One proven source may be chosen now, by this viewer. */
+function sourceOffered(line: RestockOptionsLine, locationId: string | null): boolean {
+  if (!locationId || !line.offerSourceIds.includes(locationId)) return false;
+  const s = line.sources.find((x) => x.locationId === locationId);
+  return s ? s.writable : false;
+}
+
+/** Why a restock target cannot be chosen now (null when it can). */
+function targetProblem(line: RestockOptionsLine, target: RestockTarget | null, locationId: string | null): string | null {
+  if (target === 'original') {
+    if (!line.offerOriginal) {
+      return line.case === 'not_recorded' ? RETURNS_COPY.originalNotRecorded : noLongerAvailable(line.sources);
+    }
+    return originalLegSources(line).every((s) => s.writable) ? null : RETURN_ERROR_WORDS.restockForbidden;
+  }
+  if (target === 'source') {
+    const s = line.sources.find((x) => x.locationId === locationId);
+    if (!s || !line.offerSourceIds.includes(s.locationId)) {
+      if (s && !s.valid) return noLongerAvailable([s]);
+      return RETURNS_COPY.originalLocationsChanged;
+    }
+    return s.writable ? null : RETURN_ERROR_WORDS.restockForbidden;
+  }
+  return null;
 }
 
 /** The label of the "original" row for C1 or C2. */
@@ -207,25 +274,27 @@ export function restockOptionRows(line: RestockOptionsLine): RestockOptionRow[] 
         locationId: null,
         label: originalRowLabel(line),
         help: null,
-        enabled: line.offerOriginal,
-        disabledReason: line.offerOriginal ? null : noLongerAvailable(line.sources),
+        enabled: originalOffered(line),
+        disabledReason: targetProblem(line, 'original', null),
       });
       break;
     case 'partial':
       for (const s of line.sources) {
-        const offered = line.offerSourceIds.includes(s.locationId);
+        const offered = sourceOffered(line, s.locationId);
         rows.push({
           key: `source:${s.locationId}`,
           target: 'source',
           locationId: s.locationId,
           label: `${RETURNS_COPY.oneOfTheOriginalRacks}: ${sourceName(s)}`,
-          help: upToLabel(Math.max(0, s.remaining)),
+          help: upToLabel(Math.max(0, s.cap)),
           enabled: offered,
           disabledReason: offered
             ? null
             : !s.valid
               ? noLongerAvailable([s])
-              : `Room for ${Math.max(0, s.remaining)} here; this return is ${line.quantity}.`,
+              : !line.offerSourceIds.includes(s.locationId)
+                ? `Room for ${Math.max(0, s.cap)} here; this return is ${line.quantity}.`
+                : RETURN_ERROR_WORDS.restockForbidden,
         });
       }
       break;
@@ -255,8 +324,9 @@ export function restockOptionRows(line: RestockOptionsLine): RestockOptionRow[] 
   return rows;
 }
 
-/** The row key a choice selects. */
+/** The row key a choice selects (none while a destination must be chosen). */
 export function choiceKey(choice: RestockChoice): string | null {
+  if (choice.needsChoice) return null;
   if (choice.disposition === 'scrap') return null;
   if (choice.target === 'source' && choice.locationId) return `source:${choice.locationId}`;
   return choice.target === 'original' ? 'original' : 'staging';
@@ -271,9 +341,12 @@ export function choiceFromKey(disposition: ReturnDispositionChoice, key: string 
 }
 
 /**
- * The choice the screen opens with: the live plan when one exists and is
- * still offered; otherwise the line's disposition, with the original rack
- * preselected for C1 or C2 when valid (G12) and Staging otherwise.
+ * The choice the screen opens with: the live plan while it is still offered;
+ * a live plan that is not (its rack was archived, moved or closed, or the
+ * viewer may not stock it) opens with NO destination and says why, never
+ * quietly as Staging (plan 3.5.4). With no plan: the line's disposition, the
+ * original rack preselected for C1 or C2 when offered to this viewer (G12),
+ * Staging otherwise.
  */
 export function preselectedChoice(line: RestockOptionsLine): RestockChoice {
   if (line.plan) {
@@ -283,27 +356,66 @@ export function preselectedChoice(line: RestockOptionsLine): RestockChoice {
       locationId: line.plan.locationId,
     };
     if (isChoiceOffered(line, fromPlan)) return fromPlan;
-    return { disposition: line.plan.disposition, target: line.plan.disposition === 'restock' ? 'staging' : null, locationId: null };
+    return {
+      disposition: 'restock',
+      target: null,
+      locationId: null,
+      needsChoice: targetProblem(line, fromPlan.target, fromPlan.locationId) ?? RETURNS_COPY.originalLocationsChanged,
+    };
   }
   if (line.disposition === 'scrap') return { disposition: 'scrap', target: null, locationId: null };
-  return line.preselect === 'original' && line.offerOriginal
+  return line.preselect === 'original' && originalOffered(line)
     ? { disposition: 'restock', target: 'original', locationId: null }
     : { disposition: 'restock', target: 'staging', locationId: null };
 }
 
-/** True when the server would accept this choice now (advisory; the server decides). */
-export function isChoiceOffered(line: RestockOptionsLine, choice: RestockChoice): boolean {
-  if (choice.disposition === 'scrap') return true;
-  if (choice.target === 'staging' || choice.target === null) return true;
-  if (choice.target === 'original') return line.offerOriginal;
-  return choice.locationId !== null && line.offerSourceIds.includes(choice.locationId);
+/**
+ * The choice for a line whose destinations could not be read: nothing is
+ * chosen, so nothing can be sent (no silent Staging).
+ */
+export function unreadDestinationChoice(disposition: ReturnDispositionChoice): RestockChoice {
+  return { disposition, target: null, locationId: null, needsChoice: RETURNS_COPY.destinationsUnavailable };
 }
 
-/** A choice as the RPC body's line decision. */
+/** True when the server would accept this choice now, from this viewer
+ *  (advisory; the server decides). A choice still to be made never is. */
+export function isChoiceOffered(line: RestockOptionsLine, choice: RestockChoice): boolean {
+  if (choice.needsChoice) return false;
+  if (choice.disposition === 'scrap') return true;
+  if (choice.target === 'staging' || choice.target === null) return true;
+  if (choice.target === 'original') return originalOffered(line);
+  return sourceOffered(line, choice.locationId);
+}
+
+/**
+ * The live plan, as the read-only summary of an approved RMA shows it:
+ * "When processed, New Hire Shirt, M goes back to 31-C." or, when the
+ * provenance no longer offers that plan, the line's name and why, with
+ * "Choose a destination." (never "goes into Staging" while the stored plan
+ * says otherwise).
+ */
+export function plannedSentence(line: RestockOptionsLine, itemLabel: string | null): string {
+  const live = liveChoice(line);
+  if (live.disposition === 'restock' && (live.target === 'original' || live.target === 'source')) {
+    const offered = live.target === 'original' ? line.offerOriginal : line.offerSourceIds.includes(live.locationId ?? '');
+    if (!offered) {
+      return whenProcessedSentence(
+        { kind: 'choose', reason: targetProblem({ ...line, sources: line.sources.map((s) => ({ ...s, writable: true })) }, live.target, live.locationId) ?? RETURNS_COPY.originalLocationsChanged },
+        itemLabel,
+      );
+    }
+  }
+  return whenProcessedSentence(processLabelFor(line, live).destination, itemLabel);
+}
+
+/** A choice as the RPC body's line decision. A choice still to be made has
+ *  none: the screens keep every button that sends one disabled, and this
+ *  refuses rather than sending Staging in its place. */
 export function choiceToDecision(
   returnLineId: string,
   choice: RestockChoice,
 ): { returnLineId: string; disposition: ReturnDispositionChoice; restock?: { target: RestockTarget; locationId?: string } } {
+  if (choice.needsChoice) throw new Error(`No destination is chosen for return line ${returnLineId}.`);
   if (choice.disposition === 'scrap') return { returnLineId, disposition: 'scrap' };
   const target = choice.target ?? 'staging';
   return target === 'source' && choice.locationId
@@ -336,7 +448,8 @@ export function sameChoice(a: RestockChoice, b: RestockChoice): boolean {
 export function processLabelFor(
   line: RestockOptionsLine,
   choice: RestockChoice,
-): { destination: { kind: 'rack'; rack: string } | { kind: 'staging' } | { kind: 'scrap' }; button: string } {
+): { destination: ProcessDestination; button: string } {
+  if (choice.needsChoice) return { destination: { kind: 'choose', reason: choice.needsChoice }, button: RETURNS_COPY.processReturn };
   if (choice.disposition === 'scrap') return { destination: { kind: 'scrap' }, button: RETURNS_COPY.scrap };
   if (choice.target === 'original') {
     const rack =
@@ -374,7 +487,10 @@ export function inboundStateLabel(input: {
   legs?: readonly InboundLeg[];
 }): string {
   if (!input.applied) {
-    return input.returnStatus === 'received' ? RETURNS_COPY.inboundReceived : RETURNS_COPY.inboundWaiting;
+    if (input.returnStatus === 'received') return RETURNS_COPY.inboundReceived;
+    // A denied or cancelled RMA waits for nothing: the item is not coming back.
+    if (input.returnStatus === 'denied' || input.returnStatus === 'cancelled') return RETURNS_COPY.inboundNotReturned;
+    return RETURNS_COPY.inboundWaiting;
   }
   if (input.disposition === 'scrap') return RETURNS_COPY.inboundScrapped;
   const racks = (input.legs ?? []).filter((l) => l.rack && l.quantity > 0);

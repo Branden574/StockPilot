@@ -36,7 +36,8 @@ export const RETURNS_COPY = {
   available: 'Available',
   notInStock: 'Not in stock right now',
   itemIsHere: 'The item is here',
-  itemIsHereHelp: 'Switch on only when the returned item is in your hands now.',
+  itemIsHereHelp:
+    'Switch on only when the returned item is handed to you at the counter now. A requester is not sent the approved and received messages.',
 
   // Destination
   leaveInStaging: 'Leave in Staging',
@@ -46,10 +47,13 @@ export const RETURNS_COPY = {
   originalNotRecorded:
     'Original rack unavailable. The original pick location was not recorded for this historical order.',
   originalNoLongerAvailable: 'Original rack is no longer available.',
+  originalLocationsChanged: 'The original locations changed.',
+  chooseDestination: 'Choose a destination.',
+  destinationsUnavailable: "Couldn't load where the returned item goes. Reload.",
   inspectBeforeChoosing: 'Inspect before choosing.',
 
   // What happens when you approve (return only; the exchange lines arrive in RX-2)
-  approveNothingMoves: 'Nothing moves now. The returned item stays out until it is received.',
+  approveNothingMoves: 'Nothing moves now. The returned item stays out until the return is processed.',
 
   // Buttons
   approveReturnAndExchange: 'Approve return & exchange',
@@ -72,6 +76,9 @@ export const RETURNS_COPY = {
   cancelReturn: 'Cancel return',
   openReplacement: 'Open replacement',
   createReturn: 'Create return',
+  createReturnHelp:
+    'Pick how many of each item is coming back. Restock puts it back in stock when the return is processed; Scrap writes it off.',
+  createReturnQueueNote: 'Goes to the returns approval queue. Stock moves only when the return is processed.',
 
   // Processing lines
   processToRackHint: (rack: string): string =>
@@ -93,6 +100,7 @@ export const RETURNS_COPY = {
   // Deny and cancel
   denyReasonLabel: 'Reason for denying',
   denyReasonHelp: 'Required. The requester is told the request was declined, never the reason.',
+  denyReasonHelpInternal: 'Required. The reason is kept on the return. Nobody is notified.',
   cancelReasonLabel: 'Reason (optional)',
   reasonRequired: 'Add a reason.',
 
@@ -101,9 +109,11 @@ export const RETURNS_COPY = {
   inboundReceived: 'Received',
   inboundInStaging: 'In Staging',
   inboundScrapped: 'Scrapped',
+  inboundNotReturned: 'Not returned',
 
   // Offline (phone)
   needsConnection: 'Needs a connection.',
+  offlineActionsWait: 'Offline: every action waits for a connection.',
 
   // Read-only reasons
   noManagePermission: "You don't have permission to manage returns.",
@@ -188,18 +198,47 @@ export function returnedToLabel(legs: string): string {
   return `Returned to ${legs}`;
 }
 
-/** "When processed, the returned item goes back to 31-C." / "into Staging" / "is scrapped". */
-export function whenProcessedSentence(
-  destination: { kind: 'rack'; rack: string } | { kind: 'staging' } | { kind: 'scrap' },
-): string {
+/** Where a returned line goes when processed; 'choose' while no valid
+ *  destination is chosen (with why). */
+export type ProcessDestination =
+  | { kind: 'rack'; rack: string }
+  | { kind: 'staging' }
+  | { kind: 'scrap' }
+  | { kind: 'choose'; reason: string };
+
+/**
+ * "When processed, New Hire Shirt, M goes back to 31-C." / "goes into
+ * Staging" / "is scrapped" (the item named when given, else "the returned
+ * item"); for a line with no valid destination: "New Hire Shirt, M: Original
+ * rack is no longer available: 31-C (archived). Choose a destination."
+ */
+export function whenProcessedSentence(destination: ProcessDestination, item?: string | null): string {
+  const subject = item && item.trim() ? item.trim() : 'the returned item';
   switch (destination.kind) {
     case 'rack':
-      return `When processed, the returned item goes back to ${destination.rack}.`;
+      return `When processed, ${subject} goes back to ${destination.rack}.`;
     case 'staging':
-      return 'When processed, the returned item goes into Staging.';
+      return `When processed, ${subject} goes into Staging.`;
     case 'scrap':
-      return 'When processed, the returned item is scrapped.';
+      return `When processed, ${subject} is scrapped.`;
+    case 'choose':
+      return choiceNeededSentence(item ?? null, destination.reason);
   }
+}
+
+/** "New Hire Shirt, M: Original rack is no longer available: 31-C (archived).
+ *  Choose a destination." (the reason alone when no item is given). */
+export function choiceNeededSentence(item: string | null, reason: string): string {
+  const prefix = item && item.trim() ? `${item.trim()}: ` : '';
+  const tail = reason === RETURNS_COPY.destinationsUnavailable ? '' : ` ${RETURNS_COPY.chooseDestination}`;
+  return `${prefix}${reason}${tail}`;
+}
+
+/** "New Hire Shirt, M" or "New Hire Shirt" for the sentences that name a line. */
+export function returnLineLabel(name: string | null | undefined, variant: string | null | undefined): string {
+  const n = (name ?? '').trim() || 'Item';
+  const v = (variant ?? '').trim().replace(/^Size\s+/i, '');
+  return v ? `${n}, ${v}` : n;
 }
 
 /** "Already marked received by Dana at 3:04 PM." */
