@@ -14,6 +14,7 @@ import {
   alreadyClosedSentence,
   alreadyReceivedSentence,
   availableReturnActions,
+  choiceNeededSentence,
   choiceToDecision,
   formatOrderNumber,
   isChoiceOffered,
@@ -24,8 +25,10 @@ import {
   RETURN_ACTION_LABELS,
   RETURN_WAITING_PROMPT_DAYS,
   RETURNS_COPY,
+  returnLineLabel,
   returnStatusLabel,
   sameChoice,
+  unreadDestinationChoice,
   whenProcessedSentence,
   type RestockChoice,
   type ReturnAction,
@@ -130,16 +133,42 @@ export function initialChoices(wb: Pick<MobileReturnWorkbench, 'lines'>): Record
   return out;
 }
 
+/** A line with no destination answer has NOTHING chosen (returns review):
+ *  it is never sent as Staging. */
 export function choiceFor(line: MobileReturnWorkbenchLine, choices: Record<string, RestockChoice>): RestockChoice {
-  return choices[line.id] ?? (line.restock ? preselectedChoice(line.restock) : { disposition: line.disposition, target: null, locationId: null });
+  return choices[line.id] ?? (line.restock ? preselectedChoice(line.restock) : unreadDestinationChoice(line.disposition));
 }
 
-/** Every open line's choice is one the server offers now. */
-export function allChoicesOffered(wb: Pick<MobileReturnWorkbench, 'lines'>, choices: Record<string, RestockChoice>): boolean {
-  return openLines(wb).every((l) => isChoiceOffered(l.restock!, choiceFor(l, choices)));
+/** "New Hire Shirt, M": how the sentences name a line. */
+export function lineLabel(line: MobileReturnWorkbenchLine): string {
+  return returnLineLabel(line.item.name, line.item.variant);
 }
 
-/** The approval's decision: every unapplied line (no silent default). */
+/** Every unapplied line has a choice the server offers now (none while the
+ *  destinations could not be read). */
+export function allChoicesOffered(
+  wb: Pick<MobileReturnWorkbench, 'lines'> & { destinationsUnavailable?: boolean },
+  choices: Record<string, RestockChoice>,
+): boolean {
+  if (wb.destinationsUnavailable) return false;
+  return wb.lines.filter((l) => !l.applied).every((l) => (l.restock ? isChoiceOffered(l.restock, choiceFor(l, choices)) : false));
+}
+
+/** Why the send button is disabled, one sentence per line that needs a
+ *  destination, naming it (returns review, plan 3.5.4). */
+export function choiceProblems(
+  wb: Pick<MobileReturnWorkbench, 'lines'> & { destinationsUnavailable?: boolean },
+  choices: Record<string, RestockChoice>,
+): string[] {
+  if (wb.destinationsUnavailable) return [RETURNS_COPY.destinationsUnavailable];
+  return openLines(wb).flatMap((l) => {
+    const c = choiceFor(l, choices);
+    return c.needsChoice ? [choiceNeededSentence(lineLabel(l), c.needsChoice)] : [];
+  });
+}
+
+/** The approval's decision: every unapplied line (no silent default; call
+ *  only when allChoicesOffered, a line with nothing chosen throws). */
 export function approvalDecision(
   wb: Pick<MobileReturnWorkbench, 'lines'>,
   choices: Record<string, RestockChoice>,
@@ -168,21 +197,37 @@ export function processButtonLabel(wb: Pick<MobileReturnWorkbench, 'lines'>, cho
   return RETURNS_COPY.processReturn;
 }
 
-/** "When processed, the returned item goes back to 31-C." per open line. */
-export function whatHappensLines(wb: Pick<MobileReturnWorkbench, 'lines'>, choices: Record<string, RestockChoice>): string[] {
+/** "What happens when you approve": the general line, then one sentence per
+ *  open line that names it ("When processed, New Hire Shirt, M goes back to
+ *  31-C."), each with a stable key (the line id; two lines with the same
+ *  destination are two rows, never one React key). */
+export function whatHappensLines(
+  wb: Pick<MobileReturnWorkbench, 'lines'>,
+  choices: Record<string, RestockChoice>,
+): { key: string; text: string }[] {
   return [
-    RETURNS_COPY.approveNothingMoves,
-    ...openLines(wb).map((l) => whenProcessedSentence(processLabelFor(l.restock!, choiceFor(l, choices)).destination)),
+    { key: 'nothing-moves', text: RETURNS_COPY.approveNothingMoves },
+    ...openLines(wb).map((l) => ({
+      key: l.id,
+      text: whenProcessedSentence(processLabelFor(l.restock!, choiceFor(l, choices)).destination, lineLabel(l)),
+    })),
   ];
 }
 
-/** The hint under a received line ("Put it back on 31-C now. …"). */
+/** The hint under a received line ("Put it back on 31-C now. …"), or why it
+ *  needs a destination. */
 export function processingHint(line: MobileReturnWorkbenchLine, choice: RestockChoice): string | null {
   if (!line.restock) return null;
   const p = processLabelFor(line.restock, choice);
   if (p.destination.kind === 'rack') return RETURNS_COPY.processToRackHint(p.destination.rack);
   if (p.destination.kind === 'staging') return RETURNS_COPY.processToStagingHint;
+  if (p.destination.kind === 'choose') return whenProcessedSentence(p.destination, lineLabel(line));
   return RETURNS_COPY.processScrapHint;
+}
+
+/** The deny sheet's help: only a requester's RMA tells anyone (review). */
+export function denyHelp(wb: Pick<MobileReturnWorkbench, 'return'>): string {
+  return wb.return.source === 'requester' ? RETURNS_COPY.denyReasonHelp : RETURNS_COPY.denyReasonHelpInternal;
 }
 
 // ── Step outcomes ──────────────────────────────────────────────────────────

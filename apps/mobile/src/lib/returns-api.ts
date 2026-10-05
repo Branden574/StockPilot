@@ -126,6 +126,13 @@ export interface MobileReturnWorkbench {
   revision: number;
   planSeq: number;
   createdOnCounter: boolean;
+  /**
+   * An unapplied line has no destination answer (the server's read failed):
+   * nothing is approved, processed or re-planned until a reload brings it
+   * (returns review; never a silent Staging). Derived when an older server
+   * omits it.
+   */
+  destinationsUnavailable: boolean;
   lines: MobileReturnWorkbenchLine[];
   chain: MobileReturnChainEvent[];
   viewer: { canManageReturns: boolean; canApproveOrders: boolean; canReadDecisions: boolean };
@@ -168,7 +175,9 @@ export function normalizeWorkbench(raw: MobileReturnWorkbench): MobileReturnWork
     const parsed = parseRestockOptions({ lines: [l.restock] }).lines[0] ?? null;
     return { ...l, restock: parsed };
   });
-  return { ...raw, lines, chain: raw.chain ?? [] };
+  const destinationsUnavailable =
+    typeof raw.destinationsUnavailable === 'boolean' ? raw.destinationsUnavailable : lines.some((l) => !l.applied && !l.restock);
+  return { ...raw, lines, chain: raw.chain ?? [], destinationsUnavailable };
 }
 
 // ── Writes (online only) ───────────────────────────────────────────────────

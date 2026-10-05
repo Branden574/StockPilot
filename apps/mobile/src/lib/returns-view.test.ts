@@ -7,6 +7,8 @@ import {
   allChoicesOffered,
   approvalDecision,
   changedDecisions,
+  choiceProblems,
+  denyHelp,
   initialChoices,
   processButtonLabel,
   processingHint,
@@ -58,7 +60,7 @@ function restock(over: Partial<RestockOptionsLine> = {}): RestockOptionsLine {
     plan: null,
     case: 'single_source',
     notRecordedReason: null,
-    sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: true, reason: null }],
+    sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, cap: 1, valid: true, reason: null, writable: true }],
     offerOriginal: true,
     offerSourceIds: [],
     preselect: 'original',
@@ -97,6 +99,7 @@ function wb(status: string, line: Partial<RestockOptionsLine> = {}, manage = tru
     revision: 0,
     planSeq: 2,
     createdOnCounter: false,
+    destinationsUnavailable: false,
     lines: [
       {
         id: 'l1',
@@ -161,8 +164,8 @@ describe('destinations and bodies', () => {
     expect(allChoicesOffered(w, choices)).toBe(true);
     expect(approvalDecision(w, choices)).toEqual({ lines: [{ returnLineId: 'l1', disposition: 'restock', restock: { target: 'original' } }] });
     expect(whatHappensLines(w, choices)).toEqual([
-      'Nothing moves now. The returned item stays out until it is received.',
-      'When processed, the returned item goes back to 31-C.',
+      { key: 'nothing-moves', text: 'Nothing moves now. The returned item stays out until the return is processed.' },
+      { key: 'l1', text: 'When processed, Walk Shirt, M goes back to 31-C.' },
     ]);
   });
 
@@ -177,15 +180,53 @@ describe('destinations and bodies', () => {
     expect(processButtonLabel(w, staging)).toBe('Leave in Staging');
   });
 
-  it('a rack that failed revalidation is not offered: Staging opens preselected and the rack choice blocks submit', () => {
+  it('a rack that failed revalidation opens with NO destination: submit blocked, the line named with why, until a choice is made (review)', () => {
     const w = wb('received', {
       plan: { disposition: 'restock', target: 'original', locationId: null, basis: 'single_source', seq: 2 },
       offerOriginal: false,
-      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, valid: false, reason: 'archived' }],
+      sources: [{ locationId: R31, name: '31-C', kind: 'rack', type: 'shelf', drawn: 1, restored: 0, remaining: 1, cap: 1, valid: false, reason: 'archived', writable: true }],
     });
     const choices = initialChoices(w);
-    expect(choices.l1!.target).toBe('staging');
+    expect(choices.l1!.target).toBeNull();
+    expect(allChoicesOffered(w, choices)).toBe(false);
+    expect(choiceProblems(w, choices)).toEqual(['Walk Shirt, M: Original rack is no longer available: 31-C (archived). Choose a destination.']);
+    expect(processButtonLabel(w, choices)).toBe('Process return');
+    expect(processingHint(w.lines[0]!, choices.l1!)).toBe(
+      'Walk Shirt, M: Original rack is no longer available: 31-C (archived). Choose a destination.',
+    );
     expect(allChoicesOffered(w, { l1: { disposition: 'restock', target: 'original', locationId: null } })).toBe(false);
+    const staging = { l1: { disposition: 'restock' as const, target: 'staging' as const, locationId: null } };
+    expect(allChoicesOffered(w, staging)).toBe(true);
+    expect(choiceProblems(w, staging)).toEqual([]);
+  });
+
+  it('destinations that could not be read block approval and say "Reload", never a silent Staging (review)', () => {
+    const w = { ...wb('requested'), destinationsUnavailable: true };
+    w.lines = [{ ...w.lines[0]!, restock: null }];
+    const choices = initialChoices(w);
+    expect(allChoicesOffered(w, choices)).toBe(false);
+    expect(choiceProblems(w, choices)).toEqual(["Couldn't load where the returned item goes. Reload."]);
+    expect(() => approvalDecision(w, choices)).toThrow();
+  });
+
+  it('two lines with the same destination are two keyed rows (no duplicate React key) (review)', () => {
+    const w = wb('requested', { case: 'not_recorded', sources: [], offerOriginal: false, preselect: 'staging' });
+    w.lines = [w.lines[0]!, { ...w.lines[0]!, id: 'l2', item: { ...w.lines[0]!.item, name: 'Cap', variant: null } }];
+    const rows = whatHappensLines(w, initialChoices(w));
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+    expect(rows.map((r) => r.text)).toEqual([
+      'Nothing moves now. The returned item stays out until the return is processed.',
+      'When processed, Walk Shirt, M goes into Staging.',
+      'When processed, Cap goes into Staging.',
+    ]);
+  });
+
+  it('the deny help tells the requester rule only on a requester\'s RMA (review)', () => {
+    const w = wb('requested');
+    expect(denyHelp(w)).toBe('Required. The reason is kept on the return. Nobody is notified.');
+    expect(denyHelp({ ...w, return: { ...w.return, source: 'requester' } })).toBe(
+      'Required. The requester is told the request was declined, never the reason.',
+    );
   });
 });
 

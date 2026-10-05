@@ -49,6 +49,35 @@ describe('the list filters', () => {
   });
 });
 
+describe('the create sheet and the order screen (returns review)', () => {
+  const order = code(read('app/order/[id].tsx'));
+  const sheet = order.slice(order.indexOf('Create return</Body>'), order.indexOf('<Eyebrow>NOTES</Eyebrow>'));
+
+  it('says stock moves when the return is processed, from the shared copy (never at receipt)', () => {
+    expect(order).toContain('{RETURNS_COPY.createReturnQueueNote}');
+    expect(order).toContain('{RETURNS_COPY.createReturnHelp}');
+    expect(read('app/order/[id].tsx')).not.toMatch(/(once|after) (the\s+return|it) is\s+(approved\s+and\s+)?received/);
+  });
+
+  it('gives VoiceOver radios with their state, labelled steppers and a labelled Close', () => {
+    expect(sheet.match(/accessibilityRole="radio"/g)?.length).toBe(2);
+    expect(sheet).toContain('accessibilityState={{ checked: on, disabled: returnSubmitting }}');
+    expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(2);
+    expect(sheet).toContain("`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`");
+    expect(sheet).toMatch(/accessibilityRole="button"\s+accessibilityLabel="Close"/);
+  });
+});
+
+describe('the action sheet names lines and reasons (returns review)', () => {
+  const sheet = code(read('src/components/return-action-sheet.tsx'));
+  it('keys "what happens" by line id, puts a disabled row\'s reason in its label, and picks the deny help by source', () => {
+    expect(sheet).toContain('<Body key={t.key}');
+    expect(sheet).toContain('accessibilityLabel={why ? `${row.label}. ${why}` : row.label}');
+    expect(sheet).toContain('{denyHelp(wb)}');
+    expect(sheet).not.toContain("'Choose a destination that is still available.'");
+  });
+});
+
 describe('online only', () => {
   const view = code(read('src/components/return-workbench-view.tsx'));
   const sheet = code(read('src/components/return-action-sheet.tsx'));

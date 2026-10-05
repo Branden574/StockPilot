@@ -3050,8 +3050,7 @@ export default function OrderDetail() {
                   {actionBtn('Create return', 'create-return', openReturnSheet)}
                   {connectionNotice}
                   <Mono size={10.5} color={c.ink4}>
-                    Goes to the returns approval queue — stock moves only after it is approved
-                    and received.
+                    {RETURNS_COPY.createReturnQueueNote}
                   </Mono>
                 </>
               ) : null}
@@ -3561,14 +3560,17 @@ export default function OrderDetail() {
                 onPress={() => {
                   if (!returnSubmitting) setReturnOpen(false);
                 }}
+                disabled={returnSubmitting}
                 hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                accessibilityState={{ disabled: returnSubmitting }}
               >
                 <X size={18} color={c.ink4} />
               </Pressable>
             </View>
             <Mono size={11} color={c.ink4}>
-              Pick how many of each item is coming back. Restock adds it to inventory once the
-              return is received; Scrap writes it off.
+              {RETURNS_COPY.createReturnHelp}
             </Mono>
 
             <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 12 }}>
@@ -3582,6 +3584,9 @@ export default function OrderDetail() {
                     onPress={() => stepReturnQty(l.orderRequestLineId, delta, l.quantityRemaining)}
                     disabled={disabled}
                     hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`}
+                    accessibilityState={{ disabled }}
                     style={{
                       width: 32,
                       height: 32,
@@ -3610,13 +3615,23 @@ export default function OrderDetail() {
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         {stepBtn('−', -1, d.quantity <= 0 || returnSubmitting)}
-                        <Mono size={15} color={c.ink} style={{ minWidth: 24, textAlign: 'center' }}>
+                        <Mono
+                          size={15}
+                          color={c.ink}
+                          style={{ minWidth: 24, textAlign: 'center' }}
+                          accessibilityLabel={`${d.quantity} ${l.name} returning`}
+                          accessibilityLiveRegion="polite"
+                        >
                           {d.quantity}
                         </Mono>
                         {stepBtn('+', 1, d.quantity >= l.quantityRemaining || returnSubmitting)}
                       </View>
                     </View>
-                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <View
+                      style={{ flexDirection: 'row', gap: 6 }}
+                      accessibilityRole="radiogroup"
+                      accessibilityLabel={`${RETURNS_COPY.returnDisposition} for ${l.name}`}
+                    >
                       {(['restock', 'scrap'] as const).map((disp) => {
                         const on = d.disposition === disp;
                         return (
@@ -3624,6 +3639,9 @@ export default function OrderDetail() {
                             key={disp}
                             onPress={() => setReturnDisposition(l.orderRequestLineId, disp)}
                             disabled={returnSubmitting}
+                            accessibilityRole="radio"
+                            accessibilityLabel={disp === 'restock' ? RETURNS_COPY.restock : RETURNS_COPY.scrap}
+                            accessibilityState={{ checked: on, disabled: returnSubmitting }}
                             style={{
                               paddingHorizontal: 10,
                               paddingVertical: 5,
@@ -3646,7 +3664,7 @@ export default function OrderDetail() {
 
               <View style={{ gap: 8 }}>
                 <Eyebrow>REASON</Eyebrow>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="Reason">
                   {RETURN_REASONS.map((r) => {
                     const on = returnReason === r.value;
                     return (
@@ -3656,6 +3674,9 @@ export default function OrderDetail() {
                         // chip again clears it.
                         onPress={() => setReturnReason(on ? null : r.value)}
                         disabled={returnSubmitting}
+                        accessibilityRole="radio"
+                        accessibilityLabel={r.label}
+                        accessibilityState={{ checked: on, disabled: returnSubmitting }}
                         style={{
                           paddingHorizontal: 10,
                           paddingVertical: 6,

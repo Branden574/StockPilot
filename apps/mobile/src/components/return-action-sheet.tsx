@@ -20,6 +20,7 @@ import {
   choiceFromKey,
   choiceKey,
   damagedHint,
+  isChoiceOffered,
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
   RETURN_REASON_MAX,
@@ -46,6 +47,8 @@ import {
   approvalDecision,
   changedDecisions,
   choiceFor,
+  choiceProblems,
+  denyHelp,
   initialChoices,
   openLines,
   processButtonLabel,
@@ -86,9 +89,13 @@ export interface ReturnSheetDone {
  * its reason, Staging is always one tap away, and Scrap hides the
  * destination group (brief 10). The rows are radio buttons with their
  * state, so VoiceOver reads "Return to original rack: 31-C, radio button,
- * selected". When a process step is refused because the rack is gone, the
- * answer's workbench replaces the sheet's choices (Staging preselected) and
- * the refusal is shown in place and announced; the person confirms again.
+ * selected"; a disabled row carries its reason in its label (a hint is not
+ * read when hints are off). A planned rack that is gone opens with NO
+ * destination chosen and a sentence naming the line and why; the button
+ * stays disabled until a valid choice is made (plan 3.5.4, returns review).
+ * When a process step is refused because the rack is gone, the answer's
+ * workbench replaces the sheet's choices the same way and the refusal is
+ * shown in place and announced; the person chooses and confirms again.
  *
  * Structure: the exception sheets' (sibling backdrop behind a plain card,
  * accessibilityViewIsModal, onAccessibilityTap on the scrim, the body the one
@@ -181,10 +188,12 @@ function SheetContent({
   const reasonValid =
     mode === 'deny' ? reasonCount >= 1 && reasonCount <= RETURN_REASON_MAX : mode === 'cancel' ? reasonCount <= RETURN_REASON_MAX : true;
   const choicesValid = !needsDestinations || allChoicesOffered(wb, choices);
+  // One sentence per line that needs a destination, naming it.
+  const problems = needsDestinations ? choiceProblems(wb, choices) : [];
   const disabledReason = !online
     ? READINESS_NEEDS_CONNECTION_COPY
     : !choicesValid
-      ? 'Choose a destination that is still available.'
+      ? (problems.join(' ') || RETURNS_COPY.chooseDestination)
       : !reasonValid
         ? mode === 'deny'
           ? RETURNS_COPY.reasonRequired
@@ -362,11 +371,17 @@ function SheetContent({
                     accessibilityHint={RETURNS_COPY.itemIsHereHelp}
                   />
                 </View>
-                <View style={{ gap: 4 }} accessible accessibilityLabel={whatHappensLines(wb, choices).join(' ')}>
+                <View
+                  style={{ gap: 4 }}
+                  accessible
+                  accessibilityLabel={whatHappensLines(wb, choices)
+                    .map((t) => t.text)
+                    .join(' ')}
+                >
                   <FieldLabel>WHAT HAPPENS WHEN YOU APPROVE</FieldLabel>
                   {whatHappensLines(wb, choices).map((t) => (
-                    <Body key={t} size={13.5} muted>
-                      {t}
+                    <Body key={t.key} size={13.5} muted>
+                      {t.text}
                     </Body>
                   ))}
                 </View>
@@ -378,7 +393,7 @@ function SheetContent({
                 <FieldLabel>{mode === 'deny' ? RETURNS_COPY.denyReasonLabel.toUpperCase() : RETURNS_COPY.cancelReasonLabel.toUpperCase()}</FieldLabel>
                 {mode === 'deny' ? (
                   <Body size={13} muted>
-                    {RETURNS_COPY.denyReasonHelp}
+                    {denyHelp(wb)}
                   </Body>
                 ) : null}
                 <TextInput
@@ -452,7 +467,11 @@ function LineDestination({
   const rows = line.restock ? restockOptionRows(line.restock) : [];
   const selectedKey = choiceKey(choice);
   const hint = damagedHint(reasonCode);
-  const restockKey = (): string => (line.restock?.preselect === 'original' && line.restock.offerOriginal ? 'original' : 'staging');
+  // Back from scrap: the original rack only when it is offered to this viewer.
+  const restockKey = (): string =>
+    line.restock?.preselect === 'original' && isChoiceOffered(line.restock, { disposition: 'restock', target: 'original', locationId: null })
+      ? 'original'
+      : 'staging';
 
   return (
     <View style={[styles.lineCard, { borderColor: c.hair }]}>
@@ -498,14 +517,17 @@ function LineDestination({
             {rows.map((row) => {
               const checked = selectedKey === row.key;
               const off = disabled || !row.enabled;
+              const why = !row.enabled && row.disabledReason && row.disabledReason !== row.label ? row.disabledReason : null;
               return (
                 <Pressable
                   key={row.key}
                   disabled={off}
                   onPress={() => onChange(choiceFromKey('restock', row.key))}
                   accessibilityRole="radio"
-                  accessibilityLabel={row.label}
-                  accessibilityHint={!row.enabled && row.disabledReason && row.disabledReason !== row.label ? row.disabledReason : row.help ?? undefined}
+                  // The reason a row cannot be chosen is part of its label, so
+                  // VoiceOver reads it with hints off (returns review).
+                  accessibilityLabel={why ? `${row.label}. ${why}` : row.label}
+                  accessibilityHint={row.enabled ? (row.help ?? undefined) : undefined}
                   accessibilityState={{ checked, disabled: off }}
                   style={[
                     styles.option,

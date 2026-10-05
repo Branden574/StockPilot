@@ -204,7 +204,14 @@ export function ReturnWorkbenchView({
 
         {offline ? (
           <Card padding={12}>
-            <Body size={13.5}>{READINESS_NEEDS_CONNECTION_COPY} Returns can be read offline from the last load; every action waits for a connection.</Body>
+            <Body size={13.5}>{RETURNS_COPY.offlineActionsWait}</Body>
+          </Card>
+        ) : null}
+        {wb.destinationsUnavailable && wb.viewer.canManageReturns && (actions.primary || actions.secondary.length > 0) ? (
+          <Card padding={12}>
+            <Body size={13.5} accessibilityRole="alert">
+              {RETURNS_COPY.destinationsUnavailable}
+            </Body>
           </Card>
         ) : null}
 

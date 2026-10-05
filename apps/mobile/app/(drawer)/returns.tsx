@@ -214,6 +214,22 @@ export default function ReturnsListScreen() {
               keyExtractor={(r) => r.id}
               contentContainerStyle={styles.list}
               keyboardDismissMode="on-drag"
+              // A refresh or next page that failed while rows are shown says so
+              // above them (returns review), instead of failing silently.
+              ListHeaderComponent={
+                loadError && rows.length > 0 ? (
+                  <Card padding={12}>
+                    <Body size={13.5} accessibilityRole="alert">
+                      {loadError}
+                    </Body>
+                    <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
+                      <Button variant="outline" size="sm" onPress={() => void load()}>
+                        Try again
+                      </Button>
+                    </View>
+                  </Card>
+                ) : null
+              }
               onEndReachedThreshold={0.4}
               onEndReached={() => void loadMore()}
               refreshControl={
@@ -284,12 +300,14 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
       <Card padding={16} style={selected ? { borderColor: c.ink, borderWidth: 1 } : undefined}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
+        {/* The status pill wraps below the meta at the largest text sizes,
+            so the requester is never cut to a letter (returns review, AX5). */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 0 }}>
             <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
               {returnRowTitle(row)}
             </Mono>
-            <Body size={15.5} color={c.ink} numberOfLines={2} style={{ marginTop: 6, fontFamily: FONT.display }}>
+            <Body size={15.5} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
               {returnRowMeta(row)}
             </Body>
           </View>
