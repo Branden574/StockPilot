@@ -112,6 +112,8 @@ describe('RMAService.createFromOrder line caps and the item check', () => {
   it('checks 100 named items in one read, then calls the database function', async () => {
     const lists: string[][] = [];
     const stub = makeSupabaseStub({
+      // The order, read in the active organization first (desk check F4).
+      'order_requests.select': { data: [{ id: ORDER }], error: null },
       'order_request_lines.select': (call) => {
         const list = inList(call, 'id');
         lists.push(list);
@@ -128,9 +130,13 @@ describe('RMAService.createFromOrder line caps and the item check', () => {
 
   it('throws and calls nothing when the item read fails', async () => {
     const stub = makeSupabaseStub({
+      'order_requests.select': { data: [{ id: ORDER }], error: null },
       'order_request_lines.select': { data: null, error: { message: 'boom' } },
     });
-    await expect(svcFor(stub.client).createFromOrder(ORDER, { lines: linesOf(3) })).rejects.toBeTruthy();
+    await expect(svcFor(stub.client).createFromOrder(ORDER, { lines: linesOf(3) })).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.fromCalls).toContain('order_request_lines');
     expect(stub.rpcCalls).toHaveLength(0);
   });
 });

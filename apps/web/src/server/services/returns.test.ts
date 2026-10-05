@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import type { ModuleId } from '@stockpilot/core';
 
@@ -72,6 +72,7 @@ function svcFor(results: Record<string, unknown>, ctx: Parameters<typeof makeSer
   const stub = makeSupabaseStub({
     'returns.select': { data: [HEADER], error: null },
     'return_lines.select': { data: [], error: null },
+    'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     ...results,
   } as never);
   const svc = new RMAService(makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES, ...ctx }));
@@ -438,6 +439,71 @@ describe('runSteps (the steps endpoint)', () => {
     ]);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['receive_return', 'close_return']);
     expect(workbenchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('an RMA outside the active organization (a member of two organizations, desk check F4)', () => {
+  // The functions gate on membership of the RMA's OWN organization. A member of
+  // two organizations (a stale screen after a switch, or a Bearer call naming
+  // the other organization) could act on the other one's RMA while this
+  // service wrote the audit row, the webhook and the cache invalidation into
+  // the active one. The service reads the RMA (or the order) in the active
+  // organization first: a miss is a 404 before any function runs.
+  const OTHER_ORG_HEADER = { ...HEADER, organization_id: 'org-other' };
+  const foreign = () =>
+    svcFor({
+      'returns.select': servedLikePostgrest([OTHER_ORG_HEADER]),
+      'order_requests.select': servedLikePostgrest([{ ...COMPLETED_ORDER, organization_id: 'org-other' }]),
+      'rpc:approve_return': { data: { changed: true, replay: false, revision: 1, status: 'approved' }, error: null },
+      'rpc:deny_return': { data: { changed: true, status: 'denied' }, error: null },
+      'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null },
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled', revision: 1 }, error: null },
+      'rpc:plan_return_dispositions': { data: { changed: true, appended: 1, planSeq: 2 }, error: null },
+      'rpc:close_return': { data: { changed: true, status: 'closed', lines: [], legs: [] }, error: null },
+      'rpc:return_restock_options': { data: { returnId: RET_ID, status: 'approved', planSeq: 0, lines: [] }, error: null },
+      'rpc:create_return_request': { data: { changed: true, replay: false, returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested', channel: 'staff' }, error: null },
+    });
+
+  it.each([
+    ['approve', (svc: RMAService) => svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION })],
+    ['deny', (svc: RMAService) => svc.deny(RET_ID, 'Not ours')],
+    ['receive', (svc: RMAService) => svc.receive(RET_ID)],
+    ['cancel', (svc: RMAService) => svc.cancel(RET_ID, { expectedRevision: 0 })],
+    ['planDispositions', (svc: RMAService) => svc.planDispositions(RET_ID, DECISION.lines)],
+    ['close', (svc: RMAService) => svc.close(RET_ID)],
+    ['restockOptions', (svc: RMAService) => svc.restockOptions(RET_ID)],
+    [
+      'createFromOrder',
+      (svc: RMAService) =>
+        svc.createFromOrder(ORDER_ID, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'restock' as const }] }, { idempotencyKey: KEY }),
+    ],
+  ])('%s answers not found and runs nothing: no function, audit, webhook, notification or invalidation', async (_name, act) => {
+    const { stub, svc } = foreign();
+    await expect(act(svc)).rejects.toMatchObject({ code: 'not_found' });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
+    expect(invalidateMock).not.toHaveBeenCalled();
+  });
+
+  it('the steps endpoint refuses its first step the same way and runs no function', async () => {
+    const { stub, svc } = foreign();
+    const result = await svc.runSteps(RET_ID, { steps: ['receive', 'process'] } as never);
+    expect(result.ran).toEqual([{ step: 'receive', outcome: 'refused', reason: 'return_not_found', message: "This return isn't available." }]);
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('the active-organization read is filtered by the active organization and the id', async () => {
+    const { stub, svc } = svcFor({ 'rpc:receive_return': { data: { changed: true, status: 'received' }, error: null } });
+    await svc.receive(RET_ID);
+    const first = stub.chainArgsAll.get('returns.select')![0]!;
+    const methods = stub.chainsAll.get('returns.select')![0]!;
+    const eqs = methods.map((m, i) => [m, first[i]] as const).filter(([m]) => m === 'eq').map(([, a]) => a);
+    expect(eqs).toEqual(expect.arrayContaining([['organization_id', 'org-test'], ['id', RET_ID]]));
+    // The read comes before the function call.
+    expect(stub.client.from.mock.invocationCallOrder[0]).toBeLessThan(stub.client.rpc.mock.invocationCallOrder[0]);
   });
 });
 

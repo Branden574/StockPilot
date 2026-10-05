@@ -463,6 +463,7 @@ export class RMAService {
   /** The destination read (return_restock_options): staff only. */
   async restockOptions(id: string): Promise<RestockOptions> {
     this.gateRead();
+    await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('return_restock_options', { p_return_id: id });
     if (error) throw returnRpcError(error);
     return parseRestockOptions(data);
@@ -514,6 +515,8 @@ export class RMAService {
     const parsed = parseReturnBody('create', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
     const body = parsed.value;
+
+    await this.assertOrderInActiveOrg(orderRequestId);
 
     // The item identity assertion is kept: the database stamps the item from
     // the source line, and a client that names another item is refused.
@@ -618,6 +621,7 @@ export class RMAService {
     this.gate();
     const parsed = parseReturnBody('approve', input.decision);
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('approve_return', {
       p_return_id: id,
       p_expected_revision: input.expectedRevision,
@@ -635,7 +639,6 @@ export class RMAService {
     };
 
     if (result.changed) {
-      const facts = await this.facts(id);
       const channel = input.receiveNow ? 'counter' : 'staff';
       const plan = parsed.value.lines.map((l) => ({
         returnLineId: l.returnLineId,
@@ -648,7 +651,7 @@ export class RMAService {
           event: 'return.approved',
           entityType: 'return',
           entityId: id,
-          warehouseId: facts?.warehouseId ?? null,
+          warehouseId: facts.warehouseId,
           extra: { revision: result.revision, channel, plan },
         },
         this.ctx,
@@ -659,7 +662,7 @@ export class RMAService {
       );
       void dispatchEvent(this.ctx.organizationId, 'return.approved', {
         id,
-        returnNumber: facts?.returnNumber ?? null,
+        returnNumber: facts.returnNumber,
         actorId: this.ctx.userId,
       });
       if (input.receiveNow) {
@@ -669,21 +672,19 @@ export class RMAService {
         );
         void dispatchEvent(this.ctx.organizationId, 'return.received', {
           id,
-          returnNumber: facts?.returnNumber ?? null,
+          returnNumber: facts.returnNumber,
           actorId: this.ctx.userId,
         });
       }
-      if (facts) {
-        await notifyRequesterReturnEvent({
-          organizationId: this.ctx.organizationId,
-          returnId: id,
-          returnNumber: facts.returnNumber,
-          orderId: facts.orderRequestId,
-          event: 'approved',
-          source: facts.source,
-          channel,
-        });
-      }
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'approved',
+        source: facts.source,
+        channel,
+      });
     }
     return result;
   }
@@ -693,6 +694,7 @@ export class RMAService {
     this.gate();
     const parsed = parseReturnBody('deny', { reason });
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'reason_required' });
+    const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('deny_return', {
       p_return_id: id,
       p_reason: parsed.value.reason,
@@ -700,27 +702,24 @@ export class RMAService {
     if (error) throw returnRpcError(error);
     const answer = await this.transitionAnswer(data, 'denied', 'deniedBy', 'deniedAt');
     if (answer.changed) {
-      const facts = await this.facts(id);
       await audit(
         { event: 'return.denied', entityType: 'return', entityId: id, reason: parsed.value.reason },
         this.ctx,
       );
       void dispatchEvent(this.ctx.organizationId, 'return.denied', {
         id,
-        returnNumber: facts?.returnNumber ?? null,
+        returnNumber: facts.returnNumber,
         reason: parsed.value.reason,
         actorId: this.ctx.userId,
       });
-      if (facts) {
-        await notifyRequesterReturnEvent({
-          organizationId: this.ctx.organizationId,
-          returnId: id,
-          returnNumber: facts.returnNumber,
-          orderId: facts.orderRequestId,
-          event: 'denied',
-          source: facts.source,
-        });
-      }
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'denied',
+        source: facts.source,
+      });
     }
     return answer;
   }
@@ -728,28 +727,26 @@ export class RMAService {
   /** approved → received. Moves no stock; already received answers changed false (P24). */
   async receive(id: string): Promise<ReturnTransitionAnswer> {
     this.gate();
+    const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('receive_return', { p_return_id: id });
     if (error) throw returnRpcError(error);
     const answer = await this.transitionAnswer(data, 'received', 'receivedBy', 'receivedAt');
     if (answer.changed) {
-      const facts = await this.facts(id);
       await audit({ event: 'return.received', entityType: 'return', entityId: id, extra: { channel: 'staff' } }, this.ctx);
       void dispatchEvent(this.ctx.organizationId, 'return.received', {
         id,
-        returnNumber: facts?.returnNumber ?? null,
+        returnNumber: facts.returnNumber,
         actorId: this.ctx.userId,
       });
-      if (facts) {
-        await notifyRequesterReturnEvent({
-          organizationId: this.ctx.organizationId,
-          returnId: id,
-          returnNumber: facts.returnNumber,
-          orderId: facts.orderRequestId,
-          event: 'received',
-          source: facts.source,
-          channel: 'staff',
-        });
-      }
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'received',
+        source: facts.source,
+        channel: 'staff',
+      });
     }
     return answer;
   }
@@ -762,6 +759,7 @@ export class RMAService {
     this.gate();
     const parsed = parseReturnBody('cancel', input);
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('cancel_return', {
       p_return_id: id,
       p_expected_revision: parsed.value.expectedRevision ?? null,
@@ -770,26 +768,23 @@ export class RMAService {
     if (error) throw returnRpcError(error);
     const answer = await this.transitionAnswer(data, 'cancelled', null, null);
     if (answer.changed) {
-      const facts = await this.facts(id);
       await audit(
         { event: 'return.cancelled', entityType: 'return', entityId: id, reason: parsed.value.reason ?? undefined },
         this.ctx,
       );
       void dispatchEvent(this.ctx.organizationId, 'return.cancelled', {
         id,
-        returnNumber: facts?.returnNumber ?? null,
+        returnNumber: facts.returnNumber,
         actorId: this.ctx.userId,
       });
-      if (facts) {
-        await notifyRequesterReturnEvent({
-          organizationId: this.ctx.organizationId,
-          returnId: id,
-          returnNumber: facts.returnNumber,
-          orderId: facts.orderRequestId,
-          event: 'cancelled',
-          source: facts.source,
-        });
-      }
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'cancelled',
+        source: facts.source,
+      });
     }
     return answer;
   }
@@ -799,6 +794,7 @@ export class RMAService {
     this.gate();
     const parsed = parseReturnBody('dispositions', { lines });
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('plan_return_dispositions', {
       p_return_id: id,
       p_lines: parsed.value.lines,
@@ -849,6 +845,7 @@ export class RMAService {
       if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
       lines = parsed.value.lines;
     }
+    const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('close_return', {
       p_return_id: id,
       p_lines: lines,
@@ -894,13 +891,12 @@ export class RMAService {
 
     if (result.changed) {
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.close');
-      const facts = await this.facts(id);
       await audit(
         {
           event: 'return.closed',
           entityType: 'return',
           entityId: id,
-          warehouseId: facts?.warehouseId ?? null,
+          warehouseId: facts.warehouseId,
           extra: {
             lines: closeLines.map((l) => ({
               returnLineId: l.returnLineId,
@@ -912,10 +908,10 @@ export class RMAService {
         },
         this.ctx,
       );
-      if (facts) await this.publishReturnClosed(id, facts);
+      await this.publishReturnClosed(id, facts);
       void dispatchEvent(this.ctx.organizationId, 'return.closed', {
         id,
-        returnNumber: facts?.returnNumber ?? null,
+        returnNumber: facts.returnNumber,
         actorId: this.ctx.userId,
       });
     }
@@ -1002,14 +998,26 @@ export class RMAService {
     }
   }
 
-  private async facts(id: string): Promise<ReturnFacts | null> {
+  /**
+   * The RMA read in the ACTIVE organization, before any function runs (desk
+   * check F4). The functions gate on membership of the RMA's own
+   * organization, so for a member of two organizations (a stale screen after
+   * an organization switch, or a Bearer call naming the other organization)
+   * the call would act on the other organization's RMA while this service
+   * wrote the audit row, the webhook, the notification and the inventory
+   * invalidation into the active one. A miss answers like a missing RMA,
+   * before anything runs. The header facts the side effects need do not
+   * change across a transition, so this one read serves them too.
+   */
+  private async factsInActiveOrg(id: string): Promise<ReturnFacts> {
     const { data, error } = await this.ctx.supabase
       .from('returns')
       .select('id, return_number, source, order_request_id, order_request:order_requests!order_request_id (warehouse_id, order_number)')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
-    if (error || !data) return null;
+    if (error) throw new ServiceError('internal_error', error.message, { reason: 'failed' });
+    if (!data) throw returnRpcError({ hint: 'return_not_found' });
     const row = data as {
       id: string;
       return_number: string | null;
@@ -1026,6 +1034,18 @@ export class RMAService {
       warehouseId: order?.warehouse_id ?? null,
       orderNumber: order?.order_number ?? null,
     };
+  }
+
+  /** The order read in the ACTIVE organization before a create (desk check F4). */
+  private async assertOrderInActiveOrg(orderRequestId: string): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', orderRequestId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message, { reason: 'failed' });
+    if (!data) throw returnRpcError({ hint: 'order_not_found' });
   }
 
   /**

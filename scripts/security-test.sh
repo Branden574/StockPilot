@@ -1023,7 +1023,10 @@ WEB_TESTS=(
   # refusal by hint (never raw database text), and writes audit, outbox and
   # webhooks only on a real change. The v1 routes answer cookie and Bearer
   # callers for their own organization, never cached; a foreign RMA is a 404
-  # like a missing one; the legacy create body mints a key. The public
+  # like a missing one, for a write too (the service reads the RMA or order
+  # in the active organization before any function runs, so a member of two
+  # organizations never acts on the other one's RMA and logs it here); the
+  # legacy create body mints a key. The public
   # submit keeps its honeypot and unit cap, keys its bucket by the token's
   # hash and gives one generic answer for every failure; the requester and
   # portal paths copy identity from the order and go through the

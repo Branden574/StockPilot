@@ -660,7 +660,12 @@ actually fire.
 - **Enforced by**: the four policies, the grants, the two guard triggers,
   the append-only trigger, and the in-body gates. In the app,
   `RMAService` calls only the functions (the raw edges are gone from new
-  code), maps refusals by hint (core `return-error-map.ts`), and writes
+  code), reads the RMA (or, for a create, the order) in the ACTIVE
+  organization before any function runs and answers a miss as not found (the
+  functions gate on the RMA's own organization, so a member of two
+  organizations could otherwise act on the other one's RMA and have the
+  audit row, the webhook and the inventory invalidation written into the
+  active one), maps refusals by hint (core `return-error-map.ts`), and writes
   audit, outbox and webhooks only on `changed: true`. The list reads
   `return_overview` (security_invoker, so the caller's RLS applies) behind
   `returns:read` or `returns:manage`.
