@@ -54,22 +54,22 @@
 -- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0397.py; each must
 -- fail the named lines):
 --   M1  the gate lets a pick slip through while the RMA is approved      -> E3, R4
---   M2  the gate ignores the transaction-bound flag (any value passes)   -> Q1, Q2
+--   M2  the gate takes any value of the flag (not this transaction's id) -> Q1, Q2
 --   M3  the notify trigger's WHEN is inverted                            -> N1, N2
---   M4  the issue skips caller_can_read_item (the staff tier)            -> T2
---   M5  the issue leaves the line cost to its default (0)                -> H6
---   M6  the issue checks short before approve_partial commits nothing    -> J1
---   M7  a substitution inserts the new order before cancelling the old   -> J5
+--   M4  the staff tier skips caller_can_read_item                        -> T2
+--   M5  the issue leaves the line cost at 0                              -> H6
+--   M6  the issue lets a short replacement stand under refuse            -> J1
+--   M7  a substitution issues the new order before cancelling the old    -> J5
 --   M8  the CASE drops the RMA condition from completed                  -> V1
 --   M9  the CASE ranks waiting above unavailable                         -> V1
---   M10 cancel_return_replacement refuses a drawn replacement            -> X1, X2, X3
+--   M10 cancel_return_replacement refuses a drawn replacement            -> X1, X2
 --   M11 the link guard lets an update through                            -> L2
 --   M12 the lines guard lets an API line through                         -> L3
---   M13 the approval replay reads the stored response                    -> I2
---   M14 release_return_replacement_early skips the reason                -> R2
---   M15 the on-cancel hook leaves an undrawn replacement live            -> K1
---   M16 the on-deny hook leaves requested lines requested                -> K3
---   M17 the returns API guard drops the exchange clause                  -> L5
+--   M13 the approval replay reads the stored key response                -> I2
+--   M14 release_return_replacement_early skips the reason                -> R1
+--   M15 the on-cancel hook leaves an undrawn replacement live            -> K2
+--   M16 the on-deny hook leaves requested lines requested                -> K4
+--   M17 the returns API guard drops the exchange clause                  -> L4
 --   M18 the requester options keep a hidden item                         -> Y1
 --   M19 the issue copies the original's notes                            -> H5
 --   M20 the issue drops a deleted requester's stamp                      -> H4
