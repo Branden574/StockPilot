@@ -56,8 +56,13 @@ vi.mock('@/lib/email/es/families/digest', () => ({
   weeklyDigestText: vi.fn(() => 'digest text'),
 }));
 
+// What each recipient may read is covered by route.scope.test.ts, which runs
+// the real digest service; here it is a pass-through.
 vi.mock('@/server/services/digest', () => ({
-  getDigestData: vi.fn(async () => ({ lowStock: [], openPos: [], cycleCounts: [] })),
+  getDigestSource: vi.fn(async () => ({ lowStock: [], openPos: [], openCycleCounts: [] })),
+  loadDigestReaderData: vi.fn(async () => ({})),
+  digestReaderFor: vi.fn(() => ({})),
+  buildDigestPayload: vi.fn(() => ({ lowStock: [], openPos: [], openCycleCounts: [] })),
   isDigestEmpty: vi.fn(() => false),
   applySectionOptIns: vi.fn((payload: unknown) => payload),
 }));
@@ -92,6 +97,20 @@ function recipientRow(id: string, email: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('GET /api/cron/weekly-digest — CRON_SECRET', () => {
+  it('answers 401 and reads nothing without the secret, or with a wrong one', async () => {
+    const stub = makeSupabaseStub({});
+    adminHolder.client = stub.client;
+
+    for (const header of [undefined, 'Bearer wrong-secret', 'test-cron-secret']) {
+      const res = await GET(buildRequest(header));
+      expect(res.status).toBe(401);
+    }
+    expect(stub.fromCalls).toEqual([]);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/cron/weekly-digest — disabled accounts', () => {

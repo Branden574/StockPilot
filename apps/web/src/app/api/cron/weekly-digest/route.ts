@@ -14,8 +14,11 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   applySectionOptIns,
-  getDigestData,
+  buildDigestPayload,
+  digestReaderFor,
+  getDigestSource,
   isDigestEmpty,
+  loadDigestReaderData,
 } from '@/server/services/digest';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -60,7 +63,9 @@ export const maxDuration = 60;
 /**
  * Weekly inventory digest. Wired to Vercel Cron via vercel.json
  * (0 14 * * 1 UTC ≈ 7am Pacific Mondays). Uses the service-role
- * client to span all orgs.
+ * client to span all orgs, so it reads each org once and then cuts what
+ * each recipient is sent to what that recipient may read
+ * (buildDigestPayload with their reader; see services/digest.ts).
  *
  * Auth: same Bearer ${CRON_SECRET} pattern as purge-ai-chat-history.
  *
@@ -161,8 +166,8 @@ export async function GET(req: Request) {
       sections: { lowStock: boolean; openPos: boolean; cycleCounts: boolean };
     }
 
-    // Fan recipients out by org so each org's payload is computed once
-    // even if multiple users in the same org are opted in.
+    // Fan recipients out by org so each org is read once even if multiple
+    // users in the same org are opted in.
     const byOrg = new Map<string, { orgName: string; recipients: RecipientLite[] }>();
     for (const row of recipients) {
       const sections = {
@@ -207,7 +212,19 @@ export async function GET(req: Request) {
 
     for (const [orgId, group] of byOrg) {
       try {
-        const fullPayload = await getDigestData(admin, orgId);
+        // One org-wide read (the service role sees every row), plus what
+        // decides each recipient's view: their warehouse and category
+        // assignments and the purchase_orders:read permission. A failed read
+        // throws to the per-org catch below, so nobody in the org is sent a
+        // wider view than theirs.
+        const [source, readerData] = await Promise.all([
+          getDigestSource(admin, orgId),
+          loadDigestReaderData(
+            admin,
+            orgId,
+            group.recipients.map((r) => r.userId),
+          ),
+        ]);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
         for (const { userId, email: to, name, sections } of group.recipients) {
           // Re-check membership + opt-in + disabled-status IMMEDIATELY
@@ -224,7 +241,7 @@ export async function GET(req: Request) {
           const [membershipRes, profileRes] = await Promise.all([
             admin
               .from('organization_members')
-              .select('user_id, accepted_at')
+              .select('user_id, accepted_at, role')
               .eq('organization_id', orgId)
               .eq('user_id', userId)
               // An "act as" grant is not a membership (see the pull above).
@@ -237,7 +254,7 @@ export async function GET(req: Request) {
               .maybeSingle(),
           ]);
           const membership = membershipRes.data as
-            | { user_id: string; accepted_at: string | null }
+            | { user_id: string; accepted_at: string | null; role: string }
             | null;
           const profile = profileRes.data as
             | { email_digest_optin: boolean | null; disabled_at: string | null }
@@ -255,9 +272,14 @@ export async function GET(req: Request) {
             continue;
           }
 
-          // Each recipient sees only their opted-in sections; one or two
-          // could be all-empty even when the org's full payload isn't.
-          const payload = applySectionOptIns(fullPayload, sections);
+          // Each recipient is sent what they may read in StockPilot, which
+          // is also what their "Send preview now" shows: the role read just
+          // now, with their assignments and permission (services/digest.ts
+          // restates the SELECT policies). Then only their opted-in
+          // sections; one or two could be all-empty even when the org's
+          // source isn't.
+          const reader = digestReaderFor(readerData, userId, membership.role);
+          const payload = applySectionOptIns(buildDigestPayload(source, reader), sections);
           if (isDigestEmpty(payload)) {
             skipped += 1;
             continue;

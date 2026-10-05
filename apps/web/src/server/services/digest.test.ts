@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { getDigestData } from './digest';
+import {
+  buildDigestPayload,
+  digestReaderFor,
+  getDigestData,
+  type DigestReaderData,
+  type DigestSource,
+} from './digest';
 
 /**
  * The weekly digest's low-stock section cannot be tested with the generic
@@ -273,5 +279,108 @@ describe('getDigestData low stock', () => {
     const payload = await getDigestData(client, 'org-1');
 
     expect(payload.lowStock).toEqual([]);
+  });
+});
+
+describe('buildDigestPayload: what one reader is sent (the edges route.scope.test.ts does not reach)', () => {
+  const sourceItem = (
+    id: string,
+    warehouseId: string | null,
+    over: Partial<DigestSource['lowStock'][number]> = {},
+  ): DigestSource['lowStock'][number] => ({
+    id,
+    sku: id,
+    name: id,
+    qty: 0,
+    reorderPoint: 5,
+    warehouseId,
+    charterId: null,
+    categoryId: null,
+    warehouseName: warehouseId ?? 'Unassigned',
+    ...over,
+  });
+  const sourcePo = (
+    id: string,
+    over: Partial<DigestSource['openPos'][number]> = {},
+  ): DigestSource['openPos'][number] => ({
+    id,
+    poNumber: id,
+    supplierName: null,
+    expectedAt: null,
+    status: 'ordered',
+    isOverdue: false,
+    destinationLocationId: null,
+    destinationWarehouseId: null,
+    ...over,
+  });
+  const noFacts = (): DigestReaderData => ({
+    assignments: new Map(),
+    categories: new Map(),
+    userPoRead: new Map(),
+    rolePoRead: new Map(),
+    defaultPoReadRoles: new Set(['owner', 'admin', 'manager', 'staff', 'viewer']),
+  });
+
+  it('keeps what the reader\'s own client returned (the preview), except an item no member can read', () => {
+    const source: DigestSource = {
+      lowStock: [sourceItem('placed', 'wh-1'), sourceItem('no-warehouse', null)],
+      openPos: [sourcePo('po-1')],
+      openCycleCounts: [],
+    };
+    const payload = buildDigestPayload(source, null);
+    expect(payload.lowStock.flatMap((g) => g.items.map((i) => i.id))).toEqual(['placed']);
+    expect(payload.openPos.map((p) => p.id)).toEqual(['po-1']);
+  });
+
+  it('refuses a purchase order whose destination location the read did not return, unless the reader sees every warehouse', () => {
+    const source: DigestSource = {
+      lowStock: [],
+      openPos: [sourcePo('po-unknown-destination', { destinationLocationId: 'loc-x', destinationWarehouseId: undefined })],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('staff', [{ warehouseId: 'wh-1', charterId: null }]);
+    expect(buildDigestPayload(source, digestReaderFor(facts, 'staff', 'staff')).openPos).toEqual([]);
+    expect(
+      buildDigestPayload(source, digestReaderFor(facts, 'manager', 'manager')).openPos.map((p) => p.id),
+    ).toEqual(['po-unknown-destination']);
+  });
+
+  it('gives a role the policies do not name no items and, without a grant, no purchase orders', () => {
+    const source: DigestSource = {
+      lowStock: [sourceItem('placed', 'wh-1')],
+      openPos: [sourcePo('po-1')],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('odd', [{ warehouseId: 'wh-1', charterId: null }]);
+    const reader = digestReaderFor(facts, 'odd', 'auditor');
+    expect(reader.canReadPurchaseOrders).toBe(false);
+    const payload = buildDigestPayload(source, reader);
+    expect(payload.lowStock).toEqual([]);
+    expect(payload.openPos).toEqual([]);
+  });
+
+  it('cuts to the rendered limits AFTER the reader, so a scoped reader still gets their own lowest twenty', () => {
+    // 30 low items elsewhere sort ahead of the reader's 3; cutting first
+    // would have left the reader nothing.
+    const source: DigestSource = {
+      lowStock: [
+        ...Array.from({ length: 30 }, (_, i) => sourceItem(`other-${i}`, 'wh-other', { qty: -1 })),
+        ...Array.from({ length: 3 }, (_, i) => sourceItem(`mine-${i}`, 'wh-mine')),
+      ],
+      openPos: [
+        ...Array.from({ length: 25 }, (_, i) =>
+          sourcePo(`po-other-${i}`, { destinationLocationId: 'loc-other', destinationWarehouseId: 'wh-other' }),
+        ),
+        sourcePo('po-mine', { destinationLocationId: 'loc-mine', destinationWarehouseId: 'wh-mine' }),
+      ],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('staff', [{ warehouseId: 'wh-mine', charterId: null }]);
+    const payload = buildDigestPayload(source, digestReaderFor(facts, 'staff', 'staff'));
+    expect(payload.lowStock.flatMap((g) => g.items.map((i) => i.id))).toEqual(['mine-0', 'mine-1', 'mine-2']);
+    expect(payload.openPos.map((p) => p.id)).toEqual(['po-mine']);
   });
 });
