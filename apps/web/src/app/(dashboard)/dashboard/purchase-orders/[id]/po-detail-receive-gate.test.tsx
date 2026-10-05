@@ -201,6 +201,9 @@ describe('PO detail page: who is offered Receive', () => {
     expect(screen.queryByText(RECEIVE_MANAGER_POSTS_COPY)).toBeNull();
     expect(dialogProps.value?.checklist).toEqual({ versionNumber: 2, title: 'Delivery checks' });
     expect(dialogProps.value?.canRecordChecklist).toBe(true);
+    // An ordered PO takes a receipt: the dialog shows its button
+    // (po-detail-posted-panel.test.tsx covers a PO the post completes).
+    expect(dialogProps.value?.receivable).toBe(true);
     expect(historyProps.value?.checklists).toEqual(checks.value);
     expect(historyProps.value?.poId).toBe('po-1');
   });

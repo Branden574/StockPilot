@@ -78,6 +78,15 @@ interface PoReceiveDialogProps {
   checklist?: { versionNumber: number; title: string } | null;
   /** core receivingGate().canRecordChecklist for this person. */
   canRecordChecklist?: boolean;
+  /**
+   * Whether the purchase order can take a receipt now (the page's
+   * canReceive). The page keeps this dialog mounted for a poster even when it
+   * cannot (desk check F1): the post that completes a PO refreshes the page
+   * as 'received', and the Posted panel must stay until Done or Record
+   * checklist. Without it there is no Receive items button, and an open
+   * dialog stays open until it is closed.
+   */
+  receivable?: boolean;
 }
 
 interface LotRow {
@@ -119,6 +128,7 @@ export function PoReceiveDialog({
   groups = {},
   checklist = null,
   canRecordChecklist = false,
+  receivable = true,
 }: PoReceiveDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -341,14 +351,16 @@ export function PoReceiveDialog({
       fail(res.error.message);
       return;
     }
+    // Said on both paths, so a person who looks away still learns it.
+    toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}.`);
     if (checklist && canRecordChecklist) {
       // F4-1: offer the checklist in place of the form. The receipt is posted;
-      // the page refreshes underneath so Receipts shows it.
+      // the page refreshes underneath so Receipts shows it, and keeps this
+      // dialog mounted even when the PO now reads 'received' (desk check F1).
       setPosted({ receiptId: res.data.receiptId, receiptNumber: res.data.receiptNumber });
       router.refresh();
       return;
     }
-    toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}.`);
     setOpen(false);
     router.refresh();
   }
@@ -398,15 +410,22 @@ export function PoReceiveDialog({
     [lines, groups],
   );
 
+  // Nothing to receive and nothing open: no button. The dialog itself stays
+  // mounted (the page keeps it for a poster), so an open Posted panel
+  // survives the refresh that turns the PO 'received' (desk check F1).
+  if (!receivable && !open) return null;
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {/* The ink primary: receiving commits the work in front of you
-            (DESIGN-SPEC 6.2, CONFLICTS P5). */}
-        <Button variant="default">
-          <PackageCheck className="h-4 w-4" /> Receive items
-        </Button>
-      </DialogTrigger>
+      {receivable && (
+        <DialogTrigger asChild>
+          {/* The ink primary: receiving commits the work in front of you
+              (DESIGN-SPEC 6.2, CONFLICTS P5). */}
+          <Button variant="default">
+            <PackageCheck className="h-4 w-4" /> Receive items
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="max-w-3xl">
         {posted ? (
           <>

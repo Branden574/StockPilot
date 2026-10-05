@@ -76,7 +76,9 @@ describe('PoReceiveDialog: the Posted panel', () => {
       screen.getByRole('button', { name: RECEIVING_CHECKLIST_COPY.recordChecklist }),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: RECEIVING_CHECKLIST_COPY.done })).toBeTruthy();
-    expect(toast.success).not.toHaveBeenCalled();
+    // Re-pinned by desk check F1 (was: no toast on this path): the toast says
+    // the receipt posted here too, so a person who looks away still learns it.
+    expect(toast.success).toHaveBeenCalledWith('Receipt R-1 posted against PO-1.');
     expect(router.refresh).toHaveBeenCalled();
     // The receipt is saved: a reload loses nothing now.
     expect(getUnsavedSources()).toEqual([]);
@@ -151,6 +153,21 @@ describe('PoReceiveDialog: the Posted panel', () => {
     expect((await screen.findByRole('alert')).textContent).toBe(
       `${RECEIVING_CHECKLIST_COPY.noChecklist} ${RECEIVING_CHECKLIST_COPY.startFailedAfterPostWeb}`,
     );
+  });
+
+  // Desk check F1: with nothing left to receive (the page passes receivable
+  // false), the dialog shows no button, but an open panel is never cut off.
+  it('not receivable and not open: no Receive items button', () => {
+    render(
+      <PoReceiveDialog
+        poId="po-1"
+        poNumber="PO-1"
+        warehouseId="wh-1"
+        lines={LINES}
+        receivable={false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /receive items/i })).toBeNull();
   });
 
   // Pinned: today's path, unchanged, whenever the panel would not apply.

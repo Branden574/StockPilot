@@ -153,15 +153,20 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // ReceivingService.postReceipt and the phone share).
   const gate = checklistSvc.gate();
   const canReceive = receivableHere && gate.canPostReceipt;
+  // The receive dialog stays mounted for a poster even when nothing is left
+  // to receive (desk check F1): a post that completes the PO refreshes this
+  // page as 'received', and the Posted panel the dialog holds must not vanish
+  // under the person. It shows its Receive items button only while canReceive.
+  const keepReceiveDialog = gate.canPostReceipt && warehouseId !== null;
   // The What's New registry test (lib/releases/registry.test.ts) pins this
   // statement on one line, so Prettier leaves it as written.
   // prettier-ignore
   const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
-  // Below manager the ledger refuses a post whatever the permission, so the
-  // page says who posts receipts instead of asking for a permission that
-  // would not help (F4-1). A manager without the permission reads why above.
+  // With the permission but below manager, the ledger still refuses a post
+  // (F4-1), so the page says who posts receipts. Without the permission the
+  // sentence above says what is missing, as it did before F4-1.
   const managerPostsNote =
-    receivableHere && !isManagerOrAbove(ctx.role) ? RECEIVE_MANAGER_POSTS_COPY : null;
+    receivableHere && canAdjustStock && !gate.canPostReceipt ? RECEIVE_MANAGER_POSTS_COPY : null;
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
   const liveChecklist = checklists.ok ? liveChecklistVersion(checklists.versions) : null;
 
@@ -199,7 +204,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const receiveNote =
     canReceive && warehouseId
       ? 'Items arrived? Use “Receive items” to record what was received.'
-      : (managerPostsNote ?? receiveRefusal);
+      : (receiveRefusal ?? managerPostsNote);
 
   return (
     <div className={PAGE}>
@@ -298,13 +303,14 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                       {formatCurrency(po.subtotal as number)}
                     </span>
                   </div>
-                  {canReceive && warehouseId && (
+                  {keepReceiveDialog && warehouseId && (
                     <PoReceiveDialog
                       poId={id}
                       poNumber={po.po_number as string}
                       warehouseId={warehouseId}
                       lines={lineRows}
                       groups={receiveGroups}
+                      receivable={canReceive}
                       checklist={
                         liveChecklist
                           ? { versionNumber: liveChecklist.versionNumber, title: liveChecklist.title }
