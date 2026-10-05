@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
 import { can, deliveryRecipientsForRouting, STOREFRONT_TITLE_COPY } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import { loadOrderKits } from '@/server/loaders/orders-kits';
 import {
@@ -29,10 +31,19 @@ export default async function NewOrderPage({
   if (!can(ctx, 'orders:request')) {
     redirect('/dashboard');
   }
+  // The Orders module gate, as /dashboard/orders has it (L96): with Orders off
+  // nothing else is read. Cheap on the shell path: it reads the module set
+  // requireOrgContext already resolved (request-cached), no extra round trip.
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
+  }
 
   // SHELL-PATH AUDIT: everything awaited before returning JSX must be
   // cheap or cached, because it gates the first flush:
   //   - requireOrgContext: React.cache()d, shared with the layout.
+  //   - checkModuleAccess('orders') (above): reads the request-cached module
+  //     set from the same context bundle, no extra round trip.
   //   - warehouses: getWarehousesForRequest — the request-cached LIGHT
   //     {id,name} helper shared with the dashboard layout (perf plan
   //     P2). The previous WarehousesService.forCurrentUser().list()
