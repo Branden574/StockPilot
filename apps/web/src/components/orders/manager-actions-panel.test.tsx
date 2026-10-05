@@ -945,8 +945,10 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
   // The app refuses every write for role viewer (assertWarehouseAccess:
   // "Read-only auditor cannot perform write operations."), and each of these
   // actions asks warehouse write first; the sign route hands an order over
-  // for a viewer only as its driver (handOverAllowed). Internal notes ask
-  // read access only, so a viewer granted orders:approve keeps them.
+  // for a viewer only as its driver (handOverAllowed). Since 0395 (L129a)
+  // Internal notes ask warehouse write too (setInternalNotes, and the order
+  // update policy underneath), so a viewer is not offered the editor either:
+  // every save would have been refused (small fixes slice 2 review).
   const WRITE_BUTTONS = [
     /^Approve$/, /^Deny$/, /Approve partial/, /Generate pick slip/, /(Assign|Reassign) picker/,
     /Generate packing slips/, /Reopen picking/, /Mark staged for/, /(Assign|Reassign) delivery/,
@@ -965,7 +967,7 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     ['backordered', { stockGates: { approvePartial: 'hidden', resume: 'enabled', notice: null, canRetry: false } }],
   ];
 
-  it('a viewer granted orders:approve and orders:assign_delivery sees no write button at any status, and keeps Internal notes (mutation: drop the viewer rule)', () => {
+  it('a viewer granted orders:approve and orders:assign_delivery sees no write button and no notes editor at any status (mutation: drop the viewer rule)', () => {
     for (const [status, extra] of cases) {
       const { unmount } = render(
         <ManagerActionsPanel
@@ -975,9 +977,16 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
       for (const name of WRITE_BUTTONS) {
         expect(screen.queryByRole('button', { name }), `${status}${extra.fulfillmentType ? `/${extra.fulfillmentType}` : ''}: ${name}`).not.toBeInTheDocument();
       }
-      expect(screen.getByLabelText('Internal notes'), status).toBeInTheDocument();
+      // Re-pinned by the small fixes slice 2 review (was: keeps Internal notes).
+      expect(screen.queryByLabelText('Internal notes'), status).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Save notes/ }), status).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it('a staff member granted orders:approve keeps the notes editor', () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, viewerRole: 'staff' })} />);
+    expect(screen.getByLabelText('Internal notes')).toBeInTheDocument();
   });
 
   it('a viewer who is the assigned driver keeps Collect signature and Physical signature in transit (mutation: viewer rule on the driver too)', () => {
