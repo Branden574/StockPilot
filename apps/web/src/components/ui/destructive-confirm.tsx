@@ -44,6 +44,13 @@ interface BaseProps {
    * destructive aesthetic.
    */
   tone?: 'destructive' | 'primary';
+  /**
+   * Why the last attempt was refused, shown inside the dialog above its
+   * buttons as a persistent role="alert" line. A toast alone sits behind an
+   * open dialog (L112). The caller sets it from the refusal and clears it on
+   * open and on each try.
+   */
+  error?: string | null;
 }
 
 interface StandardProps extends BaseProps {
@@ -87,6 +94,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
     pending = false,
     onConfirm,
     tone = 'destructive',
+    error = null,
   } = props;
 
   const severity: Severity = props.severity ?? 'standard';
@@ -178,6 +186,12 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
             />
           </div>
         )}
+
+        {error ? (
+          <p role="alert" className="text-destructive text-sm">
+            {error}
+          </p>
+        ) : null}
 
         <DialogFooter>
           <Button

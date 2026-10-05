@@ -142,3 +142,42 @@ describe('DestructiveConfirm — critical', () => {
     expect(screen.getByText(/This cannot be undone\./i)).toBeInTheDocument();
   });
 });
+
+// L112: a refusal (Delete account refused for the last owner) was shown only as
+// a toast, behind the still-open dialog. The dialog now has an error slot: a
+// persistent role="alert" line above its buttons.
+describe('DestructiveConfirm — error slot (L112)', () => {
+  it('shows the error as an alert inside the dialog, above the buttons', () => {
+    render(
+      <DestructiveConfirm
+        open
+        onOpenChange={() => {}}
+        title="Delete your account?"
+        description="This deletes your account."
+        confirmLabel="Delete account"
+        onConfirm={() => {}}
+        error="You are the only owner of Demo Co. Make another member the owner first."
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    const alert = within(dialog).getByRole('alert');
+    expect(alert).toHaveTextContent('You are the only owner of Demo Co. Make another member the owner first.');
+    const confirm = within(dialog).getByRole('button', { name: 'Delete account' });
+    // Above the buttons in reading order.
+    expect(alert.compareDocumentPosition(confirm) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('no error, no alert', () => {
+    render(
+      <DestructiveConfirm
+        open
+        onOpenChange={() => {}}
+        title="Archive item?"
+        description="x"
+        confirmLabel="Archive"
+        onConfirm={() => {}}
+      />,
+    );
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
+  });
+});

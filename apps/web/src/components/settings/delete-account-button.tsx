@@ -42,19 +42,29 @@ export function showDeleteAccountError(
  * dashboard layout doesn't briefly render with a now-deleted session.
  *
  * The last-owner and platform-admin refusals run server-side in
- * `deleteOwnAccountAction` (migration 0393); we surface their sentence via
- * toast (showDeleteAccountError).
+ * `deleteOwnAccountAction` (migration 0393); we surface their sentence inside
+ * the dialog (L112) and via toast (showDeleteAccountError).
  */
 export function DeleteAccountButton() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [pending, setPending] = React.useState(false);
+  // The refusal's reason, inside the dialog (L112): the toast alone sat
+  // behind the dialog, which stays open. Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
+
+  function openChange(next: boolean) {
+    if (next) setError(null);
+    setOpen(next);
+  }
 
   async function confirm() {
+    setError(null);
     setPending(true);
     const res = await deleteOwnAccountAction({ confirm: 'DELETE' });
     setPending(false);
     if (!res.ok) {
+      setError(res.error.message);
       showDeleteAccountError(res.error, () => {
         setOpen(false);
         router.push('/dashboard/team');
@@ -71,12 +81,12 @@ export function DeleteAccountButton() {
 
   return (
     <>
-      <Button variant="destructive" onClick={() => setOpen(true)} disabled={pending}>
+      <Button variant="destructive" onClick={() => openChange(true)} disabled={pending}>
         Delete my account
       </Button>
       <DestructiveConfirm
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={openChange}
         severity="critical"
         expectedConfirm="DELETE"
         title="Delete your account?"
@@ -92,6 +102,7 @@ export function DeleteAccountButton() {
         cancelLabel="Cancel"
         pending={pending}
         onConfirm={confirm}
+        error={error}
       />
     </>
   );
