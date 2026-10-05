@@ -675,3 +675,16 @@ describe('For’s Order for them stays above the keyboard (simulator walk D6)', 
     expect(inBody).not.toContain('label={CHECKOUT_USE_PERSON_COPY}');
   });
 });
+
+// iPhone 17 simulator walk at AX5, 2026-10-05: a stacked item row kept its
+// photo beside the name, so the name had about 280 pt and "Headphones" broke
+// mid-word ("Headphone" / "s"). Past the row threshold the photo now sits
+// above the name, which gets the row's full width. Mutation caught: the
+// photo beside the name again.
+describe('a stacked item row gives the name the full width (simulator walk D7)', () => {
+  it('past the row threshold the photo goes above the name', () => {
+    expect(itemRow).toContain('style={({ pressed }) => [styles.main, stacked && styles.mainStacked, { opacity: pressed ? 0.8 : 1 }]}');
+    expect(flat(itemRow)).toMatch(/mainStacked: \{ flexDirection: 'column'/);
+    expect(itemRow).toContain('<View style={stacked ? styles.textStacked : styles.text}>');
+  });
+});

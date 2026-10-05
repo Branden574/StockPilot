@@ -112,7 +112,10 @@ export const ItemRow = React.memo(function ItemRow({
         accessibilityRole="button"
         accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}
         accessibilityHint={ITEM_ROW_HINT}
-        style={({ pressed }) => [styles.main, { opacity: pressed ? 0.8 : 1 }]}
+        // Stacked (past the row threshold), the photo sits above the name so
+        // the name has the row's full width and a long word is not broken
+        // mid-word (simulator walk D7).
+        style={({ pressed }) => [styles.main, stacked && styles.mainStacked, { opacity: pressed ? 0.8 : 1 }]}
       >
         <View style={[styles.photo, { backgroundColor: c.paper2, borderColor: c.hair }]}>
           {photoUrl ? (
@@ -123,7 +126,7 @@ export const ItemRow = React.memo(function ItemRow({
             </Mono>
           )}
         </View>
-        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <View style={stacked ? styles.textStacked : styles.text}>
           <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
             {item.name}
           </Body>
@@ -168,6 +171,10 @@ const styles = StyleSheet.create({
   },
   rowStacked: { flexDirection: 'column', alignItems: 'stretch' },
   main: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: 10, minHeight: 44 },
+  mainStacked: { flexDirection: 'column', alignItems: 'stretch' },
+  text: { flex: 1, minWidth: 0, gap: 3 },
+  /** Under the photo: as tall as its lines, the row's full width. */
+  textStacked: { gap: 3 },
   photo: {
     width: 48,
     height: 48,
