@@ -5,8 +5,9 @@
  *   1. ledger.return_line_sources classifies an original location with the
  *      SAME lists the app uses for "a rack" (core isRackShelfLocation:
  *      PLACEMENT_KINDS by kind or PLACEMENT_TYPES by type, never a system
- *      bucket). If they drift, the workbench and the close disagree about
- *      which racks may be offered (plan 3.5.2 rule 4, decision D12).
+ *      bucket), reading a NULL kind or type as '' as core does. If they
+ *      drift, the workbench and the close disagree about which racks may be
+ *      offered (plan 3.5.2 rule 4, decision D12).
  *   2. The resolver never reads bin_location, primary_location_id or the
  *      custom_fields rack keys (brief 11, 13, 39; pgTAP H4 is the database
  *      twin).
@@ -47,12 +48,23 @@ describe('the RX-1 migration', () => {
   it('classifies a placement exactly as core isRackShelfLocation does', () => {
     const block = sources.slice(sources.indexOf('v_problem := case'), sources.indexOf('end;', sources.indexOf('v_problem := case')));
     expect(block).not.toBe('');
-    const excluded = [...block.matchAll(/s\.l_kind\s+is\s+distinct\s+from\s+'([^']+)'/gi)].map((m) => m[1]!).sort();
-    expect(excluded).toEqual([...SYSTEM_KINDS].sort());
-    const kinds = block.match(/s\.l_kind\s+in\s*\(([^)]*)\)/i);
-    const types = block.match(/s\.l_type\s+in\s*\(([^)]*)\)/i);
+    // Core reads a NULL kind or type as '' (`?? ''`). The SQL must too: a bare
+    // `s.l_kind in (...)` is NULL for a NULL-kind Site, the CASE arm is
+    // skipped and the Site is offered as an original rack (test stage, H6).
+    const kindCol = String.raw`coalesce\(\s*s\.l_kind\s*,\s*''\s*\)`;
+    const typeCol = String.raw`coalesce\(\s*s\.l_type\s*,\s*''\s*\)`;
+    const excluded = block.match(new RegExp(`${kindCol}\\s+not\\s+in\\s*\\(([^)]*)\\)`, 'i'));
+    const kinds = block.match(new RegExp(`${kindCol}\\s+in\\s*\\(([^)]*)\\)`, 'i'));
+    const types = block.match(new RegExp(`${typeCol}\\s+in\\s*\\(([^)]*)\\)`, 'i'));
+    expect(excluded, 'system buckets excluded with a NULL-safe kind').not.toBeNull();
+    expect(kinds, 'placement kinds read with a NULL-safe kind').not.toBeNull();
+    expect(types, 'placement types read with a NULL-safe type').not.toBeNull();
+    expect(listValues(excluded![1]!)).toEqual([...SYSTEM_KINDS].sort());
     expect(listValues(kinds![1]!)).toEqual([...PLACEMENT_KINDS].sort());
     expect(listValues(types![1]!)).toEqual([...PLACEMENT_TYPES].sort());
+    // No NULL-unsafe comparison of the location's kind or type is left.
+    expect(block).not.toMatch(/(?<!coalesce\(\s*)s\.l_(kind|type)\s+(not\s+)?in\s*\(/i);
+    expect(block).not.toMatch(/s\.l_kind\s+is\s+(not\s+)?distinct\s+from\s+'(staging|unplaced)'/i);
   });
 
   it('the Original rack helpers never read a free-text rack', () => {
