@@ -66,7 +66,7 @@ export interface MovementWithItem {
       null when the row was written by a system process (e.g. a trigger
       with no auth.uid context), or when the actor deleted their account. */
   actor: { id: string; fullName: string | null; email: string | null } | null;
-  /** The actor deleted their account (migration 0394): user_id is null and
+  /** The actor deleted their account (migration 0393): user_id is null and
       the row's deleted_users marker records user_id. Renders "Deleted user"
       instead of "System" (lib/movements/actor-label). */
   actorDeleted: boolean;
@@ -98,7 +98,7 @@ export interface MovementExportRow {
   reason: string | null;
   notes: string | null;
   /** The actor's email; "Deleted user" when the actor deleted their account
-   *  (0394, O-A3-12: the existing cell, no new column); null for a system row. */
+   *  (0393, O-A3-12: the existing cell, no new column); null for a system row. */
   actorEmail: string | null;
 }
 

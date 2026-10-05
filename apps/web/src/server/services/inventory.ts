@@ -9061,7 +9061,7 @@ export class InventoryService {
       // Rule 5: a row with no user_id was written by a trigger/system process.
       // It gets NO actor — never "System" dressed up as a person. The one
       // exception is a row whose marker records that its actor deleted their
-      // account (0394): that was a person, shown as "Deleted user".
+      // account (0393): that was a person, shown as "Deleted user".
       const actorName = actorRaw
         ? (actorRaw.full_name?.trim() || actorRaw.email || null)
         : isDeletedPerson((r.user_id as string | null) ?? null, r.deleted_users, 'user_id')

@@ -1,7 +1,7 @@
 import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
 
 /**
- * The page-level person labels that changed with migration 0394 (every member
+ * The page-level person labels that changed with migration 0393 (every member
  * can delete their account; their rows keep a deleted_users stamp). Pure, so
  * each surface's wording is unit-tested here rather than through a server
  * component render. The rule everywhere: a stamped null column reads

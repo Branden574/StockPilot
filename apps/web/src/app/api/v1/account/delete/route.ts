@@ -46,10 +46,10 @@ export const runtime = 'nodejs';
  *   body: { confirm: "DELETE" }
  *   200: { ok: true }                          // the account is gone (also when it was already gone)
  *   400: { error: "validation_error", message }
- *   403: { error: "last_owner", message }      // the only owner of an org with other members (0394),
+ *   403: { error: "last_owner", message }      // the only owner of an org with other members (0393),
  *                                              // also when a member joined after the check (F-5)
  *   403: { error: "platform_admin", message }  // an allowlisted platform admin's account (O-A3-7)
- *   403: { error: "account_linked_records", message } // a record still refuses it (unexpected after 0394)
+ *   403: { error: "account_linked_records", message } // a record still refuses it (unexpected after 0393)
  *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes
  *   503: { error: "check_failed", message }    // the check could not answer, or a row lock: try again
  *   500: { error: "internal_error", message }  // the delete itself failed (sessions revoked)
@@ -58,7 +58,7 @@ export const runtime = 'nodejs';
  * (settings.tsx performDelete), so these answers need no phone change.
  * Nothing is written before the delete (no profile tombstone); the
  * `user.deactivated` row is written after it succeeded (0388), after the
- * person's avatar files are removed (0394); it records the counts of the API
+ * person's avatar files are removed (0393); it records the counts of the API
  * keys, webhooks and links they created that keep working (O-A3-5), and a
  * solo owner's organization with a Stripe subscription is reported to the
  * platform admin (O-A3-2). Ownership is transferred on the
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // The last-owner rule (0394), the account trigger's own predicate read
+    // The last-owner rule (0393), the account trigger's own predicate read
     // with the caller's client so it can name the organizations: the only
     // accepted owner (impersonation seats count as neither owners nor
     // members) of an org that has other accepted members is refused until

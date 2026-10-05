@@ -175,8 +175,8 @@ export const RELEASES: Release[] = [
   {
     id: 'account-deletion-everyone-2026-10',
     revision: 1,
-    // Security slice A3 (migration 0394, every member can delete their own
-    // account; owner decision 2026-10-03). Held as a DRAFT until 0394 is
+    // Security slice A3 (migration 0393, every member can delete their own
+    // account; owner decision 2026-10-03). Held as a DRAFT until 0393 is
     // pushed and verified, the web deploy is READY, the phone update that
     // shows "Deleted user" is published and has launched, and the Demo Co
     // walk has run (no production account is ever deleted; the walk opens
@@ -187,7 +187,7 @@ export const RELEASES: Release[] = [
     //
     // It supersedes the "can still stop a deletion" sentence of the published
     // A2 releases (account-deletion-orders-2026-10, account-deletion-refused-
-    // 2026-10): after 0394 no record refuses a deletion. The keys that refused
+    // 2026-10): after 0393 no record refuses a deletion. The keys that refused
     // (received stock, PO imports, schedule entries, returns and the rest) are
     // SET NULL, and the five legacy May orders that broke the NOT VALID
     // delivery check (F12) are exempt by primary key, so their requester and

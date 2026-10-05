@@ -191,7 +191,7 @@ describe('MovementsService.list', () => {
     expect(rows[0]!.item).toBeNull();
   });
 
-  // 0394: an actor who deleted their account leaves user_id null and the
+  // 0393: an actor who deleted their account leaves user_id null and the
   // row's deleted_users marker records user_id.
   it('flags actorDeleted only for a null user_id stamped in deleted_users, and selects the marker', async () => {
     const stub = makeSupabaseStub({

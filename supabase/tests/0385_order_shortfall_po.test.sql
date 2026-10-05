@@ -1096,10 +1096,10 @@ select is(
   -- own column_privileges rows minus exactly those nine (2026-10-04; the
   -- local stack gave production's value for every earlier pin); verify on
   -- the stack.
-  -- Re-pinned by 0394 (was 17eb8a3457ab0a8d9cffcab1db42d50e|208): 0394
+  -- Re-pinned by 0393 (was 17eb8a3457ab0a8d9cffcab1db42d50e|208): 0393
   -- adds schedule_events.deleted_users, which anon and authenticated hold
   -- only through their table-level SELECT and REFERENCES (4 rows more; no
-  -- column grant). F2-5's function writes no schedule_events column 0394
+  -- column grant). F2-5's function writes no schedule_events column 0393
   -- touches. Computed from production's own column_privileges rows plus
   -- exactly the rows an ungranted schedule_events column carries
   -- (2026-10-04; order_request_id carries the same four); verify on the

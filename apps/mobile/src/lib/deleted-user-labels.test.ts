@@ -11,7 +11,7 @@ import {
 } from './deleted-user-labels';
 
 /**
- * The phone's "Deleted user" labels (migration 0394). A stamped null column
+ * The phone's "Deleted user" labels (migration 0393). A stamped null column
  * reads "Deleted user"; an unstamped null keeps the screen's own words; a live
  * person keeps their name; a malformed marker is never a stamp.
  */

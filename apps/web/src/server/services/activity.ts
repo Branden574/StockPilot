@@ -87,7 +87,7 @@ export interface ActivityEvent {
    */
   noteEditable: boolean;
   /** Display name of the actor; "Deleted user" when they deleted their account
-   *  (0394), "System" when the row names no user. */
+   *  (0393), "System" when the row names no user. */
   actor: string;
   actorEmail: string | null;
   /**
@@ -220,7 +220,7 @@ type EmbeddedActor = { full_name?: string | null; email?: string | null } | null
 /**
  * The display attribution for one row: "Deleted user" when the row has no user
  * and its deleted_users marker records that the actor deleted their account
- * (migration 0394), "System" when the row has no user otherwise, "Unknown"
+ * (migration 0393), "System" when the row has no user otherwise, "Unknown"
  * when it names a user whose profile the caller cannot see, otherwise full
  * name, falling back to email. A to-one embed arrives as an object, but
  * PostgREST can hand back a one-element array when it cannot prove the

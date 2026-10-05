@@ -1,4 +1,4 @@
--- 0394_account_deletion_for_everyone.sql
+-- 0393_account_deletion_for_everyone.sql
 --
 -- SECURITY slice A3: every member can delete their own account (owner
 -- decision O-A2-3, 2026-10-03; A3-plan.md as corrected by its critique and the
@@ -105,7 +105,7 @@
 -- file never waits while holding one (no deadlock with live traffic). The
 -- locks are held from the successful attempt to commit (the DDL below; tens
 -- of milliseconds), during which sign-ins and most requests wait: push
--- off-peak. scripts/db-concurrency/0394_migration_lock_footprint.sh.
+-- off-peak. scripts/db-concurrency/0393_migration_lock_footprint.sh.
 --
 -- ERRORS: P0001 (last_owner, from the trigger), 42501 and 22023 (transfer, as
 -- before), 42501 (the membership guard), 55P03 (the prelude, and the trigger
@@ -529,15 +529,15 @@ $$;
 revoke all on function public._guard_organization_member_changes() from public, anon, authenticated;
 
 comment on function public._account_exists(uuid) is
-  'Whether an auth account exists (0394). For tg_mark_deleted_users and _enforce_schedule_events_writer '
+  'Whether an auth account exists (0393). For tg_mark_deleted_users and _enforce_schedule_events_writer '
   '(service_role cannot read auth.users); EXECUTE for postgres and service_role only.';
 comment on function public.tg_mark_deleted_users() is
-  'zzz_deleted_users_ins/_upd (0394): stamps deleted_users {column: now()} when a non-API role nulls a '
+  'zzz_deleted_users_ins/_upd (0393): stamps deleted_users {column: now()} when a non-API role nulls a '
   'person column whose account no longer exists (a foreign key action of an account deletion). API roles '
   'cannot set or clear a stamp; a stamp is dropped when the column names a live person again. Arguments: '
   'the table''s person columns. SECURITY INVOKER: an FK action runs as the table owner.';
 comment on function public.tg_auth_users_before_delete() is
-  'on_auth_user_before_delete (0394): locks the owner rows of every organization the person belongs to (FOR '
+  'on_auth_user_before_delete (0393): locks the owner rows of every organization the person belongs to (FOR '
   'SHARE where they are not an owner; their own rows and the owner rows of organizations they own FOR NO KEY '
   'UPDATE) and re-reads until every one is locked (55P03 after 10 rounds), refuses deleting the only owner of '
   'an organization that has other members '
@@ -547,18 +547,18 @@ comment on function public.tg_auth_users_before_delete() is
   'maintenance requests, escalation claims, warehouse manager. Pending invites the person sent, and those '
   'of an organization left with no member, stop working; the person''s id leaves notifyAudience.';
 comment on function public._enforce_schedule_events_writer() is
-  'Schedule writer (0084, 0256; 0394): created_by and updated_by follow the signed-in caller. created_by '
+  'Schedule writer (0084, 0256; 0393): created_by and updated_by follow the signed-in caller. created_by '
   'never changes on update, except that a null stands when a non-API role nulls it and the account is gone '
-  '(the ON DELETE SET NULL of an account deletion); before 0394 the reset left a dangling key.';
+  '(the ON DELETE SET NULL of an account deletion); before 0393 the reset left a dangling key.';
 comment on function public._guard_organization_member_changes() is
-  'organization_members_role_guard (0099, 0220; 0394): an API caller (auth.uid() set) cannot create or promote '
+  'organization_members_role_guard (0099, 0220; 0393): an API caller (auth.uid() set) cannot create or promote '
   'to an owner row, demote or delete the owner, create an "Act as" seat (impersonation_expires_at), or change '
   'any column of a membership but role, is_delivery_driver and all_warehouses (invited_by may become null only '
   'when the inviter''s account is gone: an account deletion''s own key action). The server''s admin client (no '
   'JWT subject) runs provisioning, invites, transfers and impersonation and is not limited here.';
 comment on function public.transfer_org_ownership(uuid, uuid, uuid) is
   'Atomically transfers org ownership from p_caller_user_id to p_target_user_id and returns the new owner '
-  'user_id (0107). Since 0394 it locks the caller''s and the target''s membership rows FOR UPDATE, ignores '
+  'user_id (0107). Since 0393 it locks the caller''s and the target''s membership rows FOR UPDATE, ignores '
   'impersonation seats, and checks that both updates happened, so a transfer racing an account deletion or a '
   'second transfer cannot leave an organization with no owner. Service-role only: the application layer must '
   'verify the caller IS the owner (and require AAL2 and a password re-confirm) before invoking.';
@@ -574,7 +574,7 @@ alter table public.order_requests
         and fulfillment_type = 'delivery'
         and delivery_charter_id is null));
 comment on constraint order_requests_delivery_target_chk on public.order_requests is
-  'A delivery names its charter and a pickup names none (0110, 0254). Validated since 0394: the 5 legacy '
+  'A delivery names its charter and a pickup names none (0110, 0254). Validated since 0393: the 5 legacy '
   'delivery orders created 2026-05-12..15 without a charter (owner decision 2026-08-11: left as they are) '
   'are exempt by primary key, only while they keep that shape; every other row is held to the rule.';
 
@@ -890,95 +890,95 @@ create trigger on_auth_user_before_delete
 -- ═══ 9. Comments (catalog only; every table here is locked by the prelude) ═
 
 comment on column public.approvals.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.audit_logs.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column, or by the server''s own account-deletion row; API roles cannot '
   'set or clear it. The app shows "Deleted user" instead of "System".';
 comment on column public.carrier_shipments.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.cycle_count_ai_scans.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.org_connections.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.organization_invites.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.organization_modules.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.platform_admin_audit.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. actor_email is kept, so the '
   'platform audit still says who acted.';
 comment on column public.po_imports.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.putaway_moves.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.receipts.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.returns.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.schedule_events.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; authenticated may read it and may not insert or update it. '
   'The app shows "Deleted user".';
 comment on column public.size_count_training_samples.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 comment on column public.stock_movements.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user" '
   'instead of "System".';
 comment on column public.uom_conversions.deleted_users is
-  'People named on this row whose accounts were deleted (0394): {column: when}. Set only by zzz_deleted_users '
+  'People named on this row whose accounts were deleted (0393): {column: when}. Set only by zzz_deleted_users '
   'when an account deletion nulls the column; API roles cannot set or clear it. The app shows "Deleted user".';
 
 comment on constraint approvals_requested_by_deleted_chk on public.approvals is
-  'Exactly one (0394): the requester is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the requester is named, or deleted_users records that their account was deleted.';
 comment on constraint cycle_count_ai_scans_created_by_deleted_chk on public.cycle_count_ai_scans is
-  'Exactly one (0394): the creator is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the creator is named, or deleted_users records that their account was deleted.';
 comment on constraint cc_ai_scans_confirm_chk on public.cycle_count_ai_scans is
-  'A confirmed scan names who confirmed it, or records that their account was deleted (0394).';
+  'A confirmed scan names who confirmed it, or records that their account was deleted (0393).';
 comment on constraint po_imports_uploaded_by_deleted_chk on public.po_imports is
-  'Exactly one (0394): the uploader is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the uploader is named, or deleted_users records that their account was deleted.';
 comment on constraint putaway_moves_performed_by_deleted_chk on public.putaway_moves is
-  'Exactly one (0394): the person is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the person is named, or deleted_users records that their account was deleted.';
 comment on constraint receipts_received_by_deleted_chk on public.receipts is
-  'Exactly one (0394): the receiver is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the receiver is named, or deleted_users records that their account was deleted.';
 comment on constraint size_count_training_samples_captured_by_deleted_chk on public.size_count_training_samples is
-  'Exactly one (0394): the person is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the person is named, or deleted_users records that their account was deleted.';
 comment on constraint organization_invites_invited_by_deleted_chk on public.organization_invites is
-  'Exactly one (0394): the inviter is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the inviter is named, or deleted_users records that their account was deleted.';
 comment on constraint platform_admin_audit_actor_user_id_deleted_chk on public.platform_admin_audit is
-  'Exactly one (0394): the acting admin is named, or deleted_users records that their account was deleted '
+  'Exactly one (0393): the acting admin is named, or deleted_users records that their account was deleted '
   '(actor_email still names them).';
 comment on constraint schedule_events_created_by_deleted_chk on public.schedule_events is
-  'Exactly one (0394): the creator is named, or deleted_users records that their account was deleted.';
+  'Exactly one (0393): the creator is named, or deleted_users records that their account was deleted.';
 comment on constraint order_submissions_user_id_fkey on public.order_submissions is
-  'The placer''s own submission log goes with their account (0394); the order it placed stays.';
+  'The placer''s own submission log goes with their account (0393); the order it placed stays.';
 comment on constraint delivery_locations_driver_user_id_fkey on public.delivery_locations is
-  'The driver''s live position is personal data and goes with their account (0394).';
+  'The driver''s live position is personal data and goes with their account (0393).';
 comment on constraint user_permission_overrides_updated_by_fkey on public.user_permission_overrides is
-  'Who last changed the override (0394): nulled when that account is deleted, never left dangling.';
+  'Who last changed the override (0393): nulled when that account is deleted, never left dangling.';
 comment on constraint role_permission_overrides_updated_by_fkey on public.role_permission_overrides is
-  'Who last changed the override (0394): nulled when that account is deleted, never left dangling.';
+  'Who last changed the override (0393): nulled when that account is deleted, never left dangling.';
 comment on constraint user_profiles_disabled_by_fkey on public.user_profiles is
-  'The platform admin who disabled the account (0394): nulled when that account is deleted.';
+  'The platform admin who disabled the account (0393): nulled when that account is deleted.';
 comment on table public.order_submissions is
   'One private record per order submission key (0391): (organization, placer, key) -> placed (with the '
   'order), refused (with the reason) or withdrawn, decided under the key''s advisory lock in the '
   'transaction that creates the order. Rows never change (no UPDATE or DELETE policy). Each member reads '
   'only their own rows. INSERT only while stockpilot.order_submit holds this transaction''s id, raised '
   'inline by place_order_request and withdraw_order_submission alone. The placer''s rows go with their '
-  'account (0394, ON DELETE CASCADE: never blocks a deletion); the organization and the order cascade.';
+  'account (0393, ON DELETE CASCADE: never blocks a deletion); the organization and the order cascade.';
 
 reset lock_timeout;

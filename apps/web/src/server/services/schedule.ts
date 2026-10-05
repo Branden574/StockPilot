@@ -41,10 +41,10 @@ export interface ScheduleEventRow {
   bundleDistributed: boolean;
   /** Linked order (auto-created events, mig 0255) — null for manual events. */
   orderRequestId: string | null;
-  /** null once the creator deleted their account (0394). */
+  /** null once the creator deleted their account (0393). */
   createdBy: string | null;
   /** The creator's name; "Deleted user" once they deleted their account
-   *  (0394, the row's deleted_users stamp); null when it cannot be read. */
+   *  (0393, the row's deleted_users stamp); null when it cannot be read. */
   createdByName: string | null;
   createdAt: string;
   updatedAt: string;

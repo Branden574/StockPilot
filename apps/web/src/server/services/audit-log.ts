@@ -18,7 +18,7 @@ export interface AuditLogRow {
   event: string;
   createdAt: string;
   actor: AuditLogActor | null;
-  /** The actor deleted their account (migration 0394): user_id is null and
+  /** The actor deleted their account (migration 0393): user_id is null and
    *  the row's deleted_users marker records user_id. The page shows "Deleted
    *  user" instead of "System". */
   actorDeleted: boolean;

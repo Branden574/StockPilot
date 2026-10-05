@@ -30,14 +30,14 @@ const deleteUser = vi.fn(async (_id: string) => ({
   error: null as { message: string; status?: number; code?: string; name?: string } | null,
 }));
 /**
- * GoTrue's user read: first the platform-admin check's verified email (0394,
+ * GoTrue's user read: first the platform-admin check's verified email (0393,
  * O-A3-7), then (review R7) again only after deleteUser answered an error.
  */
 const getUserById = vi.fn(async (_id: string) => ({
   data: { user: { id: 'present', email: 'staff@x.org' } as { id: string; email?: string } | null },
   error: null as { message: string; status?: number; code?: string } | null,
 }));
-/** O-A3-9 (0394): user-avatars/<uid>/ is emptied after the delete. */
+/** O-A3-9 (0393): user-avatars/<uid>/ is emptied after the delete. */
 const avatarList = vi.fn(async (_prefix: string, _opts?: { limit?: number }) => ({
   data: [] as Array<{ name: string }> | null,
   error: null as { message: string } | null,
@@ -206,7 +206,7 @@ describe('POST /api/v1/account/delete', () => {
 
     await POST(buildRequest({ confirm: 'DELETE' }));
 
-    // Re-pinned by 0394 (was ['check', 'deleteUser', 'audit']): the avatar
+    // Re-pinned by 0393 (was ['check', 'deleteUser', 'audit']): the avatar
     // files are removed once the account is gone, before the audit row.
     expect(order).toEqual(['check', 'deleteUser', 'avatars', 'audit']);
     expect(rpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: USER_ID });
@@ -243,7 +243,7 @@ describe('POST /api/v1/account/delete', () => {
     deleteUser.mockResolvedValueOnce({
       error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
     });
-    // 0394: the platform-admin check reads the user first (still there).
+    // 0393: the platform-admin check reads the user first (still there).
     getUserById.mockResolvedValueOnce({ data: { user: { id: USER_ID, email: 'staff@x.org' } }, error: null });
     getUserById.mockResolvedValueOnce({
       data: { user: null },
@@ -282,7 +282,7 @@ describe('POST /api/v1/account/delete', () => {
     const res = await POST(buildRequest({ confirm: 'DELETE' }));
 
     expect(res.status).toBe(200);
-    // Re-pinned by 0394 (was not called at all): read once, by the
+    // Re-pinned by 0393 (was not called at all): read once, by the
     // platform-admin check before the delete; never again to settle it.
     expect(getUserById).toHaveBeenCalledTimes(1);
     expect(insertAuditRowReported).not.toHaveBeenCalled();
@@ -339,8 +339,8 @@ describe('POST /api/v1/account/delete', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe('account_linked_records');
-    // Re-pinned by 0394 (was "linked to records your organization keeps"):
-    // no business key refuses after 0394, so this is the support sentence.
+    // Re-pinned by 0393 (was "linked to records your organization keeps"):
+    // no business key refuses after 0393, so this is the support sentence.
     expect(body.message).toBe(
       'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.',
     );
@@ -350,7 +350,7 @@ describe('POST /api/v1/account/delete', () => {
     expect(avatarList).not.toHaveBeenCalled();
   });
 
-  // 0394: the only owner of an organization that has other members is
+  // 0393: the only owner of an organization that has other members is
   // refused, naming it; ownership moves on the web Team page (O-A3-8).
   it('the only owner of an org with other members gets 403 last_owner naming it, before the rate limit and the check', async () => {
     let n = 0;
@@ -406,7 +406,7 @@ describe('POST /api/v1/account/delete', () => {
     expect(insertAuditRowReported).not.toHaveBeenCalled();
   });
 
-  // O-A3-7 (0394): the allowlist is checked against GoTrue's verified email.
+  // O-A3-7 (0393): the allowlist is checked against GoTrue's verified email.
   it('a platform admin account gets 403 platform_admin (the verified GoTrue email) and nothing changes', async () => {
     const stub = happyStub();
     getUserById.mockResolvedValueOnce({ data: { user: { id: USER_ID, email: 'ops@stockpilotusa.com' } }, error: null });

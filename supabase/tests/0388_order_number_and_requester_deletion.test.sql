@@ -25,7 +25,7 @@
 -- P. account_deletion_check (always undone):
 --    P1  an account with no blocker: deletable, and nothing changed;
 --    P2  an account with a PO import: blocked 23503 po_imports_uploaded_by_fkey
---        (re-pinned by 0394: deletable, the key is SET NULL and the import
+--        (re-pinned by 0393: deletable, the key is SET NULL and the import
 --        kept and stamped);
 --    P3  a requester of orders with no email: deletable;
 --    P4  unknown id: not_found; null: no_user;
@@ -33,12 +33,12 @@
 --        JWT is refused by the body even with EXECUTE granted;
 --    P6  the body raises only 42501 and P0001 (never 40001 or 40P01);
 --    P7  a user named by platform_admin_audit (SET NULL on a NOT NULL column):
---        blocked 23502, the generic path (re-pinned by 0394: deletable, the
+--        blocked 23502, the generic path (re-pinned by 0393: deletable, the
 --        column lost NOT NULL behind an exactly-one CHECK);
 --    P8  no constraint in public or auth is DEFERRABLE and no constraint
 --        trigger is deferrable (a deferred check would run at commit, outside
 --        the check's subtransaction).
---    P8b (re-pinned by 0394: no NOT VALID constraint is left; 0394
+--    P8b (re-pinned by 0393: no NOT VALID constraint is left; 0393
 --        validates order_requests_delivery_target_chk with the five legacy
 --        rows exempt by primary key) the only NOT VALID constraint in public
 --        or auth was order_requests_delivery_target_chk (review R6,
@@ -52,9 +52,9 @@
 --    P8c a row that breaks the NOT VALID CHECK makes the check answer blocked
 --        23514 order_requests_delivery_target_chk, and nothing changes (at
 --        the end of the file: it drops and re-adds that CHECK, undone by the
---        file's rollback). Since 0394 the real constraint is validated; this
+--        file's rollback). Since 0393 the real constraint is validated; this
 --        case keeps proving the mechanism on a planted NOT VALID copy, which
---        is why 0394 validated it.
+--        is why 0393 validated it.
 --    (P9, a row lock held by another session, is in
 --    scripts/db-concurrency/0388_requester_delete_race.sh: pgTAP has one
 --    session.)
@@ -438,12 +438,12 @@ select is(
   pg_temp.call_as('service_role', null, format('select public.account_deletion_check(%L)::text', :poU),
                   format($q$select (select count(*) from auth.users where id = %1$L) || '/'
                                    || (select count(*) from public.po_imports where uploaded_by = %1$L)$q$, :poU)),
-  -- Re-pinned by 0394 (was blocked 23503 po_imports_uploaded_by_fkey on
-  -- public.po_imports): 0394 makes the key ON DELETE SET NULL, so the PO
+  -- Re-pinned by 0393 (was blocked 23503 po_imports_uploaded_by_fkey on
+  -- public.po_imports): 0393 makes the key ON DELETE SET NULL, so the PO
   -- import would be kept and stamped "Deleted user"; the dry run still
   -- persists nothing.
   '{"deletable": true}|1/1',
-  'P2: an account with a PO import is deletable since 0394 (the uploader key is SET NULL and the import is kept), and the dry run persisted nothing');
+  'P2: an account with a PO import is deletable since 0393 (the uploader key is SET NULL and the import is kept), and the dry run persisted nothing');
 select is(
   pg_temp.call_as('service_role', null, format('select public.account_deletion_check(%L)::text', :rq1),
                   format($q$select (select count(*) from auth.users where id = %1$L) || '/'
@@ -483,13 +483,13 @@ select is(
   'P6: account_deletion_check raises only 42501 and P0001 (its own undo, caught), never 40001 or 40P01 (PostgREST retries those forever)');
 select is(
   pg_temp.call_as('service_role', null, format('select public.account_deletion_check(%L)::text', :paU)),
-  -- Re-pinned by 0394 (was blocked 23502 on public.platform_admin_audit):
+  -- Re-pinned by 0393 (was blocked 23502 on public.platform_admin_audit):
   -- actor_user_id lost NOT NULL behind an exactly-one CHECK, so the row is
   -- kept with the actor stamped (actor_email still names them). That any
   -- refusal in the cascade is reported, not only FKs and CHECKs, is P8c and
-  -- the 0394 suite (L2, a P0001 from the account trigger).
+  -- the 0393 suite (L2, a P0001 from the account trigger).
   '{"deletable": true}',
-  'P7: a user named by platform_admin_audit as the acting admin is deletable since 0394 (the row is kept, actor stamped, actor_email kept)');
+  'P7: a user named by platform_admin_audit as the acting admin is deletable since 0393 (the row is kept, actor stamped, actor_email kept)');
 select is(
   (select count(*) from pg_constraint c join pg_namespace n on n.oid = c.connamespace
     where n.nspname in ('public', 'auth') and c.condeferrable)::text
@@ -505,9 +505,9 @@ select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname, ',' order by c.conname collate "C"), '')
      from pg_constraint c join pg_namespace n on n.oid = c.connamespace
     where n.nspname in ('public', 'auth') and not c.convalidated),
-  -- Re-pinned by 0394 (was 'order_requests.order_requests_delivery_target_chk'):
-  -- 0394 validates it, the five legacy rows exempt by primary key in their
-  -- legacy shape (0394 suite K18, F1-F5).
+  -- Re-pinned by 0393 (was 'order_requests.order_requests_delivery_target_chk'):
+  -- 0393 validates it, the five legacy rows exempt by primary key in their
+  -- legacy shape (0393 suite K18, F1-F5).
   '',
   'P8b: no NOT VALID constraint is left in public or auth (a NOT VALID CHECK refuses an FK''s SET NULL on any row that breaks it, P8c): a new one changes who can be deleted and is reviewed with the A3 census');
 
@@ -750,11 +750,11 @@ select is(
 
 -- ══ P8c. A row that breaks the NOT VALID CHECK refuses the deletion ═══════
 -- Last in the file: it drops order_requests_delivery_target_chk and re-adds
--- it NOT VALID with its pre-0394 definition, undone by the file's rollback.
+-- it NOT VALID with its pre-0393 definition, undone by the file's rollback.
 -- The free staff member (no orders, deletable in P1) gets one closed
 -- delivery order with no charter, the shape of production's 5 legacy rows.
--- Since 0394 the real constraint is validated with those rows exempt by
--- primary key (0394 suite K18, F1-F5); this case keeps proving why.
+-- Since 0393 the real constraint is validated with those rows exempt by
+-- primary key (0393 suite K18, F1-F5); this case keeps proving why.
 alter table public.order_requests drop constraint order_requests_delivery_target_chk;
 insert into public.order_requests
   (organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, delivery_charter_id)
@@ -769,7 +769,7 @@ select is(
   || '/' || (select count(*) from auth.users where id = :free)::text
   || '/' || (select count(*) from public.order_requests where requester_user_id = :free)::text,
   'false/blocked/23514/order_requests_delivery_target_chk/public.order_requests/1/1',
-  'P8c: a row breaking a NOT VALID delivery_target_chk (the pre-0394 constraint, planted) refuses the FK''s SET NULL: the check answers blocked 23514 (an integrity refusal, "linked records"), and the account and its order are unchanged');
+  'P8c: a row breaking a NOT VALID delivery_target_chk (the pre-0393 constraint, planted) refuses the FK''s SET NULL: the check answers blocked 23514 (an integrity refusal, "linked records"), and the account and its order are unchanged');
 
 select * from finish();
 rollback;

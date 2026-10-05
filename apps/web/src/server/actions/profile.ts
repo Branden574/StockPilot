@@ -489,12 +489,12 @@ const deleteAccountSchema = z.object({
 });
 
 /**
- * Self-service account deletion, for every member (migration 0394). Asks the
+ * Self-service account deletion, for every member (migration 0393). Asks the
  * database whether the account can go (`account_deletion_check`, 0388: a dry
  * run of the real delete, always undone), then deletes the auth user through
  * the admin client: the profile and memberships cascade, every record the
  * person made stays and reads "Deleted user", and work assigned to them is
- * released (the 0394 account trigger). The `user.deactivated` audit row is
+ * released (the 0393 account trigger). The `user.deactivated` audit row is
  * written only after the delete succeeded (with the counts of the API keys,
  * webhooks and links the person created that keep working, O-A3-5), and the
  * person's avatar files are removed. A solo owner's organization with a Stripe
@@ -537,7 +537,7 @@ export async function deleteOwnAccountAction(input: {
       return err('forbidden', ACCOUNT_DELETE_PLATFORM_ADMIN_COPY, { reason: 'platform_admin' });
     }
 
-    // The last-owner rule (0394), the account trigger's own predicate read
+    // The last-owner rule (0393), the account trigger's own predicate read
     // with the user's client so it can name the organizations. Fails CLOSED:
     // a failed read was once "owns nothing" and an account was deleted out
     // from under an org that still had people in it.

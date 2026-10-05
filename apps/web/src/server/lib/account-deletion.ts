@@ -32,7 +32,7 @@ import { insertAuditRowReported } from '@/server/services/audit';
  * also "try again". The function never raises either code (PostgREST retries
  * 40001/40P01 forever).
  *
- * EVERY MEMBER (migration 0394). The business keys that refused are SET NULL
+ * EVERY MEMBER (migration 0393). The business keys that refused are SET NULL
  * now: the records stay and read "Deleted user". The one refusal left is the
  * account trigger's: the only owner of an organization that has other members
  * (P0001, constraint organization_last_owner). The web and the phone name the
@@ -52,11 +52,11 @@ export type AccountDeletionCheck =
       ok: false;
       /**
        *  - blocked: a record refuses the delete, an integrity refusal
-       *    (SQLSTATE class 23: a key, a CHECK, a NOT NULL); after 0394 no
+       *    (SQLSTATE class 23: a key, a CHECK, a NOT NULL); after 0393 no
        *    business key refuses, so this is unexpected and reported; the first
        *    refusal's constraint and table are carried for reports;
        *  - last_owner: the account is the only owner of an organization that
-       *    has other members (0394, P0001 organization_last_owner): transfer
+       *    has other members (0393, P0001 organization_last_owner): transfer
        *    ownership first;
        *  - retry: a row lock or a deadlock (55P03, 40P01): nothing changed,
        *    try again in a minute;
@@ -73,11 +73,11 @@ export type AccountDeletionCheck =
     };
 
 /** Plain sentences (A2 plan 4.5, A3 plan 9.5). Never "book" for a recorded quantity. */
-/** An integrity refusal after 0394, which converted every refusing key: unexpected. */
+/** An integrity refusal after 0393, which converted every refusing key: unexpected. */
 export const ACCOUNT_DELETE_BLOCKED_COPY =
   'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.';
 /**
- * The check's last-owner answer (0394), when the app could not name the
+ * The check's last-owner answer (0393), when the app could not name the
  * organization (web). The Team page's control is a member row's "Transfer
  * ownership…" (owner is not in the role list), and removing the other members
  * also lets the account go (a solo organization), so the sentence names both
@@ -166,7 +166,7 @@ export async function checkAccountDeletable(
     if (sqlstate && RETRY_SQLSTATES.has(sqlstate)) {
       return { ok: false, kind: 'retry', sqlstate };
     }
-    // 0394: the account trigger's one refusal. Expected (a member joined
+    // 0393: the account trigger's one refusal. Expected (a member joined
     // between the app's own last-owner read and this check, or an old build
     // that never read it), so info level, names only.
     if (constraint === 'organization_last_owner') {
@@ -190,7 +190,7 @@ export async function checkAccountDeletable(
       });
       return { ok: false, kind: 'check_failed', ...(sqlstate ? { sqlstate } : {}) };
     }
-    // After 0394 no business key refuses, so an integrity refusal is a record
+    // After 0393 no business key refuses, so an integrity refusal is a record
     // the census missed: reported as a warning with the constraint and table
     // names only, so support can see what blocks a request without any
     // person's data in the report.
@@ -525,7 +525,7 @@ export async function auditAccountDeleted(args: {
           }
         : {}),
     },
-    // 0394: the actor is the person who just deleted their account, so the
+    // 0393: the actor is the person who just deleted their account, so the
     // log reads "Deleted user", not "System" (the trigger keeps this stamp:
     // a service_role insert, user_id null).
     deleted_users: { user_id: new Date().toISOString() },
@@ -539,7 +539,7 @@ export type SoleOwnedOrganizations =
 
 /**
  * The organizations `userId` is the only owner of while other members remain:
- * the account trigger's last-owner predicate (0394), read with the USER's
+ * the account trigger's last-owner predicate (0393), read with the USER's
  * client so RLS shows the co-members and the organization names.
  *
  * "Real member" means accepted and not an "Act as" impersonation seat
@@ -549,7 +549,7 @@ export type SoleOwnedOrganizations =
  * only pending members is a solo org). Disabled accounts still count.
  *
  * Fails CLOSED: a failed read is an answer the caller refuses on (as the
- * pre-0394 owner check did), never "owns nothing". A failed NAME read still
+ * pre-0393 owner check did), never "owns nothing". A failed NAME read still
  * refuses, with the organizations unnamed.
  */
 export async function soleOwnedOrganizationsWithMembers(

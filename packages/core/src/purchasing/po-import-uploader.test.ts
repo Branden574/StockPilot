@@ -48,7 +48,7 @@ describe('poImportUploaderLabel', () => {
     expect(PO_IMPORT_UPLOADER_UNAVAILABLE).toBe('—');
   });
 
-  // 0394: an uploader who deleted their account leaves the import with
+  // 0393: an uploader who deleted their account leaves the import with
   // uploaded_by null and a deleted_users stamp for that column.
   it("says 'Deleted user' for a null uploader stamped in the row's deleted_users, before every other branch", () => {
     const marks = { uploaded_by: '2026-11-04T18:22:05+00:00' };

@@ -30,15 +30,15 @@ export interface ReceiptRow {
   reversed_receipt_id: string | null;
   reversal_reason: string | null;
   notes: string | null;
-  /** null once the receiver deleted their account (0394; see deleted_users). */
+  /** null once the receiver deleted their account (0393; see deleted_users). */
   received_by: string | null;
   received_at: string;
-  /** 0394: {received_by: when} once the receiver deleted their account. */
+  /** 0393: {received_by: when} once the receiver deleted their account. */
   deleted_users?: unknown;
   /**
    * Display name of the user who posted the receipt, resolved from
    * user_profiles (full_name → email → 'Unknown'; "Deleted user" when the
-   * receiver deleted their account, 0394). Only populated by
+   * receiver deleted their account, 0393). Only populated by
    * listForPurchaseOrder(); the RPC-returning paths (postReceipt/reverse)
    * leave it undefined since they're not rendered in the history view.
    */
@@ -169,7 +169,7 @@ export class ReceivingService {
     }
 
     // A receiver who deleted their account leaves received_by null with the
-    // row's deleted_users stamp (0394; select('*') carries it): "Deleted
+    // row's deleted_users stamp (0393; select('*') carries it): "Deleted
     // user", never "Unknown". The PDF and the history read this one field.
     const receiptsWithNames = (receipts ?? []).map((r) => ({
       ...(r as Record<string, unknown>),

@@ -17,7 +17,7 @@ describe('movementActorLabel', () => {
     expect(movementActorLabel({ user_id: 'u1', actor: null })).toBe('Unknown');
   });
 
-  it('says "Deleted user" for a stamped row with no user (0394)', () => {
+  it('says "Deleted user" for a stamped row with no user (0393)', () => {
     expect(movementActorLabel({ user_id: null, actor: null, actorDeleted: true })).toBe(
       'Deleted user',
     );

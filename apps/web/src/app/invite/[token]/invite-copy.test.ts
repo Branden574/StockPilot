@@ -7,7 +7,7 @@ import { inviteExpiredDescription } from './invite-copy';
 
 /**
  * A3 review 2026-10-05: an account deletion expires every pending invite the
- * person sent (0394), so the usual reader of "Invite expired" now has an
+ * person sent (0393), so the usual reader of "Invite expired" now has an
  * inviter who no longer exists. Point them at the organization instead.
  */
 describe('inviteExpiredDescription', () => {

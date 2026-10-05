@@ -42,7 +42,7 @@ export function showDeleteAccountError(
  * dashboard layout doesn't briefly render with a now-deleted session.
  *
  * The last-owner and platform-admin refusals run server-side in
- * `deleteOwnAccountAction` (migration 0394); we surface their sentence via
+ * `deleteOwnAccountAction` (migration 0393); we surface their sentence via
  * toast (showDeleteAccountError).
  */
 export function DeleteAccountButton() {

@@ -1,9 +1,9 @@
 /**
  * "Deleted user": how every surface names a person whose account was deleted.
  *
- * Migration 0394 (security slice A3) lets every member delete their own
+ * Migration 0393 (security slice A3) lets every member delete their own
  * account. The business records they appear on stay: the foreign key nulls the
- * person column, and on the tables 0394 marks (receipts, PO imports, approvals,
+ * person column, and on the tables 0393 marks (receipts, PO imports, approvals,
  * AI scans, putaway moves, size samples, schedule entries, returns, unit
  * conversions, connections, modules, carrier shipments, the platform audit,
  * invites, audit_logs and stock_movements) the row's `deleted_users` jsonb
@@ -11,7 +11,7 @@
  * database writes it (a trigger that stamps a column only when its account no
  * longer exists), so a stamped null column is proof the person deleted their
  * account, never a guess. An unstamped null keeps the surface's own wording
- * ("System", "—", "Unknown"): those are system rows, or rows from before 0394.
+ * ("System", "—", "Unknown"): those are system rows, or rows from before 0393.
  *
  * Orders keep 0388's own marker for the requester (isDeletedRequester in
  * ../orders/requester-identity), which uses this same label.

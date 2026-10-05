@@ -140,9 +140,9 @@ describe('AuditLogService.list date bounds (SP-042)', () => {
   });
 });
 
-// 0394: an actor who deleted their account leaves user_id null and the row's
+// 0393: an actor who deleted their account leaves user_id null and the row's
 // deleted_users marker records user_id; the page says "Deleted user".
-describe('AuditLogService.list deleted actors (0394)', () => {
+describe('AuditLogService.list deleted actors (0393)', () => {
   it('selects the marker and flags only a null user_id stamped in deleted_users', async () => {
     const stub = makeSupabaseStub({
       'audit_logs.select': {

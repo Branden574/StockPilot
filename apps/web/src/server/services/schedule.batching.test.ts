@@ -163,7 +163,7 @@ describe('ScheduleService distributed flag', () => {
     expect(rows.find((r) => r.id === uuid(149, 'e'))?.bundleDistributed).toBe(true);
   });
 
-  // 0394: a creator who deleted their account leaves created_by null and the
+  // 0393: a creator who deleted their account leaves created_by null and the
   // row's deleted_users stamp; the entry page reads "Created by Deleted user".
   it('names a deleted creator "Deleted user" and leaves an unknown creator blank', async () => {
     const stub = makeSupabaseStub({

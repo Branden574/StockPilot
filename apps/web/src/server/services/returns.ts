@@ -115,7 +115,7 @@ export interface ReturnRow {
   closed_at: string | null;
   denied_by: string | null;
   denied_at: string | null;
-  /** 0394: {requested_by|approved_by|received_by|closed_by|denied_by: when}
+  /** 0393: {requested_by|approved_by|received_by|closed_by|denied_by: when}
    *  for people who deleted their account ('*' selects carry it). */
   deleted_users?: unknown;
   created_at: string;

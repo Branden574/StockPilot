@@ -234,7 +234,7 @@ export default function PoReceiveScreen() {
           receipt_number: r.receipt_number as string,
           status: r.status as string,
           received_at: (r.received_at as string | null) ?? null,
-          // "Deleted user" when the receiver deleted their account (0394).
+          // "Deleted user" when the receiver deleted their account (0393).
           received_by_name: receiverText(nameById, r),
           accepted: t.accepted,
           rejected: t.rejected,

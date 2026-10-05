@@ -151,12 +151,12 @@ const {
     revokeAllSessionsForUserMock: vi.fn(async () => ({ ok: true, sessionIds: [] as string[] })),
     reportErrorMock: vi.fn(async () => undefined),
     cookieSignOut: vi.fn(async (_opts?: { scope?: string }) => ({ error: null as unknown })),
-    /** O-A3-7 (0394): the VERIFIED auth email and the allowlist check. */
+    /** O-A3-7 (0393): the VERIFIED auth email and the allowlist check. */
     platformAdmin: {
       getVerifiedEmail: vi.fn(async (): Promise<string | null> => 'u@e.com'),
       isPlatformAdmin: vi.fn((_email: string | null | undefined) => false),
     },
-    /** O-A3-9 (0394): user-avatars/<uid>/ is emptied after the delete. */
+    /** O-A3-9 (0393): user-avatars/<uid>/ is emptied after the delete. */
     avatarStorage: {
       list: vi.fn(async (_prefix: string, _opts?: { limit?: number }) => ({
         data: [] as Array<{ name: string }> | null,
@@ -567,7 +567,7 @@ describe('deleteOwnAccountAction', () => {
     });
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(true);
-    // Re-pinned by 0394 (was ['check', 'deleteUser', 'audit']): the avatar
+    // Re-pinned by 0393 (was ['check', 'deleteUser', 'audit']): the avatar
     // files are removed once the account is gone, before the audit row.
     expect(order).toEqual(['check', 'deleteUser', 'avatars', 'audit']);
     expect(adminRpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: 'user-1' });
@@ -594,7 +594,7 @@ describe('deleteOwnAccountAction', () => {
           entity_id: 'user-1',
           reason: 'self_deletion',
         }),
-        // 0394: the log reads "Deleted user" for this row, not "System".
+        // 0393: the log reads "Deleted user" for this row, not "System".
         deleted_users: { user_id: expect.any(String) },
       }),
     );
@@ -625,7 +625,7 @@ describe('deleteOwnAccountAction', () => {
     );
   });
 
-  // O-A3-7 (0394): the platform console's operator account is refused in-app
+  // O-A3-7 (0393): the platform console's operator account is refused in-app
   // while its email is on the allowlist; asked FIRST, before any read.
   it('refuses a platform admin first, by the VERIFIED auth email, and changes nothing', async () => {
     platformAdmin.getVerifiedEmail.mockImplementationOnce(async () => 'ops@stockpilotusa.com');
@@ -689,10 +689,10 @@ describe('deleteOwnAccountAction', () => {
     expect(cookieSignOut).not.toHaveBeenCalled();
   });
 
-  // Re-pinned by 0394 (was "linked to records your organization keeps"):
-  // 0394 converted every refusing business key, so an integrity refusal now
+  // Re-pinned by 0393 (was "linked to records your organization keeps"):
+  // 0393 converted every refusing business key, so an integrity refusal now
   // is a record the census missed: the support sentence, reported as a warning.
-  it('an integrity refusal (a record 0394 did not release) is refused with the support sentence and nothing is written', async () => {
+  it('an integrity refusal (a record 0393 did not release) is refused with the support sentence and nothing is written', async () => {
     adminRpc.mockImplementationOnce(async () => ({
       data: {
         deletable: false,
@@ -784,7 +784,7 @@ describe('deleteOwnAccountAction', () => {
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
   });
 
-  // Re-pinned by 0394 (was 'forbidden' with "Transfer ownership ... before
+  // Re-pinned by 0393 (was 'forbidden' with "Transfer ownership ... before
   // deleting your account"): the only owner of an organization that has other
   // members is told which organization and what to do, as a conflict.
   it('refuses the only owner of an org with other members, naming it, before the rate limit and the check', async () => {
@@ -838,7 +838,7 @@ describe('deleteOwnAccountAction', () => {
   });
 
   // The account trigger is the backstop for a member who joins between the
-  // app's read and the delete (0394): the generic sentence, nothing changed.
+  // app's read and the delete (0393): the generic sentence, nothing changed.
   it('the check answering last owner (a member joined in between) refuses with the generic sentence', async () => {
     adminRpc.mockImplementationOnce(async () => ({
       data: {
@@ -1105,7 +1105,7 @@ describe('deleteOwnAccountAction', () => {
       expect(result.ok).toBe(true);
       expect(adminAuth.getUserById).not.toHaveBeenCalled();
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
-      // The request that deleted it removes the avatar files (0394).
+      // The request that deleted it removes the avatar files (0393).
       expect(avatarStorage.list).not.toHaveBeenCalled();
       expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
       expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();

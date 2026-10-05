@@ -90,7 +90,7 @@ const reviewScreen = read('../../app/po-import/[id].tsx');
 
 describe('imports list: who uploaded each row', () => {
   it('reads uploaded_by and looks the names up through readPoImportUploaders', () => {
-    // Re-pinned by 0394 (was /approved_po_id, created_at, uploaded_by,/):
+    // Re-pinned by 0393 (was /approved_po_id, created_at, uploaded_by,/):
     // the row's deleted_users marker rides along for "Deleted user".
     expect(listScreen).toMatch(/approved_po_id, created_at, uploaded_by, deleted_users,/);
     expect(listScreen).toContain('const uploaders = await readPoImportUploaders(');
@@ -98,7 +98,7 @@ describe('imports list: who uploaded each row', () => {
   });
 
   it('labels each row with poImportUploaderLabel and shows it on the date line', () => {
-    // Re-pinned by 0394 (was poImportUploaderLabel(uploaders, uploaded_by)):
+    // Re-pinned by 0393 (was poImportUploaderLabel(uploaders, uploaded_by)):
     // the import's stamp is passed, so an uploader who deleted their account
     // reads "Deleted user".
     expect(listScreen).toMatch(
@@ -110,12 +110,12 @@ describe('imports list: who uploaded each row', () => {
 
 describe('import review: who uploaded it', () => {
   it('reads uploaded_by and looks the name up beside the lineage', () => {
-    // Re-pinned by 0394 (was /created_at, parsed_json, uploaded_by,/).
+    // Re-pinned by 0393 (was /created_at, parsed_json, uploaded_by,/).
     expect(reviewScreen).toMatch(/created_at, parsed_json, uploaded_by, deleted_users,/);
     expect(reviewScreen).toMatch(
       /const \[uploaders\] = await Promise\.all\(\[\s*readPoImportUploaders\(supabase, \[uploaderId\]\),\s*loadLineage\(/,
     );
-    // Re-pinned by 0394 (was poImportUploaderLabel(uploaders, uploaderId)).
+    // Re-pinned by 0393 (was poImportUploaderLabel(uploaders, uploaderId)).
     expect(reviewScreen).toContain('setUploadedBy(poImportUploaderLabel(uploaders, uploaderId, r.deleted_users));');
     expect(reviewScreen).not.toContain(".from('user_profiles')");
   });

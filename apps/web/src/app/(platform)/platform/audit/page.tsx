@@ -95,7 +95,7 @@ export default async function PlatformAuditPage({
                     <td className="px-4 py-2.5 text-[12px] text-[var(--ed-ink-4)]">
                       {new Date(r.createdAt).toLocaleString()}
                     </td>
-                    {/* An admin who deleted their account (0394) keeps the
+                    {/* An admin who deleted their account (0393) keeps the
                         email the row recorded: "Deleted user · email". */}
                     <td className="px-4 py-2.5 text-[var(--ed-ink-3)]">{platformAuditActorLabel(r)}</td>
                     <td className="px-4 py-2.5 font-medium">

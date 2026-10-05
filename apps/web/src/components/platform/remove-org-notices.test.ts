@@ -14,7 +14,7 @@ describe('orphanAccountNotices', () => {
     expect(orphanAccountNotices({ keptUsers: 0, failedUsers: 0 })).toEqual({ kept: null, failed: null });
   });
 
-  // Re-pinned by 0394 (was "kept because it is linked to records that must
+  // Re-pinned by 0393 (was "kept because it is linked to records that must
   // be kept"): every member's records are kept as "Deleted user" now, so a
   // kept account is a platform admin's, or the rare unreleased record.
   it('names kept accounts (a platform admin, or a record that could not be released), singular and plural', () => {

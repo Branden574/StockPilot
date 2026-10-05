@@ -67,7 +67,7 @@ export function resolveRequesterIdentity(
 
 /**
  * The requester label for an order whose requester deleted their account.
- * Owner decision O-A2-1 (2026-10-03): plain words, no name. Since 0394 every
+ * Owner decision O-A2-1 (2026-10-03): plain words, no name. Since 0393 every
  * deleted person reads the same words (people/deleted-user).
  */
 export const DELETED_REQUESTER_LABEL = DELETED_USER_LABEL;

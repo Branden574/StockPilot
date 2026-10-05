@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Two-session proofs for migration 0394 (every member can delete their
+# Two-session proofs for migration 0393 (every member can delete their
 # account). pgTAP runs in ONE session, so it cannot show a deletion racing an
 # assignment, an edit, a member joining, an ownership transfer, a second
 # owner's deletion or an "Act as" seat ending. Session B is always GoTrue's
@@ -78,15 +78,15 @@
 #   11. Timing (plan 11.2): a subject named on 1,900 marked rows (1,000
 #       stock movements, 900 audit rows): the check and the deletion each
 #       finish under 2 s; every row is kept and stamped.
-#   6.  Error classes: no 40001 anywhere; 40P01 only in 5; no 0394
+#   6.  Error classes: no 40001 anywhere; 40P01 only in 5; no 0393
 #       function body raises 40001 or 40P01.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
-# with 0394 applied. Fixtures live under the 03941111-... namespace and are
+# with 0393 applied. Fixtures live under the 03941111-... namespace and are
 # removed at the start, at the end and by the EXIT trap. Exit status 0 =
 # every check passed. A FAIL line starts with the case number.
 #
-# Usage: bash scripts/db-concurrency/0394_account_delete_race.sh
+# Usage: bash scripts/db-concurrency/0393_account_delete_race.sh
 
 set -uo pipefail
 
@@ -215,24 +215,24 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 if [ "$(q "select count(*) from pg_trigger where tgname = 'on_auth_user_before_delete'")" != "1" ]; then
-  echo "0394 is not applied on the local stack"; exit 1
+  echo "0393 is not applied on the local stack"; exit 1
 fi
 cleanup || exit 1
 
-USER_VALUES="$(for u in $USER_LIST; do printf "('%s', '0394-2s-%s@test.local', '{}'::jsonb)," "$u" "${u: -2}"; done | sed 's/,$//')"
+USER_VALUES="$(for u in $USER_LIST; do printf "('%s', '0393-2s-%s@test.local', '{}'::jsonb)," "$u" "${u: -2}"; done | sed 's/,$//')"
 if ! "${PSQL[@]}" >"$TMP/setup.out" 2>&1 <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values $USER_VALUES;
 insert into public.organizations (id, name, slug) values
-  ('$ORG',   '0394 2S A',      '0394-2s-a'),
-  ('$ORGB',  '0394 2S Solo',   '0394-2s-solo'),
-  ('$ORGC',  '0394 2S Two',    '0394-2s-two'),
-  ('$ORGC2', '0394 2S Two R',  '0394-2s-two-r'),
-  ('$ORGE',  '0394 2S Seat',   '0394-2s-seat'),
-  ('$ORGE2', '0394 2S Seat R', '0394-2s-seat-r'),
-  ('$ORGT',  '0394 2S Xfer',   '0394-2s-xfer'),
-  ('$ORGT2', '0394 2S Xfer 2', '0394-2s-xfer-2'),
-  ('$ORGT3', '0394 2S Xfer 3', '0394-2s-xfer-3'),
-  ('$ORGT4', '0394 2S Xfer 4', '0394-2s-xfer-4');
+  ('$ORG',   '0393 2S A',      '0393-2s-a'),
+  ('$ORGB',  '0393 2S Solo',   '0393-2s-solo'),
+  ('$ORGC',  '0393 2S Two',    '0393-2s-two'),
+  ('$ORGC2', '0393 2S Two R',  '0393-2s-two-r'),
+  ('$ORGE',  '0393 2S Seat',   '0393-2s-seat'),
+  ('$ORGE2', '0393 2S Seat R', '0393-2s-seat-r'),
+  ('$ORGT',  '0393 2S Xfer',   '0393-2s-xfer'),
+  ('$ORGT2', '0393 2S Xfer 2', '0393-2s-xfer-2'),
+  ('$ORGT3', '0393 2S Xfer 3', '0393-2s-xfer-3'),
+  ('$ORGT4', '0393 2S Xfer 4', '0393-2s-xfer-4');
 insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
   ('$ORG', '$O', 'owner', now(), null), ('$ORG', '$MGR', 'manager', now(), null), ('$ORG', '$S', 'staff', now(), null),
   ('$ORG', '$P1', 'staff', now(), null), ('$ORG', '$P2', 'staff', now(), null), ('$ORG', '$P4', 'staff', now(), null),
@@ -258,23 +258,23 @@ insert into public.organization_members (id, organization_id, user_id, role, acc
 -- 7d: M3 invited the owner (organization_members.invited_by, SET NULL on M3's deletion).
 insert into public.organization_members (organization_id, user_id, role, accepted_at, invited_by) values
   ('$ORGT3', '$TO3', 'owner', now(), '$M3');
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0394 2S Main', 'WH-0394-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0393 2S Main', 'WH-0393-2S', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   ('$ORG', '$MGR', '$WH', true), ('$ORG', '$K1', '$WH', true), ('$ORG', '$K2', '$WH', true),
   ('$ORG', '$K3', '$WH', true), ('$ORG', '$K4', '$WH', true);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
-  ('$ITEM', '$ORG', '$WH', 'SKU-0394-2S', '0394 2S item', 100, 'active', 'none');
-insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'PO-0394-2S', 'draft');
+  ('$ITEM', '$ORG', '$WH', 'SKU-0393-2S', '0393 2S item', 100, 'active', 'none');
+insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'PO-0393-2S', 'draft');
 -- 1: an in-progress count assigned to P1, claimed by the manager.
 insert into public.cycle_counts (id, organization_id, warehouse_id, status, scope, started_by, started_at, assigned_to,
                                  assignment_claimed_at, assignment_claimed_by) values
   ('$CC1', '$ORG', '$WH', 'in_progress', 'warehouse', '$MGR', now(), '$P1', now(), '$MGR');
 -- 2: an entry P2 created and last updated.
 insert into public.schedule_events (id, organization_id, title, starts_at, status, assigned_user_id, created_by, updated_by) values
-  ('$SE2', '$ORG', '0394 race entry', now() + interval '1 day', 'scheduled', null, '$P2', '$P2');
+  ('$SE2', '$ORG', '0393 race entry', now() + interval '1 day', 'scheduled', null, '$P2', '$P2');
 -- 4: a receipt P4 received.
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, received_by, immutable_hash) values
-  ('$R4', '$ORG', '$PO', '$WH', 'RCV-0394-2S', '$P4', repeat('e', 64));
+  ('$R4', '$ORG', '$PO', '$WH', 'RCV-0393-2S', '$P4', repeat('e', 64));
 -- 5: P5's pending order.
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$OR5', '$ORG', '$WH', 'pending_approval', 'internal', '$P5', 'pickup');
@@ -297,7 +297,7 @@ insert into public.cycle_count_lines (id, cycle_count_id, item_id, expected_quan
 insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, user_id)
 select '$ORG', '$ITEM', 'adjust', 0, 100, 100, '$P11' from generate_series(1, 1000);
 insert into public.audit_logs (organization_id, user_id, event)
-select '$ORG', '$P11', 'test.0394.race' from generate_series(1, 900);
+select '$ORG', '$P11', 'test.0393.race' from generate_series(1, 900);
 SQL
 then
   echo "fixture setup failed:"; cat "$TMP/setup.out"; exit 1
@@ -307,7 +307,7 @@ fi
 echo "== 1. the subject's count is held FOR UPDATE; the subject's account is deleted meanwhile"
 V0="$(q "select assignment_version from public.cycle_counts where id = '$CC1'")"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/1.A.out" 2>&1 <<SQL
-set application_name to '0394-race-1-A';
+set application_name to '0393-race-1-A';
 begin;
 select 'A=locked' from public.cycle_counts where id = '$CC1' for update;
 select pg_sleep(3);
@@ -315,9 +315,9 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-1-A || bad "1: session A never reached its pg_sleep"
+wait_sleeping 0393-race-1-A || bad "1: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-1-B "$P1" > "$TMP/1.B.out" 2>&1
+delete_as_gotrue 0393-race-1-B "$P1" > "$TMP/1.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "1: B (supabase_auth_admin) deleted the account" "$(has 'B=deleted' "$TMP/1.B.out")" "1"
@@ -331,18 +331,18 @@ check "1: the account is gone" "$(users_left "$P1")" "0"
 # ═══ 2. Stamp vs edit ═════════════════════════════════════════════════════
 echo "== 2. a manager renames the subject's schedule entry and holds; the subject's account is deleted meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/2.A.out" 2>&1 <<SQL
-set application_name to '0394-race-2-A';
+set application_name to '0393-race-2-A';
 begin;
 $(as_mgr)
-update public.schedule_events set title = '0394 race edited' where id = '$SE2' returning 'A=updated';
+update public.schedule_events set title = '0393 race edited' where id = '$SE2' returning 'A=updated';
 select pg_sleep(3);
 commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-2-A || bad "2: session A never reached its pg_sleep"
+wait_sleeping 0393-race-2-A || bad "2: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-2-B "$P2" > "$TMP/2.B.out" 2>&1
+delete_as_gotrue 0393-race-2-B "$P2" > "$TMP/2.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "2: A updated, B deleted" "$(has 'A=updated' "$TMP/2.A.out")/$(has 'B=deleted' "$TMP/2.B.out")" "1/1"
@@ -350,12 +350,12 @@ if [ $((T1 - T0)) -ge 1500 ]; then ok "2: B waited for A ($((T1 - T0)) ms)"; els
 check "2: A's title and updated_by stay; created_by null and stamped; updated_by (the manager) not stamped" \
   "$(q "select concat_ws('/', title, coalesce(created_by::text, 'null'), coalesce(deleted_users ? 'created_by', false),
                          updated_by, coalesce(deleted_users ? 'updated_by', false)) from public.schedule_events where id = '$SE2'")" \
-  "0394 race edited/null/t/$MGR/f"
+  "0393 race edited/null/t/$MGR/f"
 
 # ═══ 3. Last owner vs a joining member (F1) ═══════════════════════════════
 echo "== 3. a member joins the solo owner's organization (uncommitted); the solo owner deletes meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3.A.out" 2>&1 <<SQL
-set application_name to '0394-race-3-A';
+set application_name to '0393-race-3-A';
 begin;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORGB', '$J', 'staff', now()) returning 'A=joined';
 select pg_sleep(3);
@@ -363,9 +363,9 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-3-A || bad "3: session A never reached its pg_sleep"
+wait_sleeping 0393-race-3-A || bad "3: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-3-B "$O2" > "$TMP/3.B.out" 2>&1
+delete_as_gotrue 0393-race-3-B "$O2" > "$TMP/3.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "3: B deleted the solo owner, A's member joined" "$(has 'B=deleted' "$TMP/3.B.out")/$(has 'A=joined' "$TMP/3.A.out")" "1/1"
@@ -378,7 +378,7 @@ note "3: F1 remedy: the reviewed SQL runbook (plan F14) promotes the member; the
 # ═══ 4. The deletion check vs a held row lock ═════════════════════════════
 echo "== 4. a receipt the subject received is held FOR UPDATE; account_deletion_check meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/4.A.out" 2>&1 <<SQL
-set application_name to '0394-race-4-A';
+set application_name to '0393-race-4-A';
 begin;
 select 'A=locked' from public.receipts where id = '$R4' for update;
 select pg_sleep(3);
@@ -386,7 +386,7 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-4-A || bad "4: session A never reached its pg_sleep"
+wait_sleeping 0393-race-4-A || bad "4: session A never reached its pg_sleep"
 T0=$(now_ms)
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/4.B.out" 2>&1 <<SQL
 begin;
@@ -407,7 +407,7 @@ check "4: nothing persisted: the account, the receiver, no stamp, the membership
 # ═══ 5. Approve vs delete ═════════════════════════════════════════════════
 echo "== 5. A locks the requester's order and approves after B's deletion is waiting on it"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/5.A.out" 2>&1 <<SQL
-set application_name to '0394-race-5-A';
+set application_name to '0393-race-5-A';
 begin;
 select 'A=locked' from public.order_requests where id = '$OR5' for update;
 select pg_sleep(2.5);
@@ -417,8 +417,8 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-5-A || bad "5: session A never reached its pg_sleep"
-delete_as_gotrue 0394-race-5-B "$P5" > "$TMP/5.B.out" 2>&1
+wait_sleeping 0393-race-5-A || bad "5: session A never reached its pg_sleep"
+delete_as_gotrue 0393-race-5-B "$P5" > "$TMP/5.B.out" 2>&1
 wait "$PID"
 A_DL="$(has '40P01: deadlock detected' "$TMP/5.A.out")"
 B_DL="$(has '40P01: deadlock detected' "$TMP/5.B.out")"
@@ -440,12 +440,12 @@ check "5: any 40P01 came from the server's deadlock detector, not a function bod
 
 # ═══ 7a. Transfer vs deletion: deletion first ═════════════════════════════
 echo "== 7a. B deletes member M and holds; A transfers ownership to M meanwhile"
-( delete_as_gotrue 0394-race-7a-B "$TM" 3 > "$TMP/7a.B.out" 2>&1 ) &
+( delete_as_gotrue 0393-race-7a-B "$TM" 3 > "$TMP/7a.B.out" 2>&1 ) &
 PID=$!
-wait_sleeping 0394-race-7a-B || bad "7a: session B never reached its pg_sleep"
+wait_sleeping 0393-race-7a-B || bad "7a: session B never reached its pg_sleep"
 T0=$(now_ms)
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7a.A.out" 2>&1 <<SQL
-set application_name to '0394-race-7a-A';
+set application_name to '0393-race-7a-A';
 begin;
 $(as_service)
 select 'A=' || public.transfer_org_ownership('$ORGT', '$TO', '$TM');
@@ -461,7 +461,7 @@ check "7a: the owner is still the only real owner" "$(real_owners "$ORGT")" "$TO
 # ═══ 7b. Transfer first ═══════════════════════════════════════════════════
 echo "== 7b. A transfers ownership to M2 and holds; B deletes M2 meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7b.A.out" 2>&1 <<SQL
-set application_name to '0394-race-7b-A';
+set application_name to '0393-race-7b-A';
 begin;
 $(as_service)
 select 'A=' || public.transfer_org_ownership('$ORGT', '$TO', '$TM2');
@@ -470,9 +470,9 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-7b-A || bad "7b: session A never reached its pg_sleep"
+wait_sleeping 0393-race-7b-A || bad "7b: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-7b-B "$TM2" > "$TMP/7b.B.out" 2>&1
+delete_as_gotrue 0393-race-7b-B "$TM2" > "$TMP/7b.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "7b: A transferred" "$(has "A=$TM2" "$TMP/7b.A.out")" "1"
@@ -485,7 +485,7 @@ check "7b: M2 is the only real owner, the old owner an admin, M2's account intac
 # ═══ 7c. Two transfers by the same owner ══════════════════════════════════
 echo "== 7c. the owner transfers to X1 and to X2 at once"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7c.A.out" 2>&1 <<SQL
-set application_name to '0394-race-7c-A';
+set application_name to '0393-race-7c-A';
 begin;
 $(as_service)
 select 'A=' || public.transfer_org_ownership('$ORGT2', '$TO2', '$X1');
@@ -494,9 +494,9 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-7c-A || bad "7c: session A never reached its pg_sleep"
+wait_sleeping 0393-race-7c-A || bad "7c: session A never reached its pg_sleep"
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7c.B.out" 2>&1 <<SQL
-set application_name to '0394-race-7c-B';
+set application_name to '0393-race-7c-B';
 begin;
 $(as_service)
 select 'B=' || public.transfer_org_ownership('$ORGT2', '$TO2', '$X2');
@@ -510,7 +510,7 @@ check "7c: exactly one owner, X1" "$(real_owners "$ORGT2")" "$X1"
 # ═══ 7d. The invited_by edge ══════════════════════════════════════════════
 echo "== 7d. A locks the owner's row and transfers to M3 (who invited the owner); B deletes M3 meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7d.A.out" 2>&1 <<SQL
-set application_name to '0394-race-7d-A';
+set application_name to '0393-race-7d-A';
 begin;
 select 'A=locked' from public.organization_members where organization_id = '$ORGT3' and user_id = '$TO3' for update;
 select pg_sleep(1.5);
@@ -520,8 +520,8 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-7d-A || bad "7d: session A never reached its pg_sleep"
-delete_as_gotrue 0394-race-7d-B "$M3" > "$TMP/7d.B.out" 2>&1
+wait_sleeping 0393-race-7d-A || bad "7d: session A never reached its pg_sleep"
+delete_as_gotrue 0393-race-7d-B "$M3" > "$TMP/7d.B.out" 2>&1
 wait "$PID"
 check "7d: A transferred to M3; B was refused: P0001 last_owner (no deadlock)" \
   "$(has "A=$M3" "$TMP/7d.A.out")/$(grep -c 'ERROR:  P0001: last_owner' "$TMP/7d.B.out")/$(cat "$TMP/7d.A.out" "$TMP/7d.B.out" | grep -c '40P01')" "1/1/0"
@@ -530,7 +530,7 @@ check "7d: M3 is the only real owner and intact" "$(users_left "$M3")/$(real_own
 # ═══ 7e. Three sessions: a transfer to M while M and the other owner delete ═
 echo "== 7e. T1 transfers B's ownership to M and holds; T3 deletes M, then T2 deletes A (the other owner)"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7e.T1.out" 2>&1 <<SQL
-set application_name to '0394-race-7e-T1';
+set application_name to '0393-race-7e-T1';
 begin;
 $(as_service)
 select 'T1=' || public.transfer_org_ownership('$ORGT4', '$B7', '$M7');
@@ -539,13 +539,13 @@ commit;
 SQL
 ) &
 PID1=$!
-wait_sleeping 0394-race-7e-T1 || bad "7e: T1 never reached its pg_sleep"
-( delete_as_gotrue 0394-race-7e-T3 "$M7" > "$TMP/7e.T3.out" 2>&1 ) &
+wait_sleeping 0393-race-7e-T1 || bad "7e: T1 never reached its pg_sleep"
+( delete_as_gotrue 0393-race-7e-T3 "$M7" > "$TMP/7e.T3.out" 2>&1 ) &
 PID3=$!
-wait_lock 0394-race-7e-T3 || bad "7e: T3 (M's deletion) never waited for a lock"
-( delete_as_gotrue 0394-race-7e-T2 "$A7" > "$TMP/7e.T2.out" 2>&1 ) &
+wait_lock 0393-race-7e-T3 || bad "7e: T3 (M's deletion) never waited for a lock"
+( delete_as_gotrue 0393-race-7e-T2 "$A7" > "$TMP/7e.T2.out" 2>&1 ) &
 PID2=$!
-wait_lock 0394-race-7e-T2 || bad "7e: T2 (A's deletion) never waited for a lock"
+wait_lock 0393-race-7e-T2 || bad "7e: T2 (A's deletion) never waited for a lock"
 wait "$PID1" "$PID3" "$PID2"
 check "7e: T1 transferred B's ownership to M" "$(has "T1=$M7" "$TMP/7e.T1.out")" "1"
 DEL7E=$(( $(has 'B=deleted' "$TMP/7e.T3.out") + $(has 'B=deleted' "$TMP/7e.T2.out") ))
@@ -570,12 +570,12 @@ check "7e: no 40P01 in any of the three sessions" "$(cat "$TMP"/7e.*.out | grep 
 
 # ═══ 8. Two owners delete at once (both start orders) ═════════════════════
 two_owners() { # two_owners <tag> <org> <first> <second>
-  ( delete_as_gotrue "0394-race-$1-A" "$3" 3 > "$TMP/$1.A.out" 2>&1 ) &
+  ( delete_as_gotrue "0393-race-$1-A" "$3" 3 > "$TMP/$1.A.out" 2>&1 ) &
   local pid=$!
-  wait_sleeping "0394-race-$1-A" || bad "$1: session A never reached its pg_sleep"
+  wait_sleeping "0393-race-$1-A" || bad "$1: session A never reached its pg_sleep"
   local t0 t1
   t0=$(now_ms)
-  delete_as_gotrue "0394-race-$1-B" "$4" > "$TMP/$1.B.out" 2>&1
+  delete_as_gotrue "0393-race-$1-B" "$4" > "$TMP/$1.B.out" 2>&1
   t1=$(now_ms)
   wait "$pid"
   check "$1: the first owner's deletion succeeded" "$(has 'B=deleted' "$TMP/$1.A.out")" "1"
@@ -590,11 +590,11 @@ two_owners 8r "$ORGC2" "$C4" "$C3"
 
 # ═══ 9. Two members delete at once ════════════════════════════════════════
 echo "== 9. two members of one organization delete at once"
-( delete_as_gotrue 0394-race-9-A "$Q1" 2 > "$TMP/9.A.out" 2>&1 ) &
+( delete_as_gotrue 0393-race-9-A "$Q1" 2 > "$TMP/9.A.out" 2>&1 ) &
 PID=$!
-wait_sleeping 0394-race-9-A || bad "9: session A never reached its pg_sleep"
+wait_sleeping 0393-race-9-A || bad "9: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-9-B "$Q2" > "$TMP/9.B.out" 2>&1
+delete_as_gotrue 0393-race-9-B "$Q2" > "$TMP/9.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "9: both deleted" "$(has 'B=deleted' "$TMP/9.A.out")/$(has 'B=deleted' "$TMP/9.B.out")/$(users_left "$Q1")/$(users_left "$Q2")" "1/1/0/0"
@@ -603,7 +603,7 @@ if [ $((T1 - T0)) -lt 1500 ]; then ok "9: the second did not wait for the first 
 # ═══ 10. Deletion vs an impersonation seat ending ═════════════════════════
 seat_ends() { # seat_ends <tag> <org> <owner> <commit|rollback>
   ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$1.A.out" 2>&1 <<SQL
-set application_name to '0394-race-$1-A';
+set application_name to '0393-race-$1-A';
 begin;
 delete from public.organization_members where organization_id = '$2' and user_id = '$PA' returning 'A=seat-ended';
 select pg_sleep(2);
@@ -611,8 +611,8 @@ $4;
 SQL
   ) &
   local pid=$!
-  wait_sleeping "0394-race-$1-A" || bad "$1: session A never reached its pg_sleep"
-  delete_as_gotrue "0394-race-$1-B" "$3" > "$TMP/$1.B.out" 2>&1
+  wait_sleeping "0393-race-$1-A" || bad "$1: session A never reached its pg_sleep"
+  delete_as_gotrue "0393-race-$1-B" "$3" > "$TMP/$1.B.out" 2>&1
   wait "$pid"
   check "$1: the seat removal ran ($4)" "$(has 'A=seat-ended' "$TMP/$1.A.out")" "1"
   check "$1: the only real owner (with a staff member) is refused: P0001 last_owner" "$(grep -c 'ERROR:  P0001: last_owner' "$TMP/$1.B.out")" "1"
@@ -626,7 +626,7 @@ seat_ends 10r "$ORGE2" "$O5" rollback
 # ═══ 12. The subject's own pick vs their deletion ═════════════════════════
 echo "== 12a. K1 picks (holds 3 s); K1's account is deleted meanwhile"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/12a.A.out" 2>&1 <<SQL
-set application_name to '0394-race-12a-A';
+set application_name to '0393-race-12a-A';
 begin;
 $(as_user "$K1")
 select 'A=' || quantity_picked from public.partial_pick_line('$LP1', 2);
@@ -635,9 +635,9 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-12a-A || bad "12a: session A never reached its pg_sleep"
+wait_sleeping 0393-race-12a-A || bad "12a: session A never reached its pg_sleep"
 T0=$(now_ms)
-delete_as_gotrue 0394-race-12a-B "$K1" > "$TMP/12a.B.out" 2>&1
+delete_as_gotrue 0393-race-12a-B "$K1" > "$TMP/12a.B.out" 2>&1
 T1=$(now_ms)
 wait "$PID"
 check "12a: A picked (2 in all), B deleted" "$(has 'A=2' "$TMP/12a.A.out")/$(has 'B=deleted' "$TMP/12a.B.out")" "1/1"
@@ -649,11 +649,11 @@ check "12a: the picked quantity stays, picked_by null; the pick is released and 
   "2/null/null/null/null/picking_in_progress"
 
 echo "== 12b. K2's account is deleted (B holds 3 s); K2's pick arrives meanwhile"
-( delete_as_gotrue 0394-race-12b-B "$K2" 3 > "$TMP/12b.B.out" 2>&1 ) &
+( delete_as_gotrue 0393-race-12b-B "$K2" 3 > "$TMP/12b.B.out" 2>&1 ) &
 PID=$!
-wait_sleeping 0394-race-12b-B || bad "12b: session B never reached its pg_sleep"
+wait_sleeping 0393-race-12b-B || bad "12b: session B never reached its pg_sleep"
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/12b.A.out" 2>&1 <<SQL
-set application_name to '0394-race-12b-A';
+set application_name to '0393-race-12b-A';
 begin;
 $(as_user "$K2")
 select 'A=' || quantity_picked from public.partial_pick_line('$LP2', 2);
@@ -670,7 +670,7 @@ check "12b: the earlier picked quantity stays, picked_by null; the pick is relea
 echo "== 13a. K3 records a count line (holds 3 s); K3's account is deleted meanwhile"
 V3="$(q "select assignment_version from public.cycle_counts where id = '$CC3'")"
 ( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/13a.A.out" 2>&1 <<SQL
-set application_name to '0394-race-13a-A';
+set application_name to '0393-race-13a-A';
 begin;
 $(as_user "$K3")
 update public.cycle_count_lines set counted_quantity = 47, counted_by = '$K3', counted_at = now() where id = '$CL3' returning 'A=counted';
@@ -679,8 +679,8 @@ commit;
 SQL
 ) &
 PID=$!
-wait_sleeping 0394-race-13a-A || bad "13a: session A never reached its pg_sleep"
-delete_as_gotrue 0394-race-13a-B "$K3" > "$TMP/13a.B.out" 2>&1
+wait_sleeping 0393-race-13a-A || bad "13a: session A never reached its pg_sleep"
+delete_as_gotrue 0393-race-13a-B "$K3" > "$TMP/13a.B.out" 2>&1
 wait "$PID"
 check "13a: A counted, B deleted" "$(has 'A=counted' "$TMP/13a.A.out")/$(has 'B=deleted' "$TMP/13a.B.out")" "1/1"
 check "13a: the counted 47 stays, counted_by null; the count released (version + 1), in progress" \
@@ -690,11 +690,11 @@ check "13a: the counted 47 stays, counted_by null; the count released (version +
   "47/null/null/1/in_progress"
 
 echo "== 13b. K4's account is deleted (B holds 3 s); K4 re-records their line meanwhile"
-( delete_as_gotrue 0394-race-13b-B "$K4" 3 > "$TMP/13b.B.out" 2>&1 ) &
+( delete_as_gotrue 0393-race-13b-B "$K4" 3 > "$TMP/13b.B.out" 2>&1 ) &
 PID=$!
-wait_sleeping 0394-race-13b-B || bad "13b: session B never reached its pg_sleep"
+wait_sleeping 0393-race-13b-B || bad "13b: session B never reached its pg_sleep"
 "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/13b.A.out" 2>&1 <<SQL
-set application_name to '0394-race-13b-A';
+set application_name to '0393-race-13b-A';
 begin;
 $(as_user "$K4")
 update public.cycle_count_lines set counted_quantity = 46, counted_by = '$K4', counted_at = now() where id = '$CL4' returning 'A=counted';
@@ -722,21 +722,21 @@ CHECK_MS=$((T1 - T0))
 check "11: the check answers deletable" "$(grep -c '^C={"deletable": true}$' "$TMP/11.check.out")" "1"
 if [ "$CHECK_MS" -lt 2000 ]; then ok "11: the check (a full dry run, undone) took $CHECK_MS ms"; else bad "11: the check took $CHECK_MS ms"; fi
 T0=$(now_ms)
-delete_as_gotrue 0394-race-11 "$P11" > "$TMP/11.delete.out" 2>&1
+delete_as_gotrue 0393-race-11 "$P11" > "$TMP/11.delete.out" 2>&1
 T1=$(now_ms)
 DEL_MS=$((T1 - T0))
 check "11: deleted" "$(has 'B=deleted' "$TMP/11.delete.out")" "1"
 if [ "$DEL_MS" -lt 2000 ]; then ok "11: the deletion took $DEL_MS ms"; else bad "11: the deletion took $DEL_MS ms"; fi
 check "11: all 1,900 rows kept, user_id null and stamped" \
   "$(q "select (select count(*) from public.stock_movements where organization_id = '$ORG' and user_id is null and deleted_users ? 'user_id' and movement_type = 'adjust' and quantity_change = 0)
-              + (select count(*) from public.audit_logs where organization_id = '$ORG' and event = 'test.0394.race' and user_id is null and deleted_users ? 'user_id')")" "1900"
+              + (select count(*) from public.audit_logs where organization_id = '$ORG' and event = 'test.0393.race' and user_id is null and deleted_users ? 'user_id')")" "1900"
 
 # ═══ 6. Error classes ═════════════════════════════════════════════════════
 echo "== 6. error classes"
 check "6: no 40001 in any session" "$(cat "$TMP"/*.out | grep -c '40001')" "0"
 check "6: no 40P01 outside 5" \
   "$(for f in "$TMP"/*.out; do case "$(basename "$f")" in (5.*) ;; (*) cat "$f" ;; esac; done | grep -c '40P01')" "0"
-check "6: no 0394 function body names 40001 or 40P01" \
+check "6: no 0393 function body names 40001 or 40P01" \
   "$(q "select count(*) from pg_proc where oid in (to_regprocedure('public.tg_auth_users_before_delete()'), to_regprocedure('public.tg_mark_deleted_users()'),
                                                     to_regprocedure('public._account_exists(uuid)'), to_regprocedure('public._enforce_schedule_events_writer()'),
                                                     to_regprocedure('public.transfer_org_ownership(uuid,uuid,uuid)'))

@@ -512,7 +512,7 @@ type AuditRowInsert = {
   ip?: string | null;
   user_agent?: string | null;
   metadata: Record<string, unknown>;
-  /** 0394: only the account-deletion row sets it ({user_id: when}), so the log
+  /** 0393: only the account-deletion row sets it ({user_id: when}), so the log
    *  reads "Deleted user" for the person who deleted their account. The
    *  database keeps a non-API insert's stamp only for a null column. */
   deleted_users?: Record<string, string> | null;

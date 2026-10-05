@@ -110,7 +110,7 @@ describe('ActivityService.forItem', () => {
     expect(events.map((e) => e.id)).toEqual(['m:m-new', 'a:a1', 'm:m-old']);
   });
 
-  // 0394: a movement or audit row whose actor deleted their account names no
+  // 0393: a movement or audit row whose actor deleted their account names no
   // user and carries a deleted_users stamp: "Deleted user", not "System".
   it('names a deleted actor "Deleted user" on movements and audit rows, and keeps "System" for unstamped rows', async () => {
     const stamp = { user_id: '2026-11-04T00:00:00+00:00' };

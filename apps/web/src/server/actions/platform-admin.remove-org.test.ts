@@ -16,7 +16,7 @@ import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock'
  * refusal); a delete that errored although GoTrue no longer has the user is
  * DELETED (review R7); an account already gone is neither.
  *
- * 0394: every member is deletable now, so KEPT is chiefly a platform admin's
+ * 0393: every member is deletable now, so KEPT is chiefly a platform admin's
  * account while its email is on the allowlist (O-A3-7), read from GoTrue
  * first; an email read that fails is FAILED; and each deleted account's
  * avatar files are removed (O-A3-9).
@@ -127,7 +127,7 @@ beforeEach(() => {
     }
     return { error: null };
   });
-  // Per account: the first read is the platform-admin check's email (0394);
+  // Per account: the first read is the platform-admin check's email (0393);
   // a second read settles a delete that answered an error (review R7).
   const reads = new Map<string, number>();
   const NOT_FOUND = { status: 404, code: 'user_not_found', message: 'User not found' };
@@ -144,7 +144,7 @@ beforeEach(() => {
 });
 
 describe('removeOrgAction orphan cleanup', () => {
-  // Re-pinned by 0394 (was { deletedUsers: 2, keptUsers: 1, failedUsers: 3 }
+  // Re-pinned by 0393 (was { deletedUsers: 2, keptUsers: 1, failedUsers: 3 }
   // over seven orphans, kept meaning "linked records"): three orphans added
   // for the platform-admin email read.
   it('deletes only what the check allows; kept (platform admin, a refusal) and failed are counted apart', async () => {

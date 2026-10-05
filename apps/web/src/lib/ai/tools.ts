@@ -861,7 +861,7 @@ const recentMovementsTool: ToolExecutor = {
       createdAt: m.created_at,
       itemName: dataTag(m.item?.name ?? null),
       itemSku: m.item?.sku ?? null,
-      // "Deleted user" (0394) is our own words, still tagged with the rest.
+      // "Deleted user" (0393) is our own words, still tagged with the rest.
       actor: dataTag(movementActorLabel(m)),
     }));
   },

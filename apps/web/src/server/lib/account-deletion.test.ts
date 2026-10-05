@@ -56,10 +56,10 @@ describe('checkAccountDeletable', () => {
     expect(reportErrorMock).not.toHaveBeenCalled();
   });
 
-  // Re-pinned by 0394 (was reported at info: "expected for linked
-  // records"): 0394 converted every refusing business key, so an integrity
+  // Re-pinned by 0393 (was reported at info: "expected for linked
+  // records"): 0393 converted every refusing business key, so an integrity
   // refusal now is a record the census missed, reported as a warning.
-  it('an integrity refusal is blocked, with the constraint and table (reported as a warning since 0394, names only)', async () => {
+  it('an integrity refusal is blocked, with the constraint and table (reported as a warning since 0393, names only)', async () => {
     const { admin } = adminAnswering({
       data: {
         deletable: false,
@@ -89,7 +89,7 @@ describe('checkAccountDeletable', () => {
     });
   });
 
-  // 0394: the account trigger's one refusal (P0001 is not class 23, so it
+  // 0393: the account trigger's one refusal (P0001 is not class 23, so it
   // must be read by its constraint before the class-23 rule).
   it('the last-owner refusal (P0001, organization_last_owner) is last_owner, reported at info', async () => {
     const { admin } = adminAnswering({
@@ -333,7 +333,7 @@ describe('auditAccountDeleted', () => {
         after: null,
         reason: 'self_deletion',
       },
-      // 0394: the row's actor is the person who deleted their account.
+      // 0393: the row's actor is the person who deleted their account.
       deleted_users: { user_id: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) },
     });
   });
@@ -363,7 +363,7 @@ describe('auditAccountDeleted', () => {
   });
 });
 
-describe("soleOwnedOrganizationsWithMembers (0394, the trigger's predicate, read with the user client)", () => {
+describe("soleOwnedOrganizationsWithMembers (0393, the trigger's predicate, read with the user client)", () => {
   const ownedRow = (organization_id: string) => ({ organization_id });
 
   it('a member who owns nothing: no organization', async () => {

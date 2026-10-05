@@ -1,11 +1,11 @@
--- supabase/tests/0394_account_deletion_for_everyone.test.sql
--- pgTAP proof for migration 0394 (security slice A3): every member can delete
+-- supabase/tests/0393_account_deletion_for_everyone.test.sql
+-- pgTAP proof for migration 0393 (security slice A3): every member can delete
 -- their own account. Business records stay and record "Deleted user"; the
 -- only owner of an organization with other members is refused; open work is
 -- released; F12's legacy orders no longer refuse their requester's deletion.
 --
 -- K. Catalog (no fixtures):
---    K1  the public person-key census (md5|count, the 0394 prediction from
+--    K1  the public person-key census (md5|count, the 0393 prediction from
 --        production's own keys) and no composite key or column-list SET NULL
 --        to a person;
 --    K2  no RESTRICT or NO ACTION key to a person in any schema;
@@ -29,9 +29,9 @@
 --    K14 the only function body naming deleted_users is tg_mark_deleted_users;
 --    K15 0388 C1 still holds: only account_deletion_check deletes accounts;
 --    K18 F12: no NOT VALID constraint is left in public or auth, and
---        order_requests_delivery_target_chk is the 0394 text (compared with
+--        order_requests_delivery_target_chk is the 0393 text (compared with
 --        the same CHECK on a reference table) and validated;
---    K19 the triggers on auth.users; K20 comments name 0394.
+--    K19 the triggers on auth.users; K20 comments name 0393.
 -- X0. Coverage: the fixture names the subject in every marked column.
 -- X0b. Each marked column also names the subject on a row where no other
 --      person column of that row does, so every WHEN term of a table's
@@ -310,11 +310,11 @@ select is(
                     || (count(*) filter (where c.confdelsetcols is not null))::text
                from pg_constraint c
               where c.contype = 'f' and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)),
-  -- Production d05804c6ca1f8bee2744301f5b1e43bb|130 before 0394; this value
-  -- is production's own keys with exactly 0394's changes applied (19 SET
+  -- Production d05804c6ca1f8bee2744301f5b1e43bb|130 before 0393; this value
+  -- is production's own keys with exactly 0393's changes applied (19 SET
   -- NULL, 9 NOT NULL dropped, delivery_locations CASCADE, 4 new keys).
   'afc55a5ab973223f06d7c9d0245929f1|134|0/0',
-  'K1: the person-key census in public is 0394''s (134 keys), and no key to a person is composite or names SET NULL columns');
+  'K1: the person-key census in public is 0393''s (134 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -332,7 +332,7 @@ select is(
   'organization_members.user_id,platform_impersonation_sessions.admin_user_id,push_tokens.user_id,saved_views.user_id,'
   'user_category_assignments.user_id,user_login_devices.user_id,user_onboarding.user_id,user_permission_overrides.user_id,'
   'user_profiles.id,user_release_state.user_id,user_warehouse_assignments.user_id',
-  'K3: the person keys in public that cascade are exactly the 19 personal ones (0394 adds the driver''s live position and the placer''s submission log; invites move to SET NULL)');
+  'K3: the person keys in public that cascade are exactly the 19 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL)');
 select is(
   (select string_agg(c.relname, ',' order by c.relname collate "C")
      from pg_attribute a join pg_class c on c.oid = a.attrelid
@@ -349,7 +349,7 @@ select is(
   'approvals,audit_logs,carrier_shipments,cycle_count_ai_scans,org_connections,organization_invites,organization_modules,'
   'platform_admin_audit,po_imports,putaway_moves,receipts,returns,schedule_events,size_count_training_samples,'
   'stock_movements,uom_conversions#',
-  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0394 changes, audit_logs, stock_movements), and on each the marked columns are exactly its SET NULL person columns');
+  'K4: deleted_users is on exactly the 16 tables of the narrow scope (the 14 whose key 0393 changes, audit_logs, stock_movements), and on each the marked columns are exactly its SET NULL person columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || a.attname, ',' order by 1), '')
      from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
@@ -426,7 +426,7 @@ select is(
           || coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a)::text, 'false')
      from pg_proc p where p.oid = to_regprocedure('public.tg_mark_deleted_users()')),
   'd37ffc38926ea5ca42cd2812efa51802|false|{"search_path=public, pg_temp"}|postgres|false|false|false',
-  'K9: tg_mark_deleted_users is 0394''s body, SECURITY INVOKER (an FK action runs as the table owner; a DEFINER would make every caller postgres), search_path pinned, owned by postgres, not executable by PUBLIC, anon or authenticated');
+  'K9: tg_mark_deleted_users is 0393''s body, SECURITY INVOKER (an FK action runs as the table owner; a DEFINER would make every caller postgres), search_path pinned, owned by postgres, not executable by PUBLIC, anon or authenticated');
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
           || (select string_agg(a::text, ',' order by a::text collate "C") from unnest(p.proacl) a)
@@ -436,7 +436,7 @@ select is(
               where p.oid = to_regprocedure('public.tg_auth_users_before_delete()')),
   -- Re-pinned by the review fix (was e2aeabeff7339b21b86f95788a597d6a ... #P0001): the lock loop (race 7e) and its 55P03.
   '88fbc1c4a826334245675b24b3d23106|true|{"search_path=public, pg_temp"}|postgres|postgres=X/postgres,service_role=X/postgres#55P03,P0001',
-  'K10: tg_auth_users_before_delete is 0394''s body, SECURITY DEFINER (it must release rows the deleting role cannot touch), search_path pinned, owned by postgres, EXECUTE for postgres and service_role only (a trigger function needs none to fire), and it raises only P0001 (last_owner) and 55P03 (owner rows kept changing: try again), never 40001 or 40P01');
+  'K10: tg_auth_users_before_delete is 0393''s body, SECURITY DEFINER (it must release rows the deleting role cannot touch), search_path pinned, owned by postgres, EXECUTE for postgres and service_role only (a trigger function needs none to fire), and it raises only P0001 (last_owner) and 55P03 (owner rows kept changing: try again), never 40001 or 40P01');
 select is(
   (select t.tgtype::text || '|' || t.tgenabled::text || '|' || t.tgfoid::regproc::text
      from pg_trigger t where t.tgrelid = 'auth.users'::regclass and t.tgname = 'on_auth_user_before_delete'),
@@ -447,13 +447,13 @@ select is(
           || (select string_agg(a::text, ',' order by a::text collate "C") from unnest(p.proacl) a)
      from pg_proc p where p.oid = to_regprocedure('public._account_exists(uuid)')),
   '3b8a465c85fc816ea2ad5c8c57ede301|true|true|postgres|postgres=X/postgres,service_role=X/postgres',
-  'K11: _account_exists is 0394''s body, SECURITY DEFINER with an empty search_path (service_role cannot read auth.users), EXECUTE for postgres and service_role only');
+  'K11: _account_exists is 0393''s body, SECURITY DEFINER with an empty search_path (service_role cannot read auth.users), EXECUTE for postgres and service_role only');
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
           || (select string_agg(a::text, ',' order by a::text collate "C") from unnest(p.proacl) a)
      from pg_proc p where p.oid = to_regprocedure('public._enforce_schedule_events_writer()')),
   '46bfd5262da44f0586892f0bf4178f6b|false|{search_path=public}|postgres|postgres=X/postgres,service_role=X/postgres',
-  'K12: _enforce_schedule_events_writer is 0394''s body (a null created_by stands only when a non-API role nulls it and the account is gone), SECURITY INVOKER, search_path=public (0329 pins that value), grants unchanged');
+  'K12: _enforce_schedule_events_writer is 0393''s body (a null created_by stands only when a non-API role nulls it and the account is gone), SECURITY INVOKER, search_path=public (0329 pins that value), grants unchanged');
 select is(
   (select count(*) from pg_constraint c join pg_namespace n on n.oid = c.connamespace
     where n.nspname in ('public', 'auth') and c.condeferrable)::text
@@ -471,13 +471,13 @@ select is(
      from fn_scope f
     where f.prosrc ~* $re$delete\s+from\s+(only\s+)?("?auth"?\s*\.\s*"?users\M"?|("?public"?\s*\.\s*)?"?user_profiles\M"?)$re$),
   'public.account_deletion_check:postgres:true',
-  'K15: the only function that deletes from auth.users or user_profiles is still account_deletion_check (0388 C1; the 0394 trigger releases, it never deletes an account)');
+  'K15: the only function that deletes from auth.users or user_profiles is still account_deletion_check (0388 C1; the 0393 trigger releases, it never deletes an account)');
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
           || (select string_agg(a::text, ',' order by a::text collate "C") from unnest(p.proacl) a)
      from pg_proc p where p.oid = to_regprocedure('public.transfer_org_ownership(uuid, uuid, uuid)')),
   '777da8ae49fdeabee55bb49f7259b9a2|true|{search_path=public}|postgres|postgres=X/postgres,service_role=X/postgres',
-  'K16: transfer_org_ownership is 0394''s body (both rows locked FOR UPDATE, seats ignored, both updates checked), SECURITY DEFINER, search_path=public, service_role only as before');
+  'K16: transfer_org_ownership is 0393''s body (both rows locked FOR UPDATE, seats ignored, both updates checked), SECURITY DEFINER, search_path=public, service_role only as before');
 create temp table f12_ref (
   id uuid not null,
   fulfillment_type text,
@@ -499,14 +499,14 @@ select is(
                from pg_constraint c
               where c.conrelid = 'public.order_requests'::regclass and c.conname = 'order_requests_delivery_target_chk'),
   '|true/true',
-  'K18: F12: no NOT VALID constraint is left in public or auth (a NOT VALID CHECK refused the FK''s SET NULL on 5 legacy orders), and order_requests_delivery_target_chk is 0394''s text (the two arms plus the five legacy ids in their legacy shape) and validated');
+  'K18: F12: no NOT VALID constraint is left in public or auth (a NOT VALID CHECK refused the FK''s SET NULL on 5 legacy orders), and order_requests_delivery_target_chk is 0393''s text (the two arms plus the five legacy ids in their legacy shape) and validated');
 select is(
   (select string_agg(t.tgname, ',' order by t.tgname collate "C") from pg_trigger t
     where t.tgrelid = 'auth.users'::regclass and not t.tgisinternal),
   'on_auth_user_before_delete,on_auth_user_created,on_auth_user_email_updated',
-  'K19: auth.users carries exactly the two earlier triggers and 0394''s');
+  'K19: auth.users carries exactly the two earlier triggers and 0393''s');
 select is(
-  (select bool_and(coalesce(obj_description(p.oid, 'pg_proc') ~ '0394', false))::text
+  (select bool_and(coalesce(obj_description(p.oid, 'pg_proc') ~ '0393', false))::text
      from pg_proc p
     where p.oid in (to_regprocedure('public.tg_mark_deleted_users()'), to_regprocedure('public.tg_auth_users_before_delete()'),
                     to_regprocedure('public._account_exists(uuid)'), to_regprocedure('public._enforce_schedule_events_writer()'),
@@ -514,9 +514,9 @@ select is(
   || '|' || (select bool_and(coalesce(col_description(('public.' || m.tbl)::regclass,
                                                       (select a.attnum from pg_attribute a
                                                         where a.attrelid = ('public.' || m.tbl)::regclass and a.attname = 'deleted_users'))
-                                      ~ '0394', false))::text
+                                      ~ '0393', false))::text
                from marked m)
-  || '|' || (select bool_and(coalesce(obj_description(c.oid, 'pg_constraint') ~ '0394', false))::text || '/' || count(*)::text
+  || '|' || (select bool_and(coalesce(obj_description(c.oid, 'pg_constraint') ~ '0393', false))::text || '/' || count(*)::text
                from pg_constraint c
               where c.connamespace = 'public'::regnamespace
                 and (c.conname like '%\_deleted\_chk' and c.conname <> 'order_requests_requester_deleted_chk'
@@ -524,7 +524,7 @@ select is(
                                       'delivery_locations_driver_user_id_fkey', 'user_permission_overrides_updated_by_fkey',
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
   'true|true|true/16',
-  'K20: the five functions, the 16 deleted_users columns and the 16 constraints 0394 adds or restates say so in their comments');
+  'K20: the five functions, the 16 deleted_users columns and the 16 constraints 0393 adds or restates say so in their comments');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
@@ -533,43 +533,43 @@ select is(
   || '#' || (select t.tgtype::text || '/' || t.tgenabled::text from pg_trigger t
               where t.tgrelid = 'public.organization_members'::regclass and t.tgname = 'organization_members_role_guard'),
   'b48c165e5ff1ae0e8bbf159ab97c0d42|true|{search_path=public}|postgres|false|false#31/O',
-  'K21: _guard_organization_member_changes is 0394''s body (review: an API caller may change only role, is_delivery_driver and all_warehouses on a membership, and may not create an "Act as" seat), SECURITY DEFINER, search_path=public (0329), not executable by anon or authenticated, still BEFORE INSERT OR UPDATE OR DELETE on organization_members');
+  'K21: _guard_organization_member_changes is 0393''s body (review: an API caller may change only role, is_delivery_driver and all_warehouses on a membership, and may not create an "Act as" seat), SECURITY DEFINER, search_path=public (0329), not executable by anon or authenticated, still BEFORE INSERT OR UPDATE OR DELETE on organization_members');
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 -- full_name and email feed D12: no row may gain a deleted person's name or
 -- email. sub (P) is the subject: history in every marked column, open and
 -- closed work of every kind the trigger releases, and personal rows.
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,  '0394-own@test.local',  '{"full_name": "Own Er 0394"}'::jsonb),
-  (:mgr,  '0394-mgr@test.local',  '{"full_name": "Man Ager 0394"}'::jsonb),
-  (:stf,  '0394-stf@test.local',  '{"full_name": "Sta Ff 0394"}'::jsonb),
-  (:sub,  '0394-sub@test.local',  '{"full_name": "Sub Ject 0394"}'::jsonb),
-  (:pa,   '0394-pa@test.local',   '{"full_name": "Plat Form 0394"}'::jsonb),
-  (:own2, '0394-own2@test.local', '{"full_name": "Solo Owner 0394"}'::jsonb),
-  (:pend, '0394-pend@test.local', '{"full_name": "Pen Ding 0394"}'::jsonb),
-  (:xinv, '0394-xinv@test.local', '{"full_name": "Ex Inviter 0394"}'::jsonb),
-  (:c1o,  '0394-c1o@test.local',  '{"full_name": "Co Owner One 0394"}'::jsonb),
-  (:c2o,  '0394-c2o@test.local',  '{"full_name": "Co Owner Two 0394"}'::jsonb),
-  (:cst,  '0394-cst@test.local',  '{"full_name": "Co Staff 0394"}'::jsonb),
-  (:own3, '0394-own3@test.local', '{"full_name": "Two Orgs 0394"}'::jsonb),
-  (:dmem, '0394-dmem@test.local', '{"full_name": "Dee Member 0394"}'::jsonb),
-  (:own4, '0394-own4@test.local', '{"full_name": "Seat Org Owner 0394"}'::jsonb),
-  (:est,  '0394-est@test.local',  '{"full_name": "Seat Org Staff 0394"}'::jsonb),
-  (:cust, '0394-cust@test.local', '{"full_name": "Cust Person 0394"}'::jsonb),
-  (:q1,   '0394-q1@test.local',   '{"full_name": "Que One 0394"}'::jsonb),
-  (:q2,   '0394-q2@test.local',   '{"full_name": "Que Two 0394"}'::jsonb),
-  (:leg,  '0394-leg@test.local',  '{"full_name": "Leg Acy 0394"}'::jsonb),
-  (:vd,   '0394-vd@test.local',   '{"full_name": "Dis Abled 0394"}'::jsonb),
-  (:own5, '0394-own5@test.local', '{"full_name": "Console Owner 0394"}'::jsonb),
-  (:fmem, '0394-fmem@test.local', '{"full_name": "Console Member 0394"}'::jsonb)
+  (:own,  '0393-own@test.local',  '{"full_name": "Own Er 0393"}'::jsonb),
+  (:mgr,  '0393-mgr@test.local',  '{"full_name": "Man Ager 0393"}'::jsonb),
+  (:stf,  '0393-stf@test.local',  '{"full_name": "Sta Ff 0393"}'::jsonb),
+  (:sub,  '0393-sub@test.local',  '{"full_name": "Sub Ject 0393"}'::jsonb),
+  (:pa,   '0393-pa@test.local',   '{"full_name": "Plat Form 0393"}'::jsonb),
+  (:own2, '0393-own2@test.local', '{"full_name": "Solo Owner 0393"}'::jsonb),
+  (:pend, '0393-pend@test.local', '{"full_name": "Pen Ding 0393"}'::jsonb),
+  (:xinv, '0393-xinv@test.local', '{"full_name": "Ex Inviter 0393"}'::jsonb),
+  (:c1o,  '0393-c1o@test.local',  '{"full_name": "Co Owner One 0393"}'::jsonb),
+  (:c2o,  '0393-c2o@test.local',  '{"full_name": "Co Owner Two 0393"}'::jsonb),
+  (:cst,  '0393-cst@test.local',  '{"full_name": "Co Staff 0393"}'::jsonb),
+  (:own3, '0393-own3@test.local', '{"full_name": "Two Orgs 0393"}'::jsonb),
+  (:dmem, '0393-dmem@test.local', '{"full_name": "Dee Member 0393"}'::jsonb),
+  (:own4, '0393-own4@test.local', '{"full_name": "Seat Org Owner 0393"}'::jsonb),
+  (:est,  '0393-est@test.local',  '{"full_name": "Seat Org Staff 0393"}'::jsonb),
+  (:cust, '0393-cust@test.local', '{"full_name": "Cust Person 0393"}'::jsonb),
+  (:q1,   '0393-q1@test.local',   '{"full_name": "Que One 0393"}'::jsonb),
+  (:q2,   '0393-q2@test.local',   '{"full_name": "Que Two 0393"}'::jsonb),
+  (:leg,  '0393-leg@test.local',  '{"full_name": "Leg Acy 0393"}'::jsonb),
+  (:vd,   '0393-vd@test.local',   '{"full_name": "Dis Abled 0393"}'::jsonb),
+  (:own5, '0393-own5@test.local', '{"full_name": "Console Owner 0393"}'::jsonb),
+  (:fmem, '0393-fmem@test.local', '{"full_name": "Console Member 0393"}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0394 Deletion A', '0394-deletion-a'),
-  (:orgB, '0394 Solo B',     '0394-solo-b'),
-  (:orgC, '0394 Two Owners', '0394-two-owners'),
-  (:orgD, '0394 Second Org', '0394-second-org'),
-  (:orgE, '0394 Seat Org',   '0394-seat-org'),
-  (:orgF, '0394 Console Org', '0394-console-org');
+  (:orgA, '0393 Deletion A', '0393-deletion-a'),
+  (:orgB, '0393 Solo B',     '0393-solo-b'),
+  (:orgC, '0393 Two Owners', '0393-two-owners'),
+  (:orgD, '0393 Second Org', '0393-second-org'),
+  (:orgE, '0393 Seat Org',   '0393-seat-org'),
+  (:orgF, '0393 Console Org', '0393-console-org');
 insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
   (:orgA, :own,  'owner',   now(), null),
   (:orgA, :mgr,  'manager', now(), null),
@@ -589,20 +589,20 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgF, :own5, 'owner',   now(), null),
   (:orgF, :fmem, 'staff',   now(), null);
 insert into public.warehouses (id, organization_id, name, code, status, manager_user_id) values
-  (:whA, :orgA, '0394 Main', 'WH-0394A', 'active', :sub);
+  (:whA, :orgA, '0393 Main', 'WH-0394A', 'active', :sub);
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :mgr, :whA, true),
   (:orgA, :stf, :whA, true),
   (:orgA, :sub, :whA, true);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
-  (:itA, :orgA, :whA, '0394-I', '0394 item', 100, 'active', 'none');
+  (:itA, :orgA, :whA, '0393-I', '0393 item', 100, 'active', 'none');
 insert into public.bins (id, organization_id, warehouse_id, code, name, bin_type) values
-  (:binA1, :orgA, :whA, '0394-B1', '0394 Bin 1', 'storage'),
-  (:binA2, :orgA, :whA, '0394-B2', '0394 Bin 2', 'storage');
-insert into public.purchase_orders (id, organization_id, po_number, status) values (:poA, :orgA, 'PO-0394-A', 'draft');
-insert into public.charters (id, organization_id, name, code, status) values (:chA, :orgA, '0394 Charter', 'CH-0394A', 'active');
-insert into public.customers (id, organization_id, name) values (:custA, :orgA, '0394 Cust Co');
-insert into public.customer_users (customer_id, user_id, email) values (:custA, :cust, '0394-cust@test.local');
+  (:binA1, :orgA, :whA, '0393-B1', '0393 Bin 1', 'storage'),
+  (:binA2, :orgA, :whA, '0393-B2', '0393 Bin 2', 'storage');
+insert into public.purchase_orders (id, organization_id, po_number, status) values (:poA, :orgA, 'PO-0393-A', 'draft');
+insert into public.charters (id, organization_id, name, code, status) values (:chA, :orgA, '0393 Charter', 'CH-0394A', 'active');
+insert into public.customers (id, organization_id, name) values (:custA, :orgA, '0393 Cust Co');
+insert into public.customer_users (customer_id, user_id, email) values (:custA, :cust, '0393-cust@test.local');
 
 -- Orders: an open pick and two open deliveries assigned to P (released), a
 -- completed order P picked (kept), an order for the returns and the carrier
@@ -628,7 +628,7 @@ insert into public.order_requests
 insert into public.delivery_locations (organization_id, order_request_id, driver_user_id, lat, lng) values
   (:orgA, :oTrans, :sub, 34.05, -118.25);
 insert into public.order_submissions (organization_id, user_id, key, request_hash, outcome, order_request_id, surface) values
-  (:orgA, :sub, gen_random_uuid(), md5('0394 submission'), 'placed', :oP, 'web');
+  (:orgA, :sub, gen_random_uuid(), md5('0393 submission'), 'placed', :oP, 'web');
 
 -- Counts: one in progress assigned to P (released), one completed (kept).
 insert into public.cycle_counts
@@ -638,43 +638,43 @@ insert into public.cycle_counts
   (:ccDone, :orgA, :whA, 'completed',   'warehouse', :mgr, now(), :sub, now(), :mgr, :mgr, now());
 insert into public.cycle_count_ai_scans
   (id, organization_id, cycle_count_id, created_by, photo_storage_path, model_version, confirmed_at, confirmed_by) values
-  (:scan1, :orgA, :ccOpen, :sub, '0394/scan-1.jpg', 'test-0394', now(), :sub);
+  (:scan1, :orgA, :ccOpen, :sub, '0393/scan-1.jpg', 'test-0393', now(), :sub);
 
 -- Schedule: scheduled and in-progress entries assigned to P (released), a
 -- completed one P created, updated and was assigned (kept), one P created
 -- (D8/D13), and a live manager's entry (S, M4, M7).
 insert into public.schedule_events (id, organization_id, title, starts_at, status, assigned_user_id, created_by, updated_by) values
-  (:seOpen, :orgA, '0394 scheduled', now() + interval '1 day',  'scheduled',   :sub,  :mgr, :mgr),
-  (:seProg, :orgA, '0394 underway',  now(),                     'in_progress', :sub,  :mgr, :mgr),
-  (:seDone, :orgA, '0394 done',      now() - interval '1 day',  'completed',   :sub,  :sub, :sub),
-  (:seCre,  :orgA, '0394 created',   now() + interval '2 days', 'scheduled',   null,  :sub, :sub),
-  (:seLive, :orgA, '0394 live',      now() + interval '3 days', 'scheduled',   :stf,  :mgr, :mgr);
+  (:seOpen, :orgA, '0393 scheduled', now() + interval '1 day',  'scheduled',   :sub,  :mgr, :mgr),
+  (:seProg, :orgA, '0393 underway',  now(),                     'in_progress', :sub,  :mgr, :mgr),
+  (:seDone, :orgA, '0393 done',      now() - interval '1 day',  'completed',   :sub,  :sub, :sub),
+  (:seCre,  :orgA, '0393 created',   now() + interval '2 days', 'scheduled',   null,  :sub, :sub),
+  (:seLive, :orgA, '0393 live',      now() + interval '3 days', 'scheduled',   :stf,  :mgr, :mgr);
 
 -- Maintenance and exceptions: open work owned or claimed by P (released) and
 -- closed work (kept).
 insert into public.maintenance_requests
   (id, organization_id, requester_user_id, requester_name_snapshot, subject, description, priority, status,
    local_owner_user_id, resolved_at, resolved_by, resolved_by_name_snapshot) values
-  (:mrOpen, :orgA, :stf, 'Sta Ff', 'Broken door 0394', 'It sticks', 'normal', 'saved',    :sub, null,  null, null),
-  (:mrDone, :orgA, :stf, 'Sta Ff', 'Broken lamp 0394', 'Flickers',  'normal', 'resolved', :sub, now(), :sub, 'Resolver');
+  (:mrOpen, :orgA, :stf, 'Sta Ff', 'Broken door 0393', 'It sticks', 'normal', 'saved',    :sub, null,  null, null),
+  (:mrDone, :orgA, :stf, 'Sta Ff', 'Broken lamp 0393', 'Flickers',  'normal', 'resolved', :sub, now(), :sub, 'Resolver');
 insert into public.exception_occurrences
   (id, organization_id, occurrence_number, rule, item_id, warehouse_id, first_seen_at, last_seen_at, resolved_at, resolved_reason,
    escalation_claimed_by, escalation_claimed_at) values
   (:exOpen, :orgA, 1, 'label_mismatch', :itA, :whA, now(), now(), null,  null,      :sub, now()),
   (:exDone, :orgA, 2, 'label_mismatch', :itA, :whA, now(), now(), now(), 'cleared', :sub, now());
 
--- History on the 14 tables whose key 0394 changed, and the two log tables.
+-- History on the 14 tables whose key 0393 changed, and the two log tables.
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, received_by, immutable_hash) values
-  (:rcpt1, :orgA, :poA, :whA, 'RCV-0394-1', :sub, repeat('b', 64)),
-  (:rcptQ, :orgA, :poA, :whA, 'RCV-0394-2', :q1,  repeat('d', 64));
+  (:rcpt1, :orgA, :poA, :whA, 'RCV-0393-1', :sub, repeat('b', 64)),
+  (:rcptQ, :orgA, :poA, :whA, 'RCV-0393-2', :q1,  repeat('d', 64));
 insert into public.po_imports (id, organization_id, uploaded_by, approved_by, source_type, file_name, file_mime_type, file_size, storage_path, sha256) values
-  (:poi1, :orgA, :sub, :sub, 'csv', '0394.csv', 'text/csv', 10, '0394/po.csv', repeat('c', 64));
+  (:poi1, :orgA, :sub, :sub, 'csv', '0393.csv', 'text/csv', 10, '0393/po.csv', repeat('c', 64));
 insert into public.approvals (id, organization_id, type, related_type, requested_by, payload, status, decided_by) values
   (:appr1, :orgA, 'manual_adjustment', 'inventory_item', :sub, '{}'::jsonb, 'approved', :sub);
 insert into public.putaway_moves (id, organization_id, warehouse_id, item_id, from_bin_id, to_bin_id, qty_base, movement_type, performed_by) values
   (:put1, :orgA, :whA, :itA, :binA1, :binA2, 1, 'putaway', :sub);
 insert into public.size_count_training_samples (id, organization_id, captured_by, image_storage_path, size_label) values
-  (:smp1, :orgA, :sub, '0394/sample.jpg', 'M');
+  (:smp1, :orgA, :sub, '0393/sample.jpg', 'M');
 insert into public.returns (id, organization_id, order_request_id, status, requested_by, approved_by, received_by, closed_by, denied_by) values
   (:ret1, :orgA, :oRet, 'closed',   :sub, :sub, :sub, :sub, :sub),
   (:ret2, :orgA, :oRet, 'approved', :stf, :mgr, null, null, null),
@@ -688,11 +688,11 @@ insert into public.approvals (id, organization_id, type, related_type, requested
   (:appr3, :orgA, 'manual_adjustment', 'inventory_item', :stf, '{}'::jsonb, 'approved', :sub);
 insert into public.cycle_count_ai_scans
   (id, organization_id, cycle_count_id, created_by, photo_storage_path, model_version, confirmed_at, confirmed_by) values
-  (:scan2, :orgA, :ccDone, :sub, '0394/scan-2.jpg', 'test-0394', null,  null),
-  (:scan3, :orgA, :ccDone, :stf, '0394/scan-3.jpg', 'test-0394', now(), :sub);
+  (:scan2, :orgA, :ccDone, :sub, '0393/scan-2.jpg', 'test-0393', null,  null),
+  (:scan3, :orgA, :ccDone, :stf, '0393/scan-3.jpg', 'test-0393', now(), :sub);
 insert into public.po_imports (id, organization_id, uploaded_by, approved_by, source_type, file_name, file_mime_type, file_size, storage_path, sha256) values
-  (:poi2, :orgA, :sub, null, 'csv', '0394-2.csv', 'text/csv', 10, '0394/po-2.csv', repeat('5', 64)),
-  (:poi3, :orgA, :stf, :sub, 'csv', '0394-3.csv', 'text/csv', 10, '0394/po-3.csv', repeat('6', 64));
+  (:poi2, :orgA, :sub, null, 'csv', '0393-2.csv', 'text/csv', 10, '0393/po-2.csv', repeat('5', 64)),
+  (:poi3, :orgA, :stf, :sub, 'csv', '0393-3.csv', 'text/csv', 10, '0393/po-3.csv', repeat('6', 64));
 insert into public.returns (id, organization_id, order_request_id, status, requested_by, approved_by, received_by, closed_by, denied_by) values
   (:ret3, :orgA, :oRet, 'requested', :sub, null, null, null, null),
   (:ret4, :orgA, :oRet, 'approved',  :stf, :sub, null, null, null),
@@ -703,11 +703,11 @@ insert into public.uom_conversions (id, organization_id, item_id, from_uom, to_u
   (:uom2, :orgA, :itA, 'ea', 'pk', 6, :sub, null),
   (:uom3, :orgA, :itA, 'ea', 'bx', 24, :stf, :sub);
 insert into public.schedule_events (id, organization_id, title, starts_at, status, assigned_user_id, created_by, updated_by) values
-  (:seAsg, :orgA, '0394 done, assigned only', now() - interval '2 days', 'completed', :sub, :mgr, :mgr),
-  (:seCr2, :orgA, '0394 created only',        now() + interval '4 days', 'scheduled', null, :sub, :mgr),
-  (:seUpd, :orgA, '0394 updated only',        now() + interval '5 days', 'scheduled', null, :mgr, :sub);
+  (:seAsg, :orgA, '0393 done, assigned only', now() - interval '2 days', 'completed', :sub, :mgr, :mgr),
+  (:seCr2, :orgA, '0393 created only',        now() + interval '4 days', 'scheduled', null, :sub, :mgr),
+  (:seUpd, :orgA, '0393 updated only',        now() + interval '5 days', 'scheduled', null, :mgr, :sub);
 insert into public.org_connections (id, organization_id, provider_id, created_by) values
-  (:conn1, :orgA, 'test_provider_0394', :sub);
+  (:conn1, :orgA, 'test_provider_0393', :sub);
 insert into public.carrier_shipments (id, organization_id, order_request_id, purchased_by) values
   (:cs1, :orgA, :oRet, :sub);
 insert into public.organization_modules (organization_id, module_id, tier, enabled_by, settings) values
@@ -715,21 +715,21 @@ insert into public.organization_modules (organization_id, module_id, tier, enabl
    jsonb_build_object('notifyAudience', jsonb_build_object(:sub, 'all', :mgr, 'all'), 'keep', 1))
   on conflict (organization_id, module_id) do update set enabled_by = excluded.enabled_by, settings = excluded.settings;
 insert into public.platform_admin_audit (id, actor_user_id, actor_email, action, target_user_id) values
-  (:pa1, :sub, '0394-sub@test.local', 'viewed_org', null),
-  (:pa2, :own, '0394-own@test.local', 'viewed_org', :sub),
-  (:pa4, :own, '0394-own@test.local', 'viewed_org', :mgr);
+  (:pa1, :sub, '0393-sub@test.local', 'viewed_org', null),
+  (:pa2, :own, '0393-own@test.local', 'viewed_org', :sub),
+  (:pa4, :own, '0393-own@test.local', 'viewed_org', :mgr);
 -- pa3 carries a stamp written by a non-API role (postgres): kept, because its
 -- column is null (M2, M3).
 insert into public.platform_admin_audit (id, actor_user_id, actor_email, action, target_user_id, deleted_users) values
-  (:pa3, :own, '0394-own@test.local', 'viewed_org', null, '{"target_user_id": "2026-10-01T00:00:00+00:00"}'::jsonb);
+  (:pa3, :own, '0393-own@test.local', 'viewed_org', null, '{"target_user_id": "2026-10-01T00:00:00+00:00"}'::jsonb);
 insert into public.organization_invites (id, organization_id, email, role, token, expires_at, invited_by, accepted_at) values
-  (:invP,   :orgA, '0394-newcomer@test.local', 'staff', '0394-token-pending',  now() + interval '7 days', :sub,  null),
-  (:invAcc, :orgA, '0394-mgr@test.local',      'staff', '0394-token-accepted', now() + interval '7 days', :sub,  now()),
-  (:invB1,  :orgB, '0394-b1@test.local',       'staff', '0394-token-b1',       now() + interval '7 days', :own2, null),
-  (:invB2,  :orgB, '0394-b2@test.local',       'staff', '0394-token-b2',       now() + interval '7 days', :xinv, null);
+  (:invP,   :orgA, '0393-newcomer@test.local', 'staff', '0393-token-pending',  now() + interval '7 days', :sub,  null),
+  (:invAcc, :orgA, '0393-mgr@test.local',      'staff', '0393-token-accepted', now() + interval '7 days', :sub,  now()),
+  (:invB1,  :orgB, '0393-b1@test.local',       'staff', '0393-token-b1',       now() + interval '7 days', :own2, null),
+  (:invB2,  :orgB, '0393-b2@test.local',       'staff', '0393-token-b2',       now() + interval '7 days', :xinv, null);
 insert into public.audit_logs (id, organization_id, user_id, event) values
-  (:al1, :orgA, :sub,  'test.0394'),
-  (:alB, :orgB, :own2, 'test.0394.b');
+  (:al1, :orgA, :sub,  'test.0393'),
+  (:alB, :orgB, :own2, 'test.0393.b');
 insert into public.stock_movements (id, organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, user_id) values
   (:sm1, :orgA, :itA, 'adjust', 1, 100, 101, :sub);
 -- Personal and keyless rows: P's own override, an override and a role
@@ -739,7 +739,7 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   (:orgA, :stf, 'orders:approve', true, :sub);
 insert into public.role_permission_overrides (organization_id, role, permission, granted, updated_by) values
   (:orgA, 'viewer', 'orders:request', true, :sub);
-update public.user_profiles set disabled_at = now(), disabled_reason = '0394 test', disabled_by = :sub where id = :vd;
+update public.user_profiles set disabled_at = now(), disabled_reason = '0393 test', disabled_by = :sub where id = :vd;
 
 -- ══ X0. Coverage ══════════════════════════════════════════════════════════
 create temp table snap0 as select * from pg_temp.marked_rows();
@@ -777,7 +777,7 @@ select is(
   'putaway_moves=23514:-:new row for relation "putaway_moves" violates check constraint "putaway_moves_performed_by_deleted_chk"\n'
   'receipts=23514:-:new row for relation "receipts" violates check constraint "receipts_received_by_deleted_chk"\n'
   'size_count_training_samples=23514:-:new row for relation "size_count_training_samples" violates check constraint "size_count_training_samples_captured_by_deleted_chk"',
-  'C1: service_role nulling a LIVE person in a relaxed column is refused by its exactly-one CHECK (23514, where it was 23502 before 0394): only an account deletion stamps');
+  'C1: service_role nulling a LIVE person in a relaxed column is refused by its exactly-one CHECK (23514, where it was 23502 before 0393): only an account deletion stamps');
 
 -- ══ S. The schedule writer ════════════════════════════════════════════════
 select is(
@@ -799,36 +799,36 @@ select is(
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.platform_admin_audit (id, actor_user_id, actor_email, action, deleted_users)
-                            values (%L, %L, '0394-mgr@test.local', 'viewed_org', '{"actor_user_id": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :pa5, :mgr),
-                  'create policy zz_0394_probe_ins on public.platform_admin_audit for insert to authenticated with check (true)',
+                            values (%L, %L, '0393-mgr@test.local', 'viewed_org', '{"actor_user_id": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :pa5, :mgr),
+                  'create policy zz_0393_probe_ins on public.platform_admin_audit for insert to authenticated with check (true)',
                   format('select coalesce(deleted_users::text, ''null'') from public.platform_admin_audit where id = %L', :pa5)),
   'ok:1:null',
   'M1: an API role''s insert carrying a stamp stores none (a probe policy lets authenticated insert, so only the trigger decides)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$update public.platform_admin_audit set deleted_users = '{"actor_user_id": "2026-01-01T00:00:00+00:00"}'::jsonb where id = %L$q$, :pa4),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
-                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
+                  'create policy zz_0393_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0393_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users::text, ''null'') from public.platform_admin_audit where id = %L', :pa4))
   || ' | ' ||
   pg_temp.attempt('authenticated', :mgr,
                   format('update public.platform_admin_audit set deleted_users = null where id = %L', :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
-                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
+                  'create policy zz_0393_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0393_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users ->> ''target_user_id'', ''null'') from public.platform_admin_audit where id = %L', :pa3))
   || ' | ' ||
   pg_temp.attempt('authenticated', :mgr,
                   format($q$update public.platform_admin_audit set deleted_users = '{"target_user_id": "1999-01-01T00:00:00+00:00"}'::jsonb where id = %L$q$, :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
-                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
+                  'create policy zz_0393_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0393_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users ->> ''target_user_id'', ''null'') from public.platform_admin_audit where id = %L', :pa3)),
   'ok:1:null | ok:1:2026-10-01T00:00:00+00:00 | ok:1:2026-10-01T00:00:00+00:00',
   'M2: an API role can neither add a stamp, nor erase one, nor change one (the trigger keeps the old stamps)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format('update public.platform_admin_audit set target_user_id = %L where id = %L', :mgr, :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
-                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
+                  'create policy zz_0393_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0393_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format($q$select coalesce(deleted_users::text, 'null') || '/' || target_user_id::text from public.platform_admin_audit where id = %L$q$, :pa3)),
   'ok:1:null/' || :mgr,
   'M3a: when a stamped column names a live person again (here by an API role), its stamp is dropped');
@@ -851,12 +851,12 @@ select is(
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.audit_logs (id, organization_id, user_id, event, deleted_users)
-                            values (%L, %L, null, 'test.0394.m6', '{"zz_unknown": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :al2, :orgA), null,
+                            values (%L, %L, null, 'test.0393.m6', '{"zz_unknown": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :al2, :orgA), null,
                   format('select coalesce(deleted_users::text, ''null'') from public.audit_logs where id = %L', :al2))
   || ' | ' ||
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.audit_logs (id, organization_id, user_id, event, deleted_users)
-                            values (%L, %L, %L, 'test.0394.m6', '{"user_id": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :al3, :orgA, :mgr), null,
+                            values (%L, %L, %L, 'test.0393.m6', '{"user_id": "2026-01-01T00:00:00+00:00"}'::jsonb)$q$, :al3, :orgA, :mgr), null,
                   format('select coalesce(deleted_users::text, ''null'') from public.audit_logs where id = %L', :al3))
   || ' | ' ||
   pg_temp.attempt('postgres', null,
@@ -865,9 +865,9 @@ select is(
   'ok:1:null | ok:1:null | ok:1:null',
   'M6: a non-API write keeps only stamps of its own person columns that are null: an unknown key, or a stamp on a column that names a person, is dropped');
 select is(
-  pg_temp.attempt('authenticated', :mgr, format($q$update public.schedule_events set title = '0394 renamed' where id = %L$q$, :seLive), null,
+  pg_temp.attempt('authenticated', :mgr, format($q$update public.schedule_events set title = '0393 renamed' where id = %L$q$, :seLive), null,
                   format($q$select coalesce(deleted_users::text, 'null') || '/' || updated_by::text || '/' || title from public.schedule_events where id = %L$q$, :seLive)),
-  'ok:1:null/' || :mgr || '/0394 renamed',
+  'ok:1:null/' || :mgr || '/0393 renamed',
   'M7: an ordinary API update of an unstamped row (a manager renames an entry) changes only what it writes; the marker stays null');
 select is(
   pg_temp.attempt('service_role', null,
@@ -955,11 +955,11 @@ select ok(
   'L12: the trigger starts with its lock loop: the owner rows of organizations the person belongs to but does not own FOR SHARE, then the person''s rows and the owner rows of organizations they own FOR NO KEY UPDATE (each in id order), repeated until every owner row is locked, before the last-owner check, which precedes every release (critique C2/C3, review race 7e)');
 
 -- ══ G. The membership guard (review 2026-10-05, High + Medium) ════════════
--- Before 0394 the guard pinned only the role: an admin (or the owner) could
+-- Before 0393 the guard pinned only the role: an admin (or the owner) could
 -- rewrite any membership's user_id, accepted_at or impersonation_expires_at
 -- through PostgREST. That let an admin hand the owner row to another account
 -- or lock the owner out, and let the owner (or an admin) mark the owner row an
--- "Act as" seat, which 0394's last-owner rule and transfer ignore. An API
+-- "Act as" seat, which 0393's last-owner rule and transfer ignore. An API
 -- caller (auth.uid() set) may now change only role, is_delivery_driver and
 -- all_warehouses, and may not create a seat; the server's admin client (no
 -- JWT subject) and an account deletion's own key action are unchanged.
@@ -1047,7 +1047,7 @@ select case when pg_has_role('supabase_auth_admin', 'SET')
             then is(pg_temp.attempt('supabase_auth_admin', null, format('delete from auth.users where id = %L', :sub)),
                     'ok:1',
                     'D1g: the deletion succeeds under GoTrue''s own role (supabase_auth_admin), the trigger firing as its DEFINER owner (undone)')
-            else skip('D1g: this test role may not act as supabase_auth_admin; GoTrue''s role is proven by scripts/db-concurrency/0394_account_delete_race.sh', 1)
+            else skip('D1g: this test role may not act as supabase_auth_admin; GoTrue''s role is proven by scripts/db-concurrency/0393_account_delete_race.sh', 1)
        end;
 select is(
   pg_temp.call_as('postgres', null, format('delete from auth.users where id = %L returning id::text', :sub)),
@@ -1129,7 +1129,7 @@ select is(
   || '|' || (select (a.actor_user_id = :own)::text || '/' || coalesce(a.target_user_id::text, 'null') || '/'
                     || ((a.deleted_users ->> 'target_user_id')::timestamptz = now())::text
                from public.platform_admin_audit a where a.id = :pa2),
-  'null/true|null/0394-sub@test.local/true|true/null/true',
+  'null/true|null/0393-sub@test.local/true|true/null/true',
   'D9: audit rows the subject wrote are kept and stamped (the log reads "Deleted user", not "System"); the platform audit keeps the actor''s email, stamps the actor, and stamps a target');
 select is(
   (select concat_ws('/', coalesce(i.invited_by::text, 'null'), ((i.deleted_users ->> 'invited_by')::timestamptz = now())::text,
@@ -1138,7 +1138,7 @@ select is(
   || '|' || (select concat_ws('/', coalesce(i.invited_by::text, 'null'), ((i.deleted_users ->> 'invited_by')::timestamptz = now())::text,
                               coalesce(i.revoked_at::text, 'null'), (i.accepted_at is not null)::text)
                from public.organization_invites i where i.id = :invAcc),
-  'null/true/true/true/0394-token-pending|null/true/null/true',
+  'null/true/true/true/0393-token-pending|null/true/null/true',
   'D10: the pending invite the subject sent is kept (token unchanged) but stops working: revoked and expired (acceptance reads expires_at); the accepted invite keeps its history, stamped');
 select is(
   (select count(*)
@@ -1179,7 +1179,7 @@ select is(
 select is(
   (select (p.disabled_at is not null)::text || '/' || p.disabled_reason || '/' || coalesce(p.disabled_by::text, 'null')
      from public.user_profiles p where p.id = :vd),
-  'true/0394 test/null',
+  'true/0393 test/null',
   'D18: a profile the subject disabled stays disabled with its reason; disabled_by is nulled by the new key (the pin trigger lets the owner''s FK action through)');
 select is(
   (select count(*) from public.order_submissions where user_id = :sub)::text
@@ -1203,7 +1203,7 @@ select is(
   pg_temp.call_as('authenticated', :mgr, format('select r.assigned_to::text from public.assign_cycle_count(%L, %L) r', :ccOpen, :stf))
   || ' | ' || pg_temp.call_as('authenticated', :stf, format('select r.assigned_picker_id::text from public.claim_picking(%L) r', :oPick))
   || ' | ' || pg_temp.call_as('authenticated', :mgr,
-                              format($q$with u as (update public.schedule_events set title = '0394 created, edited' where id = %L returning 1)
+                              format($q$with u as (update public.schedule_events set title = '0393 created, edited' where id = %L returning 1)
                                         select count(*)::text from u$q$, :seCre),
                               format($q$select coalesce(created_by::text, 'null') || '/' || updated_by::text || '/'
                                                || (deleted_users ? 'created_by')::text || '/' || (deleted_users ? 'updated_by')::text

@@ -111,7 +111,7 @@ export default function POImportsScreen() {
           approved_po_id: (r.approved_po_id as string | null) ?? null,
           created_at: r.created_at as string,
           vendor: Array.isArray(vendor) ? vendor[0] ?? null : vendor,
-          // The import's stamp reads "Deleted user" (0394).
+          // The import's stamp reads "Deleted user" (0393).
           uploader: poImportUploaderLabel(
             uploaders,
             (r.uploaded_by as string | null) ?? null,

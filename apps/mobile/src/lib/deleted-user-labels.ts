@@ -1,18 +1,18 @@
 /**
- * "Deleted user" on the phone (migration 0394, security slice A3): every
+ * "Deleted user" on the phone (migration 0393, security slice A3): every
  * member can delete their own account, and the records they made stay. On the
- * tables 0394 marks (stock movements, the audit log, receipts, PO imports and
+ * tables 0393 marks (stock movements, the audit log, receipts, PO imports and
  * the other refusing-key tables) the person column is nulled and the row's
  * `deleted_users` jsonb records `{ "<column>": "<when>" }` in the same write.
  * Only the database writes it, so a stamped null column is proof the person
  * deleted their account. An unstamped null keeps the screen's own words
- * ("system", "Unknown"): system rows, or rows from before 0394.
+ * ("system", "Unknown"): system rows, or rows from before 0393.
  *
  * The rule and the words come from @stockpilot/core (people/deleted-user), the
  * same helpers the web uses, so no platform names the same row differently.
  *
  * DEPLOY ORDER: the screens select `deleted_users`, a column that exists only
- * once 0394 is pushed; this ships in an OTA after the push (plan 9.4).
+ * once 0393 is pushed; this ships in an OTA after the push (plan 9.4).
  *
  * Pure: no React, no supabase import.
  */
@@ -64,7 +64,7 @@ export function receiverText(
  * requester who deleted their account (0388 requester_deleted_at): the signer
  * receipt goes to whatever is submitted, and a deleted requester is never
  * emailed again (A3). The server refuses that receipt too, for old bundles.
- * requester_deleted_at exists since 0388, so this needs no 0394 deploy order.
+ * requester_deleted_at exists since 0388, so this needs no 0393 deploy order.
  */
 export function signerEmailDefault(order: {
   requesterEmail: string | null;

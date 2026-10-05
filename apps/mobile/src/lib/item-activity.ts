@@ -84,7 +84,7 @@ export interface ActivityMovementInput {
   note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
-  /** The actor deleted their account (0394: user_id null and stamped). Rides
+  /** The actor deleted their account (0393: user_id null and stamped). Rides
    *  through untouched; the card labels it "Deleted user". */
   actor_deleted?: boolean;
   reference_type: string | null;
@@ -106,7 +106,7 @@ export interface ActivityAuditInput {
   metadata: Record<string, unknown> | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
-  /** The actor deleted their account (0394: user_id null and stamped). */
+  /** The actor deleted their account (0393: user_id null and stamped). */
   actor_deleted?: boolean;
 }
 

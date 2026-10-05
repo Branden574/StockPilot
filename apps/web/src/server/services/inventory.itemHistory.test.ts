@@ -273,7 +273,7 @@ describe('InventoryService.itemMovementHistory — the owner’s real SP-0WK2L-L
     expect(opening.actorEmail).toBeNull();
   });
 
-  // 0394: rule 5's one exception. A row whose marker records that its actor
+  // 0393: rule 5's one exception. A row whose marker records that its actor
   // deleted their account was written by a person: "Deleted user".
   it('names an actor who deleted their account "Deleted user" (the row is stamped), unlike a system write', async () => {
     const stamped = {

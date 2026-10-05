@@ -365,7 +365,7 @@ export default function PoImportDetailScreen() {
         (r.superseded_at as string | null) != null,
       ),
     ]);
-    // The import's stamp reads "Deleted user" (0394).
+    // The import's stamp reads "Deleted user" (0393).
     setUploadedBy(poImportUploaderLabel(uploaders, uploaderId, r.deleted_users));
 
     const flat: ImportLine[] = (lineRows ?? []).map((row) => {

@@ -55,7 +55,7 @@ export default async function ReturnDetailPage({
   }
   // The requester as the return recorded them (a public request snapshots the
   // order's name); a member who asked and has since deleted their account
-  // reads "Deleted user" (0394: requested_by null and stamped).
+  // reads "Deleted user" (0393: requested_by null and stamped).
   const requesterLabel = returnRequesterLabel(detail);
 
   // Resolve item name/sku for each line. Items are org-scoped under RLS, so

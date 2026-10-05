@@ -9,7 +9,7 @@ import {
 } from './deleted-person-labels';
 
 /**
- * Each surface whose wording changed with 0394: stamped (the person deleted
+ * Each surface whose wording changed with 0393: stamped (the person deleted
  * their account), unstamped null (the surface's own words), live, and hidden.
  */
 const STAMP = '2026-11-04T18:22:05.123456+00:00';

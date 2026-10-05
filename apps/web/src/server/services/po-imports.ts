@@ -83,9 +83,9 @@ import type {
 export interface PoImportRow {
   id: string;
   organization_id: string;
-  /** null once the uploader deleted their account (0394; see deleted_users). */
+  /** null once the uploader deleted their account (0393; see deleted_users). */
   uploaded_by: string | null;
-  /** 0394: {uploaded_by|approved_by: when} for people who deleted their
+  /** 0393: {uploaded_by|approved_by: when} for people who deleted their
    *  account; poImportUploaderLabel reads it ("Deleted user"). */
   deleted_users?: unknown;
   source_type: ParseSourceType | 'xlsx' | 'manual' | 'scan';

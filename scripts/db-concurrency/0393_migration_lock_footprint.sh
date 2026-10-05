@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0394 (every member can delete their account).
+# Lock footprint of migration 0393 (every member can delete their account).
 # The push runs the whole file as one batch, so every table lock a statement
-# takes is held until the file commits. 0394 touches 23 tables, two of them
+# takes is held until the file commits. 0393 touches 23 tables, two of them
 # read by nearly every request (user_profiles through RLS and the session,
 # auth.users through every sign-in), so the file takes every lock in one
 # NOWAIT prelude with a bounded retry and never waits while holding one (the
@@ -41,11 +41,11 @@
 #       for user_profiles, so neither session sees 40P01 and both complete.
 #   7.  No session in any case sees 40P01 or a deadlock, and nothing applied.
 #
-# LOCAL stack only (docker container supabase_db_stockpilot), pre-0394 head
-# (supabase db reset --local --version <the migration before 0394>).
+# LOCAL stack only (docker container supabase_db_stockpilot), pre-0393 head
+# (supabase db reset --local --version <the migration before 0393>).
 # Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0394_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0393_migration_lock_footprint.sh
 
 set -uo pipefail
 
@@ -79,7 +79,7 @@ cleanup() { wait 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 if [ "$(applied)" != "0" ]; then
-  echo "needs the pre-0394 head (supabase db reset --local --version <the migration before 0394>)"; exit 1
+  echo "needs the pre-0393 head (supabase db reset --local --version <the migration before 0393>)"; exit 1
 fi
 
 # The file split at the end of its prelude.
@@ -234,7 +234,7 @@ if grep -q '^C=' "$TMP/cycle-reader.out"; then ok "6: the reader completed"; els
 echo "== 7. invariants"
 if cat "$TMP"/*.out | grep -qE '40P01|deadlock'; then bad "7: a session saw 40P01"; else ok "7: no session saw 40P01 or a deadlock"; fi
 if cat "$TMP"/*.out | grep -q '40001'; then bad "7: a session saw 40001"; else ok "7: no session saw 40001"; fi
-if [ "$(applied)" = "0" ]; then ok "7: every migration session rolled back: nothing applied"; else bad "7: 0394 objects exist after the runs"; fi
+if [ "$(applied)" = "0" ]; then ok "7: every migration session rolled back: nothing applied"; else bad "7: 0393 objects exist after the runs"; fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL CHECKS PASSED"; exit 0; fi

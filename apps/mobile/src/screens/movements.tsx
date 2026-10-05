@@ -29,7 +29,7 @@ interface MovementRow {
   item_id: string;
   item: { name: string; sku: string } | null;
   actor: { full_name: string | null; email: string | null } | null;
-  /** The actor deleted their account (0394: user_id null and stamped). */
+  /** The actor deleted their account (0393: user_id null and stamped). */
   actor_deleted: boolean;
 }
 

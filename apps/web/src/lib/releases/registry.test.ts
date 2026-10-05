@@ -2321,12 +2321,12 @@ describe('a refused account deletion says why, and is published with the account
     // The sentence the web toast and the phone alert showed in the walk.
     const BLOCKED =
       "Your account can't be deleted from the app because it is linked to records your organization keeps, such as received stock, imported purchase orders or schedule entries. Nothing was changed. Contact StockPilot support to have it removed.";
-    // Re-pinned by 0394 (was: account-deletion.ts holds BLOCKED word for
+    // Re-pinned by 0393 (was: account-deletion.ts holds BLOCKED word for
     // word). These words were true against 562d1f0c when A2 published them.
-    // 0394 converted every key that refused, so the code's sentence for an
+    // 0393 converted every key that refused, so the code's sentence for an
     // integrity refusal (which should no longer happen) is now the support
     // sentence below, and the A3 release (account-deletion-everyone-2026-10,
-    // a draft until 0394 ships) supersedes this release's claim.
+    // a draft until 0393 ships) supersedes this release's claim.
     const copy = readFileSync(resolve(__dirname, '../../server/lib/account-deletion.ts'), 'utf8');
     expect(copy).not.toContain(`"${BLOCKED}"`);
     expect(copy).toContain(
@@ -3516,7 +3516,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'published')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    // Re-pinned by 0394 (was: the only other draft is PO-4's phone draft).
+    // Re-pinned by 0393 (was: the only other draft is PO-4's phone draft).
     // A3's account deletion draft sits below this one and is dated earlier.
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'draft')) {
       expect(['phone-place-order-2026-10', 'account-deletion-everyone-2026-10'], r.id).toContain(r.id);
@@ -3668,8 +3668,8 @@ describe('the phone draft claims nothing the phone does not do', () => {
 });
 
 /**
- * Security slice A3 (migration 0394, every member can delete their own
- * account): held as a DRAFT until 0394 is pushed and verified, the web deploy
+ * Security slice A3 (migration 0393, every member can delete their own
+ * account): held as a DRAFT until 0393 is pushed and verified, the web deploy
  * is READY, the phone update is published and launched, and the Demo Co walk
  * has run. Pinned by id, never by index. The publishing follow-up sets
  * 'published' and the real publishedAt, re-reads the words against what
@@ -3727,7 +3727,7 @@ describe('account deletion for every member (slice A3) is held as a draft', () =
     }
   });
 
-  it('claims only what 0394 does: records kept as "Deleted user" where it shows, work released, the only-owner rule, the update', () => {
+  it('claims only what 0393 does: records kept as "Deleted user" where it shows, work released, the only-owner rule, the update', () => {
     const r = release();
     const entry = r.entries[0]!;
     const text = readerText(r).join(' ');

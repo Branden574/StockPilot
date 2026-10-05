@@ -481,7 +481,7 @@ export async function removeOrgAction(
   //    membership rows, so any remaining row means the user was added to another
   //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
   //    Then ask the database whether the account can go (0388's dry run,
-  //    always undone). Since 0394 every member is deletable, so KEPT means: a
+  //    always undone). Since 0393 every member is deletable, so KEPT means: a
   //    platform admin's account while its email is on the allowlist (O-A3-7,
   //    read from GoTrue, reported), or the rare integrity refusal or last
   //    owner (no membership is left here, so neither is expected). A check

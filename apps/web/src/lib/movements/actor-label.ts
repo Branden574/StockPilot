@@ -8,10 +8,10 @@ import { DELETED_USER_LABEL } from '@stockpilot/core';
  *  - the actor's full name, else email (their profile is readable);
  *  - "Unknown" when the row names a user whose profile the reader cannot see;
  *  - "Deleted user" when the row names nobody and its deleted_users marker
- *    records that the actor deleted their account (migration 0394;
+ *    records that the actor deleted their account (migration 0393;
  *    `actorDeleted`, computed by the service from the raw row);
  *  - "System" when the row names nobody and is not stamped: a movement written
- *    without a signed-in user, or a row from before 0394.
+ *    without a signed-in user, or a row from before 0393.
  *
  * Pure (no server-only import): the widget may render on either side.
  */

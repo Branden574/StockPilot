@@ -676,7 +676,7 @@ function SettingRow({
  * lands back at the sign-in screen. Any refusal (the only owner of an
  * organization with other members, a platform admin, try again, a failed
  * delete) arrives as a non-2xx with a message: it is shown and the app
- * stays signed in. Since 0394 every member can delete their account; the
+ * stays signed in. Since 0393 every member can delete their account; the
  * last owner is pointed to the web Team page (O-A3-8).
  */
 /** useAuth().signOut: after a deletion it is called to discard, not to ask. */

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Write overhead of 0394's marker triggers on the two busy log tables
+# Write overhead of 0393's marker triggers on the two busy log tables
 # (orchestrator decision O-A3-1: measure it). Every INSERT and UPDATE on
 # stock_movements and audit_logs now passes the WHEN clause of
 # zzz_deleted_users_ins / _upd; the function itself must run only when a
@@ -18,10 +18,10 @@
 #
 # Everything runs in ONE transaction that is rolled back: the fixtures, the
 # instrumented function and every ALTER ... DISABLE TRIGGER are undone.
-# LOCAL stack only (docker container supabase_db_stockpilot), 0394 applied.
+# LOCAL stack only (docker container supabase_db_stockpilot), 0393 applied.
 # Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0394_marker_write_overhead.sh
+# Usage: bash scripts/db-concurrency/0393_marker_write_overhead.sh
 
 set -uo pipefail
 
@@ -33,19 +33,19 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 if [ "$("${PSQL[@]}" -c "select count(*) from pg_trigger where tgname = 'zzz_deleted_users_upd' and tgrelid = 'public.stock_movements'::regclass")" != "1" ]; then
-  echo "0394 is not applied on the local stack"; exit 1
+  echo "0393 is not applied on the local stack"; exit 1
 fi
 
 "${PSQL[@]}" > "$TMP/bench.out" 2>&1 <<'SQL'
 begin;
 insert into auth.users (id, email, raw_user_meta_data)
-values ('03942222-0000-0000-0000-0000000000a1', '0394-bench@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('03942222-0000-0000-0000-00000000000a', '0394 Bench', '0394-bench');
+values ('03942222-0000-0000-0000-0000000000a1', '0393-bench@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('03942222-0000-0000-0000-00000000000a', '0393 Bench', '0393-bench');
 insert into public.warehouses (id, organization_id, name, code, status)
-values ('03942222-0000-0000-0000-000000000101', '03942222-0000-0000-0000-00000000000a', '0394 Bench WH', 'WH-0394-B', 'active');
+values ('03942222-0000-0000-0000-000000000101', '03942222-0000-0000-0000-00000000000a', '0393 Bench WH', 'WH-0393-B', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
 values ('03942222-0000-0000-0000-000000000102', '03942222-0000-0000-0000-00000000000a', '03942222-0000-0000-0000-000000000101',
-        'SKU-0394-B', '0394 bench item', 100, 'active', 'none');
+        'SKU-0393-B', '0393 bench item', 100, 'active', 'none');
 create temp sequence zz_mark_calls;
 do $inject$
 declare v_def text; v_new text;
@@ -98,7 +98,7 @@ begin
             select c_org, c_item, 'adjust', 0, 100, 100, c_user from generate_series(1, 1000);
           else
             insert into public.audit_logs (organization_id, user_id, event)
-            select c_org, c_user, 'test.0394.bench' from generate_series(1, 1000);
+            select c_org, c_user, 'test.0393.bench' from generate_series(1, 1000);
           end if;
           v_ins := extract(epoch from clock_timestamp() - t0) * 1000;
           t0 := clock_timestamp();

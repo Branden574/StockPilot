@@ -11,7 +11,7 @@ import {
 
 /**
  * The one mapping from a row's person column and its `deleted_users` marker
- * (migration 0394) to words, shared by the web and the phone.
+ * (migration 0393) to words, shared by the web and the phone.
  */
 const STAMP = '2026-11-04T18:22:05.123456+00:00';
 
@@ -55,7 +55,7 @@ describe('personLabel', () => {
     expect(DELETED_USER_LABEL).toBe('Deleted user');
   });
 
-  it("keeps the surface's own words for an unstamped null (a system row, or one from before 0394)", () => {
+  it("keeps the surface's own words for an unstamped null (a system row, or one from before 0393)", () => {
     expect(personLabel({ id: null, marks: null, column: 'user_id', nullLabel: 'System' })).toBe(
       'System',
     );

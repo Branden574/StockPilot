@@ -5,7 +5,7 @@
  *
  *  - kept: the account was not deleted on purpose: a StockPilot platform
  *    admin's account while its email is on the allowlist (O-A3-7), or the
- *    rare record that could not be released (since 0394 every member's
+ *    rare record that could not be released (since 0393 every member's
  *    records are kept as "Deleted user", so this is not expected);
  *  - failed: the check could not answer or the delete failed (a row lock, a
  *    fault); the account was left in place and the error report has the

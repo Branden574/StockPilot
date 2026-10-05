@@ -135,7 +135,7 @@ describe('listPlatformAudit', () => {
     });
   });
 
-  // 0394: an admin or a target who deleted their account leaves the id null
+  // 0393: an admin or a target who deleted their account leaves the id null
   // and a deleted_users stamp; actor_email is kept, so the row still names
   // who acted.
   it('flags a deleted actor and a deleted target from the stamps, keeping the actor email', async () => {

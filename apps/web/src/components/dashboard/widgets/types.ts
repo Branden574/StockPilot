@@ -42,7 +42,7 @@ export interface RecentMovement {
   item: { name?: string | null } | null;
   actor: { fullName?: string | null; email?: string | null } | null;
   user_id: string | null;
-  /** The actor deleted their account (0394; MovementsService.list). */
+  /** The actor deleted their account (0393; MovementsService.list). */
   actorDeleted?: boolean;
 }
 

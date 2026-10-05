@@ -76,7 +76,7 @@ export async function recordPlatformAudit(input: RecordPlatformAuditInput): Prom
 export interface PlatformAuditRow {
   id: string;
   actorEmail: string;
-  /** The acting admin deleted their account (0394): actor_user_id is null and
+  /** The acting admin deleted their account (0393): actor_user_id is null and
    *  stamped; actorEmail still names them. */
   actorDeleted: boolean;
   action: PlatformAuditAction;
@@ -92,7 +92,7 @@ export interface PlatformAuditRow {
    * legitimately change afterwards.
    */
   targetUserEmail: string | null;
-  /** The target deleted their account (0394): target_user_id null and stamped. */
+  /** The target deleted their account (0393): target_user_id null and stamped. */
   targetDeleted: boolean;
   detail: Record<string, unknown>;
   createdAt: string;

@@ -552,7 +552,7 @@ PGTAP_TESTS=(
   # stockpilot.order_submit holds this transaction's id, raised inline by the
   # two writers alone (census); 'on' or another transaction's id opens
   # nothing. On-behalf ordering follows orders:approve (slice D). The
-  # placer's rows go with their account (0394: a CASCADE key on user_id;
+  # placer's rows go with their account (0393: a CASCADE key on user_id;
   # account deletion with submissions succeeds). The shape
   # rules are generated from core's parity fixture (pre-check 3). The
   # two-session proofs are scripts/db-concurrency/0391_place_order_races.sh.
@@ -624,7 +624,7 @@ PGTAP_TESTS=(
   # two-session proofs are scripts/db-concurrency/0392_secrets_contract_race.sh;
   # the lock footprint is scripts/db-concurrency/0392_migration_lock_footprint.sh.
   supabase/tests/0392_order_secrets_contract.test.sql
-  # Every member can delete their own account (0394, security slice A3): no
+  # Every member can delete their own account (0393, security slice A3): no
   # key to a person refuses a deletion (the RESTRICT and NO ACTION business
   # keys and the invites cascade are SET NULL; nine NOT NULL person columns
   # sit behind an exactly-one CHECK), and the person-key census is pinned.
@@ -650,11 +650,11 @@ PGTAP_TESTS=(
   # two-session proofs (release against assign, last owner against a joining
   # member and against a transfer, two owners at once, a transfer racing two
   # deletions, the dry run against a row lock, the person's own pick and
-  # count line) are scripts/db-concurrency/0394_account_delete_race.sh;
-  # the lock footprint is scripts/db-concurrency/0394_migration_lock_footprint.sh;
+  # count line) are scripts/db-concurrency/0393_account_delete_race.sh;
+  # the lock footprint is scripts/db-concurrency/0393_migration_lock_footprint.sh;
   # the marker's write overhead on the log tables (ordinary writes never call
-  # it) is scripts/db-concurrency/0394_marker_write_overhead.sh.
-  supabase/tests/0394_account_deletion_for_everyone.test.sql
+  # it) is scripts/db-concurrency/0393_marker_write_overhead.sh.
+  supabase/tests/0393_account_deletion_for_everyone.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -922,7 +922,7 @@ WEB_TESTS=(
   # check failure. A deleteUser error is settled against GoTrue, so an
   # account that is gone is never reported as kept. The platform cleanup
   # counts kept and failed accounts apart instead of claiming them deleted.
-  # Every member (0394): the only owner of an organization that has other
+  # Every member (0393): the only owner of an organization that has other
   # members is refused before anything changes (the trigger's own predicate:
   # impersonation seats and pending members do not count; a failed read fails
   # closed), and the check's P0001 organization_last_owner is read before the

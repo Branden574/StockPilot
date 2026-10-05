@@ -192,7 +192,7 @@ describe('listForPurchaseOrder with 250 receipts', () => {
     expect(tags()).toEqual(['receiving.receiver_names']);
   });
 
-  // 0394: a receiver who deleted their account leaves received_by null and a
+  // 0393: a receiver who deleted their account leaves received_by null and a
   // deleted_users stamp (select('*') carries it). The history and the PO PDF
   // read received_by_name.
   it('names a receiver who deleted their account "Deleted user", never "Unknown"', async () => {

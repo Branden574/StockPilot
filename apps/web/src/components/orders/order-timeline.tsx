@@ -27,7 +27,7 @@ interface AuditRow {
   event: string;
   created_at: string;
   user_id: string | null;
-  /** 0394: {user_id: when} once the actor deleted their account. */
+  /** 0393: {user_id: when} once the actor deleted their account. */
   deleted_users: unknown;
   metadata: Record<string, unknown> | null;
 }
@@ -294,7 +294,7 @@ export async function OrderTimeline({ orderId, organizationId, timeZone }: Props
         const label = eventLabel(row.event, row.metadata);
         const profile = row.user_id ? usersById.get(row.user_id) ?? null : null;
         // An event with no user is a public-link step ("Public"), unless its
-        // marker records that the actor deleted their account (0394).
+        // marker records that the actor deleted their account (0393).
         const actor = orderTimelineActor(profile, row);
         const details = humanDetails(row.event, row.metadata, actor, zone);
         return (
