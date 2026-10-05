@@ -1,4 +1,4 @@
-import { Check, Minus, Plus } from 'lucide-react-native';
+import { Check, ChevronRight, Minus, Plus } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
@@ -279,20 +279,26 @@ export function SetupRow({
       accessibilityState={{ disabled }}
       style={({ pressed }) => [
         styles.setup,
+        styles.setupTappable,
         { borderColor: c.hair, backgroundColor: c.card, opacity: disabled ? 0.6 : pressed ? 0.85 : 1 },
       ]}
     >
-      <Mono size={11} color={c.ink4} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
-        {label}
-      </Mono>
-      <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
-        {value}
-      </Body>
-      {detail ? (
-        <Body size={12.5} color={c.ink3}>
-          {detail}
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <Mono size={11} color={c.ink4} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
+          {label}
+        </Mono>
+        <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
+          {value}
         </Body>
-      ) : null}
+        {detail ? (
+          <Body size={12.5} color={c.ink3}>
+            {detail}
+          </Body>
+        ) : null}
+      </View>
+      {/* A row that can be tapped looks it (PO-4 review): the read-only one
+          (no onPress) has no chevron. */}
+      <ChevronRight size={16} color={c.ink3} strokeWidth={1.5} />
     </Pressable>
   );
 }
@@ -365,4 +371,5 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     gap: 3,
   },
+  setupTappable: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 });

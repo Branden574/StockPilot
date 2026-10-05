@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   AVAILABILITY_LABELS,
+  CART_ALL_STOCK_IN_CART_COPY,
   CART_CHECK_OUT_COPY,
   CART_TITLE_COPY,
   FREQUENTLY_ORDERED_SUBTITLE_COPY,
@@ -53,6 +54,7 @@ import {
   storefrontNothingMatchesCopy,
   storefrontSeeAllCopy,
   storefrontUpdatedAtCopy,
+  type KitOffer,
   type StorefrontItem,
 } from '@stockpilot/core';
 
@@ -65,12 +67,14 @@ import {
   changeLockedHint,
   kitAddBlockedHint,
   decreaseLabel,
+  filterChipLabel,
   increaseBlockedHint,
   increaseLabel,
   kitAnnouncement,
   lineChangeAnnouncement,
   quantityAnnouncement,
   quantityButtonLabel,
+  sortChipLabel,
 } from '@/lib/order-storefront/a11y';
 import { itemNameFrom } from '@/lib/order-storefront/checkout';
 import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
@@ -448,12 +452,13 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const header = (
     <View style={{ gap: 12, paddingBottom: 8 }}>
       {target === null ? (
+        // One warehouse and nothing locked: a row that shows it, not a
+        // dimmed button with no reason (PO-4 review).
         <SetupRow
           label={STOREFRONT_SHIP_FROM_COPY}
           value={warehouse?.name ?? '—'}
-          disabled={ready.warehouses.length < 2 && !locked}
           hint={locked ? STOREFRONT_SHIP_FROM_LOCKED_COPY : undefined}
-          onPress={() => setSheet({ kind: 'warehouse' })}
+          onPress={ready.warehouses.length < 2 && !locked ? undefined : () => setSheet({ kind: 'warehouse' })}
         />
       ) : null}
       <UnconfirmedPanel
@@ -540,13 +545,14 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
             <SmallAction
               key={s}
               label={AVAILABILITY_LABELS[s]}
-              accessibilityLabel={`${AVAILABILITY_LABELS[s]}, remove filter`}
+              accessibilityLabel={filterChipLabel(AVAILABILITY_LABELS[s])}
               onPress={() => setFilter((f) => toggleAvailability(f, s))}
             />
           ))}
           {filter.sort !== EMPTY_FILTER.sort ? (
             <SmallAction
               label={sortOptions.find((o) => o.id === filter.sort)?.label ?? ''}
+              accessibilityLabel={sortChipLabel(sortOptions.find((o) => o.id === filter.sort)?.label ?? '')}
               onPress={() => setFilter((f) => ({ ...f, sort: EMPTY_FILTER.sort }))}
             />
           ) : null}
@@ -578,6 +584,11 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   );
 
   const checkOut = () => router.push('/order/new/checkout' as Href);
+  /** The stock allows a kit, but the cart's own lines already hold every
+   *  one it allows (Add kit is dimmed for that). */
+  const kitFull = (kit: KitOffer) =>
+    kitAvailability(kit, snap.itemMap).kits >= 1 &&
+    maxKits(kit, snap.itemMap, cartKits?.[kit.bundleId], qtyMap) <= kitsInCart(kit, cartKits?.[kit.bundleId], qtyMap);
   const sheetItem = sheet && (sheet.kind === 'quantity' || sheet.kind === 'quick') ? snap.itemMap.get(sheet.itemId) : undefined;
   const sheetKit = sheet?.kind === 'kit' ? snap.kits?.find((k) => k.bundleId === sheet.bundleId) : undefined;
   const cartPanel = cart ? (
@@ -710,13 +721,22 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           itemMap={snap.itemMap}
           onClose={() => setSheet(null)}
           control={
-            <SmallAction
-              label={KIT_ADD_COPY}
-              variant="primary"
-              hint={kitAddBlockedHint({ locked, out: kitAvailability(sheetKit, snap.itemMap).kits < 1, full: maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) })}
-              disabled={locked || maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap)}
-              onPress={() => onKit(sheetKit.bundleId, kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) + 1)}
-            />
+            <View style={{ gap: 8 }}>
+              {/* Every kit the stock allows is already in the cart: said on
+                  screen, not only in the hint (PO-4 review). */}
+              {kitFull(sheetKit) ? (
+                <Body size={12.5} color={c.ink3}>
+                  {CART_ALL_STOCK_IN_CART_COPY}
+                </Body>
+              ) : null}
+              <SmallAction
+                label={KIT_ADD_COPY}
+                variant="primary"
+                hint={kitAddBlockedHint({ locked, out: kitAvailability(sheetKit, snap.itemMap).kits < 1, full: maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) })}
+                disabled={locked || maxKits(sheetKit, snap.itemMap, cartKits?.[sheetKit.bundleId], qtyMap) <= kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap)}
+                onPress={() => onKit(sheetKit.bundleId, kitsInCart(sheetKit, cartKits?.[sheetKit.bundleId], qtyMap) + 1)}
+              />
+            </View>
           }
         />
       ) : null}

@@ -104,7 +104,7 @@ export const ItemRow = React.memo(function ItemRow({
         label={STOREFRONT_ADD_COPY}
         accessibilityLabel={addItemLabel(item.name)}
         disabled={locked || out || notOrderable}
-        hint={addBlockedHint({ locked, notOrderable })}
+        hint={addBlockedHint({ locked, notOrderable, out })}
         onPress={() => onAdd(item.id)}
       />
     );

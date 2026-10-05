@@ -1,4 +1,5 @@
 import {
+  AVAILABILITY_LABELS,
   CART_ALL_STOCK_IN_CART_COPY,
   CART_CHECK_OUT_COPY,
   CHECKOUT_NOTES_FULL_COPY,
@@ -15,6 +16,7 @@ import {
   frequentlyOrderedTagCopy,
   kitAvailability,
   kitsAvailableCopy,
+  kitsInCartCopy,
   statusOf,
   storefrontInCartCopy,
   type CartState,
@@ -58,11 +60,22 @@ export function itemRowLabel(
 
 /** Why Add (an item, a kit) is dimmed, as its hint (desk check F7.1): the
  *  lock first, in core's add-while-locked words, then a line that can't be
- *  ordered. Out of stock is in the row's label already. */
-export function addBlockedHint(input: { locked: boolean; notOrderable: boolean }): string | undefined {
+ *  ordered, then out of stock (PO-4 review: a usual in the empty cart shows
+ *  only its name, so its dimmed Add said nothing). */
+export function addBlockedHint(input: { locked: boolean; notOrderable: boolean; out?: boolean }): string | undefined {
   if (input.locked) return ORDER_ADD_WHILE_LOCKED_COPY;
   if (input.notOrderable) return STOREFRONT_LINE_NOT_ORDERABLE_COPY;
+  if (input.out) return AVAILABILITY_LABELS.out;
   return undefined;
+}
+
+/** An active availability chip: a tap takes the filter off (PO-4 review). */
+export function filterChipLabel(label: string): string {
+  return `${label}, remove filter`;
+}
+/** The active sort's chip: a tap goes back to the usual sort. */
+export function sortChipLabel(label: string): string {
+  return `Sorted by ${label}, remove sort`;
 }
 
 /** Why a stepper, Remove or Clear all is dimmed: the lock's words. */
@@ -109,6 +122,11 @@ export function increaseKitLabel(name: string): string {
 }
 export function decreaseKitLabel(name: string, kits: number): string {
   return kits <= 1 ? `Take the ${kitNamed(name)} out of your cart` : `One fewer ${kitNamed(name)}`;
+}
+/** The count between a kit's stepper buttons: tapping it opens the kit's
+ *  details, so it says so (PO-4 review). */
+export function kitCountLabel(name: string, kits: number): string {
+  return `${name}: ${kitsInCartCopy(kits)}. Opens the kit’s details`;
 }
 /** Why Add kit is dimmed: the lock's words, or (the web's title) every kit
  *  the stock allows is already held by the cart's own lines. A kit out of

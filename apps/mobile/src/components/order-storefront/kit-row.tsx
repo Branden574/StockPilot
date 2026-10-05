@@ -2,6 +2,7 @@ import * as React from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import {
+  CART_ALL_STOCK_IN_CART_COPY,
   KIT_ADD_COPY,
   KIT_DETAILS_COPY,
   componentItem,
@@ -20,6 +21,7 @@ import {
   increaseBlockedHint,
   increaseKitLabel,
   kitAddBlockedHint,
+  kitCountLabel,
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
 import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
@@ -66,6 +68,9 @@ export const KitRow = React.memo(function KitRow({
   const avail = kitAvailability(kit, itemMap);
   const limiting = avail.limiting ? componentItem(avail.limiting.component, itemMap) : null;
   const out = avail.kits < 1;
+  // Add kit is dimmed because the cart's own lines already hold every kit the
+  // stock allows: said on screen too, not only to VoiceOver (PO-4 review).
+  const full = inCart === 0 && !out && maxInCart < 1;
 
   return (
     <View style={[styles.row, { borderColor: c.hair, backgroundColor: c.card }, stacked && styles.rowStacked]}>
@@ -85,6 +90,11 @@ export const KitRow = React.memo(function KitRow({
             {kitLimitedByCopy(limiting.name, avail.limiting.available)}
           </Mono>
         ) : null}
+        {full ? (
+          <Mono size={11} color={c.ink3}>
+            {CART_ALL_STOCK_IN_CART_COPY}
+          </Mono>
+        ) : null}
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
         {inCart > 0 ? (
@@ -95,7 +105,7 @@ export const KitRow = React.memo(function KitRow({
             disabled={locked}
             decLabel={decreaseKitLabel(kit.name, inCart)}
             incLabel={increaseKitLabel(kit.name)}
-            countLabel={`${kit.name}: ${inCart} in your cart`}
+            countLabel={kitCountLabel(kit.name, inCart)}
             incHint={increaseBlockedHint(inCart >= maxInCart)}
             lockHint={changeLockedHint(locked)}
             onDec={() => onChange(kit.bundleId, inCart - 1)}

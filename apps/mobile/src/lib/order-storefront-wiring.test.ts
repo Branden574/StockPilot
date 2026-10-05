@@ -517,14 +517,14 @@ describe('VoiceOver hears why, what and how much (desk check F7)', () => {
   });
 
   it('every dimmed Add, Add kit, stepper, Remove and Clear all says why (F7.1)', () => {
-    expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable })}');
+    expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable, out })}');
     expect(itemRow).toContain('lockHint={changeLockedHint(locked)}');
     // The kit's Add kit takes the kit's own hint (simulator walk D2), which
     // gives the lock's words first.
     expect(kitRow).toContain('hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}');
     expect(kitRow).toContain('lockHint={changeLockedHint(locked)}');
     expect(cartPanel).toMatch(/label=\{CART_CLEAR_ALL_COPY\} variant="ghost" disabled=\{locked\} hint=\{changeLockedHint\(locked\)\}/);
-    expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false })}');
+    expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false, out: availableOf(item) < 1 })}');
     expect(cartPanel).toContain('lockHint={changeLockedHint(locked)}');
     expect(cartPanel).toMatch(/accessibilityLabel=\{view\.removeLabel\}\s+variant="ghost"\s+disabled=\{locked\}\s+hint=\{changeLockedHint\(locked\)\}/);
     expect(catalog).toContain('lockHint={changeLockedHint(locked)}');
@@ -873,5 +873,42 @@ describe('the For sheet keeps the field being typed in view and moves from Name 
   it('the recent list’s note comes from the tested helper', () => {
     expect(fn).toContain('const listNote = requesterListNote({ people: requesters?.status === \'ok\' ? requesters.people.length : 0, matched: people.length });');
     expect(fn).not.toMatch(/people\.length === 0 \? \(\s*<Body size=\{13\} color=\{c\.ink3\}>\s*\{CHECKOUT_REQUESTERS_NONE_COPY\}/);
+  });
+});
+
+// PO-4 review: (a) an out-of-stock usual's Add dimmed with no reason; (b) Ship
+// from a dimmed button in an organization with one warehouse; (c) a full Add
+// kit's reason a VoiceOver hint only; (d) the sort chip did not say a tap
+// removes it; (e) the kit's count button opens Details but did not say so;
+// (f) the tappable setup rows looked like the read-only one. Mutations
+// caught: each reverted.
+describe('dimmed controls say why, and what can be tapped looks it (PO-4 review)', () => {
+  const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
+  const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
+  it('(a) an out-of-stock usual says so on screen and in its hint', () => {
+    expect(cartPanel).toContain('hint={addBlockedHint({ locked, notOrderable: false, out: availableOf(item) < 1 })}');
+    expect(cartPanel).toMatch(/availableOf\(item\) < 1 \? \(\s*<Mono size=\{11\.5\} color=\{ACCENT\.crit\}>\s*\{AVAILABILITY_LABELS\.out\}/);
+    expect(itemRow).toContain('hint={addBlockedHint({ locked, notOrderable, out })}');
+  });
+  it('(b) Ship from with one warehouse is a row, not a dimmed button', () => {
+    expect(catalog).toContain('onPress={ready.warehouses.length < 2 && !locked ? undefined : () => setSheet({ kind: \'warehouse\' })}');
+    expect(catalog).not.toContain('disabled={ready.warehouses.length < 2 && !locked}');
+  });
+  it('(c) a full Add kit says why on screen, on the row and in Details', () => {
+    expect(kitRow).toMatch(/\{full \? \(\s*<Mono size=\{11\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/);
+    expect(catalog).toMatch(/kitFull\(sheetKit\) \? \(\s*<Body size=\{12\.5\} color=\{c\.ink3\}>\s*\{CART_ALL_STOCK_IN_CART_COPY\}/);
+  });
+  it('(d) the chips say a tap takes them off', () => {
+    expect(catalog).toContain('accessibilityLabel={filterChipLabel(AVAILABILITY_LABELS[s])}');
+    expect(catalog).toContain('accessibilityLabel={sortChipLabel(sortOptions.find((o) => o.id === filter.sort)?.label ?? \'\')}');
+  });
+  it('(e) the kit’s count says it opens the kit’s details', () => {
+    expect(kitRow).toContain('countLabel={kitCountLabel(kit.name, inCart)}');
+  });
+  it('(f) a setup row that can be tapped shows a chevron; one that only shows a value does not', () => {
+    const setup = controls.slice(controls.indexOf('export function SetupRow('));
+    const button = setup.slice(setup.indexOf('return (\n    <Pressable'));
+    expect(button).toContain('<ChevronRight');
+    expect(setup.slice(0, setup.indexOf('return (\n    <Pressable'))).not.toContain('<ChevronRight');
   });
 });

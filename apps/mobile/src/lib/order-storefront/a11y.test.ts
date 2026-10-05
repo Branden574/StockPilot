@@ -23,6 +23,8 @@ import {
   addKitLabel,
   changeLockedHint,
   createPanelAnnouncer,
+  filterChipLabel,
+  kitCountLabel,
   lineChangeAnnouncement,
   notesCounterAnnouncement,
   addedAnnouncement,
@@ -36,6 +38,7 @@ import {
   kitRowLabel,
   quantityAnnouncement,
   quantityButtonLabel,
+  sortChipLabel,
   submittedAnnouncement,
 } from './a11y';
 
@@ -196,6 +199,10 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       addKitLabel('QA New Hire Kit'),
       lineChangeAnnouncement({ itemMap: new Map(), cart: { ...initialCartState({ warehouseId: 'w', fulfillmentType: 'pickup' }), lines: [] } }, 'gone')!,
       createPanelAnnouncer().next('It was sent.', true)!,
+      addBlockedHint({ locked: false, notOrderable: false, out: true })!,
+      filterChipLabel('Low stock'),
+      sortChipLabel('Most available'),
+      kitCountLabel('Starter', 2),
       notesCounterAnnouncement(1799, 1800, 2000)!,
       notesCounterAnnouncement(1999, 2000, 2000)!,
     ];
@@ -208,6 +215,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
         'increaseLabel', 'itemRowLabel', 'kitAnnouncement', 'kitRowLabel', 'lineChangeAnnouncement',
         'quantityAnnouncement', 'quantityButtonLabel', 'submittedAnnouncement',
         'SCREEN_ANNOUNCE_DELAY_MS', 'createPanelAnnouncer', 'notesCounterAnnouncement',
+        'filterChipLabel', 'kitCountLabel', 'sortChipLabel',
       ].sort(),
     );
     for (const s of said) rules(s, s);
@@ -297,5 +305,25 @@ describe('announcements land where the person is, once (PO-4 review)', () => {
   it('a screen’s own news waits for the screen change to finish', () => {
     expect(a11y.SCREEN_ANNOUNCE_DELAY_MS).toBeGreaterThanOrEqual(500);
     expect(a11y.SCREEN_ANNOUNCE_DELAY_MS).toBeLessThanOrEqual(1000);
+  });
+});
+
+// PO-4 review: an out-of-stock usual's Add was dimmed with nothing said; the
+// active sort chip did not say a tap removes it; the kit's count button said
+// how many but opens the kit's details.
+describe('a dimmed or tappable control says why and what (PO-4 review)', () => {
+  it('Add: the lock, then a line that can’t be ordered, then out of stock', () => {
+    expect(addBlockedHint({ locked: false, notOrderable: false, out: true })).toBe('Out of stock');
+    expect(addBlockedHint({ locked: true, notOrderable: false, out: true })).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+    expect(addBlockedHint({ locked: false, notOrderable: true, out: true })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    expect(addBlockedHint({ locked: false, notOrderable: false, out: false })).toBeUndefined();
+  });
+  it('a filter chip and the sort chip say a tap takes them off', () => {
+    expect(filterChipLabel('Low stock')).toBe('Low stock, remove filter');
+    expect(sortChipLabel('Most available')).toBe('Sorted by Most available, remove sort');
+  });
+  it('the kit’s count names what a tap opens', () => {
+    expect(kitCountLabel('Starter', 2)).toBe('Starter: 2 kits in your cart. Opens the kit’s details');
+    expect(kitCountLabel('Starter', 1)).toBe('Starter: 1 kit in your cart. Opens the kit’s details');
   });
 });

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import {
+  AVAILABILITY_LABELS,
   CART_CHECK_OUT_COPY,
   CART_CLEAR_ALL_COPY,
   CART_CLEAR_CONFIRM_COPY,
@@ -95,14 +96,23 @@ export function CartPanel({
             </Mono>
             {usuals.map((item) => (
               <View key={item.id} style={styles.usual}>
-                <Body size={14} color={c.ink} style={{ flex: 1, minWidth: 0 }}>
-                  {item.name}
-                </Body>
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Body size={14} color={c.ink}>
+                    {item.name}
+                  </Body>
+                  {/* A usual that is out of stock says so, beside its dimmed
+                      Add (PO-4 review). */}
+                  {availableOf(item) < 1 ? (
+                    <Mono size={11.5} color={ACCENT.crit}>
+                      {AVAILABILITY_LABELS.out}
+                    </Mono>
+                  ) : null}
+                </View>
                 <SmallAction
                   label={STOREFRONT_ADD_COPY}
                   accessibilityLabel={addItemLabel(item.name)}
                   disabled={locked || availableOf(item) < 1}
-                  hint={addBlockedHint({ locked, notOrderable: false })}
+                  hint={addBlockedHint({ locked, notOrderable: false, out: availableOf(item) < 1 })}
                   onPress={() => onAdd(item.id)}
                 />
               </View>
