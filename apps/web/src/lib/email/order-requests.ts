@@ -124,6 +124,22 @@ interface SummaryLineItem {
   qty: number;
 }
 
+/**
+ * What an approval actually held (0396, L86): approve_partial holds only what
+ * is free, so an approved order can be partly held. Per item, the units still
+ * owed (requested minus fulfilled) against the order's active holds. Read for
+ * the approved email only; null when the holds could not be read, and the
+ * email then says neither "every unit" nor "part".
+ */
+interface HeldSummary {
+  /** Units still owed across the order. */
+  owedUnits: number;
+  /** Units held for it, never more than owed per item. */
+  heldUnits: number;
+  /** Some item is held for less than the order owes for it. */
+  partly: boolean;
+}
+
 interface SummaryData {
   lineCount: number;
   unitCount: number;
@@ -135,6 +151,8 @@ interface SummaryData {
   /** Resolved approver profile (approved_by), for "by {approver}" + Contact approver. */
   approverName: string | null;
   approverEmail: string | null;
+  /** The approved email's held picture (see HeldSummary); null otherwise. */
+  held: HeldSummary | null;
 }
 
 const DEGRADED_SUMMARY: SummaryData = {
@@ -146,9 +164,38 @@ const DEGRADED_SUMMARY: SummaryData = {
   items: [],
   approverName: null,
   approverEmail: null,
+  held: null,
 };
 
-async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
+/** HeldSummary from an order's lines and its active holds (pure). */
+export function heldSummary(
+  lines: ReadonlyArray<{ item_id?: string | null; quantity_requested?: number | null; quantity_fulfilled?: number | null }>,
+  holds: ReadonlyArray<{ item_id?: string | null; quantity?: number | null }>,
+): HeldSummary {
+  const owed = new Map<string, number>();
+  for (const l of lines) {
+    const key = String(l.item_id ?? '');
+    const left = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+    owed.set(key, (owed.get(key) ?? 0) + left);
+  }
+  const held = new Map<string, number>();
+  for (const h of holds) {
+    const key = String(h.item_id ?? '');
+    held.set(key, (held.get(key) ?? 0) + (Number(h.quantity) || 0));
+  }
+  let owedUnits = 0;
+  let heldUnits = 0;
+  let partly = false;
+  for (const [item, units] of owed) {
+    const h = Math.min(units, held.get(item) ?? 0);
+    owedUnits += units;
+    heldUnits += h;
+    if (h < units) partly = true;
+  }
+  return { owedUnits, heldUnits, partly };
+}
+
+async function fetchSummary(row: OrderRequestRow, kind: OrderRequestEmailKind): Promise<SummaryData> {
   let admin: ReturnType<typeof createAdminClient> | null = null;
   try {
     admin = createAdminClient();
@@ -159,11 +206,11 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
     return DEGRADED_SUMMARY;
   }
 
-  const [linesRes, whRes, charterRes, approverRes] = await Promise.all([
+  const [linesRes, whRes, charterRes, approverRes, holdsRes] = await Promise.all([
     admin
       .from('order_request_lines')
       .select(
-        'quantity_picked, quantity_requested, item:inventory_items!item_id(name, sku)',
+        'item_id, quantity_picked, quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)',
       )
       .eq('order_request_id', row.id),
     admin
@@ -185,12 +232,22 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
           .eq('id', row.approved_by)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // The approved email says whether every unit is held (0396, L86).
+    kind === 'approved'
+      ? admin
+          .from('stock_reservations')
+          .select('item_id, quantity')
+          .eq('order_request_id', row.id)
+          .is('released_at', null)
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   type ItemRef = { name?: string | null; sku?: string | null };
   type LineRow = {
+    item_id?: string | null;
     quantity_picked: number | null;
     quantity_requested: number | null;
+    quantity_fulfilled?: number | null;
     item: ItemRef | ItemRef[] | null;
   };
   const lines = (linesRes.data ?? []) as LineRow[];
@@ -243,6 +300,11 @@ async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
     items,
     approverName: approver?.full_name ?? null,
     approverEmail: approver?.email ?? null,
+    // Unknown (null) when either read failed: never claim every unit, or part.
+    held:
+      kind === 'approved' && !linesRes.error && !holdsRes.error
+        ? heldSummary(lines, (holdsRes.data ?? []) as Array<{ item_id?: string | null; quantity?: number | null }>)
+        : null,
   };
 }
 
@@ -467,7 +529,14 @@ function buildView(a: TemplateArgs): OrderEmailView {
       case 'submitted':
         return def.preheader({ submittedAt: submittedOn, warehouse: wh });
       case 'approved':
-        return def.preheader({ units, lines, shipDate, warehouse: wh });
+        // 0396 (L86): the preheader says "Reserved N units", so N is what
+        // was held when only part of the order could be.
+        return def.preheader({
+          units: a.summary.held?.partly ? a.summary.held.heldUnits : units,
+          lines,
+          shipDate,
+          warehouse: wh,
+        });
       case 'denied':
         return def.preheader({
           reasonSummary: a.reasonText
@@ -554,6 +623,21 @@ function strongHtml(s: string): string {
   return `<strong style="font-weight:600;color:${ES_LIGHT.ink}">${s}</strong>`;
 }
 
+/**
+ * The approved email's opening sentence (0396, L86), for both renderers:
+ * every unit held, part held, or (the holds could not be read) neither claim.
+ * `greet` is hi(...) already escaped for the renderer it is used in; the
+ * numbers are plain integers.
+ */
+function approvedProse(greet: string, held: HeldSummary | null): string {
+  const next = 'You’ll get another note the moment it leaves the dock.';
+  if (held === null) return `${greet}your request is approved. ${next}`;
+  if (held.partly) {
+    return `${greet}we’ve reserved ${held.heldUnits} of ${held.owedUnits} units on this request; the rest is waiting for stock. ${next}`;
+  }
+  return `${greet}we’ve reserved every unit on this request. ${next}`;
+}
+
 /** "Hi Jane — …" / "Hi — …" (missing-name fallback per the design prompt). */
 function hi(firstName: string, escaped: boolean): string {
   const name = escaped ? escapeHtml(firstName) : firstName;
@@ -571,9 +655,10 @@ interface KindBody {
 function orderGrid(
   a: TemplateArgs,
   v: OrderEmailView,
-  opts: { reserved?: boolean; approvedSpan?: boolean } = {},
+  opts: { reserved?: boolean; approvedSpan?: boolean; heldOf?: { held: number; owed: number } } = {},
 ): string {
-  const contents = `${v.units} units <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
+  const units = opts.heldOf ? `${opts.heldOf.held} of ${opts.heldOf.owed} units` : `${v.units} units`;
+  const contents = `${units} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
   const rows: [DetailCell, DetailCell][] = [
     [
       {
@@ -765,17 +850,31 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'approved': {
-      const prose = `${hi(v.firstName, true)}we’ve reserved every unit on this request. You’ll get another note the moment it leaves the dock.`;
+      // 0396 (L86): approve_partial holds only what is free, so the prose
+      // says every unit only when every unit is held.
+      const held = a.summary.held;
+      const prose = approvedProse(hi(v.firstName, true), held);
       return {
         rows: [
           introSection(v, `${escapeHtml(v.displayId)} is approved.`, 'Packing starts now.', prose),
           motionSection(
             'settle',
-            'Three cartons settle into a row — your order is reserved and moving to packing',
+            held?.partly
+              ? 'Three cartons settle into a row — part of your order is reserved and moving to packing'
+              : 'Three cartons settle into a row — your order is reserved and moving to packing',
           ),
           section(PAD_TIMELINE, orderTimeline({ steps: stagePath(1), tone: 'ok' })),
           ...(showGrid
-            ? [section(PAD_BLOCK, orderGrid(a, v, { reserved: true, approvedSpan: true }))]
+            ? [
+                section(
+                  PAD_BLOCK,
+                  orderGrid(a, v, {
+                    reserved: true,
+                    approvedSpan: true,
+                    ...(held?.partly ? { heldOf: { held: held.heldUnits, owed: held.owedUnits } } : {}),
+                  }),
+                ),
+              ]
             : []),
           ctaSection(v.def.cta, a.trackUrl, { withLinkFallback: true }),
         ],
@@ -1091,7 +1190,7 @@ function renderText(a: TemplateArgs): string {
       ? `${greet}you drafted this request for pickup from ${v.wh}. Confirm it and the warehouse gets to work. Until then, nothing is reserved and nothing ships.`
       : `${greet}you drafted this request for ${v.dest}. Confirm it and ${v.wh} gets to work. Until then, nothing is reserved and nothing ships.`,
     submitted: `${greet}your request landed at ${v.wh} on ${v.submittedOn}. Next step: a quick approval, usually within one business day.`,
-    approved: `${greet}we’ve reserved every unit on this request. You’ll get another note the moment it leaves the dock.`,
+    approved: approvedProse(greet, a.summary.held),
     denied: `${greet}your request didn’t clear approval this time. Nothing was reserved or shipped. The reason is below, unedited.`,
     in_transit: `${greet}your order left ${v.wh} at ${v.dispatchedAt} and is headed to ${v.dest}.`,
     completed: `${greet}the full order arrived at ${v.dest} and was signed for by ${v.signer} at ${v.signedAt}. Thanks for routing it through StockPilot.`,
@@ -1122,6 +1221,9 @@ function renderText(a: TemplateArgs): string {
     lines.push('— Order summary —');
     lines.push(`Order: ${v.displayId}${v.displayId !== v.woId ? ` (${v.woId})` : ''}`);
     lines.push(`Contents: ${v.units} units across ${v.lines} lines`);
+    if (a.kind === 'approved' && a.summary.held?.partly) {
+      lines.push(`Reserved: ${a.summary.held.heldUnits} of ${a.summary.held.owedUnits} units`);
+    }
     if (a.summary.shipDate) lines.push(`Ships: ${a.summary.shipDate}`);
     if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
     if (a.summary.shipTo) lines.push(`${v.isPickup ? 'Pickup' : 'To'}: ${a.summary.shipTo}`);
@@ -1244,7 +1346,7 @@ export async function sendOrderRequestEmail(
     }
   }
 
-  const summary = await fetchSummary(request);
+  const summary = await fetchSummary(request, kind);
 
   const trackUrl =
     kind === 'confirm_request' && confirmationToken
