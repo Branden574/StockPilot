@@ -143,6 +143,13 @@ export async function GET(req: Request) {
         // before send — see that comment for why.)
         .is('disabled_at', null)
         .not('organization_members.accepted_at', 'is', null)
+        // A platform admin's "act as" grant (services/platform/impersonation.ts)
+        // is an accepted 'owner' row with a 45-minute expiry, not a
+        // membership: every other cron leaves it out, and so does the digest.
+        // Without this an opted-in platform admin acting as a customer at
+        // send time got that customer's digest, and the claim below landed
+        // in the customer's idempotency_keys.
+        .is('organization_members.impersonation_expires_at', null)
         .order('id', { ascending: true })
         .range(from, to),
     );
@@ -220,6 +227,8 @@ export async function GET(req: Request) {
               .select('user_id, accepted_at')
               .eq('organization_id', orgId)
               .eq('user_id', userId)
+              // An "act as" grant is not a membership (see the pull above).
+              .is('impersonation_expires_at', null)
               .maybeSingle(),
             admin
               .from('user_profiles')
