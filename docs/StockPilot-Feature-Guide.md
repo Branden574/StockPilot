@@ -191,6 +191,23 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 
 **How to use:** **Returns → open a return →** receive, inspect, restock or scrap. See `/returns/[id]`.
 
+**How a return runs (web, iPhone and iPad).** Every step goes through a server function that checks the Returns module, the **returns:manage** permission (granted or revoked per person like any other) and write access to the order's warehouse, so the database refuses what the screen would not offer. A person with only **returns:read** sees every RMA and its history but no buttons.
+- **Start a return from the order.** **Return or exchange** on a fulfilled order lists what can still come back (returns already waiting are counted), in whole units. Choose Restock or Scrap per line. **The item is here** (off by default) is for the counter: switch it on only when the returned item is in your hands now, and the RMA offers **Approve and receive** in one step. Each open of the form carries one request key, so a retry after a lost answer never makes a second RMA.
+- **Approve (nothing moves yet).** Approving records a decision for every line: **Restock** or **Scrap**, and for Restock where the unit goes. On hand, rack quantities and movements stay exactly as they were until the item is received and processed. **Deny** needs a reason (the requester is told the request was declined, never the reason); **Cancel return** takes an optional reason.
+- **Where a restocked unit goes.** StockPilot knows which rack each unit was picked from (pick provenance, recorded since 2026-09-27):
+  - one rack: **Return to original rack: 31-C** is preselected;
+  - several racks, returning everything: **Return to original racks: 31-C ×1 · 32-A ×2**;
+  - several racks, returning part: **Return to one of the original racks**, each with how many may still go back there;
+  - an order picked before provenance was recorded: "Original rack unavailable. The original pick location was not recorded for this historical order." The choices are Staging or Scrap.
+  **Leave in Staging** is always one tap away, and a Staging restock appears in normal put-away, named "Returned (RMA-…)" on the Staging worklist. Staging, Unplaced and a whole Site are never offered as a rack. A reason of "Damaged" never preselects Scrap.
+- **Receive, then process.** **Receive** marks the item as in (once; a second tap changes nothing). **Process return** places every line in one step: the unit goes back to its rack (or into Staging), or a scrapped unit is recorded as received and written off with no usable unit added. Just before it places anything the server checks the destination again: if the rack was removed, moved to another warehouse, turned into a staging area, its warehouse made inactive, or the item deleted, nothing moves, the RMA says "Original rack is no longer available." with the reason, and you choose again (Staging always works). The returned quantity counts once, and on hand always equals the sum of rack, Staging and Unplaced quantities.
+- **The list.** Filters: All, Awaiting approval, Waiting for returned item (oldest approval first), Received, not processed, and Closed. Search by RMA, SO number or requester; 25 per page with **Load more**. Each row shows the original SO, the returning items with photos, the return status and how many days it has waited.
+- **The RMA screen** is one workbench: the header (RMA, the original order link, requester, warehouse, reason, who created it), the RETURNING cards (photo, name, size, SKU, quantity, where the unit is now), one next-step bar, and the history from the original pick to the close.
+- **Notifications.** A return requested by a requester (token link, customer portal or member requester) notifies the people who manage returns at that warehouse. Turn it off in **Notifications: New return and exchange requests**. The link opens the RMA (an older phone app opens the original order instead).
+- **On the phone and iPad.** **Returns** in the drawer has the same filters and search; on an iPad (or any screen 900 points wide) the list and the RMA sit side by side. Every return action needs a connection: offline each button is disabled with "Needs a connection." and nothing is queued.
+- **Exchanges** (a different size or item as a replacement order) are not available yet; asking for one is refused with a clear message.
+- **API:** `GET /api/v1/returns?filter=&q=&cursor=`, `GET /api/v1/returns/[id]` (the workbench), `POST /api/v1/returns/[id]/steps` (approve, receive and process in order, stopping at the first refusal), `/deny`, `/cancel`, `/dispositions`, and `POST /api/v1/orders/[id]/returns` (with `idempotencyKey`). Cookie or Bearer; answers are never cached and name the organization.
+
 ### Public Requests (requester portal)
 **Purpose:** let people outside the core team submit order/return requests via a tokenized link without a full login. **Settings → Public requests** configures it (`public_requests` module).
 
@@ -346,7 +363,7 @@ This is separate from a customer's own Settings → Admin tools, and is restrict
 
 **Purpose:** run the warehouse from your pocket — scan, receive, count, and look things up on the floor. Native iOS (iPhone + iPad + Mac via "Designed for iPad") and Android.
 
-**Key screens:** Inventory, Books, **Scan** (`scan` module), **Receive** (receiving), **Cycle counts** (incl. AI shelf-scan), Movements, Orders, Purchase orders, PO imports, Suppliers, Locations, Tags, Categories, Bundles, Rentals, Procedures, Schedule, Notifications, AI chat, Team, and Settings.
+**Key screens:** Inventory, Books, **Scan** (`scan` module), **Receive** (receiving), **Cycle counts** (incl. AI shelf-scan), Movements, Orders, **Returns** (`returns` module; list and RMA workbench, online only), Purchase orders, PO imports, Suppliers, Locations, Tags, Categories, Bundles, Rentals, Procedures, Schedule, Notifications, AI chat, Team, and Settings.
 
 **How it works:**
 - Sign in with the same account; the **drawer** switches workspace (org) — respecting the org switcher everywhere.
