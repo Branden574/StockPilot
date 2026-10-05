@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   orgRow: { timezone: 'Asia/Tokyo' } as Record<string, unknown> | null,
   orgRowFails: false,
   instantProps: null as Record<string, unknown> | null,
+  listCalls: [] as Array<Record<string, unknown>>,
+  countCalls: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -42,8 +44,14 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
 vi.mock('@/server/services/movements', () => ({
   MovementsService: {
     forCurrentUser: async () => ({
-      count: async () => state.count,
-      list: async () => state.rows,
+      count: async (args: Record<string, unknown>) => {
+        state.countCalls.push(args);
+        return state.count;
+      },
+      list: async (args: Record<string, unknown>) => {
+        state.listCalls.push(args);
+        return state.rows;
+      },
     }),
   },
 }));
@@ -88,8 +96,8 @@ function movement(id: string) {
   };
 }
 
-async function renderPage() {
-  render(await MovementsPage({ searchParams: Promise.resolve({}) }));
+async function renderPage(searchParams: Record<string, string> = {}) {
+  render(await MovementsPage({ searchParams: Promise.resolve(searchParams) }));
 }
 
 beforeEach(() => {
@@ -98,6 +106,8 @@ beforeEach(() => {
   state.orgRow = { timezone: 'Asia/Tokyo' };
   state.orgRowFails = false;
   state.instantProps = null;
+  state.listCalls = [];
+  state.countCalls = [];
 });
 
 describe('Movements page: times in the organization zone (L7)', () => {
@@ -128,5 +138,45 @@ describe('Movements page: times in the organization zone (L7)', () => {
     await renderPage();
     const rows = state.instantProps!.rows as Array<Record<string, unknown>>;
     expect(rows[0]!.createdAtLabel).toBe('Oct 4, 2026, 10:30 PM');
+  });
+});
+
+// Slice 3 review F4: the page prints org-zone days (L7), so its From and To
+// filter must cut days in the same zone. It cut them at UTC midnight (the
+// SP-079 note in lib/movements-filters.ts), so From=To=2026-10-10 dropped a
+// movement at 18:30 on the 10th in Los Angeles (01:30Z on the 11th) and kept
+// the evening of the 9th.
+describe('Movements page: From and To cut days in the organization zone (F4)', () => {
+  const ONE_DAY = { from: '2026-10-10', to: '2026-10-10' };
+
+  it("server mode asks the ledger for the org's whole day", async () => {
+    state.count = 5000;
+    state.orgRow = { timezone: 'America/Los_Angeles' };
+    await renderPage(ONE_DAY);
+    const page = state.listCalls.find((c) => c.since !== undefined)!;
+    expect(page).toMatchObject({ since: '2026-10-10T07:00:00.000Z', until: '2026-10-11T07:00:00.000Z' });
+    expect(state.countCalls.find((c) => c.since !== undefined)).toMatchObject({
+      since: '2026-10-10T07:00:00.000Z',
+      until: '2026-10-11T07:00:00.000Z',
+    });
+    // An 18:30 PT movement on the 10th is inside; 23:30 PT on the 9th is not.
+    expect(Date.parse('2026-10-11T01:30:00.000Z')).toBeGreaterThanOrEqual(Date.parse(page.since as string));
+    expect(Date.parse('2026-10-11T01:30:00.000Z')).toBeLessThan(Date.parse(page.until as string));
+    expect(Date.parse('2026-10-10T06:30:00.000Z')).toBeLessThan(Date.parse(page.since as string));
+  });
+
+  it('instant mode hands the client table the zone its From and To cut days in', async () => {
+    await renderPage();
+    expect(state.instantProps).toMatchObject({ timeZone: 'Asia/Tokyo' });
+  });
+
+  it("a failed zone read cuts days in core's documented default zone, as its times print", async () => {
+    state.count = 5000;
+    state.orgRowFails = true;
+    await renderPage(ONE_DAY);
+    expect(state.listCalls.find((c) => c.since !== undefined)).toMatchObject({
+      since: '2026-10-10T07:00:00.000Z',
+      until: '2026-10-11T07:00:00.000Z',
+    });
   });
 });

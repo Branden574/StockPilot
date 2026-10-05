@@ -12729,7 +12729,8 @@ describe('the small fixes release (slice 3)', () => {
     expect(e.whatChanged).toBe(
       "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. " +
         "On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. " +
-        "In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging.",
+        "In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging. " +
+        "On the Movements page, From and To now pick whole days in your organization's time zone, for the list and for Export CSV.",
     );
     expect(e.howItAffectsYou).toBe(
       'On these screens, everyone sees the same date and time for a movement, whatever time zone their device is set to.',
@@ -12755,6 +12756,23 @@ describe('the small fixes release (slice 3)', () => {
     expect(itemScreen).toContain('formatMovementCardWhen(movement.created_at, timeZone)');
     expect(itemScreen).toContain('formatMovementCardWhen(audit.createdAt, timeZone)');
     expect(read('../../../../mobile/app/(drawer)/(tabs)/index.tsx')).toContain('formatMovementClock(m.createdAt, timeZone)');
+    // F4: From and To cut days in the organization's zone on the page (both
+    // modes) and in the export, through the shared parsers.
+    const page = read('../../app/(dashboard)/dashboard/movements/page.tsx');
+    expect(page).toContain('parseFromDateParam(params.from, timeZone)');
+    expect(page).toContain('parseToDateParam(params.to, timeZone)');
+    expect(page).toContain('timeZone={timeZone}');
+    const instant = read('../../components/movements/movements-instant-table.tsx');
+    expect(instant).toContain('parseFromDateParam(filters.from, timeZone)');
+    expect(instant).toContain('parseToDateParam(filters.to, timeZone)');
+    expect(instant).not.toContain('T00:00:00.000Z');
+    const exportRoute = read('../../app/api/movements/export.csv/route.ts');
+    expect(exportRoute).toContain('getCachedOrgTimezone(ctx.organizationId)');
+    expect(exportRoute).toContain("parseFromDateParam(params.get('from'), timeZone)");
+    expect(exportRoute).toContain("parseToDateParam(params.get('to'), timeZone)");
+    // The button the entry names: since the redesign (#369) both modes draw
+    // it from movements-export.tsx.
+    expect(read('../../components/movements/movements-export.tsx')).toMatch(/>\s*Export CSV\s*</);
     // No web surface the entry names renders the viewer-zone component any
     // more: since the redesign (#369) both Movements modes draw their When
     // cell in movements-table.tsx.

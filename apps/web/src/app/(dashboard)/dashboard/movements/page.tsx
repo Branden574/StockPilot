@@ -167,15 +167,6 @@ export default async function MovementsPage({
   // values that actually parsed, so a mangled param never round-trips into
   // the filter bar or the export link.
   const typeFilter = parseMovementTypeParam(params.type);
-  const since = parseFromDateParam(params.from);
-  const until = parseToDateParam(params.to);
-  const rawType = typeFilter ?? '';
-  const rawFrom = since ? (params.from ?? '') : '';
-  const rawTo = until ? (params.to ?? '') : '';
-  // Any of the four filter dimensions actually parsed to something active.
-  // Drives whether a zero result should read as "ledger's empty" vs "no
-  // match for these filters" — see the empty-state branching below.
-  const hasActiveFilters = Boolean(search || typeFilter || since || until);
 
   const [movementsSvc, warehouseFilter, orgRow] = await Promise.all([
     MovementsService.forCurrentUser(),
@@ -193,6 +184,19 @@ export default async function MovementsPage({
   // (toDisplayRow), and both tables are handed it as a string, so the server
   // and the browser cannot print two different days.
   const timeZone = resolveOrgTimezone(orgRow?.timezone);
+  // FROM AND TO CUT DAYS IN THAT SAME ZONE (slice 3 review F4; SP-079). They
+  // cut at UTC midnight, so From=To=2026-10-10 left out a movement this page
+  // prints as 6:30 PM on Oct 10 (01:30Z on the 11th) and kept the evening of
+  // the 9th. The instant table and the CSV export cut in the same zone.
+  const since = parseFromDateParam(params.from, timeZone);
+  const until = parseToDateParam(params.to, timeZone);
+  const rawType = typeFilter ?? '';
+  const rawFrom = since ? (params.from ?? '') : '';
+  const rawTo = until ? (params.to ?? '') : '';
+  // Any of the four filter dimensions actually parsed to something active.
+  // Drives whether a zero result should read as "ledger's empty" vs "no
+  // match for these filters" — see the empty-state branching below.
+  const hasActiveFilters = Boolean(search || typeFilter || since || until);
 
   // Instant mode: when the whole warehouse-scoped ledger fits under the cap,
   // load it all and let the client filter + page with zero latency (like
@@ -339,7 +343,7 @@ export default async function MovementsPage({
             action={<StateLink href="/dashboard/inventory">Go to inventory</StateLink>}
           />
         ) : instant ? (
-          <MovementsInstantTable rows={instantRows} canEditNotes={canEditNotes} />
+          <MovementsInstantTable rows={instantRows} canEditNotes={canEditNotes} timeZone={timeZone} />
         ) : visible.length === 0 ? (
           hasActiveFilters ? (
             <StatePanel

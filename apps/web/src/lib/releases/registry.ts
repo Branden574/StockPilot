@@ -94,9 +94,9 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: "Movement times use your organization's time zone",
         whatChanged:
-          "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging.",
+          "Stock movement dates and times now follow your organization's time zone, set under Timezone in Settings, Organization, as counts and orders do. On the web: the Movements page, every entry on an item's Movements and Activity tabs, and History on the Staging page. In the mobile app, after the latest update: the Movements list, Recent movements on the home screen, every entry on an item's Movements and Activity tabs, and History on Staging. On the Movements page, From and To now pick whole days in your organization's time zone, for the list and for Export CSV.",
         whyItMatters:
-          'They followed the time zone of the device you were using, so near midnight a movement could show a different day from a count or an order.',
+          "They followed the time zone of the device you were using, so near midnight a movement could show a different day from a count or an order, and a From and To filter for one day left out that day's evening.",
         howItAffectsYou:
           'On these screens, everyone sees the same date and time for a movement, whatever time zone their device is set to.',
         whatToDo:
