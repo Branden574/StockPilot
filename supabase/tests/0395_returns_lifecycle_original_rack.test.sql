@@ -83,6 +83,7 @@
 --   M23 the create passes the cap trigger's bare token through (F7)  -> race 5b
 --   M24 the rack leg does not lock the locations' warehouses (F8)    -> race 4c
 --   M25 the reopen rule counts a direct (via_ledger false) row (F9)  -> H7
+--   M26 the requester create lets a missing actor channel through (F10) -> C12
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -93,7 +94,7 @@
 
 begin;
 
-select plan(111);
+select plan(112);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -912,6 +913,15 @@ select is(
           pg_temp.one(:lX2, 1)::text, '{"channel":"portal"}'))),
   'P0001:module_disabled,22023:return_invalid',
   'C11: the requester create honours the module, and a portal or member actor must name its user');
+select is(
+  pg_temp.err(pg_temp.try_rpc('service_role', null, format('select public.create_requester_return_request(%L, %L::jsonb, gen_random_uuid(), %L::jsonb)', :oX,
+          pg_temp.one(:lX2, 1)::text, '{}'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('service_role', null, format('select public.create_requester_return_request(%L, %L::jsonb, gen_random_uuid(), %L::jsonb)', :oX,
+          pg_temp.one(:lX2, 1)::text, '{"channel": null}'))) || ','
+  || pg_temp.err(pg_temp.try_rpc('service_role', null, format('select public.create_requester_return_request(%L, %L::jsonb, gen_random_uuid(), %L::jsonb)', :oX,
+          pg_temp.one(:lX2, 1)::text, '{"channel": "staff"}'))),
+  '22023:return_invalid,22023:return_invalid,22023:return_invalid',
+  'C12: a requester actor with no channel, a null channel or an unknown one is refused return_invalid, never an unmapped error (F10)');
 
 -- ══ D. Approval, deny, receive, cancel, plans ═════════════════════════════
 select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rG',

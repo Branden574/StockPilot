@@ -1285,8 +1285,11 @@ declare
   v_status text;
   v_number text;
 begin
+  -- A missing or null channel is refused here too (desk check F10): NOT IN
+  -- over a NULL is NULL, which would have let the call through to a NOT NULL
+  -- failure later.
   if p_actor is null or jsonb_typeof(p_actor) <> 'object'
-     or p_actor->>'channel' not in ('token', 'portal', 'member') then
+     or coalesce(p_actor->>'channel', '') not in ('token', 'portal', 'member') then
     raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'actor';
   end if;
   v_chan := p_actor->>'channel';
