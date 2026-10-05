@@ -19,7 +19,8 @@
 -- G.  Grants and shape: order_submissions has RLS, SELECT and INSERT for
 --     authenticated only (service_role SELECT, anon and PUBLIC nothing), two
 --     policies (own rows; the flag-gated insert), its keys (the organization
---     and the order cascade, no foreign key on user_id), the one-order index;
+--     and the order cascade, and since 0394 the placer's account), the
+--     one-order index;
 --     the six functions' posture (INVOKER, volatility, search_path,
 --     lock_timeout on the two writers, EXECUTE to authenticated only); the
 --     flag census (exactly the two writers raise stockpilot.order_submit,
@@ -312,11 +313,16 @@ select is(
      from pg_constraint c where c.conrelid = 'public.order_submissions'::regclass and c.contype in ('f', 'p', 'u'))
   || E'\n' || (select pg_get_indexdef(i.indexrelid) from pg_index i
                 where i.indrelid = 'public.order_submissions'::regclass and not i.indisprimary),
+  -- Re-pinned by 0394 (was no key on user_id): the placer's submission log
+  -- goes with their account (ON DELETE CASCADE, which never blocks a
+  -- deletion; SET NULL is impossible on a key column); kept, it re-linked a
+  -- deleted person's id to the order 0388 un-links.
   E'FOREIGN KEY (order_request_id) REFERENCES order_requests(id) ON DELETE CASCADE\n'
   'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE\n'
+  'FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE\n'
   'PRIMARY KEY (organization_id, user_id, key)\n'
   'CREATE UNIQUE INDEX order_submissions_order_request_uidx ON public.order_submissions USING btree (order_request_id) WHERE (order_request_id IS NOT NULL)',
-  'G3: the organization and the order cascade, there is NO foreign key on user_id (account deletion is never blocked), one row per (org, placer, key) and at most one per order');
+  'G3: the organization and the order cascade, and since 0394 so does the placer''s account (never blocking a deletion), one row per (org, placer, key) and at most one per order');
 select is(
   (select string_agg(p.proname || '=' || p.provolatile::text || '/' || p.prosecdef || '/' || coalesce(p.proconfig::text, '')
                      || '/' || has_function_privilege('authenticated', p.oid, 'EXECUTE')
@@ -822,8 +828,10 @@ select is(
   || (select coalesce(o.requester_user_id::text, 'null') || '/' || (o.requester_deleted_at is not null)::text
         from ans a join public.order_requests o on o.id = (a.r::jsonb#>>'{order,id}')::uuid where a.tag = 'D0') || '|'
   || (select count(*) from auth.users where id = :del)::text,
-  :del || '|1|null/true|0',
-  'D1: deleting the account of a member who has submissions succeeds (no foreign key on user_id); the row stays, and the order loses its requester as 0388 decides');
+  -- Re-pinned by 0394 (was '|1|...': the row stayed with no key on
+  -- user_id): order_submissions_user_id_fkey cascades the placer's rows.
+  :del || '|0|null/true|0',
+  'D1: deleting the account of a member who has submissions succeeds; since 0394 their submission rows go with the account (CASCADE) and the order stays, losing its requester as 0388 decides');
 insert into ans values ('D2', pg_temp.place(:ownD, jsonb_build_object('organization_id', :orgD, 'placer_user_id', :ownD, 'surface', 'app',
   'warehouse_id', :whD, 'fulfillment_type', 'pickup', 'lines', pg_temp.l1(:iD)), pg_temp.k(81)));
 select (select count(*) from public.order_submissions where organization_id = :orgD)::text as "d2before" \gset
