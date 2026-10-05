@@ -68,6 +68,7 @@ export const RETURN_ERROR_WORDS = {
   replacementHandedOver: 'The replacement was already handed over.',
   replacementNotWaiting: "The replacement isn't waiting for the return.",
   replacementWaiting: 'Waiting for the returned item.',
+  replacementReturnCancelled: "This replacement's return was cancelled, so it isn't picked.",
   replacementCancelViaReturn: 'Change or cancel this replacement from its RMA.',
   replacementLinesFixed: "A replacement's items come from its RMA and can't be edited here.",
   notAllowed: 'Not allowed.',
@@ -115,6 +116,9 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   replacement_handed_over: { code: 'conflict', status: 409, message: W.replacementHandedOver },
   replacement_not_waiting: { code: 'conflict', status: 409, message: W.replacementNotWaiting },
   replacement_waiting_for_return: { code: 'conflict', status: 409, message: W.replacementWaiting },
+  // Desk check F3: the gate never lets a cancelled or denied return's
+  // replacement into picking, released or not.
+  replacement_return_cancelled: { code: 'conflict', status: 409, message: W.replacementReturnCancelled },
   replacement_cancel_via_return: { code: 'forbidden', status: 403, message: W.replacementCancelViaReturn },
   replacement_lines_fixed: { code: 'forbidden', status: 403, message: W.replacementLinesFixed },
   replacement_link_server_only: { code: 'forbidden', status: 403, message: W.notAllowed },

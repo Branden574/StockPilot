@@ -24,6 +24,7 @@ import {
   formatOrderNumber as formatSo,
   releasedBeforeReturnLine,
   replacementChipState,
+  returnCancelledReplacementLine,
   replacementShortItems,
   replacementShortLine,
   returnActionLabel,
@@ -475,6 +476,8 @@ export interface MobileOrderReplacement {
   exchangeStatus: string;
   exchangeStatusLabel: string;
   waitingForReturn: boolean;
+  /** The RMA was cancelled or denied: never picked again (desk check F3). Absent from an older server. */
+  returnClosed?: boolean;
   releasedEarly: boolean;
   release: { byName: string | null; reason: string | null; at: string | null } | null;
   returnReceived: boolean;
@@ -492,10 +495,20 @@ export function orderReplacementLines(
 ): { key: string; text: string }[] {
   const out = [{ key: 'title', text: exchangeReplacementBanner(info.returnNumber, info.originalOrderNumber) }];
   if (info.live && info.waitingForReturn) out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber) });
+  if (info.live && info.returnClosed) out.push({ key: 'closed', text: returnCancelledReplacementLine(info.returnNumber) });
   if (info.releasedEarly) out.push({ key: 'released', text: releasedBeforeReturnLine(info.release?.byName ?? null, info.release?.reason ?? null) });
   if (info.live && fulfillmentType === 'delivery' && info.driverLine) out.push({ key: 'driver', text: info.driverLine });
   if (info.live) out.push({ key: 'change', text: RETURNS_COPY.changeOrCancelHere });
   return out;
+}
+
+/**
+ * The return-first gate holds the pick slip and Resume (waiting for the
+ * returned item), or the RMA was cancelled or denied and the replacement is
+ * never picked again (desk check F3). The web's manager panel, same rule.
+ */
+export function replacementPickBlocked(info: Pick<MobileOrderReplacement, 'waitingForReturn' | 'returnClosed'> | null | undefined): boolean {
+  return info?.waitingForReturn === true || info?.returnClosed === true;
 }
 
 /** "Change or cancel in RMA-…" (the button that opens the RMA). */

@@ -1082,6 +1082,29 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
   });
 
+  // Desk check F3: the RMA was cancelled or denied: never picked again.
+  it('the RMA cancelled: no pick slip, no Resume, no release; it says why', () => {
+    const closed = { ...waiting, waitingForReturn: false, returnClosed: true };
+    const { unmount } = render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: closed })} />);
+    expect(screen.queryByRole('button', { name: /Generate pick slip/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Release before return is received/ })).toBeNull();
+    expect(screen.getByText("RMA-20261005-ABC123 was cancelled. This replacement isn't picked.")).toBeInTheDocument();
+    unmount();
+    const enabled = { approvePartial: 'hidden' as const, resume: 'enabled' as const, notice: null, canRetry: false };
+    const stocked = render(
+      <ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: { ...closed, returnClosed: false } })} />,
+    );
+    // Stock is back: with the RMA open (and the replacement released) Resume is offered...
+    expect(screen.getByRole('button', { name: /Resume fulfillment/ })).toBeInTheDocument();
+    stocked.unmount();
+    render(
+      <ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: closed })} />,
+    );
+    // ...and never once the RMA was cancelled.
+    expect(screen.queryByRole('button', { name: /Resume fulfillment/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Close as delivered-partial/ })).toBeInTheDocument();
+  });
+
   it('a delivery swap shows the driver the returned item to collect, read-only', () => {
     render(
       <ManagerActionsPanel

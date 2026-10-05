@@ -46,7 +46,9 @@
 -- R.  Early release: gates, reason, replay, the gate opens, a substituted
 --     order needs its own (D10).
 -- G.  G1 approve and receive at the counter; G9 add a replacement.
--- K.  Cancel and deny.
+-- K.  Cancel and deny; cancelling the RMA after a part hand-over (desk check
+--     F3): the backorder closed, a resumed remainder cancelled, and the gate
+--     never lets a cancelled RMA's replacement into picking.
 -- L.  The link column and fixed lines.   Q.  The cancel guard.
 -- N.  Notifications: ordinary orders unchanged, replacement words, silence.
 -- V.  The exchange status CASE, one fixture per code, and its precedence.
@@ -78,6 +80,9 @@
 --   M20 the issue drops a deleted requester's stamp                      -> H4
 --   M21 the class counts a part hand-over only on a backorder            -> Z2
 --   M22 the re-issue ignores what earlier replacements handed over       -> Z3
+--   M23 the on-cancel hook leaves a part-handed-over backorder open      -> K5
+--   M24 the gate lets a cancelled RMA's replacement into picking         -> K6
+--   M25 the on-cancel hook leaves a resumed remainder live               -> K7
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -88,7 +93,7 @@
 
 begin;
 
-select plan(93);
+select plan(96);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -143,6 +148,8 @@ select plan(93);
 \set r2XL    '\'03970000-0000-0000-0000-000000000e19\''
 \set r3XL    '\'03970000-0000-0000-0000-000000000e1a\''
 \set pX      '\'03970000-0000-0000-0000-000000000e1b\''
+\set pY      '\'03970000-0000-0000-0000-000000000e1c\''
+\set pZ      '\'03970000-0000-0000-0000-000000000e1d\''
 \set oE2E    '\'03970000-0000-0000-0000-000000000101\''
 \set oG      '\'03970000-0000-0000-0000-000000000102\''
 \set oShort  '\'03970000-0000-0000-0000-000000000103\''
@@ -162,6 +169,8 @@ select plan(93);
 \set oCnt    '\'03970000-0000-0000-0000-000000000111\''
 \set oOrd    '\'03970000-0000-0000-0000-000000000112\''
 \set oPh     '\'03970000-0000-0000-0000-000000000113\''
+\set oK5     '\'03970000-0000-0000-0000-000000000114\''
+\set oK7     '\'03970000-0000-0000-0000-000000000115\''
 \set lE2E    '\'03970000-0000-0000-0000-000000000201\''
 \set lG      '\'03970000-0000-0000-0000-000000000202\''
 \set lG2     '\'03970000-0000-0000-0000-000000000203\''
@@ -181,6 +190,8 @@ select plan(93);
 \set lMute   '\'03970000-0000-0000-0000-000000000211\''
 \set lCnt    '\'03970000-0000-0000-0000-000000000212\''
 \set lPh     '\'03970000-0000-0000-0000-000000000213\''
+\set lK5     '\'03970000-0000-0000-0000-000000000214\''
+\set lK7     '\'03970000-0000-0000-0000-000000000215\''
 \set nobody  '\'03970000-0000-0000-0000-0000000009ff\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -1400,6 +1411,77 @@ select is(
   || (select string_agg(kind, ',' order by seq) from public.return_decisions where return_id = :'rDn') || ':' || pg_temp.xs(:'rDn', :mgr),
   'denied:declined:0:exchange_requested,created,exchange_declined,denied:cancelled',
   'K4: a denied exchange declines its lines and creates no order (no reservation can remain, brief 34)');
+
+-- Desk check F3. oK5 / oK7: completed orders of 4 Mediums; pY / pZ: one unit
+-- each on 12-B. Each RMA returns 2 Mediums for 2 of the item, approved on
+-- backorder, released early, picked (1) and handed over (1): a backorder with
+-- 1 of 2 handed over while the RMA is still approved.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type, primary_location_id) values
+  (:pY, :orgA, :whA, '0397-PY', 'Walk Part Shirt Y', 1, 7, 'active', 'none', :r12B),
+  (:pZ, :orgA, :whA, '0397-PZ', 'Walk Part Shirt Z', 1, 7, 'active', 'none', :r12B);
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type) values
+  (:oK5, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
+  (:oK7, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
+  (:lK5, :oK5, :gM, 4, 4),
+  (:lK7, :oK7, :gM, 4, 4);
+create function pg_temp.part_handed_over(p_order uuid, p_line uuid, p_item uuid) returns text language plpgsql as $$
+declare v_rma text; v_live uuid; v_out text;
+begin
+  v_rma := pg_temp.mk('03970000-0000-0000-0000-0000000000a1', p_order, pg_temp.xbody(p_line, 2, jsonb_build_object('itemId', p_item)));
+  perform pg_temp.approve('03970000-0000-0000-0000-0000000000a1', v_rma::uuid,
+                          pg_temp.xdec(v_rma::uuid, 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb));
+  perform pg_temp.rpc('authenticated', '03970000-0000-0000-0000-0000000000a1',
+                      format($q$select public.release_return_replacement_early(%L, 'Customer is completing an in-person exchange today.')$q$, v_rma));
+  v_live := pg_temp.live(v_rma::uuid);
+  v_out := pg_temp.pick('03970000-0000-0000-0000-0000000000a1', v_live) || '/' || pg_temp.stage('03970000-0000-0000-0000-0000000000a1', v_live)
+        || '/' || pg_temp.call_as('authenticated', '03970000-0000-0000-0000-0000000000a1',
+                                  format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, v_live));
+  if v_out <> 'picking_complete/ok:1/backordered' then
+    raise exception 'part_handed_over setup: %', v_out;
+  end if;
+  return v_rma;
+end $$;
+select pg_temp.part_handed_over(:oK5, :lK5, :pY) as "rK5" \gset
+select pg_temp.live(:'rK5') as "oK5R", pg_temp.snap(:pY) as "k5Snap" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Original not returned')$q$, :'rK5', pg_temp.rev(:'rK5'))) as "jK5" \gset
+select is(
+  ((:'jK5'::jsonb)->>'status') || ':' || (select status from public.order_requests where id = :'oK5R') || ':'
+  || pg_temp.holds(:'oK5R')::text || ':'
+  || (select trim_scale(sum(l.quantity_fulfilled))::text from public.order_request_lines l where l.order_request_id = :'oK5R') || ':'
+  || (select string_agg(status, ',') from public.return_exchange_lines where return_id = :'rK5') || ':'
+  || pg_temp.xs(:'rK5', :mgr) || ':' || (pg_temp.snap(:pY) = :'k5Snap')::text || ':'
+  || pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK5R'),
+                     'select public.adjust_stock(''03970000-0000-0000-0000-000000000e1c''::uuid, 1, ''add'', ''03970000-0000-0000-0000-000000000c12''::uuid, ''Walk restock'', null)'),
+  'cancelled:completed:0:1:approved:handed_over_return_cancelled:true:P0001:-:invalid_status_transition',
+  'K5: released early and handed over in part, cancelling the RMA closes the replacement as delivered-partial (the record kept, nothing moves, nothing held): it is completed and can never be resumed (desk check F3)');
+select pg_temp.part_handed_over(:oK7, :lK7, :pZ) as "rK7" \gset
+select pg_temp.live(:'rK7') as "oK7R" \gset
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R'),
+    format($q$select public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add', '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+              update public.returns set status = 'cancelled' where id = %L$q$, :'rK7'))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R'),
+    format($q$select public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add', '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null)$q$)),
+  'P0001:replacement_return_cancelled:replacement_return_cancelled | ok:1',
+  'K6: the gate never lets a cancelled return''s replacement into picking, released or not (a resume refused replacement_return_cancelled); while the RMA is open the released resume passes (desk check F3)');
+do $$
+begin
+  perform public.adjust_stock('03970000-0000-0000-0000-000000000e1d'::uuid, 1, 'add',
+                              '03970000-0000-0000-0000-000000000c12'::uuid, 'Walk restock', null);
+end $$;
+select pg_temp.call_as('authenticated', :mgr, format('select (public.resume_fulfillment(%L)).status', :'oK7R')) as "k7Resume" \gset
+select pg_temp.holds(:'oK7R') as "k7Held", pg_temp.snap(:pZ) as "k7Snap" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Original not returned')$q$, :'rK7', pg_temp.rev(:'rK7'))) as "jK7" \gset
+select is(
+  :'k7Resume' || ':' || :'k7Held' || ':' || ((:'jK7'::jsonb)->>'status') || ':' || (select status from public.order_requests where id = :'oK7R') || ':'
+  || pg_temp.holds(:'oK7R')::text || ':'
+  || (select trim_scale(sum(l.quantity_fulfilled))::text from public.order_request_lines l where l.order_request_id = :'oK7R') || ':'
+  || (select string_agg(status, ',') from public.return_exchange_lines where return_id = :'rK7') || ':'
+  || pg_temp.xs(:'rK7', :mgr) || ':' || (pg_temp.snap(:pZ) = :'k7Snap')::text || ':' || pg_temp.balanced(:pZ)::text,
+  'pick_slip_generated:1:cancelled:cancelled:0:1:cancelled:handed_over_return_cancelled:true:true',
+  'K7: a remainder already resumed into picking is cancelled with the RMA (every hold released, the handed-over unit kept as the record, nothing restocked): nothing more ships for a cancelled return (desk check F3)');
 
 -- ══ L. The link column and fixed lines ════════════════════════════════════
 select is(

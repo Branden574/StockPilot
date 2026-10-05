@@ -7,6 +7,7 @@ import {
   exchangeReplacementBanner,
   formatOrderNumber,
   releasedBeforeReturnLine,
+  returnCancelledReplacementLine,
   RETURNS_COPY,
   waitingForReturnLine,
 } from '@stockpilot/core';
@@ -62,6 +63,11 @@ export function ReplacementBanner({
       {replacement.live && replacement.waitingForReturn ? (
         <p className="text-muted-foreground" role="status">
           {waitingForReturnLine(replacement.returnNumber)}
+        </p>
+      ) : null}
+      {replacement.live && replacement.returnClosed ? (
+        <p className="text-muted-foreground" role="status" data-testid="replacement-return-closed">
+          {returnCancelledReplacementLine(replacement.returnNumber)}
         </p>
       ) : null}
       {replacement.releasedEarly ? (

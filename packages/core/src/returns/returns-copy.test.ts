@@ -23,6 +23,7 @@ import {
   slipExchangeLine,
   stillWaitingLine,
   waitingForReturnLine,
+  returnCancelledReplacementLine,
   choiceNeededSentence,
   qtyRequestedLabel,
   qtyReturningLabel,
@@ -66,6 +67,7 @@ function allStrings(): string[] {
     itemQuantityLabel('New Hire Shirt, L', 1),
     exchangeReplacementBanner('RMA-20261005-ABC123', 100),
     waitingForReturnLine('RMA-20261005-ABC123'),
+    returnCancelledReplacementLine('RMA-20261005-ABC123'),
     releasedBeforeReturnLine('Dana', 'Swap at delivery: the driver collects the returned item.'),
     changeOrCancelInRmaLabel('RMA-20261005-ABC123'),
     originalExchangeLine('Large ×1', 103, 'Waiting for returned item'),
@@ -139,6 +141,8 @@ describe('returns copy', () => {
   it('RX-2: prints the plan section 6 replacement sentences', () => {
     expect(exchangeReplacementBanner('RMA-20261005-ABC123', 100)).toBe('Exchange replacement for RMA-20261005-ABC123 · Original order SO-000100');
     expect(waitingForReturnLine('RMA-1')).toBe('Replacement reserved. Waiting for returned item (RMA-1)');
+    expect(returnCancelledReplacementLine('RMA-1')).toBe("RMA-1 was cancelled. This replacement isn't picked.");
+    expect(returnCancelledReplacementLine(null)).toBe("Its return was cancelled. This replacement isn't picked.");
     expect(releasedBeforeReturnLine('Dana', 'Swap at delivery.')).toBe('Released before the return by Dana: Swap at delivery.');
     expect(releasedBeforeReturnLine(null, null)).toBe('Released before the return.');
     expect(originalExchangeLine('Large ×1', 103, 'Waiting for returned item')).toBe('Exchange: Large ×1 → SO-000103 (Waiting for returned item)');

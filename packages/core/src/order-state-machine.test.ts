@@ -576,4 +576,23 @@ describe('exchange replacements (0397)', () => {
       }),
     ).toEqual(['close_partial', 'cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
   });
+
+  // Desk check F3: once the RMA was cancelled or denied the gate never lets
+  // the replacement into picking, released or not: no pick slip, no resume,
+  // and nothing to release.
+  it('after the RMA was cancelled: no pick slip, no resume, no release', () => {
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'closed', canReleaseReplacement: true }),
+    ).toEqual(['cancel_in_rma']);
+    expect(
+      availableOrderActions({
+        ...mgr,
+        status: 'backordered',
+        hasFulfillableStock: true,
+        isReplacement: true,
+        replacementGate: 'closed',
+        canReleaseReplacement: true,
+      }),
+    ).toEqual(['close_partial', 'cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
+  });
 });

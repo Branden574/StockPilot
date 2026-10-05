@@ -11,6 +11,7 @@ import {
   orderExchangeChip,
   orderReplacementLines,
   prepareOutcomeMessage,
+  replacementPickBlocked,
   replacementOrderLines,
   replacementSideLines,
   returnRowExchange,
@@ -290,5 +291,14 @@ describe('the list and the order screen', () => {
     expect(orderExchangeChip('rma-1', { replacementOrderId: 'o1', exchangeStatus: 'ready_to_pick' }, 'o1')).toBe('Exchange · Ready to pick');
     expect(orderExchangeChip('rma-1', { replacementOrderId: 'o2', exchangeStatus: 'ready_to_pick' }, 'o1')).toBe('Exchange');
     expect(orderExchangeChip(null, null, 'o1')).toBeNull();
+    // Desk check F3: the RMA cancelled while this order is live: it says the
+    // replacement is not picked, and the pick slip and Resume are blocked.
+    const closed: MobileOrderReplacement = { ...info, waitingForReturn: false, returnClosed: true, returnStatus: 'cancelled' };
+    expect(orderReplacementLines(closed, 'pickup').map((l) => l.key)).toEqual(['title', 'closed', 'change']);
+    expect(orderReplacementLines(closed, 'pickup')[1]!.text).toBe("RMA-1 was cancelled. This replacement isn't picked.");
+    expect(replacementPickBlocked(closed)).toBe(true);
+    expect(replacementPickBlocked(info)).toBe(true);
+    expect(replacementPickBlocked({ ...info, waitingForReturn: false })).toBe(false);
+    expect(replacementPickBlocked(null)).toBe(false);
   });
 });

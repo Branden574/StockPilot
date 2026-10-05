@@ -84,7 +84,12 @@ import {
   type OrderDriver,
 } from '@/lib/orders-api';
 import { getOrderExchangeCandidates, mintReturnKey, releaseReturnReplacement } from '@/lib/returns-api';
-import { changeInRmaLabel, orderReplacementLines, type MobileOrderReplacement } from '@/lib/returns-view';
+import {
+  changeInRmaLabel,
+  orderReplacementLines,
+  replacementPickBlocked,
+  type MobileOrderReplacement,
+} from '@/lib/returns-view';
 import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReleaseReplacementSheet } from '@/components/release-replacement-sheet';
 import {
@@ -2930,7 +2935,7 @@ export default function OrderDetail() {
                   {stockNotice}
                 </>
               ) : null}
-              {managerActions.generatePickSlip && !order.replacement?.waitingForReturn
+              {managerActions.generatePickSlip && !replacementPickBlocked(order.replacement)
                 ? actionBtn('Generate pick slip', 'gps', () =>
                     void act({ action: 'generate_pick_slip' }, 'gps'),
                   )
@@ -3007,7 +3012,7 @@ export default function OrderDetail() {
                 : null}
               {managerActions.backorderedActions ? (
                 <>
-                  {order.replacement?.waitingForReturn ? null : stockGates.resume === 'waiting' ? (
+                  {replacementPickBlocked(order.replacement) ? null : stockGates.resume === 'waiting' ? (
                     <Body size={12} color={c.ink4}>
                       Resume unlocks when owed items are back in stock.
                     </Body>

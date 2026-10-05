@@ -54,6 +54,12 @@ describe('replacementRefusal', () => {
       code: 'conflict',
       details: { reason: 'replacement_waiting_for_return' },
     });
+    // Desk check F3: a cancelled or denied return's replacement is never picked.
+    expect(replacementRefusal({ hint: 'replacement_return_cancelled' })).toMatchObject({
+      code: 'conflict',
+      message: "This replacement's return was cancelled, so it isn't picked.",
+      details: { reason: 'replacement_return_cancelled' },
+    });
     expect(replacementRefusal({ hint: 'replacement_link_immutable' })?.code).toBe('forbidden');
     expect(replacementRefusal({ hint: 'returns_manage' })).toBeNull();
     expect(replacementRefusal({ message: 'replacement_waiting_for_return' })).toBeNull();
@@ -115,6 +121,16 @@ describe('loadReplacementInfo', () => {
     const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
     expect(info).toMatchObject({ waitingForReturn: false, returnReceived: true, driverLine: null });
     expect(info?.slipLine).toMatch(/, received\)$/);
+  });
+
+  // Desk check F3: a live replacement whose RMA was cancelled is never picked.
+  it('the RMA cancelled: no waiting words, the return closed (no pick slip, no resume)', async () => {
+    const { ctx } = ctxFor({ 'return_overview.select': { data: [{ ...OVERVIEW, status: 'cancelled', exchange_status: 'handed_over_return_cancelled' }], error: null } });
+    const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'backordered', replacement_for_return_id: RMA });
+    expect(info).toMatchObject({ live: true, waitingForReturn: false, returnClosed: true });
+    const open = ctxFor({});
+    const gated = await loadReplacementInfo(open.ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
+    expect(gated).toMatchObject({ waitingForReturn: true, returnClosed: false });
   });
 
   it('a cancelled earlier replacement is not the live one: no gate words', async () => {

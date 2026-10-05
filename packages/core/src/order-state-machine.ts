@@ -250,9 +250,12 @@ export interface AvailableActionsInput {
    * RX-2: the return-first gate. 'waiting' while the RMA's item has not been
    * received and nobody released the replacement early: the pick slip and a
    * resume are refused by the database (replacement_waiting_for_return), so
-   * they are not offered. Optional, default off.
+   * they are not offered. 'closed' once the RMA was cancelled or denied: the
+   * database never lets the replacement into picking again, released or not
+   * (replacement_return_cancelled, desk check F3), so neither is offered and
+   * there is nothing to release. Optional, default off.
    */
-  replacementGate?: 'waiting' | 'open' | null;
+  replacementGate?: 'waiting' | 'open' | 'closed' | null;
   /** RX-2: the viewer holds returns:manage and orders:approve (server-computed). */
   canReleaseReplacement?: boolean;
 }
@@ -379,12 +382,14 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
     const at = actions.indexOf('cancel');
     if (at >= 0) actions.splice(at, 1, 'cancel_in_rma');
   }
-  if (input.replacementGate === 'waiting') {
+  if (input.replacementGate === 'waiting' || input.replacementGate === 'closed') {
     for (const gated of ['generate_pick_slip', 'resume_fulfillment'] as const) {
       const at = actions.indexOf(gated);
       if (at >= 0) actions.splice(at, 1);
     }
-    if (input.canReleaseReplacement && input.status === 'approved') actions.unshift('release_replacement_early');
+    if (input.replacementGate === 'waiting' && input.canReleaseReplacement && input.status === 'approved') {
+      actions.unshift('release_replacement_early');
+    }
   }
 
   return actions;

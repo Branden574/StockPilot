@@ -107,6 +107,12 @@ describe('RX-2 refusals', () => {
     expect(mapReturnError({ code: 'P0001', hint: 'replacement_already_drawn' }).status).toBe(409);
     expect(mapReturnError({ code: 'P0001', hint: 'replacement_requester_unavailable' }).status).toBe(400);
     expect(mapReturnError({ code: '42501', hint: 'exchange_request_immutable' }).status).toBe(403);
+    // Desk check F3: the gate's refusal for a cancelled or denied return.
+    expect(mapReturnError({ code: 'P0001', hint: 'replacement_return_cancelled', details: 'RMA-1' })).toMatchObject({
+      status: 409,
+      reason: 'replacement_return_cancelled',
+      message: "This replacement's return was cancelled, so it isn't picked.",
+    });
   });
 
   it('reads replacement_unavailable\'s detail as a list of short items', () => {

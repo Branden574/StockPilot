@@ -1035,8 +1035,13 @@ $$;
 -- (P0001 reason_required); the live replacement is locked FOR UPDATE and
 -- classified under that lock: not handed over (undrawn, or picked and not
 -- handed over, which cancel_order_request restocks to Staging) is cancelled
--- in this transaction; handed over keeps its history and nothing moves
--- (brief 34, D11). Requested lines are cancelled with the RMA.
+-- in this transaction. Handed over in full keeps its history and nothing
+-- moves (brief 34, D11). Handed over in part (desk check F3): a backorder is
+-- closed as delivered-partial (close_partial, unchanged: the record kept,
+-- every hold released, nothing moves), and a remainder already resumed into
+-- picking is cancelled (cancel_order_request keeps quantity_fulfilled as the
+-- record and restocks only a picked batch, to Staging), so nothing more ships
+-- for a cancelled return. Requested lines are cancelled with the RMA.
 create or replace function public._return_exchange_on_cancel(p_return_id uuid, p_user uuid, p_reason text)
 returns void
 language plpgsql
@@ -1044,10 +1049,11 @@ security invoker
 set search_path = public, pg_temp
 as $$
 declare
-  v_org    uuid;
-  v_no     text;
-  v_live   uuid;
-  v_class  text;
+  v_org     uuid;
+  v_no      text;
+  v_live    uuid;
+  v_class   text;
+  v_ostatus text;
 begin
   if not exists (select 1 from public.return_exchange_lines xl where xl.return_id = p_return_id) then
     return;
@@ -1074,7 +1080,17 @@ begin
        for update;
     if v_live is not null then
       v_class := public._return_replacement_class(v_live);
+      select o.status into v_ostatus from public.order_requests o where o.id = v_live;
       if v_class in ('undrawn', 'drawn') then
+        perform public._return_replacement_cancel_order(v_live, v_no, 'return_cancelled');
+        update public.return_exchange_lines
+           set status = 'cancelled'
+         where return_id = p_return_id and status = 'approved';
+      elsif v_ostatus = 'backordered' then
+        -- Handed over in part, the rest on backorder: closed as delivered-partial.
+        perform public.close_partial(v_live);
+      elsif v_ostatus <> 'completed' then
+        -- Handed over in part, the rest resumed into picking: the rest is cancelled.
         perform public._return_replacement_cancel_order(v_live, v_no, 'return_cancelled');
         update public.return_exchange_lines
            set status = 'cancelled'
@@ -1912,8 +1928,10 @@ $$;
 -- lock: generatePickSlip holds the order row while an RMA cancel holds the
 -- RMA and then waits for the order, so a lock here would deadlock.
 --   Into pick_slip_generated (the pick slip, and resume from backorder):
---   only when the RMA is received or closed, or a released_early decision
---   names this order; otherwise P0001 replacement_waiting_for_return.
+--   never while the RMA is cancelled or denied, released or not (P0001
+--   replacement_return_cancelled; desk check F3); otherwise only when the
+--   RMA is received or closed, or a released_early decision names this
+--   order; otherwise P0001 replacement_waiting_for_return.
 --   Into cancelled or denied: only inside an RMA function, whose
 --   transaction-bound flag holds this transaction's id; otherwise 42501
 --   replacement_cancel_via_return (a requester's own cancel, a manager on
@@ -1932,6 +1950,10 @@ begin
   if new.status = 'pick_slip_generated' then
     select r.status, r.return_number into v_status, v_no
       from public.returns r where r.id = new.replacement_for_return_id;
+    if v_status in ('cancelled', 'denied') then
+      raise exception 'replacement_return_cancelled' using errcode = 'P0001', hint = 'replacement_return_cancelled',
+        detail = coalesce(v_no, '');
+    end if;
     if v_status in ('received', 'closed')
        or exists (select 1 from public.return_decisions d
                    where d.order_request_id = new.id and d.kind = 'released_early'
@@ -2229,7 +2251,7 @@ comment on function public._return_exchange_approve(uuid, jsonb, uuid, integer) 
 comment on function public._return_exchange_on_deny(uuid, uuid) is
   'RX-2 hook body: a denied RMA declines every requested exchange line (exchange_declined decisions; the denial''s reason is on the denied decision). No replacement exists before approval. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_on_cancel(uuid, uuid, text) is
-  'RX-2 hook body (plan 3.3.5, cancel_return row; X-1, X-2): once an exchange was approved, cancelling the RMA needs the orders module (P0001 module_disabled), orders:approve (42501 orders_approve) and a reason (P0001 reason_required); the live replacement is locked FOR UPDATE after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled in this transaction (every hold released; a picked batch back to Staging through cancel_order_request''s own branch); handed over keeps its history and nothing moves (brief 34, D11). Requested lines are cancelled with the RMA. SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 hook body (plan 3.3.5, cancel_return row; X-1, X-2): once an exchange was approved, cancelling the RMA needs the orders module (P0001 module_disabled), orders:approve (42501 orders_approve) and a reason (P0001 reason_required); the live replacement is locked FOR UPDATE after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled in this transaction (every hold released; a picked batch back to Staging through cancel_order_request''s own branch); handed over in full keeps its history and nothing moves (brief 34, D11); handed over in part is closed as delivered-partial when on backorder (close_partial) and its remainder cancelled when resumed into picking (desk check F3), so nothing more ships for a cancelled return. Requested lines are cancelled with the RMA. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_replay(uuid, integer) is
   'RX-2 hook body: a replay''s replacement answer is the order the replacement_issued decision of that revision names, read now; never the stored key response (managers can edit it). SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) is
@@ -2251,7 +2273,7 @@ comment on function public.tg_order_requests_replacement_link() is
 comment on function public.tg_order_request_lines_replacement_guard() is
   'RX-2 (plan 3.6.6): an API-role line insert on a replacement order is refused (42501 replacement_lines_fixed): a replacement''s items come from its RMA. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_requests_replacement_status() is
-  'RX-2 (plan 3.6.5; C-5), the return-first gate and the cancel guard for replacement orders: into pick_slip_generated only when the RMA is received or closed or a released_early decision names this order (P0001 replacement_waiting_for_return, detail the RMA number); into cancelled or denied only under the transaction-bound stockpilot.return_exchange flag (42501 replacement_cancel_via_return). Reads the RMA and the release by key and takes NO row lock (an RMA cancel holds the RMA and then waits for the order; generatePickSlip holds the order). SECURITY DEFINER (a picker without returns access is judged by the same facts), EXECUTE for nobody.';
+  'RX-2 (plan 3.6.5; C-5), the return-first gate and the cancel guard for replacement orders: into pick_slip_generated never while the RMA is cancelled or denied (P0001 replacement_return_cancelled, detail the RMA number; desk check F3), otherwise only when the RMA is received or closed or a released_early decision names this order (P0001 replacement_waiting_for_return, detail the RMA number); into cancelled or denied only under the transaction-bound stockpilot.return_exchange flag (42501 replacement_cancel_via_return). Reads the RMA and the release by key and takes NO row lock (an RMA cancel holds the RMA and then waits for the order; generatePickSlip holds the order). SECURITY DEFINER (a picker without returns access is judged by the same facts), EXECUTE for nobody.';
 comment on function public._notify_replacement_order_changes() is
   'RX-2 (plan 3.6.7): the requester pings of a replacement order, with _notify_order_request_changes'' type strings, link and preference gates, reworded, and the RMA in the metadata: staged for pickup or delivery, in transit, backordered, completed ("Your exchange is complete" once the RMA is closed). Silent on insert, approval, cancellation, denial and the picking statuses, and on ready for pickup after a counter receipt. Staff are never pinged for a replacement. SECURITY DEFINER, no EXECUTE.';
 comment on function public.tg_returns_api_guard() is
@@ -2489,8 +2511,7 @@ select r.id,
        -- exchange-status:begin
        case
          when coalesce(x.n, 0) = 0 then 'none'
-         when r.status = 'cancelled'
-              and (rep.status = 'completed' or (rep.status = 'backordered' and rep.fulfilled > 0))
+         when r.status = 'cancelled' and (rep.status = 'completed' or rep.fulfilled > 0)
            then 'handed_over_return_cancelled'
          when r.status in ('cancelled', 'denied') then 'cancelled'
          when r.status = 'requested' and x.any_requested then 'requested'

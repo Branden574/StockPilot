@@ -41,6 +41,7 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 /** The hints the order paths can meet on a replacement (0397). */
 const REPLACEMENT_HINTS: readonly string[] = [
   'replacement_waiting_for_return',
+  'replacement_return_cancelled',
   'replacement_cancel_via_return',
   'replacement_lines_fixed',
   'replacement_link_server_only',
@@ -85,6 +86,12 @@ export interface OrderReplacementInfo {
   exchangeStatusLabel: string;
   /** The return-first gate holds this order: approved, the RMA not received, no early release. */
   waitingForReturn: boolean;
+  /**
+   * The RMA was cancelled or denied while this order is still its live
+   * replacement (desk check F3): the gate never lets it into picking again,
+   * released or not, so neither the pick slip nor Resume is offered.
+   */
+  returnClosed: boolean;
   /** A manager released THIS order before the return arrived. */
   releasedEarly: boolean;
   /** Who and why, for holders of returns:read or returns:manage; else null. */
@@ -218,6 +225,7 @@ export async function loadReplacementInfo(
   const releasedEarly = released !== null || (live && ov?.released_early === true);
   const waitingForReturn =
     live && GATED_STATUSES.has(order.status) && returnStatus === 'approved' && !releasedEarly;
+  const returnClosed = live && (returnStatus === 'cancelled' || returnStatus === 'denied');
   const exchangeStatus = parseExchangeStatus(ov?.exchange_status);
   const returnedWords = returnedItems.length > 0
     ? returnedItems.map((r) => itemQuantityLabel(r.label, r.quantity)).join(', ')
@@ -234,6 +242,7 @@ export async function loadReplacementInfo(
     exchangeStatus,
     exchangeStatusLabel: exchangeStatusStaffLabel(exchangeStatus, { returnStatus }),
     waitingForReturn,
+    returnClosed,
     releasedEarly,
     release: released
       ? { byName: releaserName, reason: released.reason, at: released.created_at }

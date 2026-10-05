@@ -350,6 +350,14 @@ export function waitingForReturnLine(returnNumber: string | null): string {
 }
 
 /**
+ * A replacement whose RMA was cancelled or denied (desk check F3): the gate
+ * never lets it into picking, so neither the pick slip nor Resume is offered.
+ */
+export function returnCancelledReplacementLine(returnNumber: string | null): string {
+  return `${returnNumber ?? 'Its return'} was cancelled. This replacement isn't picked.`;
+}
+
+/**
  * The words after "Release before return is received" (web and phone, one
  * rule): released now, not needed (the returned item already arrived), or
  * a repeat of a release already made.

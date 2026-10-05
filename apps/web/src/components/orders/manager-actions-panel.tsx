@@ -68,6 +68,7 @@ import {
   isManagerOrAbove,
   previewPartialFulfilment,
   releaseOutcomeLine,
+  returnCancelledReplacementLine,
   RETURNS_COPY,
   waitingForReturnLine,
   type CompletionConfirmCopy,
@@ -193,6 +194,8 @@ interface Props {
     returnId: string;
     returnNumber: string | null;
     waitingForReturn: boolean;
+    /** The RMA was cancelled or denied: never picked again (desk check F3). */
+    returnClosed?: boolean;
     canReleaseEarly: boolean;
     driverLine: string | null;
   } | null;
@@ -265,6 +268,10 @@ export function ManagerActionsPanel({
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const gated = replacement?.waitingForReturn === true;
+  // Desk check F3: a replacement whose RMA was cancelled or denied is never
+  // picked again (the gate refuses it), so the pick slip and Resume go too.
+  const returnClosed = replacement?.returnClosed === true;
+  const pickBlocked = gated || returnClosed;
   async function releaseEarly(reason: string) {
     if (!replacement) return;
     setBusy('release-early');
@@ -319,7 +326,7 @@ export function ManagerActionsPanel({
     canApproveOrders: approves,
     // RX-2: an exchange replacement and its return-first gate.
     isReplacement: replacement !== null,
-    replacementGate: replacement ? (gated ? 'waiting' : 'open') : null,
+    replacementGate: replacement ? (gated ? 'waiting' : returnClosed ? 'closed' : 'open') : null,
     canReleaseReplacement: replacement?.canReleaseEarly === true && approves,
   });
   // The stock notice belongs to the two stock-dependent statuses only.
@@ -742,7 +749,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'approved' && approves && !gated && (
+          {status === 'approved' && approves && !pickBlocked && (
             <Button
               variant="gradient"
               onClick={generatePickSlip}
@@ -772,6 +779,12 @@ export function ManagerActionsPanel({
                 </Button>
               ) : null}
             </>
+          )}
+          {(status === 'approved' || status === 'backordered') && returnClosed && !gated && (
+            <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
+              <ClipboardList className="h-3.5 w-3.5" />
+              {returnCancelledReplacementLine(replacement?.returnNumber ?? null)}
+            </span>
           )}
 
           {isPickingPhase && (
@@ -1043,7 +1056,7 @@ export function ManagerActionsPanel({
 
           {status === 'backordered' && approves && (
             <>
-              {gated ? null : stockGates.resume !== 'waiting' ? (
+              {pickBlocked ? null : stockGates.resume !== 'waiting' ? (
                 <Button
                   variant="gradient"
                   onClick={() => openPartial('resume')}

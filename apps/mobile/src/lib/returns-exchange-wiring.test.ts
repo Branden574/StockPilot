@@ -84,11 +84,13 @@ describe('the order screen', () => {
 
   it('a replacement gets its banner, the gate in place of the pick slip, and the early release', () => {
     expect(screen).toContain('orderReplacementLines(');
-    expect(screen).toContain('managerActions.generatePickSlip && !order.replacement?.waitingForReturn');
+    // Desk check F3: the pick slip and Resume are also blocked once the RMA
+    // was cancelled or denied (replacementPickBlocked, the web panel's rule).
+    expect(screen).toContain('managerActions.generatePickSlip && !replacementPickBlocked(order.replacement)');
     expect(screen).toContain('waitingForReturnLine(order.replacement.returnNumber)');
     expect(screen).toContain('<ReleaseReplacementSheet');
     expect(screen).toContain('releaseReturnReplacement(order.replacement.returnId, reason)');
-    expect(screen).toContain('{order.replacement?.waitingForReturn ? null : stockGates.resume');
+    expect(screen).toContain('{replacementPickBlocked(order.replacement) ? null : stockGates.resume');
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {

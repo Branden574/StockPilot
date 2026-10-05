@@ -25,6 +25,7 @@ const INFO = {
   exchangeStatus: 'waiting_for_return' as const,
   exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
   waitingForReturn: true,
+  returnClosed: false,
   releasedEarly: false,
   release: null,
   returnReceived: false,
@@ -65,6 +66,20 @@ describe('ReplacementBanner', () => {
     expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
     expect(screen.getByText('Released before the return by Dana: Swap at delivery: the driver collects the returned item.')).toBeInTheDocument();
     expect(screen.getByText('Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)')).toBeInTheDocument();
+  });
+
+  // Desk check F3: the RMA was cancelled while this order is still live.
+  it('the RMA cancelled: says the replacement is not picked, never the waiting words', () => {
+    render(
+      <ReplacementBanner
+        replacement={{ ...INFO, waitingForReturn: false, returnClosed: true, returnStatus: 'cancelled' }}
+        fulfillmentType="pickup"
+      />,
+    );
+    expect(screen.getByTestId('replacement-return-closed')).toHaveTextContent(
+      "RMA-20261005-ABC123 was cancelled. This replacement isn't picked.",
+    );
+    expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
   });
 
   it('a member who cannot open the RMA reads its number without a link', () => {

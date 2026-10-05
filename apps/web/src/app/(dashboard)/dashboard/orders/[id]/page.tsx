@@ -1752,6 +1752,7 @@ export default async function OrderDetailPage({
                       returnId: replacement.returnId,
                       returnNumber: replacement.returnNumber,
                       waitingForReturn: replacement.waitingForReturn,
+                      returnClosed: replacement.returnClosed,
                       canReleaseEarly: replacement.canReleaseEarly,
                       driverLine: replacement.driverLine,
                     }
