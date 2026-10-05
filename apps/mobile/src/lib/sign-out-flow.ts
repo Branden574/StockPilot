@@ -84,6 +84,12 @@ export interface SignOutOrderSubmissions {
   withdraw(): Promise<{ placed: string[] }>;
   /** Keep a marker (ids and counts only) for each still not settled. */
   hold(): Promise<void>;
+  /** Just before the device's workspace keys are removed: every account's
+   *  order requests still not settled on this phone become their owner's
+   *  marker, except the keys this sign-out settled (PO-4 review: another
+   *  account's live key, left by a session revoked elsewhere, went with no
+   *  marker). */
+  holdDevice(): Promise<void>;
   /** Say what the withdraw found: orders already placed, and how many could
    *  not be checked (those are held like Sign out). */
   report(result: { placed: string[]; unanswered: number }): Promise<void>;
@@ -280,6 +286,16 @@ export async function runSignOutFlow(
     await deps.wipeCache();
   } catch (e) {
     warn('[auth] wipe-on-signout failed', e);
+  }
+  // Every account's live order key on this phone is held for its owner
+  // before the workspace keys go (PO-4 review); a failure never stops the
+  // sign-out.
+  if (orders) {
+    try {
+      await orders.holdDevice();
+    } catch (e) {
+      warn('[auth] could not hold the order requests on this device', e);
+    }
   }
   // Only once the session is gone, like the wipe: a sign-out that failed
   // keeps the person in their workspace.

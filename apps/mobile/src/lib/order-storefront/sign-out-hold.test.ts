@@ -16,6 +16,7 @@ import {
   checkHeldSubmissions,
   createSignOutOrderSubmissions,
   heldCheckReport,
+  holdEveryDeviceSend,
   heldWithdrawSentence,
   holdCheckFrom,
   holdFor,
@@ -452,5 +453,63 @@ describe('a check that ends after its account has gone says nothing and changes 
     expect(report.sentences).toEqual([signInHeldPlacedCopy('SO-000123'), signInHeldPlacedCopy(null), SIGN_IN_HELD_DROPPED_COPY]);
     expect(report.offers).toEqual([h2]);
     expect(heldCheckReport({ placed: [], unknown: [], dropped: 0 }, new Set())).toEqual({ sentences: [], offers: [] });
+  });
+});
+
+// PO-4 review: a session revoked from another device leaves that account's
+// drafts on the phone (right, for its own next sign-in). But a later
+// deliberate sign-out by another account, or an eviction, removed every
+// account's workspace keys and held only the signing-out account's, so the
+// first account's live key went with no marker, and it was never asked.
+describe('every account’s live order request becomes its owner’s marker before the device’s workspace keys go (PO-4 review)', () => {
+  const OTHER = '22222222-2222-4222-8222-222222222299';
+  const K2 = '55555555-5555-4555-8555-555555555558';
+  const draftFor = (store: ReturnType<typeof memory>, userId: string, pending: PendingOrderSubmission | null) => {
+    const scope = { userId, orgId: ORG, warehouseId: WH };
+    store.data.set(
+      orderDraftKey(scope),
+      serializeOrderDraft(scope, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: pending }, new Date()),
+    );
+  };
+  const otherPending: PendingOrderSubmission = { ...PENDING, key: K2, body: { ...PENDING.body, idempotencyKey: K2, placerUserId: OTHER } };
+
+  it('each account’s unsettled sends go to that account’s own marker (ids and counts only); a settled draft adds nothing', async () => {
+    const store = memory();
+    draftFor(store, USER, PENDING);
+    draftFor(store, OTHER, otherPending);
+    const settledScope = { userId: OTHER, orgId: '11111111-1111-4111-8111-111111111112', warehouseId: WH };
+    store.data.set(
+      orderDraftKey(settledScope),
+      serializeOrderDraft(settledScope, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: null }, new Date()),
+    );
+    await holdEveryDeviceSend(store);
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })]);
+    expect(parseHolds(store.data.get(orderHoldKey(OTHER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: otherPending })]);
+    for (const secret of ['Maria', 'maria@example.org', 'Room 12', ITEM]) {
+      expect(store.data.get(orderHoldKey(OTHER))).not.toContain(secret);
+    }
+  });
+
+  it('keys already settled are never held again, and a marker already holding a key is not changed', async () => {
+    const store = memory();
+    draftFor(store, USER, PENDING);
+    draftFor(store, OTHER, otherPending);
+    const raw = serializeHolds([holdFor({ orgId: ORG, warehouseId: WH, pending: otherPending })])!;
+    store.data.set(orderHoldKey(OTHER), raw);
+    await holdEveryDeviceSend(store, { except: new Set([`${ORG}.${KEY}`]) });
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+    expect(store.data.get(orderHoldKey(OTHER))).toBe(raw);
+  });
+
+  it('the sign-out’s own step skips the keys this sign-out settled and holds the other account’s', async () => {
+    const store = memory();
+    draftFor(store, USER, PENDING);
+    draftFor(store, OTHER, otherPending);
+    const calls = { status: vi.fn(), withdraw: vi.fn(async () => answer({ organizationId: ORG, outcome: 'withdrawn' })) };
+    const s = createSignOutOrderSubmissions({ userId: USER, store, calls, say: vi.fn() });
+    await s.withdraw();
+    await s.holdDevice();
+    expect(store.data.has(orderHoldKey(USER))).toBe(false);
+    expect(parseHolds(store.data.get(orderHoldKey(OTHER)) ?? null).map((h) => h.key)).toEqual([K2]);
   });
 });

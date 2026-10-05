@@ -210,6 +210,29 @@ export interface HoldCalls {
   withdraw(scope: { orgId: string; userId: string }, key: string): Promise<OrderCallResult>;
 }
 
+/**
+ * Before this phone's `workspace.` keys are removed (a deliberate sign-out,
+ * an account eviction), EVERY account's order requests still not settled on
+ * it become that account's own marker (PO-4 review). A session revoked from
+ * another device leaves its account's drafts here, rightly, for its own next
+ * sign-in; another account's sign-out or an eviction then removes them, and
+ * without this their live keys went with no marker and the owner was never
+ * asked. Ids and counts only, as hold() writes, each through updateHolds.
+ * `except`: keys already settled in this flow, never held again.
+ */
+export async function holdEveryDeviceSend(store: HoldStore, opts: { except?: ReadonlySet<string> } = {}): Promise<void> {
+  const keys = (await store.getAllKeys()).filter((k) => k.startsWith(ORDER_DRAFT_PREFIX));
+  if (keys.length === 0) return;
+  const entries = await store.multiGet(keys);
+  const users = new Set(keys.map((k) => k.slice(ORDER_DRAFT_PREFIX.length).split('.')[0]!).filter((u) => u !== ''));
+  for (const userId of users) {
+    const adds = unsettledSubmissions(entries, userId, null)
+      .filter((s) => !opts.except?.has(`${s.orgId}.${s.pending.key}`))
+      .map((s) => holdFor(s));
+    if (adds.length > 0) await updateHolds(store, userId, (holds) => mergeHolds(holds, adds));
+  }
+}
+
 async function deviceSends(store: HoldStore, userId: string) {
   const prefix = `${ORDER_DRAFT_PREFIX}${userId}.`;
   const keys = (await store.getAllKeys()).filter((k) => k.startsWith(prefix));
@@ -264,6 +287,12 @@ export function createSignOutOrderSubmissions(deps: {
       const adds = (await live()).map((s) => holdFor(s));
       if (adds.length === 0) return;
       await updateHolds(deps.store, deps.userId, (holds) => mergeHolds(holds, adds));
+    },
+    /** Just before the device's workspace keys go: every account's live
+     *  sends on this phone become their owner's marker, except the keys this
+     *  sign-out settled (PO-4 review). */
+    async holdDevice() {
+      await holdEveryDeviceSend(deps.store, { except: settled });
     },
     async report(result: { placed: string[]; unanswered: number }) {
       const lines = result.placed.map((label) =>

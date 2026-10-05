@@ -17,8 +17,13 @@ describe('account epoch', () => {
     // by source: a workspace load or switch still running must see the ended
     // epoch before the workspace key is removed, or it could save one back.
     const gate = readFileSync(path.join(__dirname, 'use-account-gate.ts'), 'utf8');
+    // The order requests' hold step (PO-4 review) runs between the two, after
+    // the epoch has ended, so no storefront write can land while it reads.
     expect(gate).toMatch(
-      /clearAccountStorage: async \(\) => \{[\s\S]{0,300}?endAccountEpoch\(\);\s*const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);/,
+      /clearAccountStorage: async \(\) => \{[\s\S]{0,300}?endAccountEpoch\(\);[\s\S]{0,700}?const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);/,
     );
+    const body = gate.slice(gate.indexOf('clearAccountStorage: async () => {'));
+    expect(body.indexOf('endAccountEpoch();')).toBeLessThan(body.indexOf('AsyncStorage.multiRemove(keys)'));
+    expect(body.slice(0, body.indexOf('endAccountEpoch();'))).not.toMatch(/multiRemove|holdDeviceOrderSends/);
   });
 });

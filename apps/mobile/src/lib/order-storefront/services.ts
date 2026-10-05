@@ -4,7 +4,7 @@ import { Alert } from 'react-native';
 import { api } from '../api';
 import { createOrderStorefrontApi } from './api';
 import type { SessionStore } from './session';
-import { createSignOutOrderSubmissions } from './sign-out-hold';
+import { createSignOutOrderSubmissions, holdEveryDeviceSend } from './sign-out-hold';
 import { ORDER_DRAFT_PREFIX, unsettledSubmissions } from './store';
 
 /**
@@ -53,4 +53,11 @@ export function signOutOrderSubmissions(userId: string) {
         });
       }),
   });
+}
+
+/** The eviction's step before it removes the workspace keys: every
+ *  account's order requests still not settled on this phone become their
+ *  owner's marker (ids and counts only; PO-4 review). */
+export function holdDeviceOrderSends(): Promise<void> {
+  return holdEveryDeviceSend(orderStore);
 }

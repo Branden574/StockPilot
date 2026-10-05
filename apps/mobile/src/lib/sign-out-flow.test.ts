@@ -377,6 +377,9 @@ describe('runSignOutFlow — order requests sent but not confirmed', () => {
       hold: vi.fn(async () => {
         h.log.push('orders:hold');
       }),
+      holdDevice: vi.fn(async () => {
+        h.log.push('orders:holdDevice');
+      }),
       report: vi.fn(async (r: { placed: string[]; unanswered: number }) => {
         h.log.push(`orders:report:${r.placed.join(',')}:${r.unanswered}`);
       }),
@@ -387,6 +390,30 @@ describe('runSignOutFlow — order requests sent but not confirmed', () => {
     h.deps.orderSubmissions = orders;
     return { h, orders };
   }
+
+  // PO-4 review: another account's live key, left by a session revoked from
+  // another device, was removed with every workspace key and never held.
+  it('before the device’s workspace keys go, every account’s live order request is held, once the session has ended', async () => {
+    const { h, orders } = withOrders({ before: 0, afterSettle: 0 });
+    const clear = h.deps.clearAccountStorage as ReturnType<typeof vi.fn>;
+    clear.mockImplementation(async () => {
+      h.log.push('clearAccountStorage');
+    });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(orders.holdDevice).toHaveBeenCalledTimes(1);
+    expect(h.log.indexOf('orders:holdDevice')).toBeGreaterThan(h.log.indexOf('signOut:global'));
+    expect(h.log.indexOf('orders:holdDevice')).toBeLessThan(h.log.indexOf('clearAccountStorage'));
+  });
+
+  it('that step failing never stops the sign-out; a session that survives holds nothing more', async () => {
+    const { h, orders } = withOrders({ before: 0, afterSettle: 0 });
+    orders.holdDevice.mockRejectedValueOnce(new Error('disk full'));
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.deps.clearAccountStorage).toHaveBeenCalledTimes(1);
+    const kept = withOrders({ before: 0, afterSettle: 0 }, { globalError: OFFLINE, localError: OFFLINE });
+    expect(await runSignOutFlow(kept.h.deps)).toBe('still-signed-in');
+    expect(kept.orders.holdDevice).not.toHaveBeenCalled();
+  });
 
   it('none: the sequence is exactly as before', async () => {
     const { h, orders } = withOrders({ before: 0, afterSettle: 0 });

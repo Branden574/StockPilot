@@ -743,3 +743,18 @@ describe('the sign-in check says nothing once its account has gone (PO-4 review)
     expect(runtime).not.toContain('for (const label of result.placed)');
   });
 });
+
+// PO-4 review: an eviction removed every account's workspace keys, a live
+// order key of another account (left by a revoked session) with them, with no
+// marker. Mutations caught: the hold step dropped, run after the removal, or
+// allowed to stop the eviction.
+describe('the eviction holds every account’s live order request before it removes the workspace keys (PO-4 review)', () => {
+  it('the account gate’s clearAccountStorage holds them first, and a failure there never stops it', () => {
+    const gate = flat(codeOnly(read('src/lib/use-account-gate.ts')));
+    expect(gate).toContain('try { await holdDeviceOrderSends(); } catch (e) {');
+    expect(gate.indexOf('await holdDeviceOrderSends();')).toBeGreaterThan(gate.indexOf('endAccountEpoch();'));
+    expect(gate.indexOf('await holdDeviceOrderSends();')).toBeLessThan(gate.indexOf('const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());'));
+    const services = flat(codeOnly(read('src/lib/order-storefront/services.ts')));
+    expect(services).toContain('export function holdDeviceOrderSends(): Promise<void> { return holdEveryDeviceSend(orderStore); }');
+  });
+});
