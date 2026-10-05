@@ -27,12 +27,14 @@
 --     (0393's K7 shape on both tables) and its CHECKs; no body raises
 --     40001/40P01 or runs dynamic SQL or names deleted_users.
 -- P.  Publish: normalised steps, v2 retires v1 in one instant, a stale
---     expected id, a replayed client id, every refusal (case markers), the
+--     expected id, a replayed client id (and that it says it made nothing:
+--     created false, desk check F9), every refusal (case markers), the
 --     procedure link, every denial and the module.
 -- S.  Start: a run on the live version with the PO and warehouse copied, a
 --     second call answers it, reversal rows refused and reversed receipts
 --     allowed, another org and a missing receipt P0002, denials.
--- V.  Save: partial, every refusal (case markers), stale revision, replay,
+-- V.  Save: partial, every refusal (case markers), stale revision, replay
+--     (and that it says it wrote nothing: saved false, desk check F9),
 --     completion rules (case markers), completion stamps and finality, a run
 --     on a retired version completes.
 -- R.  Retire, then: an existing run is still answered, no live version and no
@@ -73,6 +75,8 @@
 --   M19 a run's person keys CASCADE instead of SET NULL       -> A7, D1
 --   M20 normalize keeps the client's keys                     -> P1, P7d
 --   M21 publish retires the live version a moment early       -> P10
+--   M22 publish reports a replay as made                      -> P11b
+--   M23 save reports a replay as written                      -> V5b, V11b
 --
 -- Roles: fixtures as the test superuser. Every call runs through pg_temp.rpc,
 -- which switches role and claims with set_config inside a subtransaction (the
@@ -81,7 +85,7 @@
 
 begin;
 
-select plan(92);
+select plan(98);
 
 \set orgA     '\'03980000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03980000-0000-0000-0000-00000000000b\''
@@ -247,12 +251,15 @@ end $$;
 create function pg_temp.tgargs(p bytea) returns text[] language sql immutable as $$
   select coalesce(array_remove(string_to_array(encode(p, 'escape'), '\000'), ''), '{}'::text[])
 $$;
--- Publish / retire / start / save calls, as SQL text for pg_temp.rpc.
+-- Publish / retire / start / save calls, as SQL text for pg_temp.rpc. The
+-- publish answers {version, created} and the save {run, saved} (desk check
+-- F9): p_out names a column of the row, or 'created' / 'saved'.
 create function pg_temp.pub(p_org uuid, p_title text, p_steps jsonb, p_expected uuid, p_client uuid,
                             p_proc uuid default null, p_binding text default 'receiving', p_out text default 'id')
 returns text language sql immutable as $$
-  select format('select v.%s::text from public.checklist_publish(%L, %L, %L, %L::jsonb, %L, %L, %L) v',
-                p_out, p_org, p_binding, p_title, p_steps, p_proc, p_expected, p_client)
+  select format('select %s::text from public.checklist_publish(%L, %L, %L, %L::jsonb, %L, %L, %L) v',
+                case when p_out = 'created' then 'v.created' else '(v.version).' || p_out end,
+                p_org, p_binding, p_title, p_steps, p_proc, p_expected, p_client)
 $$;
 create function pg_temp.retire(p_org uuid, p_version uuid) returns text language sql immutable as $$
   select format('select v.id::text from public.checklist_retire(%L, ''receiving'', %L) v', p_org, p_version)
@@ -263,8 +270,9 @@ $$;
 create function pg_temp.save(p_run uuid, p_results jsonb, p_rev integer, p_save uuid, p_complete boolean,
                              p_note text default null, p_out text default 'revision')
 returns text language sql immutable as $$
-  select format('select v.%s::text from public.checklist_run_save(%L, %L::jsonb, %L, %L, %L, %L) v',
-                p_out, p_run, p_results, p_note, p_rev, p_save, p_complete)
+  select format('select %s::text from public.checklist_run_save(%L, %L::jsonb, %L, %L, %L, %L) v',
+                case when p_out = 'saved' then 'v.saved' else '(v.run).' || p_out end,
+                p_run, p_results, p_note, p_rev, p_save, p_complete)
 $$;
 
 -- The case-table version (core CASE_TABLE_STEPS), sent untidy: a client key,
@@ -668,6 +676,10 @@ select is(
   'ok:' || :'v2' || '|2',
   'P11: a replayed client publish id answers the version it made, even with a stale expected id and other content, and makes no version 3');
 select is(
+  pg_temp.rpc(:mgr2, pg_temp.pub(:orgA, 'Something else', '[{"kind": "text", "label": "x"}]'::jsonb, :'v1', :cpA2, null, 'receiving', 'created'), false),
+  'ok:false',
+  'P11b: the replay says this call made nothing (created false), so the app writes no second audit row (desk check F9)');
+select is(
   pg_temp.rpc(:stf,      pg_temp.pub(:orgA, 'T', (select v from j where k = 'steps'), :'v2', :cpX), false) || ','
   || pg_temp.rpc(:vwr,   pg_temp.pub(:orgA, 'T', (select v from j where k = 'steps'), :'v2', :cpX), false),
   '42501:not_publisher:-,42501:not_publisher:-',
@@ -684,6 +696,8 @@ select is(pg_temp.rpc(:mgrNoMan, pg_temp.pub(:orgA, 'T', (select v from j where 
   '42501:not_publisher:-', 'P15: a manager whose purchase_orders:manage was revoked may not publish');
 select is(pg_temp.rpc(:mgrNoAdj, pg_temp.pub(:orgA, 'T', (select v from j where k = 'steps'), :'v2', :cpX, null, 'receiving', 'version_number'), false),
   'ok:3', 'P16: a manager without stock:adjust still publishes (purchasing configuration needs manage, not adjust; undone)');
+select is(pg_temp.rpc(:mgrNoAdj, pg_temp.pub(:orgA, 'T', (select v from j where k = 'steps'), :'v2', :cpX, null, 'receiving', 'created'), false),
+  'ok:true', 'P16b: a publish that made the version says so (created true; undone)');
 select is(pg_temp.rpc(:vwrMan, pg_temp.pub(:orgA, 'T', (select v from j where k = 'steps'), :'v2', :cpX), false),
   '42501:not_publisher:-', 'P17: a viewer granted purchase_orders:manage may not publish (manager floor)');
 select is(pg_temp.rpc(:mgrC, pg_temp.pub(:orgC, 'T', (select v from j where k = 'steps'), null, :cpX), false),
@@ -783,6 +797,10 @@ select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s2": {"value": "fail"}}', 0
                       format('select r.results::text from public.checklist_runs r where r.id = %L', :'run1')),
   'ok:1|{"s1": {"value": "pass"}, "s3": {"value": 12}}',
   'V5: a resent save id answers the row as it stands (revision 1, the first answers), whatever the new body says');
+select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s2": {"value": "pass"}}', 1, :sv2, false, null, 'saved'), false),
+  'ok:true', 'V5a: a save that wrote says so (saved true; undone)');
+select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s2": {"value": "fail"}}', 0, :sv1, false, null, 'saved'), false),
+  'ok:false', 'V5b: the resent save id says this call wrote nothing (saved false; desk check F9)');
 select is(
   pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{}', 1, :sv2, false, repeat('n', 1001)), false) || ','
   || pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{}', 1, null, false), false) || ','
@@ -805,6 +823,8 @@ select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s1": {"value": "na"}}', 1, 
 -- case: complete_fail_with_note
 select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s1": {"value": "fail", "note": "Two boxes crushed"}}', 1, :sv4, true, null, 'status'), false),
   'ok:completed', 'V7e: a failed check with a note completes (undone)');
+select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s1": {"value": "na"}}', 1, :sv4, true, null, 'saved'), false),
+  'ok:true', 'V7f: a save that completes the run says it wrote (saved true; undone): the app audits this completion');
 
 select is(pg_temp.rpc(:mgr2, pg_temp.save(:'run1',
     '{"s1": {"value": "fail", "note": "Two boxes crushed"}, "s2": {"value": "na"}, "s3": {"value": 3}, "s4": {"value": "  two boxes short  "}}',
@@ -821,6 +841,8 @@ select is(pg_temp.rpc(:mgr, pg_temp.save(:'run1', '{"s1": {"value": "pass"}}', 2
   'P0001:checklist_run_completed:-', 'V10: a completed run is final (checklist_run_completed)');
 select is(pg_temp.rpc(:mgr2, pg_temp.save(:'run1', '{}', 1, :sv5, true, null, 'status'), false),
   'ok:completed', 'V11: the completing save, resent, answers the completed run (a replay, not a refusal)');
+select is(pg_temp.rpc(:mgr2, pg_temp.save(:'run1', '{}', 1, :sv5, true, null, 'saved'), false),
+  'ok:false', 'V11b: the resent completing save says it wrote nothing (saved false): no second completion audit row (desk check F9)');
 select is(
   pg_temp.rpc(:stf, pg_temp.save(:'run2', '{}', 0, :sv6, false), false) || ','
   || pg_temp.rpc(:vwr, pg_temp.save(:'run2', '{}', 0, :sv6, false), false) || ','

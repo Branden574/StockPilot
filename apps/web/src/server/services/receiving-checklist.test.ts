@@ -191,7 +191,7 @@ describe('gate order', () => {
   };
   const stub = () =>
     makeSupabaseStub({
-      'rpc:checklist_publish': { data: version, error: null },
+      'rpc:checklist_publish': { data: { version, created: true }, error: null },
       'rpc:checklist_retire': {
         data: { ...version, retired_at: new Date().toISOString() },
         error: null,
@@ -334,9 +334,13 @@ describe('audit', () => {
     completed_by: completedAt ? 'user-test' : null,
   });
 
-  it('a publish is audited once; a replay of an earlier publish is not', async () => {
+  // Desk check F9 (mutation caught: the old two-clock test). Whether a call
+  // made the version is the database's answer: a real publish stamped by a
+  // database clock well behind the web server is still audited, and a replay
+  // answered at once is not.
+  it('a publish is audited once; a replay of an earlier publish is not, whatever the clocks say', async () => {
     const fresh = makeSupabaseStub({
-      'rpc:checklist_publish': { data: versionAt(now()), error: null },
+      'rpc:checklist_publish': { data: { version: versionAt(old), created: true }, error: null },
     });
     await new ReceivingChecklistService(ctxFor(fresh.client)).publish({
       title: 'T',
@@ -353,7 +357,7 @@ describe('audit', () => {
     });
     auditMock.mockClear();
     const replay = makeSupabaseStub({
-      'rpc:checklist_publish': { data: versionAt(old), error: null },
+      'rpc:checklist_publish': { data: { version: versionAt(now()), created: false }, error: null },
     });
     await new ReceivingChecklistService(ctxFor(replay.client)).publish({
       title: 'T',
@@ -402,13 +406,14 @@ describe('audit', () => {
     expect(auditMock).not.toHaveBeenCalled();
   });
 
-  it('a completion is audited with its failed checks; progress and a replayed completion are not', async () => {
+  // Desk check F9: the same for a completion (saved, never a clock).
+  it('a completion is audited with its failed checks; progress and a replayed completion are not, whatever the clocks say', async () => {
     const steps = {
       'checklist_runs.select': { data: [{ version_id: VER }], error: null },
       'checklist_versions.select': { data: [{ steps: STORED_STEPS }], error: null },
     };
     const done = makeSupabaseStub({
-      'rpc:checklist_run_save': { data: runAt(now()), error: null },
+      'rpc:checklist_run_save': { data: { run: runAt(old), saved: true }, error: null },
       ...steps,
     });
     await new ReceivingChecklistService(ctxFor(done.client)).saveRun({
@@ -426,7 +431,7 @@ describe('audit', () => {
     });
     auditMock.mockClear();
     const progress = makeSupabaseStub({
-      'rpc:checklist_run_save': { data: runAt(null), error: null },
+      'rpc:checklist_run_save': { data: { run: runAt(null), saved: true }, error: null },
     });
     await new ReceivingChecklistService(ctxFor(progress.client)).saveRun({
       runId: RUN,
@@ -436,7 +441,7 @@ describe('audit', () => {
       complete: false,
     });
     const replay = makeSupabaseStub({
-      'rpc:checklist_run_save': { data: runAt(old), error: null },
+      'rpc:checklist_run_save': { data: { run: runAt(now()), saved: false }, error: null },
       ...steps,
     });
     await new ReceivingChecklistService(ctxFor(replay.client)).saveRun({
@@ -446,6 +451,25 @@ describe('audit', () => {
       saveId: RCPT,
       complete: true,
     });
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('an answer without its row', () => {
+  // The functions always answer the row; anything else is never read as a
+  // write that happened (no audit row, no view built on nothing).
+  it('publish and save answers missing the row are internal errors, with no audit row', async () => {
+    const s = makeSupabaseStub({
+      'rpc:checklist_publish': { data: { created: true }, error: null },
+      'rpc:checklist_run_save': { data: { saved: true }, error: null },
+    });
+    const svc = new ReceivingChecklistService(ctxFor(s.client));
+    await expect(
+      svc.publish({ title: 'T', steps: [], expectedCurrentId: null, clientPublishId: RUN }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    await expect(
+      svc.saveRun({ runId: RUN, results: {}, expectedRevision: 0, saveId: RCPT, complete: true }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
     expect(auditMock).not.toHaveBeenCalled();
   });
 });

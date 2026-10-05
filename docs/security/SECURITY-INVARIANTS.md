@@ -1205,7 +1205,10 @@ actually fire.
     keeps the version it started with. A completed run cannot be saved
     again (`checklist_run_completed`); a stale revision is refused
     (`checklist_run_changed`); a resent save or publish id answers the row
-    it made instead of writing twice.
+    it made instead of writing twice, and says so: `checklist_publish`
+    answers `{version, created}` and `checklist_run_save` `{run, saved}`,
+    false for a replay, so the app writes one audit row per real write and
+    never compares two clocks.
   - **No other write.** The functions touch no ledger table, receipt,
     purchase order, stock row, attachment or notification.
     `post_receipt_v2`, `reverse_receipt`, `recompute_po_status` and the

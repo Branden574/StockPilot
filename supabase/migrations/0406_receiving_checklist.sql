@@ -27,6 +27,11 @@
 --      EXECUTE to authenticated only:
 --        checklist_publish, checklist_retire   (the publisher)
 --        receiving_check_start, checklist_run_save (the recorder)
+--      checklist_publish answers {version, created} and checklist_run_save
+--      {run, saved}, receiving_check_start {runId, created, versionNumber}:
+--      whether THIS call wrote the row (false for a replay of an earlier
+--      call), decided here rather than by comparing clocks, so the app
+--      writes one audit row per real write.
 --   4. SELECT for signed-in users only: versions to members, a run only when
 --      its purchase order is visible to the caller (purchase_orders_select:
 --      membership, purchase_orders:read and, below manager, the warehouse
@@ -518,8 +523,9 @@ create or replace function public.checklist_publish(
   p_steps jsonb,
   p_procedure_id uuid,
   p_expected_current uuid,
-  p_client_publish_id uuid)
-returns public.checklist_versions
+  p_client_publish_id uuid,
+  out version public.checklist_versions,
+  out created boolean)
 language plpgsql
 security definer
 set search_path = public, pg_temp
@@ -541,13 +547,16 @@ begin
   end if;
   perform pg_advisory_xact_lock(hashtextextended('checklist:' || p_org::text || ':' || p_binding, 0));
 
-  -- A retried publish (same client id) answers the version it made.
+  -- A retried publish (same client id) answers the version it made, and says
+  -- this call made nothing.
   if p_client_publish_id is not null then
     select * into v_row
       from public.checklist_versions
      where organization_id = p_org and client_publish_id = p_client_publish_id;
     if v_row.id is not null then
-      return v_row;
+      version := v_row;
+      created := false;
+      return;
     end if;
   end if;
 
@@ -592,7 +601,8 @@ begin
   values (p_org, p_binding, v_number, v_title, v_steps, p_procedure_id, p_client_publish_id,
           auth.uid(), v_now)
   returning * into v_row;
-  return v_row;
+  version := v_row;
+  created := true;
 end;
 $$;
 
@@ -693,8 +703,9 @@ create or replace function public.checklist_run_save(
   p_note text,
   p_expected_revision integer,
   p_save_id uuid,
-  p_complete boolean)
-returns public.checklist_runs
+  p_complete boolean,
+  out run public.checklist_runs,
+  out saved boolean)
 language plpgsql
 security definer
 set search_path = public, pg_temp
@@ -729,9 +740,12 @@ begin
   end if;
   perform public._checklist_assert_recorder(v_run.organization_id);
 
-  -- A resent save (its answer was lost) answers the row as it stands.
+  -- A resent save (its answer was lost) answers the row as it stands, and
+  -- says this call wrote nothing.
   if v_run.last_save_id = p_save_id then
-    return v_run;
+    run := v_run;
+    saved := false;
+    return;
   end if;
   if v_run.status = 'completed' then
     raise exception 'checklist_run_completed' using errcode = 'P0001', hint = 'checklist_run_completed';
@@ -784,7 +798,8 @@ begin
          completed_at = case when v_complete then v_now else completed_at end
    where id = v_run.id
   returning * into v_run;
-  return v_run;
+  run := v_run;
+  saved := true;
 end;
 $$;
 
@@ -854,13 +869,13 @@ comment on function public._checklist_normalize_steps(jsonb, boolean) is
 comment on function public._checklist_validate_results(jsonb, jsonb) is
   'Receiving checklist (F4-1): results as stored, checked against the version''s steps (known keys, the value of the step''s kind, notes up to 300), blank answers left out. 22023 checklist_invalid with detail {field, key, reason}. No EXECUTE for any API role.';
 comment on function public.checklist_publish(uuid, text, text, jsonb, uuid, uuid, uuid) is
-  'Receiving checklist (F4-1): publish version N+1 and retire the live one in the same transaction. Gate: _checklist_assert_publisher. A known p_client_publish_id answers its version (a retry); p_expected_current must be the live version id or null when none is (P0001 checklist_changed); steps, title and procedure as _checklist_normalize_steps and the procedure live in the organization (22023 checklist_invalid). SECURITY DEFINER, EXECUTE to authenticated only.';
+  'Receiving checklist (F4-1): publish version N+1 and retire the live one in the same transaction, answering {version, created}. Gate: _checklist_assert_publisher. A known p_client_publish_id answers its version with created false (a retry); p_expected_current must be the live version id or null when none is (P0001 checklist_changed); steps, title and procedure as _checklist_normalize_steps and the procedure live in the organization (22023 checklist_invalid). SECURITY DEFINER, EXECUTE to authenticated only.';
 comment on function public.checklist_retire(uuid, text, uuid) is
   'Receiving checklist (F4-1): turn off the live version (only the live id; P0001 checklist_changed otherwise). Gate: _checklist_assert_publisher. Recorded runs stay. SECURITY DEFINER, EXECUTE to authenticated only.';
 comment on function public.receiving_check_start(uuid) is
   'Receiving checklist (F4-1): the run for a receipt, made on the live version when there is none ({runId, created, versionNumber}). The organization comes from the receipt (P0002 receipt_not_found for a missing receipt or a non-member); gate _checklist_assert_recorder; an existing run is answered whatever its state; a new one needs a posted or reversed receipt (P0001 receipt_not_checkable) and a live version (P0001 no_checklist). SECURITY DEFINER, EXECUTE to authenticated only.';
 comment on function public.checklist_run_save(uuid, jsonb, text, integer, uuid, boolean) is
-  'Receiving checklist (F4-1): save a run''s answers and note, and optionally complete it. The run FOR UPDATE (P0002 checklist_run_not_found); gate _checklist_assert_recorder; a resent p_save_id answers the row unchanged; a completed run is final (P0001 checklist_run_completed); p_expected_revision must match (P0001 checklist_run_changed); answers as _checklist_validate_results; completing needs every required step answered and a note on every failed check (22023 checklist_incomplete, detail {missing, failedWithoutNote, photoStepsWithoutPhoto}). SECURITY DEFINER, EXECUTE to authenticated only.';
+  'Receiving checklist (F4-1): save a run''s answers and note, and optionally complete it. The run FOR UPDATE (P0002 checklist_run_not_found); gate _checklist_assert_recorder; answers {run, saved}; a resent p_save_id answers the row unchanged with saved false; a completed run is final (P0001 checklist_run_completed); p_expected_revision must match (P0001 checklist_run_changed); answers as _checklist_validate_results; completing needs every required step answered and a note on every failed check (22023 checklist_incomplete, detail {missing, failedWithoutNote, photoStepsWithoutPhoto}). SECURITY DEFINER, EXECUTE to authenticated only.';
 comment on policy checklist_versions_select on public.checklist_versions is
   'Receiving checklist (F4-1): members read every version of their organization.';
 comment on policy checklist_runs_select on public.checklist_runs is

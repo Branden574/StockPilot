@@ -50,14 +50,13 @@ import {
  * (mapChecklistError). One audit row after each successful write that changed
  * something: receiving_checklist.published, receiving_checklist.retired,
  * receiving_check.started (only when the run was created) and
- * receiving_check.completed.
+ * receiving_check.completed. Whether a call wrote is the database's answer
+ * (created / saved, false for a replay of an earlier call), never a
+ * comparison of two clocks (desk check F9).
  *
  * Reads go through the caller's own client, so RLS decides what is visible: a
  * run exactly when its purchase order is, versions to members.
  */
-
-/** A replayed write answers a row made earlier; this margin tells them apart. */
-const REPLAY_MARGIN_MS = 2_000;
 
 const VERSION_SELECT =
   'id, organization_id, version_number, title, steps, procedure_id, published_at, published_by, retired_at, retired_by, deleted_users';
@@ -649,7 +648,6 @@ export class ReceivingChecklistService {
         reason: 'not_publisher',
       });
     }
-    const startedAt = Date.now();
     const { data, error } = await this.ctx.supabase.rpc('checklist_publish', {
       p_org: this.ctx.organizationId,
       p_binding: RECEIVING_CHECKLIST_BINDING,
@@ -660,8 +658,14 @@ export class ReceivingChecklistService {
       p_client_publish_id: input.clientPublishId,
     });
     if (error) throw mapChecklistError(error);
-    const row = data as unknown as VersionRow;
-    if (!isReplay(row.published_at, startedAt)) {
+    // {version, created}: created is false when this call replayed an earlier
+    // publish with the same client id, which wrote its own audit row.
+    const answer = (data ?? {}) as unknown as { version?: VersionRow | null; created?: unknown };
+    const row = answer.version;
+    if (!row || typeof row.id !== 'string') {
+      throw new ServiceError('internal_error', 'checklist_publish answered without a version');
+    }
+    if (answer.created === true) {
       await audit(
         {
           event: 'receiving_checklist.published',
@@ -764,7 +768,6 @@ export class ReceivingChecklistService {
         reason: 'not_recorder',
       });
     }
-    const startedAt = Date.now();
     const { data, error } = await this.ctx.supabase.rpc('checklist_run_save', {
       p_run_id: input.runId,
       p_results: input.results,
@@ -790,8 +793,14 @@ export class ReceivingChecklistService {
       }
       throw mapped;
     }
-    const row = data as unknown as RunRow;
-    if (input.complete && row.status === 'completed' && !isReplay(row.completed_at, startedAt)) {
+    // {run, saved}: saved is false when this call replayed an earlier save
+    // with the same save id; only a save that completed the run now is audited.
+    const answer = (data ?? {}) as unknown as { run?: RunRow | null; saved?: unknown };
+    const row = answer.run;
+    if (!row || typeof row.id !== 'string') {
+      throw new ServiceError('internal_error', 'checklist_run_save answered without a run');
+    }
+    if (input.complete && answer.saved === true && row.status === 'completed') {
       const steps = await this.readRunSteps(row.id);
       const results = parseStoredResults(row.results);
       const failed = steps.filter(
@@ -1140,13 +1149,6 @@ export class ReceivingChecklistService {
       return null;
     }
   }
-}
-
-/** A row the call answered but did not make (a replay of an earlier write). */
-function isReplay(madeAt: string | null | undefined, callStartedAt: number): boolean {
-  if (!madeAt) return false;
-  const t = Date.parse(madeAt);
-  return Number.isFinite(t) && t < callStartedAt - REPLAY_MARGIN_MS;
 }
 
 /** For tests: the incomplete detail the service attaches, re-read from a ServiceError. */

@@ -22,7 +22,8 @@
 #      id, waits on the checklist's advisory lock, then is refused with P0001
 #      checklist_changed. Exactly one live version, and no version 3.
 #   5. The same client publish id twice at once (a double tap): B waits on
-#      the advisory lock, then answers A's version (a replay). One version.
+#      the advisory lock, then answers A's version (a replay) and says it
+#      made nothing (created false; A says created true). One version.
 #   6. A start and a publish at once: the start's insert takes only KEY SHARE
 #      on the live version, which the publish's FOR NO KEY UPDATE does not
 #      block: neither waits for the other (no lock edge), and the run keeps
@@ -129,15 +130,16 @@ select ($2)::text;
 commit;
 SQL
 }
-publish() { # publish <expected or null> <client id> <title>
+# The publish answers {version, created} and the save {run, saved}.
+publish() { # publish <expected or null> <client id> <title> [out]: the version id, or <out>
   local e="null"
   [ "$1" != "null" ] && e="'$1'"
-  printf "(select v.id from public.checklist_publish('%s', 'receiving', '%s', '%s'::jsonb, null, %s, '%s') v)" \
-    "$ORG" "$3" "$STEPS" "$e" "$2"
+  printf "(select %s from public.checklist_publish('%s', 'receiving', '%s', '%s'::jsonb, null, %s, '%s') v)" \
+    "${4:-(v.version).id}" "$ORG" "$3" "$STEPS" "$e" "$2"
 }
 start() { printf "public.receiving_check_start('%s')" "$1"; }
 save() { # save <run> <revision> <save id> <results json>
-  printf "(select v.revision || '/' || v.results::text from public.checklist_run_save('%s', '%s'::jsonb, null, %s, '%s', false) v)" \
+  printf "(select (v.run).revision || '/' || (v.run).results::text from public.checklist_run_save('%s', '%s'::jsonb, null, %s, '%s', false) v)" \
     "$1" "$4" "$2" "$3"
 }
 
@@ -242,13 +244,15 @@ no_retryable "4d" "$TMP/publishes.A.out" "$TMP/publishes.B.out"
 
 # ═══ 5. The same client id twice at once ═══════════════════════════════════
 echo "== 5. a double tap: the same client publish id twice"
-race doubletap "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3')" \
-               "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3')"
-A_V3="$(sed -n 's/^A=//p' "$TMP/doubletap.A.out")"
-check "5a: B answered A's version (a replay)" "$(sed -n 's/^B=//p' "$TMP/doubletap.B.out")" "$A_V3"
-check "5b: exactly one version 3" \
+FLAG="(v.version).id || '/' || v.created"
+race doubletap "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3' "$FLAG")" \
+               "$(publish "$V2" 03981111-0000-0000-0000-000000000104 'Race v3' "$FLAG")"
+A_V3="$(sed -n 's/^A=//p' "$TMP/doubletap.A.out" | sed 's#/true$##')"
+check "5a: A made version 3 and says so (created true)" "$(sed -n 's/^A=//p' "$TMP/doubletap.A.out")" "$A_V3/true"
+check "5b: B answered A's version, a replay that made nothing (created false)" "$(sed -n 's/^B=//p' "$TMP/doubletap.B.out")" "$A_V3/false"
+check "5c: exactly one version 3" \
   "$(q "select count(*) from public.checklist_versions where organization_id = '$ORG' and version_number = 3")" "1"
-no_retryable "5c" "$TMP/doubletap.A.out" "$TMP/doubletap.B.out"
+no_retryable "5d" "$TMP/doubletap.A.out" "$TMP/doubletap.B.out"
 
 # ═══ 6. A start and a publish at once ═════════════════════════════════════
 echo "== 6. a start racing a publish: neither waits"
