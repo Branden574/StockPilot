@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
 import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
@@ -170,16 +171,12 @@ export const BUNDLE_SKU_TAKEN =
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const BUNDLE_DUPLICATE_COMPONENT = 'Each item can be in a bundle only once.';
-
 /** A component set naming one item twice is refused before anything is
  *  written: (bundle_id, item_id) is the table's key, so the second row would
- *  fail the insert, or the upsert, part way through. */
+ *  fail the insert, or the upsert, part way through (L10). */
 function assertDistinctComponents(components: ReadonlyArray<{ itemId: string }>): void {
-  const seen = new Set<string>();
-  for (const c of components) {
-    if (seen.has(c.itemId)) throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
-    seen.add(c.itemId);
+  if (!componentItemsDistinct(components)) {
+    throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
   }
 }
 

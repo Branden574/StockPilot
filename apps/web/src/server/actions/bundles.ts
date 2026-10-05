@@ -5,7 +5,8 @@ import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
-import { BUNDLE_DUPLICATE_COMPONENT, BundlesService } from '@/server/services/bundles';
+import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
+import { BundlesService } from '@/server/services/bundles';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -25,9 +26,7 @@ const componentsSchema = z
   .array(componentInputSchema)
   .min(1)
   .max(100)
-  .refine((list) => new Set(list.map((c) => c.itemId)).size === list.length, {
-    message: BUNDLE_DUPLICATE_COMPONENT,
-  });
+  .refine(componentItemsDistinct, { message: BUNDLE_DUPLICATE_COMPONENT });
 
 const createBundleSchema = z.object({
   name: z.string().trim().min(1).max(200),

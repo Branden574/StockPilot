@@ -9,7 +9,6 @@ vi.mock('@/server/loaders/inventory-list', () => ({
 
 const svc = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn() }));
 vi.mock('@/server/services/bundles', () => ({
-  BUNDLE_DUPLICATE_COMPONENT: 'Each item can be in a bundle only once.',
   BundlesService: { forCurrentUser: vi.fn(async () => svc) },
 }));
 
