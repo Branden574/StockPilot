@@ -40,7 +40,9 @@
 -- X.  X-1: cancelling a picked, staged or in-transit replacement from the RMA
 --     restocks the picked batch to Staging; a handed-over one is refused.
 --     C-1: a new replacement after a replacement cancel; "Keep as return
---     only" ends the exchange for good (desk check F9).
+--     only" ends the exchange for good (desk check F9), each line keeping
+--     its last replacement for display, and a line's decision changes only
+--     on a move into approved (F9.2).
 -- Z.  A replacement handed over in part (desk check F2): a backorder, and the
 --     same resumed into picking, is never cancelled or changed from the RMA;
 --     a forced re-issue sends only what is left of the returned quantity.
@@ -90,6 +92,8 @@
 --   M29 the creation never logs its exchange requests                    -> C1, K4
 --   M30 Keep as return only leaves the lines cancelled                   -> X6
 --   M31 a replacement closed with part never sent reads handed over      -> N9
+--   M32 the CHECK refuses a replacement on a declined line again         -> X5, X6, X7
+--   M33 a move that is not into approved rewrites the line's decision    -> X7
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -100,7 +104,7 @@
 
 begin;
 
-select plan(101);
+select plan(102);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -786,14 +790,16 @@ select is(
                        and strpos(p.prosrc, 'public._return_lock_items(') < pg_temp.first_item_write(p.prosrc))::text,
                      ',' order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
-      and p.proname in ('_return_exchange_approve', '_return_replacement_issue', 'change_return_replacement', '_return_exchange_on_deny'))
+      and p.proname in ('_return_exchange_approve', '_return_replacement_issue', 'change_return_replacement', '_return_exchange_on_deny',
+                        'decline_return_replacement'))
   || '|' || (select (p.prosrc ~ 'pg_advisory_xact_lock\(hashtext\(''order_number:'' \|\| p_org::text\)\)'
                      and p.prosrc ~ 'order by ii\.id\s+for update')::text
                from pg_proc p where p.oid = 'public._return_lock_items(uuid,uuid[],boolean)'::regprocedure)
   || '|' || (select (strpos(p.prosrc, 'pg_advisory_xact_lock(hashtext(''order_number:'' || new.organization_id::text))') > 0)::text
                from pg_proc p where p.oid = 'public.assign_order_request_number()'::regprocedure),
-  '_return_exchange_approve=true,_return_exchange_on_deny=true,_return_replacement_issue=true,change_return_replacement=true|true|true',
-  'A10: every exchange writer takes the order-number lock and then its items FOR UPDATE in id order before the first row naming an item (desk check F4: never two writers each holding a key-share lock the other''s FOR UPDATE needs), the same order-number lock 0254 takes');
+  '_return_exchange_approve=true,_return_exchange_on_deny=true,_return_replacement_issue=true,change_return_replacement=true,'
+  || 'decline_return_replacement=true|true|true',
+  'A10: every exchange writer (the approval, the issue, the change, the denial and "Keep as return only") takes the order-number lock when it issues an order and then its items FOR UPDATE in id order before the first row naming an item (desk check F4: never two writers each holding a key-share lock the other''s FOR UPDATE needs), the same order-number lock 0254 takes');
 
 -- ══ B. Gates ══════════════════════════════════════════════════════════════
 -- rBq: an exchange still requested; rB0: an exchange approved and waiting.
@@ -1288,9 +1294,38 @@ select is(
   || (select count(*)::text from public.order_requests where replacement_for_return_id = :'rX5' and status not in ('cancelled', 'denied')) || ':'
   || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, '[]'::jsonb, 'Issue it again', 'refuse')$q$,
        :'rX5', pg_temp.rev(:'rX5')))) || ':'
-  || (select d.reason from public.return_decisions d where d.return_id = :'rX5' and d.kind = 'exchange_declined' order by d.seq desc limit 1),
-  'true:1:false:declined:declined:0:P0001:return_changed:The requester wants a refund instead',
-  'X6: "Keep as return only" declines the cancelled lines for good with its reason: the exchange reads declined, a second press changes nothing, and a stale "Issue a new replacement" is refused return_changed (desk check F9)');
+  || (select d.reason from public.return_decisions d where d.return_id = :'rX5' and d.kind = 'exchange_declined' order by d.seq desc limit 1) || ':'
+  || (select (xl.approved_item_id = :gL)::text || '/'
+             || (xl.replacement_order_request_id = ((:'jX5c'::jsonb)->>'cancelledOrderId')::uuid)::text || '/'
+             || (xl.replacement_order_line_id = (select l.id from public.order_request_lines l
+                                                  where l.order_request_id = ((:'jX5c'::jsonb)->>'cancelledOrderId')::uuid))::text
+        from public.return_exchange_lines xl where xl.return_id = :'rX5'),
+  'true:1:false:declined:declined:0:P0001:return_changed:The requester wants a refund instead:true/true/true',
+  'X6: "Keep as return only" declines the cancelled lines for good with its reason: the exchange reads declined, a second press changes nothing, a stale "Issue a new replacement" is refused return_changed, and each declined line keeps its last approved item and the cancelled replacement it named, for display (desk check F9.2: the CHECK refuses a replacement on a requested line only)');
+
+-- Desk check F9.2: a line's decision moves only into approved. Even as the
+-- owner: a status move alone keeps the last replacement (a cancelled line
+-- declined keeps the order it named), a move that rewrites the decision is
+-- refused, and a requested line never names a replacement, even one the
+-- validation trigger would accept (the CHECK). Each attempt is undone.
+select is(
+  pg_temp.attempt('postgres', null,
+    format($q$update public.return_exchange_lines set status = 'declined' where return_id = %L$q$, :'rX3'), null,
+    format($q$select (replacement_order_request_id = %L)::text from public.return_exchange_lines where return_id = %L$q$, :'oX3', :'rX3'))
+  || ' | ' ||
+  pg_temp.attempt('postgres', null,
+    format($q$update public.return_exchange_lines set status = 'declined', replacement_order_request_id = null,
+                     replacement_order_line_id = null where return_id = %L$q$, :'rX3'))
+  || ' | ' ||
+  pg_temp.attempt('postgres', null,
+    format($q$insert into public.return_exchange_lines (organization_id, return_id, return_line_id, requested_item_id, requested_quantity,
+                     requested_by_kind, approved_item_id, approved_quantity, replacement_order_request_id, replacement_order_line_id)
+              select %L, %L, rl.id, %L, 1, 'staff', %L, 1, %L,
+                     (select l.id from public.order_request_lines l where l.order_request_id = %L)
+                from public.return_lines rl where rl.return_id = %L$q$,
+           :orgA, :'rX3', :gL, :gL, :'oX3', :'oX3', :'rX3')),
+  'ok:1:true | P0001:exchange_line_invalid:exchange_line_invalid | 23514:-:new row for relation "return_exchange_lines" violates check constraint "return_exchange_lines_unapproved_chk"',
+  'X7: a line''s decision changes only on a move into approved: a cancelled line declined keeps the replacement it named, a move that drops it is refused even for the owner, and a requested line never names a replacement (desk check F9.2)');
 
 -- ══ Z. A replacement handed over in part (desk check F2) ═════════════════
 -- oPh: a completed order of 4 Mediums; pX: a replacement item with one unit

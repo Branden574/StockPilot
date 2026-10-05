@@ -831,7 +831,14 @@ actually fire.
     F8). The app refuses both before any write.
   - **Reads.** `return_exchange_lines`: members SELECT (RLS on the RMA's
     organization), no API write; `return_decisions.exchange_line_id` is a
-    composite key to (exchange line, RMA). `return_exchange_candidates` is
+    composite key to (exchange line, RMA). A line's decision (approved item,
+    quantity, approver, replacement order and line, revision) changes only on
+    a move into `approved` (`tg_return_exchange_lines_validate`, every role):
+    a cancelled line, and one declined by "Close as return only", keeps the
+    last replacement it named for display, and
+    `return_exchange_lines_unapproved_chk` refuses a replacement on a
+    `requested` line (desk check F9.2: the first CHECK also refused one on a
+    declined line, so every "Close as return only" failed). `return_exchange_candidates` is
     SECURITY INVOKER (the caller's item scope applies; gate: the order
     readable, `returns:manage`); `return_exchange_options` (the requester
     tier, RX-3) is `service_role` only; `return_exchange_flags` answers the

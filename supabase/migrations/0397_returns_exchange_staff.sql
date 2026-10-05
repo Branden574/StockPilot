@@ -1627,7 +1627,10 @@ $$;
 
 -- Keep the return only, after a replacement cancel (desk check F9): every
 -- exchange line a replacement cancel left cancelled is declined for good, so
--- an RMA (closed or not) stops inviting "Issue a new replacement". A reason
+-- an RMA (closed or not) stops inviting "Issue a new replacement". Only the
+-- status moves: each line keeps its last approved item and the cancelled
+-- replacement it named, for display (return_exchange_lines_unapproved_chk
+-- refuses a replacement on a requested line only). A reason
 -- of 1 to 1,000 characters is recorded on each exchange_declined decision.
 -- The RMA approved, received or closed (P0001 invalid_status_transition);
 -- the revision the caller saw is required (22023 return_invalid without it,
@@ -1976,7 +1979,12 @@ $$;
 -- cancelled -> approved (a new replacement, C-1) only while the RMA is
 -- approved, received or closed, or declined (kept as a return only after a
 -- replacement cancel, desk check F9); declined is final; a replacement named
--- is this RMA's, and its line carries the approved item.
+-- is this RMA's, and its line carries the approved item. The decision (the
+-- approved item, quantity, approver, replacement order and line, revision)
+-- changes only on a move into approved: a cancelled line, and one declined
+-- after a replacement cancel, keeps the last it had for display, and a line
+-- never approved keeps none (with return_exchange_lines_unapproved_chk:
+-- only a line that was approved once can name a replacement).
 create function public.tg_return_exchange_lines_validate()
 returns trigger
 language plpgsql
@@ -2047,6 +2055,14 @@ begin
     or (old.status = 'cancelled' and new.status in ('approved', 'declined'))) then
     raise exception 'exchange_line_invalid' using errcode = 'P0001', hint = 'exchange_line_invalid',
       detail = format('status %s -> %s', old.status, new.status);
+  end if;
+  if new.status <> 'approved'
+     and (new.approved_item_id, new.approved_quantity, new.approved_by, new.approved_at,
+          new.replacement_order_request_id, new.replacement_order_line_id, new.revision)
+         is distinct from
+         (old.approved_item_id, old.approved_quantity, old.approved_by, old.approved_at,
+          old.replacement_order_request_id, old.replacement_order_line_id, old.revision) then
+    raise exception 'exchange_line_invalid' using errcode = 'P0001', hint = 'exchange_line_invalid', detail = 'decision';
   end if;
   if old.status = 'cancelled' and new.status = 'approved' then
     select r.status into v_rma from public.returns r where r.id = new.return_id;
@@ -2483,7 +2499,7 @@ comment on function public.change_return_replacement(uuid, integer, jsonb, text,
 comment on function public.cancel_return_replacement(uuid, integer, text) is
   'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. The expected revision is required (22023 return_invalid without it); a stale one gives P0001 return_changed (desk check F7). The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.decline_return_replacement(uuid, integer, text) is
-  'RX-2 (desk check F9): keep the return only after a replacement cancel: every exchange line a replacement cancel left cancelled is declined for good (exchange_declined decisions with the reason, 1 to 1,000 characters, P0001 reason_required), so the RMA stops inviting a new replacement; no cancelled line answers changed false. RMA approved, received or closed (P0001 invalid_status_transition); the expected revision is required (22023 return_invalid) and must be current (P0001 return_changed). Moves nothing and touches no order. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), the returns module (P0001 module_disabled), returns:manage (42501 returns_manage), write access to the original order''s warehouse (42501 warehouse_write). Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-2 (desk check F9): keep the return only after a replacement cancel: every exchange line a replacement cancel left cancelled is declined for good (exchange_declined decisions with the reason, 1 to 1,000 characters, P0001 reason_required), so the RMA stops inviting a new replacement; each line keeps its last approved item and the cancelled replacement it named, for display; no cancelled line answers changed false. RMA approved, received or closed (P0001 invalid_status_transition); the expected revision is required (22023 return_invalid) and must be current (P0001 return_changed). Moves nothing and touches no order. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), the returns module (P0001 module_disabled), returns:manage (42501 returns_manage), write access to the original order''s warehouse (42501 warehouse_write). Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.release_return_replacement_early(uuid, uuid, text) is
   'RX-2 (brief 24; plan 3.3.5): a manager releases the live replacement for picking before the returned item arrives, with a reason of 1 to 500 characters (P0001 reason_required), only while the RMA is approved and the replacement approved (P0001 replacement_not_waiting otherwise). p_order_id is the replacement the caller saw (null: none); any other live replacement is P0001 return_changed (desk check F7). Appends released_early naming that order (a substituted order needs its own release, D10). An existing release of the live order replays; an RMA already received or closed answers changed false, reason not_needed. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.return_exchange_candidates(uuid, uuid, text, integer) is
@@ -2493,7 +2509,7 @@ comment on function public.return_exchange_options(uuid) is
 comment on function public.return_exchange_flags(uuid) is
   'RX-2: the exchange facts the list view reads from the staff-only decision log, for any member of the RMA''s organization (or the service role): releasedEarly (the live replacement), counter (received at the counter), revision. No reason, name or rack. Null for anyone else. STABLE, SECURITY DEFINER, EXECUTE to authenticated and service_role.';
 comment on function public.tg_return_exchange_lines_validate() is
-  'RX-2 (plan 3.1.3), BEFORE INSERT OR UPDATE on return_exchange_lines, every role (defence in depth: only the RX-2 functions write it): items, RMA and line in one organization; quantities at most the returned quantity (P0001 exchange_quantity_exceeds_return); the request fields never change (42501 exchange_request_immutable); status edges requested -> approved, declined or cancelled, approved -> approved at a newer revision or cancelled, cancelled -> approved only while the RMA is approved, received or closed, or cancelled -> declined (kept as a return only, desk check F9); a replacement named is this RMA''s and its line carries the approved item (P0001 exchange_line_invalid). SECURITY INVOKER, no EXECUTE.';
+  'RX-2 (plan 3.1.3), BEFORE INSERT OR UPDATE on return_exchange_lines, every role (defence in depth: only the RX-2 functions write it): items, RMA and line in one organization; quantities at most the returned quantity (P0001 exchange_quantity_exceeds_return); the request fields never change (42501 exchange_request_immutable); status edges requested -> approved, declined or cancelled, approved -> approved at a newer revision or cancelled, cancelled -> approved only while the RMA is approved, received or closed, or cancelled -> declined (kept as a return only, desk check F9); a replacement named is this RMA''s and its line carries the approved item; the decision (approved item, quantity, approver, replacement order and line, revision) changes only on a move into approved, so a cancelled or declined line keeps the last it had and a line never approved names none (P0001 exchange_line_invalid). SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_return_decisions_exchange_requested() is
   'RX-2 (desk check F9), AFTER INSERT on return_decisions WHEN kind = created: logs the new RMA''s exchange_requested decisions right after its created decision (one per requested exchange line the log does not name yet, in order-line order, with the created decision''s channel and actor), so the log reads created first; _return_create_core (RX-1, frozen) runs the exchange hook before it appends created. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_requests_replacement_link() is
@@ -2586,8 +2602,13 @@ create table public.return_exchange_lines (
   constraint return_exchange_lines_approved_chk check (
     status <> 'approved' or (approved_item_id is not null and approved_quantity is not null
                              and replacement_order_request_id is not null)),
+  -- A requested line names no replacement. A cancelled line, and one declined
+  -- after a replacement cancel ("Close as return only", desk check F9), keeps
+  -- the last it had: the validation trigger changes a line's decision only on
+  -- a move into approved, so a declined line names a replacement only when
+  -- it was approved, then cancelled.
   constraint return_exchange_lines_unapproved_chk check (
-    status not in ('requested', 'declined') or replacement_order_request_id is null),
+    status <> 'requested' or replacement_order_request_id is null),
   constraint return_exchange_lines_id_return_key unique (id, return_id),
   constraint return_exchange_lines_return_fkey foreign key (return_id, organization_id)
     references public.returns (id, organization_id) on delete cascade,
@@ -2619,7 +2640,7 @@ grant select on public.return_exchange_lines to authenticated;
 grant all on public.return_exchange_lines to service_role;
 
 comment on table public.return_exchange_lines is
-  'RX-2: one row per returned line that asks for a replacement (a return-only line has none). The request (requested item or "the warehouse will review" note, quantity, who asked) is written once and never changes; the current decision (requested, approved, declined, cancelled; the approved item, quantity, replacement order and line, revision) changes only through the RX-2 functions, and its history is in return_decisions. A cancelled row keeps its last approved item and order for display. Read by every member; written only by SECURITY DEFINER functions (authenticated holds SELECT only). requested_by and approved_by have no foreign key (account deletion never fails).';
+  'RX-2: one row per returned line that asks for a replacement (a return-only line has none). The request (requested item or "the warehouse will review" note, quantity, who asked) is written once and never changes; the current decision (requested, approved, declined, cancelled; the approved item, quantity, replacement order and line, revision) changes only through the RX-2 functions, and its history is in return_decisions. A cancelled row, and one declined after a replacement cancel, keeps its last approved item and order for display (the decision changes only on a move into approved; a requested row names no order). Read by every member; written only by SECURITY DEFINER functions (authenticated holds SELECT only). requested_by and approved_by have no foreign key (account deletion never fails).';
 
 -- The decision log learns which exchange line an exchange decision is about.
 alter table public.return_decisions
