@@ -101,8 +101,9 @@ export function DigestControls({ initialOptIn, initialSections }: DigestControls
         <div className="flex-1">
           <div className="text-sm font-medium">Email me a weekly inventory digest</div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sent every Monday morning. We skip the email entirely on weeks
-            where every section you've opted into is empty.
+            Sent every Monday morning. It covers only the warehouses, items
+            and purchase orders you can see in StockPilot. We skip the email
+            entirely on weeks where every section you've opted into is empty.
           </p>
         </div>
         <button

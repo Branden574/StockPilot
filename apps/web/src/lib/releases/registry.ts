@@ -28,6 +28,94 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'weekly-digest-and-fixes-2026-10',
+    revision: 1,
+    // The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, no
+    // migration, web only: the phone code is unchanged, so no OTA). Held as a
+    // DRAFT until the web deploy is live; the follow-up that publishes it
+    // sets the real publishedAt (and moves this release if another is
+    // published first) and re-reads these words against what shipped.
+    // Dated after the small fixes draft and above it (newest first).
+    // Every user-visible change in the branch has a line (owner rule
+    // 2026-09-25). Left out as not visible: the returns workbench's React
+    // #418 (a hydration warning React recovers from by itself), the guard
+    // and snapshot (tests only), and the refusal of a rental whose member
+    // borrower's profile read fails (an outage-only path; the person sees
+    // the usual try-again error). The digest's scope line says what each
+    // email holds, not how the gap looked, since no digest was ever sent.
+    status: 'draft',
+    title: 'The weekly digest email goes out, and fixes for warehouses, recurring orders and rentals',
+    summary:
+      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order works again, and a rental for a member records the member's own name.",
+    publishedAt: '2026-10-13T17:20:00Z',
+    entries: [
+      {
+        id: 'weekly-digest-sent',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'The weekly inventory digest email is sent on Mondays',
+        whatChanged:
+          "The weekly inventory digest now goes out every Monday to the people who turned it on. Each Monday's run had been stopping before it sent anything, so no digest arrived.",
+        whyItMatters: 'If you turned the digest on, you received nothing, and nothing said so.',
+        howItAffectsYou:
+          'If the digest is on for you, it arrives each Monday with low and out-of-stock items, open purchase orders and cycle counts in progress, for the sections you chose. Its footer gives the time in your workspace time zone. A week where every section you chose is empty sends nothing.',
+        whatToDo:
+          'To get it, turn on Email me a weekly inventory digest in your notification settings. Send preview now shows what yours will hold.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+      {
+        id: 'weekly-digest-your-view',
+        category: 'improved',
+        area: 'Notifications',
+        title: 'The weekly digest shows what you can see, with full counts',
+        whatChanged:
+          'Each digest lists only the warehouses, items and purchase orders you can see in StockPilot, the same as Send preview now. Its counts are the full totals, not the number it lists, and an item made from a purchase order that has not arrived yet is not counted as out of stock.',
+        whyItMatters:
+          'Your digest should match what you can open in StockPilot, and its numbers should be the real ones.',
+        howItAffectsYou:
+          'If you work in some warehouses, your digest covers those. When a list holds more than it shows, the count is the full number, and the plain-text version says how many it shows of how many.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'warehouse-page-opens',
+        category: 'fixed',
+        area: 'Warehouses',
+        title: "A warehouse's page opens again",
+        whatChanged:
+          "Opening a warehouse, from the warehouse list or from search, showed an error instead of its page. The page opens again, with the warehouse's details and the charters it serves.",
+        whyItMatters: "The warehouse's page could not be used at all.",
+        howItAffectsYou: 'Select a warehouse to see its address, contact and charters, as before.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'make-recurring-works',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'Make recurring works again on a purchase order',
+        whatChanged:
+          "Make recurring on a purchase order failed with an error. It works again: it opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
+        whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
+        howItAffectsYou:
+          'On a purchase order, Make recurring takes you to Recurring purchase orders with the new one ready to review and save.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        id: 'rental-member-name',
+        category: 'fixed',
+        area: 'Rentals',
+        title: "A rental for a member records the member's name",
+        whatChanged:
+          "When a member is the borrower, the rental now records the name on the member's profile. It was keeping whatever name the form sent.",
+        whyItMatters: "The borrower name on a rental and in its emails should be the member's own.",
+        howItAffectsYou:
+          'New rentals for a member show the name on their profile. Rentals made before keep the name they were saved with.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+    ],
+  },
+  {
     id: 'small-fixes-2026-10',
     revision: 1,
     // Small fixes slice 1 (followups triage 2026-10-05, no migration). Held as

@@ -56,8 +56,13 @@ vi.mock('@/lib/email/es/families/digest', () => ({
   weeklyDigestText: vi.fn(() => 'digest text'),
 }));
 
+// What each recipient may read is covered by route.scope.test.ts, which runs
+// the real digest service; here it is a pass-through.
 vi.mock('@/server/services/digest', () => ({
-  getDigestData: vi.fn(async () => ({ lowStock: [], openPos: [], cycleCounts: [] })),
+  getDigestSource: vi.fn(async () => ({ lowStock: [], openPos: [], openCycleCounts: [] })),
+  loadDigestReaderData: vi.fn(async () => ({})),
+  digestReaderFor: vi.fn(() => ({})),
+  buildDigestPayload: vi.fn(() => ({ lowStock: [], openPos: [], openCycleCounts: [] })),
   isDigestEmpty: vi.fn(() => false),
   applySectionOptIns: vi.fn((payload: unknown) => payload),
 }));
@@ -84,7 +89,7 @@ function recipientRow(id: string, email: string) {
       {
         organization_id: 'org-1',
         accepted_at: '2026-01-01T00:00:00Z',
-        organizations: { id: 'org-1', name: 'Acme' },
+        organizations: { id: 'org-1', name: 'Acme', timezone: 'America/Los_Angeles' },
       },
     ],
   };
@@ -92,6 +97,20 @@ function recipientRow(id: string, email: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('GET /api/cron/weekly-digest — CRON_SECRET', () => {
+  it('answers 401 and reads nothing without the secret, or with a wrong one', async () => {
+    const stub = makeSupabaseStub({});
+    adminHolder.client = stub.client;
+
+    for (const header of [undefined, 'Bearer wrong-secret', 'test-cron-secret']) {
+      const res = await GET(buildRequest(header));
+      expect(res.status).toBe(401);
+    }
+    expect(stub.fromCalls).toEqual([]);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/cron/weekly-digest — disabled accounts', () => {
@@ -252,5 +271,198 @@ describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', (
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     expect(await res.json()).toMatchObject({ ok: true, sent: 1 });
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GET /api/cron/weekly-digest — a platform admin acting as an org is not a member of it', () => {
+  // "Act as" (platform console) writes an accepted 'owner' membership with a
+  // 45-minute impersonation_expires_at (services/platform/impersonation.ts).
+  // Every other cron leaves those rows out; the digest counted them, so an
+  // opted-in platform admin acting as a customer at Monday 14:00 UTC got that
+  // customer's digest and a weekly_digest claim landed in the customer's
+  // idempotency_keys.
+  const GRANT = {
+    organization_id: 'org-cust',
+    accepted_at: '2026-10-05T13:50:00Z',
+    impersonation_expires_at: '2026-10-05T14:35:00Z',
+    organizations: { id: 'org-cust', name: 'Customer Co' },
+  };
+  const REAL = {
+    organization_id: 'org-1',
+    accepted_at: '2026-01-01T00:00:00Z',
+    impersonation_expires_at: null,
+    organizations: { id: 'org-1', name: 'Acme' },
+  };
+
+  /** True when the chain filters `column` IS NULL. */
+  function filtersNull(call: { methods: string[]; args: unknown[][] }, column: string): boolean {
+    return call.methods.some(
+      (m, i) => m === 'is' && call.args[i]?.[0] === column && call.args[i]?.[1] === null,
+    );
+  }
+
+  function stubWithGrant() {
+    return makeSupabaseStub({
+      // Like PostgREST: the embedded filter drops the grant from the
+      // membership list; without it both memberships come back.
+      'user_profiles.select': (call) => {
+        const memberships = filtersNull(call, 'organization_members.impersonation_expires_at')
+          ? [REAL]
+          : [REAL, GRANT];
+        return {
+          data: [{ ...recipientRow('platform-admin', 'admin@platform.test'), organization_members: memberships }],
+          error: null,
+        };
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      // The per-recipient check reads (org, user): the grant row for the
+      // customer org unless the check leaves grants out.
+      'organization_members.select.maybeSingle': (call) => {
+        const org = call.args[call.methods.indexOf('eq')]?.[1];
+        if (org === 'org-cust') {
+          return {
+            data: filtersNull(call, 'impersonation_expires_at')
+              ? null
+              : { user_id: 'platform-admin', accepted_at: GRANT.accepted_at, role: 'owner' },
+            error: null,
+          };
+        }
+        return {
+          data: { user_id: 'platform-admin', accepted_at: REAL.accepted_at, role: 'owner' },
+          error: null,
+        };
+      },
+    });
+  }
+
+  it("sends only the admin's own org digest and claims nothing in the org they act as", async () => {
+    const stub = stubWithGrant();
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, failed: 0 });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const claims = (stub.chainArgsAll.get('idempotency_keys.insert') ?? []).map(
+      (args) => (args[0]?.[0] as { organization_id?: string } | undefined)?.organization_id,
+    );
+    expect(claims).toEqual(['org-1']);
+  });
+
+  it('leaves grants out of the recipient pull and out of the check before each send', async () => {
+    const stub = stubWithGrant();
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const pull = stub.chainsAll.get('user_profiles.select')?.[0] ?? [];
+    const pullArgs = stub.chainArgsAll.get('user_profiles.select')?.[0] ?? [];
+    expect(
+      filtersNull({ methods: pull, args: pullArgs }, 'organization_members.impersonation_expires_at'),
+    ).toBe(true);
+    const checks = stub.chainsAll.get('organization_members.select') ?? [];
+    const checkArgs = stub.chainArgsAll.get('organization_members.select') ?? [];
+    const recheck = checks.findIndex((methods) => methods.includes('maybeSingle') || methods.includes('eq'));
+    expect(recheck).toBeGreaterThanOrEqual(0);
+    expect(
+      filtersNull({ methods: checks[recheck]!, args: checkArgs[recheck]! }, 'impersonation_expires_at'),
+    ).toBe(true);
+  });
+});
+
+describe('GET /api/cron/weekly-digest — the recipient pull names its membership relationship', () => {
+  // organization_members has TWO foreign keys to user_profiles (user_id, and
+  // invited_by since 0001). PostgREST answers an embed of organization_members
+  // from user_profiles that names neither with HTTP 300, code PGRST201, and no
+  // rows. The recipient pull did exactly that: the cron answered 500 every
+  // Monday (seen 2026-09-21, 09-28, 10-05) and no digest was ever sent.
+  // The recipient's memberships are the rows whose user_id is the recipient,
+  // so the embed must go through organization_members_user_id_fkey.
+  const MEMBERSHIP_EMBED = /organization_members\s*(?:![a-z_]+\s*)*\(/;
+  const NAMED_MEMBERSHIP_EMBED =
+    /organization_members!organization_members_user_id_fkey!inner\s*\(/;
+
+  /** The select string of the bulk recipient pull (its first select chain). */
+  function bulkSelect(stub: ReturnType<typeof makeSupabaseStub>): string {
+    const chain = stub.chainsAll.get('user_profiles.select')?.[0] ?? [];
+    const args = stub.chainArgsAll.get('user_profiles.select')?.[0] ?? [];
+    return String(args[chain.indexOf('select')]?.[0] ?? '');
+  }
+
+  function stubAnsweringLikePostgrest() {
+    return makeSupabaseStub({
+      // Like PostgREST: an embed of organization_members that does not name
+      // its relationship is refused before any row is read.
+      'user_profiles.select': (call) => {
+        const select = String(call.args[call.methods.indexOf('select')]?.[0] ?? '');
+        if (MEMBERSHIP_EMBED.test(select) && !NAMED_MEMBERSHIP_EMBED.test(select)) {
+          return {
+            data: null,
+            error: {
+              code: 'PGRST201',
+              message:
+                "Could not embed because more than one relationship was found for 'user_profiles' and 'organization_members'",
+            },
+          };
+        }
+        return { data: [recipientRow('user-a', 'a@acme.test')], error: null };
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z' },
+        error: null,
+      },
+    });
+  }
+
+  it("renders each email with its org's time zone, for the send time the footer states", async () => {
+    const stub = stubAnsweringLikePostgrest();
+    adminHolder.client = stub.client;
+    const { renderWeeklyDigestHtml } = await import('@/lib/email/es/families/digest');
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(renderWeeklyDigestHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ timeZone: 'America/Los_Angeles', orgName: 'Acme' }),
+    );
+  });
+
+  it('sends the digest when PostgREST refuses an embed that does not name its relationship', async () => {
+    const stub = stubAnsweringLikePostgrest();
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, failed: 0 });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0]![0].to).toBe('a@acme.test');
+  });
+
+  it('pins the recipient select: memberships through organization_members_user_id_fkey, accepted only', async () => {
+    const stub = stubAnsweringLikePostgrest();
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    // supabase-js drops whitespace outside quotes before sending.
+    expect(bulkSelect(stub).replace(/\s+/g, '')).toBe(
+      'id,email,full_name,digest_section_low_stock,digest_section_open_pos,digest_section_cycle_counts,' +
+        'organization_members!organization_members_user_id_fkey!inner(organization_id,accepted_at,organizations:organization_id(id,name,timezone))',
+    );
+    // The accepted-membership filter still names the embed by its table name
+    // (a hint does not rename it).
+    const chain = stub.chainsAll.get('user_profiles.select')?.[0] ?? [];
+    const args = stub.chainArgsAll.get('user_profiles.select')?.[0] ?? [];
+    expect(args[chain.indexOf('not')]).toEqual(['organization_members.accepted_at', 'is', null]);
+    // ...and so does the filter that leaves "act as" grants out.
+    const isFilters = chain.flatMap((m, i) => (m === 'is' ? [args[i]] : []));
+    expect(isFilters).toContainEqual(['organization_members.impersonation_expires_at', null]);
   });
 });

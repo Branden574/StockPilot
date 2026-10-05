@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { applySectionOptIns, isDigestEmpty } from '@/server/services/digest';
@@ -5,8 +8,11 @@ import { applySectionOptIns, isDigestEmpty } from '@/server/services/digest';
 import { ES_MAX_HTML_BYTES } from '../tokens';
 import { esEmailById } from '../registry';
 import {
+  DIGEST_CRON_SCHEDULE,
   DIGEST_FROM,
-  digestRangeLabel,
+  digestAsOfLabel,
+  digestScheduleLabel,
+  digestSendAt,
   renderWeeklyDigestHtml,
   weeklyDigestPreviewSubject,
   weeklyDigestSubject,
@@ -57,6 +63,8 @@ function fullPayload(): DigestPayload {
         ],
       },
     ],
+    lowStockTotal: 2,
+    outOfStockTotal: 1,
     openPos: [
       {
         id: UUIDS.po,
@@ -75,6 +83,8 @@ function fullPayload(): DigestPayload {
         isOverdue: false,
       },
     ],
+    openPosTotal: 2,
+    overduePosTotal: 1,
     openCycleCounts: [
       {
         id: UUIDS.cc,
@@ -90,7 +100,15 @@ function fullPayload(): DigestPayload {
 }
 
 function emptyPayload(): DigestPayload {
-  return { lowStock: [], openPos: [], openCycleCounts: [] };
+  return {
+    lowStock: [],
+    lowStockTotal: 0,
+    outOfStockTotal: 0,
+    openPos: [],
+    openPosTotal: 0,
+    overduePosTotal: 0,
+    openCycleCounts: [],
+  };
 }
 
 const OPTS = {
@@ -134,11 +152,114 @@ describe('digest subjects and sender (registry byte-equality)', () => {
     expect(DIGEST_FROM).toBe(esEmailById('digest').from);
   });
 
-  it('formats the range pill like the registry badge', () => {
-    expect(digestRangeLabel(new Date('2026-06-15T18:00:00Z'))).toBe('Jun 8 – 14');
-    expect(digestRangeLabel(new Date('2026-07-03T18:00:00Z'))).toBe(
-      'Jun 26 – Jul 2',
+  it('dates the pill as of the send, not as a past week (the payload is current state)', () => {
+    expect(digestAsOfLabel(new Date('2026-06-15T18:00:00Z'))).toBe('As of Jun 15');
+    expect(digestAsOfLabel(new Date('2026-07-03T18:00:00Z'))).toBe('As of Jul 3');
+  });
+});
+
+describe('when the digest says it is sent', () => {
+  // The footer used to promise "Mondays at 7:00 AM workspace time". The cron
+  // runs at one instant for every org: vercel.json "0 14 * * 1", 14:00 UTC.
+  // That is 7:00 AM in Pacific summer, 6:00 AM in Pacific winter, 10:00 AM
+  // Eastern, 2:00 PM for an org on the UTC default, and already Tuesday in
+  // Sydney. The footer now states that instant in the workspace's zone.
+  it('keeps the schedule the footer states equal to the cron in vercel.json', () => {
+    const vercel = JSON.parse(
+      readFileSync(path.resolve(__dirname, '../../../../../vercel.json'), 'utf8'),
+    ) as { crons: Array<{ path: string; schedule: string }> };
+    const cron = vercel.crons.find((c) => c.path === '/api/cron/weekly-digest');
+    expect(cron?.schedule).toBe(DIGEST_CRON_SCHEDULE);
+    expect(DIGEST_CRON_SCHEDULE).toBe('0 14 * * 1');
+  });
+
+  it('finds the run an email belongs to: this week for the Monday digest, the next one for a preview', () => {
+    // Monday 14:00:45Z, the cron's own run.
+    const run = new Date('2026-10-05T14:00:45Z');
+    expect(digestSendAt(run, 'this-week').toISOString()).toBe('2026-10-05T14:00:00.000Z');
+    // A preview on Wednesday is followed by next Monday's run.
+    const wed = new Date('2026-10-07T09:00:00Z');
+    expect(digestSendAt(wed, 'next').toISOString()).toBe('2026-10-12T14:00:00.000Z');
+    // A preview on Monday morning is followed by that day's run.
+    const monMorning = new Date('2026-10-05T08:00:00Z');
+    expect(digestSendAt(monMorning, 'next').toISOString()).toBe('2026-10-05T14:00:00.000Z');
+    // Sunday belongs to the week that started the Monday before.
+    const sun = new Date('2026-10-11T20:00:00Z');
+    expect(digestSendAt(sun, 'this-week').toISOString()).toBe('2026-10-05T14:00:00.000Z');
+  });
+
+  it('states the send time in the workspace time zone, daylight time included', () => {
+    const summer = new Date('2026-07-20T14:00:00Z');
+    const winter = new Date('2026-11-02T14:00:00Z');
+    expect(digestScheduleLabel('America/Los_Angeles', summer)).toBe('Mondays at 7:00 AM PDT');
+    expect(digestScheduleLabel('America/Los_Angeles', winter)).toBe('Mondays at 6:00 AM PST');
+    expect(digestScheduleLabel('America/New_York', summer)).toBe('Mondays at 10:00 AM EDT');
+    expect(digestScheduleLabel('UTC', summer)).toBe('Mondays at 2:00 PM UTC');
+    // East of UTC+10 the run is already Tuesday.
+    expect(digestScheduleLabel('Australia/Sydney', summer)).toMatch(/^Tuesdays at 12:00 AM /);
+    // A zone this runtime does not know falls back like every other surface.
+    expect(digestScheduleLabel('America/Fresno', summer)).toBe('Mondays at 7:00 AM PDT');
+  });
+
+  it('prints it in the footer, for the Monday digest and for a preview', () => {
+    expect(renderWeeklyDigestHtml(fullPayload(), { ...OPTS, timeZone: 'UTC' })).toContain(
+      'workspace members who opted in — Mondays at 2:00 PM UTC.',
     );
+    // No zone passed: the documented fallback (resolveOrgTimezone).
+    expect(renderWeeklyDigestHtml(fullPayload(), OPTS)).toContain(
+      'workspace members who opted in — Mondays at 7:00 AM PDT.',
+    );
+    // A preview on Saturday Oct 31 (PDT) names the run after it, on Nov 2 (PST).
+    const preview = renderWeeklyDigestHtml(fullPayload(), {
+      ...OPTS,
+      timeZone: 'America/Los_Angeles',
+      preview: true,
+      now: new Date('2026-10-31T18:00:00Z'),
+    });
+    expect(preview).toContain('Mondays at 6:00 AM PST.');
+    expect(renderWeeklyDigestHtml(fullPayload(), OPTS)).not.toContain('workspace time');
+  });
+});
+
+describe('counts are totals, not the twenty listed', () => {
+  // The service lists the 20 lowest items and the first 20 open POs. The
+  // email used to count those lists, so an org with more than 20 of either
+  // read exactly "20" every week. The payload now carries the real totals.
+  function capped(): DigestPayload {
+    return {
+      ...fullPayload(),
+      lowStockTotal: 57,
+      outOfStockTotal: 12,
+      openPosTotal: 31,
+      overduePosTotal: 9,
+    };
+  }
+
+  it('prints the totals in the action list, the KPI cards and the preheader', () => {
+    const html = renderWeeklyDigestHtml(capped(), OPTS);
+    expect(html).toContain('57 items at or below reorder point');
+    expect(html).toContain('12 out of stock');
+    expect(html).toContain('9 purchase orders overdue');
+    expect(html).toContain('9 overdue');
+    expect(html).toContain('57 items low on stock &middot; 31 open purchase orders');
+    expect(html).not.toContain('2 items at or below reorder point');
+  });
+
+  it('says how many the plain-text lists show of how many', () => {
+    const text = weeklyDigestText(capped(), {
+      orgName: OPTS.orgName,
+      appUrl: OPTS.appUrl,
+      settingsUrl: OPTS.settingsUrl,
+    });
+    expect(text).toContain('Showing the first 2 of 57.');
+    expect(text).toContain('Showing the first 2 of 31.');
+    // Nothing to add when the list is whole.
+    const whole = weeklyDigestText(fullPayload(), {
+      orgName: OPTS.orgName,
+      appUrl: OPTS.appUrl,
+      settingsUrl: OPTS.settingsUrl,
+    });
+    expect(whole).not.toContain('Showing the first');
   });
 });
 
@@ -148,7 +269,10 @@ describe('weekly digest — full payload', () => {
   it('composes headline, KPI cards, action list, and in-progress rows', () => {
     expect(html).toContain('Your week, in order.');
     expect(html).toContain('Monday briefing &middot; two minutes.');
-    expect(html).toContain('Jul 13 – 19');
+    expect(html).toContain('As of Jul 20');
+    // Current state, not last week's activity.
+    expect(html).toContain('here&rsquo;s where');
+    expect(html).not.toMatch(/last week/i);
     expect(html).toContain('Hi Dana —');
     // KPI cards for all three non-empty sections.
     expect(html).toContain('Low stock');
@@ -175,13 +299,13 @@ describe('weekly digest — full payload', () => {
   it('embeds the bars motion hero with reserved dimensions', () => {
     expect(html).toContain('https://stockpilotusa.com/email/motion/bars@2x.gif');
     expect(html).toContain('width="528" height="194"');
-    expect(html).toContain('Five weekly bars rise');
+    expect(html).toContain('Five bars rise');
   });
 
   it('uses the pref footer with the digest archetype short note', () => {
     expect(html).toContain('>Manage email preferences</a>');
     expect(html).toContain('>Unsubscribe</a>');
-    expect(html).toContain('workspace members who opted in — Mondays at 7:00 AM');
+    expect(html).toContain('workspace members who opted in — Mondays at 7:00 AM PDT.');
     expect(html).toContain('Unsubscribing stops this notification type only.');
     // The digest archetype SHORTENS the pref boilerplate — the long
     // variant must not appear.
@@ -196,7 +320,7 @@ describe('weekly digest — full payload', () => {
     });
     expect(spicy).toContain('Meridian &amp; Sons &lt;Test&gt;');
     // The hero alt is attribute context — orgName must be escaped there too.
-    expect(spicy).toContain('activity across Meridian &amp; Sons &lt;Test&gt; last week');
+    expect(spicy).toContain('a snapshot of Meridian &amp; Sons &lt;Test&gt;');
     expect(spicy).not.toContain('<b>Dana</b>');
   });
 });
@@ -209,7 +333,7 @@ describe('weekly digest — all-clear state', () => {
       'Nothing needs your attention this week. See you next Monday.',
     );
     expect(html).toContain('Exceptions');
-    expect(html).toContain('It was a clean one.');
+    expect(html).toContain('Nothing needs a hand.');
     // No KPI cards, action rows, or progress rows for empty sections.
     expect(html).not.toContain('Low stock');
     expect(html).not.toContain('Open POs');
@@ -308,6 +432,10 @@ describe('weight budget (Gmail clip)', () => {
         status: 'ordered',
         isOverdue: i % 2 === 0,
       })),
+      lowStockTotal: 20,
+      outOfStockTotal: 5,
+      openPosTotal: 20,
+      overduePosTotal: 10,
       openCycleCounts: Array.from({ length: 80 }, (_, i) => ({
         id: `22222222-0000-4000-8000-${String(i).padStart(12, '0')}`,
         countNumber: 1_000_000 + i,

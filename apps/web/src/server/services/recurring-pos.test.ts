@@ -337,8 +337,6 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
           organization_id: 'org-test',
           supplier_id: 'sup-abc',
           destination_location_id: 'loc-1',
-          status: 'draft',
-          destination: null,
         },
         error: null,
       },
@@ -359,6 +357,64 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(payload.lineItems).toHaveLength(2);
     expect(payload.lineItems[0]).toEqual({ itemId: 'item-x', quantityOrdered: 3, unitCost: 15 });
     expect(payload.lineItems[1]).toEqual({ itemId: 'item-y', quantityOrdered: 1, unitCost: 25 });
+  });
+});
+
+describe('RecurringPoTemplatesService.seedFromPo — reads only columns purchase_orders has', () => {
+  // seedFromPo selected `destination`, a column purchase_orders does not have
+  // (its destination is destination_location_id). PostgREST answered every
+  // "Make recurring" with HTTP 400, code 42703, so the button always failed
+  // with an internal error. The test above passed anyway: its stub answered
+  // any select. This one answers like PostgREST. Found by the 2026-10-05 select
+  // sweep (every resolved select sent to the local stack with limit 0).
+  const PO_ROW = {
+    id: 'po-src',
+    organization_id: 'org-test',
+    supplier_id: 'sup-abc',
+    destination_location_id: 'loc-1',
+  };
+
+  function stubLikePostgrest() {
+    return makeSupabaseStub({
+      'purchase_orders.select': (call) => {
+        const select = String(call.args[call.methods.indexOf('select')]?.[0] ?? '');
+        if (/(^|[\s,])destination\s*(,|$)/.test(select)) {
+          return {
+            data: null,
+            error: { code: '42703', message: 'column purchase_orders.destination does not exist' },
+          };
+        }
+        return { data: PO_ROW, error: null };
+      },
+      'purchase_order_items.select': {
+        data: [{ item_id: 'item-x', quantity_ordered: 3, unit_cost: 15 }],
+        error: null,
+      },
+    });
+  }
+
+  it('seeds the template from the PO', async () => {
+    const stub = stubLikePostgrest();
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'admin' }) as never);
+
+    const payload = await svc.seedFromPo('po-src');
+
+    expect(payload).toMatchObject({
+      supplierId: 'sup-abc',
+      destinationLocationId: 'loc-1',
+      lineItems: [{ itemId: 'item-x', quantityOrdered: 3, unitCost: 15 }],
+    });
+  });
+
+  it('pins the PO select', async () => {
+    const stub = stubLikePostgrest();
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'admin' }) as never);
+
+    await svc.seedFromPo('po-src');
+
+    const chain = stub.chainsAll.get('purchase_orders.select')?.[0] ?? [];
+    const args = stub.chainArgsAll.get('purchase_orders.select')?.[0] ?? [];
+    expect(args[chain.indexOf('select')]?.[0]).toBe('id, organization_id, supplier_id, destination_location_id');
   });
 });
 

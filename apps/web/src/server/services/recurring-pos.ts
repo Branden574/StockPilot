@@ -413,9 +413,13 @@ export class RecurringPoTemplatesService {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
+    // Only columns purchase_orders has: it has no `destination` (the
+    // destination is destination_location_id). Selecting one made PostgREST
+    // refuse the read (42703), so "Make recurring" always failed until
+    // 2026-10-05.
     const { data: po, error: poError } = await this.ctx.supabase
       .from('purchase_orders')
-      .select('id, organization_id, supplier_id, destination_location_id, destination')
+      .select('id, organization_id, supplier_id, destination_location_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', poId)
       .maybeSingle();

@@ -378,6 +378,11 @@ PGTAP_TESTS=(
   # category-scoped viewer get only their readable movements, items and
   # warehouse names; no org B row in an org A answer.
   supabase/tests/0380_report_rpcs_caller_scope.test.sql
+  # The weekly digest's reader (services/digest.ts) restates the SELECT
+  # policies of items, purchase orders and warehouses, and the helpers they
+  # call, for a cron that reads with the service role. Hash pins: a changed
+  # policy or helper fails here until the reader is changed to match.
+  supabase/tests/digest_reader_policies.test.sql
   # Change an order's needed-by (F2-4, 0383): revise_order_needed_by writes
   # the order's needed-by and moves its Schedule event past RLS
   # (schedule_events_update is creator-or-manager, and an approver with an
@@ -883,6 +888,16 @@ WEB_TESTS=(
   'src/app/api/reports/[slug]/pdf/route.test.ts'
   src/app/api/reports/inventory-snapshot/pdf/route.test.tsx
   src/app/api/reports/item-cost-history/xlsx/route.test.ts
+  # The weekly digest (2026-10-05): the cron reads each org with the service
+  # role, so it builds every recipient's email with that recipient's reader,
+  # a restatement of inventory_items_select (warehouse, charter, category),
+  # purchase_orders_select (purchase_orders:read, destination warehouse) and
+  # warehouses_select; the role is read at send time, an item with no
+  # warehouse goes to nobody, and a failed read of what decides a view sends
+  # the org nothing. The route test: a disabled account and a platform
+  # admin's "act as" grant are not recipients, and the CRON_SECRET gate.
+  src/app/api/cron/weekly-digest/route.scope.test.ts
+  src/app/api/cron/weekly-digest/route.test.ts
 
   # Order secrets (0389, and since 0392 no legacy branch). Who may complete a
   # hand-over through the sign route: a raw token whose sha256 is the order's

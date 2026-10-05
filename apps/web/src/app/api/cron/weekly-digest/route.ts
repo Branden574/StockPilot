@@ -14,8 +14,11 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   applySectionOptIns,
-  getDigestData,
+  buildDigestPayload,
+  digestReaderFor,
+  getDigestSource,
   isDigestEmpty,
+  loadDigestReaderData,
 } from '@/server/services/digest';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -59,8 +62,11 @@ export const maxDuration = 60;
 
 /**
  * Weekly inventory digest. Wired to Vercel Cron via vercel.json
- * (0 14 * * 1 UTC ≈ 7am Pacific Mondays). Uses the service-role
- * client to span all orgs.
+ * (0 14 * * 1: 14:00 UTC Mondays, 7 AM Pacific in summer and 6 AM in
+ * winter; the email's footer states it in the org's zone). Uses the service-role
+ * client to span all orgs, so it reads each org once and then cuts what
+ * each recipient is sent to what that recipient may read
+ * (buildDigestPayload with their reader; see services/digest.ts).
  *
  * Auth: same Bearer ${CRON_SECRET} pattern as purge-ai-chat-history.
  *
@@ -93,6 +99,14 @@ export async function GET(req: Request) {
     // → organizations. Per-section flags are filtered AT RENDER TIME so
     // each user's digest reflects only the sections they're subscribed to.
     // Paginated via fetchAllRows to avoid the silent 1000-row PostgREST cap.
+    //
+    // The embed NAMES its foreign key: organization_members has two to
+    // user_profiles (user_id, and invited_by), and PostgREST refuses an embed
+    // that names neither with HTTP 300 PGRST201. Without the hint this pull
+    // failed every Monday and no digest was ever sent. A recipient's
+    // memberships are the rows whose user_id is the recipient. The hint does
+    // not rename the embed, so the accepted_at filter below still says
+    // `organization_members`.
     type RecipientRow = {
       id: string;
       email: string;
@@ -104,8 +118,8 @@ export async function GET(req: Request) {
         organization_id: string;
         accepted_at: string | null;
         organizations:
-          | { id: string; name: string }
-          | { id: string; name: string }[]
+          | { id: string; name: string; timezone: string | null }
+          | { id: string; name: string; timezone: string | null }[]
           | null;
       }>;
     };
@@ -119,10 +133,10 @@ export async function GET(req: Request) {
         digest_section_low_stock,
         digest_section_open_pos,
         digest_section_cycle_counts,
-        organization_members!inner (
+        organization_members!organization_members_user_id_fkey!inner (
           organization_id,
           accepted_at,
-          organizations:organization_id (id, name)
+          organizations:organization_id (id, name, timezone)
         )
       `,
         )
@@ -135,6 +149,13 @@ export async function GET(req: Request) {
         // before send — see that comment for why.)
         .is('disabled_at', null)
         .not('organization_members.accepted_at', 'is', null)
+        // A platform admin's "act as" grant (services/platform/impersonation.ts)
+        // is an accepted 'owner' row with a 45-minute expiry, not a
+        // membership: every other cron leaves it out, and so does the digest.
+        // Without this an opted-in platform admin acting as a customer at
+        // send time got that customer's digest, and the claim below landed
+        // in the customer's idempotency_keys.
+        .is('organization_members.impersonation_expires_at', null)
         .order('id', { ascending: true })
         .range(from, to),
     );
@@ -146,9 +167,12 @@ export async function GET(req: Request) {
       sections: { lowStock: boolean; openPos: boolean; cycleCounts: boolean };
     }
 
-    // Fan recipients out by org so each org's payload is computed once
-    // even if multiple users in the same org are opted in.
-    const byOrg = new Map<string, { orgName: string; recipients: RecipientLite[] }>();
+    // Fan recipients out by org so each org is read once even if multiple
+    // users in the same org are opted in.
+    const byOrg = new Map<
+      string,
+      { orgName: string; timeZone: string | null; recipients: RecipientLite[] }
+    >();
     for (const row of recipients) {
       const sections = {
         lowStock: row.digest_section_low_stock ?? true,
@@ -168,6 +192,8 @@ export async function GET(req: Request) {
         if (!orgRow) continue;
         const existing = byOrg.get(orgRow.id) ?? {
           orgName: orgRow.name,
+          // For the send time the footer states, in the org's zone.
+          timeZone: orgRow.timezone ?? null,
           recipients: [],
         };
         if (!existing.recipients.some((r) => r.userId === row.id)) {
@@ -192,7 +218,19 @@ export async function GET(req: Request) {
 
     for (const [orgId, group] of byOrg) {
       try {
-        const fullPayload = await getDigestData(admin, orgId);
+        // One org-wide read (the service role sees every row), plus what
+        // decides each recipient's view: their warehouse and category
+        // assignments and the purchase_orders:read permission. A failed read
+        // throws to the per-org catch below, so nobody in the org is sent a
+        // wider view than theirs.
+        const [source, readerData] = await Promise.all([
+          getDigestSource(admin, orgId),
+          loadDigestReaderData(
+            admin,
+            orgId,
+            group.recipients.map((r) => r.userId),
+          ),
+        ]);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
         for (const { userId, email: to, name, sections } of group.recipients) {
           // Re-check membership + opt-in + disabled-status IMMEDIATELY
@@ -209,9 +247,11 @@ export async function GET(req: Request) {
           const [membershipRes, profileRes] = await Promise.all([
             admin
               .from('organization_members')
-              .select('user_id, accepted_at')
+              .select('user_id, accepted_at, role')
               .eq('organization_id', orgId)
               .eq('user_id', userId)
+              // An "act as" grant is not a membership (see the pull above).
+              .is('impersonation_expires_at', null)
               .maybeSingle(),
             admin
               .from('user_profiles')
@@ -220,7 +260,7 @@ export async function GET(req: Request) {
               .maybeSingle(),
           ]);
           const membership = membershipRes.data as
-            | { user_id: string; accepted_at: string | null }
+            | { user_id: string; accepted_at: string | null; role: string }
             | null;
           const profile = profileRes.data as
             | { email_digest_optin: boolean | null; disabled_at: string | null }
@@ -238,9 +278,14 @@ export async function GET(req: Request) {
             continue;
           }
 
-          // Each recipient sees only their opted-in sections; one or two
-          // could be all-empty even when the org's full payload isn't.
-          const payload = applySectionOptIns(fullPayload, sections);
+          // Each recipient is sent what they may read in StockPilot, which
+          // is also what their "Send preview now" shows: the role read just
+          // now, with their assignments and permission (services/digest.ts
+          // restates the SELECT policies). Then only their opted-in
+          // sections; one or two could be all-empty even when the org's
+          // source isn't.
+          const reader = digestReaderFor(readerData, userId, membership.role);
+          const payload = applySectionOptIns(buildDigestPayload(source, reader), sections);
           if (isDigestEmpty(payload)) {
             skipped += 1;
             continue;
@@ -305,6 +350,7 @@ export async function GET(req: Request) {
             ...opts,
             recipientName: name,
             now: runStartedAt,
+            timeZone: group.timeZone,
           });
           const text = weeklyDigestText(payload, opts);
           // RFC 8058 List-Unsubscribe header. Until a dedicated

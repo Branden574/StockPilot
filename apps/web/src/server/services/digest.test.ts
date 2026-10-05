@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { getDigestData } from './digest';
+import {
+  applySectionOptIns,
+  buildDigestPayload,
+  digestReaderFor,
+  getDigestData,
+  type DigestReaderData,
+  type DigestSource,
+} from './digest';
 
 /**
  * The weekly digest's low-stock section cannot be tested with the generic
@@ -19,6 +26,8 @@ type ItemRow = {
   deleted_at: string | null;
   /** NOT NULL DEFAULT false in the database (0040): a kit's pre-assembled stock. */
   is_bundle: boolean;
+  /** NOT NULL DEFAULT false (0277): created from an inbound PO, never received. */
+  awaiting_first_receipt: boolean;
   sku: string;
   name: string;
   quantity_on_hand: number;
@@ -132,6 +141,7 @@ function filler(i: number, over: Partial<ItemRow> = {}): ItemRow {
     status: 'active',
     deleted_at: null,
     is_bundle: false,
+    awaiting_first_receipt: false,
     sku: `F-${i}`,
     name: `Filler ${i}`,
     quantity_on_hand: 1,
@@ -148,6 +158,7 @@ const HOT: ItemRow = {
   status: 'active',
   deleted_at: null,
   is_bundle: false,
+  awaiting_first_receipt: false,
   sku: 'HOT',
   name: 'Fast mover',
   quantity_on_hand: 300,
@@ -241,6 +252,27 @@ describe('getDigestData low stock', () => {
     expect(lowStockIds(payload.lowStock)).toEqual(['out']);
   });
 
+  it('leaves out an item made from a purchase order that has not been received yet', async () => {
+    // Since 0277 an item created from an inbound PO sits at quantity 0 with
+    // awaiting_first_receipt until its first receipt. It is expected, not out
+    // of stock: the dashboard's low-stock list and out-of-stock count skip it
+    // and the inventory lists hide it by default. Sorted by quantity, these
+    // came FIRST, filling "N out of stock" and the "X is out at Y" line ahead
+    // of real low stock.
+    const items = [
+      filler(1, { id: 'expected', quantity_on_hand: 0, reorder_point: 5, awaiting_first_receipt: true }),
+      filler(2, { id: 'really-out', quantity_on_hand: 0, reorder_point: 5 }),
+    ];
+    const { client, itemChains } = makeFakeClient(items);
+
+    const payload = await getDigestData(client, 'org-1');
+
+    expect(lowStockIds(payload.lowStock)).toEqual(['really-out']);
+    // Server-side, so the paging windows never carry the expected items.
+    const eq = (itemChains[0] ?? []).filter((s) => s.method === 'eq').map((s) => s.args);
+    expect(eq).toContainEqual(['awaiting_first_receipt', false]);
+  });
+
   it('omits healthy stock', async () => {
     const items = [filler(1, { quantity_on_hand: 50, reorder_point: 10 })];
     const { client } = makeFakeClient(items);
@@ -248,5 +280,150 @@ describe('getDigestData low stock', () => {
     const payload = await getDigestData(client, 'org-1');
 
     expect(payload.lowStock).toEqual([]);
+  });
+});
+
+describe('buildDigestPayload: what one reader is sent (the edges route.scope.test.ts does not reach)', () => {
+  const sourceItem = (
+    id: string,
+    warehouseId: string | null,
+    over: Partial<DigestSource['lowStock'][number]> = {},
+  ): DigestSource['lowStock'][number] => ({
+    id,
+    sku: id,
+    name: id,
+    qty: 0,
+    reorderPoint: 5,
+    warehouseId,
+    charterId: null,
+    categoryId: null,
+    warehouseName: warehouseId ?? 'Unassigned',
+    ...over,
+  });
+  const sourcePo = (
+    id: string,
+    over: Partial<DigestSource['openPos'][number]> = {},
+  ): DigestSource['openPos'][number] => ({
+    id,
+    poNumber: id,
+    supplierName: null,
+    expectedAt: null,
+    status: 'ordered',
+    isOverdue: false,
+    destinationLocationId: null,
+    destinationWarehouseId: null,
+    ...over,
+  });
+  const noFacts = (): DigestReaderData => ({
+    assignments: new Map(),
+    categories: new Map(),
+    userPoRead: new Map(),
+    rolePoRead: new Map(),
+    defaultPoReadRoles: new Set(['owner', 'admin', 'manager', 'staff', 'viewer']),
+  });
+
+  it('keeps what the reader\'s own client returned (the preview), except an item no member can read', () => {
+    const source: DigestSource = {
+      lowStock: [sourceItem('placed', 'wh-1'), sourceItem('no-warehouse', null)],
+      openPos: [sourcePo('po-1')],
+      openCycleCounts: [],
+    };
+    const payload = buildDigestPayload(source, null);
+    expect(payload.lowStock.flatMap((g) => g.items.map((i) => i.id))).toEqual(['placed']);
+    expect(payload.openPos.map((p) => p.id)).toEqual(['po-1']);
+  });
+
+  it('refuses a purchase order whose destination location the read did not return, unless the reader sees every warehouse', () => {
+    const source: DigestSource = {
+      lowStock: [],
+      openPos: [sourcePo('po-unknown-destination', { destinationLocationId: 'loc-x', destinationWarehouseId: undefined })],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('staff', [{ warehouseId: 'wh-1', charterId: null }]);
+    expect(buildDigestPayload(source, digestReaderFor(facts, 'staff', 'staff')).openPos).toEqual([]);
+    expect(
+      buildDigestPayload(source, digestReaderFor(facts, 'manager', 'manager')).openPos.map((p) => p.id),
+    ).toEqual(['po-unknown-destination']);
+  });
+
+  it('gives a role the policies do not name no items and, without a grant, no purchase orders', () => {
+    const source: DigestSource = {
+      lowStock: [sourceItem('placed', 'wh-1')],
+      openPos: [sourcePo('po-1')],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('odd', [{ warehouseId: 'wh-1', charterId: null }]);
+    const reader = digestReaderFor(facts, 'odd', 'auditor');
+    expect(reader.canReadPurchaseOrders).toBe(false);
+    const payload = buildDigestPayload(source, reader);
+    expect(payload.lowStock).toEqual([]);
+    expect(payload.openPos).toEqual([]);
+  });
+
+  it('cuts to the rendered limits AFTER the reader, so a scoped reader still gets their own lowest twenty', () => {
+    // 30 low items elsewhere sort ahead of the reader's 3; cutting first
+    // would have left the reader nothing.
+    const source: DigestSource = {
+      lowStock: [
+        ...Array.from({ length: 30 }, (_, i) => sourceItem(`other-${i}`, 'wh-other', { qty: -1 })),
+        ...Array.from({ length: 3 }, (_, i) => sourceItem(`mine-${i}`, 'wh-mine')),
+      ],
+      openPos: [
+        ...Array.from({ length: 25 }, (_, i) =>
+          sourcePo(`po-other-${i}`, { destinationLocationId: 'loc-other', destinationWarehouseId: 'wh-other' }),
+        ),
+        sourcePo('po-mine', { destinationLocationId: 'loc-mine', destinationWarehouseId: 'wh-mine' }),
+      ],
+      openCycleCounts: [],
+    };
+    const facts = noFacts();
+    facts.assignments.set('staff', [{ warehouseId: 'wh-mine', charterId: null }]);
+    const payload = buildDigestPayload(source, digestReaderFor(facts, 'staff', 'staff'));
+    expect(payload.lowStock.flatMap((g) => g.items.map((i) => i.id))).toEqual(['mine-0', 'mine-1', 'mine-2']);
+    expect(payload.openPos.map((p) => p.id)).toEqual(['po-mine']);
+  });
+});
+
+describe('buildDigestPayload: totals', () => {
+  it('counts every low item and open purchase order the reader may read, not the twenty listed', () => {
+    const source: DigestSource = {
+      lowStock: Array.from({ length: 30 }, (_, i) => ({
+        id: `item-${String(i).padStart(2, '0')}`,
+        sku: `S-${i}`,
+        name: `Item ${i}`,
+        qty: i < 5 ? 0 : 1,
+        reorderPoint: 5,
+        warehouseId: 'wh-1',
+        charterId: null,
+        categoryId: null,
+        warehouseName: 'DC4',
+      })),
+      openPos: Array.from({ length: 25 }, (_, i) => ({
+        id: `po-${String(i).padStart(2, '0')}`,
+        poNumber: `PO-${i}`,
+        supplierName: null,
+        expectedAt: null,
+        status: 'ordered',
+        isOverdue: i < 7,
+        destinationLocationId: null,
+        destinationWarehouseId: null,
+      })),
+      openCycleCounts: [],
+    };
+    const payload = buildDigestPayload(source, null);
+    expect(payload.lowStock.flatMap((g) => g.items)).toHaveLength(20);
+    expect(payload.lowStockTotal).toBe(30);
+    expect(payload.outOfStockTotal).toBe(5);
+    expect(payload.openPos).toHaveLength(20);
+    expect(payload.openPosTotal).toBe(25);
+    expect(payload.overduePosTotal).toBe(7);
+
+    // A section the recipient opted out of carries no count either.
+    const gated = applySectionOptIns(payload, { lowStock: false, openPos: false, cycleCounts: true });
+    expect([gated.lowStockTotal, gated.outOfStockTotal, gated.openPosTotal, gated.overduePosTotal]).toEqual([
+      0, 0, 0, 0,
+    ]);
   });
 });

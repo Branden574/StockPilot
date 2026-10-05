@@ -483,7 +483,15 @@ export function ReturnWorkbench({
                 {e.label}
                 {e.actorName ? <span className="text-muted-foreground"> · {e.actorName}</span> : null}
               </span>
-              <time dateTime={e.at} className="text-muted-foreground text-xs tabular-nums" title={e.at}>
+              <time
+                dateTime={e.at}
+                className="text-muted-foreground text-xs tabular-nums"
+                title={e.at}
+                // The server renders this before the browser hydrates it; a
+                // minute between the two changes the words ("3 minutes ago"
+                // to "4"). Tolerate it instead of React error #418.
+                suppressHydrationWarning
+              >
                 {formatRelative(e.at)}
               </time>
             </li>
