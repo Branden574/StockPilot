@@ -244,7 +244,10 @@ export async function ItemDetail({
     activeTab === 'movements' || activeTab === 'activity'
       ? getOrgRowForRequest(ctx.organizationId)
           .then((row) => resolveOrgTimezone(row?.timezone))
-          .catch(() => resolveOrgTimezone(null))
+          .catch((e: unknown) => {
+            if (isNextControlFlowError(e)) throw e;
+            return resolveOrgTimezone(null);
+          })
       : Promise.resolve(resolveOrgTimezone(null));
   const imageRowsRead = isOverview
     ? imagesSvc.list(id)
@@ -288,6 +291,7 @@ export async function ItemDetail({
     holdingsRead,
     destinationScopeRead,
     activityRead,
+    feedTimeZoneRead,
     imageRowsRead,
     costHistoryRead,
     customFieldDefsRead,

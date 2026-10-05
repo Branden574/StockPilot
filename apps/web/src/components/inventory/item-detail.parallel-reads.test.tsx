@@ -800,6 +800,17 @@ describe('ItemDetail: the feed prints in the organization zone (L7)', () => {
     expect(unhandled).toEqual([]);
   });
 
+  it("a redirect from the zone read is not swallowed into the default zone", async () => {
+    orgRow.answer = async () => {
+      throw Object.assign(new Error('NEXT_REDIRECT'), { digest: 'NEXT_REDIRECT;replace;/login;307;' });
+    };
+    await expect(
+      ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'movements' }),
+    ).rejects.toThrow('NEXT_REDIRECT');
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
   it('an unknown stored zone prints in the default zone too', async () => {
     orgRow.answer = async () => ({ timezone: 'Mars/Olympus' });
     render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'activity' }));
