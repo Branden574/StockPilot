@@ -127,6 +127,49 @@ describe('receipt cards: checklist chips and actions', () => {
     expect(within(cardOf('R-d')).queryByTestId('receipt-checklist-chip')).toBeNull();
     expect(within(cardOf('R-d')).queryByRole('button', { name: C.recordChecklist })).toBeNull();
     expect(within(cardOf('R-e')).queryByTestId('receipt-checklist-chip')).toBeNull();
+    // Desk check F4 (core receiptChecklistAction, the phone's rule too): it
+    // had no checklist to follow, so it is never offered one.
+    expect(within(cardOf('R-e')).queryByRole('button', { name: C.recordChecklist })).toBeNull();
+  });
+
+  // Desk check F4: one rule for web and phone (core receiptChecklistAction).
+  // A receipt received after the organization's first checklist, while none
+  // was on, has no chip (never nagged) but is offered Record once one is on;
+  // one received before the first checklist is offered nothing.
+  it('Record for a receipt from a gap after the first checklist, never for one from before it', () => {
+    const versions = [
+      { ...V1, retiredAt: '2026-10-02T00:00:00Z' },
+      { ...V1, id: 'v2', versionNumber: 2, publishedAt: '2026-10-04T00:00:00Z', retiredAt: null },
+    ];
+    const gap = { ok: true as const, versions, runs: [] };
+    const view = render(
+      <ReceiptHistory
+        receipts={[receipt('g', 'posted', '2026-10-03T00:00:00Z'), RECEIPTS[4]!]}
+        lines={[]}
+        items={{}}
+        canReverse={false}
+        checklists={gap}
+        canRecordChecklist
+        poId="po-1"
+      />,
+    );
+    expect(within(cardOf('R-g')).queryByTestId('receipt-checklist-chip')).toBeNull();
+    expect(within(cardOf('R-g')).getByRole('button', { name: C.recordChecklist })).toBeTruthy();
+    expect(within(cardOf('R-e')).queryByRole('button', { name: C.recordChecklist })).toBeNull();
+    view.unmount();
+    // Someone who may not record is offered nothing on either.
+    render(
+      <ReceiptHistory
+        receipts={[receipt('g', 'posted', '2026-10-03T00:00:00Z')]}
+        lines={[]}
+        items={{}}
+        canReverse={false}
+        checklists={gap}
+        canRecordChecklist={false}
+        poId="po-1"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: C.recordChecklist })).toBeNull();
   });
 
   it('someone who may not record sees the chips and View, never Record or Continue', () => {

@@ -10,6 +10,7 @@ import {
   checklistPublishBodySchema,
   checklistSaveBodySchema,
   checklistTextLength,
+  firstChecklistPublishedAt,
   isRunCompletable,
   liveChecklistVersion,
   normalizeChecklistResults,
@@ -22,6 +23,7 @@ import {
   parseStoredSteps,
   receiptChecklistAction,
   receiptChecklistState,
+  receivedAfterFirstChecklist,
   receivingChecklistCases,
   SUGGESTED_RECEIVING_PHOTO_STEP,
   SUGGESTED_RECEIVING_STEPS,
@@ -378,86 +380,89 @@ describe('receiptChecklistAction', () => {
       : kind === 'in_progress'
         ? receiptChecklistState({ receipt: receipt(), versions: [V1, V2], runs: [run({})] })
         : ({ kind } as const);
+  /** v1 Oct 1-3 and v2 from Oct 3 (live): a receipt on Oct 2 was inside v1. */
+  const act = (
+    state: ReturnType<typeof st>,
+    over: Partial<{
+      status: string;
+      receivedAt: string | null;
+      versions: ChecklistVersionLite[];
+      canRecord: boolean;
+    }> = {},
+  ) =>
+    receiptChecklistAction({
+      state,
+      receipt: {
+        status: over.status ?? 'posted',
+        receivedAt: 'receivedAt' in over ? (over.receivedAt ?? null) : receipt().receivedAt,
+      },
+      versions: over.versions ?? [V1, V2],
+      canRecord: over.canRecord ?? true,
+    });
+  const off = { ...V2, retiredAt: '2026-10-04T00:00:00Z' };
 
   it('Record only with a live version, a recorder and a posted or reversed receipt', () => {
+    expect(act(st('not_recorded'))).toBe('record');
+    expect(act(st('not_recorded'), { status: 'reversed' })).toBe('record');
+    expect(act(st('not_recorded'), { versions: [V1, off] })).toBeNull();
+    expect(act(st('not_recorded'), { canRecord: false })).toBeNull();
+    expect(act(st('none'), { status: 'reversal' })).toBeNull();
+    expect(act(st('none'), { status: 'draft' })).toBeNull();
+  });
+
+  // Desk check F4: one rule for the web and the phone.
+  it('never Record for a receipt from before the first checklist: it had none to follow', () => {
+    for (const receivedAt of ['2026-09-30T09:00:00Z', '2026-10-01T09:59:59Z']) {
+      expect(act(st('none'), { receivedAt }), receivedAt).toBeNull();
+      expect(act(st('none'), { receivedAt, status: 'reversed' }), receivedAt).toBeNull();
+    }
+    // The instant it was published counts as after (the live window's edge).
+    expect(act(st('none'), { receivedAt: '2026-10-01T10:00:00Z' })).toBe('record');
+    // No readable time: never claimed.
+    expect(act(st('none'), { receivedAt: null })).toBeNull();
+    expect(act(st('none'), { receivedAt: 'not a time' })).toBeNull();
+  });
+
+  it('Record for a receipt from a gap after the first checklist, once one is on again', () => {
+    const v3 = { ...V2, id: 'v3', versionNumber: 3, publishedAt: '2026-10-05T00:00:00Z' };
+    const gap = { receivedAt: '2026-10-04T12:00:00Z', versions: [V1, off, v3] };
+    // No version was live then: no chip (never nagged)...
     expect(
-      receiptChecklistAction({
-        state: st('not_recorded'),
-        receiptStatus: 'posted',
-        liveNow: true,
-        canRecord: true,
+      receiptChecklistState({
+        receipt: receipt({ receivedAt: gap.receivedAt }),
+        versions: gap.versions,
+        runs: [],
       }),
-    ).toBe('record');
-    expect(
-      receiptChecklistAction({
-        state: st('none'),
-        receiptStatus: 'reversed',
-        liveNow: true,
-        canRecord: true,
-      }),
-    ).toBe('record');
-    expect(
-      receiptChecklistAction({
-        state: st('not_recorded'),
-        receiptStatus: 'posted',
-        liveNow: false,
-        canRecord: true,
-      }),
-    ).toBeNull();
-    expect(
-      receiptChecklistAction({
-        state: st('not_recorded'),
-        receiptStatus: 'posted',
-        liveNow: true,
-        canRecord: false,
-      }),
-    ).toBeNull();
-    expect(
-      receiptChecklistAction({
-        state: st('none'),
-        receiptStatus: 'reversal',
-        liveNow: true,
-        canRecord: true,
-      }),
-    ).toBeNull();
+    ).toEqual({ kind: 'none' });
+    // ...but it came after the first checklist, so a recorder may record it.
+    expect(act(st('none'), gap)).toBe('record');
+    expect(act(st('none'), { ...gap, canRecord: false })).toBeNull();
+    // While the checklist is off, nothing is offered.
+    expect(act(st('none'), { ...gap, versions: [V1, off] })).toBeNull();
+  });
+
+  it('nothing ever published: nothing offered', () => {
+    expect(act(st('none'), { versions: [] })).toBeNull();
   });
 
   it('Continue for an open run the person may record, View otherwise and for completed runs', () => {
-    expect(
-      receiptChecklistAction({
-        state: st('in_progress'),
-        receiptStatus: 'posted',
-        liveNow: false,
-        canRecord: true,
-      }),
-    ).toBe('continue');
-    expect(
-      receiptChecklistAction({
-        state: st('in_progress'),
-        receiptStatus: 'posted',
-        liveNow: true,
-        canRecord: false,
-      }),
-    ).toBe('view');
-    expect(
-      receiptChecklistAction({
-        state: st('completed'),
-        receiptStatus: 'posted',
-        liveNow: true,
-        canRecord: true,
-      }),
-    ).toBe('view');
+    expect(act(st('in_progress'), { versions: [V1, off] })).toBe('continue');
+    expect(act(st('in_progress'), { canRecord: false })).toBe('view');
+    expect(act(st('completed'))).toBe('view');
+    // A run is shown whatever the receipt's time.
+    expect(act(st('completed'), { receivedAt: '2026-09-01T00:00:00Z' })).toBe('view');
   });
 
   it('nothing when the state did not load', () => {
-    expect(
-      receiptChecklistAction({
-        state: st('unavailable'),
-        receiptStatus: 'posted',
-        liveNow: true,
-        canRecord: true,
-      }),
-    ).toBeNull();
+    expect(act(st('unavailable'))).toBeNull();
+  });
+
+  it('the first checklist is the earliest publish of any version', () => {
+    expect(firstChecklistPublishedAt([V2, V1])).toBe(Date.parse(V1.publishedAt));
+    expect(firstChecklistPublishedAt([])).toBeNull();
+    expect(firstChecklistPublishedAt([{ publishedAt: 'x' }])).toBeNull();
+    expect(receivedAfterFirstChecklist('2026-10-01T10:00:00Z', [V2, V1])).toBe(true);
+    expect(receivedAfterFirstChecklist('2026-10-01T09:59:59Z', [V2, V1])).toBe(false);
   });
 });
 

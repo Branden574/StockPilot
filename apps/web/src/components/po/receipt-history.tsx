@@ -33,7 +33,6 @@ import { reverseReceiptAction } from '@/server/actions/receiving';
 import { startReceivingCheckAction } from '@/server/actions/receiving-checklist';
 
 import {
-  liveChecklistVersion,
   receiptChecklistAction,
   receiptChecklistActionLabel,
   receiptChecklistChipText,
@@ -161,7 +160,7 @@ export function ReceiptHistory({
                     versions: checklists.ok ? checklists.versions : null,
                     runs: checklists.ok ? checklists.runs : null,
                   }),
-                  liveNow: checklists.ok && liveChecklistVersion(checklists.versions) !== null,
+                  versions: checklists.ok ? checklists.versions : [],
                 }
           }
           canRecordChecklist={canRecordChecklist}
@@ -185,7 +184,7 @@ function ReceiptEntry({
   lines: ReceiptLineRow[];
   items: ItemLookup;
   canReverse: boolean;
-  checklist: { state: ReceiptChecklistState; liveNow: boolean } | null;
+  checklist: { state: ReceiptChecklistState; versions: readonly ChecklistVersionLite[] } | null;
   canRecordChecklist: boolean;
   poId?: string;
 }) {
@@ -203,8 +202,8 @@ function ReceiptEntry({
   const action = checklist
     ? receiptChecklistAction({
         state: checklist.state,
-        receiptStatus: receipt.status,
-        liveNow: checklist.liveNow,
+        receipt: { status: receipt.status, receivedAt: receipt.received_at },
+        versions: checklist.versions,
         canRecord: canRecordChecklist,
       })
     : null;

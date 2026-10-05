@@ -25,9 +25,13 @@ const C = RECEIVING_CHECKLIST_COPY;
 export type PoChecksState = { kind: 'loading' } | { kind: 'ready'; checks: PhonePoChecks };
 
 export interface ReceiptChip {
-  /** The chip's words; never colour alone. */
-  text: string;
-  tone: 'ok' | 'warn' | 'muted';
+  /**
+   * The chip's words; never colour alone. Null for an action-only row: a
+   * receipt from a gap after the first checklist, never nagged but offered
+   * Record once a checklist is on (core receiptChecklistAction, desk check F4).
+   */
+  text: string | null;
+  tone: 'ok' | 'warn' | 'muted' | null;
   /** What tapping offers, with its label; null = the chip is only words. */
   action: 'record' | 'continue' | 'view' | null;
   actionLabel: string | null;
@@ -36,10 +40,12 @@ export interface ReceiptChip {
 }
 
 /**
- * One Receipt history card's chip. Null while the read is in flight, when it
- * failed (the history says so once, above the cards: historyChecksFailed),
- * and for a receipt that has no checklist to show (a reversal entry, or one
- * received before any checklist was turned on: never nagged).
+ * One Receipt history card's chip and action. Null while the read is in
+ * flight, when it failed (the history says so once, above the cards:
+ * historyChecksFailed), and for a receipt with nothing to show or offer (a
+ * reversal entry, or one received before the organization's first checklist:
+ * it had none to follow). A receipt from a gap after the first checklist has
+ * no chip but is offered Record while one is on, as on the web.
  */
 export function receiptChip(input: {
   receipt: { id: string; status: string; receivedAt: string | null };
@@ -58,14 +64,14 @@ export function receiptChip(input: {
     runs,
   });
   const text = receiptChecklistChipText(state);
-  const tone = receiptChecklistChipTone(state);
-  if (text === null || tone === null) return null;
+  const tone = text === null ? null : receiptChecklistChipTone(state);
   const action = receiptChecklistAction({
     state,
-    receiptStatus: input.receipt.status,
-    liveNow: liveChecklistVersion(versions) !== null,
+    receipt: { status: input.receipt.status, receivedAt: input.receipt.receivedAt },
+    versions,
     canRecord: input.canRecord,
   });
+  if (text === null && action === null) return null;
   return {
     text,
     tone,

@@ -492,23 +492,61 @@ export function receiptChecklistState(input: {
 export type ReceiptChecklistAction = 'record' | 'continue' | 'view';
 
 /**
- * What a receipt card offers. "Record checklist" only when a version is live
- * now, the person may record (receivingGate().canRecordChecklist) and the
- * receipt is posted or reversed; "Continue" for an open run they may record;
- * "View" for any run. Nothing when the state did not load.
+ * When the organization's first checklist was published: the earliest
+ * publish of any version (a version is never deleted). Null when none was
+ * ever published, or no time could be read.
+ */
+export function firstChecklistPublishedAt(
+  versions: readonly { publishedAt: string }[],
+): number | null {
+  let first: number | null = null;
+  for (const v of versions) {
+    const t = Date.parse(v.publishedAt);
+    if (Number.isFinite(t) && (first === null || t < first)) first = t;
+  }
+  return first;
+}
+
+/**
+ * A receipt received at or after the organization's first checklist was
+ * published. One received before it had no checklist to follow, so it is
+ * never offered one; a receipt whose time cannot be read is not either.
+ */
+export function receivedAfterFirstChecklist(
+  receivedAt: string | null | undefined,
+  versions: readonly { publishedAt: string }[],
+): boolean {
+  const first = firstChecklistPublishedAt(versions);
+  const t = Date.parse(receivedAt ?? '');
+  return first !== null && Number.isFinite(t) && t >= first;
+}
+
+/**
+ * What a receipt card offers, on the web and the phone alike (one rule, desk
+ * check F4):
+ *   - "View" for a completed run, and for an open run the person may not
+ *     record; "Continue" for an open run they may record;
+ *   - "Record checklist" only for a posted or reversed receipt received at or
+ *     after the organization's first checklist, while a version is live now,
+ *     to someone who may record (receivingGate().canRecordChecklist). That
+ *     includes a receipt from a gap when the checklist was off (no chip, it
+ *     is never nagged), and never one from before the first checklist: it
+ *     had none to follow;
+ *   - nothing when the state did not load.
  */
 export function receiptChecklistAction(input: {
   state: ReceiptChecklistState;
-  receiptStatus: string;
-  liveNow: boolean;
+  receipt: { status: string; receivedAt: string | null | undefined };
+  versions: readonly { publishedAt: string; retiredAt: string | null }[];
   canRecord: boolean;
 }): ReceiptChecklistAction | null {
-  const { state } = input;
+  const { state, receipt, versions } = input;
   if (state.kind === 'unavailable') return null;
   if (state.kind === 'completed') return 'view';
   if (state.kind === 'in_progress') return input.canRecord ? 'continue' : 'view';
-  const checkable = input.receiptStatus === 'posted' || input.receiptStatus === 'reversed';
-  return input.liveNow && input.canRecord && checkable ? 'record' : null;
+  const checkable = receipt.status === 'posted' || receipt.status === 'reversed';
+  if (!checkable || !input.canRecord || liveChecklistVersion(versions) === null) return null;
+  return receivedAfterFirstChecklist(receipt.receivedAt, versions) ? 'record' : null;
 }
 
 // ── Suggested steps (offered by "Start from suggested steps", never seeded) ─

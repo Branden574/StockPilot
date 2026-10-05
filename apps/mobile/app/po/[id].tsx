@@ -1168,18 +1168,22 @@ export default function PoReceiveScreen() {
                       </Text>
                       {chip ? (
                         <View style={styles.checkRow}>
-                          <Text
-                            style={[
-                              styles.checkChip,
-                              chip.tone === 'ok'
-                                ? styles.checkChipOk
-                                : chip.tone === 'warn'
-                                  ? styles.checkChipWarn
-                                  : null,
-                            ]}
-                          >
-                            {chip.text}
-                          </Text>
+                          {/* No words for a receipt from a gap after the
+                              first checklist: only its Record (core rule). */}
+                          {chip.text !== null ? (
+                            <Text
+                              style={[
+                                styles.checkChip,
+                                chip.tone === 'ok'
+                                  ? styles.checkChipOk
+                                  : chip.tone === 'warn'
+                                    ? styles.checkChipWarn
+                                    : null,
+                              ]}
+                            >
+                              {chip.text}
+                            </Text>
+                          ) : null}
                           {chip.action && chip.actionLabel ? (
                             <Pressable
                               onPress={() => void openChecklist(r.id, chip)}

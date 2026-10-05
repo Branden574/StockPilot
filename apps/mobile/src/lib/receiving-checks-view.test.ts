@@ -112,6 +112,64 @@ describe('the chip on a Receipt history card', () => {
     ).toBeNull();
   });
 
+  // Desk check F4: one rule for web and phone (core receiptChecklistAction).
+  // A receipt received after the organization's first checklist, while none
+  // was on, gets an action-only row (no chip: never nagged) once one is on;
+  // one received before the first checklist gets nothing (it had none).
+  it('a receipt from a gap after the first checklist offers Record without a chip; one from before it, nothing', () => {
+    const gap: PoChecksState = {
+      kind: 'ready',
+      checks: parsePoChecks({
+        checks: {
+          ok: true,
+          versions: [
+            {
+              id: IDS.v2,
+              versionNumber: 2,
+              title: 'Delivery checks',
+              steps: [],
+              publishedAt: '2026-10-05T15:00:00.000Z',
+              retiredAt: null,
+            },
+            {
+              id: IDS.v1,
+              versionNumber: 1,
+              title: 'Delivery checks',
+              steps: [],
+              publishedAt: '2026-10-01T15:00:00.000Z',
+              retiredAt: '2026-10-02T15:00:00.000Z',
+            },
+          ],
+          runs: [],
+        },
+      }),
+    };
+    const inGap = receipt(IDS.rcptC, 'posted', '2026-10-03T15:00:00Z');
+    expect(receiptChip({ receipt: inGap, checks: gap, canRecord: true })).toEqual({
+      text: null,
+      tone: null,
+      action: 'record',
+      actionLabel: C.recordChecklist,
+      runId: null,
+    });
+    expect(receiptChip({ receipt: inGap, checks: gap, canRecord: false })).toBeNull();
+    expect(
+      receiptChip({
+        receipt: receipt(IDS.rcptC, 'posted', '2026-09-30T15:00:00Z'),
+        checks: gap,
+        canRecord: true,
+      }),
+    ).toBeNull();
+    // A reversal entry in the gap: nothing.
+    expect(
+      receiptChip({
+        receipt: receipt(IDS.rcptC, 'reversal', '2026-10-03T15:00:00Z'),
+        checks: gap,
+        canRecord: true,
+      }),
+    ).toBeNull();
+  });
+
   // pattern #28 (mutation caught: a failed read shown as "not recorded" on
   // every card, with Record offered).
   it('while loading, and after a failed read, a card claims nothing; the history says it once', () => {

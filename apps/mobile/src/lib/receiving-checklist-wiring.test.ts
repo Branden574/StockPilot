@@ -110,6 +110,9 @@ describe('the PO screen (1-3)', () => {
       /const chip = receiptChip\(\{[\s\S]*?canRecord: gate\?\.canRecordChecklist === true,/,
     );
     expect(po).toContain('{historyChecksFailed(checks, receipts.length) ? (');
+    // A receipt from a gap after the first checklist: Record without a chip
+    // (core receiptChecklistAction, the web's rule; desk check F4).
+    expect(po).toContain('{chip.text !== null ? (');
     expect(po).toContain("onPress={() => void retryPart('checks')}");
     expect(po).toContain('accessibilityLabel={`${chip.actionLabel}, ${r.receipt_number}`}');
   });
