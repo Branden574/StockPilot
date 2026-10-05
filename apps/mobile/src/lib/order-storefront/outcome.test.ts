@@ -9,7 +9,7 @@ import {
   type OrderSubmissionState,
 } from '@stockpilot/core';
 
-import { storefrontOutcome } from './outcome';
+import { outcomeBesideSetup, storefrontOutcome } from './outcome';
 import type { SubmitEngineSnapshot } from './submit';
 
 const A = '44444444-4444-4444-8444-444444444444';
@@ -66,5 +66,26 @@ describe('the outcome sentence every storefront screen shows (desk check F3)', (
         ctx,
       ),
     ).toBeNull();
+  });
+});
+
+// Simulator re-verify D10 (PO-4 review round): a Submit refused for permission
+// is followed by the answer read again, refused for the same reason, and the
+// turned-off/refused state then showed "Your account can't place orders. Ask
+// an admin." twice, one under the other (and VoiceOver said it twice).
+describe('the outcome beside the setup message says a sentence once (simulator walk D10)', () => {
+  const said = "Your account can't place orders. Ask an admin.";
+  const refusedSetup = { status: 'refused' as const, message: said };
+
+  it('the same words as the setup message: shown once, as the setup message', () => {
+    expect(outcomeBesideSetup({ text: said, tone: 'critical' }, refusedSetup)).toBeNull();
+  });
+
+  it('different words, a loading answer or no outcome: unchanged', () => {
+    const other = { text: 'It was not sent. Your cart is unlocked.', tone: 'calm' as const };
+    expect(outcomeBesideSetup(other, refusedSetup)).toBe(other);
+    expect(outcomeBesideSetup({ text: said, tone: 'critical' }, { status: 'loading' })).toEqual({ text: said, tone: 'critical' });
+    expect(outcomeBesideSetup(null, refusedSetup)).toBeNull();
+    expect(outcomeBesideSetup(other, { status: 'off', message: 'Placing orders from the app is turned off right now. Use the web.' })).toBe(other);
   });
 });

@@ -272,9 +272,11 @@ describe('accessibility and Dynamic Type', () => {
     const state = codeOnly(read(`${COMPONENTS}/storefront-state.tsx`));
     expect(checkout).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName, warehouseName: warehouse?.name ?? null }) : null;');
     expect(catalog).toContain('const outcome = snap ? storefrontOutcome(snap, { itemName: outcomeItemName, warehouseName: outcomeWarehouse }) : null;');
-    for (const src of [checkout, catalog, state]) {
+    for (const src of [checkout, catalog]) {
       expect(src).toMatch(/\{outcome \? \(\s*<Body size=\{1[34](\.5)?\} color=\{outcome\.tone === 'calm' \? c\.ink : c\.critText\} accessibilityRole="alert">\s*\{outcome\.text\}/);
     }
+    // The turned-off or refused state draws it once beside its own message (D10).
+    expect(state).toMatch(/\{shown \? \(\s*<Body size=\{14\} color=\{shown\.tone === 'calm' \? c\.ink : c\.critText\} accessibilityRole="alert">\s*\{shown\.text\}/);
     for (const src of [checkout, catalog]) {
       expect(src).toContain('if (outcomeText && focused) AccessibilityInfo.announceForAccessibility(outcomeText);');
       expect(src).not.toMatch(/snap\.refusal \?|refusalText/);
@@ -725,6 +727,24 @@ describe('checkout says why when the storefront is not usable, never a spinner t
     expect(state).toContain('onCheckAndFinish={() => void session.checkAndFinish()}');
     expect(state).toContain('onDontSend={() => void session.dontSend()}');
     expect(state).toContain('onRefresh={() => void refresh()}');
+  });
+});
+
+// Simulator re-verify D10: the refused state drew the outcome and the setup
+// message even when they were the same sentence, and checkout announced it a
+// second time when the answer came back refused. Mutations caught: the state
+// rendering the raw outcome, checkout announcing a setup message equal to the
+// outcome it already said.
+describe('the turned-off or refused state says one sentence once (simulator walk D10)', () => {
+  it('StorefrontState draws the outcome through outcomeBesideSetup', () => {
+    const state = codeOnly(read(`${COMPONENTS}/storefront-state.tsx`));
+    expect(state).toContain('const shown = outcomeBesideSetup(outcome ?? null, setup);');
+    expect(state).toMatch(/\{shown \? \(\s*<Body[\s\S]*?\{shown\.text\}/);
+    expect(state).not.toMatch(/\{outcome\.text\}/);
+  });
+
+  it('checkout never announces a setup message it already said as the outcome', () => {
+    expect(checkout).toContain('if (setupMessage && focused && setupMessage !== outcomeText) AccessibilityInfo.announceForAccessibility(setupMessage);');
   });
 });
 

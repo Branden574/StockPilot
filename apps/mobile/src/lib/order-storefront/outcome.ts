@@ -43,3 +43,19 @@ export function storefrontOutcome(
   const other = snap.submission.deviceError ?? snap.refusal;
   return other ? { text: other, tone: 'critical' } : null;
 }
+
+/**
+ * The outcome beside the turned-off or refused state's own message (simulator
+ * walk D10): a Submit refused for permission is followed by the answer read
+ * again, refused for the same reason, and both say "Your account can't place
+ * orders. Ask an admin.". One sentence is shown once, as the setup message;
+ * different words, or an answer still loading, keep the outcome. Pure.
+ */
+export function outcomeBesideSetup(
+  outcome: StorefrontOutcome | null,
+  setup: { status: 'loading' } | { status: string; message: string },
+): StorefrontOutcome | null {
+  if (!outcome) return null;
+  if ('message' in setup && setup.message === outcome.text) return null;
+  return outcome;
+}

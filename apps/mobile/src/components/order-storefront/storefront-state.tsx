@@ -3,7 +3,7 @@ import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Body, Display } from '@/components/ui/text';
-import type { StorefrontOutcome } from '@/lib/order-storefront/outcome';
+import { outcomeBesideSetup, type StorefrontOutcome } from '@/lib/order-storefront/outcome';
 import type { SetupState } from '@/lib/order-storefront/session';
 import { STOREFRONT_GUTTER } from '@/lib/order-storefront/layout';
 import { useTheme } from '@/lib/use-theme';
@@ -39,6 +39,8 @@ export function StorefrontState({
   outcome?: StorefrontOutcome | null;
 }) {
   const { c } = useTheme();
+  // The same sentence as the setup message is said once (simulator walk D10).
+  const shown = outcomeBesideSetup(outcome ?? null, setup);
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
@@ -52,9 +54,9 @@ export function StorefrontState({
           {title}
         </Display>
         {panel ?? null}
-        {outcome ? (
-          <Body size={14} color={outcome.tone === 'calm' ? c.ink : c.critText} accessibilityRole="alert">
-            {outcome.text}
+        {shown ? (
+          <Body size={14} color={shown.tone === 'calm' ? c.ink : c.critText} accessibilityRole="alert">
+            {shown.text}
           </Body>
         ) : null}
         {setup.status === 'loading' ? (

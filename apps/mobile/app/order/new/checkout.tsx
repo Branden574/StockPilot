@@ -161,9 +161,10 @@ export default function Checkout() {
   const stage = checkoutStage(snap);
   const setupMessage =
     snap && snap.setup.status !== 'ready' && snap.setup.status !== 'loading' ? snap.setup.message : null;
+  // A setup message with the outcome's own words was said already (D10).
   React.useEffect(() => {
-    if (setupMessage && focused) AccessibilityInfo.announceForAccessibility(setupMessage);
-  }, [setupMessage, focused]);
+    if (setupMessage && focused && setupMessage !== outcomeText) AccessibilityInfo.announceForAccessibility(setupMessage);
+  }, [setupMessage, focused, outcomeText]);
 
   const leave = () => {
     if (router.canGoBack()) router.back();
