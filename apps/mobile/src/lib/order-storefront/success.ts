@@ -11,6 +11,7 @@ import {
   type OrderCatalogSite,
   type OrderStorefrontDeliveryRecipients,
   type OrderStorefrontViewer,
+  type OrderStorefrontWarehouse,
   type StorefrontItem,
 } from '@stockpilot/core';
 
@@ -28,6 +29,62 @@ import type { PlacedContext } from './session';
  * canRequestDelivery (requester-only, a policy the owner keeps for that
  * screen). It opens a draft on this phone; nothing is sent.
  */
+
+/**
+ * What the success screen shows beside the order (PO-4 review): the
+ * warehouse's name, whether this person approves orders (Review and approve),
+ * the email's routing, who is placing it, the organization's zone, the
+ * delivery sites and the names of the lines sent. Taken from the storefront
+ * answer and the catalog AS THEY WERE WHEN THE ORDER WAS PLACED (session.ts
+ * keeps it on PlacedContext), so a read on return from the mail app that comes
+ * back turned off or refused never takes the email, Review and approve or the
+ * warehouse's name away from a screen about an order already placed.
+ */
+export interface SuccessContext {
+  warehouseName: string;
+  canApproveOrders: boolean;
+  recipients: OrderStorefrontDeliveryRecipients | null;
+  viewer: Pick<OrderStorefrontViewer, 'name' | 'email'>;
+  orgTimezone: string | null;
+  sites: readonly OrderCatalogSite[];
+  /** The name and SKU of each line sent, as the catalog named it. */
+  items: ReadonlyMap<string, { name: string; sku: string }>;
+}
+
+export function successContextFrom(input: {
+  answer: {
+    warehouses: readonly OrderStorefrontWarehouse[];
+    viewer: Pick<OrderStorefrontViewer, 'name' | 'email' | 'canApproveOrders'>;
+    deliveryRecipients: OrderStorefrontDeliveryRecipients | null;
+    orgTimezone: string | null;
+  };
+  warehouseId: string;
+  sites: readonly OrderCatalogSite[];
+  itemMap: ReadonlyMap<string, StorefrontItem>;
+  lines: readonly { itemId: string }[];
+}): SuccessContext {
+  const items = new Map<string, { name: string; sku: string }>();
+  for (const l of input.lines) {
+    const it = input.itemMap.get(l.itemId);
+    if (it) items.set(l.itemId, { name: it.name, sku: it.sku });
+  }
+  return {
+    warehouseName: input.answer.warehouses.find((w) => w.id === input.warehouseId)?.name ?? '',
+    canApproveOrders: input.answer.viewer.canApproveOrders,
+    recipients: input.answer.deliveryRecipients,
+    viewer: { name: input.answer.viewer.name, email: input.answer.viewer.email },
+    orgTimezone: input.answer.orgTimezone,
+    sites: input.sites,
+    items,
+  };
+}
+
+/** The context the success screen draws from: the one taken when the order
+ *  was placed; only when none could be taken (placed while the storefront
+ *  was turned off or refused: a settle with no answer), the answer shown now. */
+export function successContextFor(placed: Pick<PlacedContext, 'context'>, live: SuccessContext | null): SuccessContext | null {
+  return placed.context ?? live;
+}
 
 /** "SO-000123 · DC4 · 12 units". */
 export function successReference(placed: PlacedContext, warehouseName: string): string {
@@ -73,46 +130,33 @@ export function successOrderHref(orderId: string, canApproveOrders: boolean): st
  * closed: never mail an address nothing validated), or a body an earlier
  * build wrote that this one cannot read.
  */
-export function successEmailInput(input: {
-  placed: PlacedContext;
-  recipients: OrderStorefrontDeliveryRecipients | null;
-  warehouseName: string;
-  sites: readonly OrderCatalogSite[];
-  viewer: Pick<OrderStorefrontViewer, 'name' | 'email'>;
-  orgTimezone: string | null;
-  itemMap: ReadonlyMap<string, StorefrontItem>;
-}): DeliveryRequestInput | null {
-  const { placed } = input;
-  if (!input.recipients || !placed.body) return null;
+export function successEmailInput(input: { placed: PlacedContext; context: SuccessContext }): DeliveryRequestInput | null {
+  const { placed, context } = input;
+  if (!context.recipients || !placed.body) return null;
   let recipients;
   try {
     recipients = deliveryRequestRecipients({
-      to: input.recipients.to,
-      cc: input.recipients.cc,
-      ...(input.recipients.toName ? { toName: input.recipients.toName } : {}),
-      ...(input.recipients.ccName ? { ccName: input.recipients.ccName } : {}),
+      to: context.recipients.to,
+      cc: context.recipients.cc,
+      ...(context.recipients.toName ? { toName: context.recipients.toName } : {}),
+      ...(context.recipients.ccName ? { ccName: context.recipients.ccName } : {}),
     });
   } catch {
     return null;
   }
-  const site = input.sites.find((s) => s.id === placed.body!.deliveryCharterId) ?? null;
-  const items = new Map<string, { name: string; sku: string }>();
-  for (const l of placed.body.lines) {
-    const it = input.itemMap.get(l.itemId);
-    if (it) items.set(l.itemId, { name: it.name, sku: it.sku });
-  }
-  const email = input.viewer.email ?? null;
+  const site = context.sites.find((s) => s.id === placed.body!.deliveryCharterId) ?? null;
+  const email = context.viewer.email ?? null;
   return deliveryRequestInputFromSubmission(
     placed.order,
     {
-      warehouseName: input.warehouseName,
+      warehouseName: context.warehouseName,
       destination: site ? { id: site.id, name: site.name, code: site.code, address: site.address } : null,
-      viewerLabel: input.viewer.name?.trim() || email || '',
+      viewerLabel: context.viewer.name?.trim() || email || '',
       viewerEmail: email,
-      orgTimezone: input.orgTimezone,
+      orgTimezone: context.orgTimezone,
       notes: placed.body.notes ?? null,
       lines: placed.body.lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
-      itemMap: items,
+      itemMap: context.items,
     },
     recipients,
   );

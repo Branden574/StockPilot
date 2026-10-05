@@ -65,6 +65,7 @@ import {
   type KeyValueStore,
 } from './store';
 import { createSubmitEngine, type SubmitEngine, type SubmitEngineSnapshot } from './submit';
+import { successContextFrom, type SuccessContext } from './success';
 
 /**
  * ONE ACCOUNT'S STOREFRONT IN ONE ORGANIZATION (phone ordering PO-4): what
@@ -162,6 +163,12 @@ export interface PlacedContext {
   /** The success screen has shown it (desk check F10): a storefront that
    *  comes into focus afterwards clears it instead of showing it again. */
   shown: boolean;
+  /** What the success screen shows beside the order, taken from the answer
+   *  and the catalog when it was placed (PO-4 review), so a later read that
+   *  comes back turned off or refused never changes that screen. Null when
+   *  there was no answer to take it from (a settle while the storefront was
+   *  turned off or refused): the screen then uses the answer shown. */
+  context: SuccessContext | null;
 }
 
 export interface StorefrontSnapshot {
@@ -486,12 +493,23 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         if (lastLocked && !nowLocked) refusal = null;
         lastLocked = nowLocked;
         if (snap.state.phase === 'placed') {
+          const sites = catalog.answer?.sites;
           placed = {
             order: snap.state.order,
             replay: snap.state.replay,
             viaWithdraw: snap.state.viaWithdraw,
             body: sentBody,
             shown: false,
+            context:
+              setup.status === 'ready'
+                ? successContextFrom({
+                    answer: setup.answer,
+                    warehouseId: snap.state.order.warehouseId,
+                    sites: sites?.status === 'ok' ? sites.sites : [],
+                    itemMap,
+                    lines: sentBody?.lines ?? [],
+                  })
+                : null,
           };
           if (cart) cart = cartReducer(cart, { type: 'reset' });
           refusedItems = new Set();

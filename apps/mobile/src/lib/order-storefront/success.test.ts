@@ -12,6 +12,8 @@ import type { PlacedContext } from './session';
 import {
   orderStatusLabel,
   placedOnStorefrontFocus,
+  successContextFor,
+  successContextFrom,
   successEmailInput,
   successOrderHref,
   successReference,
@@ -56,6 +58,7 @@ const placed = (patch: Partial<PlacedContext> = {}): PlacedContext => ({
   viaWithdraw: false,
   body: BODY,
   shown: false,
+  context: null,
   ...patch,
 });
 
@@ -112,14 +115,15 @@ describe('the pickup or delivery request email (offered to every placer when rou
   const base = {
     recipients: ROUTING,
     warehouseName: 'DC4',
+    canApproveOrders: false,
     sites: [{ id: SITE, name: 'North', code: 'N', address: { line1: '1 Main' } }],
     viewer: { name: 'Pat Placer', email: 'pat@x.org' },
     orgTimezone: 'America/Los_Angeles',
-    itemMap: ITEMS,
+    items: new Map([[ITEM, { name: 'Planner', sku: 'PL-1' }]]),
   };
 
   it('a pickup: the real method, the stored needed-by INSTANT, no destination, the viewer as requester', () => {
-    const input = successEmailInput({ ...base, placed: placed() })!;
+    const input = successEmailInput({ placed: placed(), context: base })!;
     expect(input.fulfillmentType).toBe('pickup');
     expect(input.destination).toBeNull();
     expect(input.neededByLocal).toBe('2026-10-05T17:00:00.000Z');
@@ -137,7 +141,7 @@ describe('the pickup or delivery request email (offered to every placer when rou
   it('a delivery for someone else: the site placed for, and the person it is for', () => {
     const order = { ...ORDER_SUMMARY, fulfillmentType: 'delivery' as const, deliveryCharterId: SITE, requestedFor: { self: false as const, name: 'Maria', email: 'maria@x.org' } };
     const input = successEmailInput({
-      ...base,
+      context: base,
       placed: placed({ order, body: { ...BODY, fulfillmentType: 'delivery', deliveryCharterId: SITE, onBehalfOf: { name: 'Maria', email: 'maria@x.org' } } }),
     })!;
     expect(input.destination).toMatchObject({ id: SITE, name: 'North' });
@@ -146,9 +150,53 @@ describe('the pickup or delivery request email (offered to every placer when rou
   });
 
   it('no routing, routing core refuses, or a body this build cannot read: no email', () => {
-    expect(successEmailInput({ ...base, placed: placed(), recipients: null })).toBeNull();
-    expect(successEmailInput({ ...base, placed: placed(), recipients: { ...ROUTING, to: 'not an address' } })).toBeNull();
-    expect(successEmailInput({ ...base, placed: placed({ body: null }) })).toBeNull();
+    expect(successEmailInput({ placed: placed(), context: { ...base, recipients: null } })).toBeNull();
+    expect(successEmailInput({ placed: placed(), context: { ...base, recipients: { ...ROUTING, to: 'not an address' } } })).toBeNull();
+    expect(successEmailInput({ placed: placed({ body: null }), context: base })).toBeNull();
+  });
+});
+
+// PO-4 review: the success screen read the storefront answer shown NOW, so a
+// read on return from Outlook that came back turned off or refused took the
+// email away, turned Review and approve into View order and dropped the
+// warehouse from the reference line. It now shows what was true when the
+// order was placed.
+describe('what the success screen shows is taken when the order is placed (PO-4 review)', () => {
+  const answer = {
+    warehouses: [{ id: WH, name: 'DC4' }],
+    viewer: { userId: 'u', role: 'manager' as const, name: 'Pat Placer', email: 'pat@x.org', canOrderOnBehalf: true, canApproveOrders: true },
+    deliveryRecipients: ROUTING,
+    orgTimezone: 'America/Los_Angeles',
+  };
+  const SITES = [{ id: SITE, name: 'North', code: 'N', address: null }];
+
+  it('the warehouse’s name, the approve gate, the routing, the viewer, the zone, the sites and the names of the lines sent', () => {
+    const OTHER = '44444444-4444-4444-8444-444444444499';
+    const items = new Map(ITEMS);
+    items.set(OTHER, { ...ITEMS.get(ITEM)!, id: OTHER, name: 'Mug', sku: 'MG' });
+    const ctx = successContextFrom({ answer, warehouseId: WH, sites: SITES, itemMap: items, lines: BODY.lines });
+    expect(ctx).toEqual({
+      warehouseName: 'DC4',
+      canApproveOrders: true,
+      recipients: ROUTING,
+      viewer: { name: 'Pat Placer', email: 'pat@x.org' },
+      orgTimezone: 'America/Los_Angeles',
+      sites: SITES,
+      items: new Map([[ITEM, { name: 'Planner', sku: 'PL-1' }]]),
+    });
+  });
+
+  it('a warehouse the answer no longer lists has no name (core leaves it out of the line)', () => {
+    expect(successContextFrom({ answer, warehouseId: 'gone', sites: [], itemMap: ITEMS, lines: [] }).warehouseName).toBe('');
+  });
+
+  it('the screen keeps the context taken when it was placed over the answer shown now; with none taken, the answer shown now', () => {
+    const taken = successContextFrom({ answer, warehouseId: WH, sites: SITES, itemMap: ITEMS, lines: BODY.lines });
+    const now = { ...taken, canApproveOrders: false, recipients: null, warehouseName: '' };
+    expect(successContextFor(placed({ context: taken }), now)).toBe(taken);
+    expect(successContextFor(placed({ context: taken }), null)).toBe(taken);
+    expect(successContextFor(placed({ context: null }), now)).toBe(now);
+    expect(successContextFor(placed({ context: null }), null)).toBeNull();
   });
 });
 

@@ -412,7 +412,8 @@ describe('nothing about an order is queued, written directly, or sent as anyone 
 describe('the success screen’s email', () => {
   it('built from the submission and offered to every placer: never gated by the order screen’s requester-only rule', () => {
     expect(placed).not.toMatch(/canRequestDelivery/);
-    expect(placed).toMatch(/successEmailInput\(\{\s*placed,\s*recipients: ready\.deliveryRecipients,/);
+    // The routing comes with the context taken at placed (PO-4 review).
+    expect(placed).toMatch(/successEmailInput\(\{ placed, context \}\)/);
     expect(placed).toContain('prepareDeliveryRequest(emailInput, { transport: deliveryComposeTransport(nativeOutlook) })');
   });
 
@@ -429,7 +430,9 @@ describe('the success screen’s email', () => {
   });
 
   it('Review and approve follows the server’s approve gate (the effective orders:approve, never a viewer)', () => {
-    expect(placed).toContain('const canApprove = ready?.viewer.canApproveOrders ?? false;');
+    // The server's canApproveOrders, as it was when the order was placed
+    // (successContextFrom reads answer.viewer.canApproveOrders; PO-4 review).
+    expect(placed).toContain('const canApprove = context?.canApproveOrders ?? false;');
     expect(placed).toContain('label={canApprove ? SUCCESS_REVIEW_AND_APPROVE_COPY : SUCCESS_VIEW_ORDER_COPY}');
     expect(placed).toContain('onPress={() => router.push(successOrderHref(order.id, canApprove) as Href)}');
   });
@@ -710,5 +713,18 @@ describe('checkout says why when the storefront is not usable, never a spinner t
     expect(state).toContain('onCheckAndFinish={() => void session.checkAndFinish()}');
     expect(state).toContain('onDontSend={() => void session.dontSend()}');
     expect(state).toContain('onRefresh={() => void refresh()}');
+  });
+});
+
+// PO-4 review: the success screen drew from the answer shown now. Mutations
+// caught: Review and approve, the warehouse's name or the email read from the
+// live answer again.
+describe('the success screen draws from what was true when it was placed (PO-4 review)', () => {
+  it('one context, taken at placed (the live answer only when none was taken), feeds the approve gate, the reference line and the email', () => {
+    expect(placed).toContain('const context = placed ? successContextFor(placed, live) : null;');
+    expect(placed).toContain("const warehouseName = context?.warehouseName ?? '';");
+    expect(placed).toContain('const canApprove = context?.canApproveOrders ?? false;');
+    expect(placed).toMatch(/successEmailInput\(\{ placed, context \}\)/);
+    expect(placed).not.toMatch(/ready\?\.viewer\.canApproveOrders|ready\.deliveryRecipients/);
   });
 });

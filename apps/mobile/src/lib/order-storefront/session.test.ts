@@ -1115,3 +1115,53 @@ describe('checkout when the answer read again is no longer ready (PO-4 review)',
     expect(checkoutStage(snap())).toBe('unavailable');
   });
 });
+
+// PO-4 review: the success screen took its warehouse name, the approve gate
+// and the email's routing from the answer shown at the time it drew, so a
+// read that came back turned off or refused (on return from Outlook) changed
+// a screen describing an order already placed.
+describe('the success screen keeps what was true when the order was placed (PO-4 review)', () => {
+  const approverWithRouting = (): OrderStorefrontAnswer => ({
+    ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>),
+    viewer: { ...(storefrontAnswer() as Extract<OrderStorefrontAnswer, { enabled: true }>).viewer, canOrderOnBehalf: true, canApproveOrders: true },
+    deliveryRecipients: { to: 'intake@example.org', cc: 'copy@example.org', toName: null, ccName: null },
+  });
+
+  it('placed takes the answer and the catalog as they are; an answer read later as refused changes none of it', async () => {
+    api.storefront.mockResolvedValueOnce(approverWithRouting());
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    await session.submit(false);
+    expect(snap().placed?.context).toMatchObject({
+      warehouseName: 'DC4',
+      canApproveOrders: true,
+      recipients: { to: 'intake@example.org' },
+      viewer: { name: 'Pat', email: 'pat@x.org' },
+      orgTimezone: 'America/Los_Angeles',
+    });
+    expect(snap().placed?.context?.items.get(A)).toEqual({ name: 'Planner', sku: 'PL' });
+    const taken = snap().placed?.context;
+    // Back from Outlook a minute later: the answer is read again and refused.
+    now += STOREFRONT_ANSWER_STALE_MS + 1;
+    api.storefront.mockRejectedValueOnce({ status: 403, code: 'forbidden', details: { reason: 'permission' } });
+    await session.focus();
+    expect(snap().setup.status).toBe('refused');
+    expect(snap().placed?.context).toBe(taken);
+  });
+
+  it('placed with no answer to take it from (the kill switch’s settle): no context, the screen fills it from the next answer', async () => {
+    api.storefront.mockResolvedValueOnce({ organizationId: ORG, enabled: false, message: ORDER_PHONE_TURNED_OFF_COPY, serverNow: 'x' });
+    const pending: PendingOrderSubmission = {
+      key: KEY,
+      state: 'possibly_sent',
+      sends: 1,
+      firstSentAt: '2026-10-04T11:00:00.000Z',
+      body: { idempotencyKey: KEY, placerUserId: USER, warehouseId: WH, fulfillmentType: 'pickup', deliveryCharterId: null, onBehalfOf: null, notes: null, neededByLocal: null, lines: [{ itemId: A, quantity: 4 }] },
+    };
+    store.data.set(draftKey, serializeOrderDraft({ userId: USER, orgId: ORG, warehouseId: WH }, { cart: initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' }), submission: pending }, new Date()));
+    api.status.mockResolvedValueOnce({ ok: true, status: 200, body: { organizationId: ORG, outcome: 'placed', order: SUMMARY } });
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().submission.state.phase).toBe('placed'));
+    expect(snap().placed?.context).toBeNull();
+  });
+});

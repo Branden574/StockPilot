@@ -53,6 +53,8 @@ import { storefrontLayout } from '@/lib/order-storefront/layout';
 import { storefrontSession, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import {
   orderStatusLabel,
+  successContextFor,
+  successContextFrom,
   successEmailInput,
   successOrderHref,
   successReference,
@@ -94,24 +96,32 @@ export default function OrderPlaced() {
   React.useEffect(() => {
     if (placedId) session.placedShown();
   }, [placedId, session]);
+  // What this screen shows beside the order was taken when it was placed
+  // (PO-4 review): a read of the answer on return from the mail app that
+  // comes back turned off or refused changes nothing here. Only an order
+  // placed with no answer to take it from uses the answer shown now.
   const ready = snap?.setup.status === 'ready' ? snap.setup.answer : null;
-  const warehouseName = ready?.warehouses.find((w) => w.id === placed?.order.warehouseId)?.name ?? '';
   const sites = snap?.catalog.answer?.sites;
-
-  const emailInput = React.useMemo(
+  const itemMap = snap?.itemMap;
+  const live = React.useMemo(
     () =>
-      placed && ready && snap
-        ? successEmailInput({
-            placed,
-            recipients: ready.deliveryRecipients,
-            warehouseName,
+      placed && ready && itemMap
+        ? successContextFrom({
+            answer: ready,
+            warehouseId: placed.order.warehouseId,
             sites: sites?.status === 'ok' ? sites.sites : [],
-            viewer: ready.viewer,
-            orgTimezone: ready.orgTimezone,
-            itemMap: snap.itemMap,
+            itemMap,
+            lines: placed.body?.lines ?? [],
           })
         : null,
-    [placed, ready, snap, warehouseName, sites],
+    [placed, ready, itemMap, sites],
+  );
+  const context = placed ? successContextFor(placed, live) : null;
+  const warehouseName = context?.warehouseName ?? '';
+
+  const emailInput = React.useMemo(
+    () => (placed && context ? successEmailInput({ placed, context }) : null),
+    [placed, context],
   );
 
   // Is the native Outlook app installed? Probed once, only when the email is
@@ -183,7 +193,7 @@ export default function OrderPlaced() {
   }
 
   const order = placed.order;
-  const canApprove = ready?.viewer.canApproveOrders ?? false;
+  const canApprove = context?.canApproveOrders ?? false;
 
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
