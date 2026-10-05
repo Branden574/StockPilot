@@ -118,19 +118,20 @@ const sqlText = (v) => `'${String(v).replace(/'/g, "''")}'`;
 
 /** The pgTAP data block: the snapshot's facts as rows. */
 export function renderPgtapBlock(s) {
-  const rows = (items) => items.map((r) => `  (${r.map(sqlText).join(', ')})`).join(',\n');
+  // An empty list inserts nothing (`values` with no rows is a syntax error).
+  const insert = (head, items) =>
+    items.length === 0
+      ? [`-- (no rows for: ${head})`]
+      : [`${head} values`, `${items.map((r) => `  (${r.map(sqlText).join(', ')})`).join(',\n')};`];
   const fkRows = s.foreignKeys.map(([t, n, r, c, rc]) => [t, n, r, c.join(','), rc.join(',')]);
   const junctionRows = s.junctions.map((x) => [x.junction, x.a, x.b, x.via[0], x.via[1]]);
   const pairRows = s.ambiguousPairs.map((p) => [p.a, p.b, p.relationships.join(',')]);
   return [
     BEGIN_MARKER,
     `-- ${s.foreignKeys.length} foreign keys, ${s.junctions.length} junctions, ${s.ambiguousPairs.length} ambiguous pairs.`,
-    'insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values',
-    `${rows(fkRows)};`,
-    'insert into expected_junctions (junction, a, b, a_fk, b_fk) values',
-    `${rows(junctionRows)};`,
-    'insert into expected_pairs (a, b, relationships) values',
-    `${rows(pairRows)};`,
+    ...insert('insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols)', fkRows),
+    ...insert('insert into expected_junctions (junction, a, b, a_fk, b_fk)', junctionRows),
+    ...insert('insert into expected_pairs (a, b, relationships)', pairRows),
     END_MARKER,
   ].join('\n');
 }
