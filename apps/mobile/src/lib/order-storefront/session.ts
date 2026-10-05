@@ -279,6 +279,9 @@ export interface StorefrontSession {
 export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   const listeners = new Set<() => void>();
   let scope: SessionScope | null = null;
+  /** The account epoch the scope was opened in: a sign-out ends it, and the
+   *  same account signing back in starts over (simulator walk D4). */
+  let scopeEpoch: number | null = null;
   let scopeGen = 0;
   let warehouseGen = 0;
 
@@ -750,7 +753,16 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     },
 
     async open(next) {
-      const same = scope !== null && scope.userId === next.userId && scope.orgId === next.orgId;
+      // The same account and organization, in the same account epoch. A
+      // sign-out ends the epoch even when no storefront screen was mounted to
+      // close the session, and the account's storage was cleared: everything
+      // kept here belongs to that ended session (its writer refuses every
+      // save), so the same account signing back in starts over.
+      const same =
+        scope !== null &&
+        scope.userId === next.userId &&
+        scope.orgId === next.orgId &&
+        scopeEpoch === deps.epoch();
       if (same) {
         // A screen opening again: read the answer again when it failed, or
         // once it is stale (never on every mount).
@@ -760,8 +772,9 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
         }
         return;
       }
-      resetScope(scope !== null && scope.userId === next.userId);
+      resetScope(scope !== null && scope.userId === next.userId && scopeEpoch === deps.epoch());
       scope = { ...next };
+      scopeEpoch = deps.epoch();
       publish();
       await readStorefront(scopeGen);
     },
@@ -944,6 +957,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     close() {
       resetScope(false);
       scope = null;
+      scopeEpoch = null;
       publish();
     },
   };

@@ -1042,3 +1042,33 @@ describe('the storefront answer is read again before Submit (re-check: approve r
     expect(api.storefront).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('signing out and back in as the same account starts over (simulator walk D4)', () => {
+  it('a sign-out ends the epoch: the next open reads everything again, the cart cleared at sign-out stays cleared, and Submit can send', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    await flushSaves();
+    expect(store.data.get(draftKey)).toBeDefined();
+    // Sign-out with no storefront screen mounted (nothing calls close()):
+    // the epoch ends and the account's storage is cleared.
+    epoch += 1;
+    store.data.clear();
+    // The same account signs back in and opens the storefront.
+    await session.open(scope);
+    expect(api.storefront).toHaveBeenCalledTimes(2);
+    expect(snap().cart?.lines).toEqual([]);
+    session.dispatch({ type: 'add', itemId: A, quantity: 1 });
+    await session.submit(false);
+    expect(snap().submission.deviceError).toBeNull();
+    expect(api.place).toHaveBeenCalledTimes(1);
+    expect(snap().submission.state.phase).toBe('placed');
+  });
+
+  it('the same epoch keeps the open storefront (a screen mounting again reads nothing new)', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    await session.open(scope);
+    expect(api.storefront).toHaveBeenCalledTimes(1);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+  });
+});
