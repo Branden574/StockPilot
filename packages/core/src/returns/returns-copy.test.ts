@@ -18,6 +18,7 @@ import {
   pickingWaitsSentence,
   prepareTakeLine,
   releasedBeforeReturnLine,
+  releaseOutcomeLine,
   replacementShortLine,
   slipExchangeLine,
   stillWaitingLine,
@@ -150,6 +151,13 @@ describe('returns copy', () => {
     expect(createdAsReplacementLabel('RMA-1', 2)).toBe('Created as exchange replacement for RMA-1 (revision 2)');
     expect(createdAsReplacementLabel('RMA-1', 1)).toBe('Created as exchange replacement for RMA-1');
     expect(replacementShortLine('Large', 0, 1)).toBe('Large: 0 available, 1 needed.');
+  });
+
+  it('RX-2: words an early release the same on the web and the phone', () => {
+    expect(releaseOutcomeLine({ changed: true })).toBe('Released for picking.');
+    expect(releaseOutcomeLine({ changed: false, notNeeded: true })).toBe('The return was already received.');
+    expect(releaseOutcomeLine({ changed: false, notNeeded: false })).toBe('Already released.');
+    expect(releaseOutcomeLine({})).toBe('Already released.');
   });
 
   it('builds the staff push body from what exists, joined by a middle dot', () => {

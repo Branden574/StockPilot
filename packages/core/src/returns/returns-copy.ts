@@ -125,6 +125,9 @@ export const RETURNS_COPY = {
   getReplacementReadyHelp: 'Prints the pick slip, picks, prints the packing slips and stages it. Stops before the signature.',
   changeOrCancelHere: 'Change or cancel this replacement from its RMA.',
   releaseBeforeReturn: 'Release before return is received',
+  releasedForPicking: 'Released for picking.',
+  releaseNotNeeded: 'The return was already received.',
+  releaseAlreadyDone: 'Already released.',
 
   // The outbound rail (RX-2)
   railRequested: 'Requested',
@@ -344,6 +347,16 @@ export function exchangeReplacementBanner(returnNumber: string | null, originalO
 /** "Replacement reserved. Waiting for returned item (RMA-…)" (the gated order). */
 export function waitingForReturnLine(returnNumber: string | null): string {
   return `Replacement reserved. Waiting for returned item${returnNumber ? ` (${returnNumber})` : ''}`;
+}
+
+/**
+ * The words after "Release before return is received" (web and phone, one
+ * rule): released now, not needed (the returned item already arrived), or
+ * a repeat of a release already made.
+ */
+export function releaseOutcomeLine(answer: { changed?: boolean | null; notNeeded?: boolean | null }): string {
+  if (answer.changed) return RETURNS_COPY.releasedForPicking;
+  return answer.notNeeded ? RETURNS_COPY.releaseNotNeeded : RETURNS_COPY.releaseAlreadyDone;
 }
 
 /** "Released before the return by Dana: Swap at delivery." (the reason only for staff who read returns). */

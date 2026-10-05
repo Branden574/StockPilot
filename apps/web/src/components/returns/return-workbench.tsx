@@ -64,6 +64,7 @@ import {
   preselectedChoice,
   processLabelFor,
   qtyReturningLabel,
+  releaseOutcomeLine,
   returnActionLabel,
   returnLineLabel,
   replacementShortItems,
@@ -322,11 +323,11 @@ export function ReturnWorkbench({
     setBusy(null);
     if (res.ok && !res.data.answer.changed) {
       adopt(res.data.workbench as Workbench);
-      toast.message(res.data.answer.notNeeded ? 'The return was already received.' : 'Already released.');
+      toast.message(releaseOutcomeLine(res.data.answer));
       setReleaseOpen(false);
       return;
     }
-    if (afterReplacement(res, 'Released for picking.')) setReleaseOpen(false);
+    if (afterReplacement(res, RETURNS_COPY.releasedForPicking)) setReleaseOpen(false);
   }
 
   async function cancelReplacement(reason: string) {

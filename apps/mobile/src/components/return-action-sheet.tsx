@@ -26,6 +26,7 @@ import {
   RETURN_REASON_MAX,
   RETURN_RELEASE_REASON_MAX,
   RETURNS_COPY,
+  releaseOutcomeLine,
   restockOptionRows,
   returnLineLabel,
   type ExchangeReviewState,
@@ -316,7 +317,7 @@ function SheetContent({
       if (mode === 'release') {
         const res = await releaseReturnReplacement(id, reasonText);
         onDone({
-          message: res.answer.changed ? 'Released for picking.' : res.answer.notNeeded ? 'The return was already received.' : 'Already released.',
+          message: releaseOutcomeLine(res.answer),
           workbench: res.workbench,
         });
         return;

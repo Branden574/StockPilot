@@ -67,6 +67,7 @@ import {
   describeDepartureRisk,
   isManagerOrAbove,
   previewPartialFulfilment,
+  releaseOutcomeLine,
   RETURNS_COPY,
   waitingForReturnLine,
   type CompletionConfirmCopy,
@@ -274,7 +275,7 @@ export function ManagerActionsPanel({
       router.refresh();
       return;
     }
-    toast.success(res.data.answer.notNeeded ? 'The return was already received.' : 'Released for picking.');
+    toast.success(releaseOutcomeLine(res.data.answer));
     setReleaseOpen(false);
     router.refresh();
   }

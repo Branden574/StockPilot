@@ -205,6 +205,7 @@ import {
   READINESS_NEEDS_CONNECTION_COPY,
   RETURNS_COPY,
   readinessOfflineCopy,
+  releaseOutcomeLine,
   shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
   type DepartureAction,
@@ -1104,10 +1105,7 @@ export default function OrderDetail() {
     try {
       const res = await releaseReturnReplacement(order.replacement.returnId, reason);
       setReleaseOpen(false);
-      Alert.alert(
-        res.answer.changed ? 'Released for picking' : res.answer.notNeeded ? 'Already received' : 'Already released',
-        res.answer.changed ? 'The pick slip can be generated now.' : 'The returned item is in, or it was released already.',
-      );
+      Alert.alert(RETURNS_COPY.releaseBeforeReturn, releaseOutcomeLine(res.answer));
       await load();
     } catch (e) {
       setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
