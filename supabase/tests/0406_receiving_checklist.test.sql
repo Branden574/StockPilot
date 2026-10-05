@@ -44,7 +44,8 @@
 -- N.  F4 writes no stock: counts and sums unchanged; reverse_receipt on a
 --     receipt with a completed run succeeds and the run stays.
 -- D.  An account deletion keeps versions and runs, nulls and stamps every
---     person column (the 0393 marker), and the CHECKs hold.
+--     person column (the 0393 marker), and the CHECKs hold; a person who only
+--     completed a run is stamped alone, the starter kept (desk check F12).
 -- Z.  The frozen receipt objects F4 must not touch.
 --
 -- Case markers: each `-- case: <name>` sits above the assertion that runs
@@ -71,8 +72,8 @@
 --   M15 the runs policy without the purchase-order EXISTS     -> L2, L3, L4
 --   M16 the versions policy USING true                        -> L5
 --   M17 retire accepts a non-live id                          -> R1
---   M18 the run trigger pair dropped                          -> A10, D1
---   M19 a run's person keys CASCADE instead of SET NULL       -> A7, D1
+--   M18 the run trigger pair dropped                          -> A10, D1, D3
+--   M19 a run's person keys CASCADE instead of SET NULL       -> A7, D1, D3
 --   M20 normalize keeps the client's keys                     -> P1, P7d
 --   M21 publish retires the live version a moment early       -> P10
 --   M22 publish reports a replay as made                      -> P11b
@@ -85,7 +86,7 @@
 
 begin;
 
-select plan(98);
+select plan(99);
 
 \set orgA     '\'03980000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03980000-0000-0000-0000-00000000000b\''
@@ -144,6 +145,7 @@ select plan(98);
 \set sv5      '\'03980000-0000-0000-0000-000000000605\''
 \set sv6      '\'03980000-0000-0000-0000-000000000606\''
 \set sv7      '\'03980000-0000-0000-0000-000000000607\''
+\set sv8      '\'03980000-0000-0000-0000-000000000608\''
 \set missing  '\'03980000-0000-0000-0000-0000000009ff\''
 
 -- ══ Helpers (the 0387/0393 shape, sentinel XX398) ═════════════════════════
@@ -957,6 +959,20 @@ select is(
            :'vD1', :'runD', :orgD, :orgD, :ownD, :'vD2')),
   'ok:1|null/null/true/true|null/null/true/true/completed/true|2/1|true',
   'D1: deleting the account of a manager who published, turned off, started and completed: both rows are kept, every person column is null and stamped (the 0393 marker; the CHECKs hold), the run stays completed, and the other publisher is untouched (undone)');
+-- Desk check F12: a person who only completed a run (the owner started it).
+insert into ids values ('rcD2', pg_temp.post(:ownD, :poD, :whD, :lnD, 1, '0398-kD2'));
+select v as "rcD2" from ids where k = 'rcD2' \gset
+select pg_temp.rpc(:ownD, pg_temp.start(:'rcD2')) as "sD2" \gset
+select pg_temp.val(:'sD2')::jsonb ->> 'runId' as "runD2" \gset
+select pg_temp.val(pg_temp.rpc(:del, pg_temp.save(:'runD2', '{"s1": {"value": "na"}}', 0, :sv8, true, null, 'status'))) as "runD2done" \gset
+select is(
+  pg_temp.undone(format('delete from auth.users where id = %L', :del),
+    format($q$select coalesce(r.started_by::text, 'null') || '/' || coalesce(r.completed_by::text, 'null') || '/'
+                     || (r.deleted_users ? 'started_by')::text || '/' || (r.deleted_users ? 'completed_by')::text
+                     || '/' || r.status || '/' || (r.completed_at is not null)::text
+                from public.checklist_runs r where r.id = %L$q$, :'runD2')),
+  'ok:1|' || :ownD || '/null/false/true/completed/true',
+  'D3: deleting the account of a manager who only completed a run (the owner started it): completed_by alone is null and stamped, the starter is kept unstamped, and the run stays completed (the completion pair CHECK accepts the stamp; undone)');
 select is(
   (select count(*) from public.checklist_runs where deleted_users is not null)::text || '/'
   || (select count(*) from public.checklist_versions where deleted_users is not null)::text || '/'
