@@ -5,6 +5,7 @@ import {
   MIN_TAP,
   SHEET_MAX_WIDTH,
   itemRowStacked,
+  kitRowStacked,
   stepperCountWidth,
   storefrontLayout,
   storefrontLayoutKind,
@@ -54,5 +55,36 @@ describe('rows and steppers', () => {
     expect(stepperCountWidth(5)).toBeGreaterThanOrEqual(MIN_TAP);
     expect(stepperCountWidth(10_000)).toBeGreaterThan(stepperCountWidth(5));
     expect(stepperCountWidth(-3)).toBeGreaterThanOrEqual(MIN_TAP);
+  });
+});
+
+// iPhone 17 simulator walk, 2026-10-05: at the default text size a kit in the
+// cart put its stepper and Details beside the text, which was left about
+// 88 pt wide: the kit's name and "Limited by ..." broke one word per line.
+describe('a kit row stacks its controls under the text when the text would be squeezed (simulator walk D1)', () => {
+  const rowOn = (width: number, fontScale = 1) => storefrontLayout({ width, fontScale }).catalogWidth - 40;
+  it('every iPhone width stacks a kit in the cart; Add kit and Details stay beside the text only on the widest', () => {
+    for (const width of [375, 393, 402, 430]) {
+      expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(width), inCart: 1, maxInCart: 3 })).toBe(true);
+    }
+    for (const width of [375, 393, 402]) {
+      expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(width), inCart: 0, maxInCart: 3 })).toBe(true);
+    }
+    expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(430), inCart: 0, maxInCart: 3 })).toBe(false);
+  });
+  it('the 13-inch iPad catalog column keeps the controls beside the text; the iPad mini column stacks', () => {
+    expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(1032), inCart: 1, maxInCart: 3 })).toBe(false);
+    expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(1032), inCart: 0, maxInCart: 3 })).toBe(false);
+    expect(kitRowStacked({ fontScale: 1, rowWidth: rowOn(744), inCart: 1, maxInCart: 3 })).toBe(true);
+  });
+  it('past the row threshold it always stacks; a width it cannot read stacks', () => {
+    expect(kitRowStacked({ fontScale: 1.5, rowWidth: 2000, inCart: 0, maxInCart: 1 })).toBe(true);
+    expect(kitRowStacked({ fontScale: 1, rowWidth: Number.NaN, inCart: 0, maxInCart: 1 })).toBe(true);
+  });
+  it('more digits in the stepper need more room', () => {
+    const at = (rowWidth: number, maxInCart: number) => kitRowStacked({ fontScale: 1, rowWidth, inCart: 1, maxInCart });
+    const w = 30 + 2 * MIN_TAP + stepperCountWidth(9) + 8 + 88 + 160;
+    expect(at(w, 9)).toBe(false);
+    expect(at(w, 99_999)).toBe(true);
   });
 });

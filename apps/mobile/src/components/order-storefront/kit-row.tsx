@@ -22,7 +22,7 @@ import {
   increaseKitLabel,
   kitRowLabel,
 } from '@/lib/order-storefront/a11y';
-import { itemRowStacked } from '@/lib/order-storefront/layout';
+import { STOREFRONT_GUTTER, kitRowStacked, storefrontLayout } from '@/lib/order-storefront/layout';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -54,8 +54,15 @@ export const KitRow = React.memo(function KitRow({
   onDetails: (bundleId: string) => void;
 }) {
   const { c } = useTheme();
-  const { fontScale } = useWindowDimensions();
-  const stacked = itemRowStacked(fontScale);
+  const { width, fontScale } = useWindowDimensions();
+  // The row is the catalog's width less its gutters; too little room beside
+  // the controls puts them under the text (simulator walk D1).
+  const stacked = kitRowStacked({
+    fontScale,
+    rowWidth: storefrontLayout({ width, fontScale }).catalogWidth - 2 * STOREFRONT_GUTTER,
+    inCart,
+    maxInCart,
+  });
   const avail = kitAvailability(kit, itemMap);
   const limiting = avail.limiting ? componentItem(avail.limiting.component, itemMap) : null;
   const out = avail.kits < 1;

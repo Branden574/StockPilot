@@ -72,6 +72,29 @@ export function itemRowStacked(fontScale: number): boolean {
   return finite(fontScale, 1) > ROW_STACK_FONT_SCALE;
 }
 
+/** A kit row's Add kit and Details buttons at the default size, in points. */
+export const KIT_ACTION_WIDTH = 88;
+/** The least room a kit's name and its "Limited by" line keep beside the
+ *  controls; less, and the controls go under the text. */
+export const KIT_TEXT_MIN_WIDTH = 160;
+/** The kit row's padding (10 each side) and the gap before its controls. */
+const KIT_ROW_CHROME = 30;
+const KIT_CONTROL_GAP = 8;
+
+/**
+ * A kit row stacks its controls under the text past the row threshold, and
+ * also whenever the text would keep less than KIT_TEXT_MIN_WIDTH beside them
+ * (simulator walk D1: on an iPhone at the default size a kit in the cart left
+ * the text about 88 pt, one word per line). `rowWidth` is the row's width.
+ */
+export function kitRowStacked(input: { fontScale: number; rowWidth: number; inCart: number; maxInCart: number }): boolean {
+  if (itemRowStacked(input.fontScale)) return true;
+  if (typeof input.rowWidth !== 'number' || !Number.isFinite(input.rowWidth)) return true;
+  const first = input.inCart > 0 ? 2 * MIN_TAP + stepperCountWidth(input.maxInCart) : KIT_ACTION_WIDTH;
+  const controls = first + KIT_CONTROL_GAP + KIT_ACTION_WIDTH;
+  return input.rowWidth - KIT_ROW_CHROME - controls < KIT_TEXT_MIN_WIDTH;
+}
+
 /** The stepper count's box: wide enough for the digits of what is
  *  available at the capped size (the pick field's rule), at least 44 pt. */
 export function stepperCountWidth(available: number): number {

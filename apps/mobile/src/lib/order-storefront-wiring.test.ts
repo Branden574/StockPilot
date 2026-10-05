@@ -615,3 +615,11 @@ describe('checkout keeps Manager notes in view above the keyboard (simulator wal
     expect(flat(fn)).toMatch(/onBlur=\{\(\) => \{ draft\.flush\(\); keyboard\.onNoteBlur\(\); \}\}/);
   });
 });
+
+describe('the kit row follows the tested stacking rule (simulator walk D1)', () => {
+  it('stacks by kitRowStacked over the catalog row width, never by the font scale alone', () => {
+    const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
+    expect(kitRow).toMatch(/const stacked = kitRowStacked\(\{\s*fontScale,\s*rowWidth:/);
+    expect(kitRow).not.toContain('itemRowStacked(');
+  });
+});
