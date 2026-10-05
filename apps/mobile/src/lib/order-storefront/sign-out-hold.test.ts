@@ -24,6 +24,7 @@ import {
   orderHoldKey,
   parseHolds,
   serializeHolds,
+  updateHolds,
   withdrawHeldSubmission,
   type HoldStore,
 } from './sign-out-hold';
@@ -393,6 +394,28 @@ describe('the marker is changed by a fresh read, never by an old one (PO-4 revie
     release(answer({ organizationId: ORG, outcome: 'placed', order: ORDER }));
     expect(await checking).toEqual({ placed: ['SO-000123'], unknown: [], dropped: 0 });
     expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_NEW]);
+  });
+
+  // The mutation pass (RV4b) showed nothing proved the changes run one at a
+  // time: two changes that both read before either writes lose one of them.
+  it('two changes at once both land: each reads what the one before it wrote', async () => {
+    const store = memory();
+    const slow: HoldStore = {
+      ...store,
+      // Read when asked, answered a moment later: two changes not run one at
+      // a time would both read the marker before either writes.
+      getItem: (k) => {
+        const v = store.data.get(k) ?? null;
+        return new Promise((r) => setTimeout(() => r(v), 5));
+      },
+    };
+    const a = holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING });
+    const b = holdFor({ orgId: ORG, warehouseId: WH2, pending: pendingNew });
+    await Promise.all([
+      updateHolds(slow, USER, (holds) => mergeHolds(holds, [a])),
+      updateHolds(slow, USER, (holds) => mergeHolds(holds, [b])),
+    ]);
+    expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null).map((h) => h.key)).toEqual([K_OLD, K_NEW]);
   });
 
   it('a check that settles nothing writes nothing', async () => {
