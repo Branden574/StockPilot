@@ -33,7 +33,9 @@ export type OrderStatusTab =
   | 'in_transit'
   | 'backordered'
   | 'completed'
-  | 'denied_cancelled';
+  | 'denied_cancelled'
+  /** Not a tab: the dashboard's "waiting for signature" filter (L88). */
+  | 'awaiting_signature';
 
 export function isOrderStatusTab(value: string | undefined): value is OrderStatusTab {
   return value !== undefined && value in ORDER_EXPORT_STATUS_TABS;
@@ -63,6 +65,9 @@ export const ORDER_EXPORT_STATUS_TABS: Record<
   backordered: 'backordered',
   completed: 'completed',
   denied_cancelled: ['denied', 'cancelled'],
+  // Orders that can be signed and are not yet: exactly the statuses
+  // OrderRequestsService.awaitingSignatureCount counts for the dashboard card.
+  awaiting_signature: ['staged_for_pickup', 'in_transit'],
 };
 
 /** Human labels per tab key — the page's tab strip and the PDF document
@@ -77,7 +82,13 @@ export const ORDER_EXPORT_TAB_LABELS: Record<OrderStatusTab, string> = {
   backordered: 'Backordered',
   completed: 'Completed',
   denied_cancelled: 'Denied/Cancelled',
+  awaiting_signature: 'Waiting for signature',
 };
+
+/** The dashboard's "N orders waiting for signature" card links here (L88).
+ *  The Orders page reads `?status=`; this filter is not in its tab strip, so
+ *  the page shows it as a labelled filter with a way back to all orders. */
+export const ORDERS_AWAITING_SIGNATURE_HREF = '/dashboard/orders?status=awaiting_signature';
 
 // Statuses an explicit ?status=<status> param may select. Deliberately
 // EXCLUDES 'pending_confirmation': those are public-submit limbo rows the

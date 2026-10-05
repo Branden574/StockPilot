@@ -165,3 +165,26 @@ describe('Orders page: server chain before rows', () => {
     expect(unhandled).toEqual([]);
   });
 });
+
+// L88: the dashboard's "waiting for signature" card opens this filter. It is
+// not in the tab strip, so the page says what it shows and links back.
+describe('Orders page: the Waiting for signature filter (L88)', () => {
+  it('lists staged-for-pickup and in-transit orders, says so, and links back to all active orders', async () => {
+    const view = render(await callPage({ status: 'awaiting_signature' }));
+
+    expect(m.list).toHaveBeenCalledWith(
+      expect.objectContaining({ status: ['staged_for_pickup', 'in_transit'] }),
+    );
+    expect(view.getByText('Waiting for signature')).toBeTruthy();
+    const back = view.getByText('Show all active orders').closest('a');
+    expect(back?.getAttribute('href')).toBe('/dashboard/orders?status=all_active');
+    // Not a tab: the strip does not grow a tenth entry.
+    const strip = view.getByRole('navigation', { name: 'Status' });
+    expect(strip.querySelectorAll('a')).toHaveLength(9);
+  });
+
+  it('an ordinary tab shows no filter line', async () => {
+    const view = render(await callPage({ status: 'in_transit' }));
+    expect(view.queryByText('Show all active orders')).toBeNull();
+  });
+});

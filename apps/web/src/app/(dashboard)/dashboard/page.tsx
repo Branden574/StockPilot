@@ -36,6 +36,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
+import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
   getMfaFactorsForRequest,
@@ -548,7 +549,7 @@ async function DashboardBody({
       title: `${awaitingSignature} order${awaitingSignature === 1 ? '' : 's'} waiting for signature`,
       detail:
         'Staged for pickup or out for delivery. Confirm the QR-scan signature on arrival or hand-off.',
-      href: '/dashboard/orders?tab=in_transit',
+      href: ORDERS_AWAITING_SIGNATURE_HREF,
       rank: 5,
       tone: 'neutral',
     });
