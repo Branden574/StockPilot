@@ -353,8 +353,12 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   migrations re-states its `grant execute ... to authenticated, service_role`
   unchanged and puts the entire fix in the body.
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
-  stale entry, and no entry whose body has grown an `INSERT`/`UPDATE`/`DELETE`),
-  with INV-29 and INV-30 as the controls. Those two plant their own probes
+  stale entry, and no entry whose body has grown a write: `INSERT INTO`,
+  `MERGE INTO [ONLY]`, `UPDATE [ONLY]` of any table, unqualified or quoted, or
+  `DELETE FROM [ONLY]`; one detector shared with INV-30 and INV-31 since 0396,
+  which also caught the forms the old `update public.` pattern missed), with
+  INV-29, INV-30 and INV-30b as the controls (INV-30b plants one probe per
+  write form and two reads that must not match). INV-29 and INV-30 plant their own probes
   inside the rolled-back transaction — an ungated definer function granted to
   `authenticated`, a stale allowlist row, and an allowlist row naming a
   function known to write — so INV-25 and INV-26 are proven able to fail on
