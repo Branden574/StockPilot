@@ -193,3 +193,15 @@ describe('importing phone-copy.ts runs nothing', () => {
     expect(index).toContain("export * from './orders/storefront/phone-copy';");
   });
 });
+
+// Simulator walk D12 (M13): opened with no connection, the storefront answer
+// cannot be read, so nothing can be browsed; "couldn't be loaded. Pull down
+// to try again." was untrue offline (it loads on its own when the connection
+// returns).
+describe('the storefront opened offline says so (simulator walk D12)', () => {
+  it('names the connection, that it loads on its own, and that the cart is kept', () => {
+    expect(phone.STOREFRONT_OFFLINE_NOT_LOADED_COPY).toBe(
+      "You're offline. Ordering loads once you're connected again. Your cart is kept on this phone.",
+    );
+  });
+});

@@ -61,7 +61,7 @@ import {
 } from '@/lib/order-storefront/checkout';
 import { MIN_TAP, NOTES_FIELD_HEIGHT, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
 import { createNotesDraft, type NotesDraft } from '@/lib/order-storefront/notes-draft';
-import { storefrontOutcome } from '@/lib/order-storefront/outcome';
+import { storefrontOutcome, storefrontStateMessage } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
 import { requesterRowValue, siteAddressLines, siteLabel } from '@/lib/order-storefront/setup';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -160,7 +160,7 @@ export default function Checkout() {
   // (PO-4 review). What replaced the screen is announced while it is shown.
   const stage = checkoutStage(snap);
   const setupMessage =
-    snap && snap.setup.status !== 'ready' && snap.setup.status !== 'loading' ? snap.setup.message : null;
+    snap && snap.setup.status !== 'ready' && snap.setup.status !== 'loading' ? storefrontStateMessage(snap.setup, offline) : null;
   // A setup message with the outcome's own words was said already (D10).
   React.useEffect(() => {
     if (setupMessage && focused && setupMessage !== outcomeText) AccessibilityInfo.announceForAccessibility(setupMessage);
@@ -203,6 +203,7 @@ export default function Checkout() {
         refreshing={refreshing}
         onRefresh={() => void refresh()}
         outcome={outcome}
+        offline={offline}
         panel={
           <UnconfirmedPanel
             state={snap.submission.state}

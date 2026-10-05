@@ -1,4 +1,4 @@
-import { ORDER_WITHDRAWN_COPY, orderRefusalCopy } from '@stockpilot/core';
+import { ORDER_WITHDRAWN_COPY, STOREFRONT_OFFLINE_NOT_LOADED_COPY, orderRefusalCopy } from '@stockpilot/core';
 
 import type { StorefrontSnapshot } from './session';
 
@@ -58,4 +58,15 @@ export function outcomeBesideSetup(
   if (!outcome) return null;
   if ('message' in setup && setup.message === outcome.text) return null;
   return outcome;
+}
+
+/**
+ * The turned-off, refused or failed state's own message, in the words for the
+ * case (simulator walk D12): a read that failed while the phone is offline
+ * says so, and that ordering loads once it is connected again (runtime reads
+ * it on the way back online), never "Pull down to try again". An answer that
+ * came back (turned off, refused) keeps its words. Pure.
+ */
+export function storefrontStateMessage(setup: { status: string; message: string }, offline: boolean): string {
+  return setup.status === 'failed' && offline ? STOREFRONT_OFFLINE_NOT_LOADED_COPY : setup.message;
 }

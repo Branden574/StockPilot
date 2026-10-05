@@ -3,7 +3,7 @@ import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-nativ
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Body, Display } from '@/components/ui/text';
-import { outcomeBesideSetup, type StorefrontOutcome } from '@/lib/order-storefront/outcome';
+import { outcomeBesideSetup, storefrontStateMessage, type StorefrontOutcome } from '@/lib/order-storefront/outcome';
 import type { SetupState } from '@/lib/order-storefront/session';
 import { STOREFRONT_GUTTER } from '@/lib/order-storefront/layout';
 import { useTheme } from '@/lib/use-theme';
@@ -26,6 +26,7 @@ export function StorefrontState({
   onRefresh,
   panel,
   outcome,
+  offline = false,
 }: {
   topBar: React.ReactNode;
   title: string;
@@ -37,6 +38,8 @@ export function StorefrontState({
   panel?: React.ReactNode;
   /** How that send ended (withdrawn, refused, the device could not save). */
   outcome?: StorefrontOutcome | null;
+  /** The phone is offline: a read that failed says so (simulator walk D12). */
+  offline?: boolean;
 }) {
   const { c } = useTheme();
   // The same sentence as the setup message is said once (simulator walk D10).
@@ -63,7 +66,7 @@ export function StorefrontState({
           <ActivityIndicator color={c.ink} style={{ marginTop: 24 }} />
         ) : (
           <Body size={15} color={setup.status === 'failed' ? c.warnText : c.ink} accessibilityRole="alert">
-            {setup.message}
+            {storefrontStateMessage(setup, offline)}
           </Body>
         )}
       </ScrollView>

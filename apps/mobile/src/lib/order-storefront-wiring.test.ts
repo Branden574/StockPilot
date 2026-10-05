@@ -766,6 +766,25 @@ describe('a marked line can be lowered or removed from its row and Quick view, n
   });
 });
 
+// Simulator walk D12 (M13): opened offline, the state said "couldn't be
+// loaded. Pull down to try again.". Mutations caught: the state drawing the
+// raw setup message, a screen not passing offline, checkout announcing the
+// raw message.
+describe('the storefront opened offline says so, in place and announced (simulator walk D12)', () => {
+  it('StorefrontState draws the message for the case, and both screens pass offline', () => {
+    const state = codeOnly(read(`${COMPONENTS}/storefront-state.tsx`));
+    expect(state).toMatch(/\{storefrontStateMessage\(setup, offline\)\}/);
+    expect(state).not.toMatch(/\{setup\.message\}/);
+    expect(catalog).toMatch(/<StorefrontState[\s\S]*?offline=\{offline\}[\s\S]*?\/>/);
+    const at = checkout.indexOf("if (stage === 'unavailable' && snap) {");
+    expect(checkout.slice(at, checkout.indexOf('/>\n    );', at) + 4)).toContain('offline={offline}');
+  });
+
+  it('checkout announces the message for the case', () => {
+    expect(checkout).toMatch(/const setupMessage =\s*snap && snap\.setup\.status !== 'ready' && snap\.setup\.status !== 'loading' \? storefrontStateMessage\(snap\.setup, offline\) : null;/);
+  });
+});
+
 // PO-4 review: the success screen drew from the answer shown now. Mutations
 // caught: Review and approve, the warehouse's name or the email read from the
 // live answer again.

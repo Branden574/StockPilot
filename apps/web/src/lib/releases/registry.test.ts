@@ -3638,4 +3638,14 @@ describe('the phone draft claims nothing the phone does not do', () => {
     expect(text).not.toMatch(/the way the web does|same words as the web/i);
     expect(text).toContain('who the order is for (if you can order for someone else)');
   });
+
+  // Simulator walk D12 (M13): opened with no connection, the phone cannot
+  // read what it may order, so nothing can be browsed; only a connection lost
+  // while ordering keeps the items as they were last loaded.
+  it('promises offline browsing only for a connection lost while ordering', () => {
+    const r = RELEASES.find((x) => x.id === 'phone-place-order-2026-10')!;
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/offline you can still browse/i);
+    expect(text).toContain("If the connection drops while you're ordering, you can still browse the items as they were last loaded and keep building your cart.");
+  });
 });

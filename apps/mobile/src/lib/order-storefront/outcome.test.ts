@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   ORDER_DEVICE_SAVE_FAILED_COPY,
   ORDER_WITHDRAWN_COPY,
+  STOREFRONT_OFFLINE_NOT_LOADED_COPY,
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
   orderRefusalCopy,
   readOrderRefusalDetails,
   type OrderSubmissionState,
 } from '@stockpilot/core';
 
-import { outcomeBesideSetup, storefrontOutcome } from './outcome';
+import { outcomeBesideSetup, storefrontOutcome, storefrontStateMessage } from './outcome';
 import type { SubmitEngineSnapshot } from './submit';
 
 const A = '44444444-4444-4444-8444-444444444444';
@@ -87,5 +88,21 @@ describe('the outcome beside the setup message says a sentence once (simulator w
     expect(outcomeBesideSetup({ text: said, tone: 'critical' }, { status: 'loading' })).toEqual({ text: said, tone: 'critical' });
     expect(outcomeBesideSetup(null, refusedSetup)).toBeNull();
     expect(outcomeBesideSetup(other, { status: 'off', message: 'Placing orders from the app is turned off right now. Use the web.' })).toBe(other);
+  });
+});
+
+// Simulator walk D12 (M13): the storefront opened with no connection said
+// "Ordering couldn't be loaded. Pull down to try again.", but offline it
+// loads on its own once the connection returns (runtime's focus on the way
+// back online).
+describe('the turned-off, refused or failed state says why in the words for the case (simulator walk D12)', () => {
+  const failed = { status: 'failed' as const, message: "Ordering couldn't be loaded. Pull down to try again." };
+  it('a read that failed while offline: the offline words', () => {
+    expect(storefrontStateMessage(failed, true)).toBe(STOREFRONT_OFFLINE_NOT_LOADED_COPY);
+  });
+  it('online, or an answer that came back (turned off, refused): its own words', () => {
+    expect(storefrontStateMessage(failed, false)).toBe(failed.message);
+    expect(storefrontStateMessage({ status: 'refused', message: 'R' }, true)).toBe('R');
+    expect(storefrontStateMessage({ status: 'off', message: 'O' }, true)).toBe('O');
   });
 });

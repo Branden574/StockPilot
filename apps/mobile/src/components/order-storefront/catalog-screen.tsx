@@ -434,6 +434,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         refreshing={refreshing}
         onRefresh={() => void refresh()}
         outcome={outcome}
+        offline={offline}
         panel={
           snap ? (
             <UnconfirmedPanel

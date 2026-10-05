@@ -42,6 +42,11 @@ export function storefrontUpdatedAtCopy(time: string): string {
 }
 export const STOREFRONT_OFFLINE_COPY =
   "You're offline. These are the items as they were last loaded. Your cart is kept on this phone.";
+/** The storefront opened with no connection (simulator walk D12): what this
+ *  account may order can't be read, so nothing is shown; it loads on its own
+ *  once the phone is connected again. */
+export const STOREFRONT_OFFLINE_NOT_LOADED_COPY =
+  "You're offline. Ordering loads once you're connected again. Your cart is kept on this phone.";
 export const STOREFRONT_CATALOG_LOAD_FAILED_COPY =
   "The items couldn't be loaded. Pull down to load them again.";
 export const STOREFRONT_NOTHING_ORDERABLE_COPY =

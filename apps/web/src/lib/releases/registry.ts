@@ -57,7 +57,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Placing an order request needed the web. Now it works from the phone, with the same rules as the web.',
         howItAffectsYou:
-          'Your cart is kept on your phone for each warehouse, for your account only. Submitting needs a connection; offline you can still browse the items as they were last loaded and build your cart. On an iPad the cart stays open beside the items. If you can approve orders, Review and approve takes you straight to the order.',
+          "Your cart is kept on your phone for each warehouse, for your account only. Submitting needs a connection. If the connection drops while you're ordering, you can still browse the items as they were last loaded and keep building your cart. On an iPad the cart stays open beside the items. If you can approve orders, Review and approve takes you straight to the order.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders/new', label: 'Place an order' },
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },
