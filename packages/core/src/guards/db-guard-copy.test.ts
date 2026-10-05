@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ITEM_HOLDS_STOCK_COPY,
   ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
   ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   dbGuardHint,
   dbPermissionFor,
@@ -62,6 +63,7 @@ describe('the 0395 refusal words', () => {
     const all = [
       ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
       ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
+      ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
       ITEM_HOLDS_STOCK_COPY,
       ...(['adjust', 'transfer', 'count_post', 'receipt_post', 'receipt_reverse', 'kit_assemble'] as const).map(
         dbPermissionRefusedCopy,
@@ -85,11 +87,22 @@ describe('the 0395 refusal words', () => {
     );
     // L129a (test stage): an approver outside the order's warehouse was told
     // "User does not have write access to warehouse <uuid>." The sentence names
-    // no id and says who can act.
+    // no id. Review (2026-10-05): it names someone the person can find (they
+    // cannot see the order's warehouse, so "someone who works there" named
+    // nobody they could reach), and "you can't change it" holds for every
+    // change, Cancel included: the order service now checks the warehouse on
+    // an approver's cancel too.
     expect(ORDER_WAREHOUSE_WRITE_REFUSED_COPY).toBe(
-      "This order is in a warehouse you don't work in, so you can't change it. Ask someone who works there.",
+      "This order is in a warehouse you don't work in, so you can't change it. Ask a manager.",
     );
-    expect(ORDER_WAREHOUSE_WRITE_REFUSED_COPY).not.toMatch(/[0-9a-f]{8}-|access to warehouse/i);
+    expect(ORDER_WAREHOUSE_WRITE_REFUSED_COPY).not.toMatch(/[0-9a-f]{8}-|access to warehouse|works there/i);
+    // Review (2026-10-05): a failed read of the caller's own warehouse access
+    // is not a refusal. It claims no scope ("a warehouse you don't work in"
+    // would be false for someone acting in their own) and asks for another try.
+    expect(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY).toBe(
+      "Your warehouse access couldn't be checked just now, so nothing was changed. Try again.",
+    );
+    expect(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY).not.toMatch(/don't work in|can't change/i);
   });
 
   it('is exported from the package entry point', () => {
@@ -97,6 +110,7 @@ describe('the 0395 refusal words', () => {
     expect(core.ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).toBe(ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
     expect(core.ITEM_HOLDS_STOCK_COPY).toBe(ITEM_HOLDS_STOCK_COPY);
     expect(core.ORDER_WAREHOUSE_WRITE_REFUSED_COPY).toBe(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
+    expect(core.ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY).toBe(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY);
     expect(core.dbPermissionRefusedCopy).toBe(dbPermissionRefusedCopy);
   });
 });

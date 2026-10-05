@@ -16,6 +16,8 @@ import {
   NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
   neededByChangedCopy,
   neededByInvalidTimeCopy,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderScheduleEventDetails,
   type ModuleId,
   type Role,
@@ -368,8 +370,32 @@ describe('gates, in core\'s words, before anything is sent', () => {
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(new ForbiddenError('no'));
     const { stub, svc } = build();
     const e = await refusal(svc.reviseNeededBy(input()));
-    expect(e).toMatchObject({ code: 'forbidden', message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY });
+    // Re-pinned by the small fixes slice 2 review (was NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY):
+    // outside the order's warehouse, the date says what every order action says.
+    expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
+    expect(e.details).toEqual({ reason: 'forbidden' });
     expect(assertWarehouseAccess).toHaveBeenCalledWith('wh-1', 'write', expect.anything(), expect.anything());
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('a viewer granted orders:approve keeps the date\'s own sentence: they work there, read-only', async () => {
+    vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(
+      new ForbiddenError('Read-only auditor cannot perform write operations.'),
+    );
+    const { stub, svc } = build({ role: 'viewer', permissions: ['orders:approve', 'orders:request'] });
+    const e = await refusal(svc.reviseNeededBy(input()));
+    expect(e).toMatchObject({ code: 'forbidden', message: NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('the caller\'s own access could not be read: retryable, never "a warehouse you don\'t work in"', async () => {
+    vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(
+      new ForbiddenError('User does not have write access to warehouse wh-1.', { accessUnreadable: true }),
+    );
+    const { stub, svc } = build({ role: 'staff', permissions: ['orders:approve', 'orders:request'] });
+    const e = await refusal(svc.reviseNeededBy(input()));
+    expect(e).toMatchObject({ code: 'conflict', message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY });
+    expect(e.details).toEqual({ reason: 'failed', retryable: true });
     expect(stub.rpcCalls).toHaveLength(0);
   });
 

@@ -8,6 +8,7 @@ import {
   HOLD_NOT_APPLICABLE_COPY,
   HOLD_NOT_APPROVER_COPY,
   HOLD_ORDER_NOT_FOUND_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   type ModuleId,
   type Role,
 } from '@stockpilot/core';
@@ -166,7 +167,10 @@ describe('OrderRequestsService.holdStock', () => {
     const scoped = stubWith({ data: HELD, error: null });
     const e = await svc(scoped).holdStock(ORDER).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ServiceError);
-    expect(e).toMatchObject({ code: 'forbidden', message: HOLD_NO_WAREHOUSE_ACCESS_COPY });
+    // Re-pinned by the small fixes slice 2 review (was HOLD_NO_WAREHOUSE_ACCESS_COPY):
+    // outside the order's warehouse, Hold says what every order action says.
+    // A viewer keeps the hold's own sentence (the top-up case below).
+    expect(e).toMatchObject({ code: 'forbidden', message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY });
     expect(scoped.rpcCalls).toEqual([]);
   });
 

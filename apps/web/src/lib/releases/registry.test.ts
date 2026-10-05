@@ -4842,10 +4842,14 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
   });
 
   // Test stage (local walk): the order service's refusal outside the caller's
-  // warehouses now reads in plain words (it named the warehouse's id), a
-  // change only someone who approves orders can meet, so it is its own entry
-  // for them.
-  it('is told to whoever can place an order request; the warehouse words only to people who approve orders', () => {
+  // warehouses now reads in plain words (it named the warehouse's id). Review
+  // (2026-10-05): only someone who works in SOME warehouses can meet it, and
+  // that is staff (owners, admins and managers work in every warehouse by
+  // role, so 7 people in production were told about a refusal they can never
+  // see). Staff meet it as approvers (orders:approve) and as pickers
+  // (items:update: Claim, Release and Complete picking on the phone), so the
+  // entry is theirs.
+  it('is told to whoever can place an order request; the warehouse words only to staff who approve or pick', () => {
     const r = release();
     expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
     expect(r.entries.map((e) => e.id)).toEqual(['order-partial-approval-held', 'order-other-warehouse-words']);
@@ -4855,23 +4859,45 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
       expect(entry.link, entry.id).toBeUndefined();
     }
     expect(r.entries[0]!.audience).toBeUndefined();
-    expect(r.entries[1]!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(r.entries[1]!.audience).toEqual({
+      roles: ['staff'],
+      anyPermission: ['orders:approve', 'items:update'],
+      modules: ['orders'],
+    });
     const published: Release = { ...r, status: 'published' };
     const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
       visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
     expect(entriesFor('viewer', ['orders:request'])).toBe(1);
     expect(entriesFor('staff', ['orders:request', 'orders:approve'])).toBe(2);
+    expect(entriesFor('staff', ['orders:request', 'items:update'])).toBe(2);
     expect(entriesFor('staff', ['members:read'])).toBe(0);
+    // Owners, admins and managers with Orders on: the partial-approval entry
+    // only, never a refusal their role cannot meet.
+    expect(entriesFor('owner', [...PERMISSIONS])).toBe(1);
+    expect(entriesFor('admin', [...PERMISSIONS])).toBe(1);
+    expect(entriesFor('manager', ['orders:request', 'orders:approve', 'items:update'])).toBe(1);
     expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
   });
 
-  it('quotes the warehouse refusal as the order service says it, and claims no new rule', () => {
+  it('quotes the warehouse refusal as the order service says it, names the actions, and says Cancel now follows it', () => {
     const entry = release().entries.find((e) => e.id === 'order-other-warehouse-words')!;
     expect(entry.whatChanged).toContain(`"${ORDER_WAREHOUSE_WRITE_REFUSED_COPY}"`);
     const svc = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
     expect(svc).toContain('throw new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);');
-    expect(entry.howItAffectsYou).toContain('Nothing changes in who can do what');
-    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|uuid|database|policy/i);
+    // Every change the service refuses outside the warehouse, by what a person
+    // presses: the approver's steps, Cancel, items, Hold and the date, and on
+    // the phone the picking steps (the web offers those only in the
+    // warehouse).
+    for (const word of ['Approve', 'Deny', 'Cancel', 'notes', 'pick slip', 'staging', 'items', 'Hold available stock', 'needed-by date', 'Claim', 'Release']) {
+      expect(entry.whatChanged, word).toContain(word);
+    }
+    // Cancel is the one rule that changed: an approver's cancel now asks the
+    // warehouse, as approving does; the person who placed an order still
+    // cancels it while it waits for approval.
+    expect(entry.howItAffectsYou).toMatch(/Cancel/);
+    expect(entry.howItAffectsYou).toContain('while it waits for approval');
+    expect(entry.howItAffectsYou).not.toContain('Nothing changes in who can do what');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|uuid|database|policy|works there/i);
     expect(entry.whatToDo).toBe('No action needed.');
   });
 

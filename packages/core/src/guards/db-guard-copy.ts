@@ -25,13 +25,25 @@ export const ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY =
   'Only a pending order can be cancelled by the person who placed it. Ask someone who approves orders to cancel it.';
 
 /**
- * The app's refusal of an order action by someone without write access to
- * the order's warehouse (L129a: the order update policy asks the same, so a
- * raw write matches no row). It names no warehouse id: the caller may not be
- * able to read the warehouse at all.
+ * The app's refusal of a change to an order by someone outside the order's
+ * warehouse (L129a: the order update policy asks the same, so a raw write
+ * matches no row). The order service says it for every change: approve, deny,
+ * cancel (an approver's), notes, the pick slip, picking, staging, delivery,
+ * adding or changing items, holding stock and the needed-by date. It names no
+ * warehouse id, and it points to a manager: managers work in every warehouse,
+ * while the person refused may not be able to see this one at all.
  */
 export const ORDER_WAREHOUSE_WRITE_REFUSED_COPY =
-  "This order is in a warehouse you don't work in, so you can't change it. Ask someone who works there.";
+  "This order is in a warehouse you don't work in, so you can't change it. Ask a manager.";
+
+/**
+ * The same check when the caller's own warehouse access could not be read (a
+ * failed read is never treated as access): nothing was changed, and another
+ * try may work. It claims no scope, so it is never false for someone acting in
+ * a warehouse they do work in.
+ */
+export const ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY =
+  "Your warehouse access couldn't be checked just now, so nothing was changed. Try again.";
 
 /**
  * The database refuses the delete while the item has stock on record or a

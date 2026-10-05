@@ -1081,6 +1081,11 @@ WEB_TESTS=(
   src/server/services/db-guard-refusal.wiring.test.ts
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
+  # 0395 review: an approver's cancel asks write access to the order's
+  # warehouse, as every other approver action does, and every refusal outside
+  # the caller's warehouses (and a failed read of their own access) reads one
+  # sentence, never a warehouse id.
+  src/server/services/order-requests.warehouse-words.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

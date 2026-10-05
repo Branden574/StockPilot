@@ -230,6 +230,42 @@ describe('assertWarehouseAccess and forcedWarehouseId deny on an unreadable answ
     },
   );
 
+  // Small fixes slice 2 review: the order service words this refusal "Your
+  // warehouse access couldn't be checked just now ... Try again." rather than
+  // "This order is in a warehouse you don't work in", which would be false for
+  // someone acting in their own warehouse. The refusal says which it is.
+  it('flags a refusal that came from the unreadable answer, and only that one', async () => {
+    const unreadable = await assertWarehouseAccess('wh-b', 'write', failedStaff()).catch((x: unknown) => x);
+    expect(unreadable).toBeInstanceOf(ForbiddenError);
+    expect((unreadable as ForbiddenError).accessUnreadable).toBe(true);
+
+    // Read fine, warehouse not assigned: a real refusal, not flagged.
+    const readable = bearerCtx(
+      'staff',
+      client({
+        'user_warehouse_assignments.select': ASSIGNMENTS,
+        'organization_members.select': member(false),
+      }).client,
+    );
+    const real = await assertWarehouseAccess('wh-z', 'write', readable).catch((x: unknown) => x);
+    expect(real).toBeInstanceOf(ForbiddenError);
+    expect((real as ForbiddenError).accessUnreadable).toBe(false);
+
+    // A viewer never writes, whatever the read did: the read-only refusal,
+    // never flagged.
+    const viewer = bearerCtx(
+      'viewer',
+      client({
+        'user_warehouse_assignments.select': FAILED,
+        'organization_members.select': member(false),
+      }).client,
+    );
+    const ro = await assertWarehouseAccess('wh-b', 'write', viewer).catch((x: unknown) => x);
+    expect((ro as Error).message).toBe('Read-only auditor cannot perform write operations.');
+    expect((ro as ForbiddenError).accessUnreadable).toBe(false);
+    expect(new ForbiddenError().accessUnreadable).toBe(false);
+  });
+
   it('forcedWarehouseId refuses instead of returning null (which would mean "no pin")', async () => {
     await expect(forcedWarehouseId(failedStaff())).rejects.toBeInstanceOf(ForbiddenError);
   });

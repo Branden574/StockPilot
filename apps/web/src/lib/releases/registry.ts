@@ -294,18 +294,26 @@ export const RELEASES: Release[] = [
         // Test stage (local walk): an approver assigned to some warehouses
         // who pressed Approve, Deny or Save notes on another warehouse's order
         // read "User does not have write access to warehouse <id>." The order
-        // service now answers with core ORDER_WAREHOUSE_WRITE_REFUSED_COPY.
-        // Only someone who approves orders can meet it.
+        // service now answers with core ORDER_WAREHOUSE_WRITE_REFUSED_COPY for
+        // every change it refuses outside the caller's warehouses (review,
+        // 2026-10-05: line edits too, and Hold and the needed-by date say the
+        // same sentence; an approver's Cancel now asks the warehouse, which it
+        // never did). Who can meet it: staff, the only role that works in
+        // SOME warehouses (owners, admins and managers work in every one by
+        // role), as approvers or as pickers (items:update: the phone offers
+        // Claim and Release with no warehouse check).
         id: 'order-other-warehouse-words',
         category: 'fixed',
         area: 'Orders',
         title: 'Plain words for an order in another warehouse',
         whatChanged:
-          'If you approve orders and open an order from a warehouse you don\'t work in, Approve, Deny, the pick slip, staging and notes now say "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask someone who works there."',
-        whyItMatters: 'The old message named the warehouse by a long internal code and did not say what to do.',
-        howItAffectsYou: 'Nothing changes in who can do what: only the words are new.',
+          'If you work in only some of your organization\'s warehouses and open an order from another one, every change to it now says "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask a manager.": Approve, Deny, Cancel, notes, the pick slip, staging, adding or changing items, Hold available stock and the needed-by date. In the mobile app, so do Claim and Release picking.',
+        whyItMatters:
+          'The old messages named the warehouse by a long internal code, or said only that write access was needed, and none said who could help. Cancel did not check the warehouse at all.',
+        howItAffectsYou:
+          'If you approve orders, Cancel now follows the same rule as Approve: you can cancel an order only in a warehouse you work in. An order you placed yourself can still be cancelled while it waits for approval.',
         whatToDo: 'No action needed.',
-        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+        audience: { roles: ['staff'], anyPermission: ['orders:approve', 'items:update'], modules: ['orders'] },
       },
     ],
   },
