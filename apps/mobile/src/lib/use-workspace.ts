@@ -1,4 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  resolveOrderStatusConfig,
+  type OrderStatusConfig,
+  type ResolvedOrderStatusMeta,
+} from '@stockpilot/core';
 import * as React from 'react';
 
 import { accountEpoch, endAccountEpoch } from './account-epoch';
@@ -33,6 +38,12 @@ export interface OrgOption {
   id: string;
   name: string;
   role: string;
+  /**
+   * The organization's raw `order_status_config` (Settings > Order statuses),
+   * read with the membership, or null when it has none (L83b). Untrusted
+   * jsonb: only core's resolver reads it (useOrderStatusMeta).
+   */
+  orderStatusConfig?: unknown;
 }
 
 export interface WarehouseOption {
@@ -49,6 +60,8 @@ interface WorkspaceState {
   warehouses: WarehouseOption[];
   activeWarehouseId: string | null;
   activeWarehouseName: string | null;
+  /** The ACTIVE organization's raw order_status_config, or null (L83b). */
+  activeOrderStatusConfig: unknown;
 }
 
 const WAREHOUSE_STORAGE_KEY = (orgId: string) => `workspace.activeWarehouseId.${orgId}`;
@@ -63,6 +76,7 @@ let cached: WorkspaceState = {
   warehouses: [],
   activeWarehouseId: null,
   activeWarehouseName: null,
+  activeOrderStatusConfig: null,
 };
 
 function publish(next: Partial<WorkspaceState>) {
@@ -76,9 +90,12 @@ function publish(next: Partial<WorkspaceState>) {
  * hydrate() keeps the workspace already on screen instead (see there).
  */
 export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
+  // The organization's order status words and colours ride on this read (one
+  // request, as before): the phone's order screens show them as the web does
+  // (L83b). A member can read their organization's row (RLS) and the column.
   const { data, error } = await supabase
     .from('organization_members')
-    .select('role, organization_id, organizations:organization_id (name)')
+    .select('role, organization_id, organizations:organization_id (name, order_status_config)')
     .eq('user_id', userId)
     .not('accepted_at', 'is', null);
   if (error) {
@@ -86,14 +103,16 @@ export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
     return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;
+  type OrgField = { name?: string; order_status_config?: unknown };
   return rows
     .map((r) => {
-      const orgField = r.organizations as { name?: string } | { name?: string }[] | null;
+      const orgField = r.organizations as OrgField | OrgField[] | null;
       const org = Array.isArray(orgField) ? orgField[0] : orgField;
       return {
         id: r.organization_id as string,
         name: (org?.name as string | undefined) ?? 'Workspace',
         role: r.role as string,
+        orderStatusConfig: org?.order_status_config ?? null,
       };
     })
     .filter((o) => !!o.id);
@@ -294,6 +313,7 @@ async function loadWorkspace(userId: string) {
     warehouses,
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
+    activeOrderStatusConfig: activeOrg?.orderStatusConfig ?? null,
   });
   if (activeOrgId && choice.resetCache) {
     void syncNow(true).then(() => refreshEnabledModules());
@@ -385,6 +405,7 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     warehouses: [],
     activeWarehouseId: null,
     activeWarehouseName: null,
+    activeOrderStatusConfig: orgRow?.orderStatusConfig ?? null,
   });
   // A failed read leaves this new workspace with no warehouse list yet: there
   // is nothing of its own on screen to keep.
@@ -429,6 +450,43 @@ export async function setActiveWarehouse(warehouseId: string | null): Promise<vo
   });
 }
 
+/** One resolved map per published config (compared by identity), so every
+ *  row of a list reads the same object and nothing resolves it per render. */
+let resolvedStatusMeta: { config: unknown; meta: ResolvedOrderStatusMeta } | null = null;
+
+function activeOrderStatusMeta(): ResolvedOrderStatusMeta {
+  const config = cached.activeOrderStatusConfig;
+  if (!resolvedStatusMeta || resolvedStatusMeta.config !== config) {
+    resolvedStatusMeta = {
+      config,
+      meta: resolveOrderStatusConfig(config as OrderStatusConfig | null | undefined),
+    };
+  }
+  return resolvedStatusMeta.meta;
+}
+
+function subscribeWorkspace(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => {
+    listeners.delete(onChange);
+  };
+}
+
+/**
+ * THE ACTIVE ORGANIZATION'S ORDER STATUS WORDS AND COLOURS (L83b): its
+ * `order_status_config` resolved by core's one resolver (the web badge's), so
+ * a renamed or recoloured status reads on the phone as on the web. Core's
+ * defaults until the workspace has loaded, with no organization, or when the
+ * organization set none.
+ *
+ * Subscribes to the workspace store WITHOUT starting a load: useWorkspace()
+ * starts a membership read on every mount, and an Orders list card or the
+ * order screen already sits under a screen that holds the workspace.
+ */
+export function useOrderStatusMeta(): ResolvedOrderStatusMeta {
+  return React.useSyncExternalStore(subscribeWorkspace, activeOrderStatusMeta, activeOrderStatusMeta);
+}
+
 /**
  * React hook. Returns the live workspace state and triggers a hydrate
  * on first sign-in (or user-id change).
@@ -457,6 +515,7 @@ export function useWorkspace(): WorkspaceState {
         warehouses: [],
         activeWarehouseId: null,
         activeWarehouseName: null,
+        activeOrderStatusConfig: null,
       });
       return;
     }

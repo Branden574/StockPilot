@@ -12,6 +12,7 @@ import {
   type OrderStorefrontDeliveryRecipients,
   type OrderStorefrontViewer,
   type OrderStorefrontWarehouse,
+  type ResolvedOrderStatusMeta,
   type StorefrontItem,
 } from '@stockpilot/core';
 
@@ -91,9 +92,11 @@ export function successReference(placed: PlacedContext, warehouseName: string): 
   return successRefLine(placed.order.orderNumber, placed.order.id, warehouseName, placed.order.unitCount);
 }
 
-/** The order's status in core's words (customization defaults). */
-export function orderStatusLabel(status: string): string {
-  return isOrderStatusKey(status) ? ORDER_STATUS_META[status].label : status.replace(/_/g, ' ');
+/** The order's status in the organization's words (`meta`, its resolved
+ *  status config, read with the workspace; L83b), else core's (customization
+ *  defaults). */
+export function orderStatusLabel(status: string, meta: ResolvedOrderStatusMeta = ORDER_STATUS_META): string {
+  return isOrderStatusKey(status) ? meta[status].label : status.replace(/_/g, ' ');
 }
 
 /** The lines under the title: the replay or "already placed" sentence first

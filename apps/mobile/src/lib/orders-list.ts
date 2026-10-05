@@ -11,6 +11,7 @@ import {
   orderStatusLabelForFulfillment,
   type OrderStatusColor,
   type Permission,
+  type ResolvedOrderStatusMeta,
   type Role,
 } from '@stockpilot/core';
 
@@ -35,26 +36,45 @@ const PILL_FOR_COLOR: Record<OrderStatusColor, PillStatus> = {
 };
 
 /**
- * Every status's pill from core's status defaults (customization/
- * order-status.ts ORDER_STATUS_META), the web badge's words. Only four of the
+ * Every status's pill in the web badge's words and colour. Only four of the
  * thirteen statuses had a pill before; the rest showed their raw key (D6).
  * With the order's fulfilment a completed pickup reads HANDED OVER, never
  * DELIVERED (core orderStatusLabelForFulfillment, the web badge's rule;
  * returns RX-3 PR stage, polish (c)).
+ *
+ * `meta` is the ORGANIZATION's resolved status config (Settings > Order
+ * statuses; useOrderStatusMeta reads it with the workspace), so a renamed or
+ * recoloured status reads here as it does on the web (L83b). Without one it is
+ * core's defaults (customization/order-status.ts ORDER_STATUS_META), which is
+ * also what core's resolver answers for an organization with no config. A
+ * completed pickup keeps the organization's own word for the status when it
+ * renamed it, as the web badge does.
  */
-export function orderStatusPill(status: string, fulfillmentType?: string | null): { label: string; status: PillStatus } {
+export function orderStatusPill(
+  status: string,
+  fulfillmentType?: string | null,
+  meta: ResolvedOrderStatusMeta = ORDER_STATUS_META,
+): { label: string; status: PillStatus } {
   if (!isOrderStatusKey(status)) return { label: status.replace(/_/g, ' ').toUpperCase(), status: 'default' };
-  const meta = ORDER_STATUS_META[status];
-  return { label: orderStatusLabelForFulfillment(status, meta.label, fulfillmentType).toUpperCase(), status: PILL_FOR_COLOR[meta.color] };
+  const resolved = meta[status];
+  return {
+    label: orderStatusLabelForFulfillment(status, resolved.label, fulfillmentType).toUpperCase(),
+    status: PILL_FOR_COLOR[resolved.color],
+  };
 }
 
 /** The order screen's header line, "ORDER SO-000049 · PICKING": the status
- *  in the same words as the list's pill, never its raw key (L83a). The org's
- *  renamed statuses come in a later slice. A completed pickup reads HANDED
- *  OVER (polish (c)). */
-export function orderHeaderEyebrow(orderNumber: number | null, status: string, fulfillmentType?: string | null): string {
+ *  in the same words as the list's pill, never its raw key (L83a), in the
+ *  organization's own words when it renamed it (L83b). A completed pickup
+ *  reads HANDED OVER (polish (c)). */
+export function orderHeaderEyebrow(
+  orderNumber: number | null,
+  status: string,
+  fulfillmentType?: string | null,
+  meta: ResolvedOrderStatusMeta = ORDER_STATUS_META,
+): string {
   const number = orderNumber ? formatOrderNumber(orderNumber) : null;
-  return `ORDER${number ? ` ${number}` : ''} · ${orderStatusPill(status, fulfillmentType).label}`;
+  return `ORDER${number ? ` ${number}` : ''} · ${orderStatusPill(status, fulfillmentType, meta).label}`;
 }
 
 /** "+" and the empty state's "Place an order": the Orders module is on and
