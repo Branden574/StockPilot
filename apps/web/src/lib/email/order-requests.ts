@@ -1221,11 +1221,14 @@ function renderHtml(a: TemplateArgs): string {
 function renderText(a: TemplateArgs): string {
   const v = buildView(a);
   const greet = hi(v.firstName, false);
+  // 0395 (L86): an approval that held nothing is waiting for stock, as the
+  // HTML says: nothing is packing and no ship date is promised.
+  const nothingHeld = a.kind === 'approved' && heldState(a.summary.held) === 'none';
 
   const heads: Record<OrderRequestEmailKind, [string, string]> = {
     confirm_request: [`One tap sends ${v.displayId}.`, 'The warehouse hasn’t seen it yet.'],
     submitted: [`${v.displayId} received.`, 'We’re on it.'],
-    approved: [`${v.displayId} is approved.`, 'Packing starts now.'],
+    approved: [`${v.displayId} is approved.`, nothingHeld ? 'It is waiting for stock.' : 'Packing starts now.'],
     denied: [`${v.displayId} wasn’t approved.`, 'Here’s exactly why.'],
     in_transit: [`${v.displayId} is on the way.`, `Estimated ${v.eta}.`],
     completed: [`${v.displayId} was delivered.`, 'Signed, received, done.'],
@@ -1277,7 +1280,7 @@ function renderText(a: TemplateArgs): string {
         lines.push('Reserved: nothing yet (waiting for stock)');
       }
     }
-    if (a.summary.shipDate) lines.push(`Ships: ${a.summary.shipDate}`);
+    if (a.summary.shipDate && !nothingHeld) lines.push(`Ships: ${a.summary.shipDate}`);
     if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
     if (a.summary.shipTo) lines.push(`${v.isPickup ? 'Pickup' : 'To'}: ${a.summary.shipTo}`);
     if (a.kind === 'approved' && v.approvedAt) {

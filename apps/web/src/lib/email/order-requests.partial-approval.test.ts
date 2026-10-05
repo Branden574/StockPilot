@@ -193,6 +193,13 @@ describe('the approved email says what is held (L86)', () => {
     expect(args.text).toContain('your request is approved. Nothing is reserved yet; your order is waiting for stock.');
     expect(args.text).toContain('Reserved: nothing yet (waiting for stock)');
     expect(args.text).not.toMatch(/0 of 8|Reserved 0|every unit|packing has started/i);
+    // Test stage (local walk): the plain-text part matches the HTML too. Its
+    // heading said "Packing starts now." and it named a ship date the HTML
+    // leaves out when nothing is held (the warehouse is still on From:).
+    expect(args.text).toContain('is approved. It is waiting for stock.');
+    expect(args.text).not.toMatch(/Packing starts now/i);
+    expect(args.text).not.toMatch(/^Ships: /m);
+    expect(args.text).toMatch(/^From: /m);
   });
 
   it('holds not readable: claims neither every unit nor part', async () => {
