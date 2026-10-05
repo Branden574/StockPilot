@@ -30,8 +30,14 @@
 --      is unchanged and keeps today's behaviour.
 --   3. on_auth_user_before_delete (tg_auth_users_before_delete, SECURITY
 --      DEFINER) runs before any cascade, on every path (web, phone, platform
---      console, the Supabase dashboard). It locks the person's membership rows
---      and the owner rows of the organizations they own, then refuses the
+--      console, the Supabase dashboard). It locks the owner rows of every
+--      organization the person belongs to (FOR SHARE where they are not an
+--      owner, so two members' deletions never wait for each other; the
+--      person's own rows and the owner rows of organizations they own FOR NO
+--      KEY UPDATE, in id order) and reads them again until every owner row is
+--      locked: a role that changes while a lock waits (a transfer committing)
+--      cannot hide a new owner, nor another owner's deletion still in flight
+--      (review 2026-10-05, three-session race 7e). Then it refuses the
 --      deletion of the only owner of an organization that has other members
 --      (P0001, constraint organization_last_owner; an "Act as" impersonation
 --      seat is neither an owner nor a member), then releases the person's open
@@ -70,6 +76,16 @@
 --      would re-link a deleted person's id to the order 0388 un-links).
 --      delivery_locations.driver_user_id moves from SET NULL to CASCADE: the
 --      row is the driver's live GPS point, personal data (critique C4).
+--   8. _guard_organization_member_changes (review 2026-10-05, a production
+--      security bug older than this file): the guard pinned only the role, so
+--      an org admin could rewrite any membership through the API (hand the
+--      owner row to another account, unaccept the owner) and the owner or an
+--      admin could set impersonation_expires_at, which makes a row an "Act as"
+--      seat that this file's last-owner rule and transfer ignore. An API
+--      caller may now change only role, is_delivery_driver and all_warehouses
+--      (what the app writes) and may not insert a seat. The admin client (no
+--      JWT subject) and an account deletion's own invited_by SET NULL pass as
+--      before. CREATE OR REPLACE takes no table lock.
 --
 -- DATA: the file writes no row. Every new CHECK and key is validated against
 -- the existing rows (the largest table it validates is
@@ -92,8 +108,9 @@
 -- off-peak. scripts/db-concurrency/0394_migration_lock_footprint.sh.
 --
 -- ERRORS: P0001 (last_owner, from the trigger), 42501 and 22023 (transfer, as
--- before), 55P03 (the prelude). No function here raises 40001 or 40P01
--- (PostgREST retries those forever; 0367).
+-- before), 42501 (the membership guard), 55P03 (the prelude, and the trigger
+-- after 10 rounds of owner rows changing under it). No function here raises
+-- 40001 or 40P01 (PostgREST retries those forever; 0367).
 --
 -- RE-APPLY: the revert kit (stockpilot-work sec-orders/revert/A3-revert.sql)
 -- never drops a deleted_users column, and keeps a relaxed column's
@@ -212,19 +229,55 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  v_locked uuid[] := '{}';
+  v_new    uuid[];
+  v_try    integer := 0;
   v_orgs   uuid[];
   v_orphan uuid[];
 begin
-  perform 1
-     from public.organization_members m
-    where m.user_id = old.id
-       or (m.role = 'owner'
-           and m.organization_id in (select x.organization_id
-                                       from public.organization_members x
-                                      where x.user_id = old.id
-                                        and x.role = 'owner'))
-    order by m.id
-    for no key update;
+  loop
+    v_try := v_try + 1;
+    select coalesce(array_agg(l.id), '{}') into v_new
+      from (select m.id
+              from public.organization_members m
+             where m.role = 'owner'
+               and not (m.id = any (v_locked))
+               and m.organization_id in (select x.organization_id
+                                           from public.organization_members x
+                                          where x.user_id = old.id
+                                            and x.role <> 'owner')
+             order by m.id
+             for share) l;
+    v_locked := v_locked || v_new;
+    select coalesce(array_agg(l.id), '{}') into v_new
+      from (select m.id
+              from public.organization_members m
+             where not (m.id = any (v_locked))
+               and (m.user_id = old.id
+                    or (m.role = 'owner'
+                        and m.organization_id in (select x.organization_id
+                                                    from public.organization_members x
+                                                   where x.user_id = old.id
+                                                     and x.role = 'owner')))
+             order by m.id
+             for no key update) l;
+    v_locked := v_locked || v_new;
+    exit when not exists (
+      select 1
+        from public.organization_members m
+       where not (m.id = any (v_locked))
+         and (m.user_id = old.id
+              or (m.role = 'owner'
+                  and m.organization_id in (select x.organization_id
+                                              from public.organization_members x
+                                             where x.user_id = old.id))));
+    if v_try >= 10 then
+      raise exception 'account_deletion_busy'
+        using errcode = '55P03',
+              detail = 'The owners of an organization the account belongs to kept changing while it was being deleted.',
+              hint = 'Try again in a minute.';
+    end if;
+  end loop;
 
   select array_agg(m.organization_id order by m.organization_id)
     into v_orgs
@@ -421,6 +474,60 @@ $$;
 revoke all on function public.transfer_org_ownership(uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.transfer_org_ownership(uuid, uuid, uuid) to service_role;
 
+create or replace function public._guard_organization_member_changes()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.role = 'owner' then
+      raise exception 'cannot create an owner row via direct insert'
+        using errcode = 'insufficient_privilege';
+    end if;
+    if new.impersonation_expires_at is not null then
+      raise exception 'cannot create an Act as seat via direct insert'
+        using errcode = 'insufficient_privilege';
+    end if;
+    return new;
+
+  elsif tg_op = 'UPDATE' then
+    if new.role = 'owner' and old.role <> 'owner' then
+      raise exception 'cannot promote member to owner via direct update'
+        using errcode = 'insufficient_privilege';
+    end if;
+    if old.role = 'owner' and new.role <> 'owner' then
+      raise exception 'cannot demote the owner via direct update'
+        using errcode = 'insufficient_privilege';
+    end if;
+    if (to_jsonb(new) - '{role,is_delivery_driver,all_warehouses,invited_by}'::text[])
+         is distinct from (to_jsonb(old) - '{role,is_delivery_driver,all_warehouses,invited_by}'::text[])
+       or (new.invited_by is distinct from old.invited_by
+           and (new.invited_by is not null
+                or exists (select 1 from auth.users u where u.id = old.invited_by))) then
+      raise exception 'only role, is_delivery_driver and all_warehouses can change on a membership'
+        using errcode = 'insufficient_privilege';
+    end if;
+    return new;
+
+  elsif tg_op = 'DELETE' then
+    if old.role = 'owner' then
+      raise exception 'cannot remove the owner via direct delete'
+        using errcode = 'insufficient_privilege';
+    end if;
+    return old;
+  end if;
+
+  return new;
+end;
+$$;
+revoke all on function public._guard_organization_member_changes() from public, anon, authenticated;
+
 comment on function public._account_exists(uuid) is
   'Whether an auth account exists (0394). For tg_mark_deleted_users and _enforce_schedule_events_writer '
   '(service_role cannot read auth.users); EXECUTE for postgres and service_role only.';
@@ -430,8 +537,10 @@ comment on function public.tg_mark_deleted_users() is
   'cannot set or clear a stamp; a stamp is dropped when the column names a live person again. Arguments: '
   'the table''s person columns. SECURITY INVOKER: an FK action runs as the table owner.';
 comment on function public.tg_auth_users_before_delete() is
-  'on_auth_user_before_delete (0394): locks the person''s membership rows and the owner rows of the '
-  'organizations they own, refuses deleting the only owner of an organization that has other members '
+  'on_auth_user_before_delete (0394): locks the owner rows of every organization the person belongs to (FOR '
+  'SHARE where they are not an owner; their own rows and the owner rows of organizations they own FOR NO KEY '
+  'UPDATE) and re-reads until every one is locked (55P03 after 10 rounds), refuses deleting the only owner of '
+  'an organization that has other members '
   '(P0001, constraint organization_last_owner; impersonation seats are neither owners nor members), then '
   'releases the person''s open work as release_cycle_count and release_picking do, before any cascade: '
   'counts in progress, open picks, open deliveries, scheduled and in-progress schedule entries, open '
@@ -441,6 +550,12 @@ comment on function public._enforce_schedule_events_writer() is
   'Schedule writer (0084, 0256; 0394): created_by and updated_by follow the signed-in caller. created_by '
   'never changes on update, except that a null stands when a non-API role nulls it and the account is gone '
   '(the ON DELETE SET NULL of an account deletion); before 0394 the reset left a dangling key.';
+comment on function public._guard_organization_member_changes() is
+  'organization_members_role_guard (0099, 0220; 0394): an API caller (auth.uid() set) cannot create or promote '
+  'to an owner row, demote or delete the owner, create an "Act as" seat (impersonation_expires_at), or change '
+  'any column of a membership but role, is_delivery_driver and all_warehouses (invited_by may become null only '
+  'when the inviter''s account is gone: an account deletion''s own key action). The server''s admin client (no '
+  'JWT subject) runs provisioning, invites, transfers and impersonation and is not limited here.';
 comment on function public.transfer_org_ownership(uuid, uuid, uuid) is
   'Atomically transfers org ownership from p_caller_user_id to p_target_user_id and returns the new owner '
   'user_id (0107). Since 0394 it locks the caller''s and the target''s membership rows FOR UPDATE, ignores '

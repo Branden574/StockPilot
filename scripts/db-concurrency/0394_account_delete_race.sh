@@ -28,19 +28,36 @@
 #       session gets 40P01 (raised by the server's deadlock detector), and the
 #       state matches the outcome: nothing is half-applied.
 #   7a. Transfer vs deletion, deletion first: B deletes member M and holds;
-#       A runs transfer_org_ownership(owner -> M), waits on M's row and fails
-#       22023 once B commits. The owner is still the owner.
+#       A runs transfer_org_ownership(owner -> M), waits (on the owner's row,
+#       which M's deletion holds FOR SHARE since the review fix; on M's row
+#       before it) and fails 22023 once B commits. The owner is still the
+#       owner.
 #   7b. Transfer first: A transfers ownership to M2 and holds; B deletes M2,
-#       its lock statement waits on M2's row, then its last-owner check (a
-#       new snapshot) sees M2 as the only owner and refuses
+#       its lock loop waits for A, then its last-owner check (a new snapshot)
+#       sees M2 as the only owner and refuses
 #       (organization_last_owner). M2 and the organization are intact.
 #   7c. Two transfers by the same owner at once: one succeeds, the other
 #       fails 42501 (the caller row is re-checked after the lock); exactly
 #       one owner.
 #   7d. The invited_by edge (plan 5.1): M3 invited the owner; A locks the
-#       owner's row, then transfers to M3, while B's deletion of M3 nulls the
-#       owner row's invited_by. The server detects the cycle and ends exactly
-#       one session with 40P01; the other completes; one real owner.
+#       owner's row, then transfers to M3, while B deletes M3. Before the
+#       review fix B's cascade nulled the owner row's invited_by while A held
+#       it, and the server ended one session with 40P01. Now B's lock loop
+#       takes the owner row FOR SHARE first, so B waits for A before it holds
+#       anything A needs: A transfers, B re-reads, finds M3 the only owner
+#       and is refused (P0001 last_owner). No deadlock.
+#   7e. Three sessions (review 2026-10-05): an organization with two owners
+#       (A, B), an admin M and a staff member. T1 transfers B's ownership to
+#       M and holds; T3 deletes M, then T2 deletes A, both while T1 holds.
+#       Before the review fix the deletion locked only the owner rows of the
+#       organizations the person owned in its snapshot, so M's deletion
+#       locked only M's row, A's deletion skipped B's row once T1 committed,
+#       each saw the other as the remaining owner, and both committed: an
+#       organization with members and no owner. Now a member's deletion locks
+#       the owner rows of every organization they belong to (FOR SHARE) and
+#       re-reads until every owner row is locked: exactly one deletion
+#       commits, the other is refused (P0001 last_owner), one real owner
+#       remains, and nobody gets 40P01.
 #   8.  Two owners of one organization delete at once (both start orders):
 #       one deletion succeeds, the other waits on the lock, re-reads and is
 #       refused; the organization keeps one owner.
@@ -49,10 +66,19 @@
 #   10. Deletion vs an impersonation seat ending: the only real owner (with
 #       a staff member) is refused whether the seat's removal commits or
 #       rolls back during the deletion.
+#   12. The subject's own pick vs their deletion (review 2026-10-05, record
+#       loss): 12a the pick commits first (A holds 3 s): the deletion waits,
+#       the picked quantity stays, picked_by is null, the pick is released;
+#       12b the deletion first (B holds 3 s): the pick is refused (42501) and
+#       the earlier picked quantity stays.
+#   13. The subject's own count line vs their deletion: 13a the line first:
+#       the counted quantity stays, counted_by null, the count released
+#       (version + 1); 13b the deletion first: the re-record fails 23503 and
+#       the earlier counted quantity stays.
 #   11. Timing (plan 11.2): a subject named on 1,900 marked rows (1,000
 #       stock movements, 900 audit rows): the check and the deletion each
 #       finish under 2 s; every row is kept and stamped.
-#   6.  Error classes: no 40001 anywhere; 40P01 only in 5 and 7d; no 0394
+#   6.  Error classes: no 40001 anywhere; 40P01 only in 5; no 0394
 #       function body raises 40001 or 40P01.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
@@ -74,8 +100,8 @@ TMP="$(mktemp -d)"
 NS='03941111-0000-0000-0000'
 ORG="$NS-00000000000a"; ORGB="$NS-00000000000b"; ORGC="$NS-00000000000c"; ORGC2="$NS-00000000000d"
 ORGE="$NS-00000000000e"; ORGE2="$NS-00000000000f"; ORGT="$NS-000000000010"; ORGT2="$NS-000000000011"
-ORGT3="$NS-000000000012"
-ORGS="'$ORG','$ORGB','$ORGC','$ORGC2','$ORGE','$ORGE2','$ORGT','$ORGT2','$ORGT3'"
+ORGT3="$NS-000000000012"; ORGT4="$NS-000000000013"
+ORGS="'$ORG','$ORGB','$ORGC','$ORGC2','$ORGE','$ORGE2','$ORGT','$ORGT2','$ORGT3','$ORGT4'"
 O="$NS-0000000000a0"; MGR="$NS-0000000000a1"; S="$NS-0000000000a2"
 P1="$NS-0000000000b1"; P2="$NS-0000000000b2"; P4="$NS-0000000000b4"; P5="$NS-0000000000b5"
 Q1="$NS-0000000000b6"; Q2="$NS-0000000000b7"; P11="$NS-0000000000b8"
@@ -86,10 +112,14 @@ O4="$NS-0000000000e0"; ES="$NS-0000000000e1"; PA="$NS-0000000000e2"; O5="$NS-000
 TO="$NS-0000000000f0"; TM="$NS-0000000000f1"; TM2="$NS-0000000000f2"; TS="$NS-0000000000f3"
 TO2="$NS-0000000000f4"; X1="$NS-0000000000f5"; X2="$NS-0000000000f6"
 TO3="$NS-0000000000f7"; M3="$NS-0000000000f8"; TS3="$NS-0000000000f9"
-USER_LIST="$O $MGR $S $P1 $P2 $P4 $P5 $Q1 $Q2 $P11 $O2 $J $C1 $C2 $CS $C3 $C4 $CS2 $O4 $ES $PA $O5 $ES2 $TO $TM $TM2 $TS $TO2 $X1 $X2 $TO3 $M3 $TS3"
+A7="$NS-0000000000fa"; B7="$NS-0000000000fb"; M7="$NS-0000000000fc"; Z7="$NS-0000000000fd"
+K1="$NS-0000000000a3"; K2="$NS-0000000000a4"; K3="$NS-0000000000a5"; K4="$NS-0000000000a6"
+USER_LIST="$O $MGR $S $P1 $P2 $P4 $P5 $Q1 $Q2 $P11 $O2 $J $C1 $C2 $CS $C3 $C4 $CS2 $O4 $ES $PA $O5 $ES2 $TO $TM $TM2 $TS $TO2 $X1 $X2 $TO3 $M3 $TS3 $A7 $B7 $M7 $Z7 $K1 $K2 $K3 $K4"
 USERS="$(for u in $USER_LIST; do printf "'%s'," "$u"; done | sed 's/,$//')"
 WH="$NS-000000000101"; ITEM="$NS-000000000102"; PO="$NS-000000000103"
 CC1="$NS-000000000201"; SE2="$NS-000000000202"; R4="$NS-000000000203"; OR5="$NS-000000000204"
+OP1="$NS-000000000205"; OP2="$NS-000000000206"; LP1="$NS-000000000207"; LP2="$NS-000000000208"
+CC3="$NS-000000000209"; CC4="$NS-00000000020a"; CL3="$NS-00000000020b"; CL4="$NS-00000000020c"
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -117,8 +147,21 @@ wait_event() { # wait_event <application_name> <wait_event>
   return 1
 }
 wait_sleeping() { wait_event "$1" PgSleep; }
+wait_lock() { # wait_lock <application_name>: the session is waiting for a lock
+  local _
+  for _ in $(seq 1 200); do
+    if [ "$(q "select count(*) from pg_stat_activity where application_name = '$1' and wait_event_type = 'Lock'")" = "1" ]; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
 as_mgr() { # the manager's claims, as authenticated (PostgREST's shape)
   printf "set local role authenticated;\nset local \"request.jwt.claim.role\" to 'authenticated';\nset local \"request.jwt.claim.sub\" to '%s';\n" "$MGR"
+}
+as_user() { # a member's claims, as authenticated (PostgREST's shape)
+  printf "set local role authenticated;\nset local \"request.jwt.claim.role\" to 'authenticated';\nset local \"request.jwt.claim.sub\" to '%s';\n" "$1"
 }
 as_service() {
   printf "set local role service_role;\nset local \"request.jwt.claim.role\" to 'service_role';\nset local \"request.jwt.claim.sub\" to '';\n"
@@ -141,6 +184,7 @@ delete from public.stock_movements where organization_id in ($ORGS);
 delete from public.audit_logs where organization_id in ($ORGS);
 delete from public.receipts where organization_id in ($ORGS);
 delete from public.purchase_orders where organization_id in ($ORGS);
+delete from public.cycle_count_lines where cycle_count_id in (select id from public.cycle_counts where organization_id in ($ORGS));
 delete from public.cycle_counts where organization_id in ($ORGS);
 delete from public.schedule_events where organization_id in ($ORGS);
 delete from public.stock_reservations where organization_id in ($ORGS);
@@ -187,12 +231,15 @@ insert into public.organizations (id, name, slug) values
   ('$ORGE2', '0394 2S Seat R', '0394-2s-seat-r'),
   ('$ORGT',  '0394 2S Xfer',   '0394-2s-xfer'),
   ('$ORGT2', '0394 2S Xfer 2', '0394-2s-xfer-2'),
-  ('$ORGT3', '0394 2S Xfer 3', '0394-2s-xfer-3');
+  ('$ORGT3', '0394 2S Xfer 3', '0394-2s-xfer-3'),
+  ('$ORGT4', '0394 2S Xfer 4', '0394-2s-xfer-4');
 insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
   ('$ORG', '$O', 'owner', now(), null), ('$ORG', '$MGR', 'manager', now(), null), ('$ORG', '$S', 'staff', now(), null),
   ('$ORG', '$P1', 'staff', now(), null), ('$ORG', '$P2', 'staff', now(), null), ('$ORG', '$P4', 'staff', now(), null),
   ('$ORG', '$P5', 'staff', now(), null), ('$ORG', '$Q1', 'staff', now(), null), ('$ORG', '$Q2', 'staff', now(), null),
   ('$ORG', '$P11', 'staff', now(), null),
+  ('$ORG', '$K1', 'staff', now(), null), ('$ORG', '$K2', 'staff', now(), null),
+  ('$ORG', '$K3', 'manager', now(), null), ('$ORG', '$K4', 'manager', now(), null),
   ('$ORGB', '$O2', 'owner', now(), null),
   ('$ORGC', '$C1', 'owner', now(), null), ('$ORGC', '$C2', 'owner', now(), null), ('$ORGC', '$CS', 'staff', now(), null),
   ('$ORGC2', '$C3', 'owner', now(), null), ('$ORGC2', '$C4', 'owner', now(), null), ('$ORGC2', '$CS2', 'staff', now(), null),
@@ -202,11 +249,19 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   ('$ORGT', '$TS', 'staff', now(), null),
   ('$ORGT2', '$TO2', 'owner', now(), null), ('$ORGT2', '$X1', 'staff', now(), null), ('$ORGT2', '$X2', 'staff', now(), null),
   ('$ORGT3', '$M3', 'admin', now(), null), ('$ORGT3', '$TS3', 'staff', now(), null);
+-- 7e: fixed membership ids in the order A < B < M < Z, so the deletion of A
+-- locks A's row before it waits on B's (the order that turned a missing FOR
+-- SHARE statement into a deadlock in the mutation proof, M38).
+insert into public.organization_members (id, organization_id, user_id, role, accepted_at) values
+  ('$NS-000000000a01', '$ORGT4', '$A7', 'owner', now()), ('$NS-000000000a02', '$ORGT4', '$B7', 'owner', now()),
+  ('$NS-000000000a03', '$ORGT4', '$M7', 'admin', now()), ('$NS-000000000a04', '$ORGT4', '$Z7', 'staff', now());
 -- 7d: M3 invited the owner (organization_members.invited_by, SET NULL on M3's deletion).
 insert into public.organization_members (organization_id, user_id, role, accepted_at, invited_by) values
   ('$ORGT3', '$TO3', 'owner', now(), '$M3');
 insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0394 2S Main', 'WH-0394-2S', 'active');
-insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values ('$ORG', '$MGR', '$WH', true);
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
+  ('$ORG', '$MGR', '$WH', true), ('$ORG', '$K1', '$WH', true), ('$ORG', '$K2', '$WH', true),
+  ('$ORG', '$K3', '$WH', true), ('$ORG', '$K4', '$WH', true);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
   ('$ITEM', '$ORG', '$WH', 'SKU-0394-2S', '0394 2S item', 100, 'active', 'none');
 insert into public.purchase_orders (id, organization_id, po_number, status) values ('$PO', '$ORG', 'PO-0394-2S', 'draft');
@@ -224,6 +279,20 @@ insert into public.receipts (id, organization_id, purchase_order_id, warehouse_i
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$OR5', '$ORG', '$WH', 'pending_approval', 'internal', '$P5', 'pickup');
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values ('$OR5', '$ITEM', 5);
+-- 12: two picks in progress, claimed by K1 and K2, one unit picked on each.
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type,
+                                   assigned_picker_id, picking_claimed_by, picking_claimed_at) values
+  ('$OP1', '$ORG', '$WH', 'picking_in_progress', 'internal', '$O', 'pickup', '$K1', '$K1', now()),
+  ('$OP2', '$ORG', '$WH', 'picking_in_progress', 'internal', '$O', 'pickup', '$K2', '$K2', now());
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_picked, picked_by) values
+  ('$LP1', '$OP1', '$ITEM', 3, 1, '$K1'), ('$LP2', '$OP2', '$ITEM', 3, 1, '$K2');
+-- 13: two counts in progress assigned to K3 and K4; K4 has counted 48 already.
+insert into public.cycle_counts (id, organization_id, warehouse_id, status, scope, started_by, started_at, assigned_to) values
+  ('$CC3', '$ORG', '$WH', 'in_progress', 'warehouse', '$MGR', now(), '$K3'),
+  ('$CC4', '$ORG', '$WH', 'in_progress', 'warehouse', '$MGR', now(), '$K4');
+insert into public.cycle_count_lines (id, cycle_count_id, item_id, expected_quantity, expected_at_start, counted_quantity, counted_by, counted_at) values
+  ('$CL3', '$CC3', '$ITEM', 50, 50, null, null, null),
+  ('$CL4', '$CC4', '$ITEM', 50, 50, 48, '$K4', now());
 -- 11: P11 named on 1,900 marked rows.
 insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, user_id)
 select '$ORG', '$ITEM', 'adjust', 0, 100, 100, '$P11' from generate_series(1, 1000);
@@ -386,7 +455,7 @@ T1=$(now_ms)
 wait "$PID"
 check "7a: B deleted M" "$(has 'B=deleted' "$TMP/7a.B.out")" "1"
 check "7a: A failed 22023 (target not an active member)" "$(grep -c 'ERROR:  22023: target user is not an active member' "$TMP/7a.A.out")" "1"
-if [ $((T1 - T0)) -ge 1500 ]; then ok "7a: A waited on M's row ($((T1 - T0)) ms)"; else bad "7a: A did not wait ($((T1 - T0)) ms)"; fi
+if [ $((T1 - T0)) -ge 1500 ]; then ok "7a: A waited for B's locks ($((T1 - T0)) ms)"; else bad "7a: A did not wait ($((T1 - T0)) ms)"; fi
 check "7a: the owner is still the only real owner" "$(real_owners "$ORGT")" "$TO"
 
 # ═══ 7b. Transfer first ═══════════════════════════════════════════════════
@@ -408,7 +477,7 @@ T1=$(now_ms)
 wait "$PID"
 check "7b: A transferred" "$(has "A=$TM2" "$TMP/7b.A.out")" "1"
 check "7b: B was refused: P0001 last_owner (the check re-read after the lock wait)" "$(grep -c 'ERROR:  P0001: last_owner' "$TMP/7b.B.out")" "1"
-if [ $((T1 - T0)) -ge 1500 ]; then ok "7b: B's lock statement waited on M2's row ($((T1 - T0)) ms)"; else bad "7b: B did not wait ($((T1 - T0)) ms)"; fi
+if [ $((T1 - T0)) -ge 1500 ]; then ok "7b: B's lock loop waited for A ($((T1 - T0)) ms)"; else bad "7b: B did not wait ($((T1 - T0)) ms)"; fi
 check "7b: M2 is the only real owner, the old owner an admin, M2's account intact" \
   "$(real_owners "$ORGT")/$(q "select role from public.organization_members where organization_id = '$ORGT' and user_id = '$TO'")/$(users_left "$TM2")" \
   "$TM2/admin/1"
@@ -454,20 +523,50 @@ PID=$!
 wait_sleeping 0394-race-7d-A || bad "7d: session A never reached its pg_sleep"
 delete_as_gotrue 0394-race-7d-B "$M3" > "$TMP/7d.B.out" 2>&1
 wait "$PID"
-A_DL="$(has '40P01: deadlock detected' "$TMP/7d.A.out")"
-B_DL="$(has '40P01: deadlock detected' "$TMP/7d.B.out")"
-if [ "$A_DL" = "1" ] && [ "$B_DL" = "0" ]; then
-  note "7d: the transfer was the deadlock victim; the deletion completed"
-  check "7d: M3 gone, the owner still the only real owner" "$(users_left "$M3")/$(real_owners "$ORGT3")" "0/$TO3"
-elif [ "$B_DL" = "1" ] && [ "$A_DL" = "0" ]; then
-  note "7d: the deletion was the deadlock victim; the transfer completed"
-  check "7d: M3 is the only real owner and intact" "$(users_left "$M3")/$(real_owners "$ORGT3")" "1/$M3"
+check "7d: A transferred to M3; B was refused: P0001 last_owner (no deadlock)" \
+  "$(has "A=$M3" "$TMP/7d.A.out")/$(grep -c 'ERROR:  P0001: last_owner' "$TMP/7d.B.out")/$(cat "$TMP/7d.A.out" "$TMP/7d.B.out" | grep -c '40P01')" "1/1/0"
+check "7d: M3 is the only real owner and intact" "$(users_left "$M3")/$(real_owners "$ORGT3")" "1/$M3"
+
+# ═══ 7e. Three sessions: a transfer to M while M and the other owner delete ═
+echo "== 7e. T1 transfers B's ownership to M and holds; T3 deletes M, then T2 deletes A (the other owner)"
+( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7e.T1.out" 2>&1 <<SQL
+set application_name to '0394-race-7e-T1';
+begin;
+$(as_service)
+select 'T1=' || public.transfer_org_ownership('$ORGT4', '$B7', '$M7');
+select pg_sleep(3);
+commit;
+SQL
+) &
+PID1=$!
+wait_sleeping 0394-race-7e-T1 || bad "7e: T1 never reached its pg_sleep"
+( delete_as_gotrue 0394-race-7e-T3 "$M7" > "$TMP/7e.T3.out" 2>&1 ) &
+PID3=$!
+wait_lock 0394-race-7e-T3 || bad "7e: T3 (M's deletion) never waited for a lock"
+( delete_as_gotrue 0394-race-7e-T2 "$A7" > "$TMP/7e.T2.out" 2>&1 ) &
+PID2=$!
+wait_lock 0394-race-7e-T2 || bad "7e: T2 (A's deletion) never waited for a lock"
+wait "$PID1" "$PID3" "$PID2"
+check "7e: T1 transferred B's ownership to M" "$(has "T1=$M7" "$TMP/7e.T1.out")" "1"
+DEL7E=$(( $(has 'B=deleted' "$TMP/7e.T3.out") + $(has 'B=deleted' "$TMP/7e.T2.out") ))
+REF7E=$(( $(grep -c 'ERROR:  P0001: last_owner' "$TMP/7e.T3.out") + $(grep -c 'ERROR:  P0001: last_owner' "$TMP/7e.T2.out") ))
+check "7e: exactly one deletion committed and the other was refused (P0001 last_owner)" "$DEL7E/$REF7E" "1/1"
+OWN7E="$(real_owners "$ORGT4")"
+if [ "$(has 'B=deleted' "$TMP/7e.T3.out")" = "1" ]; then
+  note "7e: M's deletion committed first; A's deletion re-read and was refused"
+  check "7e: A is the only real owner and intact; B an admin; M gone" \
+    "$OWN7E/$(users_left "$A7")/$(users_left "$M7")/$(q "select role from public.organization_members where organization_id = '$ORGT4' and user_id = '$B7'")" \
+    "$A7/1/0/admin"
 else
-  note "7d: no deadlock observed (A_DL=$A_DL B_DL=$B_DL)"
-  OWN="$(real_owners "$ORGT3")"
-  if [ "$OWN" = "$TO3" ] || [ "$OWN" = "$M3" ]; then ok "7d: one real owner ($OWN)"; else bad "7d: owners '$OWN'"; fi
+  note "7e: A's deletion committed first; M's deletion re-read and was refused"
+  check "7e: M is the only real owner and intact; B an admin; A gone" \
+    "$OWN7E/$(users_left "$M7")/$(users_left "$A7")/$(q "select role from public.organization_members where organization_id = '$ORGT4' and user_id = '$B7'")" \
+    "$M7/1/0/admin"
 fi
-if [ $((A_DL + B_DL)) -le 1 ]; then ok "7d: at most one 40P01 (server-raised)"; else bad "7d: both sessions got 40P01"; fi
+check "7e: the organization keeps members and exactly one real owner" \
+  "$(q "select count(*) filter (where role = 'owner' and accepted_at is not null and impersonation_expires_at is null) || '/' || count(*)
+          from public.organization_members where organization_id = '$ORGT4'")" "1/3"
+check "7e: no 40P01 in any of the three sessions" "$(cat "$TMP"/7e.*.out | grep -c '40P01')" "0"
 
 # ═══ 8. Two owners delete at once (both start orders) ═════════════════════
 two_owners() { # two_owners <tag> <org> <first> <second>
@@ -524,6 +623,91 @@ seat_ends 10 "$ORGE" "$O4" commit
 echo "== 10. the same while the seat removal rolls back"
 seat_ends 10r "$ORGE2" "$O5" rollback
 
+# ═══ 12. The subject's own pick vs their deletion ═════════════════════════
+echo "== 12a. K1 picks (holds 3 s); K1's account is deleted meanwhile"
+( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/12a.A.out" 2>&1 <<SQL
+set application_name to '0394-race-12a-A';
+begin;
+$(as_user "$K1")
+select 'A=' || quantity_picked from public.partial_pick_line('$LP1', 2);
+select pg_sleep(3);
+commit;
+SQL
+) &
+PID=$!
+wait_sleeping 0394-race-12a-A || bad "12a: session A never reached its pg_sleep"
+T0=$(now_ms)
+delete_as_gotrue 0394-race-12a-B "$K1" > "$TMP/12a.B.out" 2>&1
+T1=$(now_ms)
+wait "$PID"
+check "12a: A picked (2 in all), B deleted" "$(has 'A=2' "$TMP/12a.A.out")/$(has 'B=deleted' "$TMP/12a.B.out")" "1/1"
+if [ $((T1 - T0)) -ge 1500 ]; then ok "12a: B waited for the pick ($((T1 - T0)) ms)"; else bad "12a: B did not wait ($((T1 - T0)) ms)"; fi
+check "12a: the picked quantity stays, picked_by null; the pick is released and still in progress" \
+  "$(q "select concat_ws('/', l.quantity_picked::int, coalesce(l.picked_by::text, 'null'), coalesce(o.assigned_picker_id::text, 'null'),
+                         coalesce(o.picking_claimed_by::text, 'null'), coalesce(o.picking_claimed_at::text, 'null'), o.status)
+          from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id where l.id = '$LP1'")" \
+  "2/null/null/null/null/picking_in_progress"
+
+echo "== 12b. K2's account is deleted (B holds 3 s); K2's pick arrives meanwhile"
+( delete_as_gotrue 0394-race-12b-B "$K2" 3 > "$TMP/12b.B.out" 2>&1 ) &
+PID=$!
+wait_sleeping 0394-race-12b-B || bad "12b: session B never reached its pg_sleep"
+"${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/12b.A.out" 2>&1 <<SQL
+set application_name to '0394-race-12b-A';
+begin;
+$(as_user "$K2")
+select 'A=' || quantity_picked from public.partial_pick_line('$LP2', 2);
+commit;
+SQL
+wait "$PID"
+check "12b: B deleted; the pick was refused 42501 after the wait" "$(has 'B=deleted' "$TMP/12b.B.out")/$(grep -c 'ERROR:  42501' "$TMP/12b.A.out")" "1/1"
+check "12b: the earlier picked quantity stays, picked_by null; the pick is released" \
+  "$(q "select concat_ws('/', l.quantity_picked::int, coalesce(l.picked_by::text, 'null'), coalesce(o.assigned_picker_id::text, 'null'), o.status)
+          from public.order_request_lines l join public.order_requests o on o.id = l.order_request_id where l.id = '$LP2'")" \
+  "1/null/null/picking_in_progress"
+
+# ═══ 13. The subject's own count line vs their deletion ═══════════════════
+echo "== 13a. K3 records a count line (holds 3 s); K3's account is deleted meanwhile"
+V3="$(q "select assignment_version from public.cycle_counts where id = '$CC3'")"
+( "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/13a.A.out" 2>&1 <<SQL
+set application_name to '0394-race-13a-A';
+begin;
+$(as_user "$K3")
+update public.cycle_count_lines set counted_quantity = 47, counted_by = '$K3', counted_at = now() where id = '$CL3' returning 'A=counted';
+select pg_sleep(3);
+commit;
+SQL
+) &
+PID=$!
+wait_sleeping 0394-race-13a-A || bad "13a: session A never reached its pg_sleep"
+delete_as_gotrue 0394-race-13a-B "$K3" > "$TMP/13a.B.out" 2>&1
+wait "$PID"
+check "13a: A counted, B deleted" "$(has 'A=counted' "$TMP/13a.A.out")/$(has 'B=deleted' "$TMP/13a.B.out")" "1/1"
+check "13a: the counted 47 stays, counted_by null; the count released (version + 1), in progress" \
+  "$(q "select concat_ws('/', l.counted_quantity::int, coalesce(l.counted_by::text, 'null'),
+                         coalesce(c.assigned_to::text, 'null'), c.assignment_version - $V3, c.status)
+          from public.cycle_count_lines l join public.cycle_counts c on c.id = l.cycle_count_id where l.id = '$CL3'")" \
+  "47/null/null/1/in_progress"
+
+echo "== 13b. K4's account is deleted (B holds 3 s); K4 re-records their line meanwhile"
+( delete_as_gotrue 0394-race-13b-B "$K4" 3 > "$TMP/13b.B.out" 2>&1 ) &
+PID=$!
+wait_sleeping 0394-race-13b-B || bad "13b: session B never reached its pg_sleep"
+"${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/13b.A.out" 2>&1 <<SQL
+set application_name to '0394-race-13b-A';
+begin;
+$(as_user "$K4")
+update public.cycle_count_lines set counted_quantity = 46, counted_by = '$K4', counted_at = now() where id = '$CL4' returning 'A=counted';
+commit;
+SQL
+wait "$PID"
+check "13b: B deleted; the re-record failed 23503 (counted_by names an account that is gone)" \
+  "$(has 'B=deleted' "$TMP/13b.B.out")/$(grep -c 'ERROR:  23503: .*cycle_count_lines_counted_by_fkey' "$TMP/13b.A.out")" "1/1"
+check "13b: the earlier counted 48 stays, counted_by null; the count released" \
+  "$(q "select concat_ws('/', l.counted_quantity::int, coalesce(l.counted_by::text, 'null'), coalesce(c.assigned_to::text, 'null'), c.status)
+          from public.cycle_count_lines l join public.cycle_counts c on c.id = l.cycle_count_id where l.id = '$CL4'")" \
+  "48/null/null/in_progress"
+
 # ═══ 11. Timing ═══════════════════════════════════════════════════════════
 echo "== 11. a subject named on 1,900 marked rows: the check, then the deletion"
 T0=$(now_ms)
@@ -550,8 +734,8 @@ check "11: all 1,900 rows kept, user_id null and stamped" \
 # ═══ 6. Error classes ═════════════════════════════════════════════════════
 echo "== 6. error classes"
 check "6: no 40001 in any session" "$(cat "$TMP"/*.out | grep -c '40001')" "0"
-check "6: no 40P01 outside 5 and 7d" \
-  "$(for f in "$TMP"/*.out; do case "$(basename "$f")" in (5.*|7d.*) ;; (*) cat "$f" ;; esac; done | grep -c '40P01')" "0"
+check "6: no 40P01 outside 5" \
+  "$(for f in "$TMP"/*.out; do case "$(basename "$f")" in (5.*) ;; (*) cat "$f" ;; esac; done | grep -c '40P01')" "0"
 check "6: no 0394 function body names 40001 or 40P01" \
   "$(q "select count(*) from pg_proc where oid in (to_regprocedure('public.tg_auth_users_before_delete()'), to_regprocedure('public.tg_mark_deleted_users()'),
                                                     to_regprocedure('public._account_exists(uuid)'), to_regprocedure('public._enforce_schedule_events_writer()'),

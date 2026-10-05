@@ -633,7 +633,8 @@ PGTAP_TESTS=(
   # never sets, clears or changes a stamp, a live person nulled by
   # service_role or postgres is never stamped, a profile-only delete fails
   # closed. The account trigger (DEFINER, before any cascade) locks the
-  # person's membership rows and their organizations' owner rows, refuses
+  # owner rows of every organization the person belongs to and their own
+  # rows, re-reading until every owner row is locked, refuses
   # the only owner of an organization with other members (P0001
   # organization_last_owner; impersonation seats are neither owners nor
   # members), then releases open counts, picks, deliveries, schedule
@@ -641,11 +642,15 @@ PGTAP_TESTS=(
   # expires pending invites and drops the person from the notification
   # audience. The schedule writer lets a deleted creator's null stand (no
   # dangling key anywhere afterwards). transfer_org_ownership locks both
-  # rows and checks both updates. The F12 delivery-target check is validated
-  # with the five legacy orders exempt by primary key in their legacy shape.
-  # The two-session proofs (release against assign, last owner against a
-  # joining member and against a transfer, two owners at once, the dry run
-  # against a row lock) are scripts/db-concurrency/0394_account_delete_race.sh;
+  # rows and checks both updates. The membership guard lets an API caller
+  # change only role, is_delivery_driver and all_warehouses on a membership
+  # and never insert an "Act as" seat (review: admins could rewrite the
+  # owner's row). The F12 delivery-target check is validated with the five
+  # legacy orders exempt by primary key in their legacy shape. The
+  # two-session proofs (release against assign, last owner against a joining
+  # member and against a transfer, two owners at once, a transfer racing two
+  # deletions, the dry run against a row lock, the person's own pick and
+  # count line) are scripts/db-concurrency/0394_account_delete_race.sh;
   # the lock footprint is scripts/db-concurrency/0394_migration_lock_footprint.sh;
   # the marker's write overhead on the log tables (ordinary writes never call
   # it) is scripts/db-concurrency/0394_marker_write_overhead.sh.

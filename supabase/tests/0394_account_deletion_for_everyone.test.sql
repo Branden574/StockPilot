@@ -69,7 +69,7 @@
 
 begin;
 
-select plan(73);
+select plan(79);
 
 \set orgA    '\'03940000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03940000-0000-0000-0000-00000000000b\''
@@ -434,8 +434,9 @@ select is(
   || '#' || (select string_agg(distinct m[1], ',' order by m[1])
                from pg_proc p, regexp_matches(p.prosrc, $re$errcode\s*=\s*'([^']+)'$re$, 'g') m
               where p.oid = to_regprocedure('public.tg_auth_users_before_delete()')),
-  'e2aeabeff7339b21b86f95788a597d6a|true|{"search_path=public, pg_temp"}|postgres|postgres=X/postgres,service_role=X/postgres#P0001',
-  'K10: tg_auth_users_before_delete is 0394''s body, SECURITY DEFINER (it must release rows the deleting role cannot touch), search_path pinned, owned by postgres, EXECUTE for postgres and service_role only (a trigger function needs none to fire), and it raises only P0001 (never 40001 or 40P01)');
+  -- Re-pinned by the review fix (was e2aeabeff7339b21b86f95788a597d6a ... #P0001): the lock loop (race 7e) and its 55P03.
+  '88fbc1c4a826334245675b24b3d23106|true|{"search_path=public, pg_temp"}|postgres|postgres=X/postgres,service_role=X/postgres#55P03,P0001',
+  'K10: tg_auth_users_before_delete is 0394''s body, SECURITY DEFINER (it must release rows the deleting role cannot touch), search_path pinned, owned by postgres, EXECUTE for postgres and service_role only (a trigger function needs none to fire), and it raises only P0001 (last_owner) and 55P03 (owner rows kept changing: try again), never 40001 or 40P01');
 select is(
   (select t.tgtype::text || '|' || t.tgenabled::text || '|' || t.tgfoid::regproc::text
      from pg_trigger t where t.tgrelid = 'auth.users'::regclass and t.tgname = 'on_auth_user_before_delete'),
@@ -524,6 +525,15 @@ select is(
                                       'role_permission_overrides_updated_by_fkey', 'user_profiles_disabled_by_fkey'))),
   'true|true|true/16',
   'K20: the five functions, the 16 deleted_users columns and the 16 constraints 0394 adds or restates say so in their comments');
+
+select is(
+  (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
+          || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || '|' || has_function_privilege('anon', p.oid, 'EXECUTE')::text
+     from pg_proc p where p.oid = to_regprocedure('public._guard_organization_member_changes()'))
+  || '#' || (select t.tgtype::text || '/' || t.tgenabled::text from pg_trigger t
+              where t.tgrelid = 'public.organization_members'::regclass and t.tgname = 'organization_members_role_guard'),
+  'b48c165e5ff1ae0e8bbf159ab97c0d42|true|{search_path=public}|postgres|false|false#31/O',
+  'K21: _guard_organization_member_changes is 0394''s body (review: an API caller may change only role, is_delivery_driver and all_warehouses on a membership, and may not create an "Act as" seat), SECURITY DEFINER, search_path=public (0329), not executable by anon or authenticated, still BEFORE INSERT OR UPDATE OR DELETE on organization_members');
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 -- full_name and email feed D12: no row may gain a deleted person's name or
@@ -931,13 +941,86 @@ select is(
   pg_temp.attempt('service_role', null, format('select public.transfer_org_ownership(%L, %L, %L)', :orgE, :own4, :pa)),
   '42501:-:caller is not the current owner | 22023:-:target user is not an active member of this organization',
   'L11: an impersonation seat can neither hand ownership away (42501) nor receive it (22023)');
+-- Re-pinned by the review fix (was: the first statement is one FOR NO KEY
+-- UPDATE over the person's rows and the owner rows of the organizations they
+-- own; race 7e showed a role changing during that wait could hide an owner).
 select ok(
-  (select p.prosrc ~ $re$^\s*declare[^;]*;[^;]*;\s*begin\s*perform 1\s+from public\.organization_members m\s+where m\.user_id = old\.id$re$
-          and position('for no key update' in p.prosrc) < position('raise exception ''last_owner''' in p.prosrc)
+  (select p.prosrc ~ $re$^\s*declare(?:[^;]*;){5}\s*begin\s*loop\s+v_try := v_try \+ 1;\s*select coalesce\(array_agg\(l\.id\), '\{\}'\) into v_new$re$
+          and position('for share' in p.prosrc) < position('for no key update' in p.prosrc)
+          and position('for no key update' in p.prosrc) < position('exit when not exists' in p.prosrc)
+          and position('exit when not exists' in p.prosrc) < position('raise exception ''last_owner''' in p.prosrc)
           and position('raise exception ''last_owner''' in p.prosrc) < position('update public.cycle_counts' in p.prosrc)
-          and position('order by m.id' in p.prosrc) between 1 and position('for no key update' in p.prosrc)
+          and (select count(*) from regexp_matches(p.prosrc, 'order by m\.id\s+for (share|no key update)', 'g')) = 2
      from pg_proc p where p.oid = to_regprocedure('public.tg_auth_users_before_delete()')),
-  'L12: the trigger''s first statement locks the person''s membership rows and their organizations'' owner rows (FOR NO KEY UPDATE, in id order), before the last-owner check, which precedes every release (critique C2/C3)');
+  'L12: the trigger starts with its lock loop: the owner rows of organizations the person belongs to but does not own FOR SHARE, then the person''s rows and the owner rows of organizations they own FOR NO KEY UPDATE (each in id order), repeated until every owner row is locked, before the last-owner check, which precedes every release (critique C2/C3, review race 7e)');
+
+-- ══ G. The membership guard (review 2026-10-05, High + Medium) ════════════
+-- Before 0394 the guard pinned only the role: an admin (or the owner) could
+-- rewrite any membership's user_id, accepted_at or impersonation_expires_at
+-- through PostgREST. That let an admin hand the owner row to another account
+-- or lock the owner out, and let the owner (or an admin) mark the owner row an
+-- "Act as" seat, which 0394's last-owner rule and transfer ignore. An API
+-- caller (auth.uid() set) may now change only role, is_delivery_driver and
+-- all_warehouses, and may not create a seat; the server's admin client (no
+-- JWT subject) and an account deletion's own key action are unchanged.
+select format($q$update public.organization_members set role = 'admin' where organization_id = %L and user_id = %L$q$, :orgA, :mgr) as promote_mgr \gset
+select is(
+  (select string_agg(pg_temp.attempt('authenticated', :mgr,
+                                     format('update public.organization_members set %s where organization_id = %L and user_id = %L', s.setc, :orgA, :own),
+                                     :'promote_mgr'),
+                     ' | ' order by s.n)
+     from (values (1, format('user_id = %L', :xinv)), (2, 'accepted_at = null'), (3, $v$impersonation_expires_at = '2099-01-01'$v$),
+                  (4, format('organization_id = %L', :orgB)), (5, format('invited_by = %L', :mgr)), (6, $v$invited_at = now()$v$),
+                  (7, $v$created_at = now() - interval '1 day'$v$), (8, 'id = gen_random_uuid()')) s(n, setc)),
+  (select string_agg('42501:-:only role, is_delivery_driver and all_warehouses can change on a membership', ' | ') from generate_series(1, 8)),
+  'G1: an org admin can no longer rewrite the owner''s membership through the API: not the account it names, its acceptance, an "Act as" expiry, its organization, who invited it or when, or its id (each 42501, nothing changed)');
+select is(
+  (select string_agg(pg_temp.attempt('authenticated', :own,
+                                     format('update public.organization_members set %s where organization_id = %L and user_id = %L', s.setc, :orgA, s.who)),
+                     ' | ' order by s.n)
+     from (values (1, $v$impersonation_expires_at = '2099-01-01'$v$, :own::uuid), (2, 'accepted_at = null', :own::uuid),
+                  (3, format('user_id = %L', :xinv), :stf::uuid), (4, $v$impersonation_expires_at = now() + interval '1 hour'$v$, :stf::uuid))
+          s(n, setc, who))
+  || ' # ' || pg_temp.attempt('postgres', null, format('delete from auth.users where id = %L', :own)),
+  (select string_agg('42501:-:only role, is_delivery_driver and all_warehouses can change on a membership', ' | ') from generate_series(1, 4))
+  || ' # P0001:Transfer ownership before deleting the account.:last_owner',
+  'G2: the owner cannot make their own row an "Act as" seat or unaccept it, nor rewrite a member''s row, so the last-owner refusal cannot be side-stepped: the owner is still refused (P0001 last_owner)');
+select is(
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$update public.organization_members set role = 'viewer', is_delivery_driver = true, all_warehouses = true
+                             where organization_id = %L and user_id = %L$q$, :orgA, :stf), :'promote_mgr')
+  || ' | ' ||
+  pg_temp.attempt('authenticated', :mgr,
+                  format('update public.organization_members set is_delivery_driver = true where organization_id = %L and user_id = %L', :orgA, :own),
+                  :'promote_mgr')
+  || ' | ' ||
+  pg_temp.attempt('authenticated', :own,
+                  format($q$update public.organization_members set role = 'manager' where organization_id = %L and user_id = %L$q$, :orgA, :stf))
+  || ' | ' ||
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at)
+                            values (%L, %L, 'staff', now(), now() + interval '1 hour')$q$, :orgA, :xinv), :'promote_mgr')
+  || ' | ' ||
+  pg_temp.attempt('authenticated', :mgr,
+                  format($q$insert into public.organization_members (organization_id, user_id, role, accepted_at)
+                            values (%L, %L, 'staff', now())$q$, :orgA, :xinv), :'promote_mgr'),
+  'ok:1 | ok:1 | ok:1 | 42501:-:cannot create an Act as seat via direct insert | ok:1',
+  'G3: what the app writes still works (team.ts: role, is_delivery_driver, all_warehouses, on any row an admin may edit; the owner too), an admin may still add a member (0217/0220), but no API caller may insert an "Act as" seat');
+select is(
+  pg_temp.attempt('service_role', null, format('select public.transfer_org_ownership(%L, %L, %L)', :orgA, :own, :mgr),
+                  format('%s; select pg_temp.call_as(%L, %L, %L)', :'promote_mgr', 'authenticated', :mgr,
+                         format($q$update public.organization_members set impersonation_expires_at = '2099-01-01'
+                                    where organization_id = %L and user_id = %L returning 'written'$q$, :orgA, :own)),
+                  format($q$select string_agg(role || '/' || coalesce(impersonation_expires_at::text, 'null'), ',' order by user_id)
+                             from public.organization_members where organization_id = %L and user_id in (%L, %L)$q$, :orgA, :own, :mgr)),
+  'ok:1:admin/null,owner/null',
+  'G4: an admin''s attempt to mark the owner row an "Act as" seat changes nothing, so the owner can still transfer ownership (before the fix the transfer then failed 42501 "caller is not the current owner")');
+select is(
+  pg_temp.attempt('postgres', :mgr, format('delete from auth.users where id = %L', :xinv),
+                  format('update public.organization_members set invited_by = %L where organization_id = %L and user_id = %L', :xinv, :orgD, :dmem),
+                  format('select coalesce(invited_by::text, %L) from public.organization_members where organization_id = %L and user_id = %L', 'null', :orgD, :dmem)),
+  'ok:1:null',
+  'G5: an account deletion''s own key action (organization_members.invited_by SET NULL) still passes the guard even when a JWT subject is set: invited_by may become null only when the inviter''s account is gone');
 
 -- ══ P10. The dry run changes nothing ══════════════════════════════════════
 select count(*) as stamped0 from pg_temp.marked_rows() r where r.o_j ->> 'deleted_users' is not null \gset
