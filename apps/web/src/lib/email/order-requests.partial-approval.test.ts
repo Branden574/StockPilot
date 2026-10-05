@@ -171,11 +171,21 @@ describe('the approved email says what is held (L86)', () => {
     const args = await send();
     expect(args.html).toContain('we’ve reserved 6 of 8 units on this request; the rest is waiting for stock.');
     expect(args.html).toContain('6 of 8 units');
-    expect(args.html).toContain('Reserved 6 units across 2 lines.');
     expect(args.html).toContain('part of your order is reserved and moving to packing');
     expect(args.html).not.toContain('every unit');
     expect(args.text).toContain('we’ve reserved 6 of 8 units on this request; the rest is waiting for stock.');
     expect(args.text).toContain('Reserved: 6 of 8 units');
+    // Review (2026-10-05): the preheader said "Reserved 6 units across 2
+    // lines", every line counted though nothing was held for some, and the
+    // grid and the text promised "Ships <the approval date>" while the rest
+    // waits for stock. The preheader says 6 of 8 and the rest waits; no date
+    // is promised (the warehouse it ships from stays).
+    expect(args.html).toContain('Reserved 6 of 8 units. The rest is waiting for stock.');
+    expect(args.html).not.toContain('Reserved 6 units across 2 lines.');
+    expect(args.html).not.toMatch(/Ships [A-Z][a-z]{2} \d{1,2}, \d{4}/);
+    expect(args.html).toContain('Ships from DCIV');
+    expect(args.text).not.toMatch(/^Ships: /m);
+    expect(args.text).toMatch(/^From: /m);
   });
 
   it('nothing held: says nothing is reserved yet and the order is waiting for stock, never "0 of 8" or "packing has started"', async () => {
@@ -209,6 +219,27 @@ describe('the approved email says what is held (L86)', () => {
     expect(args.html).not.toContain('every unit');
     expect(args.html).not.toContain('the rest is waiting for stock');
     expect(args.text).toContain('your request is approved.');
+    // Review (2026-10-05): only the prose followed the rule. The preheader
+    // said "Reserved 8 units across 2 lines. Ships ...", the grid's label read
+    // Reserved, and the motion caption said the order "is reserved". Now none
+    // of them claims a reservation, and no ship date is promised.
+    expect(args.html).not.toMatch(/Reserved \d/);
+    expect(args.html).toContain('Approved. 8 units across 2 lines from DCIV — Fresno.');
+    expect(args.html).toMatch(/>Contents<\/div>/);
+    expect(args.html).not.toMatch(/>Reserved<\/div>/);
+    expect(args.html).not.toMatch(/your order is reserved|part of your order is reserved/);
+    expect(args.html).toContain('Three cartons settle into a row — your order is approved');
+    expect(args.html).not.toMatch(/Ships [A-Z][a-z]{2} \d{1,2}, \d{4}/);
+    expect(args.text).not.toMatch(/^Ships: /m);
+    expect(args.text).not.toMatch(/^Reserved: /m);
+  });
+
+  it('every unit held keeps the full approval as it was: Reserved in the grid with the ship date, and the preheader', async () => {
+    wire({ data: [{ item_id: 'it-a', quantity: 6 }, { item_id: 'it-b', quantity: 2 }], error: null });
+    const args = await send();
+    expect(args.html).toMatch(/>Reserved<\/div>/);
+    expect(args.html).toMatch(/Ships [A-Z][a-z]{2} \d{1,2}, \d{4}/);
+    expect(args.text).toMatch(/^Ships: /m);
   });
 
   it('reads the holds for the approved email only', async () => {

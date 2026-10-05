@@ -557,17 +557,25 @@ function buildView(a: TemplateArgs): OrderEmailView {
         return def.preheader({ warehouse: wh, window: '24 hours' });
       case 'submitted':
         return def.preheader({ submittedAt: submittedOn, warehouse: wh });
-      case 'approved':
-        // 0395 (L86): the preheader says "Reserved N units", so N is what
-        // was held when only part of the order could be; when nothing could
-        // be, it says so instead of "Reserved 0 units".
-        if (heldState(a.summary.held) === 'none') return `Approved. ${NOTHING_HELD_YET}`;
-        return def.preheader({
-          units: a.summary.held?.partly ? a.summary.held.heldUnits : units,
-          lines,
-          shipDate,
-          warehouse: wh,
-        });
+      case 'approved': {
+        // 0395 (L86): the registry preheader says "Reserved N units across M
+        // lines. Ships <date> from <warehouse>." only when every unit is held.
+        // Part held: how many of how many, and that the rest waits (every
+        // line was counted, and the date is the approval's, not a shipment's;
+        // small fixes slice 2 review). Nothing held: says so. Holds not read:
+        // claims no reservation at all.
+        const held = a.summary.held;
+        switch (heldState(held)) {
+          case 'none':
+            return `Approved. ${NOTHING_HELD_YET}`;
+          case 'part':
+            return `Reserved ${held!.heldUnits} of ${held!.owedUnits} units. The rest is waiting for stock.`;
+          case 'unknown':
+            return `Approved. ${units} units across ${lines} lines from ${wh}.`;
+          case 'all':
+            return def.preheader({ units, lines, shipDate, warehouse: wh });
+        }
+      }
       case 'denied':
         return def.preheader({
           reasonSummary: a.reasonText
@@ -691,7 +699,15 @@ interface KindBody {
 function orderGrid(
   a: TemplateArgs,
   v: OrderEmailView,
-  opts: { reserved?: boolean; approvedSpan?: boolean; heldOf?: { held: number; owed: number } } = {},
+  opts: {
+    reserved?: boolean;
+    approvedSpan?: boolean;
+    heldOf?: { held: number; owed: number };
+    /** Under a Reserved cell, "Ships from <warehouse>" instead of "Ships
+     *  <date>": the date is the approval's, so only a fully held order may
+     *  read as shipping on it (small fixes slice 2 review). */
+    noShipDate?: boolean;
+  } = {},
 ): string {
   const units = opts.heldOf ? `${opts.heldOf.held} of ${opts.heldOf.owed} units` : `${v.units} units`;
   const contents = `${units} <span class="ink4" style="color:${ES_LIGHT.ink4};font-weight:400">&middot; ${v.lines} lines</span>`;
@@ -711,9 +727,10 @@ function orderGrid(
       {
         label: opts.reserved ? 'Reserved' : 'Contents',
         valueHtml: contents,
-        subHtml: opts.reserved
-          ? `Ships ${escapeHtml(v.shipDate)}`
-          : `Ships from ${escapeHtml(v.wh)}`,
+        subHtml:
+          opts.reserved && !opts.noShipDate
+            ? `Ships ${escapeHtml(v.shipDate)}`
+            : `Ships from ${escapeHtml(v.wh)}`,
         strong: true,
       },
     ],
@@ -906,7 +923,9 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
               ? 'Three cartons settle into a row — your order is approved and waiting for stock'
               : state === 'part'
                 ? 'Three cartons settle into a row — part of your order is reserved and moving to packing'
-                : 'Three cartons settle into a row — your order is reserved and moving to packing',
+                : state === 'unknown'
+                  ? 'Three cartons settle into a row — your order is approved'
+                  : 'Three cartons settle into a row — your order is reserved and moving to packing',
           ),
           section(PAD_TIMELINE, orderTimeline({ steps: stagePath(1), tone: 'ok' })),
           ...(showGrid
@@ -914,11 +933,13 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
                 section(
                   PAD_BLOCK,
                   orderGrid(a, v, {
-                    // Nothing held: the cell reads Contents, not "Reserved 8 units".
-                    reserved: state !== 'none',
+                    // Nothing held, or the holds not read: the cell reads
+                    // Contents, not "Reserved 8 units".
+                    reserved: state === 'all' || state === 'part',
                     approvedSpan: true,
+                    // Part held: "3 of 5 units", and no ship date promised.
                     ...(state === 'part' && held
-                      ? { heldOf: { held: held.heldUnits, owed: held.owedUnits } }
+                      ? { heldOf: { held: held.heldUnits, owed: held.owedUnits }, noShipDate: true }
                       : {}),
                   }),
                 ),
@@ -1222,8 +1243,12 @@ function renderText(a: TemplateArgs): string {
   const v = buildView(a);
   const greet = hi(v.firstName, false);
   // 0395 (L86): an approval that held nothing is waiting for stock, as the
-  // HTML says: nothing is packing and no ship date is promised.
-  const nothingHeld = a.kind === 'approved' && heldState(a.summary.held) === 'none';
+  // HTML says: nothing is packing and no ship date is promised. Nor is one
+  // promised when only part is held or the holds could not be read (the date
+  // is the approval's; small fixes slice 2 review), as the HTML's grid.
+  const approvedState = a.kind === 'approved' ? heldState(a.summary.held) : null;
+  const nothingHeld = approvedState === 'none';
+  const promisesShipDate = approvedState === null || approvedState === 'all';
 
   const heads: Record<OrderRequestEmailKind, [string, string]> = {
     confirm_request: [`One tap sends ${v.displayId}.`, 'The warehouse hasn’t seen it yet.'],
@@ -1280,7 +1305,7 @@ function renderText(a: TemplateArgs): string {
         lines.push('Reserved: nothing yet (waiting for stock)');
       }
     }
-    if (a.summary.shipDate && !nothingHeld) lines.push(`Ships: ${a.summary.shipDate}`);
+    if (a.summary.shipDate && promisesShipDate) lines.push(`Ships: ${a.summary.shipDate}`);
     if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
     if (a.summary.shipTo) lines.push(`${v.isPickup ? 'Pickup' : 'To'}: ${a.summary.shipTo}`);
     if (a.kind === 'approved' && v.approvedAt) {
