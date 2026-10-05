@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -38,7 +38,7 @@ function req(): NextRequest {
   }) as unknown as NextRequest;
 }
 
-let info: ReturnType<typeof vi.spyOn>;
+let info: MockInstance<Console['info']>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,7 +74,7 @@ describe('GET /api/cron/auto-delete-archived', () => {
 
     expect(res.status).toBe(200);
     expect(body).toMatchObject({ orgsProcessed: 2, itemsDeleted: 2, itemsSkipped: 4 });
-    const lines = info.mock.calls.filter(([tag]) => tag === '[cron.auto-delete-archived]');
+    const lines = info.mock.calls.filter((args: unknown[]) => args[0] === '[cron.auto-delete-archived]');
     expect(lines).toHaveLength(1);
     const logged = JSON.parse(String(lines[0]?.[1])) as Record<string, unknown>;
     expect(logged).toMatchObject({ itemsDeleted: 2, itemsSkipped: 4 });
