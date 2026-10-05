@@ -40,3 +40,16 @@ export function receiptNotesForPost(text: string): string | undefined {
   const trimmed = text.trim();
   return trimmed.length > 0 ? trimmed.slice(0, RECEIPT_NOTES_MAX) : undefined;
 }
+
+/**
+ * What the Variance number on a line card means, in the web receive dialog's
+ * words (po-receive-dialog.tsx). variance = what is left to receive less what
+ * is entered now: positive is still to come, 0 is fully received, negative is
+ * over ordered. Now that the phone takes an over-receipt, a bare "-2" read as
+ * two short (review 2026-10-05).
+ */
+export function varianceCaption(variance: number): string {
+  if (variance > 0) return `${variance} still to come`;
+  if (variance < 0) return `${Math.abs(variance)} over ordered`;
+  return 'Fully received';
+}

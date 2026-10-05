@@ -10,6 +10,7 @@ import {
   overReceiptUnits,
   RECEIPT_NOTES_LABEL,
   receiptNotesForPost,
+  varianceCaption,
 } from './po-receive';
 
 /**
@@ -58,6 +59,28 @@ describe('receiptNotesForPost', () => {
   });
 });
 
+// Review (2026-10-05): now that the phone takes an over-receipt, its line
+// card showed a bare "VARIANCE -2" beside an alert saying "2 more than
+// ordered", and -2 reads as two short. The web receive dialog
+// (po-receive-dialog.tsx) captions the same number and colours an over
+// receipt red; the phone now says it in the web's words.
+describe('varianceCaption (the web receive dialog\'s words)', () => {
+  it('what is still to come, fully received, or how many over ordered', () => {
+    expect(varianceCaption(3)).toBe('3 still to come');
+    expect(varianceCaption(0)).toBe('Fully received');
+    expect(varianceCaption(-2)).toBe('2 over ordered');
+  });
+  it('matches the web dialog, word for word', () => {
+    const web = readFileSync(
+      path.resolve(__dirname, '../../../web/src/components/po/po-receive-dialog.tsx'),
+      'utf8',
+    );
+    expect(web).toContain('`${variance} still to come`');
+    expect(web).toContain('`${Math.abs(variance)} over ordered`');
+    expect(web).toContain("'Fully received'");
+  });
+});
+
 describe('po/[id].tsx wiring', () => {
   const screen = readFileSync(path.resolve(__dirname, '../../app/po/[id].tsx'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -103,8 +126,31 @@ describe('po/[id].tsx wiring', () => {
     expect(screen).toContain('{RECEIPT_NOTES_LABEL}');
   });
 
-  // Mutation caught: the hint shown on a draft again.
+  // Mutation caught: the hint shown on a draft again. Review (2026-10-05):
+  // and on a PO with nothing left to receive, where no receipt can be posted.
   it('the attachment hint shows only on a PO that can be received (L77)', () => {
-    expect(screen).toMatch(/\{reviewOnly \? null : \(\s*<Text style=\{styles\.attachHint\}>/);
+    expect(screen).toMatch(/\{receivable \? \(\s*<Text style=\{styles\.attachHint\}>/);
+  });
+
+  // Review (2026-10-05): the Notes field showed on a fully received PO, whose
+  // footer says Fully received and can post nothing, so the note could never
+  // be sent. It shows only when a line has something left to receive, the
+  // same rule as the footer's Post receipt.
+  it('the Notes field shows only when a receipt can be posted, by the footer\'s own rule', () => {
+    expect(screen).toMatch(
+      /const receivable =\s*!reviewOnly && lines\.some\(\(l\) => l\.quantity_ordered - l\.quantity_received > 0\);/,
+    );
+    expect(screen).toMatch(/\{receivable \? \(\s*<View style=\{styles\.notesBlock\}>/);
+    expect(screen).toMatch(/disabled=\{posting \|\| !receivable\}/);
+    expect(screen).not.toContain('const anyReceivable');
+  });
+
+  // Review (2026-10-05): the bare Variance number gets the web's caption on a
+  // line with something left to receive, and an over receipt is red.
+  it('the Variance metric says what its number means, red when over ordered', () => {
+    expect(screen).toMatch(
+      /<Metric\s+label="Variance"\s+value=\{variance\}\s+tone=\{variance < 0 \? 'danger' : 'primary'\}\s+caption=\{remaining > 0 \? varianceCaption\(variance\) : undefined\}\s*\/>/,
+    );
+    expect(screen).toMatch(/tone === 'danger' && \{ color: theme\.destructive \}/);
   });
 });

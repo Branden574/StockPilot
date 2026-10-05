@@ -41,6 +41,7 @@ import {
   overReceiptUnits,
   RECEIPT_NOTES_LABEL,
   receiptNotesForPost,
+  varianceCaption,
 } from '@/lib/po-receive';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -397,6 +398,12 @@ export default function PoReceiveScreen() {
   // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
   // no Post receipt, and its lines one by one (no receiving runs).
   const reviewOnly = poIsReviewOnly(header?.status);
+  // A receipt can be posted only while a line has something left to receive:
+  // the footer's Post receipt, the Notes that go with a receipt and the
+  // attachment hint about posting one all follow it (a fully received PO
+  // showed a Notes field whose note could never be sent; review 2026-10-05).
+  const receivable =
+    !reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   const blocks = React.useMemo(
     () => buildPoBlocks(lines, reviewOnly ? {} : groups),
     [lines, groups, reviewOnly],
@@ -764,7 +771,12 @@ export default function PoReceiveScreen() {
                       {reviewOnly ? null : (
                         <>
                           <Metric label="Already" value={l.quantity_received} />
-                          <Metric label="Variance" value={variance} tone="primary" />
+                          <Metric
+                            label="Variance"
+                            value={variance}
+                            tone={variance < 0 ? 'danger' : 'primary'}
+                            caption={remaining > 0 ? varianceCaption(variance) : undefined}
+                          />
                         </>
                       )}
                     </View>
@@ -850,7 +862,7 @@ export default function PoReceiveScreen() {
               </View>
             )}
 
-            {reviewOnly ? null : (
+            {receivable ? (
               <View style={styles.notesBlock}>
                 <Text style={styles.qtyLabel}>{RECEIPT_NOTES_LABEL}</Text>
                 <TextInput
@@ -864,45 +876,35 @@ export default function PoReceiveScreen() {
                   style={[styles.qtyInput, styles.notesInput]}
                 />
               </View>
-            )}
+            ) : null}
 
             {/* Only a PO that can be received has a receipt to post (L77): a
-                draft is read-only here. */}
-            {reviewOnly ? null : (
+                draft is read-only here, and a fully received PO has nothing
+                left to post. */}
+            {receivable ? (
               <Text style={styles.attachHint}>
                 Documents save as soon as you add them — you don&apos;t need to post a
                 receipt to keep an attachment.
               </Text>
-            )}
+            ) : null}
             <PoAttachments poId={id} />
           </ScrollView>
 
           {reviewOnly ? null : (
             <View style={styles.footer}>
-              {(() => {
-                const anyReceivable = lines.some(
-                  (l) => l.quantity_ordered - l.quantity_received > 0,
-                );
-                return (
-                  <Pressable
-                    onPress={postReceipt}
-                    disabled={posting || !anyReceivable}
-                    style={({ pressed }) => [
-                      styles.postBtn,
-                      pressed && { opacity: 0.85 },
-                      (posting || !anyReceivable) && { opacity: 0.5 },
-                    ]}
-                  >
-                    <Text style={styles.postBtnText}>
-                      {posting
-                        ? 'Posting…'
-                        : anyReceivable
-                          ? 'Post receipt'
-                          : 'Fully received'}
-                    </Text>
-                  </Pressable>
-                );
-              })()}
+              <Pressable
+                onPress={postReceipt}
+                disabled={posting || !receivable}
+                style={({ pressed }) => [
+                  styles.postBtn,
+                  pressed && { opacity: 0.85 },
+                  (posting || !receivable) && { opacity: 0.5 },
+                ]}
+              >
+                <Text style={styles.postBtnText}>
+                  {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
+                </Text>
+              </Pressable>
             </View>
           )}
         </>
@@ -1036,10 +1038,13 @@ function Metric({
   label,
   value,
   tone,
+  caption,
 }: {
   label: string;
   value: number;
-  tone?: 'primary';
+  tone?: 'primary' | 'danger';
+  /** What the number means, under it (the Variance's web words). */
+  caption?: string;
 }) {
   return (
     <View style={styles.metric}>
@@ -1048,10 +1053,12 @@ function Metric({
         style={[
           styles.metricValue,
           tone === 'primary' && { color: theme.primary },
+          tone === 'danger' && { color: theme.destructive },
         ]}
       >
         {value}
       </Text>
+      {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
     </View>
   );
 }
@@ -1227,6 +1234,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  metricCaption: {
+    color: theme.textMuted,
+    fontSize: 11,
     marginTop: 2,
   },
   qtyRow: {
