@@ -203,19 +203,71 @@ function openDraftsPhrase(drafts: ReadinessDraftFacts): string | null {
   return null;
 }
 
+/**
+ * What the item's draft POs do for a short line (L76, owner wording Q15).
+ *
+ * Other orders' committed shortfall takes what is on order first and then
+ * the drafts, the same order readiness.ts uses for `draftable`
+ * (short0 - max(0, inboundRemaining + draftRemaining - committed)). So the
+ * drafts serve this order only with what is left of them after that claim:
+ *   claimedOnDrafts = min(max(0, committed - inboundRemaining), draftRemaining)
+ *   free            = draftRemaining - claimedOnDrafts
+ *   covers          = min(short, free)
+ * The claimed part is named ("50 of it is needed by other orders"); with
+ * nothing claimed the sentence is as before. When other orders need all of
+ * it, the draft is still named, covering nothing here.
+ */
 function draftSentence(item: ReadinessItemAssessment | null, shortUnits: number): string | null {
   const drafts = item?.facts?.drafts;
-  if (!drafts) return null;
-  const covers = Math.min(shortUnits, item?.quantities?.draftRemaining ?? 0);
-  if (covers <= 0) return null;
+  const q = item?.quantities;
+  if (!drafts || !q) return null;
+  const draftRemaining = q.draftRemaining;
+  if (draftRemaining <= 0) return null;
+  const committed = item?.facts?.committedOtherShortfall ?? 0;
+  const claimed = Math.min(Math.max(0, committed - q.inboundRemaining), draftRemaining);
+  const free = Math.max(0, draftRemaining - claimed);
+  const covers = Math.min(shortUnits, free);
+  if (covers <= 0 && claimed <= 0) return null;
   // Units on drafts the reader can't open are a quantity only (0377): how
   // many drafts hold them is not known, so none is counted or named.
   const open = drafts.hiddenRemaining > 0 ? null : openDraftsPhrase(drafts);
-  if (!open) return `Draft POs cover ${fq(covers)} but have not been ordered.`;
-  if (drafts.rows.length === 1 && !drafts.truncated) {
-    return `Draft ${drafts.rows[0]!.poNumber} covers ${fq(covers)} but has not been ordered.`;
+  const single = open !== null && drafts.rows.length === 1 && !drafts.truncated;
+  const subject = !open
+    ? 'Draft POs'
+    : single
+      ? `Draft ${drafts.rows[0]!.poNumber}`
+      : `${open.charAt(0).toUpperCase()}${open.slice(1)}`;
+  const has = single ? 'has' : 'have';
+  if (covers <= 0) {
+    return single
+      ? `${subject} has not been ordered; all of it is needed by other orders.`
+      : `${subject} have not been ordered; all of them are needed by other orders.`;
   }
-  return `${open.charAt(0).toUpperCase()}${open.slice(1)} cover ${fq(covers)} but have not been ordered.`;
+  const base = `${subject} ${single ? 'covers' : 'cover'} ${fq(covers)} but ${has} not been ordered`;
+  if (claimed <= 0.00005) return `${base}.`;
+  return single
+    ? `${base}; ${fq(claimed)} of it is needed by other orders.`
+    : `${base}; ${fq(claimed)} of them are needed by other orders.`;
+}
+
+/**
+ * Why a short line's units are not free when the shelf holds them for others
+ * (L45c, owner wording Q16): "10 on the shelf are held for other orders." The
+ * count is what is held for other orders and rentals, never more than what is
+ * on record. Null when nothing is held.
+ */
+function heldForOthersSentence(item: ReadinessItemAssessment | null): string | null {
+  const f = item?.facts;
+  if (!f) return null;
+  const held = Math.min(f.onHand, f.heldOtherOrders + f.heldRentals);
+  if (held <= 0.00005) return null;
+  const forWhom =
+    f.heldOtherOrders > 0 && f.heldRentals > 0
+      ? 'other orders and rentals'
+      : f.heldRentals > 0
+        ? 'rentals'
+        : 'other orders';
+  return `${fq(held)} on the shelf ${isOne(held) ? 'is' : 'are'} held for ${forWhom}.`;
 }
 
 /**
@@ -274,10 +326,14 @@ export function describeReadinessLine(
   }
   if (u.short > 0) {
     const draft = draftSentence(item, u.short);
+    // A line short because the shelf is held for others says so, in the line
+    // itself, instead of "Nothing is on order." (L45c).
+    const held = u.awaiting <= 0 && !takenBy && !draft ? heldForOthersSentence(item) : null;
     if (u.awaiting <= 0 && item?.facts?.inbound) {
       if (takenBy) parts.push(`What is on order is already needed by ${takenBy}.`);
-      else if (!draft) parts.push('Nothing is on order.');
+      else if (!draft && !held) parts.push('Nothing is on order.');
     }
+    if (held) parts.push(held);
     if (draft) parts.push(draft);
   }
   if (line.reasons.includes('records_disagree') && item?.facts && item.quantities) {
