@@ -4328,7 +4328,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     // A real time on a whole minute, after the walk ended (2026-10-05 19:01Z)
-    // and after EAS showed the phone update launching on an iPhone (19:23Z):
+    // and after EAS showed the phone update launching on iOS (19:23Z):
     // never the draft's placeholder date.
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-05T19:23:00Z'));
@@ -4597,15 +4597,23 @@ describe('the small fixes release (slice 1) is published', () => {
   // Publish re-read: a Physical signature that completed the order already
   // emailed a member who placed their own order the completion receipt
   // (notifyEmail resolves their profile address); only one that left items
-  // owed gave them the notice in the app alone.
-  it('says which Physical signature left a requester with only the notice in the app', () => {
+  // owed gave them a notification and no email. Claims review: the why says
+  // "a notification", not "the notice in the app", since elsewhere in this
+  // release the app is the mobile app and the notification shows on the web
+  // too. The notification goes to the requester's id; the email needs an
+  // address, and the paper path passed the empty requester_email column.
+  it('says which Physical signature left a requester with a notification but no email', () => {
     const e = entry('sign-page-partial-handover');
     expect(e.whyItMatters).toContain(
-      'After a Physical signature that left items owed, a person who placed their own order got only the notice in the app.',
+      'After a Physical signature that left items owed, a person who placed their own order got a notification but no email.',
     );
+    expect(e.whyItMatters).not.toContain('the notice in the app');
     const service = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
     expect(service).toContain("defer(() => this.notifyEmail(row, 'completed'));");
     expect(service).toContain(': await resolveRequesterContact(admin, {');
+    const notify = readFileSync(resolve(__dirname, '../../server/lib/order-handover-notify.ts'), 'utf8');
+    expect(notify).toContain('if (args.requesterUserId) {');
+    expect(notify).toContain('if (args.requesterEmail && !args.emailOptedOut) {');
   });
 
   // Publish re-read: the held sentence takes the place of "Nothing is on

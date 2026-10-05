@@ -265,13 +265,13 @@ export const RELEASES: Release[] = [
     // Cancel request on approved, pending, staged and backordered orders and
     // none on a cancelled one; the printouts named SO-000003 and SO-000004;
     // pages scrolled clear of the What's New card; SO-000025 was placed on
-    // the web and cancelled from an iPhone on the published bundle with a
-    // reason; the phone's order headers used the list's words, such as
+    // the web and cancelled from the iPhone simulator on the published bundle
+    // with a reason; the phone's order headers used the list's words, such as
     // STAGED (PICKUP); the over-receipt confirm and the Variance caption
     // showed and nothing was received; the Acknowledge sheet closed with no
     // flash) were done. Published after them, the newest published release;
-    // the drafts sit above it, newest first: the weekly digest fixes' (#326)
-    // and PO-2's.
+    // the drafts sit above it, newest first: Items first-paint's (#328), the
+    // weekly digest fixes' (#326) and PO-2's.
     //
     // Its words were re-read against what shipped. The phone half is an
     // over-the-air update, which loads when the app is opened again, so every
@@ -289,7 +289,11 @@ export const RELEASES: Release[] = [
     // - Sign page: a Physical signature that completed the order already
     //   emailed a member who placed their own order the completion receipt
     //   (notifyEmail reads their profile address); only one that left items
-    //   owed gave them the notice in the app alone, so the why says so.
+    //   owed gave them a notification and no email (notifyRequesterBackordered
+    //   was passed the empty requester_email column), so the why says so. It
+    //   says "a notification", not "the notice in the app": elsewhere in this
+    //   release the app is the mobile app, and the notification shows on the
+    //   web too (claims review).
     // - Stock lines: the held sentence takes the place of "Nothing is on
     //   order." (core readiness-copy describeReadinessLine); a line with a
     //   draft PO, or with stock on order, says that instead, so the words say
@@ -418,7 +422,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'After a hand-over that leaves items owed, the sign page says what was handed over is recorded and the rest stays on backorder, and so does recording a Physical signature on the web. After a hand-over recorded with Physical signature, a person who placed their own order is emailed at the address on their profile about what was handed over, as after signing on the sign page.',
         whyItMatters:
-          'The sign page said the order was completed, and Physical signature that the hand-over was complete, although the order was backordered. After a Physical signature that left items owed, a person who placed their own order got only the notice in the app.',
+          'The sign page said the order was completed, and Physical signature that the hand-over was complete, although the order was backordered. After a Physical signature that left items owed, a person who placed their own order got a notification but no email.',
         howItAffectsYou:
           'When a hand-over completes the order, the page says so, as before. If you turned off the Order completed email in your notification settings, these emails stay off.',
         whatToDo: 'No action needed.',
