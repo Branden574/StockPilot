@@ -10,9 +10,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * set naming one item twice is refused before anything is written.
  */
 
-vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+const { createAdminClientMock, reportError } = vi.hoisted(() => ({
+  createAdminClientMock: vi.fn(),
+  reportError: vi.fn(async () => undefined),
+}));
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
+import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import { BundlesService } from './bundles';
 
@@ -90,23 +97,117 @@ describe('BundlesService.update: components', () => {
   });
 });
 
+/**
+ * The caller's client answers a bundles DELETE as RLS does: bundles_delete
+ * (0140) admits admins only, so for a manager, who may create a bundle
+ * (bundles_insert is manager; bundles:manage is a manager default), the
+ * policy filters the row out and the DELETE answers 0 rows and NO error.
+ */
+function rlsBundlesDelete(role: 'owner' | 'admin' | 'manager') {
+  return (call: MockCall) => {
+    const visible = role === 'owner' || role === 'admin';
+    const returning = call.methods.includes('select');
+    return { data: returning ? (visible ? [{ id: 'b-new' }] : []) : null, error: null };
+  };
+}
+
+function createService(
+  role: 'owner' | 'admin' | 'manager',
+  adminDelete: Parameters<typeof makeSupabaseStub>[0][string],
+) {
+  const stub = makeSupabaseStub({
+    'bundles.insert': { data: { id: 'b-new' }, error: null },
+    'bundle_components.insert': { data: null, error: { message: 'connection lost' } },
+    'bundles.delete': rlsBundlesDelete(role),
+  });
+  const admin = makeSupabaseStub({ 'bundles.delete': adminDelete });
+  createAdminClientMock.mockReturnValue(admin.client);
+  return {
+    stub,
+    admin,
+    svc: new BundlesService(makeServiceContext(stub.client, { role, userId: 'user-test' })),
+  };
+}
+
 describe('BundlesService.create: components', () => {
-  it('removes the bundle it just made when its components cannot be saved', async () => {
-    const { stub, svc } = service({
-      'bundles.insert': { data: { id: 'b-new' }, error: null },
-      'bundle_components.insert': { data: null, error: { message: 'connection lost' } },
-      'bundles.delete': { data: null, error: null },
-    });
+  it.each(['manager', 'admin', 'owner'] as const)(
+    'removes the bundle it just made when its components cannot be saved, for a %s',
+    async (role) => {
+      const { stub, admin, svc } = createService(role, (call) => ({
+        data: call.methods.includes('select') ? [{ id: 'b-new' }] : null,
+        error: null,
+      }));
+
+      await expect(
+        svc.create({ name: 'Kit', components: [{ itemId: A, quantity: 1 }] }),
+      ).rejects.toMatchObject({ code: 'internal_error', internalDetail: 'connection lost' });
+
+      // Not through the caller's client: for a manager RLS answers that delete
+      // with 0 rows and no error, and the empty bundle would stay.
+      expect(stub.chainsAll.get('bundles.delete')).toBeUndefined();
+      // Through the service role, scoped to this org, the id this call just
+      // inserted and its creator, and confirmed by the row it returns.
+      const del = admin.chainsAll.get('bundles.delete')?.[0] ?? [];
+      const delArgs = admin.chainArgsAll.get('bundles.delete')?.[0] ?? [];
+      expect(del[0]).toBe('delete');
+      expect(del).toContain('select');
+      expect(delArgs).toContainEqual(['organization_id', 'org-test']);
+      expect(delArgs).toContainEqual(['id', 'b-new']);
+      expect(delArgs).toContainEqual(['created_by', 'user-test']);
+      expect(reportError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reports when the undo removed no row, so an empty bundle never stays silently', async () => {
+    const { svc } = createService('manager', (call) => ({
+      data: call.methods.includes('select') ? [] : null,
+      error: null,
+    }));
 
     await expect(
       svc.create({ name: 'Kit', components: [{ itemId: A, quantity: 1 }] }),
-    ).rejects.toMatchObject({ code: 'internal_error' });
+    ).rejects.toMatchObject({ code: 'internal_error', internalDetail: 'connection lost' });
 
-    const del = stub.chainsAll.get('bundles.delete')?.[0] ?? [];
-    const delArgs = stub.chainArgsAll.get('bundles.delete')?.[0] ?? [];
-    expect(del[0]).toBe('delete');
-    expect(delArgs).toContainEqual(['id', 'b-new']);
-    expect(delArgs).toContainEqual(['organization_id', 'org-test']);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'bundles.create.undo',
+        organizationId: 'org-test',
+        extra: expect.objectContaining({ bundleId: 'b-new', removed: 0 }),
+      }),
+    );
+  });
+
+  it('reports when the undo itself fails, and still answers the components error', async () => {
+    const { svc } = createService('manager', { data: null, error: { message: 'timeout' } });
+
+    await expect(
+      svc.create({ name: 'Kit', components: [{ itemId: A, quantity: 1 }] }),
+    ).rejects.toMatchObject({ code: 'internal_error', internalDetail: 'connection lost' });
+
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'bundles.create.undo',
+        extra: expect.objectContaining({ bundleId: 'b-new', detail: 'timeout' }),
+      }),
+    );
+  });
+
+  it('touches nothing with the service role when the components save', async () => {
+    const stub = makeSupabaseStub({
+      'bundles.insert': { data: { id: 'b-new' }, error: null },
+      'bundles.select': { data: { id: 'b-new', phantom_item_id: null }, error: null },
+      'bundle_components.insert': { data: null, error: null },
+      'bundle_components.select': { data: [], error: null },
+    });
+    const svc = new BundlesService(makeServiceContext(stub.client, { role: 'manager' }));
+
+    await svc.create({ name: 'Kit', components: [{ itemId: A, quantity: 1 }] }).catch(() => undefined);
+
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('bundles.delete')).toBeUndefined();
   });
 
   it('refuses a set that names one item twice, before writing anything', async () => {

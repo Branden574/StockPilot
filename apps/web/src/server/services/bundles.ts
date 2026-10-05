@@ -3,6 +3,7 @@ import 'server-only';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
 import { reportError } from '@/lib/error-reporter';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import {
@@ -533,20 +534,7 @@ export class BundlesService {
       .from('bundle_components')
       .insert(componentsPayload);
     if (cErr) {
-      // Never leave a bundle with no components behind (L10): remove the one
-      // just made. Its components never landed, so nothing else names it.
-      const { error: undoErr } = await this.ctx.supabase
-        .from('bundles')
-        .delete()
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', bundle.id as string);
-      if (undoErr) {
-        void reportError(new Error('A bundle whose components failed could not be removed'), {
-          tag: 'bundles.create.undo',
-          organizationId: this.ctx.organizationId,
-          extra: { bundleId: bundle.id, detail: undoErr.message },
-        });
-      }
+      await this.undoCreate(bundle.id as string);
       throw new ServiceError('internal_error', cErr.message);
     }
 
@@ -565,6 +553,51 @@ export class BundlesService {
     );
 
     return this.get(bundle.id as string);
+  }
+
+  /**
+   * Never leave a bundle with no components behind (L10): remove the one
+   * create() just made when its components could not be saved.
+   *
+   * With the SERVICE ROLE, because the caller's client cannot do it for
+   * everyone allowed to create: bundles_insert admits a manager (and
+   * bundles:manage is a manager default), but bundles_delete (0140) admits
+   * admins only, so for a manager RLS filters this DELETE to 0 rows with no
+   * error and the empty bundle stays. The service role skips that policy, so
+   * the call keeps itself to what the caller may undo: it runs only after
+   * create()'s own checks (module on, bundles:manage) and the caller's own
+   * RLS insert succeeded, and it names this org, the id that insert just
+   * returned and the caller as its creator. Its components failed as one
+   * statement, so none landed. Should anything else already name the row (a
+   * distribution's foreign key restricts the delete), the delete fails and
+   * is reported below.
+   *
+   * The row coming back confirms the removal; none coming back, or an error,
+   * is reported, since the bundle then stays with no components.
+   */
+  private async undoCreate(bundleId: string): Promise<void> {
+    let removed: number | null = null;
+    let detail: string | null = null;
+    try {
+      const { data, error } = await createAdminClient()
+        .from('bundles')
+        .delete()
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', bundleId)
+        .eq('created_by', this.ctx.userId)
+        .select('id');
+      if (error) detail = error.message;
+      else removed = (data ?? []).length;
+    } catch (e) {
+      detail = e instanceof Error ? e.message : String(e);
+    }
+    if (detail !== null || removed !== 1) {
+      void reportError(new Error('A bundle whose components failed could not be removed'), {
+        tag: 'bundles.create.undo',
+        organizationId: this.ctx.organizationId,
+        extra: { bundleId, ...(detail !== null ? { detail } : { removed }) },
+      });
+    }
   }
 
   async update(id: string, patch: UpdateBundleInput): Promise<BundleDetail> {
