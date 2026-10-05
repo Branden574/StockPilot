@@ -294,6 +294,7 @@ export default function Checkout() {
               cart={cart}
               itemMap={snap.itemMap}
               notOrderable={snap.notOrderable}
+              refusals={snap.refusals}
               locked={locked}
               usuals={[]}
               onInc={(itemId) => changeLine({ type: 'inc', itemId })}

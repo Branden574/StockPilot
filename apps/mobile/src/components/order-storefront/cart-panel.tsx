@@ -51,6 +51,7 @@ export function CartPanel({
   cart,
   itemMap,
   notOrderable,
+  refusals,
   locked,
   usuals,
   onInc,
@@ -63,6 +64,8 @@ export function CartPanel({
   cart: CartState;
   itemMap: ReadonlyMap<string, StorefrontItem>;
   notOrderable: ReadonlySet<string>;
+  /** The server's reason for each refused line (PO-4 review). */
+  refusals: ReadonlyMap<string, string>;
   locked: boolean;
   /** Frequently ordered items to start an empty cart with. */
   usuals: readonly StorefrontItem[];
@@ -135,7 +138,7 @@ export function CartPanel({
         const unorderable = notOrderable.has(line.itemId);
         // Marked only from a catalog answer (or the server's refusal): while
         // the catalog loads, a line it does not name yet is not marked.
-        const view = cartLineView(line, item, unorderable);
+        const view = cartLineView(line, item, unorderable, refusals.get(line.itemId));
         const note = view.note;
         return (
           <View key={line.itemId} style={[styles.line, { borderColor: c.hair }]}>

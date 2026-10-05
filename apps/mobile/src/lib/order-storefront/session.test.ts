@@ -1315,3 +1315,23 @@ describe('how a send ended, if no screen showed it, survives a workspace switch 
     expect(snap().submission.state.phase).toBe('open');
   });
 });
+
+// PO-4 review: a refused line now says why (core orderItemRefusalCopy), so
+// the snapshot keeps each refused item's reason for its line.
+describe('a refused item keeps its reason for its line (PO-4 review)', () => {
+  it('until the line is removed; an unrelated change keeps the same map (the rows’ memo)', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 400, code: 'validation_error', details: { reason: 'item_not_orderable', settled: true, items: { [A]: 'rental' }, organizationId: ORG } },
+    });
+    await session.submit(false);
+    expect(snap().refusals.get(A)).toBe('rental');
+    const before = snap().refusals;
+    session.dispatch({ type: 'set-notes', value: 'x' });
+    expect(snap().refusals).toBe(before);
+    session.dispatch({ type: 'remove', itemId: A });
+    expect(snap().refusals.size).toBe(0);
+  });
+});

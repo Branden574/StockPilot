@@ -35,7 +35,7 @@ import {
   buildOrderCreateBody,
   linesNotInCatalog,
   recheckRestoredCart,
-  refusedItemIds,
+  refusedItemReasons,
   stockChangedNotice,
   storefrontNeededByZone,
   submitBlockedBy,
@@ -189,6 +189,9 @@ export interface StorefrontSnapshot {
   /** Lines that cannot be ordered from here: gone from the catalog, or
    *  refused by the server's item check. */
   notOrderable: ReadonlySet<string>;
+  /** The server's reason for each refused line still in the cart (a rental,
+   *  not received yet...), so the line says why (PO-4 review). */
+  refusals: ReadonlyMap<string, string>;
   /** One sentence about a restored cart, or the stock that moved before
    *  checkout. Cleared by the next change to the cart. */
   notice: string | null;
@@ -226,6 +229,7 @@ const EMPTY_PREPARED = prepareCatalog<StorefrontItem>([]);
  *  catalog's memoized rows do not redraw on a keystroke (desk check F8.1). */
 const EMPTY_PHOTOS: Readonly<Record<string, string>> = Object.freeze({});
 const NO_MARKS: ReadonlySet<string> = new Set<string>();
+const NO_REFUSALS: ReadonlyMap<string, string> = new Map<string, string>();
 
 /** A photo that fails reads the photo map again at most once in this long,
  *  per warehouse (desk check F8.2): a fresh map that still holds a broken
@@ -246,6 +250,12 @@ const ANSWER_REFUSAL_REASONS: ReadonlySet<string> = new Set(['on_behalf_not_perm
 function sameMembers(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+function sameEntries(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
   return true;
 }
 
@@ -321,7 +331,8 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
   /** Every key the shown engine has held (sent or restored): the records it
    *  may replace once they are settled. */
   let engineKeys = new Set<string>();
-  let refusedItems = new Set<string>();
+  /** The server's refused lines and their reasons (item_not_orderable). */
+  let refusedItems = new Map<string, string>();
   /** A cart restored from the device waits for the FRESH catalog to be
    *  checked against (desk check F9): the device's copy describes old
    *  stock. Its marks are never kept apart: the live catalog marks a line
@@ -337,6 +348,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
    *  photo (null: not yet). */
   let photoRetryAt: number | null = null;
   let lastMarks: ReadonlySet<string> = NO_MARKS;
+  let lastRefusals: ReadonlyMap<string, string> = NO_REFUSALS;
   /** How a send ended that no screen showed before a workspace switch, by
    *  its draft key, for this account only (PO-4 review, probe P6): shown
    *  when that warehouse opens again, then forgotten. */
@@ -359,9 +371,15 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     const submission = engine?.getSnapshot() ?? EMPTY_SUBMISSION;
     const notOrderable = new Set<string>();
     if (cart && catalog.answer) for (const id of linesNotInCatalog(cart, itemMap)) notOrderable.add(id);
-    for (const id of refusedItems) if (cart?.lines.some((l) => l.itemId === id)) notOrderable.add(id);
+    const refusals = new Map<string, string>();
+    for (const [id, reason] of refusedItems) {
+      if (!cart?.lines.some((l) => l.itemId === id)) continue;
+      notOrderable.add(id);
+      refusals.set(id, reason);
+    }
     // The same marks keep the same set (the rows' memo depends on it).
     if (!sameMembers(notOrderable, lastMarks)) lastMarks = notOrderable.size === 0 ? NO_MARKS : notOrderable;
+    if (!sameEntries(refusals, lastRefusals)) lastRefusals = refusals.size === 0 ? NO_REFUSALS : refusals;
     const kitsPart = catalog.answer?.kits;
     return {
       scope: scope ? { userId: scope.userId, orgId: scope.orgId } : null,
@@ -377,6 +395,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       submission,
       locked: orderSubmissionLocked(submission.state),
       notOrderable: lastMarks,
+      refusals: lastRefusals,
       notice,
       refusal,
       placed,
@@ -532,10 +551,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
                 : null,
           };
           if (cart) cart = cartReducer(cart, { type: 'reset' });
-          refusedItems = new Set();
+          refusedItems = new Map();
           notice = null;
         } else if (snap.state.phase === 'refused') {
-          refusedItems = refusedItemIds(snap.state.details);
+          refusedItems = refusedItemReasons(snap.state.details);
           if (ANSWER_REFUSAL_REASONS.has(snap.state.reason)) void readStorefront(scopeGen);
         }
         // Which warehouses hold a send not settled (Ship from, the banner).
@@ -574,7 +593,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     prepared = EMPTY_PREPARED;
     photos = { answer: null, failed: false };
     photoRetryAt = null;
-    refusedItems = new Set();
+    refusedItems = new Map();
     recheckPending = false;
     notice = null;
     refusal = null;
@@ -799,7 +818,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     photos = { answer: null, failed: false };
     photoRetryAt = null;
     cart = null;
-    refusedItems = new Set();
+    refusedItems = new Map();
     recheckPending = false;
     notice = null;
     refusal = null;
@@ -893,7 +912,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
       refusal = null;
       // A line taken out takes its marks with it.
       const ids = new Set(next.lines.map((l) => l.itemId));
-      refusedItems = new Set([...refusedItems].filter((id) => ids.has(id)));
+      refusedItems = new Map([...refusedItems].filter(([id]) => ids.has(id)));
       // A change to the cart is the person moving on: a refusal, the withdrawn
       // notice and a device error are done with.
       const e = engine?.getSnapshot();

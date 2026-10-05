@@ -43,7 +43,7 @@ export function itemRowLabel(
   item: StorefrontItem,
   inCart: number,
   earmark: string | null,
-  extra: { rank?: { place: number; orders: number }; notOrderable?: boolean } = {},
+  extra: { rank?: { place: number; orders: number }; notOrderable?: boolean; refusal?: string | null } = {},
 ): string {
   const parts = [item.name];
   if (item.sku) parts.push(`SKU ${item.sku}`);
@@ -51,7 +51,8 @@ export function itemRowLabel(
   if (extra.rank) parts.push(`${FREQUENTLY_ORDERED_TITLE_COPY} ${frequentlyOrderedTagCopy(extra.rank.place, extra.rank.orders)}`);
   if (earmark) parts.push(`earmarked for ${earmark}`);
   if (inCart > 0) parts.push(storefrontInCartCopy(inCart));
-  if (extra.notOrderable) parts.push(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+  // A refused item reads why (core orderItemRefusalCopy; PO-4 review).
+  if (extra.notOrderable) parts.push(extra.refusal ?? STOREFRONT_LINE_NOT_ORDERABLE_COPY);
   return parts.join(', ');
 }
 

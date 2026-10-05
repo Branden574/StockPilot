@@ -50,6 +50,7 @@ export const ItemRow = React.memo(function ItemRow({
   photoUrl,
   rank,
   notOrderable,
+  refusal = null,
   locked,
   onOpen,
   onAdd,
@@ -63,6 +64,9 @@ export const ItemRow = React.memo(function ItemRow({
   photoUrl: string | null;
   rank?: { place: number; orders: number };
   notOrderable: boolean;
+  /** Why the server refused this item (core's sentence), or null: said in
+   *  place of the generic mark (PO-4 review). */
+  refusal?: string | null;
   locked: boolean;
   onOpen: (itemId: string) => void;
   onAdd: (itemId: string) => void;
@@ -110,7 +114,7 @@ export const ItemRow = React.memo(function ItemRow({
       <Pressable
         onPress={() => onOpen(item.id)}
         accessibilityRole="button"
-        accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}
+        accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable, refusal })}
         accessibilityHint={ITEM_ROW_HINT}
         // Stacked (past the row threshold), the photo sits above the name so
         // the name has the row's full width and a long word is not broken
@@ -147,7 +151,7 @@ export const ItemRow = React.memo(function ItemRow({
           ) : null}
           {notOrderable ? (
             <Body size={12.5} color={ACCENT.crit}>
-              {STOREFRONT_LINE_NOT_ORDERABLE_COPY}
+              {refusal ?? STOREFRONT_LINE_NOT_ORDERABLE_COPY}
             </Body>
           ) : null}
         </View>

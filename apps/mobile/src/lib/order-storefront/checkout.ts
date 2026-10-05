@@ -26,6 +26,7 @@ import {
   isOrderOnBehalfValid,
   kitsForAudit,
   neededByLabel,
+  orderItemRefusalCopy,
   resolveOrgTimezone,
   restoredCartChangedCopy,
   wallClockToInstant,
@@ -192,6 +193,13 @@ export function refusedItemIds(details: OrderRefusalDetails | null): Set<string>
   return new Set(Object.keys(details?.items ?? {}));
 }
 
+/** Each refused line's reason (a rental, not received yet, a pre-assembled
+ *  kit, archived...), from a final refusal's details: the line says why in
+ *  core's words, as the web does (PO-4 review). */
+export function refusedItemReasons(details: OrderRefusalDetails | null): Map<string, string> {
+  return new Map(Object.entries(details?.items ?? {}));
+}
+
 /** Lines no longer in the catalog this account can order from here. */
 export function linesNotInCatalog(cart: CartState, catalog: ReadonlyMap<string, StorefrontItem>): Set<string> {
   return new Set(cart.lines.filter((l) => !catalog.has(l.itemId)).map((l) => l.itemId));
@@ -199,6 +207,8 @@ export function linesNotInCatalog(cart: CartState, catalog: ReadonlyMap<string, 
 
 export type CartLineNote =
   | { kind: 'not_orderable' }
+  /** Refused by the server's item check: core's sentence for its reason. */
+  | { kind: 'refused'; message: string }
   | { kind: 'over'; message: string }
   | { kind: 'at_max'; message: string }
   | null;
@@ -238,10 +248,14 @@ export function cartLineView(
   line: { itemId: string; quantity: number },
   item: StorefrontItem | undefined,
   unorderable: boolean,
+  /** The server's reason when it refused this line (PO-4 review): named from
+   *  the cart's item, never from the server; without a name, the generic mark. */
+  refusedReason?: string,
 ): CartLineView {
+  const refused = unorderable && refusedReason !== undefined && item !== undefined;
   return {
     title: item ? item.name : unorderable ? STOREFRONT_LINE_NOT_LISTED_COPY : STOREFRONT_LINE_DETAILS_PENDING_COPY,
-    note: cartLineNote(line.quantity, item, unorderable),
+    note: refused ? { kind: 'refused', message: orderItemRefusalCopy(refusedReason, item.name) } : cartLineNote(line.quantity, item, unorderable),
     stepper: item !== undefined && !unorderable,
     removeLabel: item ? `${STOREFRONT_REMOVE_COPY} ${item.name}` : STOREFRONT_REMOVE_THIS_ITEM_COPY,
   };

@@ -248,7 +248,7 @@ describe('accessibility and Dynamic Type', () => {
   });
 
   it('a row is one element with its name, availability, rank, earmark, quantity in the cart and mark', () => {
-    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}');
+    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable, refusal })}');
   });
 
   it('Pickup or Delivery is a radio group to VoiceOver; choices in sheets are radios', () => {
@@ -486,7 +486,8 @@ describe('words that claim nothing untrue (desk check F6)', () => {
   const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
 
   it('a cart line is drawn from the tested view: no mark until a catalog answer leaves it out, and never the mark as its title', () => {
-    expect(cartPanel).toContain('const view = cartLineView(line, item, unorderable);');
+    // With the server's reason for a refused line (PO-4 review).
+    expect(cartPanel).toContain('const view = cartLineView(line, item, unorderable, refusals.get(line.itemId));');
     expect(cartPanel).toContain('const unorderable = notOrderable.has(line.itemId);');
     expect(cartPanel).toMatch(/<Body size=\{14\.5\} color=\{c\.ink\}>\s*\{view\.title\}\s*<\/Body>/);
     expect(cartPanel).toMatch(/\{view\.stepper \? \(\s*<Stepper/);
@@ -532,7 +533,7 @@ describe('VoiceOver hears why, what and how much (desk check F7)', () => {
   });
 
   it('the row’s one label carries the rank and the can’t-be-ordered mark (F7.2)', () => {
-    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable })}');
+    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable, refusal })}');
   });
 
   it('Remove never reads a uuid (F7.3)', () => {
@@ -825,5 +826,21 @@ describe('the email confirmation names the order’s own method (PO-4 review)', 
   it('core’s words from the order’s method and the app that opened it', () => {
     expect(placed).toContain("{successEmailOpenedCopy(order.fulfillmentType, openResult.used === 'default-mail')}");
     expect(placed).not.toContain('deliverySuccessMessageFor');
+  });
+});
+
+// PO-4 review: refused lines said only the generic mark. Mutations caught:
+// the reason not passed to the cart line or the item row.
+describe('a refused line and its catalog row say why (PO-4 review)', () => {
+  const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
+  it('the cart line takes the snapshot’s reason through the tested view', () => {
+    expect(cartPanel).toContain('const view = cartLineView(line, item, unorderable, refusals.get(line.itemId));');
+    expect(checkout).toContain('refusals={snap.refusals}');
+    expect(catalog).toContain('refusals={snap.refusals}');
+  });
+  it('the catalog row shows the same sentence, and VoiceOver reads it in the row’s label', () => {
+    expect(catalog).toContain('refusal={refusalFor(row.item)}');
+    expect(itemRow).toContain('accessibilityLabel={itemRowLabel(item, quantity, earmark, { rank, notOrderable, refusal })}');
+    expect(itemRow).toMatch(/\{refusal \?\? STOREFRONT_LINE_NOT_ORDERABLE_COPY\}/);
   });
 });

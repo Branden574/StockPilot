@@ -20,6 +20,7 @@ import {
   STOREFRONT_REMOVE_THIS_ITEM_COPY,
   checkoutNeededByZoneUnknownCopy,
   initialCartState,
+  orderItemRefusalCopy,
   parseOrderCreateRequest,
   type CartState,
   type KitOffer,
@@ -35,6 +36,7 @@ import {
   neededByRowValue,
   recheckRestoredCart,
   refusedItemIds,
+  refusedItemReasons,
   showNotesCounter,
   stockChangedNotice,
   storefrontNeededByZone,
@@ -348,5 +350,35 @@ describe('which body checkout draws (PO-4 review: never a spinner that does not 
       expect(checkoutStage({ setup: { status }, cart }), status).toBe('unavailable');
       expect(checkoutStage({ setup: { status }, cart: null }), status).toBe('unavailable');
     }
+  });
+});
+
+// PO-4 review: every refused line read the generic "Can't be ordered from
+// here anymore. Remove it." while the web names why (core
+// orderItemRefusalCopy: a rental, not received yet, a pre-assembled kit,
+// archived). Walk shot M16-iphone-recorded-refusal-marked.png showed only the
+// generic words for an item made a rental.
+describe('a refused line says why, in core’s words (PO-4 review)', () => {
+  it('each refused item’s reason, from the refusal’s details', () => {
+    expect(refusedItemReasons({ items: { [A]: 'rental', [B]: 'archived' } } as never)).toEqual(
+      new Map([
+        [A, 'rental'],
+        [B, 'archived'],
+      ]),
+    );
+    expect(refusedItemReasons(null).size).toBe(0);
+  });
+
+  it('a refused line whose item the cart names says the sentence for its reason; no stepper', () => {
+    for (const reason of ['rental', 'awaiting_first_receipt', 'kit_stock', 'archived', 'deleted']) {
+      const v = cartLineView({ itemId: A, quantity: 1 }, item(A, 'Planner', 8), true, reason);
+      expect(v.note, reason).toEqual({ kind: 'refused', message: orderItemRefusalCopy(reason, 'Planner') });
+      expect(v.stepper).toBe(false);
+    }
+  });
+
+  it('a refused item the cart cannot name, or a line only left out of the catalog: the generic mark', () => {
+    expect(cartLineView({ itemId: A, quantity: 1 }, undefined, true, 'rental').note).toEqual({ kind: 'not_orderable' });
+    expect(cartLineView({ itemId: A, quantity: 1 }, item(A, 'Planner', 8), true).note).toEqual({ kind: 'not_orderable' });
   });
 });

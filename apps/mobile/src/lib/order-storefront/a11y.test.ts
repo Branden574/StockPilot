@@ -108,6 +108,14 @@ describe('a dimmed control says why (desk check F7.1)', () => {
   });
 });
 
+describe('a refused row reads why (PO-4 review)', () => {
+  it('the refusal’s sentence takes the generic mark’s place in the label', () => {
+    expect(itemRowLabel(PLANNER, 1, null, { notOrderable: true, refusal: 'Planner is a rental item.' })).toBe(
+      'Planner, SKU PL-1, 134 available, 1 in your cart, Planner is a rental item.',
+    );
+  });
+});
+
 describe('the row says what the eye sees (desk check F7.2)', () => {
   it('the Frequently ordered rank and the can’t-be-ordered mark are in the one label', () => {
     expect(itemRowLabel(PLANNER, 0, null, { rank: { place: 1, orders: 12 } })).toBe(

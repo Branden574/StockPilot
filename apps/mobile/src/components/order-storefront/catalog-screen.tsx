@@ -48,6 +48,7 @@ import {
   kitsInCart,
   kitsLoadFailedCopy,
   maxKits,
+  orderItemRefusalCopy,
   storefrontItemCountCopy,
   storefrontNothingMatchesCopy,
   storefrontSeeAllCopy,
@@ -282,6 +283,15 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const locked = snap?.locked ?? false;
   const photos = snap?.photos;
   const notOrderable = snap?.notOrderable;
+  const refusals = snap?.refusals;
+  // Why the server refused an item, in core's words (PO-4 review).
+  const refusalFor = React.useCallback(
+    (item: StorefrontItem): string | null => {
+      const reason = refusals?.get(item.id);
+      return reason ? orderItemRefusalCopy(reason, item.name) : null;
+    },
+    [refusals],
+  );
   const cartKits = snap?.cart?.kits;
   const itemMap = snap?.itemMap;
 
@@ -307,6 +317,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
               photoUrl={photos?.[row.item.id] ?? null}
               rank={row.rank}
               notOrderable={notOrderable?.has(row.item.id) ?? false}
+              refusal={refusalFor(row.item)}
               locked={locked}
               onOpen={onOpen}
               onAdd={onAdd}
@@ -368,7 +379,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           );
       }
     },
-    [c, qtyMap, photos, notOrderable, locked, cartKits, itemMap, onOpen, onAdd, onInc, onDec, onQuantity, onPhotoError, onKit, onKitDetails, router, shownFilter.search, clearAll],
+    [c, qtyMap, photos, notOrderable, refusalFor, locked, cartKits, itemMap, onOpen, onAdd, onInc, onDec, onQuantity, onPhotoError, onKit, onKitDetails, router, shownFilter.search, clearAll],
   );
 
   const leave = () => {
@@ -574,6 +585,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
       cart={cart}
       itemMap={snap.itemMap}
       notOrderable={snap.notOrderable}
+      refusals={snap.refusals}
       locked={locked}
       usuals={usuals}
       onInc={onInc}
