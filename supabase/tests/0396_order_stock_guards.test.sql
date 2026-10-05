@@ -41,8 +41,8 @@
 --     unchanged.
 -- B.  L11: a kit line is refused on the requester's own client and the
 --     approver's; a normal line passes.
--- A.  L86: the approved notification for a full, a partial, an enough and a
---     two-lines-one-item approval.
+-- A.  L86: the approved notification for a full, a partial, an enough, a
+--     two-lines-one-item approval, and a partial approval that held nothing.
 -- H.  The two policies' text (predicted from production's text plus the
 --     added term; verify on the stack), still PERMISSIVE for authenticated;
 --     no policy pairs has_org_role with orders:approve (0390 H2's census).
@@ -69,9 +69,10 @@
 --   M16 signature without the membership term                -> R3, S2, S3
 --   M17 signature without the module term                    -> R3, S4
 --   M18 lines policy without the kit term                    -> B1, H2
---   M19 notify without the partial sentence                  -> R4, A2
+--   M19 notify without the partial sentence                  -> R4, A2, A4
 --   M20 notify comparing per line instead of per item        -> R4, A4
 --   M21 update policy with a manager-by-role arm added        -> H1, H3, H4
+--   M22 notify says "part" when nothing is held              -> R4, A5
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt (always undone) or pg_temp.call_as (kept), which switch role
@@ -81,7 +82,7 @@
 
 begin;
 
-select plan(56);
+select plan(57);
 
 \set orgA    '\'03960000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03960000-0000-0000-0000-00000000000b\''
@@ -108,6 +109,7 @@ select plan(56);
 \set itDQ    '\'03960000-0000-0000-0000-0000000000e6\''
 \set itDH    '\'03960000-0000-0000-0000-0000000000e7\''
 \set itGone  '\'03960000-0000-0000-0000-0000000000e8\''
+\set itNone  '\'03960000-0000-0000-0000-0000000000e9\''
 \set bnA     '\'03960000-0000-0000-0000-0000000000f1\''
 \set ccA     '\'03960000-0000-0000-0000-0000000000f2\''
 \set poA     '\'03960000-0000-0000-0000-0000000000f3\''
@@ -136,6 +138,7 @@ select plan(56);
 \set oN2     '\'03960000-0000-0000-0000-000000000142\''
 \set oN3     '\'03960000-0000-0000-0000-000000000143\''
 \set oN4     '\'03960000-0000-0000-0000-000000000144\''
+\set oN5     '\'03960000-0000-0000-0000-000000000145\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -203,7 +206,8 @@ insert into public.inventory_items
   (:itD0,   :orgA, :whA, '0396-D0',   'Empty archived item',          0, 'archived', 'none', false, null),
   (:itDQ,   :orgA, :whA, '0396-DQ',   'Archived with stock on record', 5, 'archived', 'none', false, null),
   (:itDH,   :orgA, :whA, '0396-DH',   'Archived with a holding only',  0, 'archived', 'none', false, null),
-  (:itGone, :orgA, :whA, '0396-GONE', 'Deleted with stock on record',  3, 'archived', 'none', false, now() - interval '30 days');
+  (:itGone, :orgA, :whA, '0396-GONE', 'Deleted with stock on record',  3, 'archived', 'none', false, now() - interval '30 days'),
+  (:itNone, :orgA, :whA, '0396-NONE', 'Out of stock',                  0, 'active',   'none', false, null);
 -- A holding with nothing on record (the shape the guard must still see).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
   (:orgA, :itDH, :'locA', 2);
@@ -249,7 +253,8 @@ insert into public.order_requests
   (:oN1,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null),
   (:oN2,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null),
   (:oN3,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null),
-  (:oN4,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null);
+  (:oN4,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null),
+  (:oN5,     :orgA, :whA, 'pending_approval',       'internal', :req, 'pickup',   null, null, null,  null);
 
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked) values
   (:oPend,  :itA, 1, 0, null),
@@ -269,7 +274,8 @@ insert into public.order_request_lines (order_request_id, item_id, quantity_requ
   (:oN2,    :itP, 30, 0, null),
   (:oN3,    :itP, 4, 0, null),
   (:oN4,    :itP, 6, 0, null),
-  (:oN4,    :itP, 6, 0, null);
+  (:oN4,    :itP, 6, 0, null),
+  (:oN5,    :itNone, 5, 0, null);
 
 -- ══ Helpers (0387's, unchanged) ═══════════════════════════════════════════
 -- pg_temp.hint drops supautils' generic "Grant the required privileges ..."
@@ -450,8 +456,9 @@ select is(
   'R3: confirm_physical_signature has 0396''s body (md5 c0d1c11d), and removing the added text gives production''s body exactly (f7a14a46): the driver''s membership and module terms (L129b) are the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$        -- S2 (L86): approve_partial holds only what is free. Say so when
-        -- any item is held for less than the order still owes for it.
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$        -- S2 (L86): approve_partial holds only what is free, which may be
+        -- nothing. Say so when any item is held for less than the order
+        -- still owes for it, and say nothing is held when no hold is.
         if exists (
           select 1
             from public.order_request_lines l
@@ -464,12 +471,20 @@ select is(
                                 and r.item_id = l.item_id
                                 and r.released_at is null), 0)
         ) then
-          v_body := 'Part of your order is held; the rest is waiting for stock.';
+          if exists (select 1
+                       from public.stock_reservations r
+                      where r.order_request_id = new.id
+                        and r.released_at is null
+                        and r.quantity > 0) then
+            v_body := 'Part of your order is held; the rest is waiting for stock.';
+          else
+            v_body := 'Nothing is held yet; your order is waiting for stock.';
+          end if;
         end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')),
-  'ac05decf6a7968dfdbb471b6e252cdc3|a223ae83810149728156b8e299c7425e',
-  'R4: _notify_order_request_changes has 0396''s body (md5 ac05decf), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
+  '8d9de81d81de84af3e2589e6044506bf|a223ae83810149728156b8e299c7425e',
+  'R4: _notify_order_request_changes has 0396''s body (md5 8d9de81d), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -660,8 +675,9 @@ $b0$, '')) as m
           or not public.module_enabled(v_req.organization_id, 'orders')$b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.confirm_physical_signature(uuid, text)')
   union all
-  select '_notify_order_request_changes' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$        -- S2 (L86): approve_partial holds only what is free. Say so when
-        -- any item is held for less than the order still owes for it.
+  select '_notify_order_request_changes' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$        -- S2 (L86): approve_partial holds only what is free, which may be
+        -- nothing. Say so when any item is held for less than the order
+        -- still owes for it, and say nothing is held when no hold is.
         if exists (
           select 1
             from public.order_request_lines l
@@ -674,7 +690,15 @@ $b0$, '')) as m
                                 and r.item_id = l.item_id
                                 and r.released_at is null), 0)
         ) then
-          v_body := 'Part of your order is held; the rest is waiting for stock.';
+          if exists (select 1
+                       from public.stock_reservations r
+                      where r.order_request_id = new.id
+                        and r.released_at is null
+                        and r.quantity > 0) then
+            v_body := 'Part of your order is held; the rest is waiting for stock.';
+          else
+            v_body := 'Nothing is held yet; your order is waiting for stock.';
+          end if;
         end if;
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')
@@ -792,7 +816,7 @@ $b0$, '')) as m
   end if;
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.reverse_receipt(uuid, text)')) d),
-  E'_notify_order_request_changes=c783ed3ee3302644927ec57f4f3a6103|ff18125ea9142821da9c1a0d2b07c1da\n'
+  E'_notify_order_request_changes=7dac8b4627df955f9aeb83d8caee0459|ff18125ea9142821da9c1a0d2b07c1da\n'
   'adjust_stock=0dbc639017c2f827e2c7a18e5486d975|8f2b54ee153cb1dd8cfccce7ab462b62\n'
   'assemble_bundle=c3e186436c7848163beafe5e85b062c8|9c725f9d2aac44bcd38889450056d67a\n'
   'cancel_order_request=6a21252e51fff929fc18573e60b51324|112ba9976a11269694b161bc55d41562\n'
@@ -1073,6 +1097,14 @@ select is(
     format($q$select n.body from public.notifications n where n.user_id = %L and n.type = 'order_request.approved' and n.metadata->>'order_request_id' = %L$q$, :req, :oN4)),
   'ok:1:Part of your order is held; the rest is waiting for stock.',
   'A4: two lines of one item (6 and 6 of 10 free: held 6 and 4) are compared per item, not per line, and say only part is held');
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select public.approve_partial(%L)', :oN5), null,
+    format($q$select n.body || '|' || (select count(*) from public.stock_reservations r
+                                          where r.order_request_id = %L and r.released_at is null)::text
+                from public.notifications n
+               where n.user_id = %L and n.type = 'order_request.approved' and n.metadata->>'order_request_id' = %L$q$, :oN5, :req, :oN5)),
+  'ok:1:Nothing is held yet; your order is waiting for stock.|0',
+  'A5: approve_partial with nothing free (5 asked, 0 on record) still approves, holds nothing, and says nothing is held yet instead of "part"');
 
 -- ══ H. The two policies' text ═════════════════════════════════════════════
 -- Predicted from production's text (read 2026-10-05) plus the added term in
