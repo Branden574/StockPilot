@@ -40,7 +40,7 @@
 
 begin;
 
-select plan(87);
+select plan(88);
 
 \set org     '\'03690000-0000-0000-0000-00000000000a\''
 \set mgr     '\'03690000-0000-0000-0000-0000000000a1\''
@@ -277,17 +277,41 @@ select is(
   'A8: via_ledger is never null');
 
 -- Every stock_movements writer outside the ledger schema that is not SECURITY
--- DEFINER writes UNTRUSTED rows when a user calls it. Today that is exactly
--- the opening-stock copy in duplicate_inventory_item (a brand-new item, never
--- on an open count). A new invoker writer outside the ledger shows up here.
+-- DEFINER writes UNTRUSTED rows when a user calls it. Today that is the
+-- opening-stock copy in duplicate_inventory_item (a brand-new item, never on
+-- an open count) and the 0340 location dedup helper. A new invoker writer
+-- outside the ledger shows up here.
+-- Changed on purpose by 0396 (L19; was array['public.duplicate_inventory_item']
+-- with the INSERT-only regex 'insert\s+into\s+(public\.)?stock_movements'):
+-- the census now reads 0387's writer forms (INSERT INTO, MERGE INTO [ONLY],
+-- UPDATE [ONLY], DELETE FROM [ONLY], optional quoted public), and it found
+-- public._dedup_rack_locations, which the old regex missed: it re-points
+-- from/to location ids of existing rows in place, writes no movement row and
+-- no draw, and only postgres may EXECUTE it (production 2026-10-05: no API
+-- role holds EXECUTE). A9b plants a probe per form.
 select is(
   (select array_agg(n.nspname || '.' || p.proname order by n.nspname, p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname in ('public', 'ledger') and p.prokind = 'f'
-      and p.prosrc ~* 'insert\s+into\s+(public\.)?stock_movements'
+      and p.prosrc ~* $re$(insert\s+into|merge\s+into(\s+only)?|update(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?stock_movements\M$re$
       and n.nspname <> 'ledger' and not p.prosecdef),
-  array['public.duplicate_inventory_item'],
-  'A9: the only non-ledger invoker writer of stock_movements is the opening-stock copy');
+  array['public._dedup_rack_locations', 'public.duplicate_inventory_item'],
+  'A9: the non-ledger invoker writers of stock_movements are the opening-stock copy and the postgres-only location dedup helper');
+select is(
+  (select string_agg(v.form || '=' || (v.src ~* $re$(insert\s+into|merge\s+into(\s+only)?|update(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?stock_movements\M$re$)::text, ', ' order by v.n)
+     from (values
+       (1, 'insert',          $s$insert into public.stock_movements (item_id) values (null);$s$),
+       (2, 'insert bare',     $s$insert into stock_movements (item_id) values (null);$s$),
+       (3, 'merge only',      $s$merge into only public.stock_movements m using x on true when matched then delete;$s$),
+       (4, 'update only',     $s$update only public.stock_movements set notes = null;$s$),
+       (5, 'update bare',     $s$update stock_movements set notes = null;$s$),
+       (6, 'update quoted',   $s$update "public"."stock_movements" set notes = null;$s$),
+       (7, 'delete only',     $s$delete from only public.stock_movements;$s$),
+       (8, 'read',            $s$select count(*) from public.stock_movements;$s$),
+       (9, 'other table',     $s$update public.stock_movements_archive set notes = null;$s$)) v(n, form, src)),
+  'insert=true, insert bare=true, merge only=true, update only=true, update bare=true, update quoted=true, '
+  'delete only=true, read=false, other table=false',
+  'A9b control: the A9 census catches every write form on stock_movements and neither a read nor another table');
 
 -- ═══ B. Overlapping counts ════════════════════════════════════════════════
 -- B1-B6: A and B both record 22 on 20. Mutation: drop the superseded guard,
