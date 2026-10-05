@@ -99,9 +99,13 @@ describe('InventoryService.transferStock — the stock:transfer refusal from the
 });
 
 describe('InventoryService.softDelete — an item that holds stock (0395 L15)', () => {
+  // The service refuses an item that reads as holding stock before it writes
+  // (small fixes slice 1, the archive guard's check; inventory.test.ts pins
+  // it). The database's refusal is what answers when stock arrives between
+  // that read and the update, so the item reads empty here.
   it('says the item still holds stock, and what makes it deletable, when the database refuses the delete', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: ITEM, error: null },
+      'inventory_items.select': { data: { ...ITEM, quantity_on_hand: 0 }, error: null },
       'item_stock_levels.select': { data: [], error: null },
       'inventory_items.update': {
         data: null,
