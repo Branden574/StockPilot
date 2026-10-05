@@ -84,6 +84,8 @@
 --   M24 the rack leg does not lock the locations' warehouses (F8)    -> race 4c
 --   M25 the reopen rule counts a direct (via_ledger false) row (F9)  -> H7
 --   M26 the requester create lets a missing actor channel through (F10) -> C12
+--   M27 approve_return trusts a key row it did not complete (F11)     -> D12
+--   M28 the create replays an RMA of another organization or order (F11) -> C13
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -94,7 +96,7 @@
 
 begin;
 
-select plan(112);
+select plan(114);
 
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
@@ -922,6 +924,33 @@ select is(
           pg_temp.one(:lX2, 1)::text, '{"channel": "staff"}'))),
   '22023:return_invalid,22023:return_invalid,22023:return_invalid',
   'C12: a requester actor with no channel, a null channel or an unknown one is refused return_invalid, never an unmapped error (F10)');
+-- idempotency_keys is writable by managers through the API, so the create
+-- replays only an RMA of its own organization and order (F11). The planted
+-- rows below carry the exact request hash, so only that tie refuses them.
+select (pg_temp.rpc('authenticated', :outZ, format('select public.create_return_request(%L, %L::jsonb, %L)', :oZ,
+          pg_temp.one(:lZ, 1)::text, '03950000-0000-0000-0000-00000000f005'))->>'returnId') as "rZ0" \gset
+select is(
+  pg_temp.err(pg_temp.try_rpc('authenticated', :mgr,
+     format('select public.create_return_request(%L, %L::jsonb, %L)', :oX, pg_temp.one(:lX1, 1)::text, '03950000-0000-0000-0000-00000000f006'),
+     format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
+               values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|' || public._return_normalize_request(%L::jsonb, 'staff')::text),
+                       'completed', 'return', jsonb_build_object('returnId', %L))$q$,
+            :orgA, :mgr || ':03950000-0000-0000-0000-00000000f006', :oX, pg_temp.one(:lX1, 1)::text, :'rZ0')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr,
+     format('select public.create_return_request(%L, %L::jsonb, %L)', :oX, pg_temp.one(:lX1, 1)::text, '03950000-0000-0000-0000-00000000f007'),
+     format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
+               values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|' || public._return_normalize_request(%L::jsonb, 'staff')::text),
+                       'completed', 'return', jsonb_build_object('returnId', %L))$q$,
+            :orgA, :mgr || ':03950000-0000-0000-0000-00000000f007', :oX, pg_temp.one(:lX1, 1)::text, :'rB')))
+  || ',' || pg_temp.err(pg_temp.try_rpc('service_role', null,
+     format('select public.create_requester_return_request(%L, %L::jsonb, %L, %L::jsonb)', :oX, pg_temp.one(:lX2, 1)::text,
+            '03950000-0000-0000-0000-00000000f008', '{"channel":"token"}'),
+     format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, response)
+               values (%L, 'return_create', %L, md5('return_create:v1|' || %L || '|token|' || public._return_normalize_request(%L::jsonb, 'requester')::text),
+                       'completed', 'return', jsonb_build_object('returnId', %L))$q$,
+            :orgA, 'anon:03950000-0000-0000-0000-00000000f008', :oX, pg_temp.one(:lX2, 1)::text, :'rZ0'))),
+  'P0001:idempotency_conflict,P0001:idempotency_conflict,P0001:idempotency_conflict',
+  'C13: a key row the create did not write, naming another organization''s RMA or another order''s, is refused idempotency_conflict, never replayed, on the staff and the requester paths (F11)');
 
 -- ══ D. Approval, deny, receive, cancel, plans ═════════════════════════════
 select pg_temp.rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rG',
@@ -1023,6 +1052,19 @@ select is(
   || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.receive_return(%L)', :'rC'))),
   'P0001:invalid_status_transition,P0001:invalid_status_transition',
   'D11: deny of a received RMA and receive of a cancelled one are invalid_status_transition');
+-- A key row approve_return did not complete (no approved decision at the next
+-- revision) is taken over, never trusted (F11): a planted row would otherwise
+-- wedge this approval (return_changed) or fake its replay.
+select is(
+  (select (j->>'status') || ':' || (j->>'changed') || ':' || coalesce(j->>'replay', '-')
+     from (select pg_temp.try_rpc('authenticated', :mgr,
+             format('select public.approve_return(%L, 0, %L::jsonb)', :'rQ',
+                    pg_temp.dec((select id from public.return_lines where return_id = :'rQ'), 'restock', 'staging')::text),
+             format($q$insert into public.idempotency_keys (organization_id, scope, key, request_hash, status, resource_type, resource_id, response)
+                       values (%L, 'return_approval', %L, 'planted', 'completed', 'return', %L, '{"revision": 9}'::jsonb)$q$,
+                    :orgA, :'rQ' || ':0', :'rQ')) as j) x),
+  'approved:true:false',
+  'D12: a planted approval key row (no approved decision behind it) is taken over: the approval goes through (F11)');
 
 -- ══ E. Acceptance 36, inbound half: back to 31-C ══════════════════════════
 select (pg_temp.rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oA,

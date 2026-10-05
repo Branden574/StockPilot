@@ -638,7 +638,12 @@ actually fire.
     0359 test 15 still lists exactly four DEFINER `ledger` functions. Every
     write locks the RMA row first under `lock_timeout = '5s'`, so a blocked
     caller is refused with 55P03, and no function raises 40001 or 40P01
-    (PostgREST retries those forever).
+    (PostgREST retries those forever). The functions never trust a key row
+    in `idempotency_keys` they did not write (managers may write that table
+    through the API): a create replays only an RMA of its own organization
+    and order (else `idempotency_conflict`), and an approval takes over a key
+    row with no `approved` decision at the next revision instead of
+    answering `return_changed` or a false replay.
   - **The restock destination.** A restock to a rack is honoured only for a
     location the pick provenance proves (`stock_movements.draw`, 0373): the
     server offers `original` or a `source` location from the line's own

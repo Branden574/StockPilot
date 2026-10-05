@@ -1181,6 +1181,7 @@ set lock_timeout = '5s'
 as $$
 declare
   c_scope  constant text := 'return_create';
+  c_uuid   constant text := '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
   v_user   uuid := auth.uid();
   v_org    uuid;
   v_wh     uuid;
@@ -1231,11 +1232,22 @@ begin
       from public.idempotency_keys k
      where k.organization_id = v_org and k.scope = c_scope and k.key = v_key;
     if not found or v_prev.request_hash is distinct from v_hash or v_prev.status is distinct from 'completed'
-       or jsonb_typeof(v_prev.response->'returnId') is distinct from 'string' then
+       or jsonb_typeof(v_prev.response->'returnId') is distinct from 'string'
+       or (v_prev.response->>'returnId') !~ c_uuid then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
+    -- The stored answer must name an RMA of this organization and this order
+    -- (desk check F11): idempotency_keys is writable by managers through the
+    -- API, so a row this function did not write could name any RMA. Anything
+    -- else is a conflict, never a replay.
     select r.status, r.return_number into v_status, v_number
-      from public.returns r where r.id = (v_prev.response->>'returnId')::uuid;
+      from public.returns r
+     where r.id = (v_prev.response->>'returnId')::uuid
+       and r.organization_id = v_org
+       and r.order_request_id = p_order_id;
+    if not found then
+      raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
+    end if;
     return jsonb_build_object('changed', false, 'replay', true,
                               'returnId', v_prev.response->>'returnId', 'returnNumber', v_number,
                               'status', v_status, 'channel', v_chan);
@@ -1330,11 +1342,20 @@ begin
       from public.idempotency_keys k
      where k.organization_id = v_org and k.scope = c_scope and k.key = v_key;
     if not found or v_prev.request_hash is distinct from v_hash or v_prev.status is distinct from 'completed'
-       or jsonb_typeof(v_prev.response->'returnId') is distinct from 'string' then
+       or jsonb_typeof(v_prev.response->'returnId') is distinct from 'string'
+       or (v_prev.response->>'returnId') !~ c_uuid then
       raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
     end if;
+    -- Only an RMA of this organization and this order is replayed (desk
+    -- check F11; see create_return_request).
     select r.status, r.return_number into v_status, v_number
-      from public.returns r where r.id = (v_prev.response->>'returnId')::uuid;
+      from public.returns r
+     where r.id = (v_prev.response->>'returnId')::uuid
+       and r.organization_id = v_org
+       and r.order_request_id = p_order_id;
+    if not found then
+      raise exception 'idempotency_conflict' using errcode = 'P0001', hint = 'idempotency_conflict';
+    end if;
     return jsonb_build_object('changed', false, 'replay', true, 'organizationId', v_org,
                               'returnId', v_prev.response->>'returnId', 'returnNumber', v_number,
                               'status', v_status);
@@ -1449,6 +1470,25 @@ begin
   values (v_org, c_scope, v_key, v_hash, 'in_progress', 'return', p_return_id)
   on conflict (organization_id, scope, key) do nothing
   returning k.id into v_key_id;
+
+  -- A key row this function did not complete is not trusted (desk check
+  -- F11). Every approval it completes appends the approved decision at the
+  -- next revision in the same transaction, and it holds the RMA row lock, so
+  -- no approval of this RMA is in flight now: a key row with no such
+  -- decision was written by someone else (idempotency_keys is writable by
+  -- managers through the API) and would wedge this approval (return_changed)
+  -- or fake its replay. Take it over and approve normally. return_decisions
+  -- has no API write path, so the decision cannot be planted.
+  if v_key_id is null
+     and not exists (select 1 from public.return_decisions d
+                      where d.return_id = p_return_id and d.kind = 'approved'
+                        and d.revision = p_expected_revision + 1) then
+    update public.idempotency_keys k
+       set request_hash = v_hash, status = 'in_progress', response = null,
+           resource_type = 'return', resource_id = p_return_id, updated_at = now()
+     where k.organization_id = v_org and k.scope = c_scope and k.key = v_key
+    returning k.id into v_key_id;
+  end if;
 
   if v_key_id is null then
     select k.request_hash, k.status, k.response into v_prev
@@ -2169,11 +2209,11 @@ comment on function public._return_create_core(uuid, uuid, jsonb, text, uuid, te
 comment on function public._return_plan_lines(uuid, uuid, jsonb, uuid, text, boolean, boolean) is
   'RX-1: validates and appends disposition plans for approval, the planner and the close. Restock targets are checked against the resolver now (P0001 restock_location_not_offered, one answer whatever the cause); scrap carries no destination; with p_require_all every unapplied line needs a decision (P0001 return_decision_incomplete). SECURITY INVOKER, no API EXECUTE.';
 comment on function public.create_return_request(uuid, jsonb, uuid) is
-  'RX-1: the staff create, header and lines and the created decision in one transaction. Gates: signed in (42501 unauthenticated); order in a member organization (P0002 order_not_found); returns module (P0001 module_disabled); returns:manage (42501 returns_manage); write access to the order''s warehouse (42501 warehouse_write); key required (22023 idempotency_key_required). Idempotent on (caller, key): the same request replays the RMA, another gets P0001 idempotency_conflict. Exchange input: P0001 exchange_not_available until RX-2. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: the staff create, header and lines and the created decision in one transaction. Gates: signed in (42501 unauthenticated); order in a member organization (P0002 order_not_found); returns module (P0001 module_disabled); returns:manage (42501 returns_manage); write access to the order''s warehouse (42501 warehouse_write); key required (22023 idempotency_key_required). Idempotent on (caller, key): the same request replays the RMA (only an RMA of this organization and this order), another gets P0001 idempotency_conflict. Exchange input: P0001 exchange_not_available until RX-2. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.create_requester_return_request(uuid, jsonb, uuid, jsonb) is
   'RX-1: the requester create (token, B2B portal, member) after the SERVER resolved the order and the actor; disposition always restock, requester name and email from the order, channel recorded on the created decision. Idempotent on (actor or anon, key). Never raises a retryable class (0367). SECURITY DEFINER, EXECUTE to service_role only.';
 comment on function public.approve_return(uuid, integer, jsonb, boolean) is
-  'RX-1: requested to approved with every line''s disposition and destination (restock to Staging, the original rack or one proven source, or scrap), validated against the resolver now; optionally received in the same transaction (p_receive_now, channel counter). Moves no stock. Gates as create, plus orders module and orders:approve (42501 orders_approve) for an exchange approved or added. Idempotent on (RMA, expected revision): a replay answers the stored result, another decision P0001 return_changed; a stale revision P0001 return_changed; another status P0001 invalid_status_transition. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-1: requested to approved with every line''s disposition and destination (restock to Staging, the original rack or one proven source, or scrap), validated against the resolver now; optionally received in the same transaction (p_receive_now, channel counter). Moves no stock. Gates as create, plus orders module and orders:approve (42501 orders_approve) for an exchange approved or added. Idempotent on (RMA, expected revision): a replay answers the stored result, another decision P0001 return_changed; a key row with no approved decision at the next revision was not written by this function and is taken over, never trusted; a stale revision P0001 return_changed; another status P0001 invalid_status_transition. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.deny_return(uuid, text) is
   'RX-1: requested to denied with a reason of 1 to 1,000 characters (P0001 reason_required). Already denied answers changed false. Gates as approve. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.receive_return(uuid) is
