@@ -18,6 +18,8 @@
  * silently invented):
  *   - KPI cards      ← per-section headline counts (non-empty sections only,
  *                      so per-user section opt-outs never leak a number).
+ *                      The counts are the payload's TOTALS: the lists stop
+ *                      at 20, the counts do not.
  *   - Needs action   ← exception rows: low stock + open/overdue POs.
  *   - rows card      ← in-progress cycle counts under an honest
  *                      "In progress" eyebrow (the mockup's "This week"
@@ -25,12 +27,18 @@
  *                      change this unit must not make).
  *   - preheader      ← registry cadence ("N x · N y · N z. Two-minute
  *                      read.") over the sections that actually exist.
+ *   - range pill     ← "As of <date>": the payload is current state (low
+ *                      stock now, open POs, counts in progress), not last
+ *                      week's activity, so the design's date range and its
+ *                      "what moved last week" copy would misdescribe it.
+ *   - footer         ← the real send time (the vercel.json cron, 14:00 UTC
+ *                      Mondays) in the workspace's time zone.
  * Rendering-only swap: empty-skip, membership/opt-in rechecks,
  * List-Unsubscribe headers, and digest_section_* gating all stay in the
  * cron/action wiring, byte-identical.
  */
 
-import { formatCycleCountNumber } from '@stockpilot/core';
+import { formatCycleCountNumber, resolveOrgTimezone } from '@stockpilot/core';
 
 import type { DigestPayload } from '@/server/services/digest';
 
@@ -84,8 +92,6 @@ export const DIGEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
-const MONTH_SHORT_FMT = new Intl.DateTimeFormat('en-US', { month: 'short' });
-const DAY_FMT = new Intl.DateTimeFormat('en-US', { day: 'numeric' });
 const MONTH_DAY_FMT = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -108,19 +114,56 @@ export function weeklyDigestPreviewSubject(now: Date = new Date()): string {
 }
 
 /**
- * Range pill label for the week the digest covers — the seven days
- * ending yesterday, in the registry badge's format ("Jun 8 – 14",
- * cross-month "Jun 28 – Jul 4").
+ * Pill label: the day the digest's numbers were read ("As of Jun 15"), on the
+ * same clock as the subject's dateline. The registry badge is the design's
+ * date range ("Jun 8 – 14"); the payload is current state, not a week of
+ * activity, so a range would say something the email does not show.
  */
-export function digestRangeLabel(now: Date = new Date()): string {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const start = new Date(now.getTime() - 7 * DAY_MS);
-  const end = new Date(now.getTime() - 1 * DAY_MS);
-  const startMonth = MONTH_SHORT_FMT.format(start);
-  const endMonth = MONTH_SHORT_FMT.format(end);
-  return startMonth === endMonth
-    ? `${startMonth} ${DAY_FMT.format(start)} – ${DAY_FMT.format(end)}`
-    : `${startMonth} ${DAY_FMT.format(start)} – ${endMonth} ${DAY_FMT.format(end)}`;
+export function digestAsOfLabel(now: Date = new Date()): string {
+  return `As of ${MONTH_DAY_FMT.format(now)}`;
+}
+
+/**
+ * The weekly-digest cron in apps/web/vercel.json: Mondays at 14:00 UTC, one
+ * instant for every org. A test holds the two equal; change both together.
+ */
+export const DIGEST_CRON_SCHEDULE = '0 14 * * 1';
+const DIGEST_SEND_HOUR_UTC = 14;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The cron run an email belongs to. 'this-week': the run of `now`'s week
+ * (weeks start on Monday, UTC), which is the run sending a Monday digest.
+ * 'next': the first run at or after `now`, the one a preview stands in for.
+ */
+export function digestSendAt(now: Date, which: 'this-week' | 'next'): Date {
+  const daysSinceMonday = (now.getUTCDay() + 6) % 7; // getUTCDay: 0 = Sunday
+  const monday = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() - daysSinceMonday,
+    DIGEST_SEND_HOUR_UTC,
+  );
+  if (which === 'this-week' || monday >= now.getTime()) return new Date(monday);
+  return new Date(monday + WEEK_MS);
+}
+
+/**
+ * When the digest goes out, in the workspace's time zone: "Mondays at 7:00
+ * AM PDT" (6:00 AM PST in winter, 2:00 PM UTC for an org on the UTC default,
+ * "Tuesdays at ..." east of UTC+10). The zone goes through resolveOrgTimezone,
+ * like every other surface that prints an org-local time.
+ */
+export function digestScheduleLabel(timeZone: string | null | undefined, sendAt: Date): string {
+  const tz = resolveOrgTimezone(timeZone);
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long' }).format(sendAt);
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(sendAt);
+  return `${weekday}s at ${time}`;
 }
 
 export interface WeeklyDigestRenderOptions {
@@ -133,6 +176,8 @@ export interface WeeklyDigestRenderOptions {
   preview?: boolean;
   /** Injectable clock for deterministic subjects/ranges in tests. */
   now?: Date;
+  /** organizations.timezone, for the send time the footer states. */
+  timeZone?: string | null;
 }
 
 const plural = (count: number, word: string): string =>
@@ -157,6 +202,11 @@ export function renderWeeklyDigestHtml(
   const outItems = lowItems.filter((it) => it.qty <= 0);
   const overduePos = payload.openPos.filter((po) => po.isOverdue);
   const cycleCounts = payload.openCycleCounts;
+  // The lists stop at 20; the counts are the totals behind them.
+  const lowTotal = payload.lowStockTotal;
+  const outTotal = payload.outOfStockTotal;
+  const poTotal = payload.openPosTotal;
+  const overdueTotal = payload.overduePosTotal;
 
   // ── Needs action (exceptions only — in-progress counts are not
   //    exceptions and live in their own rows card below) ─────────────
@@ -165,7 +215,7 @@ export function renderWeeklyDigestHtml(
     const exemplar = outItems[0] ?? lowItems[0]!;
     actions.push({
       tone: outItems.length > 0 ? 'err' : 'warn',
-      titleHtml: `${plural(lowItems.length, 'item')} at or below reorder point`,
+      titleHtml: `${plural(lowTotal, 'item')} at or below reorder point`,
       detailHtml:
         outItems.length > 0
           ? `${escapeHtml(exemplar.name)} is out at ${escapeHtml(exemplar.warehouseName)}`
@@ -182,8 +232,8 @@ export function renderWeeklyDigestHtml(
       tone: overduePos.length > 0 ? 'err' : 'info',
       titleHtml:
         overduePos.length > 0
-          ? `${plural(overduePos.length, 'purchase order')} overdue`
-          : `${plural(payload.openPos.length, 'purchase order')} open`,
+          ? `${plural(overdueTotal, 'purchase order')} overdue`
+          : `${plural(poTotal, 'purchase order')} open`,
       detailHtml: `${escapeHtml(exemplar.poNumber)} &middot; ${supplier} &middot; ${expected}`,
     });
   }
@@ -194,19 +244,15 @@ export function renderWeeklyDigestHtml(
   if (lowItems.length > 0) {
     kpis.push({
       label: 'Low stock',
-      valueHtml: String(lowItems.length),
-      noteHtml:
-        outItems.length > 0
-          ? `${outItems.length} out of stock`
-          : 'none out of stock',
+      valueHtml: String(lowTotal),
+      noteHtml: outTotal > 0 ? `${outTotal} out of stock` : 'none out of stock',
     });
   }
   if (payload.openPos.length > 0) {
     kpis.push({
       label: 'Open POs',
-      valueHtml: String(payload.openPos.length),
-      noteHtml:
-        overduePos.length > 0 ? `${overduePos.length} overdue` : 'none overdue',
+      valueHtml: String(poTotal),
+      noteHtml: overdueTotal > 0 ? `${overdueTotal} overdue` : 'none overdue',
     });
   }
   if (cycleCounts.length > 0) {
@@ -242,9 +288,11 @@ export function renderWeeklyDigestHtml(
   const firstName = opts.recipientName?.trim().split(/\s+/)[0] || null;
   const greeting = firstName ? `Hi ${escapeHtml(firstName)} —` : 'Hi —';
   const orgStrong = `<strong class="ink" style="font-weight:600;color:${L.ink}">${escapeHtml(orgName)}</strong>`;
+  // Current state, not last week's activity: low stock now, open POs and
+  // counts in progress are what the payload holds.
   const intro = allClear
-    ? `${greeting} here&rsquo;s what moved across ${orgStrong} last week. It was a clean one.`
-    : `${greeting} here&rsquo;s what moved across ${orgStrong} last week, and the ${
+    ? `${greeting} here&rsquo;s where ${orgStrong} stands right now. Nothing needs a hand.`
+    : `${greeting} here&rsquo;s where ${orgStrong} stands right now, and the ${
         actions.length === 1
           ? 'one thing that needs a hand'
           : `${actions.length} things that need a hand`
@@ -255,9 +303,9 @@ export function renderWeeklyDigestHtml(
   // overdue rentals — data the digest pipeline does not gather.
   const preheaderSegments: string[] = [];
   if (lowItems.length > 0)
-    preheaderSegments.push(`${plural(lowItems.length, 'item')} low on stock`);
+    preheaderSegments.push(`${plural(lowTotal, 'item')} low on stock`);
   if (payload.openPos.length > 0)
-    preheaderSegments.push(`${plural(payload.openPos.length, 'open purchase order')}`);
+    preheaderSegments.push(`${plural(poTotal, 'open purchase order')}`);
   if (cycleCounts.length > 0)
     preheaderSegments.push(`${plural(cycleCounts.length, 'cycle count')} in progress`);
   const preheader = preview
@@ -280,7 +328,7 @@ export function renderWeeklyDigestHtml(
       [
         statusPill({
           variant: 'info',
-          label: digestRangeLabel(now),
+          label: digestAsOfLabel(now),
           dot: false,
         }),
         headline({
@@ -299,7 +347,7 @@ export function renderWeeklyDigestHtml(
         '0 36px 24px',
         heroSlot({
           src: esAssetUrl('motion/bars@2x.gif'),
-          alt: `Five weekly bars rise — activity across ${escapeHtml(orgName)} last week`,
+          alt: `Five bars rise — a snapshot of ${escapeHtml(orgName)}`,
           note: 'motion asset: bars.gif · L2 · plays once · frame 1 = resting composition',
         }),
       ),
@@ -337,8 +385,11 @@ export function renderWeeklyDigestHtml(
   rows.push(
     footer({
       kind: 'pref',
-      reasonHtml:
-        'The weekly digest goes to workspace members who opted in — Mondays at 7:00 AM workspace time.',
+      // The real send time: the cron's run, in the workspace's zone. A
+      // preview names the run after it.
+      reasonHtml: `The weekly digest goes to workspace members who opted in — ${escapeHtml(
+        digestScheduleLabel(opts.timeZone, digestSendAt(now, preview ? 'next' : 'this-week')),
+      )}.`,
       // The digest archetype shortens the pref boilerplate (see the
       // FOOTER_NOTES flag in components.ts) — passed explicitly so the
       // bytes match archetype-digest.html:118.
@@ -396,6 +447,10 @@ export function weeklyDigestText(
         );
       }
     }
+    const shown = payload.lowStock.reduce((n, g) => n + g.items.length, 0);
+    if (payload.lowStockTotal > shown) {
+      blocks.push(`  Showing the first ${shown} of ${payload.lowStockTotal}.`);
+    }
     blocks.push(`  → ${appUrl}/dashboard/inventory?stock=low&type=all`, '');
   }
   if (payload.openPos.length > 0) {
@@ -408,6 +463,9 @@ export function weeklyDigestText(
       blocks.push(
         `  ${po.poNumber}  ${po.supplierName ?? 'No supplier'}  expected ${exp}${overdue}`,
       );
+    }
+    if (payload.openPosTotal > payload.openPos.length) {
+      blocks.push(`  Showing the first ${payload.openPos.length} of ${payload.openPosTotal}.`);
     }
     blocks.push(`  → ${appUrl}/dashboard/purchase-orders`, '');
   }

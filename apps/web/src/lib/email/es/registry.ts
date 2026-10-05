@@ -785,7 +785,9 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     status: 'live',
     category: 'pref',
     tag: 'Weekly Digest',
-    trigger: 'Scheduled — Monday 7:00 AM workspace time',
+    // vercel.json runs the cron at 14:00 UTC for every org; the footer states
+    // that instant in the workspace's time zone (digestScheduleLabel).
+    trigger: 'Scheduled — Monday 14:00 UTC',
     to: 'Subscribed workspace members',
     from: 'StockPilot <digest@stockpilotusa.com>',
     replyTo: 'Not monitored',

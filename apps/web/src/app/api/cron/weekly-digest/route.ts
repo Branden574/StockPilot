@@ -62,7 +62,8 @@ export const maxDuration = 60;
 
 /**
  * Weekly inventory digest. Wired to Vercel Cron via vercel.json
- * (0 14 * * 1 UTC ≈ 7am Pacific Mondays). Uses the service-role
+ * (0 14 * * 1: 14:00 UTC Mondays, 7 AM Pacific in summer and 6 AM in
+ * winter; the email's footer states it in the org's zone). Uses the service-role
  * client to span all orgs, so it reads each org once and then cuts what
  * each recipient is sent to what that recipient may read
  * (buildDigestPayload with their reader; see services/digest.ts).
@@ -117,8 +118,8 @@ export async function GET(req: Request) {
         organization_id: string;
         accepted_at: string | null;
         organizations:
-          | { id: string; name: string }
-          | { id: string; name: string }[]
+          | { id: string; name: string; timezone: string | null }
+          | { id: string; name: string; timezone: string | null }[]
           | null;
       }>;
     };
@@ -135,7 +136,7 @@ export async function GET(req: Request) {
         organization_members!organization_members_user_id_fkey!inner (
           organization_id,
           accepted_at,
-          organizations:organization_id (id, name)
+          organizations:organization_id (id, name, timezone)
         )
       `,
         )
@@ -168,7 +169,10 @@ export async function GET(req: Request) {
 
     // Fan recipients out by org so each org is read once even if multiple
     // users in the same org are opted in.
-    const byOrg = new Map<string, { orgName: string; recipients: RecipientLite[] }>();
+    const byOrg = new Map<
+      string,
+      { orgName: string; timeZone: string | null; recipients: RecipientLite[] }
+    >();
     for (const row of recipients) {
       const sections = {
         lowStock: row.digest_section_low_stock ?? true,
@@ -188,6 +192,8 @@ export async function GET(req: Request) {
         if (!orgRow) continue;
         const existing = byOrg.get(orgRow.id) ?? {
           orgName: orgRow.name,
+          // For the send time the footer states, in the org's zone.
+          timeZone: orgRow.timezone ?? null,
           recipients: [],
         };
         if (!existing.recipients.some((r) => r.userId === row.id)) {
@@ -344,6 +350,7 @@ export async function GET(req: Request) {
             ...opts,
             recipientName: name,
             now: runStartedAt,
+            timeZone: group.timeZone,
           });
           const text = weeklyDigestText(payload, opts);
           // RFC 8058 List-Unsubscribe header. Until a dedicated

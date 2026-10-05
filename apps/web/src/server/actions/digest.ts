@@ -1,6 +1,7 @@
 'use server';
 
 import { requireOrgContext } from '@/lib/auth/session';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { env } from '@/lib/env';
 import {
   DIGEST_FROM,
@@ -93,7 +94,10 @@ export async function sendDigestPreviewAction() {
     cycleCounts: (profile as { digest_section_cycle_counts?: boolean } | null)
       ?.digest_section_cycle_counts ?? true,
   };
-  const fullPayload = await getDigestData(supabase, ctx.organizationId);
+  const [fullPayload, timeZone] = await Promise.all([
+    getDigestData(supabase, ctx.organizationId),
+    getCachedOrgTimezone(ctx.organizationId),
+  ]);
   const payload = applySectionOptIns(fullPayload, sections);
   const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
   const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
@@ -110,6 +114,8 @@ export async function sendDigestPreviewAction() {
     ...opts,
     recipientName: ctx.fullName,
     preview: true,
+    // The footer names the next Monday run in the workspace's zone.
+    timeZone,
   });
   const text = weeklyDigestText(payload, opts);
   // Match the production cron's List-Unsubscribe header so preview

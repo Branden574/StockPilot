@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applySectionOptIns,
   buildDigestPayload,
   digestReaderFor,
   getDigestData,
@@ -382,5 +383,47 @@ describe('buildDigestPayload: what one reader is sent (the edges route.scope.tes
     const payload = buildDigestPayload(source, digestReaderFor(facts, 'staff', 'staff'));
     expect(payload.lowStock.flatMap((g) => g.items.map((i) => i.id))).toEqual(['mine-0', 'mine-1', 'mine-2']);
     expect(payload.openPos.map((p) => p.id)).toEqual(['po-mine']);
+  });
+});
+
+describe('buildDigestPayload: totals', () => {
+  it('counts every low item and open purchase order the reader may read, not the twenty listed', () => {
+    const source: DigestSource = {
+      lowStock: Array.from({ length: 30 }, (_, i) => ({
+        id: `item-${String(i).padStart(2, '0')}`,
+        sku: `S-${i}`,
+        name: `Item ${i}`,
+        qty: i < 5 ? 0 : 1,
+        reorderPoint: 5,
+        warehouseId: 'wh-1',
+        charterId: null,
+        categoryId: null,
+        warehouseName: 'DC4',
+      })),
+      openPos: Array.from({ length: 25 }, (_, i) => ({
+        id: `po-${String(i).padStart(2, '0')}`,
+        poNumber: `PO-${i}`,
+        supplierName: null,
+        expectedAt: null,
+        status: 'ordered',
+        isOverdue: i < 7,
+        destinationLocationId: null,
+        destinationWarehouseId: null,
+      })),
+      openCycleCounts: [],
+    };
+    const payload = buildDigestPayload(source, null);
+    expect(payload.lowStock.flatMap((g) => g.items)).toHaveLength(20);
+    expect(payload.lowStockTotal).toBe(30);
+    expect(payload.outOfStockTotal).toBe(5);
+    expect(payload.openPos).toHaveLength(20);
+    expect(payload.openPosTotal).toBe(25);
+    expect(payload.overduePosTotal).toBe(7);
+
+    // A section the recipient opted out of carries no count either.
+    const gated = applySectionOptIns(payload, { lowStock: false, openPos: false, cycleCounts: true });
+    expect([gated.lowStockTotal, gated.outOfStockTotal, gated.openPosTotal, gated.overduePosTotal]).toEqual([
+      0, 0, 0, 0,
+    ]);
   });
 });

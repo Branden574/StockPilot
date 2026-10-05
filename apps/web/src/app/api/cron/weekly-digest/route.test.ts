@@ -89,7 +89,7 @@ function recipientRow(id: string, email: string) {
       {
         organization_id: 'org-1',
         accepted_at: '2026-01-01T00:00:00Z',
-        organizations: { id: 'org-1', name: 'Acme' },
+        organizations: { id: 'org-1', name: 'Acme', timezone: 'America/Los_Angeles' },
       },
     ],
   };
@@ -420,6 +420,19 @@ describe('GET /api/cron/weekly-digest — the recipient pull names its membershi
     });
   }
 
+  it("renders each email with its org's time zone, for the send time the footer states", async () => {
+    const stub = stubAnsweringLikePostgrest();
+    adminHolder.client = stub.client;
+    const { renderWeeklyDigestHtml } = await import('@/lib/email/es/families/digest');
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(renderWeeklyDigestHtml).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ timeZone: 'America/Los_Angeles', orgName: 'Acme' }),
+    );
+  });
+
   it('sends the digest when PostgREST refuses an embed that does not name its relationship', async () => {
     const stub = stubAnsweringLikePostgrest();
     adminHolder.client = stub.client;
@@ -441,7 +454,7 @@ describe('GET /api/cron/weekly-digest — the recipient pull names its membershi
     // supabase-js drops whitespace outside quotes before sending.
     expect(bulkSelect(stub).replace(/\s+/g, '')).toBe(
       'id,email,full_name,digest_section_low_stock,digest_section_open_pos,digest_section_cycle_counts,' +
-        'organization_members!organization_members_user_id_fkey!inner(organization_id,accepted_at,organizations:organization_id(id,name))',
+        'organization_members!organization_members_user_id_fkey!inner(organization_id,accepted_at,organizations:organization_id(id,name,timezone))',
     );
     // The accepted-membership filter still names the embed by its table name
     // (a hint does not rename it).

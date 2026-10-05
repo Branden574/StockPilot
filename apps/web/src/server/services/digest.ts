@@ -42,8 +42,18 @@ export interface DigestCycleCount {
 }
 
 export interface DigestPayload {
+  /** The lowest LOW_STOCK_LIMIT low-stock items, grouped by warehouse. */
   lowStock: DigestLowStockGroup[];
+  /** Every low-stock item the recipient may read (lowStock lists at most 20). */
+  lowStockTotal: number;
+  /** Of lowStockTotal, those with nothing on hand. */
+  outOfStockTotal: number;
+  /** The first PO_LIMIT open purchase orders, earliest expected first. */
   openPos: DigestOpenPo[];
+  /** Every open purchase order the recipient may read (openPos lists at most 20). */
+  openPosTotal: number;
+  /** Of openPosTotal, those past their expected date. */
+  overduePosTotal: number;
   openCycleCounts: DigestCycleCount[];
 }
 
@@ -91,7 +101,11 @@ export function applySectionOptIns(
 ): DigestPayload {
   return {
     lowStock: optIns.lowStock ? payload.lowStock : [],
+    lowStockTotal: optIns.lowStock ? payload.lowStockTotal : 0,
+    outOfStockTotal: optIns.lowStock ? payload.outOfStockTotal : 0,
     openPos: optIns.openPos ? payload.openPos : [],
+    openPosTotal: optIns.openPos ? payload.openPosTotal : 0,
+    overduePosTotal: optIns.openPos ? payload.overduePosTotal : 0,
     openCycleCounts: optIns.cycleCounts ? payload.openCycleCounts : [],
   };
 }
@@ -424,6 +438,12 @@ export function buildDigestPayload(
 
   return {
     lowStock: [...groups.values()].sort((a, b) => a.warehouseName.localeCompare(b.warehouseName)),
+    // The lists are cut to the rendered limits; the counts the email prints
+    // are not, or an org with more than 20 of either would read "20".
+    lowStockTotal: items.length,
+    outOfStockTotal: items.filter((it) => it.qty <= 0).length,
+    openPosTotal: pos.length,
+    overduePosTotal: pos.filter((po) => po.isOverdue).length,
     openPos: pos.slice(0, PO_LIMIT).map((po) => ({
       id: po.id,
       poNumber: po.poNumber,

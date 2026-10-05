@@ -105,9 +105,30 @@ const POS = [
   po('po-no-destination', null, null),
 ];
 const COUNTS = [
-  { id: 'cc-a', count_number: 1, started_at: '2026-10-01T00:00:00Z', warehouse_id: 'wh-a', scope: 'warehouse', warehouse: { name: 'North DC' } },
-  { id: 'cc-b', count_number: 2, started_at: '2026-10-02T00:00:00Z', warehouse_id: 'wh-b', scope: 'warehouse', warehouse: { name: 'South DC' } },
-  { id: 'cc-all', count_number: 3, started_at: '2026-10-03T00:00:00Z', warehouse_id: null, scope: 'all', warehouse: null },
+  {
+    id: 'cc-a',
+    count_number: 1,
+    started_at: '2026-10-01T00:00:00Z',
+    warehouse_id: 'wh-a',
+    scope: 'warehouse',
+    warehouse: { name: 'North DC' },
+  },
+  {
+    id: 'cc-b',
+    count_number: 2,
+    started_at: '2026-10-02T00:00:00Z',
+    warehouse_id: 'wh-b',
+    scope: 'warehouse',
+    warehouse: { name: 'South DC' },
+  },
+  {
+    id: 'cc-all',
+    count_number: 3,
+    started_at: '2026-10-03T00:00:00Z',
+    warehouse_id: null,
+    scope: 'all',
+    warehouse: null,
+  },
 ];
 
 // ── The recipients ───────────────────────────────────────────────────
@@ -161,20 +182,31 @@ function orgStub(overrides: Record<string, QueryResult | ((call: MockCall) => Qu
         digest_section_open_pos: true,
         digest_section_cycle_counts: true,
         organization_members: [
-          { organization_id: ORG, accepted_at: '2026-01-01T00:00:00Z', organizations: { id: ORG, name: 'Acme' } },
+          {
+            organization_id: ORG,
+            accepted_at: '2026-01-01T00:00:00Z',
+            organizations: { id: ORG, name: 'Acme' },
+          },
         ],
       })),
     ),
     'user_profiles.select.maybeSingle': rows([{ email_digest_optin: true, disabled_at: null }]),
     'organization_members.select.maybeSingle': (call) => {
       const userId = String(eqValue(call, 'user_id'));
-      return rows([{ user_id: userId, accepted_at: '2026-01-01T00:00:00Z', role: MEMBERS[userId]!.role }]);
+      return rows([
+        { user_id: userId, accepted_at: '2026-01-01T00:00:00Z', role: MEMBERS[userId]!.role },
+      ]);
     },
     'inventory_items.select': rows(ITEMS),
     'purchase_orders.select': rows(POS),
     'cycle_counts.select': rows(COUNTS),
     'cycle_count_lines.select': (call) =>
-      rows(inValues(call, 'cycle_count_id').map((id) => ({ cycle_count_id: id, counted_quantity: null }))),
+      rows(
+        inValues(call, 'cycle_count_id').map((id) => ({
+          cycle_count_id: id,
+          counted_quantity: null,
+        })),
+      ),
     'user_warehouse_assignments.select': (call) =>
       rows(WAREHOUSE_ASSIGNMENTS.filter((r) => inValues(call, 'user_id').includes(r.user_id))),
     'user_category_assignments.select': (call) =>
@@ -217,7 +249,14 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
 
     for (const name of ['Olive Owner', 'Mona Manager']) {
       const got = sentTo(name);
-      expect(got.items).toEqual(['a-ch1', 'a-ch2', 'a-generic', 'b-books', 'b-sports', 'b-uncategorised']);
+      expect(got.items).toEqual([
+        'a-ch1',
+        'a-ch2',
+        'a-generic',
+        'b-books',
+        'b-sports',
+        'b-uncategorised',
+      ]);
       expect(got.warehouses).toEqual(['North DC', 'South DC']);
       expect(got.pos).toEqual(['po-no-destination', 'po-to-a', 'po-to-b', 'po-to-org-level']);
       expect(got.counts).toEqual(['cc-a: North DC', 'cc-b: South DC', 'cc-all: All warehouses']);
