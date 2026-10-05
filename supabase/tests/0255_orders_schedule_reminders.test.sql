@@ -23,13 +23,17 @@ insert into public.warehouses (id, organization_id, name, code, status)
   values (:wh, :org, 'S WH', 'WH-S-0255', 'active') on conflict (id) do nothing;
 
 select has_column('public', 'order_requests', 'needed_by', 'P1: needed_by exists');
+-- Re-pinned by 0394 (was 22 columns): 0394 adds deleted_users, the
+-- server-owned "Deleted user" marker (stamped only by zzz_deleted_users when
+-- an account deletion nulls created_by, updated_by or assigned_user_id).
 select columns_are(
   'public', 'schedule_events',
   array['id','organization_id','title','starts_at','ends_at','all_day','location_text',
         'warehouse_id','requester_name','details','status','bundle_id','bundle_quantity',
         'bundle_warehouse_id','created_by','updated_by','created_at','updated_at',
-        'order_request_id','assigned_user_id','reminded_24h_at','reminded_1h_at'],
-  'P2: schedule_events carries the four new columns');
+        'order_request_id','assigned_user_id','reminded_24h_at','reminded_1h_at',
+        'deleted_users'],
+  'P2: schedule_events carries the four new columns (and 0394''s deleted_users)');
 
 -- source defaults to 'internal', which requires requester_user_id or
 -- requester_email (order_requests_identity_chk, 0116/0251).
