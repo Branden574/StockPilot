@@ -72,6 +72,12 @@ export function itemRowStacked(fontScale: number): boolean {
   return finite(fontScale, 1) > ROW_STACK_FONT_SCALE;
 }
 
+/** Manager notes in checkout: a fixed height (about five lines) that scrolls
+ *  inside itself, where iOS keeps the caret in view. A field that grew with
+ *  its text ran under the keyboard and hid the caret and the counter
+ *  (simulator walk D5). */
+export const NOTES_FIELD_HEIGHT = 132;
+
 /** A kit row's Add kit and Details buttons at the default size, in points. */
 export const KIT_ACTION_WIDTH = 88;
 /** The least room a kit's name and its "Limited by" line keep beside the

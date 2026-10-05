@@ -6,6 +6,7 @@ import {
   SHEET_MAX_WIDTH,
   itemRowStacked,
   kitRowStacked,
+  NOTES_FIELD_HEIGHT,
   stepperCountWidth,
   storefrontLayout,
   storefrontLayoutKind,
@@ -86,5 +87,12 @@ describe('a kit row stacks its controls under the text when the text would be sq
     const w = 30 + 2 * MIN_TAP + stepperCountWidth(9) + 8 + 88 + 160;
     expect(at(w, 9)).toBe(false);
     expect(at(w, 99_999)).toBe(true);
+  });
+});
+
+describe('Manager notes are a fixed height (simulator walk D5)', () => {
+  it('taller than the old minimum, short enough that its block shows above the keyboard on an SE-width phone', () => {
+    expect(NOTES_FIELD_HEIGHT).toBeGreaterThanOrEqual(96);
+    expect(NOTES_FIELD_HEIGHT).toBeLessThanOrEqual(160);
   });
 });

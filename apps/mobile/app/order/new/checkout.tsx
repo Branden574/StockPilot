@@ -55,7 +55,7 @@ import {
   showNotesCounter,
   storefrontNeededByZone,
 } from '@/lib/order-storefront/checkout';
-import { MIN_TAP, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
+import { MIN_TAP, NOTES_FIELD_HEIGHT, STOREFRONT_GUTTER, storefrontLayout } from '@/lib/order-storefront/layout';
 import { createNotesDraft, type NotesDraft } from '@/lib/order-storefront/notes-draft';
 import { storefrontOutcome } from '@/lib/order-storefront/outcome';
 import { storefrontSession, useOffline, useStorefront, useStorefrontScope } from '@/lib/order-storefront/runtime';
@@ -442,6 +442,7 @@ function NotesField({
 }) {
   const { c } = useTheme();
   const [text, setText] = React.useState(initial);
+  const counter = showNotesCounter(text) ? checkoutNotesCounterCopy(Array.from(text).length, ORDER_NOTES_MAX) : null;
   return (
     <View style={{ gap: 6 }} onLayout={keyboard.onNoteBlockLayout}>
       <FieldLabel>{`${CART_MANAGER_NOTES_LABEL_COPY} · ${CART_OPTIONAL_COPY}`}</FieldLabel>
@@ -467,11 +468,17 @@ function NotesField({
         maxFontSizeMultiplier={INPUT_CAP}
         style={[styles.notes, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
       />
-      {showNotesCounter(text) ? (
-        <Body size={12} color={c.ink3}>
-          {checkoutNotesCounterCopy(Array.from(text).length, ORDER_NOTES_MAX)}
-        </Body>
-      ) : null}
+      {/* The counter's line is kept from the start (blank, and hidden from
+          VoiceOver, until 1,800), so the block shown above the keyboard
+          never grows under it (simulator walk D5). */}
+      <Body
+        size={12}
+        color={c.ink3}
+        accessibilityElementsHidden={counter === null}
+        importantForAccessibility={counter ? 'auto' : 'no-hide-descendants'}
+      >
+        {counter ?? ' '}
+      </Body>
     </View>
   );
 }
@@ -482,7 +489,7 @@ const ACTION_CAP = capTo(15.5, TYPE_CEILING.control);
 const styles = StyleSheet.create({
   topbar: { paddingHorizontal: 9 + STOREFRONT_GUTTER - 20, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
   notes: {
-    minHeight: 96,
+    height: NOTES_FIELD_HEIGHT,
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 12,

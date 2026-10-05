@@ -551,7 +551,7 @@ describe('a keystroke in the notes never redraws every storefront screen (desk c
     expect(checkout).toMatch(/<TextInput\s+defaultValue=\{initial\}\s+onChangeText=\{\(value\) => \{\s*setText\(value\);\s*draft\.change\(value\);\s*\}\}\s+onFocus=\{keyboard\.onNoteFocus\}\s+onBlur=\{\(\) => \{\s*draft\.flush\(\);\s*keyboard\.onNoteBlur\(\);\s*\}\}/);
     expect(checkout).not.toContain('value={cart.notes}');
     expect(checkout).not.toContain("type: 'set-notes'");
-    expect(checkout).toContain('{showNotesCounter(text) ? (');
+    expect(checkout).toContain('const counter = showNotesCounter(text) ? checkoutNotesCounterCopy(');
   });
 });
 
@@ -631,5 +631,28 @@ describe('a dimmed Add kit says why (simulator walk D2)', () => {
     const kitRow = codeOnly(read(`${COMPONENTS}/kit-row.tsx`));
     expect(flat(kitRow)).toContain('hint={kitAddBlockedHint({ locked, out, full: maxInCart < 1 })}');
     expect(flat(catalog)).toMatch(/hint=\{kitAddBlockedHint\(\{ locked, out: kitAvailability\(sheetKit, snap\.itemMap\)\.kits < 1, full: /);
+  });
+});
+
+// iPhone 17 simulator walk, 2026-10-05, after D3: with 1,850 characters in
+// Manager notes the field grew under the keyboard, so the caret and the
+// counter were hidden while typing (typing did not move the body: the reveal
+// never scrolls on typing, by design). The field now has a fixed height and
+// scrolls inside itself, where iOS keeps the caret in view, and the counter's
+// line is kept from the start so the revealed block never grows under the
+// keyboard. Mutations caught: the field growing again, the counter line
+// appearing only at 1,800.
+describe('long Manager notes keep the caret and the counter in view (simulator walk D5)', () => {
+  const fn = checkout.slice(checkout.indexOf('function NotesField('));
+  it('the field is a fixed height from the tested layout module and scrolls inside itself', () => {
+    expect(checkout).toMatch(/notes: \{\s*height: NOTES_FIELD_HEIGHT,/);
+    expect(checkout).not.toMatch(/notes: \{\s*minHeight/);
+    expect(fn).not.toContain('scrollEnabled={false}');
+  });
+  it('the counter’s line is always there (blank and hidden from VoiceOver until 1,800)', () => {
+    expect(flat(fn)).toContain('{counter ?? ' + "' '" + '}');
+    expect(flat(fn)).toContain("importantForAccessibility={counter ? 'auto' : 'no-hide-descendants'}");
+    expect(flat(fn)).toContain('accessibilityElementsHidden={counter === null}');
+    expect(flat(fn)).not.toMatch(/showNotesCounter\(text\) \? \(/);
   });
 });
