@@ -213,7 +213,8 @@ function openDraftsPhrase(drafts: ReadinessDraftFacts): string | null {
  *   claimedOnDrafts = min(max(0, committed - inboundRemaining), draftRemaining)
  *   free            = draftRemaining - claimedOnDrafts
  *   covers          = min(short, free)
- * The claimed part is named ("50 of it is needed by other orders"); with
+ * The claimed part is named ("50 of it is needed by other orders"; with
+ * several drafts "50 of the units on them are needed by other orders"); with
  * nothing claimed the sentence is as before. When other orders need all of
  * it, the draft is still named, covering nothing here.
  */
@@ -238,16 +239,19 @@ function draftSentence(item: ReadinessItemAssessment | null, shortUnits: number)
       ? `Draft ${drafts.rows[0]!.poNumber}`
       : `${open.charAt(0).toUpperCase()}${open.slice(1)}`;
   const has = single ? 'has' : 'have';
+  // Several drafts: the claimed part is units on them, said so, since "50 of
+  // them" read as 50 of the POs (review 2026-10-05). One draft keeps Q15's
+  // "50 of it".
   if (covers <= 0) {
     return single
       ? `${subject} has not been ordered; all of it is needed by other orders.`
-      : `${subject} have not been ordered; all of them are needed by other orders.`;
+      : `${subject} have not been ordered; all of the units on them are needed by other orders.`;
   }
   const base = `${subject} ${single ? 'covers' : 'cover'} ${fq(covers)} but ${has} not been ordered`;
   if (claimed <= 0.00005) return `${base}.`;
   return single
     ? `${base}; ${fq(claimed)} of it is needed by other orders.`
-    : `${base}; ${fq(claimed)} of them are needed by other orders.`;
+    : `${base}; ${fq(claimed)} of the units on them ${isOne(claimed) ? 'is' : 'are'} needed by other orders.`;
 }
 
 /**

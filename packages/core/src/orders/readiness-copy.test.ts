@@ -337,7 +337,37 @@ describe('line sentences (F2 plan section 6)', () => {
           }),
         ],
       ),
-    ).toBe('200 short. 2 draft POs cover 130 but have not been ordered; 50 of them are needed by other orders.');
+    ).toBe('200 short. 2 draft POs cover 130 but have not been ordered; 50 of the units on them are needed by other orders.');
+  });
+
+  // Review (2026-10-05): with several drafts, "50 of them are needed" read as
+  // 50 of the POs. The claimed part is units on the drafts, and the words say
+  // so; one draft keeps the owner's Q15 words ("50 of it").
+  it('several drafts name the claimed part as units on them, never "of them" (review)', () => {
+    const drafts = (a: number, b: number) => ({
+      rows: [
+        { poId: 'd1', poNumber: 'PO-1', remaining: a },
+        { poId: 'd2', poNumber: 'PO-2', remaining: b },
+      ],
+      hiddenRemaining: 0,
+      truncated: false,
+      truncatedRemaining: 0,
+    });
+    // Other orders need all of them.
+    expect(
+      lineSentence([{ item: 'a', requested: 10 }], [item('a', { committedOtherShortfall: 50, drafts: drafts(20, 20) })]),
+    ).toBe('10 short. 2 draft POs have not been ordered; all of the units on them are needed by other orders.');
+    // One unit claimed.
+    expect(
+      lineSentence([{ item: 'a', requested: 10 }], [item('a', { committedOtherShortfall: 1, drafts: drafts(20, 20) })]),
+    ).toBe('10 short. 2 draft POs cover 10 but have not been ordered; 1 of the units on them is needed by other orders.');
+    // Drafts the reader cannot open are named as Draft POs, with the same words.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 200 }],
+        [item('a', { committedOtherShortfall: 50, drafts: { ...drafts(100, 80), hiddenRemaining: 20 } })],
+      ),
+    ).toMatch(/^200 short\. Draft POs cover \d+ but have not been ordered; 50 of the units on them are needed by other orders\.$/);
   });
 
   // L45c (owner wording Q16): a line short only because the units on the
