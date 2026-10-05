@@ -2545,6 +2545,17 @@
   justify-content: center;
   flex-wrap: wrap;
 }
+/* The delivery-request notes are paragraphs inside the buttons row. The
+   paragraph cap above (max-width 380px, auto margins) is more specific than
+   .sf-note's flex-basis: 100%, so a note fit BESIDE the buttons in a narrow
+   column (L122). In the row they take the full width, on their own line. */
+.sp-storefront .sf-success .acts > .sf-note {
+  max-width: none;
+  margin: 4px 0 8px;
+}
+.sp-storefront .sf-success .sf-fallback p {
+  max-width: none;
+}
 
 /* ---- Skeletons -------------------------------------------------------- */
 .sp-storefront .sf-sk {
