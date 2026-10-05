@@ -125,6 +125,11 @@ export default function PoReceiveScreen() {
   // post before React re-renders the disabled button (each post would
   // otherwise carry its own key = a duplicate receipt = double-counted stock).
   const submittingRef = React.useRef(false);
+  // The same guard for the over-receipt confirm, which asks BEFORE
+  // sendReceipt runs: set while the alert is up, so a second tap cannot
+  // queue a second confirm (the first post retires the key, and confirming
+  // the second would post the over-receipt again under a new one).
+  const confirmingRef = React.useRef(false);
   // One idempotency key per receive-intent, stable across retries so a network
   // blip after a server-side success doesn't post a second receipt. Reset only
   // after a successful post (the screen navigates away on success anyway).
@@ -453,19 +458,40 @@ export default function PoReceiveScreen() {
     // The RPC still refuses an already-'received' PO (po_already_closed).
     const over = overReceiptUnits(lines, draft);
     if (over > 0) {
-      Alert.alert(OVER_RECEIPT_CONFIRM_TITLE, overReceiptConfirmMessage(over), [
-        { text: 'Cancel', style: 'cancel' },
+      // Checked and set synchronously, before the alert is presented.
+      if (confirmingRef.current || submittingRef.current) return;
+      confirmingRef.current = true;
+      Alert.alert(
+        OVER_RECEIPT_CONFIRM_TITLE,
+        overReceiptConfirmMessage(over),
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => {
+              confirmingRef.current = false;
+            },
+          },
+          {
+            text: OVER_RECEIPT_CONFIRM_LABEL,
+            onPress: () => void sendReceipt(),
+          },
+        ],
         {
-          text: OVER_RECEIPT_CONFIRM_LABEL,
-          onPress: () => void sendReceipt(),
+          // Android only, should the alert ever be made cancelable: a tap
+          // outside it would close it with no button pressed.
+          onDismiss: () => {
+            confirmingRef.current = false;
+          },
         },
-      ]);
+      );
       return;
     }
     await sendReceipt();
   }
 
   async function sendReceipt() {
+    confirmingRef.current = false;
     if (!header?.destination_warehouse_id) return;
 
     // camelCase because this is the API route's body (the shared

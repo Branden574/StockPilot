@@ -67,8 +67,34 @@ describe('po/[id].tsx wiring', () => {
   it('asks before an over-receipt instead of refusing it (L21)', () => {
     expect(screen).not.toContain("'Too many'");
     expect(screen).toContain('const over = overReceiptUnits(lines, draft);');
-    expect(screen).toMatch(/Alert\.alert\(OVER_RECEIPT_CONFIRM_TITLE, overReceiptConfirmMessage\(over\), \[/);
+    expect(screen).toMatch(
+      /Alert\.alert\(\s*OVER_RECEIPT_CONFIRM_TITLE,\s*overReceiptConfirmMessage\(over\),\s*\[/,
+    );
     expect(screen).toMatch(/text: OVER_RECEIPT_CONFIRM_LABEL,[\s\S]{0,80}onPress: \(\) => void sendReceipt\(\)/);
+  });
+
+  // Mutation caught: the double-tap guard left only in sendReceipt, after the
+  // alert. Two quick taps then queued two confirms; the first post retired the
+  // key, so confirming the second minted a new one and posted the
+  // over-receipt again (a duplicate receipt, double-counted stock).
+  it('a second tap while the over-receipt confirm is up does not queue another (desk check F2)', () => {
+    const post = screen.slice(
+      screen.indexOf('async function postReceipt()'),
+      screen.indexOf('async function sendReceipt()'),
+    );
+    const guard = post.indexOf('if (confirmingRef.current || submittingRef.current) return;');
+    const set = post.indexOf('confirmingRef.current = true;');
+    const alert = post.search(/Alert\.alert\(\s*OVER_RECEIPT_CONFIRM_TITLE/);
+    expect(guard).toBeGreaterThan(-1);
+    expect(set).toBeGreaterThan(guard);
+    expect(alert).toBeGreaterThan(set);
+    // Cancel (and an Android dismiss) lets the next tap ask again.
+    expect(post).toMatch(
+      /\{\s*text: 'Cancel',\s*style: 'cancel',\s*onPress: \(\) => \{\s*confirmingRef\.current = false;\s*\},?\s*\}/,
+    );
+    expect(post).toMatch(/onDismiss: \(\) => \{\s*confirmingRef\.current = false;\s*\}/);
+    // Confirming hands over to sendReceipt's own guard, which clears it first.
+    expect(screen).toMatch(/async function sendReceipt\(\) \{\s*confirmingRef\.current = false;/);
   });
 
   // Mutation caught: the note typed but never sent.
