@@ -147,7 +147,17 @@ describe('the order screen', () => {
   // light read), and the whole order is read only for a replacement's
   // banner, never for every completed order the screen opens.
   it('reads the exchange switch when the create sheet opens, and the order route only for a replacement', () => {
-    expect(screen).toMatch(/function openReturnSheet\(\) \{\s*const read = \+\+exchangeSwitchRead\.current;\s*setExchangesEnabled\(false\);\s*void getExchangeSwitch\(\)/);
+    // The answer is kept with the key of the sheet that asked: a late answer
+    // for an earlier opening never shows, and no ref is read in a handler
+    // passed down during render (React Compiler's refs rule).
+    expect(screen).toMatch(
+      /function openReturnSheet\(\) \{\s*const sheetKey = mintReturnKey\(\);\s*void getExchangeSwitch\(\)\.then\(\(on\) => setExchangeSwitch\(\{ sheetKey, on \}\)\);/,
+    );
+    expect(screen).toContain('setReturnKey(sheetKey);');
+    expect(screen).toContain(
+      'const exchangesEnabled = exchangeSwitch !== null && exchangeSwitch.sheetKey === returnKey && exchangeSwitch.on;',
+    );
+    expect(screen).not.toContain('exchangeSwitchRead');
     expect(screen).toMatch(/if \(replacementForReturnId\) \{\s*try \{\s*const extras = await api</);
     expect(screen).not.toMatch(/replacementForReturnId \|\| shouldLoadOrderReturns/);
     expect(screen).not.toContain('order?.exchangesEnabled');

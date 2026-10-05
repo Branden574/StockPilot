@@ -522,9 +522,12 @@ export default function OrderDetail() {
   const [returnKey, setReturnKey] = React.useState<string | null>(null);
   const [returnItemIsHere, setReturnItemIsHere] = React.useState(false);
   // RX-2: the exchange kill switch, read when the sheet opens (desk check F9).
-  // Off until it answers: the sheet offers a return only meanwhile.
-  const [exchangesEnabled, setExchangesEnabled] = React.useState(false);
-  const exchangeSwitchRead = React.useRef(0);
+  // The answer is kept with the key of the sheet that asked, so a late answer
+  // for an earlier opening never shows. Off until it answers: the sheet
+  // offers a return only meanwhile. (State, not a ref: the handler that reads
+  // it is passed down during render.)
+  const [exchangeSwitch, setExchangeSwitch] = React.useState<{ sheetKey: string; on: boolean } | null>(null);
+  const exchangesEnabled = exchangeSwitch !== null && exchangeSwitch.sheetKey === returnKey && exchangeSwitch.on;
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
@@ -1128,16 +1131,13 @@ export default function OrderDetail() {
   }
 
   function openReturnSheet() {
-    const read = ++exchangeSwitchRead.current;
-    setExchangesEnabled(false);
-    void getExchangeSwitch().then((on) => {
-      if (exchangeSwitchRead.current === read) setExchangesEnabled(on);
-    });
+    const sheetKey = mintReturnKey();
+    void getExchangeSwitch().then((on) => setExchangeSwitch({ sheetKey, on }));
     setReturnDraft(initialReturnDraft(orderReturnable));
     setReturnReason(null);
     setReturnNotes('');
     setReturnError(null);
-    setReturnKey(mintReturnKey());
+    setReturnKey(sheetKey);
     setReturnItemIsHere(false);
     setReturnOpen(true);
   }

@@ -132,7 +132,11 @@ describe('the order screen', () => {
   const screen = code(read('app/order/[id].tsx'));
 
   it('mints a key when the create sheet opens and sends it with the item-is-here switch', () => {
-    expect(screen).toMatch(/function openReturnSheet\(\) \{[\s\S]*?setReturnKey\(mintReturnKey\(\)\);[\s\S]*?setReturnItemIsHere\(false\);/);
+    // Re-pinned on purpose (RX-2, desk check F9.3): the key is minted first
+    // so the exchange switch's answer can carry it; the claim is unchanged.
+    expect(screen).toMatch(
+      /function openReturnSheet\(\) \{\s*const sheetKey = mintReturnKey\(\);[\s\S]*?setReturnKey\(sheetKey\);[\s\S]*?setReturnItemIsHere\(false\);/,
+    );
     expect(screen).toMatch(/idempotencyKey: returnKey,\s*itemIsHere: returnItemIsHere,/);
     expect(screen).toContain('useState(false);');
   });
