@@ -205,6 +205,13 @@ export interface StorefrontSnapshot {
   serverSkewMs: number;
 }
 
+/** How a warehouse's send ended, kept for the same account across a
+ *  workspace switch when no screen showed it (PO-4 review). */
+interface CarriedOutcome {
+  state: OrderSubmissionState;
+  placed: PlacedContext | null;
+}
+
 const EMPTY_SUBMISSION: SubmitEngineSnapshot = {
   state: { phase: 'open' },
   busy: false,
@@ -330,6 +337,10 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
    *  photo (null: not yet). */
   let photoRetryAt: number | null = null;
   let lastMarks: ReadonlySet<string> = NO_MARKS;
+  /** How a send ended that no screen showed before a workspace switch, by
+   *  its draft key, for this account only (PO-4 review, probe P6): shown
+   *  when that warehouse opens again, then forgotten. */
+  const carried = new Map<string, CarriedOutcome>();
   let snapshot: StorefrontSnapshot = build();
 
   function blankCatalog(): CatalogState {
@@ -582,10 +593,18 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     const stored = parseStoredOrderDraft(rawDraft, ds);
     const restored = stored ? restoredDraft(stored, id) : null;
     cart = restored?.cart ?? initialCartState({ warehouseId: id, fulfillmentType: 'pickup' });
+    const carriedHere = carried.get(orderDraftKey(ds));
+    carried.delete(orderDraftKey(ds));
     if (restored?.submission) {
       sentBody = restored.submission.bodyUnreadable ? null : restored.submission.body;
       engineKeys.add(restored.submission.key);
       engine?.restore(restored.submission);
+    } else if (carriedHere) {
+      // Its key settled while no screen showed it, and the person switched
+      // workspaces before coming back: say how it ended now (PO-4 review).
+      sentBody = carriedHere.placed?.body ?? null;
+      engine?.adopt(carriedHere.state);
+      if (carriedHere.placed) placed = carriedHere.placed;
     } else if (stored && cart.lines.length > 0) {
       recheckPending = true;
     }
@@ -739,10 +758,28 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     }
   }
 
+  /** The shown engine's final outcome that no screen has shown (a refusal or
+   *  withdrawn not dismissed, a placed order whose success screen did not
+   *  open), kept by its draft key. */
+  function carryOutcome() {
+    const ds = draftScope();
+    const state = engine?.getSnapshot().state;
+    if (!ds || !state) return;
+    if (state.phase === 'refused' || state.phase === 'withdrawn') {
+      carried.set(orderDraftKey(ds), { state, placed: null });
+    } else if (state.phase === 'placed' && placed && !placed.shown) {
+      carried.set(orderDraftKey(ds), { state, placed });
+    }
+  }
+
   /** Forget the scope shown. `sameAccount`: a workspace switch, whose waiting
    *  save still lands under its own key with its own cart; otherwise (the
    *  account ended) it is dropped. */
   function resetScope(sameAccount: boolean) {
+    // How the shown send ended, if no screen showed it yet, goes with this
+    // account to that warehouse's next open; another account never sees it.
+    if (sameAccount) carryOutcome();
+    else carried.clear();
     scopeGen += 1;
     warehouseGen += 1;
     engineUnsub?.();

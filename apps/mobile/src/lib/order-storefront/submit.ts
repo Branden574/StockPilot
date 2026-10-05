@@ -86,6 +86,11 @@ export interface SubmitEngine {
   dontSend(): Promise<void>;
   /** The automatic status read (only while unconfirmed). */
   readStatus(): Promise<void>;
+  /** How this warehouse's key ended while no screen showed it, carried
+   *  across a workspace switch (PO-4 review): a FINAL outcome (placed,
+   *  refused, withdrawn), shown again here and never written (its record is
+   *  already settled). Only over an open engine with nothing out. */
+  adopt(outcome: OrderSubmissionState): boolean;
   /** The success screen, the refusal, the withdrawn notice or the device
    *  error is done with. */
   dismiss(): void;
@@ -245,6 +250,14 @@ export function createSubmitEngine(deps: SubmitEngineDeps): SubmitEngine {
       busy = false;
       inFlight = false;
       publish();
+    },
+
+    adopt(outcome) {
+      if (inFlight || state.phase !== 'open') return false;
+      if (outcome.phase !== 'placed' && outcome.phase !== 'refused' && outcome.phase !== 'withdrawn') return false;
+      state = outcome;
+      publish();
+      return true;
     },
 
     dismiss() {

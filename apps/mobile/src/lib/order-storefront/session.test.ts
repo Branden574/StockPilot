@@ -1216,3 +1216,102 @@ describe('the locked cart shows exactly what was sent (PO-4 review, the write-ah
     expect(record?.cart.notes).toBe('Room 12');
   });
 });
+
+// PO-4 review (probe P6, walk shot M18-iphone-back-to-A-refusal-settled.png):
+// the session's scope changes only when a storefront screen mounts. An answer
+// that lands after the person left the storefront, while its engine is still
+// the one shown, settles the record (cart kept, no key); the next workspace
+// switch then dropped how it ended, and back in that organization the cart
+// was simply unlocked, with no sentence and no item marked.
+describe('how a send ended, if no screen showed it, survives a workspace switch (PO-4 review)', () => {
+  const WHB = '77777777-7777-4777-8777-777777777777';
+  const scopeB = { userId: USER, orgId: ORG2, activeWarehouseId: null };
+
+  beforeEach(() => {
+    api.storefront.mockImplementation(async (s: { orgId: string }) =>
+      s.orgId === ORG2 ? { ...storefrontAnswer(ORG2), warehouses: [{ id: WHB, name: 'B' }] } : storefrontAnswer(),
+    );
+    api.catalog.mockImplementation(async (s: { orgId: string }, wh: string) => catalogAnswer(wh, 10, s.orgId));
+  });
+
+  /** A sends; the answer lands while A is still the scope (no screen
+   *  mounted); then the person opens B's storefront, then A's again. */
+  async function answeredThenSwitchAndBack(answer: OrderCallResult) {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce(answer);
+    await session.submit(false);
+    await session.open(scopeB);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    expect(snap().submission.state.phase).toBe('open');
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+  }
+
+  it('a refusal: back in A it is said, its items are marked and Submit says why', async () => {
+    await answeredThenSwitchAndBack({
+      ok: false,
+      error: { status: 400, code: 'validation_error', details: { reason: 'item_not_orderable', settled: true, items: { [A]: 'archived' }, organizationId: ORG } },
+    });
+    expect(snap().submission.state.phase).toBe('refused');
+    expect(storefrontOutcome(snap(), { itemName: () => 'Planner', warehouseName: 'DC4' })?.text).toMatch(/Planner/);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect([...snap().notOrderable]).toEqual([A]);
+    expect(session.submitBlockedBy(false)).toBe(SUBMIT_REMOVE_UNORDERABLE_COPY);
+    expect(api.place).toHaveBeenCalledTimes(1);
+  });
+
+  it('withdrawn: back in A, "It was not sent. Your cart is unlocked."', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    await session.submit(false);
+    await vi.waitFor(() => expect(snap().submission.busy).toBe(false));
+    await session.dontSend();
+    expect(snap().submission.state.phase).toBe('withdrawn');
+    await session.open(scopeB);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    expect(storefrontOutcome(snap(), { itemName: () => null, warehouseName: null })?.text).toBe(ORDER_WITHDRAWN_COPY);
+    expect(snap().locked).toBe(false);
+  });
+
+  it('placed: back in A the success screen is offered for it, once', async () => {
+    await answeredThenSwitchAndBack({ ok: true, status: 201, body: { organizationId: ORG, result: { replay: false, order: SUMMARY } } });
+    expect(snap().placed).toMatchObject({ order: { orderLabel: 'SO-000123' }, shown: false, body: { lines: [{ itemId: A, quantity: 2 }] } });
+    expect(snap().placed?.context?.warehouseName).toBe('DC4');
+    expect(snap().cart?.lines).toEqual([]);
+  });
+
+  it('once a screen has shown it (and the person moved on), it does not come back', async () => {
+    await answeredThenSwitchAndBack({
+      ok: false,
+      error: { status: 403, code: 'forbidden', details: { reason: 'warehouse_not_available', settled: true, organizationId: ORG } },
+    });
+    expect(snap().submission.state.phase).toBe('refused');
+    session.dismissOutcome();
+    await session.open(scopeB);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    expect(snap().submission.state.phase).toBe('open');
+  });
+
+  it('another account never sees it, and it is not kept past the account', async () => {
+    const OTHER = '22222222-2222-4222-8222-222222222299';
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    api.place.mockResolvedValueOnce({
+      ok: false,
+      error: { status: 403, code: 'forbidden', details: { reason: 'warehouse_not_available', settled: true, organizationId: ORG } },
+    });
+    await session.submit(false);
+    await session.open({ userId: OTHER, orgId: ORG, activeWarehouseId: null });
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    expect(snap().submission.state.phase).toBe('open');
+    await session.open(scope);
+    await vi.waitFor(() => expect(snap().cart).not.toBeNull());
+    expect(snap().submission.state.phase).toBe('open');
+  });
+});
