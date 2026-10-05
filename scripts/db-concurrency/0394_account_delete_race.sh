@@ -281,7 +281,7 @@ if [ $((T1 - T0)) -ge 1500 ]; then ok "2: B waited for A ($((T1 - T0)) ms)"; els
 check "2: A's title and updated_by stay; created_by null and stamped; updated_by (the manager) not stamped" \
   "$(q "select concat_ws('/', title, coalesce(created_by::text, 'null'), coalesce(deleted_users ? 'created_by', false),
                          updated_by, coalesce(deleted_users ? 'updated_by', false)) from public.schedule_events where id = '$SE2'")" \
-  "0394 race edited/null/true/$MGR/false"
+  "0394 race edited/null/t/$MGR/f"
 
 # ═══ 3. Last owner vs a joining member (F1) ═══════════════════════════════
 echo "== 3. a member joins the solo owner's organization (uncommitted); the solo owner deletes meanwhile"
@@ -551,7 +551,7 @@ check "11: all 1,900 rows kept, user_id null and stamped" \
 echo "== 6. error classes"
 check "6: no 40001 in any session" "$(cat "$TMP"/*.out | grep -c '40001')" "0"
 check "6: no 40P01 outside 5 and 7d" \
-  "$(for f in "$TMP"/*.out; do case "$(basename "$f")" in 5.*|7d.*) ;; *) cat "$f" ;; esac; done | grep -c '40P01')" "0"
+  "$(for f in "$TMP"/*.out; do case "$(basename "$f")" in (5.*|7d.*) ;; (*) cat "$f" ;; esac; done | grep -c '40P01')" "0"
 check "6: no 0394 function body names 40001 or 40P01" \
   "$(q "select count(*) from pg_proc where oid in (to_regprocedure('public.tg_auth_users_before_delete()'), to_regprocedure('public.tg_mark_deleted_users()'),
                                                     to_regprocedure('public._account_exists(uuid)'), to_regprocedure('public._enforce_schedule_events_writer()'),

@@ -726,6 +726,9 @@ select is(
   'S1-S3: no role moves a schedule entry''s creator (an API role, service_role) and no role clears a LIVE creator: the writer restores it, so no stamp and no CHECK failure');
 
 -- ══ M. Marker semantics ═══════════════════════════════════════════════════
+-- platform_admin_audit has RLS and no policy, so each probe adds its own. An
+-- UPDATE with a WHERE clause also needs a SELECT policy to see the row (test
+-- stage fix: M2/M3a first ran with the UPDATE policy only and matched 0 rows).
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.platform_admin_audit (id, actor_user_id, actor_email, action, deleted_users)
@@ -737,24 +740,28 @@ select is(
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$update public.platform_admin_audit set deleted_users = '{"actor_user_id": "2026-01-01T00:00:00+00:00"}'::jsonb where id = %L$q$, :pa4),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true)',
+                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users::text, ''null'') from public.platform_admin_audit where id = %L', :pa4))
   || ' | ' ||
   pg_temp.attempt('authenticated', :mgr,
                   format('update public.platform_admin_audit set deleted_users = null where id = %L', :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true)',
+                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users ->> ''target_user_id'', ''null'') from public.platform_admin_audit where id = %L', :pa3))
   || ' | ' ||
   pg_temp.attempt('authenticated', :mgr,
                   format($q$update public.platform_admin_audit set deleted_users = '{"target_user_id": "1999-01-01T00:00:00+00:00"}'::jsonb where id = %L$q$, :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true)',
+                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format('select coalesce(deleted_users ->> ''target_user_id'', ''null'') from public.platform_admin_audit where id = %L', :pa3)),
   'ok:1:null | ok:1:2026-10-01T00:00:00+00:00 | ok:1:2026-10-01T00:00:00+00:00',
   'M2: an API role can neither add a stamp, nor erase one, nor change one (the trigger keeps the old stamps)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
                   format('update public.platform_admin_audit set target_user_id = %L where id = %L', :mgr, :pa3),
-                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true)',
+                  'create policy zz_0394_probe_upd on public.platform_admin_audit for update to authenticated using (true) with check (true); '
+                  'create policy zz_0394_probe_sel on public.platform_admin_audit for select to authenticated using (true)',
                   format($q$select coalesce(deleted_users::text, 'null') || '/' || target_user_id::text from public.platform_admin_audit where id = %L$q$, :pa3)),
   'ok:1:null/' || :mgr,
   'M3a: when a stamped column names a live person again (here by an API role), its stamp is dropped');
