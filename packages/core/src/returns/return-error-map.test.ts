@@ -73,6 +73,15 @@ describe('the returns error map', () => {
       retryable: true,
     });
     expect(mapReturnError({ code: '57014' }).reason).toBe('busy');
+    // Desk check F4: a residual deadlock (40P01, one side rolled back; never
+    // raised by a function, 0367) is the same plain "Busy. Try again.", not a
+    // generic failure. The body may be sent again safely.
+    expect(mapReturnError({ code: '40P01', message: 'deadlock detected' })).toMatchObject({
+      reason: 'busy',
+      status: 409,
+      retryable: true,
+      message: 'Busy. Try again.',
+    });
   });
 
   it('answers a generic internal error for anything else, never the raw text', () => {

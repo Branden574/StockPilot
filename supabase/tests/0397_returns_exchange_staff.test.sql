@@ -83,6 +83,7 @@
 --   M23 the on-cancel hook leaves a part-handed-over backorder open      -> K5
 --   M24 the gate lets a cancelled RMA's replacement into picking         -> K6
 --   M25 the on-cancel hook leaves a resumed remainder live               -> K7
+--   M26 the item locks are a no-op (desk check F4)                       -> A10 (and races 11a, 12a)
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -93,7 +94,7 @@
 
 begin;
 
-select plan(96);
+select plan(97);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -663,7 +664,7 @@ select is(
                      ',' order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('_return_exchange_requester_options', '_return_exchange_item_ok', '_return_replacement_summary',
-                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_replacement_cancel_order', '_return_exchange_reason',
+                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_lock_items', '_return_replacement_cancel_order', '_return_exchange_reason',
                         '_return_exchange_quantity', '_return_replacement_issue', '_return_exchange_create',
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
@@ -672,7 +673,7 @@ select is(
   '_notify_replacement_order_changes:true:false,_return_exchange_approve:false:false,_return_exchange_create:false:false,'
   || '_return_exchange_fulfilled:false:false,_return_exchange_item_ok:false:false,_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,'
   || '_return_exchange_quantity:false:false,_return_exchange_reason:false:false,_return_exchange_replay:false:false,'
-  || '_return_exchange_requester_options:false:false,_return_replacement_cancel_order:false:false,'
+  || '_return_exchange_requester_options:false:false,_return_lock_items:false:false,_return_replacement_cancel_order:false:false,'
   || '_return_replacement_class:false:false,_return_replacement_issue:true:false,_return_replacement_summary:false:false,'
   || 'tg_order_request_lines_replacement_guard:false:false,tg_order_requests_replacement_link:false:false,'
   || 'tg_order_requests_replacement_status:true:false,tg_return_exchange_lines_validate:false:false,tg_returns_api_guard:false:false',
@@ -681,7 +682,7 @@ select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname collate "C"), '')
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('_return_exchange_requester_options', '_return_exchange_item_ok', '_return_replacement_summary',
-                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_replacement_cancel_order', '_return_exchange_reason',
+                        '_return_replacement_class', '_return_exchange_fulfilled', '_return_lock_items', '_return_replacement_cancel_order', '_return_exchange_reason',
                         '_return_exchange_quantity', '_return_replacement_issue', '_return_exchange_create',
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
@@ -754,6 +755,34 @@ select is(
   || '|FOREIGN KEY (exchange_line_id, return_id) REFERENCES return_exchange_lines(id, return_id) ON DELETE CASCADE'
   || '|0',
   'A9: at most one live replacement per RMA (partial unique index), the link keyed to (RMA, organization) with NO ACTION (G6), the decision log''s exchange line keyed to its RMA, and the new table outside realtime');
+
+-- Desk check F4 (the two-session proof is races 11 and 12 of
+-- scripts/db-concurrency/0397_exchange_races.sh): every exchange writer takes
+-- the item locks before its first row naming an item, the lock helper takes
+-- the order-number lock and then the items FOR UPDATE in id order, and the
+-- order-number lock is the very one assign_order_request_number (0254) takes.
+create function pg_temp.first_item_write(p_src text) returns integer language sql immutable as $$
+  select min(p) from unnest(array[
+           nullif(strpos(p_src, 'insert into public.return_exchange_lines'), 0),
+           nullif(strpos(p_src, 'insert into public.return_decisions'), 0),
+           nullif(strpos(p_src, 'insert into public.order_requests'), 0),
+           nullif(strpos(p_src, 'insert into public.order_request_lines'), 0),
+           nullif(strpos(p_src, 'public._return_replacement_cancel_order('), 0),
+           nullif(strpos(p_src, 'public._return_replacement_issue('), 0)]) p
+$$;
+select is(
+  (select string_agg(p.proname || '=' || (strpos(p.prosrc, 'public._return_lock_items(') > 0
+                       and strpos(p.prosrc, 'public._return_lock_items(') < pg_temp.first_item_write(p.prosrc))::text,
+                     ',' order by p.proname collate "C")
+     from pg_proc p where p.pronamespace = 'public'::regnamespace
+      and p.proname in ('_return_exchange_approve', '_return_replacement_issue', 'change_return_replacement', '_return_exchange_on_deny'))
+  || '|' || (select (p.prosrc ~ 'pg_advisory_xact_lock\(hashtext\(''order_number:'' \|\| p_org::text\)\)'
+                     and p.prosrc ~ 'order by ii\.id\s+for update')::text
+               from pg_proc p where p.oid = 'public._return_lock_items(uuid,uuid[],boolean)'::regprocedure)
+  || '|' || (select (strpos(p.prosrc, 'pg_advisory_xact_lock(hashtext(''order_number:'' || new.organization_id::text))') > 0)::text
+               from pg_proc p where p.oid = 'public.assign_order_request_number()'::regprocedure),
+  '_return_exchange_approve=true,_return_exchange_on_deny=true,_return_replacement_issue=true,change_return_replacement=true|true|true',
+  'A10: every exchange writer takes the order-number lock and then its items FOR UPDATE in id order before the first row naming an item (desk check F4: never two writers each holding a key-share lock the other''s FOR UPDATE needs), the same order-number lock 0254 takes');
 
 -- ══ B. Gates ══════════════════════════════════════════════════════════════
 -- rBq: an exchange still requested; rB0: an exchange approved and waiting.

@@ -36,6 +36,22 @@
 #      receipt holds; the release waits, then answers not needed (changed
 #      false). 9b: the release holds; the receipt waits, then receives; one
 #      released_early decision.
+#  11. Two RMAs, one item (desk check F4): approval against approval. 11a: a
+#      third session holds item K; B approves an RMA whose replacement is K
+#      and L (it waits on K); A approves another RMA with "Add a replacement"
+#      of L (it waits on B). Once K is free both finish: B first, then A. The
+#      exchange writers take the order-number lock and then every item FOR
+#      UPDATE in id order BEFORE any row naming an item, so A never holds a
+#      key-share lock on L that B's approve_partial needs (without that, B
+#      waits on A's key-share lock while A waits on B's order-number lock:
+#      40P01). 11b: A's approval with an added L commits after a pause; B's
+#      approval for L waits, then finishes.
+#  12. Approval against substitution, same item (desk check F4). 12a: the
+#      third session holds K; B substitutes K for one line of an RMA whose
+#      replacement is L and N (it waits on K); A approves another RMA with an
+#      added L (it waits on B); both finish. 12b: A's substitution to L
+#      commits after a pause; B's approval with an added L waits, then
+#      finishes.
 #  10. No session ever sees 40001 or 40P01, nothing deadlocks, and on hand
 #      equals the sum of holdings for every fixture item.
 #
@@ -61,8 +77,16 @@ R2='03971111-0000-0000-0000-000000000c32'
 IM='03971111-0000-0000-0000-0000000000e1'
 IL='03971111-0000-0000-0000-0000000000e2'
 INAVY='03971111-0000-0000-0000-0000000000e3'
+# F4: K sorts before L (the blocker holds K while L is the contended item);
+# N is a substitution's source; M2 is the second original line's item.
+IK='03971111-0000-0000-0000-0000000000e0'
+IN='03971111-0000-0000-0000-0000000000e4'
+IM2='03971111-0000-0000-0000-0000000000e5'
 ORDER='03971111-0000-0000-0000-000000000101'
+ORDER2='03971111-0000-0000-0000-000000000102'
 L='03971111-0000-0000-0000-000000000201'
+L2A='03971111-0000-0000-0000-000000000202'
+L2B='03971111-0000-0000-0000-000000000203'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -189,12 +213,18 @@ insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, primary_location_id) values
   ('$IM',    '$ORG', '$WH', '0397-2S-M',    '2S shirt M',    20, 'active', 'none', '$R1'),
   ('$IL',    '$ORG', '$WH', '0397-2S-L',    '2S shirt L',    30, 'active', 'none', '$R2'),
-  ('$INAVY', '$ORG', '$WH', '0397-2S-NAVY', '2S shirt navy', 10, 'active', 'none', '$R2');
+  ('$INAVY', '$ORG', '$WH', '0397-2S-NAVY', '2S shirt navy', 10, 'active', 'none', '$R2'),
+  ('$IK',    '$ORG', '$WH', '0397-2S-K',    '2S shirt K',    10, 'active', 'none', '$R2'),
+  ('$IN',    '$ORG', '$WH', '0397-2S-N',    '2S shirt N',    10, 'active', 'none', '$R2'),
+  ('$IM2',   '$ORG', '$WH', '0397-2S-M2',   '2S shirt M2',    0, 'active', 'none', null);
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
-  ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup');
+  ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
+  ('$ORDER2', '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
-  ('$L', '$ORDER', '$IM', 12, 0);
+  ('$L', '$ORDER', '$IM', 12, 0),
+  ('$L2A', '$ORDER2', '$IM', 40, 40),
+  ('$L2B', '$ORDER2', '$IM2', 40, 40);
 SQL
 then
   echo "fixture setup failed"; exit 1
@@ -403,6 +433,95 @@ check "9b: A released" "$(ans relrec A | jget changed)" "true"
 check "9b: B received" "$(ans relrec B | jget changed status)" "true/received"
 waited relrec "9b"
 check "9b: one released_early decision, one received" "$(decisions "$R" released_early)/$(decisions "$R" received)" "1/1"
+
+# ═══ 11-12. Two RMAs, one item: approval and substitution (desk check F4) ══
+# Requests built in SQL from the RMA's own rows (the member reads them).
+create2_sql() { # create2_sql <key> <item for line A> <item for line B>: two exchange lines on ORDER2
+  printf "select 'R=' || public.create_return_request('%s', '%s'::jsonb, '%s')::text;" "$ORDER2" \
+    "{\"reasonCode\":\"other\",\"lines\":[{\"orderRequestLineId\":\"$L2A\",\"quantity\":1,\"disposition\":\"restock\",\"exchange\":{\"itemId\":\"$2\"}},{\"orderRequestLineId\":\"$L2B\",\"quantity\":1,\"disposition\":\"restock\",\"exchange\":{\"itemId\":\"$3\"}}]}" "$1"
+}
+create_ro_sql() { # create_ro_sql <key>: a return-only line on ORDER2
+  printf "select 'R=' || public.create_return_request('%s', '%s'::jsonb, '%s')::text;" "$ORDER2" \
+    "{\"reasonCode\":\"other\",\"lines\":[{\"orderRequestLineId\":\"$L2A\",\"quantity\":1,\"disposition\":\"restock\"}]}" "$1"
+}
+lines_json() { # every line of the RMA to Staging
+  printf "(select jsonb_agg(jsonb_build_object('returnLineId', rl.id, 'disposition', 'restock', 'restock', jsonb_build_object('target', 'staging'))) from public.return_lines rl where rl.return_id = '%s')" "$1"
+}
+approve_all_sql() { # approve every requested exchange line as requested
+  printf "select 'R=' || public.approve_return('%s', 0, jsonb_build_object('lines', %s, 'exchange', coalesce((select jsonb_agg(jsonb_build_object('exchangeLineId', xl.id, 'action', 'approve')) from public.return_exchange_lines xl where xl.return_id = '%s' and xl.status = 'requested'), '[]'::jsonb), 'replacement', jsonb_build_object('whenShort', 'refuse')), false)::text;" "$1" "$(lines_json "$1")" "$1"
+}
+add_sql() { # approve a return-only RMA with "Add a replacement" of <item>
+  printf "select 'R=' || public.approve_return('%s', 0, jsonb_build_object('lines', %s, 'exchange', (select jsonb_agg(jsonb_build_object('returnLineId', rl.id, 'action', 'add', 'itemId', '%s')) from public.return_lines rl where rl.return_id = '%s'), 'replacement', jsonb_build_object('whenShort', 'refuse')), false)::text;" "$1" "$(lines_json "$1")" "$2" "$1"
+}
+swap_sql() { # change_return_replacement: the line now approved for <from> becomes <to>
+  printf "select 'R=' || public.change_return_replacement('%s', 1, (select jsonb_agg(jsonb_build_object('exchangeLineId', xl.id, 'itemId', '%s')) from public.return_exchange_lines xl where xl.return_id = '%s' and xl.approved_item_id = '%s'), 'Race swap', 'refuse', null)::text;" "$1" "$3" "$1" "$2"
+}
+member_now() { # member_now <statements>: one committed member transaction; prints its answer
+  N=$((N + 1))
+  as_user - "$MGR" "$1" > "$TMP/m.$N.out"
+  sed -n 's/^R=//p' "$TMP/m.$N.out"
+}
+new2() { member_now "$(create2_sql "$(key "$1")" "$2" "$3")" | jget returnId; }
+new_ro() { member_now "$(create_ro_sql "$(key "$1")")" | jget returnId; }
+deadlocked() { # deadlocked <tag>: how many of the sessions saw a deadlock or a retryable class
+  cat "$TMP/$1".*.out | grep -cE '40P01|40001|deadlock'
+}
+# three <tag> <B's user> <B's statements> <A's user> <A's statements>: the
+# blocker holds K FOR UPDATE for 4 s; B starts and waits on a lock; A starts
+# and waits on a lock; then K is released and both finish.
+three() {
+  local tag="$1"
+  ( printf '%s\n' "set application_name to '0397-race-$tag-C';" "begin;" \
+      "select 'C=' || count(*) from (select 1 from public.inventory_items where id = '$IK' for update) k;" \
+      "select pg_sleep(4);" "commit;" | "${PSQL[@]}" > "$TMP/$tag.C.out" 2>&1 ) &
+  local pc=$!
+  wait_for "0397-race-$tag-C" Timeout PgSleep || bad "$tag: the blocker never held K"
+  ( as_user "0397-race-$tag-B" "$2" "$3" commit > "$TMP/$tag.B.out" ) &
+  local pb=$!
+  wait_for "0397-race-$tag-B" Lock || bad "$tag: B never waited on a lock"
+  ( as_user "0397-race-$tag-A" "$4" "$5" commit > "$TMP/$tag.A.out" ) &
+  local pa=$!
+  wait_for "0397-race-$tag-A" Lock || bad "$tag: A never waited on a lock"
+  wait "$pc" "$pb" "$pa"
+}
+
+echo "== 11a. approval (K and L, waits on K) against approval with an added L"
+RB="$(new2 13 "$IK" "$IL")"
+RA="$(new_ro 14)"
+check "11a: set up (B's RMA asks for K and L; A's is return only)" "$(q "select count(*) from public.return_exchange_lines where return_id = '$RB'")/$(q "select count(*) from public.return_exchange_lines where return_id = '$RA'")" "2/0"
+three r11a "$MGR2" "$(approve_all_sql "$RB")" "$MGR" "$(add_sql "$RA" "$IL")"
+check "11a: no session deadlocked or saw a retryable class (never 40P01)" "$(deadlocked r11a)" "0"
+check "11a: B approved, its replacement holds K and L" "$(ans r11a B | jget changed status)/$(holds_rma "$RB")" "true/approved/2"
+check "11a: A approved with the added L, held once" "$(ans r11a A | jget changed status)/$(holds_rma "$RA")" "true/approved/1"
+check "11a: one live replacement each" "$(live_count "$RB")/$(live_count "$RA")" "1/1"
+
+echo "== 11b. approval with an added L holds; another approval for L waits"
+RA="$(new_ro 15)"
+RB="$(new2 16 "$IL" "$IN")"
+race r11b "$MGR" "$(add_sql "$RA" "$IL")" commit "$MGR2" "$(approve_all_sql "$RB")"
+check "11b: A approved with the added L" "$(ans r11b A | jget changed status)" "true/approved"
+check "11b: B approved after A" "$(ans r11b B | jget changed status)" "true/approved"
+waited r11b "11b"
+check "11b: no session deadlocked (never 40P01); each replacement held" "$(deadlocked r11b)/$(holds_rma "$RA")/$(holds_rma "$RB")" "0/1/2"
+
+echo "== 12a. substitution (to K, waits on K) against approval with an added L"
+RS="$(new2 17 "$IL" "$IN")"
+check "12a: set up (the RMA approved for L and N, its replacement held)" "$(member_now "$(approve_all_sql "$RS")" | jget status)/$(holds_rma "$RS")" "approved/2"
+RA="$(new_ro 18)"
+three r12a "$MGR2" "$(swap_sql "$RS" "$IN" "$IK")" "$MGR" "$(add_sql "$RA" "$IL")"
+check "12a: no session deadlocked or saw a retryable class (never 40P01)" "$(deadlocked r12a)" "0"
+check "12a: B substituted (K and L held on the new replacement)" "$(ans r12a B | jget changed mode)/$(holds_rma "$RS")/$(live_count "$RS")" "true/substitute/2/1"
+check "12a: A approved with the added L, held once" "$(ans r12a A | jget changed status)/$(holds_rma "$RA")" "true/approved/1"
+
+echo "== 12b. a substitution to L holds; an approval with an added L waits"
+RS="$(new2 19 "$IN" "$INAVY")"
+check "12b: set up (the RMA approved for N and navy)" "$(member_now "$(approve_all_sql "$RS")" | jget status)" "approved"
+RA="$(new_ro 20)"
+race r12b "$MGR" "$(swap_sql "$RS" "$IN" "$IL")" commit "$MGR2" "$(add_sql "$RA" "$IL")"
+check "12b: A substituted N for L" "$(ans r12b A | jget changed mode)" "true/substitute"
+check "12b: B approved with the added L after A" "$(ans r12b B | jget changed status)" "true/approved"
+waited r12b "12b"
+check "12b: no session deadlocked (never 40P01); one live replacement each" "$(deadlocked r12b)/$(live_count "$RS")/$(live_count "$RA")" "0/1/1"
 
 # ═══ 10. No retryable SQLSTATE; holdings equal on hand ════════════════════
 echo "== 10. no 40001 / 40P01, no deadlock; on hand = the sum of holdings"

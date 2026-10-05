@@ -75,8 +75,13 @@
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- Lock order of every exchange function: (1) the RMA row FOR UPDATE, (2)
 -- the live replacement order FOR UPDATE, classified only under that lock
--- (plan X-2), (3) items in id order inside approve_partial or
--- cancel_order_request. The gate trigger reads the RMA without a lock
+-- (plan X-2), (3) when it will insert an order, the organization's
+-- order-number advisory lock (assign_order_request_number's), (4) every item
+-- it will name, FOR UPDATE in id order, BEFORE the first row naming one
+-- (_return_lock_items, desk check F4: key-share locks from foreign-key checks
+-- taken before approve_partial's FOR UPDATE would deadlock two writers), and
+-- items in id order again inside approve_partial or cancel_order_request
+-- (already held). The gate trigger reads the RMA without a lock
 -- (generatePickSlip holds the order while an RMA cancel takes the RMA and
 -- then the order). complete_picking takes the order and then items, never
 -- the RMA: no cycle.
@@ -515,6 +520,37 @@ begin
 end;
 $$;
 
+-- The lock order of every exchange function that writes a row naming an
+-- item (desk check F4): the RMA row, the live replacement's row, then, when
+-- it will insert an order, the organization's order-number lock (the
+-- advisory lock assign_order_request_number takes at every order insert,
+-- 0254: 'order_number:' || organization), then every item it names, FOR
+-- UPDATE in id order, and only then the inserts. A foreign-key check takes a
+-- key-share lock on each item a new row names, and approve_partial then
+-- takes FOR UPDATE on them: two writers that both took key-share on one
+-- item before either asked for FOR UPDATE would deadlock (40P01). Taking
+-- the order-number lock first keeps create_order_request (which takes it,
+-- then key-share on its items) and every exchange issuer in one order per
+-- organization, as order numbers already are. Items of another
+-- organization are never locked (the caller refuses them afterwards).
+create function public._return_lock_items(p_org uuid, p_items uuid[], p_issues_order boolean)
+returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if p_issues_order then
+    perform pg_advisory_xact_lock(hashtext('order_number:' || p_org::text));
+  end if;
+  perform 1
+     from public.inventory_items ii
+    where ii.id = any (coalesce(p_items, '{}'::uuid[])) and ii.organization_id = p_org
+    order by ii.id
+      for update;
+end;
+$$;
+
 -- ── 1b. The replacement order (plan 3.6.1-3.6.3) ──────────────────────────
 -- SECURITY DEFINER on purpose, with EXECUTE for nobody: it inserts order
 -- rows as postgres, which the insert guard and the insert policy do not
@@ -673,6 +709,11 @@ begin
       raise exception 'exchange_item_not_eligible' using errcode = 'P0001', hint = 'exchange_item_not_eligible';
     end if;
   end loop;
+
+  -- The order-number lock, then every item FOR UPDATE in id order, before
+  -- the order and lines are written (desk check F4; see _return_lock_items).
+  perform public._return_lock_items(
+    v_org, array(select (x->>'itemId')::uuid from jsonb_array_elements(v_merged) as x), true);
 
   begin
     insert into public.order_requests (
@@ -847,6 +888,7 @@ declare
   v_xl      record;
   v_rl      record;
   v_new_xl  uuid;
+  v_lock    uuid[];
   e         jsonb;
   a         jsonb;
 begin
@@ -892,6 +934,20 @@ begin
               where xl.return_id = p_return_id and xl.status = 'requested' and not (xl.id = any (v_seen))) then
     raise exception 'return_decision_incomplete' using errcode = 'P0001', hint = 'return_decision_incomplete';
   end if;
+
+  -- Every item a row below names (approved, added, declined or replaced
+  -- items), FOR UPDATE in id order, after the order-number lock when an order
+  -- will be issued, before the first insert (desk check F4).
+  select coalesce(array_agg(distinct t.item_id), '{}'::uuid[]) into v_lock
+    from (select (x->>'itemId')::uuid as item_id
+            from jsonb_array_elements(v_entries) as x
+           where x->>'action' in ('approve', 'add') and jsonb_typeof(x->'itemId') = 'string' and (x->>'itemId') ~ c_uuid
+          union
+          select xl.requested_item_id
+            from public.return_exchange_lines xl
+           where xl.return_id = p_return_id and xl.status = 'requested' and xl.requested_item_id is not null) t;
+  perform public._return_lock_items(
+    v_org, v_lock, exists (select 1 from jsonb_array_elements(v_entries) as x where x->>'action' in ('approve', 'add')));
 
   for e in select x from jsonb_array_elements(v_entries) as x
             order by coalesce(x->>'exchangeLineId', x->>'returnLineId'), x::text loop
@@ -1015,6 +1071,13 @@ as $$
 declare
   v_xl record;
 begin
+  -- The requested items the decisions below name, FOR UPDATE in id order
+  -- before the first of them (desk check F4).
+  perform public._return_lock_items(
+    (select r.organization_id from public.returns r where r.id = p_return_id),
+    array(select xl.requested_item_id from public.return_exchange_lines xl
+           where xl.return_id = p_return_id and xl.status = 'requested' and xl.requested_item_id is not null),
+    false);
   for v_xl in
     update public.return_exchange_lines
        set status = 'declined'
@@ -1400,6 +1463,16 @@ begin
     'fulfillmentType', coalesce(p_replacement->>'fulfillmentType', v_ftype),
     'deliveryCharterId', case when coalesce(p_replacement ? 'deliveryCharterId', false) then p_replacement->'deliveryCharterId'
                               else to_jsonb(v_site) end);
+
+  -- The order-number lock, then every item a row below names (the new items
+  -- and the ones they replace), FOR UPDATE in id order (desk check F4).
+  perform public._return_lock_items(
+    v_org,
+    array(select (y->>'itemId')::uuid from jsonb_array_elements(v_set) as y
+          union
+          select xl.approved_item_id from public.return_exchange_lines xl
+           where xl.return_id = p_return_id and xl.approved_item_id is not null),
+    true);
 
   -- Never both reservations: the old order is cancelled first (every hold
   -- released, nothing restocked: it was not picked), then the new one is
@@ -2197,6 +2270,7 @@ revoke all on function public._return_exchange_item_ok(uuid, uuid, text, uuid) f
 revoke all on function public._return_replacement_summary(uuid) from public, anon, authenticated, service_role;
 revoke all on function public._return_replacement_class(uuid) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_fulfilled(uuid) from public, anon, authenticated, service_role;
+revoke all on function public._return_lock_items(uuid, uuid[], boolean) from public, anon, authenticated, service_role;
 revoke all on function public._return_replacement_cancel_order(uuid, text, text) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_reason(text, integer) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_quantity(jsonb, numeric, numeric) from public, anon, authenticated, service_role;
@@ -2234,6 +2308,8 @@ comment on function public._return_replacement_summary(uuid) is
   'RX-2: a replacement order as the exchange screens and a replay show it: id, number, status, and per line the item, the requested quantity and the active hold, plus short. SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public._return_replacement_class(uuid) is
   'RX-2 (plan 3.3.5): a live replacement''s class, read under the caller''s row lock: undrawn (approved, pick slip, picking, or a backorder, with nothing handed over), drawn (picking_complete through in_transit, nothing handed over: cancel_order_request restocks the picked batch to Staging), handed_over (completed, or any status once anything was handed over, a resumed backorder included: desk check F2, never cancelled or changed from the RMA). SECURITY INVOKER, STABLE, no API EXECUTE.';
+comment on function public._return_lock_items(uuid, uuid[], boolean) is
+  'RX-2 (desk check F4): the lock order of every exchange writer, before the first row naming an item: the organization''s order-number advisory lock when an order will be issued (the one assign_order_request_number takes, 0254), then the items of the organization FOR UPDATE in id order. Two writers that both took key-share locks on one item (foreign-key checks) before approve_partial''s FOR UPDATE would deadlock; this order also matches create_order_request (order-number lock, then its items). SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_fulfilled(uuid) is
   'RX-2 (desk check F2): per exchange line, the units this RMA''s replacements (live or cancelled) already handed over for it: each replacement line''s quantity_fulfilled shared out among the exchange lines that order carried for that item (exchange_approved decisions), in exchange-line id order, each up to its approved quantity there. change_return_replacement caps every line at its returned quantity minus these units. SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public._return_replacement_cancel_order(uuid, text, text) is

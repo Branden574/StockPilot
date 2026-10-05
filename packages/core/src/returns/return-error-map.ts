@@ -13,10 +13,12 @@
  * the holdings writer's bare `forbidden` (desk check F7). A refusal with no
  * known hint is an internal error, whatever its message says.
  *
- * Specific before general: a hint wins over the SQLSTATE; 55P03 and 57014
- * (lock wait, statement timeout) map to a retryable "Busy" only when no hint
- * matched; anything unknown is an internal error with a generic sentence (the
- * raw text stays server-side).
+ * Specific before general: a hint wins over the SQLSTATE; 55P03, 57014 and
+ * 40P01 (lock wait, statement timeout, and a deadlock the server resolved by
+ * rolling one side back: never raised by a function, 0367, and the exchange
+ * writers take their locks in one order, desk check F4) map to a retryable
+ * "Busy" only when no hint matched; anything unknown is an internal error
+ * with a generic sentence (the raw text stays server-side).
  *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
@@ -223,7 +225,7 @@ export function mapReturnError(err: ReturnDbError | null | undefined): MappedRet
   const detailList = parseDetailList(err?.details);
   if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail, detailList };
   const code = (err?.code ?? '').toUpperCase();
-  if (code === '55P03' || code === '57014') return { ...BUSY, reason: 'busy', detail, detailList };
+  if (code === '55P03' || code === '57014' || code === '40P01') return { ...BUSY, reason: 'busy', detail, detailList };
   return { ...INTERNAL, reason: 'internal_error', detail, detailList };
 }
 
