@@ -20,7 +20,15 @@ interface Props {
   /** The org's zone (the order page's), for the dates a needed-by change
    *  names. Core's default when absent. */
   timeZone?: string;
+  /** The viewer holds activity_logs:read. audit_logs is readable only with
+   *  it (staff and viewers lack it by default), so without it the history is
+   *  empty for this viewer, never for the order (L89). */
+  canReadActivity: boolean;
 }
+
+/** What a viewer without activity_logs:read sees instead of the history. */
+export const ORDER_TIMELINE_NO_ACTIVITY_ACCESS =
+  "Only people who can see activity can see this order's history.";
 
 interface AuditRow {
   id: string;
@@ -250,7 +258,13 @@ function humanDetails(
  * same gate as the /platform console) — internal ids and event plumbing
  * are not for org members, super-admin or otherwise.
  */
-export async function OrderTimeline({ orderId, organizationId, timeZone }: Props) {
+export async function OrderTimeline({ orderId, organizationId, timeZone, canReadActivity }: Props) {
+  // L89: the read below would come back empty for this viewer whatever the
+  // order's history, and "No events yet." would be untrue. Say why instead,
+  // and read nothing.
+  if (!canReadActivity) {
+    return <div className="text-muted-foreground text-sm">{ORDER_TIMELINE_NO_ACTIVITY_ACCESS}</div>;
+  }
   const zone = resolveOrgTimezone(timeZone);
   const supabase = await createClient();
   const [{ data }, { data: auth }] = await Promise.all([

@@ -1769,6 +1769,7 @@ export default async function OrderDetailPage({
                 orderId={request.id}
                 organizationId={ctx.organizationId}
                 timeZone={orgTimeZone}
+                canReadActivity={can(ctx, 'activity_logs:read')}
               />
             </React.Suspense>
           </section>

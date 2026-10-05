@@ -9,8 +9,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 const auditRows = vi.hoisted(() => ({ current: [] as unknown[] }));
 
+/** How many times the timeline built a Supabase client (L89: none when the
+ *  viewer cannot see activity). A plain counter: the global afterEach resets
+ *  every mock's implementation. */
+const clientBuilds = vi.hoisted(() => ({ count: 0 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {
+    clientBuilds.count += 1;
     const chain = (data: unknown) => {
       const self: Record<string, unknown> = {};
       for (const m of ['select', 'eq', 'or', 'filter', 'order', 'in']) self[m] = () => self;
@@ -41,7 +46,7 @@ function stockHeld(id: string, after: Record<string, unknown>) {
 
 async function renderTimeline(rows: unknown[]) {
   auditRows.current = rows;
-  render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1' }));
+  render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: true }));
 }
 
 describe('OrderTimeline — stock held (F2-2)', () => {
@@ -111,7 +116,9 @@ describe('OrderTimeline — needed-by date changed (F2-4)', () => {
 
   async function renderIn(rows: unknown[], timeZone?: string) {
     auditRows.current = rows;
-    render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', timeZone }));
+    render(
+      await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', timeZone, canReadActivity: true }),
+    );
   }
 
   it("says what changed, from and to, in the org's zone, with the reason", async () => {
@@ -195,5 +202,28 @@ describe('OrderTimeline — draft PO created for the shortfall (F2-5)', () => {
     await renderTimeline([drafted('a', { po_numbers: 'PO-1', lines: [{ item_id: 'i1', quantity: 'many' }] })]);
     expect(screen.getByText('Draft PO created for the shortfall')).toBeInTheDocument();
     expect(screen.queryByText(/Drafts are not sent/)).toBeNull();
+  });
+});
+
+// L89: audit_logs is readable only with activity_logs:read, which staff and
+// viewers lack by default, so a requester without it saw "No events yet." on
+// an order with a full history. The timeline now says why it is empty, and
+// reads nothing it cannot see.
+describe('OrderTimeline — a viewer who cannot see activity (L89)', () => {
+  it('says only people who can see activity can see the history, and reads nothing', async () => {
+    clientBuilds.count = 0;
+    auditRows.current = [stockHeld('a', { trigger: 'manual', held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })];
+    render(await OrderTimeline({ orderId: 'order-1', organizationId: 'org-1', canReadActivity: false }));
+
+    expect(
+      screen.getByText("Only people who can see activity can see this order's history."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No events yet.')).toBeNull();
+    expect(clientBuilds.count).toBe(0);
+  });
+
+  it('someone who can see activity still gets "No events yet." on an order with no history', async () => {
+    await renderTimeline([]);
+    expect(screen.getByText('No events yet.')).toBeInTheDocument();
   });
 });

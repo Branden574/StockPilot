@@ -407,6 +407,23 @@ beforeEach(() => {
 // approved, and the service then refused it. The page now offers it to the
 // requester only while the order waits for approval (core orderCancelOffer);
 // an approver still gets it at every open status.
+// L89: the timeline is told whether the viewer can see activity.
+describe('orders/[id]: the timeline knows whether the viewer can see activity (L89)', () => {
+  it('a staff requester without activity_logs:read', async () => {
+    await renderPage();
+    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: false }));
+  });
+
+  it('a viewer granted activity_logs:read', async () => {
+    ctxHolder.current = {
+      role: 'staff',
+      permissions: new Set(['orders:read', 'activity_logs:read']),
+    };
+    await renderPage();
+    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: true }));
+  });
+});
+
 describe('orders/[id]: Cancel request (L85)', () => {
   it('the requester (no approve) is offered it while the order waits for approval', async () => {
     orderGet.mockResolvedValue(
