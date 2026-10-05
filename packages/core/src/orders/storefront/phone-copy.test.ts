@@ -91,6 +91,17 @@ describe('the templated sentences', () => {
     expect(phone.ORDERS_LIST_RELOAD_FAILED_COPY).toBe("Orders couldn't be loaded again, so these may be out of date. Pull down to load them again.");
   });
 
+  // PO-4 review: the filter chips' way out sat beside the cart's own "Clear
+  // all" in the iPad split view; the screens' last literals become core's.
+  it('the polish words', () => {
+    expect(phone.STOREFRONT_CLEAR_FILTERS_COPY).toBe('Clear all filters');
+    expect(phone.STOREFRONT_BACK_COPY).toBe('Back');
+    expect(phone.STOREFRONT_NONE_COPY).toBe('None');
+    expect(phone.SUCCESS_EMAIL_OPEN_ANOTHER_TITLE_COPY).toBe('Open another draft?');
+    expect(phone.SUCCESS_EMAIL_OPEN_ANOTHER_COPY).toBe('Open another draft');
+    expect(phone.SUCCESS_EMAIL_COPY_FIELD_LABEL_COPY).toBe('Request text to copy');
+  });
+
   it('the For sheet’s words', () => {
     expect(phone.CHECKOUT_USE_PERSON_COPY).toBe('Order for someone new');
     expect(phone.CHECKOUT_REQUESTERS_NO_MATCH_COPY).toBe('Nobody matches that. Enter someone new.');

@@ -106,9 +106,10 @@ export const CART_CHECK_OUT_COPY = 'Check out';
 export const CART_SUBMIT_FINE_PRINT_COPY =
   'Someone who approves orders will review it before stock is reserved.';
 
-/** A line holding everything available. */
+/** A line holding everything available ("The 1 available is in your cart"
+ *  when there is one: PO-4 review). */
 export function cartLineAtMaxCopy(available: number): string {
-  return `All ${available} available are in your cart`;
+  return available === 1 ? 'The 1 available is in your cart' : `All ${available} available are in your cart`;
 }
 /** A line holding more than is available (a restored draft, or stock that
  *  moved since it was added). */

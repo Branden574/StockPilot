@@ -39,6 +39,7 @@ import {
   quantityAnnouncement,
   quantityButtonLabel,
   sortChipLabel,
+  spokenValue,
   submittedAnnouncement,
 } from './a11y';
 
@@ -203,6 +204,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       filterChipLabel('Low stock'),
       sortChipLabel('Most available'),
       kitCountLabel('Starter', 2),
+      spokenValue(a11y.MISSING_VALUE),
       notesCounterAnnouncement(1799, 1800, 2000)!,
       notesCounterAnnouncement(1999, 2000, 2000)!,
     ];
@@ -215,7 +217,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
         'increaseLabel', 'itemRowLabel', 'kitAnnouncement', 'kitRowLabel', 'lineChangeAnnouncement',
         'quantityAnnouncement', 'quantityButtonLabel', 'submittedAnnouncement',
         'SCREEN_ANNOUNCE_DELAY_MS', 'createPanelAnnouncer', 'notesCounterAnnouncement',
-        'filterChipLabel', 'kitCountLabel', 'sortChipLabel',
+        'filterChipLabel', 'kitCountLabel', 'sortChipLabel', 'MISSING_VALUE', 'spokenValue',
       ].sort(),
     );
     for (const s of said) rules(s, s);
@@ -231,26 +233,35 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
         (n) => `src/components/order-storefront/${n}.tsx`,
       ),
     ];
-    let walked = 0;
-    for (const rel of files) {
-      const file = path.join(ROOT, rel);
-      const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    /** Words a person reads: a literal with a capital letter and a space
+     *  (style keys, routes and ids are neither). */
+    const sentences = (file: string, src: string): string[] => {
+      const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const found: string[] = [];
       const visit = (n: ts.Node): void => {
         if (ts.isImportDeclaration(n)) return;
         if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isJsxText(n)) {
           const text = n.getText(sf);
-          // Words a person reads: a capital letter and a space (style keys,
-          // routes and ids are neither).
-          if (/[A-Z]/.test(text) && /\s/.test(text.trim())) {
-            walked += 1;
-            rules(text, `${rel}: ${text}`);
-          }
+          if (/[A-Z]/.test(text) && /\s/.test(text.trim())) found.push(text);
         }
         ts.forEachChild(n, visit);
       };
       visit(sf);
+      return found;
+    };
+    // The walker finds a sentence written in a screen (it is not vacuous).
+    expect(sentences('x.tsx', "Alert.alert('Open another draft?', m, [{ text: 'Open Another Draft' }]);")).toEqual([
+      "'Open another draft?'",
+      "'Open Another Draft'",
+    ]);
+    for (const rel of files) {
+      const file = path.join(ROOT, rel);
+      const found = sentences(file, readFileSync(file, 'utf8'));
+      for (const text of found) rules(text, `${rel}: ${text}`);
+      // PO-4 review: the screens' last sentences moved to core; a new one
+      // belongs in core's phone words (phone-copy.ts), under its rules.
+      expect(found, rel).toEqual([]);
     }
-    expect(walked).toBeGreaterThan(0);
   });
 });
 
@@ -325,5 +336,15 @@ describe('a dimmed or tappable control says why and what (PO-4 review)', () => {
   it('the kit’s count names what a tap opens', () => {
     expect(kitCountLabel('Starter', 2)).toBe('Starter: 2 kits in your cart. Opens the kit’s details');
     expect(kitCountLabel('Starter', 1)).toBe('Starter: 1 kit in your cart. Opens the kit’s details');
+  });
+});
+
+// PO-4 review: a missing value shows an em dash, which VoiceOver may read as
+// "em dash".
+describe('a missing value is spoken as a word (PO-4 review)', () => {
+  it('the dash is shown, "None" is heard; anything else is heard as shown', () => {
+    expect(a11y.MISSING_VALUE).toBe('—');
+    expect(spokenValue('—')).toBe('None');
+    expect(spokenValue('DC4')).toBe('DC4');
   });
 });

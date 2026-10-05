@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { STOREFRONT_CLOSE_COPY } from '@stockpilot/core';
+
 import { Body } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { MIN_TAP, storefrontLayout } from '@/lib/order-storefront/layout';
@@ -80,7 +82,7 @@ export function StorefrontSheet({
             onPress={requestClose}
             onAccessibilityTap={requestClose}
             accessibilityRole="button"
-            accessibilityLabel="Close"
+            accessibilityLabel={STOREFRONT_CLOSE_COPY}
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
@@ -114,7 +116,7 @@ export function StorefrontSheet({
                 onPress={requestClose}
                 disabled={busy}
                 accessibilityRole="button"
-                accessibilityLabel="Close"
+                accessibilityLabel={STOREFRONT_CLOSE_COPY}
                 accessibilityState={{ disabled: busy }}
                 style={styles.close}
               >

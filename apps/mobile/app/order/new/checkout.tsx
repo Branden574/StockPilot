@@ -28,6 +28,7 @@ import {
   REVIEW_SUBMIT_COPY,
   REVIEW_SUBTITLE_COPY,
   REVIEW_TITLE_COPY,
+  STOREFRONT_BACK_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_CHOOSE_SITE_COPY,
   STOREFRONT_DELIVER_TO_COPY,
@@ -49,7 +50,7 @@ import { StorefrontState } from '@/components/order-storefront/storefront-state'
 import { UnconfirmedPanel } from '@/components/order-storefront/unconfirmed-panel';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
-import { lineChangeAnnouncement, notesCounterAnnouncement, quantityAnnouncement } from '@/lib/order-storefront/a11y';
+import { MISSING_VALUE, lineChangeAnnouncement, notesCounterAnnouncement, quantityAnnouncement } from '@/lib/order-storefront/a11y';
 import {
   checkoutStage,
   forRowView,
@@ -180,7 +181,7 @@ export default function Checkout() {
 
   const topBar = (
     <View style={styles.topbar}>
-      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
+      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={STOREFRONT_BACK_COPY} minTap />
     </View>
   );
 
@@ -309,7 +310,7 @@ export default function Checkout() {
               onClear={() => void session.dispatch({ type: 'clear' })}
             />
 
-            <SetupRow label={STOREFRONT_SHIP_FROM_COPY} value={warehouse?.name ?? '—'} />
+            <SetupRow label={STOREFRONT_SHIP_FROM_COPY} value={warehouse?.name || MISSING_VALUE} />
             {forRow.shown ? (
               <SetupRow
                 label={STOREFRONT_FOR_COPY}

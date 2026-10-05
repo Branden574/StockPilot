@@ -963,3 +963,31 @@ describe('Submit waits for the answer being read when the cart is for someone el
     expect(checkout).toContain('accessibilityState={{ disabled: blockedBy !== null || sending, busy: sending }}');
   });
 });
+
+// PO-4 review (polish): the success screen's eyebrow repeated its button; the
+// cart sheet's title repeated the panel's header; the literals Close, Back,
+// Cancel and Open another draft were the screens' own; a missing value was
+// read as a dash. Mutations caught: each reverted.
+describe('the storefront’s smaller words (PO-4 review)', () => {
+  const cartPanel = codeOnly(read(`${COMPONENTS}/cart-panel.tsx`));
+  const frame = codeOnly(read(SHEET_FRAME));
+  it('the success screen says Email pickup request once, on its button', () => {
+    expect(placed).not.toMatch(/<Eyebrow>\{successEmailButtonCopy/);
+  });
+  it('the cart sheet’s panel shows the counts under the sheet’s own title', () => {
+    expect(catalog).toMatch(/<StorefrontSheet\s+visible\s+title=\{CART_TITLE_COPY\}[\s\S]*?\{cartSheetPanel\}/);
+    expect(cartPanel).toContain('{titled ? `${CART_TITLE_COPY} · ${cartCountsCopy(totals.lines, totals.units)}` : cartCountsCopy(totals.lines, totals.units)}');
+  });
+  it('no storefront screen names Close, Back, Cancel or Open another draft in its own words', () => {
+    for (const file of STOREFRONT_FILES) {
+      const src = codeOnly(readFileSync(file, 'utf8'));
+      expect(src, file).not.toMatch(/accessibilityLabel="(Close|Back)"|text: 'Cancel'|'Open another draft\?'|'Open Another Draft'|"Request text to copy manually"/);
+    }
+    expect(frame).toContain('accessibilityLabel={STOREFRONT_CLOSE_COPY}');
+  });
+  it('a missing value is shown as a dash and heard as a word', () => {
+    expect(controls).toContain('accessibilityLabel={`${label}: ${spokenValue(value)}${detail ? `, ${detail}` : \'\'}`}');
+    expect(sheets).toContain('accessibilityLabel={`${label}: ${spokenValue(value)}`}');
+    for (const src of [checkout, catalog]) expect(src).toContain("value={warehouse?.name || MISSING_VALUE}");
+  });
+});

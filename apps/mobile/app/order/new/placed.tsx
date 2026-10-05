@@ -15,9 +15,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  STOREFRONT_CANCEL_COPY,
+  STOREFRONT_CLOSE_COPY,
   SUCCESS_DONE_COPY,
   SUCCESS_EMAIL_COPY_DETAILS_COPY,
+  SUCCESS_EMAIL_COPY_FIELD_LABEL_COPY,
   SUCCESS_EMAIL_HIDE_PREVIEW_COPY,
+  SUCCESS_EMAIL_OPEN_ANOTHER_COPY,
+  SUCCESS_EMAIL_OPEN_ANOTHER_TITLE_COPY,
   SUCCESS_EMAIL_PREVIEW_COPY,
   SUCCESS_EMAIL_SUBJECT_LABEL_COPY,
   SUCCESS_PLACE_ANOTHER_COPY,
@@ -32,7 +37,7 @@ import {
 
 import { SmallAction } from '@/components/order-storefront/controls';
 import { IconChip } from '@/components/ui/row';
-import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { Body, Display, Mono } from '@/components/ui/text';
 import {
   BLOCKED_HEADLINE,
   BLOCKED_RETRY_MESSAGE,
@@ -177,9 +182,9 @@ export default function OrderPlaced() {
       return;
     }
     if (shouldConfirmBeforeOpening(draftCount)) {
-      Alert.alert('Open another draft?', DUPLICATE_WARNING, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Open Another Draft', onPress: () => void runEmailOpen() },
+      Alert.alert(SUCCESS_EMAIL_OPEN_ANOTHER_TITLE_COPY, DUPLICATE_WARNING, [
+        { text: STOREFRONT_CANCEL_COPY, style: 'cancel' },
+        { text: SUCCESS_EMAIL_OPEN_ANOTHER_COPY, onPress: () => void runEmailOpen() },
       ]);
       return;
     }
@@ -197,7 +202,7 @@ export default function OrderPlaced() {
       <View style={{ flex: 1, backgroundColor: c.paper }}>
         <SafeAreaView edges={['top']}>
           <View style={styles.topbar}>
-            <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel="Close" minTap />
+            <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel={STOREFRONT_CLOSE_COPY} minTap />
           </View>
         </SafeAreaView>
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
@@ -212,7 +217,7 @@ export default function OrderPlaced() {
     <View style={{ flex: 1, backgroundColor: c.paper }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel="Close" minTap />
+          <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel={STOREFRONT_CLOSE_COPY} minTap />
         </View>
       </SafeAreaView>
       <ScrollView contentContainerStyle={{ paddingVertical: 8, paddingBottom: 48, alignItems: 'center' }}>
@@ -252,7 +257,6 @@ export default function OrderPlaced() {
 
           {prepared && emailInput ? (
             <View style={{ gap: 8, marginTop: 8 }}>
-              <Eyebrow>{successEmailButtonCopy(order.fulfillmentType)}</Eyebrow>
               <SmallAction
                 label={successEmailButtonCopy(order.fulfillmentType)}
                 busy={opening}
@@ -316,7 +320,7 @@ export default function OrderPlaced() {
                     selectTextOnFocus
                     value={prepared.clipboardText}
                     style={[styles.copyBox, { color: c.ink, borderColor: c.hair }]}
-                    accessibilityLabel="Request text to copy manually"
+                    accessibilityLabel={SUCCESS_EMAIL_COPY_FIELD_LABEL_COPY}
                   />
                   <Body size={11.5} muted>
                     {COPY_HELPER_TEXT}

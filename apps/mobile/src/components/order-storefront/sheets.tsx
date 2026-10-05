@@ -60,6 +60,7 @@ import {
   selectNeededByDay,
   type NeededByDraft,
 } from '@/lib/order-needed-by';
+import { MISSING_VALUE, spokenValue } from '@/lib/order-storefront/a11y';
 import { someoneNewCheck, wallClockIso } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
 import {
@@ -162,8 +163,8 @@ export function QuickViewSheet({
   const available = availableOf(item);
   const earmark = earmarkLabel(item);
   const facts: [string, string][] = [
-    [STOREFRONT_SKU_LABEL_COPY, item.sku || '—'],
-    [STOREFRONT_BIN_LABEL_COPY, item.rackLabel || '—'],
+    [STOREFRONT_SKU_LABEL_COPY, item.sku || MISSING_VALUE],
+    [STOREFRONT_BIN_LABEL_COPY, item.rackLabel || MISSING_VALUE],
     [STOREFRONT_AVAILABLE_LABEL_COPY, String(available)],
     [STOREFRONT_STATUS_LABEL_COPY, availabilityLabel(status, available, 'long')],
   ];
@@ -180,7 +181,7 @@ export function QuickViewSheet({
         />
       ) : null}
       {facts.map(([label, value]) => (
-        <View key={label} accessible accessibilityLabel={`${label}: ${value}`} style={{ gap: 2 }}>
+        <View key={label} accessible accessibilityLabel={`${label}: ${spokenValue(value)}`} style={{ gap: 2 }}>
           <Mono size={11} color={c.ink3} upper tracking={0.12}>
             {label}
           </Mono>
@@ -220,8 +221,13 @@ export function KitDetailsSheet({
       {kit.components.map((comp) => {
         const row = componentItem(comp, itemMap);
         return (
-          <Body key={comp.anchorItemId} size={14.5} color={c.ink}>
-            {kitComponentLineCopy(comp.perKit, row?.name ?? '—')}
+          <Body
+            key={comp.anchorItemId}
+            size={14.5}
+            color={c.ink}
+            accessibilityLabel={kitComponentLineCopy(comp.perKit, spokenValue(row?.name ?? MISSING_VALUE))}
+          >
+            {kitComponentLineCopy(comp.perKit, row?.name ?? MISSING_VALUE)}
           </Body>
         );
       })}

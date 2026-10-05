@@ -55,6 +55,7 @@ export function CartPanel({
   refusals,
   locked,
   usuals,
+  titled = true,
   onInc,
   onDec,
   onQuantity,
@@ -70,6 +71,9 @@ export function CartPanel({
   locked: boolean;
   /** Frequently ordered items to start an empty cart with. */
   usuals: readonly StorefrontItem[];
+  /** "Cart · 3 items · 12 units"; false in the cart sheet, whose own title
+   *  says Cart (the counts only). */
+  titled?: boolean;
   onInc: (itemId: string) => void;
   onDec: (itemId: string) => void;
   onQuantity: (itemId: string) => void;
@@ -138,7 +142,7 @@ export function CartPanel({
           accessibilityRole="header"
           style={{ fontFamily: FONT.display, flex: 1, minWidth: 0 }}
         >
-          {`${CART_TITLE_COPY} · ${cartCountsCopy(totals.lines, totals.units)}`}
+          {titled ? `${CART_TITLE_COPY} · ${cartCountsCopy(totals.lines, totals.units)}` : cartCountsCopy(totals.lines, totals.units)}
         </Body>
         <SmallAction label={CART_CLEAR_ALL_COPY} variant="ghost" disabled={locked} hint={changeLockedHint(locked)} onPress={confirmClear} />
       </View>

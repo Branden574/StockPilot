@@ -3,6 +3,7 @@ import * as React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import { Body, Mono } from '@/components/ui/text';
+import { spokenValue } from '@/lib/order-storefront/a11y';
 import { MIN_TAP, stepperCountWidth } from '@/lib/order-storefront/layout';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -252,7 +253,7 @@ export function SetupRow({
     return (
       <View
         accessible
-        accessibilityLabel={`${label}: ${value}${detail ? `, ${detail}` : ''}`}
+        accessibilityLabel={`${label}: ${spokenValue(value)}${detail ? `, ${detail}` : ''}`}
         style={[styles.setup, { borderColor: c.hair, backgroundColor: c.card }]}
       >
         <Mono size={11} color={c.ink3} upper tracking={0.12} maxFontSizeMultiplier={LABEL_CAP}>
@@ -274,7 +275,7 @@ export function SetupRow({
       onPress={disabled ? undefined : onPress}
       disabled={disabled}
       accessibilityRole="button"
-      accessibilityLabel={`${label}: ${value}${detail ? `, ${detail}` : ''}`}
+      accessibilityLabel={`${label}: ${spokenValue(value)}${detail ? `, ${detail}` : ''}`}
       accessibilityHint={hint}
       accessibilityState={{ disabled }}
       style={({ pressed }) => [

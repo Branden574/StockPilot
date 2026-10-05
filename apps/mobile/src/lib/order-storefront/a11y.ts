@@ -8,6 +8,7 @@ import {
   ORDER_ADD_WHILE_LOCKED_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_LINE_NOT_ORDERABLE_COPY,
+  STOREFRONT_NONE_COPY,
   availabilityLabel,
   availableOf,
   cartCountsCopy,
@@ -209,4 +210,12 @@ export function notesCounterAnnouncement(before: number, after: number, max: num
   if (after >= max) return `${checkoutNotesCounterSpokenCopy(after, max)}. ${CHECKOUT_NOTES_FULL_COPY}`;
   if (before < NOTES_COUNTER_FROM && after >= NOTES_COUNTER_FROM) return checkoutNotesCounterSpokenCopy(after, max);
   return null;
+}
+
+/** A missing value (no SKU, no bin, a warehouse with no name) is shown as a
+ *  dash and heard as a word (PO-4 review): VoiceOver can read the dash as
+ *  "em dash". */
+export const MISSING_VALUE = '—';
+export function spokenValue(value: string): string {
+  return value === MISSING_VALUE ? STOREFRONT_NONE_COPY : value;
 }

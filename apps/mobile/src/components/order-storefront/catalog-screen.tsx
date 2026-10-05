@@ -29,6 +29,7 @@ import {
   KITS_TITLE_COPY,
   STOREFRONT_ADD_COPY,
   STOREFRONT_ALL_ITEMS_COPY,
+  STOREFRONT_BACK_COPY,
   STOREFRONT_BROWSE_CATEGORIES_COPY,
   STOREFRONT_CLEAR_FILTERS_COPY,
   STOREFRONT_CLEAR_SEARCH_AND_FILTERS_COPY,
@@ -61,6 +62,7 @@ import {
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import {
+  MISSING_VALUE,
   addBlockedHint,
   addItemLabel,
   addedAnnouncement,
@@ -411,7 +413,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
 
   const topBar = (
     <View style={styles.topbar}>
-      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel="Back" minTap />
+      <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={STOREFRONT_BACK_COPY} minTap />
     </View>
   );
   // Past the row threshold the title scrolls with the list, so the search and
@@ -465,7 +467,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         // dimmed button with no reason (PO-4 review).
         <SetupRow
           label={STOREFRONT_SHIP_FROM_COPY}
-          value={warehouse?.name ?? '—'}
+          value={warehouse?.name || MISSING_VALUE}
           hint={locked ? STOREFRONT_SHIP_FROM_LOCKED_COPY : undefined}
           onPress={ready.warehouses.length < 2 && !locked ? undefined : () => setSheet({ kind: 'warehouse' })}
         />
@@ -600,26 +602,32 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
     maxKits(kit, snap.itemMap, cartKits?.[kit.bundleId], qtyMap) <= kitsInCart(kit, cartKits?.[kit.bundleId], qtyMap);
   const sheetItem = sheet && (sheet.kind === 'quantity' || sheet.kind === 'quick') ? snap.itemMap.get(sheet.itemId) : undefined;
   const sheetKit = sheet?.kind === 'kit' ? snap.kits?.find((k) => k.bundleId === sheet.bundleId) : undefined;
-  const cartPanel = cart ? (
-    <CartPanel
-      cart={cart}
-      itemMap={snap.itemMap}
-      notOrderable={snap.notOrderable}
-      refusals={snap.refusals}
-      locked={locked}
-      usuals={usuals}
-      onInc={onInc}
-      onDec={onDec}
-      onQuantity={onQuantity}
-      onRemove={(itemId) => {
-        if (session.dispatch({ type: 'remove', itemId }) !== null) return;
-        const said = lineChangeAnnouncement(session.getSnapshot(), itemId);
-        if (said) say(said);
-      }}
-      onAdd={onAdd}
-      onClear={() => session.dispatch({ type: 'clear' })}
-    />
-  ) : null;
+  const cartPanelFor = (titled: boolean) =>
+    cart ? (
+      <CartPanel
+        cart={cart}
+        itemMap={snap.itemMap}
+        notOrderable={snap.notOrderable}
+        refusals={snap.refusals}
+        locked={locked}
+        usuals={usuals}
+        titled={titled}
+        onInc={onInc}
+        onDec={onDec}
+        onQuantity={onQuantity}
+        onRemove={(itemId) => {
+          if (session.dispatch({ type: 'remove', itemId }) !== null) return;
+          const said = lineChangeAnnouncement(session.getSnapshot(), itemId);
+          if (said) say(said);
+        }}
+        onAdd={onAdd}
+        onClear={() => session.dispatch({ type: 'clear' })}
+      />
+    ) : null;
+  // The iPad's column has no title of its own; the phone's sheet says Cart
+  // in its title, so its panel shows only the counts (PO-4 review).
+  const cartPanel = cartPanelFor(true);
+  const cartSheetPanel = cartPanelFor(false);
 
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
@@ -653,7 +661,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         </>
       )}
 
-      {sheet?.kind === 'cart' && cartPanel ? (
+      {sheet?.kind === 'cart' && cartSheetPanel ? (
         <StorefrontSheet
           visible
           title={CART_TITLE_COPY}
@@ -671,7 +679,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
             ) : null
           }
         >
-          {cartPanel}
+          {cartSheetPanel}
         </StorefrontSheet>
       ) : null}
       {sheet?.kind === 'quantity' && sheetItem ? (

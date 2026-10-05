@@ -30,8 +30,9 @@ export function storefrontItemCountCopy(count: number): string {
 export const STOREFRONT_SORT_AND_FILTER_COPY = 'Sort & filter';
 export const STOREFRONT_SORT_LABEL_COPY = 'Sort';
 export const STOREFRONT_AVAILABILITY_LABEL_COPY = 'Availability';
-/** The active-filter chips' way out. */
-export const STOREFRONT_CLEAR_FILTERS_COPY = 'Clear all';
+/** The active-filter chips' way out (it sits beside the cart's own "Clear
+ *  all" in the iPad split view). */
+export const STOREFRONT_CLEAR_FILTERS_COPY = 'Clear all filters';
 export const STOREFRONT_SHOW_RESULTS_COPY = 'Show items';
 export const STOREFRONT_ADD_COPY = 'Add';
 export const STOREFRONT_SEARCH_LABEL_COPY = 'Search items';
@@ -67,6 +68,10 @@ export function storefrontQuantityHintCopy(available: number): string {
 export const STOREFRONT_QUANTITY_SAVE_COPY = 'Set quantity';
 export const STOREFRONT_CANCEL_COPY = 'Cancel';
 export const STOREFRONT_CLOSE_COPY = 'Close';
+export const STOREFRONT_BACK_COPY = 'Back';
+/** A value that is missing (no SKU, no bin), as VoiceOver hears it: the
+ *  screen shows a dash. */
+export const STOREFRONT_NONE_COPY = 'None';
 export const STOREFRONT_DONE_COPY = 'Done';
 export const STOREFRONT_DETAILS_COPY = 'Details';
 export const STOREFRONT_SKU_LABEL_COPY = 'SKU';
@@ -200,6 +205,12 @@ export function successEmailOpenedCopy(fulfillmentType: 'pickup' | 'delivery', m
 }
 export const SUCCESS_EMAIL_SUBJECT_LABEL_COPY = 'Subject';
 export const SUCCESS_EMAIL_COPY_DETAILS_COPY = 'Copy details';
+/** The field holding the request's text to copy by hand. */
+export const SUCCESS_EMAIL_COPY_FIELD_LABEL_COPY = 'Request text to copy';
+/** A second tap on the email button: asked first (two drafts are two
+ *  requests). */
+export const SUCCESS_EMAIL_OPEN_ANOTHER_TITLE_COPY = 'Open another draft?';
+export const SUCCESS_EMAIL_OPEN_ANOTHER_COPY = 'Open another draft';
 
 // ── The Orders list ─────────────────────────────────────────────────────────
 
