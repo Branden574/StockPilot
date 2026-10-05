@@ -1,4 +1,5 @@
 import {
+  ORDER_ADD_WHILE_LOCKED_COPY,
   ORDER_DEVICE_SAVE_FAILED_COPY,
   ORDER_SUBMISSION_OPEN,
   orderCallResultForOrganization,
@@ -89,7 +90,9 @@ export interface SubmitEngine {
    *  error is done with. */
   dismiss(): void;
   /** The sentence that refuses an add or an edit while the key is live, or
-   *  null when the cart is free (core refuseAddWhileLocked). */
+   *  null when the cart is free (core refuseAddWhileLocked). Also from the
+   *  moment Submit is pressed: while its record is still being written the
+   *  state is open, but the send is on its way (PO-4 review). */
   refuseChange(): string | null;
   /** Stop telling listeners (the account or organization ended). Calls
    *  already out still write their answer (the epoch check in persist decides
@@ -252,7 +255,11 @@ export function createSubmitEngine(deps: SubmitEngineDeps): SubmitEngine {
     },
 
     refuseChange() {
-      return orderSubmissionLocked(state) ? refuseAddWhileLocked(livePending(state)) : null;
+      if (orderSubmissionLocked(state)) return refuseAddWhileLocked(livePending(state));
+      // The write-ahead before a send (the ref guard is set, the state is
+      // still open): a change now would lock a cart that differs from the
+      // body about to be sent (PO-4 review, probe P1).
+      return inFlight ? ORDER_ADD_WHILE_LOCKED_COPY : null;
     },
 
     dispose() {

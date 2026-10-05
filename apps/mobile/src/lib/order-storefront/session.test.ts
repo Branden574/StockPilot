@@ -1165,3 +1165,54 @@ describe('the success screen keeps what was true when the order was placed (PO-4
     expect(snap().placed?.context).toBeNull();
   });
 });
+
+// PO-4 review (probe P1): a stepper tap during the write-ahead (the state
+// still open) was applied, and the unconfirmed record then held the edited
+// cart beside the body that was sent: the locked cart showed 3, the request
+// said 2, and a relaunch showed 2.
+describe('the locked cart shows exactly what was sent (PO-4 review, the write-ahead window)', () => {
+  it('a change made while the write-ahead is written is refused; the cart, the record and Check and finish all hold what was sent', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    const setItem = store.setItem.bind(store);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let held = false;
+    store.setItem = async (k, v) => {
+      if (k === draftKey && !held) {
+        held = true;
+        await gate;
+      }
+      return setItem(k, v);
+    };
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    const sending = session.submit(false);
+    await vi.waitFor(() => expect(held).toBe(true));
+    expect(snap().submission.state.phase).toBe('open');
+    expect(session.dispatch({ type: 'inc', itemId: A })).toBe(STOREFRONT_CART_LOCKED_COPY);
+    expect(session.dispatch({ type: 'add', itemId: A })).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    release();
+    await sending;
+    expect(snap().locked).toBe(true);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    const record = parseStoredOrderDraft(store.data.get(draftKey)!, { userId: USER, orgId: ORG, warehouseId: WH });
+    expect(record?.cart.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    expect(record?.submission?.body.lines).toEqual([{ itemId: A, quantity: 2 }]);
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    await session.checkAndFinish();
+    expect(api.place.mock.calls[1]?.[1]).toMatchObject({ idempotencyKey: KEY, lines: [{ itemId: A, quantity: 2 }] });
+  });
+
+  it('a locked record’s cart is the body that was sent (as a relaunch restores it), never the cart as typed', async () => {
+    await session.open(scope);
+    session.dispatch({ type: 'add', itemId: A, quantity: 2 });
+    session.dispatch({ type: 'set-notes', value: '  Room 12  ' });
+    api.place.mockResolvedValueOnce({ ok: false, error: new Error('Request timed out.') });
+    await session.submit(false);
+    expect(snap().locked).toBe(true);
+    const record = parseStoredOrderDraft(store.data.get(draftKey)!, { userId: USER, orgId: ORG, warehouseId: WH });
+    expect(record?.submission?.body.notes).toBe('Room 12');
+    expect(record?.cart.notes).toBe('Room 12');
+  });
+});

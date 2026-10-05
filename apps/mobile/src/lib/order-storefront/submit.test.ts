@@ -121,6 +121,8 @@ const placedReply = (replay: boolean): Reply => ({
 
 let stored: (PendingOrderSubmission | null)[] = [];
 let persistFails = false;
+/** Holds the next record write until released (the write-ahead's window). */
+let persistGate: Promise<void> | null = null;
 
 function engine(): SubmitEngine {
   const calls3 = createOrderStorefrontApi((path, opts) => api(path, opts));
@@ -129,6 +131,11 @@ function engine(): SubmitEngine {
     organizationId: ORG,
     persist: async (next: OrderSubmissionState) => {
       events.push(`persist ${next.phase}`);
+      if (persistGate) {
+        const gate = persistGate;
+        persistGate = null;
+        await gate;
+      }
       if (persistFails) throw new Error('disk full');
       stored.push(
         next.phase === 'sending' || next.phase === 'withdrawing' || next.phase === 'unconfirmed' ? next.pending : null,
@@ -147,6 +154,7 @@ beforeEach(() => {
   replies = [];
   stored = [];
   persistFails = false;
+  persistGate = null;
   session.userId = USER;
   stubFetch();
 });
@@ -454,6 +462,33 @@ describe('a locked cart refuses an add (core refuseAddWhileLocked)', () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(phase(e)).toBe('sending');
     expect(e.refuseChange()).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+  });
+});
+
+// PO-4 review (probe P1): Submit sets the ref guard at once, but the state
+// stays open until the write-ahead lands, and a change in that window was
+// accepted, so the locked cart showed a quantity that was never sent.
+describe('a change is refused from the moment Submit is pressed (PO-4 review, the write-ahead window)', () => {
+  it('while the write-ahead is still being written (the state still open), and not once the send has settled', async () => {
+    const e = engine();
+    let release: () => void = () => undefined;
+    persistGate = new Promise<void>((r) => (release = r));
+    replies = [placedReply(false)];
+    const sending = e.submit(BODY);
+    expect(phase(e)).toBe('open');
+    expect(e.refuseChange()).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
+    release();
+    await sending;
+    expect(phase(e)).toBe('placed');
+    expect(e.refuseChange()).toBeNull();
+  });
+
+  it('a write-ahead that fails leaves the cart free again', async () => {
+    const e = engine();
+    persistFails = true;
+    await e.submit(BODY);
+    expect(phase(e)).toBe('open');
+    expect(e.refuseChange()).toBeNull();
   });
 });
 

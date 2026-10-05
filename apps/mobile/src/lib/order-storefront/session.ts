@@ -43,6 +43,7 @@ import {
 import { catalogIsStale, catalogItems, initialShipFrom, photosNeedRefresh } from './setup';
 import {
   LEAVE_DRAFT,
+  cartFromPendingBody,
   createDraftWriter,
   isEmptyDraft,
   orderCatalogKey,
@@ -470,7 +471,15 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
           const held = storedLiveKey(stored, ds);
           if (held !== null && (pending ? held !== pending.key : !keys.has(held))) return LEAVE_DRAFT;
           if (pending) keys.add(pending.key);
-          const recordCart = state.phase === 'placed' ? cartReducer(own, { type: 'reset' }) : own;
+          // A locked record holds the cart the body was built from, as a
+          // relaunch restores it (store.ts restoredDraft): a locked cart
+          // always shows exactly what was sent (PO-4 review).
+          const recordCart =
+            state.phase === 'placed'
+              ? cartReducer(own, { type: 'reset' })
+              : pending && pending.bodyUnreadable !== true
+                ? cartFromPendingBody(pending.body, ds.warehouseId)
+                : own;
           const draft = { cart: recordCart, submission: pending };
           return isEmptyDraft(draft) ? null : serializeOrderDraft(ds, draft, new Date(deps.now()));
         });
