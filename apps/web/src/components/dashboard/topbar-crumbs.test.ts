@@ -178,6 +178,23 @@ describe('fixed pages have their own crumb, never a catch-all Detail', () => {
     ]);
   });
 
+  it('the receiving checklist and one receipt\'s checklist sit under Purchase orders (F4-1)', () => {
+    expect(
+      crumbsForPathname('/dashboard/purchase-orders/receiving-checklist').map((c) => c.label),
+    ).toEqual(['Purchasing', 'Purchase orders', 'Receiving checklist']);
+    expect(
+      crumbsForPathname(
+        '/dashboard/purchase-orders/receiving-checks/0a0f2100-0000-4000-8000-000000000301',
+      ).map((c) => c.label),
+    ).toEqual(['Purchasing', 'Purchase orders', 'Checklist']);
+    // A PO id is still a PO.
+    expect(
+      crumbsForPathname('/dashboard/purchase-orders/0a0f2100-0000-4000-8000-000000000302').map(
+        (c) => c.label,
+      ),
+    ).toEqual(['Purchasing', 'Purchase orders', 'Detail']);
+  });
+
   it('an item id is still an item', () => {
     expect(
       crumbsForPathname('/dashboard/inventory/0a0f2100-0000-4000-8000-000000000201').map(

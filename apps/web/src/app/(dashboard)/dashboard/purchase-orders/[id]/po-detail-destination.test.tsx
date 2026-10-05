@@ -106,6 +106,16 @@ vi.mock('@/server/services/po-attachments', () => ({
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ byIds: inventoryByIds })) },
 }));
+// F4-1: the page also reads the receiving checklist (never throws) and asks
+// core receivingGate who may post; an owner may.
+vi.mock('@/server/services/receiving-checklist', () => ({
+  ReceivingChecklistService: {
+    forCurrentUser: vi.fn(async () => ({
+      forPurchaseOrder: vi.fn(async () => ({ ok: true, versions: [], runs: [] })),
+      gate: () => ({ canPostReceipt: true, canRecordChecklist: true, canPublishChecklist: true, canAddPoFile: true }),
+    })),
+  },
+}));
 vi.mock('@/server/services/size-run-display', () => ({
   loadSizeRunGroups: (...args: unknown[]) => loadSizeRunGroups(...(args as [])),
 }));

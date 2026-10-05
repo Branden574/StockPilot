@@ -22,6 +22,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn } from '@/lib/utils';
 import { postReceiptAction } from '@/server/actions/receiving';
+import { startReceivingCheckAction } from '@/server/actions/receiving-checklist';
+
+import { RECEIVING_CHECKLIST_COPY } from '@stockpilot/core';
 
 import {
   SizeRunReceiveGrid,
@@ -66,6 +69,15 @@ interface PoReceiveDialogProps {
    * groups every line renders exactly as it does today.
    */
   groups?: Record<string, SizeRunGroup>;
+  /**
+   * The live receiving checklist (F4-1), or null when none is turned on (or
+   * its state did not load). With it AND `canRecordChecklist`, a successful
+   * post shows the Posted panel with "Record checklist"; otherwise the post
+   * closes the dialog with a toast exactly as before.
+   */
+  checklist?: { versionNumber: number; title: string } | null;
+  /** core receivingGate().canRecordChecklist for this person. */
+  canRecordChecklist?: boolean;
 }
 
 interface LotRow {
@@ -105,11 +117,25 @@ export function PoReceiveDialog({
   warehouseId,
   lines,
   groups = {},
+  checklist = null,
+  canRecordChecklist = false,
 }: PoReceiveDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [notes, setNotes] = React.useState('');
+  /**
+   * The receipt this dialog just posted, when the Posted panel is showing
+   * (F4-1). Set only when a checklist is live and the person may record it.
+   * The receipt is posted and saved by then: nothing in the panel can undo
+   * or change it.
+   */
+  const [posted, setPosted] = React.useState<{ receiptId: string; receiptNumber: string } | null>(
+    null,
+  );
+  const [starting, setStarting] = React.useState(false);
+  /** The inline failure of "Record checklist" (pattern #20). */
+  const [startError, setStartError] = React.useState<string | null>(null);
   /**
    * Persistent, in-dialog failure message (recurring pattern #20).
    *
@@ -140,6 +166,9 @@ export function PoReceiveDialog({
   // the stock landed).
   useUnsavedWork('po-receive', `Receiving ${poNumber}`, () => {
     if (!open) return false;
+    // Posted: the quantities are saved in the receipt, so a reload loses
+    // nothing (F4-1's Posted panel).
+    if (posted) return false;
     if (submitting || notes.trim().length > 0) return true;
     const blank = JSON.stringify(blankEntry());
     return Object.values(entries).some((e) => JSON.stringify(e) !== blank);
@@ -175,6 +204,9 @@ export function PoReceiveDialog({
       setEntries(Object.fromEntries(linesRef.current.map((l) => [l.id, blankEntry()])));
       setNotes('');
       setServerError(null);
+      setPosted(null);
+      setStartError(null);
+      setStarting(false);
     }
     // `lines` is deliberately NOT a dependency — see the comment above; it is
     // read through linesRef so a new array identity from an RSC refresh cannot
@@ -309,9 +341,45 @@ export function PoReceiveDialog({
       fail(res.error.message);
       return;
     }
+    if (checklist && canRecordChecklist) {
+      // F4-1: offer the checklist in place of the form. The receipt is posted;
+      // the page refreshes underneath so Receipts shows it.
+      setPosted({ receiptId: res.data.receiptId, receiptNumber: res.data.receiptNumber });
+      router.refresh();
+      return;
+    }
     toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}.`);
     setOpen(false);
     router.refresh();
+  }
+
+  /** "Record checklist": start (or reopen) the run, then open its page. */
+  async function recordChecklist() {
+    if (!posted || starting) return;
+    setStartError(null);
+    setStarting(true);
+    let res: Awaited<ReturnType<typeof startReceivingCheckAction>>;
+    try {
+      res = await startReceivingCheckAction(posted.receiptId, poId);
+    } catch {
+      // The request never came back: the receipt is still posted.
+      setStarting(false);
+      setStartError(
+        `${RECEIVING_CHECKLIST_COPY.didNotGoThrough} ${RECEIVING_CHECKLIST_COPY.startFailedAfterPostWeb}`,
+      );
+      return;
+    }
+    if (!res.ok) {
+      setStarting(false);
+      setStartError(
+        res.error.details?.reason === 'no_checklist'
+          ? `${RECEIVING_CHECKLIST_COPY.noChecklist} ${RECEIVING_CHECKLIST_COPY.startFailedAfterPostWeb}`
+          : RECEIVING_CHECKLIST_COPY.startFailedAfterPostWeb,
+      );
+      return;
+    }
+    setOpen(false);
+    router.push(`/dashboard/purchase-orders/receiving-checks/${res.data.runId}`);
   }
 
   // Lay the lines out as runs + loose rows. With no groups (every non-sports
@@ -340,177 +408,209 @@ export function PoReceiveDialog({
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Receive {poNumber}</DialogTitle>
-          <DialogDescription>
-            Enter how many you received for each line — the variance shows what&apos;s still
-            outstanding. Receiving in parts is fine: post a receipt each time more arrives, until
-            the variance reaches zero.
-          </DialogDescription>
-        </DialogHeader>
-        {/* The lines scroll inside the dialog; 2 px each side keep the
-            fields' focus rings inside the scroller's clip. */}
-        <div className="-mx-0.5 max-h-[55vh] space-y-3 overflow-y-auto px-0.5 py-0.5">
-          {blocks.map((block) => {
-            if (block.kind === 'run') {
-              const group = groups[block.groupId];
-              // A run with no resolved group metadata cannot name its counting
-              // unit, and the unit is READ, never inferred (requirements 5).
-              // Fall back to the flat rows rather than guessing "each".
-              if (group) {
-                return (
-                  <SizeRunReceiveGrid
-                    key={block.groupId}
-                    groupId={block.groupId}
-                    group={group}
-                    lines={block.lines}
-                    entries={entries}
-                    onChange={(lineId, patch) =>
-                      setField(lineId, {
-                        received: patch.received,
-                        // Same split the flat row applies: everything received
-                        // goes into usable stock.
-                        accepted: patch.received,
-                        rejected: 0,
-                      })
-                    }
-                    renderExtras={(l) => (
+        {posted ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{RECEIVING_CHECKLIST_COPY.postedTitle(posted.receiptNumber)}</DialogTitle>
+              <DialogDescription>{RECEIVING_CHECKLIST_COPY.postedBody}</DialogDescription>
+            </DialogHeader>
+            {startError && (
+              <p
+                role="alert"
+                className="border-destructive/30 bg-destructive-wash text-destructive flex items-start gap-2 rounded-md border px-3 py-2 text-[13px] leading-5"
+              >
+                <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0 [overflow-wrap:anywhere]">{startError}</span>
+              </p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpen(false)} disabled={starting}>
+                {RECEIVING_CHECKLIST_COPY.done}
+              </Button>
+              {/* Recording the checklist is the panel's next piece of work,
+                  in ink like Post receipt; the spinner shows beside the
+                  words, so the button keeps its name. */}
+              <Button variant="default" onClick={recordChecklist} disabled={starting}>
+                {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {RECEIVING_CHECKLIST_COPY.recordChecklist}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Receive {poNumber}</DialogTitle>
+              <DialogDescription>
+                Enter how many you received for each line — the variance shows what&apos;s still
+                outstanding. Receiving in parts is fine: post a receipt each time more arrives, until
+                the variance reaches zero.
+              </DialogDescription>
+            </DialogHeader>
+            {/* The lines scroll inside the dialog; 2 px each side keep the
+                fields' focus rings inside the scroller's clip. */}
+            <div className="-mx-0.5 max-h-[55vh] space-y-3 overflow-y-auto px-0.5 py-0.5">
+              {blocks.map((block) => {
+                if (block.kind === 'run') {
+                  const group = groups[block.groupId];
+                  // A run with no resolved group metadata cannot name its counting
+                  // unit, and the unit is READ, never inferred (requirements 5).
+                  // Fall back to the flat rows rather than guessing "each".
+                  if (group) {
+                    return (
+                      <SizeRunReceiveGrid
+                        key={block.groupId}
+                        groupId={block.groupId}
+                        group={group}
+                        lines={block.lines}
+                        entries={entries}
+                        onChange={(lineId, patch) =>
+                          setField(lineId, {
+                            received: patch.received,
+                            // Same split the flat row applies: everything received
+                            // goes into usable stock.
+                            accepted: patch.received,
+                            rejected: 0,
+                          })
+                        }
+                        renderExtras={(l) => (
+                          <LineCapture
+                            line={l}
+                            entry={entries[l.id] ?? blankEntry()}
+                            setField={setField}
+                          />
+                        )}
+                      />
+                    );
+                  }
+                }
+                return block.lines.map((l) => {
+                  const remaining = l.quantityOrdered - l.quantityReceived;
+                  const e = entries[l.id] ?? blankEntry();
+                  // Variance = what's still outstanding after this receipt. Positive =
+                  // still waiting on stock; 0 = fully received; negative = over ordered.
+                  const variance = remaining - e.received;
+                  const receivedId = `${fieldId}-received-${l.id}`;
+                  return (
+                    // One card per line: the item, then what arrived (with All
+                    // beside its field, the quantity it fills) and the variance;
+                    // side by side on a phone under the item, in one row wider.
+                    <div
+                      key={l.id}
+                      className="border-border bg-card grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border p-3 sm:grid-cols-12"
+                    >
+                      <div className="col-span-2 min-w-0 sm:col-span-5">
+                        <p className="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                          {l.name}
+                        </p>
+                        <p className="text-muted-foreground font-mono text-[11.5px] leading-[17.25px]">
+                          {l.sku}
+                        </p>
+                        <p className="text-muted-foreground mt-1 text-[12px] leading-[18px]">
+                          Ordered {l.quantityOrdered} · Already received {l.quantityReceived}
+                        </p>
+                      </div>
+                      <div className="min-w-0 space-y-1 sm:col-span-4">
+                        <Label
+                          htmlFor={receivedId}
+                          className="text-muted-foreground block text-[11px] leading-none"
+                        >
+                          Received now
+                        </Label>
+                        <div className="flex items-center gap-1.5">
+                          <BlankZeroNumberInput
+                            id={receivedId}
+                            min={0}
+                            step={1}
+                            value={e.received}
+                            onValueChange={(v) => {
+                              const r = Math.max(0, v);
+                              // Everything you receive goes into usable stock. We keep the
+                              // accepted/rejected split in the payload (accepted = received,
+                              // rejected = 0) but don't ask for it — the variance is what matters.
+                              setField(l.id, { received: r, accepted: r, rejected: 0 });
+                            }}
+                            className="min-w-0 font-mono"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="shrink-0"
+                            onClick={() =>
+                              setField(l.id, { received: remaining, accepted: remaining, rejected: 0 })
+                            }
+                          >
+                            All
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="min-w-0 space-y-1 sm:col-span-3">
+                        <p className="text-muted-foreground text-[11px] font-medium leading-none">
+                          Variance
+                        </p>
+                        <div
+                          className={cn(
+                            'border-border bg-sunk flex h-8 items-center rounded-md border px-2.5 font-mono text-[13px] tabular-nums max-sm:h-11',
+                            varianceToneClass(variance),
+                          )}
+                        >
+                          {variance}
+                        </div>
+                        <p className="text-muted-foreground text-[11px] leading-4">
+                          {variance > 0
+                            ? `${variance} still to come`
+                            : variance < 0
+                              ? `${Math.abs(variance)} over ordered`
+                              : 'Fully received'}
+                        </p>
+                      </div>
                       <LineCapture
                         line={l}
-                        entry={entries[l.id] ?? blankEntry()}
+                        entry={e}
                         setField={setField}
+                        wrapperClassName="col-span-2 sm:col-span-12"
                       />
-                    )}
-                  />
-                );
-              }
-            }
-            return block.lines.map((l) => {
-              const remaining = l.quantityOrdered - l.quantityReceived;
-              const e = entries[l.id] ?? blankEntry();
-              // Variance = what's still outstanding after this receipt. Positive =
-              // still waiting on stock; 0 = fully received; negative = over ordered.
-              const variance = remaining - e.received;
-              const receivedId = `${fieldId}-received-${l.id}`;
-              return (
-                // One card per line: the item, then what arrived (with All
-                // beside its field, the quantity it fills) and the variance;
-                // side by side on a phone under the item, in one row wider.
-                <div
-                  key={l.id}
-                  className="border-border bg-card grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg border p-3 sm:grid-cols-12"
-                >
-                  <div className="col-span-2 min-w-0 sm:col-span-5">
-                    <p className="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
-                      {l.name}
-                    </p>
-                    <p className="text-muted-foreground font-mono text-[11.5px] leading-[17.25px]">
-                      {l.sku}
-                    </p>
-                    <p className="text-muted-foreground mt-1 text-[12px] leading-[18px]">
-                      Ordered {l.quantityOrdered} · Already received {l.quantityReceived}
-                    </p>
-                  </div>
-                  <div className="min-w-0 space-y-1 sm:col-span-4">
-                    <Label
-                      htmlFor={receivedId}
-                      className="text-muted-foreground block text-[11px] leading-none"
-                    >
-                      Received now
-                    </Label>
-                    <div className="flex items-center gap-1.5">
-                      <BlankZeroNumberInput
-                        id={receivedId}
-                        min={0}
-                        step={1}
-                        value={e.received}
-                        onValueChange={(v) => {
-                          const r = Math.max(0, v);
-                          // Everything you receive goes into usable stock. We keep the
-                          // accepted/rejected split in the payload (accepted = received,
-                          // rejected = 0) but don't ask for it — the variance is what matters.
-                          setField(l.id, { received: r, accepted: r, rejected: 0 });
-                        }}
-                        className="min-w-0 font-mono"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="shrink-0"
-                        onClick={() =>
-                          setField(l.id, { received: remaining, accepted: remaining, rejected: 0 })
-                        }
-                      >
-                        All
-                      </Button>
                     </div>
-                  </div>
-                  <div className="min-w-0 space-y-1 sm:col-span-3">
-                    <p className="text-muted-foreground text-[11px] font-medium leading-none">
-                      Variance
-                    </p>
-                    <div
-                      className={cn(
-                        'border-border bg-sunk flex h-8 items-center rounded-md border px-2.5 font-mono text-[13px] tabular-nums max-sm:h-11',
-                        varianceToneClass(variance),
-                      )}
-                    >
-                      {variance}
-                    </div>
-                    <p className="text-muted-foreground text-[11px] leading-4">
-                      {variance > 0
-                        ? `${variance} still to come`
-                        : variance < 0
-                          ? `${Math.abs(variance)} over ordered`
-                          : 'Fully received'}
-                    </p>
-                  </div>
-                  <LineCapture
-                    line={l}
-                    entry={e}
-                    setField={setField}
-                    wrapperClassName="col-span-2 sm:col-span-12"
-                  />
-                </div>
-              );
-            });
-          })}
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={`${fieldId}-notes`}>Notes</Label>
-          <Textarea
-            id={`${fieldId}-notes`}
-            rows={2}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-        </div>
-        {/*
-          The failure surface for this dialog. Lives INSIDE the modal and
-          persists until the next attempt — see the serverError comment above
-          for the "clicked, nothing happened" bug this closes.
-        */}
-        {serverError && (
-          <p
-            role="alert"
-            className="border-destructive/30 bg-destructive-wash text-destructive flex items-start gap-2 rounded-md border px-3 py-2 text-[13px] leading-5"
-          >
-            <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 [overflow-wrap:anywhere]">{serverError}</span>
-          </p>
+                  );
+                });
+              })}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${fieldId}-notes`}>Notes</Label>
+              <Textarea
+                id={`${fieldId}-notes`}
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
+            {/*
+              The failure surface for this dialog. Lives INSIDE the modal and
+              persists until the next attempt — see the serverError comment above
+              for the "clicked, nothing happened" bug this closes.
+            */}
+            {serverError && (
+              <p
+                role="alert"
+                className="border-destructive/30 bg-destructive-wash text-destructive flex items-start gap-2 rounded-md border px-3 py-2 text-[13px] leading-5"
+              >
+                <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0 [overflow-wrap:anywhere]">{serverError}</span>
+              </p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+                Cancel
+              </Button>
+              {/* The dialog's commit, in ink; the spinner shows beside the words
+                  while the receipt posts, so the button keeps its name. */}
+              <Button variant="default" onClick={submit} disabled={submitting}>
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Post receipt
+              </Button>
+            </DialogFooter>
+          </>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
-            Cancel
-          </Button>
-          {/* The dialog's commit, in ink; the spinner shows beside the words
-              while the receipt posts, so the button keeps its name. */}
-          <Button variant="default" onClick={submit} disabled={submitting}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Post receipt
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

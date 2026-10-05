@@ -1,6 +1,7 @@
 'use client';
 
-import { Loader2, Undo2 } from 'lucide-react';
+import { ClipboardCheck, Loader2, TriangleAlert, Undo2 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -29,6 +30,20 @@ import {
 } from '@/components/ui/table';
 import { formatRelative } from '@/lib/utils';
 import { reverseReceiptAction } from '@/server/actions/receiving';
+import { startReceivingCheckAction } from '@/server/actions/receiving-checklist';
+
+import {
+  liveChecklistVersion,
+  receiptChecklistAction,
+  receiptChecklistActionLabel,
+  receiptChecklistChipText,
+  receiptChecklistChipTone,
+  receiptChecklistState,
+  RECEIVING_CHECKLIST_COPY,
+  type ChecklistRunLite,
+  type ChecklistVersionLite,
+  type ReceiptChecklistState,
+} from '@stockpilot/core';
 
 import type { ReceiptLineRow, ReceiptRow } from '@/server/services/receiving';
 
@@ -60,12 +75,39 @@ const STATUS_TONE: Record<ReceiptRow['status'], TimelineTone> = {
   canceled: 'muted',
 };
 
+/**
+ * The receiving checklist chip (F4-1) in the shared tones: done with no failed
+ * check is the accent, failed checks and a status that did not load the
+ * caution, in progress and not recorded the neutral label. The chip's words
+ * carry the state, so colour is never the only cue.
+ */
+const CHECKLIST_CHIP_BADGE: Record<'ok' | 'warn' | 'muted', ReceiptBadgeTone> = {
+  ok: 'success',
+  warn: 'warning',
+  muted: 'secondary',
+};
+
+/** The org's checklist versions and this PO's runs (F4-1); ok false = the read failed. */
+export type ReceiptChecklists =
+  | { ok: true; versions: ChecklistVersionLite[]; runs: ChecklistRunLite[] }
+  | { ok: false };
+
 interface ReceiptHistoryProps {
   receipts: ReceiptRow[];
   lines: ReceiptLineRow[];
   items: ItemLookup;
   /** Manager+ only — admins/managers see "Reverse"; others don't. */
   canReverse: boolean;
+  /**
+   * Receiving checklist state for each entry (F4-1). Absent: no chips at all
+   * (the feature's reads were not made). `{ ok: false }`: every entry says
+   * "Checklist status didn't load", never "not recorded".
+   */
+  checklists?: ReceiptChecklists;
+  /** core receivingGate().canRecordChecklist for this person. */
+  canRecordChecklist?: boolean;
+  /** The purchase order, to refresh it after a start. */
+  poId?: string;
 }
 
 /**
@@ -73,7 +115,15 @@ interface ReceiptHistoryProps {
  * (matrix W-PU-02d, P-TL): one entry per receipt with its number and status,
  * when and by whom, Reverse where allowed, and its lines.
  */
-export function ReceiptHistory({ receipts, lines, items, canReverse }: ReceiptHistoryProps) {
+export function ReceiptHistory({
+  receipts,
+  lines,
+  items,
+  canReverse,
+  checklists,
+  canRecordChecklist = false,
+  poId,
+}: ReceiptHistoryProps) {
   const linesByReceipt = React.useMemo(() => {
     const m = new Map<string, ReceiptLineRow[]>();
     for (const l of lines) {
@@ -102,6 +152,20 @@ export function ReceiptHistory({ receipts, lines, items, canReverse }: ReceiptHi
           lines={linesByReceipt.get(r.id) ?? []}
           items={items}
           canReverse={canReverse}
+          checklist={
+            checklists === undefined
+              ? null
+              : {
+                  state: receiptChecklistState({
+                    receipt: { id: r.id, status: r.status, receivedAt: r.received_at },
+                    versions: checklists.ok ? checklists.versions : null,
+                    runs: checklists.ok ? checklists.runs : null,
+                  }),
+                  liveNow: checklists.ok && liveChecklistVersion(checklists.versions) !== null,
+                }
+          }
+          canRecordChecklist={canRecordChecklist}
+          poId={poId}
         />
       ))}
     </Timeline>
@@ -113,11 +177,17 @@ function ReceiptEntry({
   lines,
   items,
   canReverse,
+  checklist,
+  canRecordChecklist,
+  poId,
 }: {
   receipt: ReceiptRow;
   lines: ReceiptLineRow[];
   items: ItemLookup;
   canReverse: boolean;
+  checklist: { state: ReceiptChecklistState; liveNow: boolean } | null;
+  canRecordChecklist: boolean;
+  poId?: string;
 }) {
   const router = useRouter();
   // The receipt number titles its lines table (a scroll region on a phone).
@@ -125,6 +195,45 @@ function ReceiptEntry({
   const [reverseOpen, setReverseOpen] = React.useState(false);
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [starting, setStarting] = React.useState(false);
+  const [startError, setStartError] = React.useState<string | null>(null);
+
+  const chip = checklist ? receiptChecklistChipText(checklist.state) : null;
+  const tone = checklist ? receiptChecklistChipTone(checklist.state) : null;
+  const action = checklist
+    ? receiptChecklistAction({
+        state: checklist.state,
+        receiptStatus: receipt.status,
+        liveNow: checklist.liveNow,
+        canRecord: canRecordChecklist,
+      })
+    : null;
+  const runId =
+    checklist && (checklist.state.kind === 'completed' || checklist.state.kind === 'in_progress')
+      ? checklist.state.runId
+      : null;
+  const showReverse = canReverse && receipt.status === 'posted';
+
+  /** "Record checklist" on an entry: start (or reopen) the run, then open it. */
+  async function record() {
+    if (starting) return;
+    setStartError(null);
+    setStarting(true);
+    let r: Awaited<ReturnType<typeof startReceivingCheckAction>>;
+    try {
+      r = await startReceivingCheckAction(receipt.id, poId ?? null);
+    } catch {
+      setStarting(false);
+      setStartError(RECEIVING_CHECKLIST_COPY.didNotGoThrough);
+      return;
+    }
+    if (!r.ok) {
+      setStarting(false);
+      setStartError(r.error.message);
+      return;
+    }
+    router.push(`/dashboard/purchase-orders/receiving-checks/${r.data.runId}`);
+  }
 
   const totalAccepted = lines.reduce((s, l) => s + Number(l.qty_accepted_base), 0);
   const totalRejected = lines.reduce((s, l) => s + Number(l.qty_rejected_base), 0);
@@ -155,15 +264,39 @@ function ReceiptEntry({
             {receipt.receipt_number}
           </span>
           <Badge variant={STATUS_BADGE[receipt.status]}>{receipt.status}</Badge>
-          {canReverse && receipt.status === 'posted' && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="-my-1 ml-auto"
-              onClick={() => setReverseOpen(true)}
-            >
-              <Undo2 className="h-3.5 w-3.5" /> Reverse
-            </Button>
+          {chip && tone && (
+            <Badge variant={CHECKLIST_CHIP_BADGE[tone]} data-testid="receipt-checklist-chip">
+              {chip}
+            </Badge>
+          )}
+          {(action !== null || showReverse) && (
+            // The entry's actions on the right of its title line: the
+            // checklist's (Record, Continue or View) and Reverse.
+            <span className="-my-1 ml-auto flex flex-wrap items-center gap-1">
+              {action === 'record' && (
+                <Button variant="ghost" size="sm" onClick={record} disabled={starting}>
+                  {starting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                  )}
+                  {receiptChecklistActionLabel('record')}
+                </Button>
+              )}
+              {(action === 'continue' || action === 'view') && runId && (
+                <Button asChild variant="ghost" size="sm">
+                  <Link href={`/dashboard/purchase-orders/receiving-checks/${runId}`}>
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                    {receiptChecklistActionLabel(action)}
+                  </Link>
+                </Button>
+              )}
+              {showReverse && (
+                <Button variant="ghost" size="sm" onClick={() => setReverseOpen(true)}>
+                  <Undo2 className="h-3.5 w-3.5" /> Reverse
+                </Button>
+              )}
+            </span>
           )}
         </span>
       }
@@ -192,6 +325,15 @@ function ReceiptEntry({
         </>
       }
     >
+      {startError && (
+        <p
+          role="alert"
+          className="border-destructive/30 bg-destructive-wash text-destructive mb-2 flex items-start gap-2 rounded-md border px-3 py-2 text-[12.5px] leading-[18.75px]"
+        >
+          <TriangleAlert aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{startError}</span>
+        </p>
+      )}
       <div className="border-border mt-1 overflow-hidden rounded-md border">
         <Table scrollLabelledBy={numberId} className="text-[13px]">
           <TableHeader>

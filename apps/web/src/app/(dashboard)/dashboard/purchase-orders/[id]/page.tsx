@@ -32,6 +32,7 @@ import { LocationsService } from '@/server/services/locations';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReceivingService } from '@/server/services/receiving';
+import { ReceivingChecklistService } from '@/server/services/receiving-checklist';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
@@ -41,6 +42,8 @@ import {
   dbPermissionRefusedCopy,
   formatCalendarDate,
   isManagerOrAbove,
+  liveChecklistVersion,
+  RECEIVE_MANAGER_POSTS_COPY,
 } from '@stockpilot/core';
 
 /** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 28 / 32 / 64, 16 px gutters on a phone. */
@@ -67,6 +70,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     receivingSvc,
     warehousesSvc,
     poAttachSvc,
+    checklistSvc,
   ] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
@@ -75,36 +79,41 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     ReceivingService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
     PoAttachmentsService.forCurrentUser(),
+    ReceivingChecklistService.forCurrentUser(),
   ]);
 
   // po.get() and all the PO-INDEPENDENT queries (they need only `id`, not the
   // fetched PO row) start together — one round trip instead of two sequential
   // stages. Only referencedItems below depends on po.lines, so it still waits.
   // (P13) The not_found → notFound() handling stays scoped to po.get().
-  const [result, suppliers, locations, receiptData, warehouses, attachments] = await Promise.all([
-    poSvc.get(id).catch((e) => {
-      if (e instanceof ServiceError && e.code === 'not_found') notFound();
-      throw e;
-    }),
-    suppliersSvc.listForLookups(),
-    // UNFILTERED, deliberately. This list is not a picker — it exists only to
-    // look the PO's own `destination_location_id` back up (below) so the page
-    // can read its name and derive the receiving warehouse. With
-    // `excludeSystem: true`, `isUserFacingLocation` dropped kind 'staging' and
-    // 'unplaced', so a PO destined for a warehouse's STAGING bucket resolved to
-    // undefined: Destination rendered as an em-dash, the Receive button vanished
-    // (it needs `warehouseId`), and the "destination isn't linked to a
-    // warehouse" card appeared — whose own picker resolves back to staging, so
-    // the offered fix looped. The database was correct the whole time.
-    //
-    // The pickers that OFFER a destination still filter; staging must never be
-    // an operator's choice. Reading one back is a different question from
-    // offering it, and `isUserFacingLocation` stays untouched.
-    locationsSvc.list(),
-    receivingSvc.listForPurchaseOrder(id),
-    warehousesSvc.listNames(),
-    poAttachSvc.list(id),
-  ]);
+  const [result, suppliers, locations, receiptData, warehouses, attachments, checklists] =
+    await Promise.all([
+      poSvc.get(id).catch((e) => {
+        if (e instanceof ServiceError && e.code === 'not_found') notFound();
+        throw e;
+      }),
+      suppliersSvc.listForLookups(),
+      // UNFILTERED, deliberately. This list is not a picker — it exists only to
+      // look the PO's own `destination_location_id` back up (below) so the page
+      // can read its name and derive the receiving warehouse. With
+      // `excludeSystem: true`, `isUserFacingLocation` dropped kind 'staging' and
+      // 'unplaced', so a PO destined for a warehouse's STAGING bucket resolved to
+      // undefined: Destination rendered as an em-dash, the Receive button vanished
+      // (it needs `warehouseId`), and the "destination isn't linked to a
+      // warehouse" card appeared — whose own picker resolves back to staging, so
+      // the offered fix looped. The database was correct the whole time.
+      //
+      // The pickers that OFFER a destination still filter; staging must never be
+      // an operator's choice. Reading one back is a different question from
+      // offering it, and `isUserFacingLocation` stays untouched.
+      locationsSvc.list(),
+      receivingSvc.listForPurchaseOrder(id),
+      warehousesSvc.listNames(),
+      poAttachSvc.list(id),
+      // The receiving checklist's versions and this PO's runs (F4-1). Never
+      // throws: a failed read answers { ok: false } and the receipts say so.
+      checklistSvc.forPurchaseOrder(id),
+    ]);
 
   const { po, lines } = result;
   const canManagePo = can(ctx, 'purchase_orders:manage');
@@ -139,12 +148,22 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // the permission the page says why, in the words the server's refusal maps
   // to, where the receiving hint would be.
   const canAdjustStock = can(ctx, 'stock:adjust');
-  const canReceive = receivableHere && canAdjustStock;
+  // F4-1: Receive and Post receipt only for someone the ledger lets post, a
+  // manager or above with stock:adjust (core receivingGate, the predicate
+  // ReceivingService.postReceipt and the phone share).
+  const gate = checklistSvc.gate();
+  const canReceive = receivableHere && gate.canPostReceipt;
   // The What's New registry test (lib/releases/registry.test.ts) pins this
   // statement on one line, so Prettier leaves it as written.
   // prettier-ignore
   const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
+  // Below manager the ledger refuses a post whatever the permission, so the
+  // page says who posts receipts instead of asking for a permission that
+  // would not help (F4-1). A manager without the permission reads why above.
+  const managerPostsNote =
+    receivableHere && !isManagerOrAbove(ctx.role) ? RECEIVE_MANAGER_POSTS_COPY : null;
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
+  const liveChecklist = checklists.ok ? liveChecklistVersion(checklists.versions) : null;
 
   const lineRows = lines.map((l) => {
     const item = itemsById.get(l.item_id as string);
@@ -180,7 +199,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const receiveNote =
     canReceive && warehouseId
       ? 'Items arrived? Use “Receive items” to record what was received.'
-      : receiveRefusal;
+      : (managerPostsNote ?? receiveRefusal);
 
   return (
     <div className={PAGE}>
@@ -286,6 +305,12 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                       warehouseId={warehouseId}
                       lines={lineRows}
                       groups={receiveGroups}
+                      checklist={
+                        liveChecklist
+                          ? { versionNumber: liveChecklist.versionNumber, title: liveChecklist.title }
+                          : null
+                      }
+                      canRecordChecklist={gate.canRecordChecklist}
                     />
                   )}
                 </>
@@ -302,6 +327,9 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                   referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
                 )}
                 canReverse={canReverse}
+                checklists={checklists}
+                canRecordChecklist={gate.canRecordChecklist}
+                poId={id}
               />
             </DetailSection>
           </div>

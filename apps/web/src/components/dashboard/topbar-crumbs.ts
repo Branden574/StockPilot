@@ -274,6 +274,16 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
     /^\/dashboard\/purchase-orders\/recurring$/,
     [SECTION_PURCHASING, POS_LIST, { label: 'Recurring', href: null }],
   ],
+  // The receiving checklist (F4-1) and one receipt's checklist: fixed paths
+  // the detail catch-all below would take for a PO id.
+  [
+    /^\/dashboard\/purchase-orders\/receiving-checklist$/,
+    [SECTION_PURCHASING, POS_LIST, { label: 'Receiving checklist', href: null }],
+  ],
+  [
+    /^\/dashboard\/purchase-orders\/receiving-checks\/[^/]+$/,
+    [SECTION_PURCHASING, POS_LIST, { label: 'Checklist', href: null }],
+  ],
   [
     /^\/dashboard\/purchase-orders\/imports\/new$/,
     [SECTION_PURCHASING, POS_LIST, PO_IMPORTS_LIST, { label: 'New', href: null }],

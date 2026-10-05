@@ -1,0 +1,555 @@
+'use client';
+
+import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Plus, Trash2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import * as React from 'react';
+import { toast } from 'sonner';
+
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useUnsavedWork } from '@/lib/unsaved-work';
+import {
+  publishReceivingChecklistAction,
+  retireReceivingChecklistAction,
+} from '@/server/actions/receiving-checklist';
+
+import {
+  CHECKLIST_LIMITS,
+  CHECKLIST_PUBLISHABLE_KINDS,
+  checklistWhen,
+  describeChecklistInvalid,
+  normalizeChecklistSteps,
+  normalizeChecklistTitle,
+  RECEIVING_CHECKLIST_COPY,
+  SUGGESTED_RECEIVING_STEPS,
+  type ChecklistStepKind,
+} from '@stockpilot/core';
+
+import type {
+  ChecklistEditorView,
+  ChecklistVersionView,
+} from '@/server/services/receiving-checklist';
+
+const C = RECEIVING_CHECKLIST_COPY;
+
+/** A step as the editor holds it; `uid` keys the row only, the server assigns step keys. */
+export interface EditorStep {
+  uid: string;
+  kind: ChecklistStepKind;
+  label: string;
+  help: string;
+  required: boolean;
+}
+
+const KIND_LABEL: Record<ChecklistStepKind, string> = {
+  check: C.kindCheck,
+  count: C.kindCount,
+  text: C.kindText,
+  photo: 'Photo or scan',
+};
+
+let uidSeq = 0;
+const nextUid = () => `step-${(uidSeq += 1)}`;
+
+export function stepsFromDrafts(
+  drafts: ReadonlyArray<{
+    kind: ChecklistStepKind;
+    label: string;
+    help?: string | null;
+    required?: boolean;
+  }>,
+): EditorStep[] {
+  return drafts.map((d) => ({
+    uid: nextUid(),
+    kind: d.kind,
+    label: d.label,
+    help: d.help ?? '',
+    required: d.required === true,
+  }));
+}
+
+/** What publish sends: the steps without the editor's row keys. */
+export function publishPayload(steps: readonly EditorStep[]) {
+  return steps.map((s) => ({
+    kind: s.kind,
+    label: s.label,
+    help: s.help.trim() === '' ? null : s.help,
+    required: s.required,
+  }));
+}
+
+/** Move one step up (-1) or down (+1); out of range leaves the list as it is. */
+export function moveStep(steps: readonly EditorStep[], index: number, by: -1 | 1): EditorStep[] {
+  const to = index + by;
+  if (index < 0 || index >= steps.length || to < 0 || to >= steps.length) return [...steps];
+  const next = [...steps];
+  const [s] = next.splice(index, 1);
+  next.splice(to, 0, s as EditorStep);
+  return next;
+}
+
+/**
+ * The receiving checklist editor (F4-1): the live version read only, "Start
+ * from suggested steps" or "Start blank" when there is none, a staged draft
+ * (title, steps added, removed and moved, kind, required and help per step,
+ * an optional procedure as instructions), "Publish version N" with a confirm,
+ * "Turn off" with a confirm, and the earlier versions. Only a publisher sees
+ * the actions; the database refuses everyone else anyway.
+ */
+export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorView }) {
+  const router = useRouter();
+  const canPublish = editor.gate.canPublishChecklist;
+  const live = editor.live;
+
+  const [editing, setEditing] = React.useState(false);
+  const [title, setTitle] = React.useState('');
+  const [steps, setSteps] = React.useState<EditorStep[]>([]);
+  const [procedureId, setProcedureId] = React.useState<string>('');
+  const [error, setError] = React.useState<{
+    message: string;
+    step: number | null;
+    changed: boolean;
+  } | null>(null);
+  const [confirm, setConfirm] = React.useState<'publish' | 'turn_off' | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const pending = React.useRef<{ payload: string; clientPublishId: string } | null>(null);
+
+  useUnsavedWork('receiving-checklist-editor', C.editorTitle, () => editing || busy);
+
+  function begin(from: 'suggested' | 'blank' | 'live') {
+    setError(null);
+    if (from === 'live' && live) {
+      setTitle(live.title);
+      setSteps(
+        stepsFromDrafts(
+          live.steps.map((s) => ({
+            kind: s.kind,
+            label: s.label,
+            help: s.help,
+            required: s.required,
+          })),
+        ),
+      );
+      setProcedureId(live.procedureId ?? '');
+    } else if (from === 'suggested') {
+      setTitle(live?.title ?? 'Receiving checklist');
+      setSteps(stepsFromDrafts(SUGGESTED_RECEIVING_STEPS));
+      setProcedureId('');
+    } else {
+      setTitle(live?.title ?? 'Receiving checklist');
+      setSteps(stepsFromDrafts([{ kind: 'check', label: '', required: true }]));
+      setProcedureId('');
+    }
+    setEditing(true);
+  }
+
+  const update = (uid: string, patch: Partial<EditorStep>) =>
+    setSteps((list) => list.map((s) => (s.uid === uid ? { ...s, ...patch } : s)));
+
+  /** Checked here in the server's words before anything is sent. */
+  function localCheck(): string | null {
+    const t = normalizeChecklistTitle(title);
+    if (!t.ok) return describeChecklistInvalid(t.detail);
+    const r = normalizeChecklistSteps(publishPayload(steps));
+    if (!r.ok) {
+      setError({
+        message: describeChecklistInvalid(r.detail),
+        step: r.detail.step ?? null,
+        changed: false,
+      });
+      return '';
+    }
+    return null;
+  }
+
+  function askPublish() {
+    setError(null);
+    const problem = localCheck();
+    if (problem === '') return;
+    if (problem) {
+      setError({ message: problem, step: null, changed: false });
+      return;
+    }
+    setConfirm('publish');
+  }
+
+  async function publish() {
+    setConfirm(null);
+    if (busy) return;
+    const body = {
+      title,
+      steps: publishPayload(steps),
+      procedureId: procedureId || null,
+      expectedCurrentId: live?.id ?? null,
+    };
+    const payload = JSON.stringify(body);
+    if (!pending.current || pending.current.payload !== payload) {
+      pending.current = { payload, clientPublishId: crypto.randomUUID() };
+    }
+    setBusy(true);
+    let res: Awaited<ReturnType<typeof publishReceivingChecklistAction>>;
+    try {
+      res = await publishReceivingChecklistAction({
+        ...body,
+        clientPublishId: pending.current.clientPublishId,
+      });
+    } catch {
+      // The reply was lost, so the version may have been published. The id is
+      // kept: publishing the same edits again is answered as that publish.
+      setBusy(false);
+      setError({ message: C.didNotGoThrough, step: null, changed: false });
+      return;
+    }
+    setBusy(false);
+    if (!res.ok) {
+      const d = res.error.details as { reason?: string; step?: number } | undefined;
+      setError({
+        message: d?.reason === 'checklist_changed' ? C.publishChanged : res.error.message,
+        step: typeof d?.step === 'number' ? d.step : null,
+        changed: d?.reason === 'checklist_changed',
+      });
+      return;
+    }
+    pending.current = null;
+    setEditing(false);
+    toast.success(C.published(res.data.versionNumber));
+    router.refresh();
+  }
+
+  async function turnOff() {
+    setConfirm(null);
+    if (!live || busy) return;
+    setBusy(true);
+    let res: Awaited<ReturnType<typeof retireReceivingChecklistAction>>;
+    try {
+      res = await retireReceivingChecklistAction({ versionId: live.id });
+    } catch {
+      setBusy(false);
+      setError({ message: C.didNotGoThrough, step: null, changed: false });
+      return;
+    }
+    setBusy(false);
+    if (!res.ok) {
+      const d = res.error.details as { reason?: string } | undefined;
+      setError({
+        message: d?.reason === 'checklist_changed' ? C.publishChanged : res.error.message,
+        step: null,
+        changed: true,
+      });
+      return;
+    }
+    toast.success(C.turnedOff);
+    router.refresh();
+  }
+
+  return (
+    <div className="space-y-6">
+      {!editing && (
+        <section
+          aria-labelledby="live-checklist"
+          className="border-border bg-card rounded-xl border p-4"
+        >
+          {live ? (
+            <>
+              <h2 id="live-checklist" className="font-medium">
+                {C.liveVersion(live.versionNumber)} {live.title}
+              </h2>
+              <VersionDetails version={live} timeZone={editor.timeZone} />
+              {canPublish && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="gradient"
+                    onClick={() => begin('live')}
+                    disabled={busy}
+                  >
+                    {C.prepareVersion(editor.nextVersionNumber)}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setConfirm('turn_off')}
+                    disabled={busy}
+                  >
+                    {C.turnOff}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <h2 id="live-checklist" className="font-medium">
+                {C.noLiveVersion}
+              </h2>
+              <p className="text-muted-foreground mt-1 text-sm">{C.editorEmpty}</p>
+              {canPublish && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button type="button" variant="gradient" onClick={() => begin('suggested')}>
+                    {C.startSuggested}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => begin('blank')}>
+                    {C.startBlank}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+          {!canPublish && <p className="text-muted-foreground mt-3 text-xs">{C.readOnlyEditor}</p>}
+        </section>
+      )}
+
+      {editing && (
+        <section aria-label={C.publishVersion(editor.nextVersionNumber)} className="space-y-4">
+          <div className="space-y-1">
+            <Label htmlFor="checklist-title">{C.titleLabel}</Label>
+            <Input
+              id="checklist-title"
+              value={title}
+              maxLength={CHECKLIST_LIMITS.title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+          <ol className="space-y-3">
+            {steps.map((s, i) => (
+              <li
+                key={s.uid}
+                className={`rounded-xl border p-3 ${error?.step === i + 1 ? 'border-destructive' : 'border-border'}`}
+              >
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground mt-2 w-6 text-sm tabular-nums">
+                    {i + 1}.
+                  </span>
+                  <div className="flex-1 space-y-2">
+                    <Input
+                      aria-label={`${C.stepLabel} ${i + 1}`}
+                      value={s.label}
+                      maxLength={CHECKLIST_LIMITS.label}
+                      onChange={(e) => update(s.uid, { label: e.target.value })}
+                    />
+                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                      <label className="flex items-center gap-2">
+                        <span className="text-muted-foreground text-xs">{C.stepKind}</span>
+                        <select
+                          className="bg-background rounded-md border px-2 py-1.5 text-sm"
+                          value={s.kind}
+                          onChange={(e) =>
+                            update(s.uid, { kind: e.target.value as ChecklistStepKind })
+                          }
+                        >
+                          {CHECKLIST_PUBLISHABLE_KINDS.map((k) => (
+                            <option key={k} value={k}>
+                              {KIND_LABEL[k]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={s.required}
+                          onChange={(e) => update(s.uid, { required: e.target.checked })}
+                        />
+                        {C.stepRequired}
+                      </label>
+                    </div>
+                    <Input
+                      aria-label={`${C.stepHelp}, ${C.stepLabel.toLowerCase()} ${i + 1}`}
+                      placeholder={C.stepHelp}
+                      value={s.help}
+                      maxLength={CHECKLIST_LIMITS.help}
+                      onChange={(e) => update(s.uid, { help: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={C.moveStepUp(i + 1)}
+                      disabled={i === 0}
+                      onClick={() => setSteps((l) => moveStep(l, i, -1))}
+                    >
+                      <ArrowUp />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={C.moveStepDown(i + 1)}
+                      disabled={i === steps.length - 1}
+                      onClick={() => setSteps((l) => moveStep(l, i, 1))}
+                    >
+                      <ArrowDown />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={C.removeStep(i + 1)}
+                      disabled={steps.length <= 1}
+                      onClick={() => setSteps((l) => l.filter((x) => x.uid !== s.uid))}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={steps.length >= CHECKLIST_LIMITS.maxSteps}
+            onClick={() =>
+              setSteps((l) => [
+                ...l,
+                ...stepsFromDrafts([{ kind: 'check', label: '', required: false }]),
+              ])
+            }
+          >
+            <Plus /> {C.addStep}
+          </Button>
+          {editor.procedures && editor.procedures.length > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="checklist-procedure">{C.procedureLabel}</Label>
+              <select
+                id="checklist-procedure"
+                className="bg-background w-full rounded-md border px-2 py-2 text-sm"
+                value={procedureId}
+                onChange={(e) => setProcedureId(e.target.value)}
+              >
+                <option value="">{C.procedureNone}</option>
+                {editor.procedures.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="gradient" onClick={askPublish} disabled={busy}>
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                C.publishVersion(editor.nextVersionNumber)
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false);
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="border-destructive/40 text-destructive flex items-start gap-2 rounded-md border p-3 text-sm"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <div className="space-y-2">
+            <p>{error.message}</p>
+            {error.changed && (
+              <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+                {C.reload}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {editor.history.length > 0 && (
+        <section aria-labelledby="checklist-history" className="space-y-3">
+          <h2 id="checklist-history" className="font-medium">
+            {C.history}
+          </h2>
+          {editor.history.map((v) => (
+            <details key={v.id} className="border-border rounded-xl border p-3">
+              <summary className="cursor-pointer text-sm">
+                {C.versionLine(v.versionNumber, v.title)}
+              </summary>
+              <VersionDetails version={v} timeZone={editor.timeZone} />
+            </details>
+          ))}
+        </section>
+      )}
+
+      <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {confirm === 'turn_off' ? C.turnOff : C.publishVersion(editor.nextVersionNumber)}
+            </DialogTitle>
+            <DialogDescription>
+              {confirm === 'turn_off'
+                ? C.turnOffConfirm
+                : C.publishConfirm(editor.nextVersionNumber)}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirm === 'turn_off' ? 'destructive' : 'gradient'}
+              onClick={() => void (confirm === 'turn_off' ? turnOff() : publish())}
+            >
+              {confirm === 'turn_off' ? C.turnOff : C.publishVersion(editor.nextVersionNumber)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function VersionDetails({
+  version,
+  timeZone,
+}: {
+  version: ChecklistVersionView;
+  timeZone: string;
+}) {
+  return (
+    <div className="mt-2 space-y-2 text-sm">
+      <ol className="list-decimal space-y-1 pl-5">
+        {version.steps.map((s) => (
+          <li key={s.key}>
+            {s.label}
+            <span className="text-muted-foreground"> · {KIND_LABEL[s.kind]}</span>
+            {s.required && <span className="text-muted-foreground"> · {C.stepRequired}</span>}
+            {s.help && <span className="text-muted-foreground block text-xs">{s.help}</span>}
+          </li>
+        ))}
+      </ol>
+      {version.procedureTitle && (
+        <p className="text-muted-foreground">{C.instructions(version.procedureTitle)}</p>
+      )}
+      <p className="text-muted-foreground text-xs">
+        Published by {version.publishedByName} on {checklistWhen(version.publishedAt, timeZone)}
+        {version.retiredAt && version.retiredByName
+          ? ` · turned off by ${version.retiredByName} on ${checklistWhen(version.retiredAt, timeZone)}`
+          : ''}
+        {version.runCount !== null ? ` · ${C.runsOnVersion(version.runCount)}` : ''}
+      </p>
+    </div>
+  );
+}
