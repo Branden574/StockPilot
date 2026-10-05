@@ -64,7 +64,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Put staged stock back on a Site',
         whatChanged:
-          "Place and Place selected on the Staging page, and Place on Staging in the mobile app after the latest update, now list your warehouse's Site, marked (site), after its racks and crates. Placing stock there moves it onto the Site, and the item's rack label is not replaced by the Site's name.",
+          "Place and Place selected on the Staging page, and in the mobile app after the latest update, Place on Staging and Transfer / put away on an item, for units in Staging or Unplaced, now list your warehouse's Site, marked (site), after its racks and crates. Placing stock there moves it onto the Site, and the item's rack label is not replaced by the Site's name.",
         whyItMatters:
           'A cancelled pick sends its units back to Staging, and a warehouse whose stock sits on its Site, with no racks, had no way to put them back.',
         howItAffectsYou:

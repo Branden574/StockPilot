@@ -12702,6 +12702,19 @@ describe('the small fixes release (slice 3)', () => {
     expect(read('../../app/api/v1/items/[id]/transfer/route.ts')).toContain('!destIsSite &&');
     // The web buttons and the phone's are called what the entry calls them.
     expect(e.whatChanged).toContain('Place and Place selected on the Staging page');
+    // F8: the phone's item screen offers the Site too, for units waiting in
+    // Staging or Unplaced (moveDestinationKinds gives a put-away source the
+    // put-away set); the web cannot move those units from an item at all
+    // (transferableHoldings drops Staging and Unplaced sources), so the entry
+    // names the phone only.
+    expect(e.whatChanged).toContain(
+      'in the mobile app after the latest update, Place on Staging and Transfer / put away on an item, for units in Staging or Unplaced,',
+    );
+    expect(read('../../../../mobile/app/item/[id].tsx')).toContain('Transfer / put away');
+    const phoneDestinations = read('../../../../mobile/src/components/move-stock-destinations.ts');
+    expect(phoneDestinations).toContain("const PUT_AWAY: readonly MoveDestinationKind[] = ['rack', 'crate', 'site'];");
+    expect(phoneDestinations).toContain('if (opts.fixedPutAway || awaitingPutAway(source)) return [...PUT_AWAY];');
+    expect(read('../placements.ts')).toContain("h.kind !== 'staging' && h.kind !== 'unplaced'");
     expect(read('../../components/inventory/staging-table.tsx')).toContain('Place selected');
     expect(read('../../../../mobile/app/(drawer)/staging.tsx')).toMatch(/onPress=\{onPlace\}[^>]*>\s*Place\s*</);
   });
