@@ -34,6 +34,14 @@ export const STORAGE_SIGN_CONCURRENCY = 20;
  */
 export const STORAGE_SIGN_TIMEOUT_MS = 10_000;
 
+/**
+ * Paths per createSignedUrls call. storage-api refuses more than 1000 paths in
+ * one body with a 400 for the whole call (v1.60.21, 2026-06-18,
+ * supabase/storage#1160; still 1000 in v1.79.20), so every batch signer
+ * chunks at this size.
+ */
+export const SIGN_PATHS_PER_CALL = 1000;
+
 export class StorageSignTimeoutError extends Error {
   constructor() {
     super(`Storage signing did not answer within ${STORAGE_SIGN_TIMEOUT_MS} ms`);

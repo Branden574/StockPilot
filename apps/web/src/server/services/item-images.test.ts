@@ -133,6 +133,52 @@ beforeEach(() => {
  * ITS OWN paths — reusing a path across tests would hit the memo.
  */
 describe('ItemImagesService.signedUrls (batched signing)', () => {
+  // L17: storage-api refuses more than 1000 paths in one createSignedUrls
+  // call (a 400 for the whole call), so a page past 1000 cold paths fell back
+  // to one single sign per path. The batch is now chunked at 1000.
+  it('signs 2,500 cold paths in three createSignedUrls calls of at most 1000', async () => {
+    createSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
+      data: paths.map((p) => ({ path: p, signedUrl: `https://signed/${p}`, error: null })),
+      error: null,
+    }));
+    const paths = Array.from(
+      { length: 2500 },
+      (_, i) => `${ORG}/items/c0c0c0c0-0000-4000-8000-${String(i).padStart(12, '0')}/m.jpg`,
+    );
+
+    const map = await svc().signedUrls(paths);
+
+    expect(createSignedUrlsMock).toHaveBeenCalledTimes(3);
+    const sizes = createSignedUrlsMock.mock.calls.map(([p]) => (p as string[]).length);
+    expect(sizes).toEqual([1000, 1000, 500]);
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
+    expect(map.size).toBe(2500);
+  });
+
+  it('a failed chunk leaves only its own paths to the single signer', async () => {
+    createSignedUrlsMock.mockImplementation(async (paths: string[]) =>
+      paths.length === 1000
+        ? {
+            data: paths.map((p) => ({ path: p, signedUrl: `https://signed/${p}`, error: null })),
+            error: null,
+          }
+        : { data: null, error: { message: 'boom' } },
+    );
+    createSignedUrlMock.mockImplementation(async (p: string) => ({
+      data: { signedUrl: `https://single/${p}` },
+      error: null,
+    }));
+    const paths = Array.from(
+      { length: 1200 },
+      (_, i) => `${ORG}/items/c1c1c1c1-0000-4000-8000-${String(i).padStart(12, '0')}/m.jpg`,
+    );
+
+    const map = await svc().signedUrls(paths);
+
+    expect(createSignedUrlMock).toHaveBeenCalledTimes(200);
+    expect(map.size).toBe(1200);
+  });
+
   it('cold paths are signed with ONE batch call — the per-path signer consumes the primed batch and never issues individual storage calls', async () => {
     createSignedUrlsMock.mockResolvedValue({
       data: [
