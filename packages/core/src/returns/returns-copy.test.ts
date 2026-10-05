@@ -99,6 +99,9 @@ describe('returns copy', () => {
     );
     expect(choiceNeededSentence('Cap', RETURNS_COPY.destinationsUnavailable)).toBe("Cap: Couldn't load where the returned item goes. Reload.");
     expect(returnLineLabel('New Hire Shirt', 'Size M')).toBe('New Hire Shirt, M');
+    // A name that already carries the size is not repeated (browser walk).
+    expect(returnLineLabel('Walk New Hire Shirt - 2XL', 'Size 2XL')).toBe('Walk New Hire Shirt - 2XL');
+    expect(returnLineLabel('Medium Tee', 'Size M')).toBe('Medium Tee, M');
     expect(returnLineLabel(null, null)).toBe('Item');
   });
 
