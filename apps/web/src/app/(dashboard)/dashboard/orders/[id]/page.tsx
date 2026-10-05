@@ -338,20 +338,21 @@ export default async function OrderDetailPage({
   const canAssignDelivery = can(ctx, 'orders:assign_delivery');
   const driversGate = canApprove && canAssignDelivery && request.status === 'staged_for_delivery';
 
-  // Carrier shipping (EasyPost). showShippingPanel needs no round trip — the
-  // panel renders (and self-hides via its own GET when no shipment exists)
-  // for anyone on a shippable delivery order. Only canBuyLabel needs the
-  // module-enabled check, and only for a manager who could act on it.
+  // Carrier shipping (EasyPost). The panel renders (and self-hides via its own
+  // GET when no shipment exists) for anyone on a shippable delivery order, but
+  // only with the Shipping module on (L50b): with it off, the panel's GET
+  // answered 403 in the console. The module check reads the request-cached
+  // module set (no round trip); canBuyLabel adds shipping:manage.
   const SHIPPABLE_STATUSES: OrderRequestStatus[] = [
     'staged_for_delivery',
     'in_transit',
     'completed',
   ];
-  const showShippingPanel =
+  const shippableOrder =
     request.fulfillment_type === 'delivery' &&
     Boolean(request.delivery_charter_id) &&
     SHIPPABLE_STATUSES.includes(request.status);
-  const shippingModuleGate = showShippingPanel && can(ctx, 'shipping:manage');
+  const shippingModuleGate = shippableOrder && can(ctx, 'shipping:manage');
 
   // Returns (RMA). 'completed' is the live terminal status; 'delivered' is a
   // legacy value some older rows still carry (compared as a raw string since
@@ -584,7 +585,7 @@ export default async function OrderDetailPage({
         })()
       : Promise.resolve({ pickers: [] as DriverOption[], assignedPickerName: null as string | null }),
 
-    shippingModuleGate ? checkModuleAccess('shipping') : Promise.resolve(null),
+    shippableOrder ? checkModuleAccess('shipping') : Promise.resolve(null),
 
     returnsModuleGate ? checkModuleAccess('returns') : Promise.resolve(null),
 
@@ -951,7 +952,8 @@ export default async function OrderDetailPage({
   };
   const showLiveTrackingShare = liveTrackingGate && (liveTrackingAccess?.enabled ?? false);
   const { pickers, assignedPickerName } = pickerResult;
-  const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
+  const showShippingPanel = shippableOrder && (shippingAccess?.enabled ?? false);
+  const canBuyLabel = shippingModuleGate && showShippingPanel;
   const returnsModuleEnabled = returnsModuleGate && (returnsAccess?.enabled ?? false);
   const maintenanceModuleEnabled = maintenanceAccess?.enabled ?? false;
   // The RMA number links to /dashboard/returns/[id] only when that page will

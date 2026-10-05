@@ -147,7 +147,14 @@ vi.mock('@/components/orders/draft-shortfall-po-dialog', () => ({
 /** The views the page handed its dialog (null: no Change offered). */
 const handedViews = () =>
   reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
-vi.mock('@/components/orders/shipping-panel', () => ({ ShippingPanel: () => null }));
+// L50b: whether the shipping panel mounts, recorded.
+const shippingPanelProps = vi.fn();
+vi.mock('@/components/orders/shipping-panel', () => ({
+  ShippingPanel: (props: Record<string, unknown>) => {
+    shippingPanelProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/status-badge', () => ({ OrderStatusBadge: () => null }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 vi.mock('@/components/onboarding/help-tip', () => ({ HelpTip: () => null }));
@@ -421,6 +428,37 @@ describe('orders/[id]: the timeline knows whether the viewer can see activity (L
     };
     await renderPage();
     expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: true }));
+  });
+});
+
+// L50b: the shipping panel fetched /api/v1/orders/<id>/shipping on every
+// delivery order, and with the Shipping module off that answered 403 in the
+// console. The panel now mounts only with the module on.
+describe('orders/[id]: the shipping panel follows the Shipping module (L50b)', () => {
+  const deliveryOrder = () =>
+    detailFixture({
+      request: requestFixture({
+        status: 'in_transit',
+        fulfillment_type: 'delivery',
+        delivery_charter_id: 'charter-1',
+      }),
+    });
+
+  it('with Shipping off, no panel (and so no request that answers 403)', async () => {
+    orderGet.mockResolvedValue(deliveryOrder());
+    checkModuleAccessMock.mockImplementation(async (id: string) => ({
+      enabled: id !== 'shipping',
+      canManage: false,
+    }));
+    await renderPage();
+    expect(checkModuleAccessMock).toHaveBeenCalledWith('shipping');
+    expect(shippingPanelProps).not.toHaveBeenCalled();
+  });
+
+  it('with Shipping on, the panel mounts', async () => {
+    orderGet.mockResolvedValue(deliveryOrder());
+    await renderPage();
+    expect(shippingPanelProps).toHaveBeenCalled();
   });
 });
 
