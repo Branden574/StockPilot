@@ -4291,6 +4291,7 @@ describe('the small fixes release (slice 1)', () => {
       'Waiting for signature',                    // 1.10
       'the new order page says so',               // 1.11
       'what was handed over is recorded',         // 1.12
+      'emailed at the address on their profile',  // 1.13
       'SO-000049',                                // 1.14
       'Timeline',                                 // 1.15
       'cancelled, denied or backordered',         // 1.17
