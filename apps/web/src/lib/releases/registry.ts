@@ -252,9 +252,10 @@ export const RELEASES: Release[] = [
     // published and the Demo Co walk passed (returns plan 10.1 R5-R8); RX-5
     // publishes it, sets the real publishedAt and re-reads these words
     // against what shipped. It sits directly below the phone-ordering drafts
-    // (PO-4 and PO-2, dated later; PO-2's test pins it after every published
-    // release) and above every published release; the publishing follow-up
-    // keeps the order newest first.
+    // (PO-4 and PO-2) and security slice A3's account deletion draft, each
+    // dated later (A3's test wants every draft above it dated after it), and
+    // above every published release; the publishing follow-up keeps the order
+    // newest first.
     //
     // What a person can see: the RMA workbench and the destination choice on
     // the web and the phone, the returns list's filters and paging, the
@@ -267,7 +268,7 @@ export const RELEASES: Release[] = [
     title: 'Returns remember the rack an item came from',
     summary:
       'When you approve a return you now choose Restock or Scrap, and for Restock you can send the item straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received and processed. Returns also have their own screens on the phone, and return requests from requesters notify the people who manage returns.',
-    publishedAt: '2026-10-11T17:00:00Z',
+    publishedAt: '2026-10-11T16:50:00Z',
     audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
     entries: [
       {

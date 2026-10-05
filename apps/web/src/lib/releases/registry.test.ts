@@ -3803,11 +3803,20 @@ describe('returns remember the original rack (returns RX-1) is held as a draft',
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('sits among the drafts above every published release', () => {
+  it('sits among the drafts above every published release, directly below A3\'s draft, dated before every draft above it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
     expect(RELEASES[at + 1]?.status).toBe('published');
+    // Rebased on 0393: security slice A3's account deletion draft sits
+    // directly above it, and its test wants every draft above it dated later.
+    expect(RELEASES[at - 1]?.id).toBe('account-deletion-everyone-2026-10');
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
   });
 
   it('is told to whoever can open Returns; the request ping only to people who manage returns', () => {
