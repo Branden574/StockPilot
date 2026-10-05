@@ -152,6 +152,13 @@ async function getLowStock(
       // whose assembled stock ran out is the normal state, not an alert.
       // NOT NULL (0040), so the equality is total.
       .eq('is_bundle', false)
+      // An item created from an inbound PO sits at quantity 0 with
+      // awaiting_first_receipt until its first receipt (0277). It is
+      // expected, not out of stock: the dashboard's low-stock list and its
+      // out-of-stock count leave it out, and so does the digest. Sorted by
+      // quantity, these used to come first and fill the out-of-stock count.
+      // NOT NULL (0277), so the equality is total.
+      .eq('awaiting_first_receipt', false)
       .or('quantity_on_hand.lte.0,reorder_point.gt.0')
       // Quantity-ascending keeps the neediest items in the rendered slice; the
       // id tiebreak is what makes the paging windows stable (see paginate.ts).

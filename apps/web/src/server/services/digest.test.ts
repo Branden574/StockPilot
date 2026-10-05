@@ -19,6 +19,8 @@ type ItemRow = {
   deleted_at: string | null;
   /** NOT NULL DEFAULT false in the database (0040): a kit's pre-assembled stock. */
   is_bundle: boolean;
+  /** NOT NULL DEFAULT false (0277): created from an inbound PO, never received. */
+  awaiting_first_receipt: boolean;
   sku: string;
   name: string;
   quantity_on_hand: number;
@@ -132,6 +134,7 @@ function filler(i: number, over: Partial<ItemRow> = {}): ItemRow {
     status: 'active',
     deleted_at: null,
     is_bundle: false,
+    awaiting_first_receipt: false,
     sku: `F-${i}`,
     name: `Filler ${i}`,
     quantity_on_hand: 1,
@@ -148,6 +151,7 @@ const HOT: ItemRow = {
   status: 'active',
   deleted_at: null,
   is_bundle: false,
+  awaiting_first_receipt: false,
   sku: 'HOT',
   name: 'Fast mover',
   quantity_on_hand: 300,
@@ -239,6 +243,27 @@ describe('getDigestData low stock', () => {
     const payload = await getDigestData(client, 'org-1');
 
     expect(lowStockIds(payload.lowStock)).toEqual(['out']);
+  });
+
+  it('leaves out an item made from a purchase order that has not been received yet', async () => {
+    // Since 0277 an item created from an inbound PO sits at quantity 0 with
+    // awaiting_first_receipt until its first receipt. It is expected, not out
+    // of stock: the dashboard's low-stock list and out-of-stock count skip it
+    // and the inventory lists hide it by default. Sorted by quantity, these
+    // came FIRST, filling "N out of stock" and the "X is out at Y" line ahead
+    // of real low stock.
+    const items = [
+      filler(1, { id: 'expected', quantity_on_hand: 0, reorder_point: 5, awaiting_first_receipt: true }),
+      filler(2, { id: 'really-out', quantity_on_hand: 0, reorder_point: 5 }),
+    ];
+    const { client, itemChains } = makeFakeClient(items);
+
+    const payload = await getDigestData(client, 'org-1');
+
+    expect(lowStockIds(payload.lowStock)).toEqual(['really-out']);
+    // Server-side, so the paging windows never carry the expected items.
+    const eq = (itemChains[0] ?? []).filter((s) => s.method === 'eq').map((s) => s.args);
+    expect(eq).toContainEqual(['awaiting_first_receipt', false]);
   });
 
   it('omits healthy stock', async () => {
