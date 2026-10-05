@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId, Role } from '@stockpilot/core';
+import { ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY, type ModuleId, type Role } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -266,8 +266,9 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
     const staff = cancelStub('approved');
     await expect(svc(staff, { role: 'staff', userId: 'u1' }).cancel('ord-1', null)).rejects.toMatchObject({
       code: 'validation_error',
-      message:
-        'You can only cancel your own request while it is still pending approval. Ask someone who approves orders to cancel approved or in-progress requests.',
+      // 0396: the sentence moved to core, shared with the function's own
+      // refusal (hint requester_pending_only).
+      message: ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
     });
   });
 });

@@ -675,6 +675,19 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0394_return_close_races.sh; the lock footprint is
   # scripts/db-concurrency/0394_migration_lock_footprint.sh.
   supabase/tests/0394_returns_lifecycle_original_rack.test.sql
+  # Order and stock guards (0396, small fixes slice 2): the requester cancels
+  # their own order only at pending approval; cancel and reopen link their
+  # movements to the order; the adjust, transfer, count-post, receipt-post,
+  # receipt-reverse and kit-assembly wrappers refuse a direct call without the
+  # permission the app checks first (not inside another ledger call, not for
+  # service_role, not for a row the caller cannot read); no soft delete of an
+  # item with stock on record or a holding, for any role; order_requests_update
+  # follows write access to the order's warehouse on every user-client edge;
+  # a paper signature by the driver needs a member with Orders on; no kit line;
+  # the partial-approval notification. Every restated body is production's
+  # with its added block removed. The lock footprint is
+  # scripts/db-concurrency/0396_migration_lock_footprint.sh.
+  supabase/tests/0396_order_stock_guards.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1060,6 +1073,14 @@ WEB_TESTS=(
   src/app/api/v1/public/returns/route.test.ts
   src/components/returns/create-return-dialog.test.tsx
   'src/app/returns/request/[token]/requester-return-form.test.tsx'
+  # 0396: each database refusal (the cancel window, a missing stock or kit
+  # permission, an item that holds stock) reaches the user as its own
+  # sentence, mapped before the older 'forbidden' arms; the notes editor asks
+  # write access to the order's warehouse, as the update policy now does.
+  src/server/services/lib/db-guard-refusal.test.ts
+  src/server/services/db-guard-refusal.wiring.test.ts
+  src/server/services/order-requests.db-guard.test.ts
+  src/server/services/inventory.db-guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1157,6 +1178,8 @@ MOBILE_TESTS=(
 # ═══════════════════════════════════════════════════════════════════════════
 CORE_TESTS=(
   src/constants/permissions.test.ts
+  # 0396: the database refusals' hints and words, shared by web and phone.
+  src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts

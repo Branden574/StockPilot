@@ -18,6 +18,7 @@ import {
   isNeededByWithinReach,
   lineOwedUnits,
   NEEDED_BY_BUSY_COPY,
+  ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_MODULE_OFF_COPY,
@@ -88,6 +89,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { defer } from './lib/defer';
 import {
   orderOrganizationChangedError,
@@ -2776,10 +2778,9 @@ export class OrderRequestsService {
       ) {
         const status = (row as { status: OrderRequestStatus }).status;
         if (status !== 'pending_approval') {
-          throw new ServiceError(
-            'validation_error',
-            'You can only cancel your own request while it is still pending approval. Ask someone who approves orders to cancel approved or in-progress requests.',
-          );
+          // 0396: the same sentence cancel_order_request's own refusal maps to
+          // (hint requester_pending_only, below), from core copy.
+          throw new ServiceError('validation_error', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
         }
       }
     }
@@ -2794,6 +2795,13 @@ export class OrderRequestsService {
       p_reason: reason ?? null,
     });
     if (error) {
+      // 0396: the function now refuses a requester's cancel past pending
+      // approval itself (42501 forbidden, hint requester_pending_only). The
+      // read above normally stops it first; this is the status changing in
+      // between, or that read and the function disagreeing. Checked before
+      // the 'forbidden' arm, which would call it someone else's order.
+      const guard = dbGuardRefusal(error);
+      if (guard) throw guard;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
@@ -4442,12 +4450,15 @@ export class OrderRequestsService {
   async setInternalNotes(id: string, notes: string | null): Promise<void> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
-    // C3: 'read' is enough for editing internal notes — the RLS UPDATE
-    // policy further restricts writes to manager+, and we already
-    // gated on `orders:approve`. A warehouse-scoped manager who can
-    // READ a warehouse should be able to annotate its requests even
-    // without write privileges on the warehouse itself.
-    await this.requireWarehouseAccess(id, 'read');
+    // 'write', as every other user-client write to the order (0396, L129a):
+    // order_requests_update now requires write access to the order's
+    // warehouse (a manager by role, or user_can_access_warehouse 'write'), so
+    // this gate says the same thing the policy enforces. Owners, admins and
+    // managers write every warehouse and staff write exactly the warehouses
+    // they read, so the only member this moves is a viewer granted
+    // orders:approve, who now gets the read-only refusal instead of a notes
+    // save the database would match to no row (production 2026-10-05: none).
+    await this.requireWarehouseAccess(id, 'write');
     // Row-proof (bug-pattern #2): without `.select().maybeSingle()` a 0-row
     // update — RLS miss, or the order deleted mid-request — returns HTTP 204
     // with error === null and the UI happily shows notes that were never

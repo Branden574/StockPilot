@@ -16,14 +16,14 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 /**
  * SP-050 — the M7 requester self-cancel rule had NO test at any layer.
  *
- * The TypeScript guard in `cancel()` is the ONLY enforcement of "a requester
- * may only cancel their OWN request while it is still pending approval". The
- * RPC deliberately does not back it up: 0290_cancel_restock_guard refuses only
- * terminal statuses and then accepts owner-or-manager, so a requester reaching
- * the DB directly could cancel an APPROVED, mid-pick order — releasing its
- * reservations and restocking picked units out from under the picker who
- * claimed it. A role-allowlist edit or a status rename would have silently
- * disabled the guard with the whole suite green; these tests pin it.
+ * The TypeScript guard in `cancel()` was the ONLY enforcement of "a requester
+ * may only cancel their OWN request while it is still pending approval": the
+ * RPC refused only terminal statuses and then accepted owner-or-manager, so a
+ * requester reaching the DB directly could cancel an APPROVED, mid-pick order
+ * — releasing its reservations and restocking picked units out from under the
+ * picker who claimed it. Since 0396 the function refuses that too (hint
+ * requester_pending_only, mapped in order-requests.db-guard.test.ts); this
+ * guard still answers first, without a round trip, and these tests pin it.
  */
 
 function svc(
