@@ -172,6 +172,13 @@ export default function ExceptionDetailScreen() {
   const [stored, setState] = React.useState<Loaded>({ kind: 'loading' });
   const [refreshing, setRefreshing] = React.useState(false);
   const [sheet, setSheet] = React.useState<ExceptionSheetMode | null>(null);
+  // The last mode the sheet opened in: kept while it closes, so the closing
+  // sheet does not switch to the note form for its last frames (L101).
+  const [lastSheet, setLastSheet] = React.useState<ExceptionSheetMode>('note');
+  const openSheet = React.useCallback((mode: ExceptionSheetMode) => {
+    setLastSheet(mode);
+    setSheet(mode);
+  }, []);
   const [recountOpen, setRecountOpen] = React.useState(false);
   // Bumped whenever this screen re-reads, so the card re-reads with it.
   const [verificationNonce, setVerificationNonce] = React.useState(0);
@@ -352,7 +359,7 @@ export default function ExceptionDetailScreen() {
           offline={offline}
           refreshing={refreshing}
           onRefresh={() => void refresh()}
-          onOpenSheet={setSheet}
+          onOpenSheet={openSheet}
           onRecount={() => setRecountOpen(true)}
           maintenanceEnabled={maintenanceEnabled}
           canSubmitMaintenance={canSubmitMaintenance}
@@ -373,7 +380,7 @@ export default function ExceptionDetailScreen() {
       {state.kind === 'ready' ? (
         <ExceptionNoteSheet
           visible={sheet !== null}
-          mode={sheet ?? 'note'}
+          mode={sheet ?? lastSheet}
           occurrence={state.detail.occurrence}
           acknowledgeHelp={view?.acknowledgeHelp ?? null}
           confirm={view?.confirm ?? null}
