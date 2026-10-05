@@ -1112,8 +1112,11 @@ select is(
   -- (return_line_sources, return_line_plans_original, return_line_restock_legs,
   -- return_restock_original). F2-5's function calls none of them. Computed from
   -- production's own ledger rows (which reproduce the old pin exactly) with those
-  -- five rows changed, under production's collation (2026-10-04); verify on the stack.
-  'ledger.*|817dc7bdb8170180476ba5e4fe325d4b|18\n'
+  -- five rows changed, under production's collation (2026-10-04; re-derived
+  -- 2026-10-05 after the desk-check fixes changed return_line_sources and
+  -- return_restock_original, the same query giving 817dc7bd|18 for the earlier
+  -- bodies); verify on the stack.
+  'ledger.*|b19b3b42b13e22c020bc64e5fae89dca|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are
