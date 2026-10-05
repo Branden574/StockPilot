@@ -26,26 +26,38 @@ const CLOSED = ['completed', 'denied', 'cancelled'];
 describe('orderCancelOffer', () => {
   it('offers an approver Cancel at every open status, and never on a closed order', () => {
     for (const status of OPEN) {
-      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: false })).toBe('approver');
-      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: true })).toBe('approver');
+      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: false, canRequest: true })).toBe('approver');
+      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: true, canRequest: true })).toBe('approver');
     }
     for (const status of CLOSED) {
-      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: true })).toBeNull();
+      expect(orderCancelOffer({ status, canApprove: true, isOwnRequest: true, canRequest: true })).toBeNull();
     }
   });
 
   it('offers the requester Cancel request only while their order waits for approval', () => {
     expect(
-      orderCancelOffer({ status: 'pending_approval', canApprove: false, isOwnRequest: true }),
+      orderCancelOffer({ status: 'pending_approval', canApprove: false, isOwnRequest: true, canRequest: true }),
     ).toBe('requester');
     for (const status of [...OPEN, ...CLOSED].filter((s) => s !== 'pending_approval')) {
-      expect(orderCancelOffer({ status, canApprove: false, isOwnRequest: true })).toBeNull();
+      expect(orderCancelOffer({ status, canApprove: false, isOwnRequest: true, canRequest: true })).toBeNull();
+    }
+  });
+
+  // Desk check F3: svc.cancel asserts orders:request before any rule, for
+  // approvers too, so someone whose orders:request was revoked is refused
+  // every cancel. They are offered none.
+  it('offers nothing without orders:request, to an approver or the requester', () => {
+    for (const status of [...OPEN, ...CLOSED]) {
+      for (const isOwnRequest of [true, false]) {
+        expect(orderCancelOffer({ status, canApprove: true, isOwnRequest, canRequest: false })).toBeNull();
+        expect(orderCancelOffer({ status, canApprove: false, isOwnRequest, canRequest: false })).toBeNull();
+      }
     }
   });
 
   it('offers nothing to someone who neither approves nor placed the order', () => {
     for (const status of [...OPEN, ...CLOSED]) {
-      expect(orderCancelOffer({ status, canApprove: false, isOwnRequest: false })).toBeNull();
+      expect(orderCancelOffer({ status, canApprove: false, isOwnRequest: false, canRequest: true })).toBeNull();
     }
   });
 });

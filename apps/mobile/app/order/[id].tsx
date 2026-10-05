@@ -1964,11 +1964,13 @@ export default function OrderDetail() {
     isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
-  // Cancel (L93): core's orderCancelOffer, the web order page's rule.
+  // Cancel (L93): core's orderCancelOffer, the web order page's rule. The
+  // effective orders:request too: the service asserts it for every cancel.
   const cancelOffer = phoneOrderCancel({
     status: st,
     canApproveOrders: rpApprove,
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
+    canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
   });
   const pickerLabel =
     !order || order.assignedPickerId === null

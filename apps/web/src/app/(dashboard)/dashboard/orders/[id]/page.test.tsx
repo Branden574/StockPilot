@@ -463,7 +463,14 @@ describe('orders/[id]: the shipping panel follows the Shipping module (L50b)', (
 });
 
 describe('orders/[id]: Cancel request (L85)', () => {
+  // A requester holds orders:request (the staff default); the beforeEach's
+  // set is orders:read only.
+  const asRequester = () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
+  };
+
   it('the requester (no approve) is offered it while the order waits for approval', async () => {
+    asRequester();
     orderGet.mockResolvedValue(
       detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
     );
@@ -474,6 +481,7 @@ describe('orders/[id]: Cancel request (L85)', () => {
   });
 
   it('the requester (no approve) is not offered it once the order is approved', async () => {
+    asRequester();
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }) }));
     await renderPage();
     expect(cancelButtonProps).not.toHaveBeenCalled();
@@ -482,11 +490,31 @@ describe('orders/[id]: Cancel request (L85)', () => {
   it('an approver is offered it on an approved order', async () => {
     ctxHolder.current = {
       role: 'manager',
-      permissions: new Set(['orders:read', 'orders:approve']),
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
     };
     orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }) }));
     await renderPage();
     expect(cancelButtonProps).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+  });
+
+  // Desk check F3: svc.cancel asserts orders:request for every cancel,
+  // approvers included, so without it the button only led to a refusal.
+  it('is not offered without orders:request, to an approver or to the requester', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }) }));
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
   });
 });
 

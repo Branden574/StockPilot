@@ -1217,9 +1217,14 @@ export default async function OrderDetailPage({
             )}
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
-                order. core's orderCancelOffer is that rule, shared with the
-                phone. */}
-            {orderCancelOffer({ status: request.status, canApprove, isOwnRequest }) !== null && (
+                order; and every cancel needs orders:request (desk check F3).
+                core's orderCancelOffer is that rule, shared with the phone. */}
+            {orderCancelOffer({
+              status: request.status,
+              canApprove,
+              isOwnRequest,
+              canRequest: can(ctx, 'orders:request'),
+            }) !== null && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
             <ReportProblemButton

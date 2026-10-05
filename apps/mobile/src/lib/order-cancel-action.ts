@@ -4,7 +4,8 @@ import { orderCancelOffer } from '@stockpilot/core';
  * Cancel on the phone's order screen (L93). WHO is offered it is core's
  * orderCancelOffer, the web order page's rule and the service's: someone who
  * approves orders at every open status, the person who placed it only while
- * it waits for approval. The confirm carries the web's optional reason
+ * it waits for approval, and nobody without orders:request, which the service
+ * asserts for every cancel (desk check F3). The confirm carries the web's optional reason
  * (Alert.prompt's text field), sent to /api/v1/orders/[id]/transition.
  *
  * Pure, so vitest pins it; the screen reads the result.
@@ -25,12 +26,15 @@ export function phoneOrderCancel(input: {
   canApproveOrders: boolean;
   /** The viewer placed this order. */
   isOwnRequest: boolean;
+  /** The effective orders:request. */
+  canRequestOrders: boolean;
 }): PhoneOrderCancel | null {
   if (!input.status) return null;
   const offer = orderCancelOffer({
     status: input.status,
     canApprove: input.canApproveOrders,
     isOwnRequest: input.isOwnRequest,
+    canRequest: input.canRequestOrders,
   });
   if (offer === null) return null;
   if (offer === 'requester') {
