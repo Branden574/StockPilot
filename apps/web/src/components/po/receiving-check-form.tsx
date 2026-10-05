@@ -45,6 +45,8 @@ const C = RECEIVING_CHECKLIST_COPY;
 
 type Draft = ChecklistAnswerDraft;
 type Drafts = ChecklistAnswerDrafts;
+/** A run as the server holds it: the page's view, or a save's answer. */
+type SavedRunState = Pick<ReceivingRunView['run'], 'results' | 'note' | 'revision' | 'status'>;
 
 type FormError =
   | { kind: 'changed'; message: string }
@@ -63,26 +65,76 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
   const router = useRouter();
   const steps = view.version.steps;
   const tz = view.timeZone;
-  const readOnly = view.run.status === 'completed' || !view.canRecord;
 
-  const initial = React.useMemo(
-    () => checklistDraftsFrom(steps, view.run.results),
-    [steps, view.run.results],
+  const [drafts, setDrafts] = React.useState<Drafts>(() =>
+    checklistDraftsFrom(steps, view.run.results),
   );
-  const [drafts, setDrafts] = React.useState<Drafts>(initial);
   const [note, setNote] = React.useState(view.run.note ?? '');
-  const [saved, setSaved] = React.useState({ drafts: initial, note: view.run.note ?? '' });
+  const [saved, setSaved] = React.useState(() => ({
+    drafts: checklistDraftsFrom(steps, view.run.results),
+    note: view.run.note ?? '',
+  }));
+  /**
+   * The saved revision these answers are based on (desk check F3): what a save
+   * names as expected, so a newer save by someone else is refused, never
+   * overwritten. It moves only with this form's own save or with what it
+   * adopts (a newer save while nothing is typed, or Reload).
+   */
+  const [base, setBase] = React.useState({ revision: view.run.revision, status: view.run.status });
+  /** The newest revision the page has brought; a newer one is handled once. */
+  const [seenRevision, setSeenRevision] = React.useState(view.run.revision);
   const [busy, setBusy] = React.useState<'save' | 'complete' | null>(null);
   const [error, setError] = React.useState<FormError | null>(null);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const pending = React.useRef<{ payload: string; saveId: string } | null>(null);
 
   const dirty = !checklistDraftsEqual(drafts, saved.drafts) || note !== saved.note;
+  const readOnly =
+    view.run.status === 'completed' || base.status === 'completed' || !view.canRecord;
   useUnsavedWork(
     'receiving-check',
     `Receiving checklist ${view.receipt.receiptNumber}`,
     () => busy !== null || dirty,
   );
+
+  /** Show what the server holds for this run, and base the next save on it. */
+  function adopt(run: SavedRunState) {
+    const fresh = checklistDraftsFrom(steps, run.results);
+    setDrafts(fresh);
+    setNote(run.note ?? '');
+    setSaved({ drafts: fresh, note: run.note ?? '' });
+    setBase({ revision: run.revision, status: run.status });
+    setError(null);
+  }
+
+  // A newer save reached the page (someone else's, or a Reload's). Typed and
+  // unsaved answers are never replaced: they stay, with the notice and Reload
+  // (desk check F3). With nothing typed, the form shows the new save at once.
+  // Not while this form's own save is in flight: its answer settles that.
+  if (busy === null && view.run.revision > seenRevision) {
+    setSeenRevision(view.run.revision);
+    if (dirty) {
+      setError(
+        view.run.status === 'completed'
+          ? {
+              kind: 'completed',
+              message: view.run.completedByName
+                ? C.runCompletedBy(view.run.completedByName)
+                : C.runCompleted,
+            }
+          : { kind: 'changed', message: C.runChanged },
+      );
+    } else {
+      adopt(view.run);
+    }
+  }
+
+  /** Reload: what the page holds now, then whatever the server holds. */
+  function reload() {
+    setSeenRevision((r) => Math.max(r, view.run.revision));
+    adopt(view.run);
+    router.refresh();
+  }
 
   const setDraft = (key: string, patch: Partial<Draft>) =>
     setDrafts((d) => ({ ...d, [key]: { ...(d[key] ?? { value: '', note: '' }), ...patch } }));
@@ -124,7 +176,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
     }
     // One save id per payload: resending the same answers after a lost reply
     // is answered as a replay; changed answers are a new save.
-    const payload = JSON.stringify({ results, note, complete, revision: view.run.revision });
+    const payload = JSON.stringify({ results, note, complete, revision: base.revision });
     if (!pending.current || pending.current.payload !== payload) {
       pending.current = { payload, saveId: crypto.randomUUID() };
     }
@@ -134,7 +186,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
       res = await saveReceivingCheckAction(view.run.id, {
         results,
         note: note.trim() === '' ? null : note,
-        expectedRevision: view.run.revision,
+        expectedRevision: base.revision,
         saveId: pending.current.saveId,
         complete,
       });
@@ -169,7 +221,10 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
       return;
     }
     pending.current = null;
-    setSaved({ drafts, note });
+    // What was saved, as the server stored it, is the new base; the page's
+    // refresh then brings the same revision, or a newer one from someone else.
+    setSeenRevision((r) => Math.max(r, res.data.revision));
+    adopt(res.data);
     toast.success(complete ? C.completed : C.saved);
     router.refresh();
   }
@@ -353,7 +408,7 @@ export function ReceivingCheckForm({ view }: { view: ReceivingRunView }) {
           <div className="space-y-2">
             <p>{error.message}</p>
             {(error.kind === 'changed' || error.kind === 'completed') && (
-              <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+              <Button type="button" variant="outline" size="sm" onClick={reload}>
                 {C.reload}
               </Button>
             )}

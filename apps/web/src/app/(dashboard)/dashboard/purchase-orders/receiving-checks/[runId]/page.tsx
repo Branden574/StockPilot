@@ -80,12 +80,11 @@ export default async function ReceivingCheckPage({
       <p className="text-muted-foreground mb-6 mt-1 text-sm">
         {RECEIVING_CHECKLIST_COPY.versionLine(view.version.versionNumber, view.version.title)}
       </p>
-      {/* Keyed on the saved revision: a save (this person's or, after Reload,
-          someone else's) remounts the form from what the server holds. */}
-      <ReceivingCheckForm
-        key={`${view.run.id}:${view.run.revision}:${view.run.status}`}
-        view={view}
-      />
+      {/* Keyed on the run only (desk check F3): a newer save reaching the
+          page must not remount the form over typed answers. The form adopts
+          it when nothing is typed, and otherwise keeps the answers and offers
+          Reload. */}
+      <ReceivingCheckForm key={view.run.id} view={view} />
     </div>
   );
 }

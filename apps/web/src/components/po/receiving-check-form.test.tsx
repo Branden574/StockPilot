@@ -167,6 +167,76 @@ describe('ReceivingCheckForm', () => {
     expect(router.refresh).toHaveBeenCalled();
   });
 
+  // Desk check F3 (mutation caught: a newer revision replacing the form, or a
+  // save naming the newer revision). Someone else's save reaches the page
+  // while answers are typed and unsaved: they stay, the existing notice says
+  // someone else saved, a save still names the revision they were typed on
+  // (so the database refuses it rather than overwriting), and Reload shows
+  // what was saved.
+  it('a newer save arriving while answers are typed keeps them, says so, and saves on their revision', async () => {
+    saveReceivingCheckAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'x', details: { reason: 'checklist_run_changed' } },
+    });
+    const user = userEvent.setup();
+    const v = render(<ReceivingCheckForm view={view()} />);
+    const countBox = () =>
+      screen.getByRole('textbox', { name: 'Number of boxes received' }) as HTMLInputElement;
+    await user.type(countBox(), '7');
+    v.rerender(
+      <ReceivingCheckForm
+        view={view({}, { revision: 2, results: { s1: { value: 'fail', note: 'Wrong slip' } } })}
+      />,
+    );
+    expect(countBox().value).toBe('7');
+    expect(screen.getByRole('alert').textContent).toContain(C.runChanged);
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(1));
+    expect(saveReceivingCheckAction.mock.calls[0]![1].expectedRevision).toBe(1);
+    expect(countBox().value).toBe('7');
+    await user.click(await screen.findByRole('button', { name: C.reload }));
+    expect(router.refresh).toHaveBeenCalled();
+    expect(countBox().value).toBe('');
+    expect((screen.getAllByRole('radio', { name: C.fail })[0] as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a newer save arriving with nothing typed shows it at once, with no notice', () => {
+    const v = render(<ReceivingCheckForm view={view()} />);
+    v.rerender(
+      <ReceivingCheckForm view={view({}, { revision: 2, results: { s3: { value: 12 } } })} />,
+    );
+    expect(
+      (screen.getByRole('textbox', { name: 'Number of boxes received' }) as HTMLInputElement).value,
+    ).toBe('12');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('after its own save the form holds what was saved, on the new revision', async () => {
+    saveReceivingCheckAction.mockResolvedValue({
+      ok: true,
+      data: {
+        id: 'run-1',
+        status: 'in_progress',
+        revision: 2,
+        results: { s1: { value: 'pass' }, s4: { value: 'one box short' } },
+        note: null,
+        completedAt: null,
+      },
+    });
+    const user = userEvent.setup();
+    render(<ReceivingCheckForm view={view()} />);
+    const text = screen.getByRole('textbox', { name: 'Anything missing, extra or damaged?' });
+    await user.type(text, '  one box short  ');
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    await waitFor(() => expect((text as HTMLTextAreaElement).value).toBe('one box short'));
+    await user.click(screen.getByRole('button', { name: C.saveProgress }));
+    await waitFor(() => expect(saveReceivingCheckAction).toHaveBeenCalledTimes(2));
+    expect(saveReceivingCheckAction.mock.calls[1]![1].expectedRevision).toBe(2);
+  });
+
   // Mutation caught: the save awaited bare (Save progress stayed busy for
   // good), and a fresh save id on the resend (a lost reply then a resend
   // would be two saves, the second refused as changed).

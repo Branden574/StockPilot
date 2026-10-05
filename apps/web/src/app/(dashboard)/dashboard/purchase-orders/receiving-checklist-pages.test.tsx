@@ -20,6 +20,7 @@ const svc = vi.hoisted(() => ({
 }));
 const moduleOn = vi.hoisted(() => ({ value: true }));
 const reportError = vi.hoisted(() => vi.fn(async () => undefined));
+const formMounts = vi.hoisted(() => ({ n: 0 }));
 
 vi.mock('next/navigation', async (orig) => ({
   ...(await orig<typeof import('next/navigation')>()),
@@ -44,9 +45,17 @@ vi.mock('@/components/dashboard/module-not-enabled', () => ({
 vi.mock('@/components/po/receiving-checklist-editor', () => ({
   ReceivingChecklistEditor: () => <div data-testid="editor" />,
 }));
-vi.mock('@/components/po/receiving-check-form', () => ({
-  ReceivingCheckForm: () => <div data-testid="check-form" />,
-}));
+vi.mock('@/components/po/receiving-check-form', async () => {
+  const React = await import('react');
+  return {
+    ReceivingCheckForm: () => {
+      React.useEffect(() => {
+        formMounts.n += 1;
+      }, []);
+      return <div data-testid="check-form" />;
+    },
+  };
+});
 vi.mock('@/server/services/receiving-checklist', () => ({
   ReceivingChecklistService: { forCurrentUser: vi.fn(async () => svc) },
 }));
@@ -75,6 +84,7 @@ const runView = {
 beforeEach(() => {
   vi.clearAllMocks();
   moduleOn.value = true;
+  formMounts.n = 0;
 });
 
 describe('the receiving checklist page', () => {
@@ -129,6 +139,21 @@ describe("one receipt's checklist page", () => {
       'href',
       '/dashboard/purchase-orders/po-1',
     );
+  });
+
+  // Desk check F3 (mutation caught: the form keyed on the revision). A newer
+  // save reaching the page must not remount the form over typed answers; the
+  // form itself decides (receiving-check-form.test.tsx).
+  it('a newer revision of the same run keeps the same form', async () => {
+    svc.getRun.mockResolvedValueOnce(runView);
+    const view = render(await RunPage(params(RUN_ID)));
+    svc.getRun.mockResolvedValueOnce({
+      ...runView,
+      run: { ...runView.run, revision: 3, status: 'completed' },
+    });
+    view.rerender(await RunPage(params(RUN_ID)));
+    expect(screen.getByTestId('check-form')).toBeInTheDocument();
+    expect(formMounts.n).toBe(1);
   });
 
   it('a run id that is not a uuid is not found, before any read', async () => {
