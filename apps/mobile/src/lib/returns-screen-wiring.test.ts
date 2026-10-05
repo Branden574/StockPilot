@@ -32,6 +32,16 @@ describe('routes', () => {
   });
 });
 
+describe('the list filters', () => {
+  it('are buttons with a selected state, never the tab role iOS gives no trait (VoiceOver says they can be pressed)', () => {
+    const list = code(read('app/(drawer)/returns.tsx'));
+    const chip = list.slice(list.indexOf('filters.map('), list.indexOf('</Pressable>', list.indexOf('filters.map(')));
+    expect(chip).toContain('accessibilityRole="button"');
+    expect(chip).toContain('accessibilityState={{ selected: filter === f.id }}');
+    expect(list).not.toMatch(/accessibilityRole="tab(list)?"/);
+  });
+});
+
 describe('online only', () => {
   const view = code(read('src/components/return-workbench-view.tsx'));
   const sheet = code(read('src/components/return-action-sheet.tsx'));

@@ -162,12 +162,15 @@ export default function ReturnsListScreen() {
       ) : (
         <>
           <View style={styles.toolbar}>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }} accessibilityRole="tablist">
+            {/* Buttons with a selected state, like the shared Chip: iOS gives
+                the "tab" role no trait, so VoiceOver read the filters without
+                saying they can be pressed (RX-1 simulator matrix). */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {filters.map((f) => (
                 <Pressable
                   key={f.id}
                   onPress={() => setFilter(f.id)}
-                  accessibilityRole="tab"
+                  accessibilityRole="button"
                   accessibilityState={{ selected: filter === f.id }}
                   accessibilityLabel={f.label}
                   hitSlop={6}
