@@ -574,14 +574,14 @@ select is(
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13\n'
   -- Re-pinned by 0396 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
   -- requires a member with Orders on (0396 R3); the hand-over accounting is unchanged.
-  'confirm_physical_signature(uuid,text)|09d4c2fb10d31a55d97c5a1070d02f3d\n'
+  'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c\n'
   -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c and
   -- e0f2ae5d7d3564cdad3b36ba4cf5aa8c): slice D removes the manager-by-role
   -- term from each gate and nothing else (0390 R8, R9, R11); the secret
   -- clears this suite cares about are untouched.
   -- Re-pinned by 0396 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
   -- (0396 R2); the draw reversal and the holds it restores are unchanged.
-  'reopen_picking(uuid,text)|4d5508df23b02c7dde2db2ac13c859e9\n'
+  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd\n'
   -- Re-pinned by 0392 (was 1b109d535811e9a21c43d01dcc344892, 0365's body): the
   -- insert guard also refuses an admin-client (service_role) insert carrying

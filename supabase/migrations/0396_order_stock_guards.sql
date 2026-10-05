@@ -8,7 +8,10 @@
 -- production's, and the pgTAP R-section proves that removing the added text
 -- gives production's body exactly. Signatures, SECURITY mode, SET clauses,
 -- volatility, owner and grants are unchanged (CREATE OR REPLACE keeps the
--- owner and grants; each header restates production's attributes).
+-- owner and grants; each header restates production's attributes). Inside the
+-- bodies each added block is tagged "S2" (small fixes slice 2) rather than
+-- with this file's number, so every md5 pin survives the push-time
+-- renumbering.
 --
 --   1. N1   cancel_order_request: the person who placed an order cancels it
 --           only while it is pending approval (42501 forbidden, hint
@@ -103,7 +106,7 @@
 set lock_timeout = '900ms';
 
 -- ═══ N1 and L115. cancel_order_request: the requester's window, and its restocks linked ═══
--- cancel_order_request: restated from 0390_approval_follows_permission.sql; md5(prosrc) 47cabcd1fe4f52fb7b2b6b6b64b68da1 -> f045aa484b35d9f35e70bfb3099bae61.
+-- cancel_order_request: restated from 0390_approval_follows_permission.sql; md5(prosrc) 47cabcd1fe4f52fb7b2b6b6b64b68da1 -> 535fc49935f15adc8d7dfa78836a06af.
 CREATE OR REPLACE FUNCTION public.cancel_order_request(p_id uuid, p_reason text DEFAULT NULL::text)
  RETURNS order_requests
  LANGUAGE plpgsql
@@ -140,7 +143,7 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
 
-  -- 0396 (N1): the person who placed the order cancels it only while it is
+  -- S2 (N1): the person who placed the order cancels it only while it is
   -- pending approval. After that only someone who approves orders cancels
   -- it: an approved order holds stock, a picked one has drawn it and an
   -- order in transit is on the truck. The web service already refused this
@@ -225,7 +228,7 @@ begin
       where id = v_line.line_id;
   end loop;
 
-  -- 0396 (L115): link the restock movements this call just wrote to the
+  -- S2 (L115): link the restock movements this call just wrote to the
   -- order, as complete_picking links its own. adjust_stock takes no
   -- reference, so the rows are found by what only these restocks share:
   -- this organization, this transaction's time, a 'return' by this caller
@@ -264,7 +267,7 @@ comment on function public.cancel_order_request(uuid, text) is
   'Cancel an order request. Restocks the current staged batch (quantity_picked) ONLY when the order status says those units are actually out of quantity_on_hand: picking_complete, packing_slip_generated, staged_for_pickup, staged_for_delivery, in_transit. A mid-pick (picking_in_progress) order has not drawn yet, and a reopen_picking order has already had its draw returned — restocking either would invent stock. quantity_picked is cleared either way; quantity_fulfilled is never restocked. The status classification is exhaustive over order_requests_status_check: an unrecognised status raises unclassified_order_status_for_restock rather than defaulting to skip-the-restock, because a skipped restock destroys stock silently while a refused cancel is retryable. Since 0396: the person who placed the order may cancel it only while it is pending approval (42501 forbidden, hint requester_pending_only); someone with orders:approve cancels it at any open status; the restock movements carry reference_type order_request and the order id.';
 
 -- ═══ L115. reopen_picking: its movements linked ═══
--- reopen_picking: restated from 0390_approval_follows_permission.sql; md5(prosrc) 293ce0e76d195bb13105cfd1c067de82 -> 4d5508df23b02c7dde2db2ac13c859e9.
+-- reopen_picking: restated from 0390_approval_follows_permission.sql; md5(prosrc) 293ce0e76d195bb13105cfd1c067de82 -> 14e49293fa670dc2e05a1c1b6930bce5.
 CREATE OR REPLACE FUNCTION public.reopen_picking(p_id uuid, p_reason text)
  RETURNS order_requests
  LANGUAGE plpgsql
@@ -368,7 +371,7 @@ begin
     end if;
   end loop;
 
-  -- 0396 (L115): link the movements this call just wrote back to the order,
+  -- S2 (L115): link the movements this call just wrote back to the order,
   -- as cancel_order_request and complete_picking link theirs: this
   -- organization, this transaction's time, a 'transfer' by this caller with
   -- no reference yet, and the reason that names this order. An order leaves
@@ -417,7 +420,7 @@ comment on function public.reopen_picking(uuid, text) is
   'Manager override: rewind a picked/packed (pre-signature) order to picking_in_progress to fix a miscount. Reverses complete_picking''s stock draw (adjust_stock +quantity_picked into the item''s Unplaced bucket, so the units stay drawable by the re-pick), restores the reservations released by this picking cycle, preserves quantity_picked + assigned_picker_id, clears packing-slip/token fields. Refuses when signed_at is set. Reason required. Since 0396 its movements carry reference_type order_request and the order id.';
 
 -- ═══ L129b. confirm_physical_signature: the driver is still a member, with Orders on ═══
--- confirm_physical_signature: restated from 0248_physical_signature.sql; md5(prosrc) f7a14a46d2c70f635c3da844c786ce67 -> 09d4c2fb10d31a55d97c5a1070d02f3d.
+-- confirm_physical_signature: restated from 0248_physical_signature.sql; md5(prosrc) f7a14a46d2c70f635c3da844c786ce67 -> c0d1c11d31dd86e072f05b72f299535c.
 CREATE OR REPLACE FUNCTION public.confirm_physical_signature(p_id uuid, p_signer_name text)
  RETURNS order_requests
  LANGUAGE plpgsql
@@ -447,7 +450,7 @@ begin
   -- at the door). Mirrors who the UI shows Collect-signature to.
   if not public.has_org_role(v_req.organization_id, 'manager')
      and (v_req.assigned_delivery_user_id is null or v_req.assigned_delivery_user_id <> v_user
-          -- 0396 (L129b): the driver must still be a member, with Orders on.
+          -- S2 (L129b): the driver must still be a member, with Orders on.
           or not public.is_org_member(v_req.organization_id)
           or not public.module_enabled(v_req.organization_id, 'orders')) then
     raise exception 'forbidden' using errcode = '42501';
@@ -495,7 +498,7 @@ comment on function public.confirm_physical_signature(uuid, text) is
   'Records a paper signature at hand-over (0248): the same hand-over accounting as confirm_order_signature, no image. Who: a manager by role, or the assigned driver while they are still a member of the order''s organization and the Orders module is on (0396).';
 
 -- ═══ L86. The approved notification says when only part is held ═══
--- _notify_order_request_changes: restated from 0265_notify_order_request_created_pref.sql; md5(prosrc) a223ae83810149728156b8e299c7425e -> ac89ce9b7910e5b1f1742f3bd633ef7d.
+-- _notify_order_request_changes: restated from 0265_notify_order_request_created_pref.sql; md5(prosrc) a223ae83810149728156b8e299c7425e -> ac05decf6a7968dfdbb471b6e252cdc3.
 CREATE OR REPLACE FUNCTION public._notify_order_request_changes()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -621,7 +624,7 @@ begin
       when 'approved' then
         v_title := 'Your order request was approved';
         v_body := 'Stock has been reserved.';
-        -- 0396 (L86): approve_partial holds only what is free. Say so when
+        -- S2 (L86): approve_partial holds only what is free. Say so when
         -- any item is held for less than the order still owes for it.
         if exists (
           select 1
@@ -695,7 +698,7 @@ $function$;
 -- ═══ L8. The ledger wrappers answer to the app's permission ═══
 -- Each: the 0359 wrapper body with one gate before the flag is raised.
 
--- adjust_stock: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) c8cdaf566ec1ed69b8e9ae56791822da -> 3a3bf3eca5a91076d16e8d685c51e214.
+-- adjust_stock: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) c8cdaf566ec1ed69b8e9ae56791822da -> 329b71a0add8df3e1a13bdd609e7e652.
 CREATE OR REPLACE FUNCTION public.adjust_stock(p_item_id uuid, p_quantity_change numeric, p_movement_type text, p_location_id uuid DEFAULT NULL::uuid, p_reason text DEFAULT NULL::text, p_notes text DEFAULT NULL::text, p_mode text DEFAULT 'placed'::text)
  RETURNS inventory_items
  LANGUAGE plpgsql
@@ -705,7 +708,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.inventory_items;
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -732,7 +735,7 @@ $function$;
 comment on function public.adjust_stock(uuid, numeric, text, uuid, text, text, text) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.adjust_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
--- transfer_stock: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 849690c9313d2d8abfc70eb2b3120d90 -> aec4f1a7eae5b65da95bb3a769f4674f.
+-- transfer_stock: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 849690c9313d2d8abfc70eb2b3120d90 -> a95dbf8d8fc9e0450aa5a2d733197843.
 CREATE OR REPLACE FUNCTION public.transfer_stock(p_item_id uuid, p_from_location_id uuid, p_to_location_id uuid, p_quantity numeric, p_notes text DEFAULT NULL::text)
  RETURNS inventory_items
  LANGUAGE plpgsql
@@ -742,7 +745,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.inventory_items;
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:transfer). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -769,7 +772,7 @@ $function$;
 comment on function public.transfer_stock(uuid, uuid, uuid, numeric, text) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.transfer_stock as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:transfer (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
--- post_cycle_count: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) ecc566f4079270480df1d9504358ea73 -> 8f4e6550bc0d6073467e1287a6756991.
+-- post_cycle_count: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) ecc566f4079270480df1d9504358ea73 -> b6b00e4d720aad8032a76ec122c4612c.
 CREATE OR REPLACE FUNCTION public.post_cycle_count(p_cycle_count_id uuid)
  RETURNS cycle_counts
  LANGUAGE plpgsql
@@ -779,7 +782,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.cycle_counts;
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -805,7 +808,7 @@ $function$;
 comment on function public.post_cycle_count(uuid) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_cycle_count as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
--- assemble_bundle: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 7b3f769cb33ef6767557e0b9c4377ddb -> 8d9f8001cf89fa3b731eadfeccfdb591.
+-- assemble_bundle: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) 7b3f769cb33ef6767557e0b9c4377ddb -> bcc4fbe7461ba3c02b5e0c2d18988fcf.
 CREATE OR REPLACE FUNCTION public.assemble_bundle(p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_notes text DEFAULT NULL::text)
  RETURNS TABLE(phantom_item_id uuid, phantom_qty numeric)
  LANGUAGE plpgsql
@@ -814,7 +817,7 @@ AS $function$
 declare
   v_prev text := current_setting('stockpilot.ledger', true);
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (bundles:manage). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -844,7 +847,7 @@ $function$;
 comment on function public.assemble_bundle(uuid, numeric, uuid, text) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.assemble_bundle as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs bundles:manage (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
--- post_receipt_v2: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) efc01e2e0ea98531c92c7db27f17695c -> 58460bf51bcdf622fa054d70708b9ee9.
+-- post_receipt_v2: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) efc01e2e0ea98531c92c7db27f17695c -> 15f5db367d297a58acc1065bae4ffe69.
 CREATE OR REPLACE FUNCTION public.post_receipt_v2(p_purchase_order_id uuid, p_warehouse_id uuid, p_lines jsonb, p_idempotency_key text, p_request_hash text, p_notes text DEFAULT NULL::text)
  RETURNS receipts
  LANGUAGE plpgsql
@@ -854,7 +857,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.receipts;
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -881,7 +884,7 @@ $function$;
 comment on function public.post_receipt_v2(uuid, uuid, jsonb, text, text, text) is
   'Stock-ledger RPC (0359 wrapper): raises stockpilot.ledger for the call, runs ledger.post_receipt_v2 as the caller, then restores the previous value. Name, signature, return type, INVOKER and grants are frozen: installed phones call it. Since 0396 an API role''s direct call needs stock:adjust (42501 forbidden, hint permission); a call made inside another ledger call of the same transaction is not asked again.';
 
--- reverse_receipt: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) e277d737103a5cb561860c229f6631e7 -> dbe83d2f93b4f8f251e60d9aee99376f.
+-- reverse_receipt: restated from 0359_ledger_flag_carriers.sql; md5(prosrc) e277d737103a5cb561860c229f6631e7 -> f2f13dc2951ad3a5de4aaf034487cac9.
 CREATE OR REPLACE FUNCTION public.reverse_receipt(p_receipt_id uuid, p_reason text)
  RETURNS receipts
  LANGUAGE plpgsql
@@ -891,7 +894,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.receipts;
 begin
-  -- 0396 (L8): a direct call answers to the permission the app checks
+  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller

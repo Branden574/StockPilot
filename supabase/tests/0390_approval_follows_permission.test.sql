@@ -343,7 +343,7 @@ select is(
   -- Re-pinned by 0396 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1|7a2302dec888970054738b0dad420fd3):
   -- 0396 adds the requester's window and the restock link; 0396 R1 proves that
   -- removing them gives 0390's body (47cabcd1), whose role term this checks.
-  'f045aa484b35d9f35e70bfb3099bae61|7153af7636cef0243b496f224a9dedd7',
+  '535fc49935f15adc8d7dfa78836a06af|2a2c6626a1e3b5db5884a793eb067576',
   'R4: cancel_order_request has 0390''s body (md5 47cabcd1), and putting the role term back gives production''s pre-0390 body exactly (7a2302de): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
@@ -370,7 +370,7 @@ select is(
   -- Re-pinned by 0396 (was 293ce0e76d195bb13105cfd1c067de82|a7fabd5fb3d07467135006b56581e46c):
   -- 0396 adds the movement link; 0396 R2 proves that removing it gives 0390's
   -- body (293ce0e7), whose role term this checks.
-  '4d5508df23b02c7dde2db2ac13c859e9|dbb93afcec7075ef0557111f88c4be8d',
+  '14e49293fa670dc2e05a1c1b6930bce5|5d4e4cc624c2ec460e907e9952cee106',
   'R8: reopen_picking has 0390''s body (md5 293ce0e7), and putting the role term back gives production''s pre-0390 body exactly (a7fabd5f): the gate is the only change');
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
@@ -431,11 +431,11 @@ select is(
   -- Re-pinned by 0396 (was 60198cff2d40c936d4d1cd11e050de14 and, for reopen_picking,
   -- 53b3b2e29c611896d4a99987c0983c18): the bodies carry 0396's blocks; 0396 R11
   -- proves the definitions are otherwise production's.
-  'cancel_order_request=6770384ddeaf3a54a956d6902e2b3be1\n'
+  'cancel_order_request=79a8dcaf652b4ef59075c0f532666fee\n'
   'close_partial=eca9e0f511b63c157f278adf05f34955\n'
   'hold_order_stock=8f40b4baabd79973458d1759be5da4dd\n'
   'order_readiness_facts=faea50d0129c265a99b2660b42998abc\n'
-  'reopen_picking=02a94b8b161615919eddc756fa03ef89\n'
+  'reopen_picking=0a8a99eb2d7ccf077b65907e9c6e32db\n'
   'resume_fulfillment=6cd0f43bc073c47555bbc12268c20415\n'
   'revise_order_needed_by=63ebe4a959306bc59edf61f39f68739b',
   'R11: for each of the ten, putting the role term back into the whole definition (pg_get_functiondef) gives production''s pre-0390 definition exactly: arguments and defaults, result, volatility, strictness, cost, parallel, leakproof, SECURITY DEFINER and SET clauses are unchanged, not only the body');

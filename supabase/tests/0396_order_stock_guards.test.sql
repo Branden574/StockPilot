@@ -385,7 +385,7 @@ create temp table snap as select pg_temp.state() as v;
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(replace(p.prosrc, $b0$
-  -- 0396 (N1): the person who placed the order cancels it only while it is
+  -- S2 (N1): the person who placed the order cancels it only while it is
   -- pending approval. After that only someone who approves orders cancels
   -- it: an approved order holds stock, a picked one has drawn it and an
   -- order in transit is on the truck. The web service already refused this
@@ -397,7 +397,7 @@ select is(
             detail  = 'Only a pending order can be cancelled by the person who placed it.';
   end if;
 $b0$, ''), $b1$
-  -- 0396 (L115): link the restock movements this call just wrote to the
+  -- S2 (L115): link the restock movements this call just wrote to the
   -- order, as complete_picking links its own. adjust_stock takes no
   -- reference, so the rows are found by what only these restocks share:
   -- this organization, this transaction's time, a 'return' by this caller
@@ -414,12 +414,12 @@ $b0$, ''), $b1$
      and reason          = 'Order cancelled (order_request ' || p_id::text || ')';
 $b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
-  'f045aa484b35d9f35e70bfb3099bae61|47cabcd1fe4f52fb7b2b6b6b64b68da1',
-  'R1: cancel_order_request has 0396''s body (md5 f045aa48), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
+  '535fc49935f15adc8d7dfa78836a06af|47cabcd1fe4f52fb7b2b6b6b64b68da1',
+  'R1: cancel_order_request has 0396''s body (md5 535fc499), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$
-  -- 0396 (L115): link the movements this call just wrote back to the order,
+  -- S2 (L115): link the movements this call just wrote back to the order,
   -- as cancel_order_request and complete_picking link theirs: this
   -- organization, this transaction's time, a 'transfer' by this caller with
   -- no reference yet, and the reason that names this order. An order leaves
@@ -435,20 +435,20 @@ select is(
      and reason          = 'Reopen picking (order_request ' || p_id::text || ')';
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')),
-  '4d5508df23b02c7dde2db2ac13c859e9|293ce0e76d195bb13105cfd1c067de82',
-  'R2: reopen_picking has 0396''s body (md5 4d5508df), and removing the added text gives production''s body exactly (293ce0e7): the movement link (L115) is the only change');
+  '14e49293fa670dc2e05a1c1b6930bce5|293ce0e76d195bb13105cfd1c067de82',
+  'R2: reopen_picking has 0396''s body (md5 14e49293), and removing the added text gives production''s body exactly (293ce0e7): the movement link (L115) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$
-          -- 0396 (L129b): the driver must still be a member, with Orders on.
+          -- S2 (L129b): the driver must still be a member, with Orders on.
           or not public.is_org_member(v_req.organization_id)
           or not public.module_enabled(v_req.organization_id, 'orders')$b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.confirm_physical_signature(uuid, text)')),
-  '09d4c2fb10d31a55d97c5a1070d02f3d|f7a14a46d2c70f635c3da844c786ce67',
-  'R3: confirm_physical_signature has 0396''s body (md5 09d4c2fb), and removing the added text gives production''s body exactly (f7a14a46): the driver''s membership and module terms (L129b) are the only change');
+  'c0d1c11d31dd86e072f05b72f299535c|f7a14a46d2c70f635c3da844c786ce67',
+  'R3: confirm_physical_signature has 0396''s body (md5 c0d1c11d), and removing the added text gives production''s body exactly (f7a14a46): the driver''s membership and module terms (L129b) are the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$        -- 0396 (L86): approve_partial holds only what is free. Say so when
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$        -- S2 (L86): approve_partial holds only what is free. Say so when
         -- any item is held for less than the order still owes for it.
         if exists (
           select 1
@@ -466,11 +466,11 @@ select is(
         end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')),
-  'ac89ce9b7910e5b1f1742f3bd633ef7d|a223ae83810149728156b8e299c7425e',
-  'R4: _notify_order_request_changes has 0396''s body (md5 ac89ce9b), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
+  'ac05decf6a7968dfdbb471b6e252cdc3|a223ae83810149728156b8e299c7425e',
+  'R4: _notify_order_request_changes has 0396''s body (md5 ac05decf), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -488,11 +488,11 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.adjust_stock(uuid, numeric, text, uuid, text, text, text)')),
-  '3a3bf3eca5a91076d16e8d685c51e214|c8cdaf566ec1ed69b8e9ae56791822da',
-  'R5: adjust_stock has 0396''s body (md5 3a3bf3ec), and removing the added text gives production''s body exactly (c8cdaf56): the stock:adjust gate (L8) is the only change');
+  '329b71a0add8df3e1a13bdd609e7e652|c8cdaf566ec1ed69b8e9ae56791822da',
+  'R5: adjust_stock has 0396''s body (md5 329b71a0), and removing the added text gives production''s body exactly (c8cdaf56): the stock:adjust gate (L8) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:transfer). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -510,11 +510,11 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.transfer_stock(uuid, uuid, uuid, numeric, text)')),
-  'aec4f1a7eae5b65da95bb3a769f4674f|849690c9313d2d8abfc70eb2b3120d90',
-  'R6: transfer_stock has 0396''s body (md5 aec4f1a7), and removing the added text gives production''s body exactly (849690c9): the stock:transfer gate (L8) is the only change');
+  'a95dbf8d8fc9e0450aa5a2d733197843|849690c9313d2d8abfc70eb2b3120d90',
+  'R6: transfer_stock has 0396''s body (md5 a95dbf8d), and removing the added text gives production''s body exactly (849690c9): the stock:transfer gate (L8) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -532,11 +532,11 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.post_cycle_count(uuid)')),
-  '8f4e6550bc0d6073467e1287a6756991|ecc566f4079270480df1d9504358ea73',
-  'R7: post_cycle_count has 0396''s body (md5 8f4e6550), and removing the added text gives production''s body exactly (ecc566f4): the stock:adjust gate (L8) is the only change');
+  'b6b00e4d720aad8032a76ec122c4612c|ecc566f4079270480df1d9504358ea73',
+  'R7: post_cycle_count has 0396''s body (md5 b6b00e4d), and removing the added text gives production''s body exactly (ecc566f4): the stock:adjust gate (L8) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (bundles:manage). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -554,11 +554,11 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.assemble_bundle(uuid, numeric, uuid, text)')),
-  '8d9f8001cf89fa3b731eadfeccfdb591|7b3f769cb33ef6767557e0b9c4377ddb',
-  'R8: assemble_bundle has 0396''s body (md5 8d9f8001), and removing the added text gives production''s body exactly (7b3f769c): the bundles:manage gate (L8) is the only change');
+  'bcc4fbe7461ba3c02b5e0c2d18988fcf|7b3f769cb33ef6767557e0b9c4377ddb',
+  'R8: assemble_bundle has 0396''s body (md5 bcc4fbe7), and removing the added text gives production''s body exactly (7b3f769c): the bundles:manage gate (L8) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -576,11 +576,11 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.post_receipt_v2(uuid, uuid, jsonb, text, text, text)')),
-  '58460bf51bcdf622fa054d70708b9ee9|efc01e2e0ea98531c92c7db27f17695c',
-  'R9: post_receipt_v2 has 0396''s body (md5 58460bf5), and removing the added text gives production''s body exactly (efc01e2e): the stock:adjust gate (L8) is the only change');
+  '15f5db367d297a58acc1065bae4ffe69|efc01e2e0ea98531c92c7db27f17695c',
+  'R9: post_receipt_v2 has 0396''s body (md5 15f5db36), and removing the added text gives production''s body exactly (efc01e2e): the stock:adjust gate (L8) is the only change');
 
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -598,13 +598,13 @@ select is(
   end if;
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.reverse_receipt(uuid, text)')),
-  'dbe83d2f93b4f8f251e60d9aee99376f|e277d737103a5cb561860c229f6631e7',
-  'R10: reverse_receipt has 0396''s body (md5 dbe83d2f), and removing the added text gives production''s body exactly (e277d737): the stock:adjust gate (L8) is the only change');
+  'f2f13dc2951ad3a5de4aaf034487cac9|e277d737103a5cb561860c229f6631e7',
+  'R10: reverse_receipt has 0396''s body (md5 f2f13dc2), and removing the added text gives production''s body exactly (e277d737): the stock:adjust gate (L8) is the only change');
 
 select is(
   (select string_agg(d.fn || '=' || d.m, E'\n' order by d.fn collate "C") from (
   select 'cancel_order_request' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(replace(pg_get_functiondef(p.oid), $b0$
-  -- 0396 (N1): the person who placed the order cancels it only while it is
+  -- S2 (N1): the person who placed the order cancels it only while it is
   -- pending approval. After that only someone who approves orders cancels
   -- it: an approved order holds stock, a picked one has drawn it and an
   -- order in transit is on the truck. The web service already refused this
@@ -616,7 +616,7 @@ select is(
             detail  = 'Only a pending order can be cancelled by the person who placed it.';
   end if;
 $b0$, ''), $b1$
-  -- 0396 (L115): link the restock movements this call just wrote to the
+  -- S2 (L115): link the restock movements this call just wrote to the
   -- order, as complete_picking links its own. adjust_stock takes no
   -- reference, so the rows are found by what only these restocks share:
   -- this organization, this transaction's time, a 'return' by this caller
@@ -635,7 +635,7 @@ $b1$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')
   union all
   select 'reopen_picking' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$
-  -- 0396 (L115): link the movements this call just wrote back to the order,
+  -- S2 (L115): link the movements this call just wrote back to the order,
   -- as cancel_order_request and complete_picking link theirs: this
   -- organization, this transaction's time, a 'transfer' by this caller with
   -- no reference yet, and the reason that names this order. An order leaves
@@ -653,12 +653,12 @@ $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')
   union all
   select 'confirm_physical_signature' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$
-          -- 0396 (L129b): the driver must still be a member, with Orders on.
+          -- S2 (L129b): the driver must still be a member, with Orders on.
           or not public.is_org_member(v_req.organization_id)
           or not public.module_enabled(v_req.organization_id, 'orders')$b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.confirm_physical_signature(uuid, text)')
   union all
-  select '_notify_order_request_changes' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$        -- 0396 (L86): approve_partial holds only what is free. Say so when
+  select '_notify_order_request_changes' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$        -- S2 (L86): approve_partial holds only what is free. Say so when
         -- any item is held for less than the order still owes for it.
         if exists (
           select 1
@@ -677,7 +677,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')
   union all
-  select 'adjust_stock' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'adjust_stock' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -696,7 +696,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.adjust_stock(uuid, numeric, text, uuid, text, text, text)')
   union all
-  select 'transfer_stock' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'transfer_stock' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:transfer). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -715,7 +715,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.transfer_stock(uuid, uuid, uuid, numeric, text)')
   union all
-  select 'post_cycle_count' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'post_cycle_count' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -734,7 +734,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.post_cycle_count(uuid)')
   union all
-  select 'assemble_bundle' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'assemble_bundle' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (bundles:manage). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -753,7 +753,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.assemble_bundle(uuid, numeric, uuid, text)')
   union all
-  select 'post_receipt_v2' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'post_receipt_v2' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -772,7 +772,7 @@ $b0$, '')) as m
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.post_receipt_v2(uuid, uuid, jsonb, text, text, text)')
   union all
-  select 'reverse_receipt' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- 0396 (L8): a direct call answers to the permission the app checks
+  select 'reverse_receipt' as fn, md5(pg_get_functiondef(p.oid)) || '|' || md5(replace(pg_get_functiondef(p.oid), $b0$  -- S2 (L8): a direct call answers to the permission the app checks
   -- first (stock:adjust). Only an API role's own call is held here: a call
   -- made inside another ledger call of this transaction was answered by
   -- that call, and the order functions run as postgres. A row the caller
@@ -790,16 +790,16 @@ $b0$, '')) as m
   end if;
 $b0$, '')) as m
     from pg_proc p where p.oid = to_regprocedure('public.reverse_receipt(uuid, text)')) d),
-  E'_notify_order_request_changes=8ac8f5a6fa62a76e4eaf73e4e1e414cd|ff18125ea9142821da9c1a0d2b07c1da\n'
-  'adjust_stock=b11478b56c08eb933175fad1dfb5c847|8f2b54ee153cb1dd8cfccce7ab462b62\n'
-  'assemble_bundle=52e207aa602a3351a326e1647db0bdcb|9c725f9d2aac44bcd38889450056d67a\n'
-  'cancel_order_request=8861655d5adf6d0bbe5d4978f0fae340|112ba9976a11269694b161bc55d41562\n'
-  'confirm_physical_signature=f99a9980f30e1b3acfbbcc6180051fd4|76899ffd767f579d61cfd2a6fccd1fb7\n'
-  'post_cycle_count=3c3c8fac3091fdafd773c90c0ac29a34|d2eee4d6216069731f965e9d2853c832\n'
-  'post_receipt_v2=7dbdf70d873cb054797eecb50d501b56|d40d3757f56f552c361acfbac0232c9b\n'
-  'reopen_picking=831e493f7afa201aaaf1642e97e6a08f|aba2579ec63fcd5400abae9cf5591ac2\n'
-  'reverse_receipt=4fb267b11db6c36a2f949d1ba6030914|4c049069d229b92b9b121d723cff081e\n'
-  'transfer_stock=d7367c98af3f8addfd8c96cc13a997cf|6231a20a470cd1991d32de9effe472c8',
+  E'_notify_order_request_changes=c783ed3ee3302644927ec57f4f3a6103|ff18125ea9142821da9c1a0d2b07c1da\n'
+  'adjust_stock=0dbc639017c2f827e2c7a18e5486d975|8f2b54ee153cb1dd8cfccce7ab462b62\n'
+  'assemble_bundle=c3e186436c7848163beafe5e85b062c8|9c725f9d2aac44bcd38889450056d67a\n'
+  'cancel_order_request=6a21252e51fff929fc18573e60b51324|112ba9976a11269694b161bc55d41562\n'
+  'confirm_physical_signature=0ce2f35c507bef9e53f58ada6590993d|76899ffd767f579d61cfd2a6fccd1fb7\n'
+  'post_cycle_count=40528d9207c8fe353b04d48bc0284acb|d2eee4d6216069731f965e9d2853c832\n'
+  'post_receipt_v2=822851e86940eda3a9ad627cc53b3bcc|d40d3757f56f552c361acfbac0232c9b\n'
+  'reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2\n'
+  'reverse_receipt=774eb447eaf4d8340522f159295a9377|4c049069d229b92b9b121d723cff081e\n'
+  'transfer_stock=6a21d824bb893511cf72d192acb6043a|6231a20a470cd1991d32de9effe472c8',
   'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0396''s, and removing the added text gives production''s definition exactly: arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');
 
 

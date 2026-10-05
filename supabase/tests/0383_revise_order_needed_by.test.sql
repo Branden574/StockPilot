@@ -796,7 +796,7 @@ select is(
   -- Re-pinned by 0396 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
   -- pending approval, and the restock movements carry the order (0396 R1:
   -- removing both gives 0390's body exactly); nothing proven here reads either.
-  'cancel_order_request(uuid,text)|f045aa484b35d9f35e70bfb3099bae61|true|{"search_path=public, extensions"}|postgres\n'
+  'cancel_order_request(uuid,text)|535fc49935f15adc8d7dfa78836a06af|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was 2d873a049a5584df7d3a168fb2b45e34): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'close_partial(uuid)|a519c3e58fb577c3ff1b30fb3a6cc0ad|true|{search_path=public}|postgres\n'
@@ -804,7 +804,7 @@ select is(
   'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0396 (was f7a14a46d2c70f635c3da844c786ce67): the driver branch also
   -- requires a member with Orders on (0396 R3); the hand-over accounting is unchanged.
-  'confirm_physical_signature(uuid,text)|09d4c2fb10d31a55d97c5a1070d02f3d|true|{search_path=public}|postgres\n'
+  'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c|true|{search_path=public}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
@@ -817,12 +817,12 @@ select is(
   -- Re-pinned by 0396 (was efc01e2e0ea98531c92c7db27f17695c): the wrapper refuses a direct
   -- call without stock:adjust before raising the flag (0396 R9); its body and
   -- what a posted receipt writes are unchanged.
-  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|58460bf51bcdf622fa054d70708b9ee9|false|{search_path=public}|postgres\n'
+  'post_receipt_v2(uuid,uuid,jsonb,text,text,text)|15f5db367d297a58acc1065bae4ffe69|false|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was a7fabd5fb3d07467135006b56581e46c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   -- Re-pinned by 0396 (was 293ce0e76d195bb13105cfd1c067de82): its movements carry the order
   -- (0396 R2); the draw reversal and the holds it restores are unchanged.
-  'reopen_picking(uuid,text)|4d5508df23b02c7dde2db2ac13c859e9|true|{"search_path=public, extensions"}|postgres\n'
+  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5|true|{"search_path=public, extensions"}|postgres\n'
   -- Re-pinned by 0390 (was e0f2ae5d7d3564cdad3b36ba4cf5aa8c): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd|true|{search_path=public}|postgres\n'
