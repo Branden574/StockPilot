@@ -1026,18 +1026,20 @@ WEB_TESTS=(
   # like a missing one, for a write too (the service reads the RMA or order
   # in the active organization before any function runs, so a member of two
   # organizations never acts on the other one's RMA and logs it here); the
-  # legacy create body mints a key. The public
-  # submit keeps its honeypot and unit cap, keys its bucket by the token's
-  # hash and gives one generic answer for every failure; the requester and
-  # portal paths copy identity from the order and go through the
-  # service-role function only. The migration guard pins the grants and the
-  # guard triggers the app relies on.
+  # legacy create body mints a key, and the web create dialog mints one per
+  # open (an edited resend after a lost answer is a conflict, never a second
+  # RMA). The public submit keeps its honeypot and unit cap, keys its bucket
+  # by the token's hash and gives one generic answer for every failure; the
+  # requester and portal paths copy identity from the order and go through
+  # the service-role function only. The migration guard pins the grants and
+  # the guard triggers the app relies on.
   src/server/services/returns.test.ts
   src/server/services/returns.portal.test.ts
   src/server/services/returns-migration.guard.test.ts
   src/app/api/v1/returns/routes.test.ts
   'src/app/api/v1/orders/[id]/returns/route.test.ts'
   src/app/api/v1/public/returns/route.test.ts
+  src/components/returns/create-return-dialog.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
