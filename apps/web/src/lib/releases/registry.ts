@@ -28,6 +28,60 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'items-list-first-paint-2026-10',
+    revision: 1,
+    // Items first paint (owner bug 2026-10-05, branch fix/items-first-paint).
+    // Held as a DRAFT until the web deploy is live and the browser walk shows
+    // the first page staying as it loads; the follow-up that publishes it sets
+    // the real publishedAt and re-reads these words against what shipped. Web
+    // only: the mobile app's Items list reads the whole filtered set before it
+    // pages (inventory-paging.ts), so it has no second paint to differ from.
+    // At the top (newest first), dated after the weekly digest and small fixes
+    // drafts.
+    //
+    // Who saw the reshuffle: owners, admins and managers on the default Items
+    // view, the only view that streams the whole list behind its first page.
+    // Who is told: everyone who can open the Items page (items:read, with the
+    // Items module), as the page checks; the second entry (Active after
+    // Auto-archived only) reaches every reader of the list, staff included.
+    // The words claim no timing nobody measured and name no organization's
+    // numbers.
+    status: 'draft',
+    title: 'The Items list no longer reshuffles a moment after it loads',
+    summary:
+      'On the web, the first page of the Items list now opens with the rows, page count and totals it keeps, instead of redrawing a moment later. Nothing was ever missing: the rows that seemed to disappear had moved to the next page. Choosing Active after Auto-archived only now shows your active items.',
+    publishedAt: '2026-10-14T17:10:00Z',
+    audience: { anyPermission: ['items:read'], modules: ['inventory'] },
+    entries: [
+      {
+        id: 'items-list-first-paint',
+        category: 'fixed',
+        area: 'Items',
+        title: 'The Items list no longer reshuffles a moment after it loads',
+        whatChanged:
+          'On the web, the first page of the Items list now opens the way it stays: the same rows in the same order, the same page count and the same totals. It used to open with one page and redraw it a moment later: a size run or a group of items sharing a SKU gained its other members, some rows moved to page 2, and the totals changed from items to SKUs and rows.',
+        whyItMatters:
+          'Rows seemed to disappear. Nothing was ever missing: the list keeps every member of a size run, and every item sharing a SKU, together on one page, and the rows that moved were on the next page.',
+        howItAffectsYou:
+          'The first page you see is the page you work with, with each size run and SKU whole. If the rest of the list cannot load, the bottom of the list says Refresh to see more instead of offering pages that would skip or repeat rows.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'items-active-after-auto-archived',
+        category: 'fixed',
+        area: 'Items',
+        title: 'Active shows your items after Auto-archived only',
+        whatChanged:
+          'On the web, choosing Active while Archived has Auto-archived only switched on now opens your active items, on Items and on Books. When Auto-archived only finds nothing, the list says No items match your filters and keeps Auto-archived only on screen, so you can switch it off.',
+        whyItMatters:
+          'Active kept the Auto-archived only filter, and no active item is auto-archived, so the list came up empty, sometimes after showing its first page for a moment. After a refresh, an Auto-archived only view with nothing in it said No items yet, or No books yet.',
+        howItAffectsYou:
+          'Active opens your active items. A search or another filter you had set stays applied.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'weekly-digest-and-fixes-2026-10',
     revision: 1,
     // The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, no

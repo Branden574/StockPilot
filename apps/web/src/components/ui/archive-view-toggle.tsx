@@ -29,6 +29,7 @@ export function ArchiveViewToggle({
   archivedLabel = 'Archived',
   paramName = 'view',
   archivedValue = 'archived',
+  archivedOnlyParams,
 }: {
   basePath?: string;
   view?: 'active' | 'archived';
@@ -49,6 +50,14 @@ export function ArchiveViewToggle({
    * vocabulary can still use this toggle.
    */
   archivedValue?: string;
+  /**
+   * Search params that only mean something on the archived view, dropped by
+   * the Active link (the Archived link keeps them). Items and Books pass
+   * ['auto']: their "Auto-archived only" chip narrows the list to rows the
+   * zero-stock job archived, no active row is one, so an Active link that
+   * carried it opened an empty list.
+   */
+  archivedOnlyParams?: readonly string[];
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
@@ -65,6 +74,7 @@ export function ArchiveViewToggle({
     const sp = new URLSearchParams(params.toString());
     sp.delete(paramName);
     if (target === 'archived') sp.set(paramName, archivedValue);
+    else for (const name of archivedOnlyParams ?? []) sp.delete(name);
     // Reset paging when crossing views — the page count for active and
     // archived almost never lines up.
     sp.delete('page');

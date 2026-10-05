@@ -187,10 +187,12 @@ export default async function BooksPage({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Same status-param toggle the Inventory page uses; books
-              accept the same lifecycleStatus filter. */}
+              accept the same lifecycleStatus filter. Active drops the
+              "Auto-archived only" chip (?auto=1), as on Items. */}
           <ArchiveViewToggle
             paramName="status"
             view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+            archivedOnlyParams={['auto']}
           />
           <RackFilterDropdown racks={racks} />
           {canCreate && lifecycleStatus !== 'archived' && (
@@ -660,7 +662,9 @@ function booksEmptyState({
   }
   // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
   // the Items page: a zero result there just means none of the archived
-  // books were system-archived, not that nothing is archived at all.
+  // books were system-archived, not that nothing is archived at all. So
+  // does "No books yet" below, as on Items: the view falls through to the
+  // table's own "No items match your filters." row, chip and all.
   if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
     return (
       <EmptyState
@@ -671,7 +675,7 @@ function booksEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock) {
+  if (!params.q && !params.stock && params.auto !== '1') {
     return (
       <EmptyState
         icon={BookOpen}
