@@ -2778,9 +2778,10 @@ export class OrderRequestsService {
       ) {
         const status = (row as { status: OrderRequestStatus }).status;
         if (status !== 'pending_approval') {
-          // 0396: the same sentence cancel_order_request's own refusal maps to
-          // (hint requester_pending_only, below), from core copy.
-          throw new ServiceError('validation_error', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
+          // 0396: the same answer cancel_order_request's own refusal maps to
+          // (hint requester_pending_only, below): 403 forbidden with the core
+          // sentence, so the refusal reads the same whichever layer answers.
+          throw new ServiceError('forbidden', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
         }
       }
     }

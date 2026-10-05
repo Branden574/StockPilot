@@ -19,8 +19,8 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
  *   N1    cancel_order_request refuses a requester past pending approval
  *         (42501 forbidden, hint requester_pending_only). The service's own
  *         read normally stops it first; the database answers when the status
- *         changes between that read and the call. Both say the same sentence
- *         (core ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).
+ *         changes between that read and the call. Both answer 403 forbidden
+ *         with the same sentence (core ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).
  *   L129a order_requests_update requires write access to the order's
  *         warehouse, so the notes editor asks 'write' like every other
  *         user-client write to the order.
@@ -64,6 +64,34 @@ describe('OrderRequestsService.cancel — the requester window answered by the d
     expect(invalidateInventoryListAfterWrite).not.toHaveBeenCalled();
   });
 
+  it('answers the same 403 and sentence whichever layer refuses first (the service read or the function)', async () => {
+    // Service first: the read already shows the order approved, so the
+    // function is never called.
+    const early = makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: { status: 'approved', requester_user_id: 'u1' },
+        error: null,
+      },
+    });
+    const first = await svc(early).cancel('ord-1', null).catch((e: unknown) => e);
+    expect(early.rpcCalls).toHaveLength(0);
+    // Function first: the read saw pending_approval, the function did not.
+    const late = makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: { status: 'pending_approval', requester_user_id: 'u1' },
+        error: null,
+      },
+      'rpc:cancel_order_request': {
+        data: null,
+        error: { message: 'forbidden', code: '42501', hint: 'requester_pending_only' },
+      },
+    });
+    const second = await svc(late).cancel('ord-1', null).catch((e: unknown) => e);
+    const shape = (e: unknown) => ({ code: (e as { code?: string }).code, message: (e as Error).message });
+    expect(shape(first)).toEqual({ code: 'forbidden', message: ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY });
+    expect(shape(second)).toEqual(shape(first));
+  });
+
   it("keeps 'forbidden' without the hint as the someone-else's-order refusal", async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
@@ -78,7 +106,7 @@ describe('OrderRequestsService.cancel — the requester window answered by the d
     });
   });
 
-  it("the service's own refusal says the same sentence (one rule, one sentence, from core)", async () => {
+  it("the service's own refusal says the same sentence with the same 403 (one rule, one answer, from core)", async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
         data: { status: 'approved', requester_user_id: 'u1' },
@@ -86,7 +114,7 @@ describe('OrderRequestsService.cancel — the requester window answered by the d
       },
     });
     await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
-      code: 'validation_error',
+      code: 'forbidden',
       message: ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
     });
     expect(stub.rpcCalls).toHaveLength(0);

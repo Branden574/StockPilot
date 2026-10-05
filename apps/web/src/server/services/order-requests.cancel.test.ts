@@ -57,8 +57,9 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
       },
       ...OK_RPC,
     });
+    // 403, as the function's own refusal maps (0396, hint requester_pending_only).
     await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
-      code: 'validation_error',
+      code: 'forbidden',
     });
     expect(stub.rpcCalls).toHaveLength(0);
   });
@@ -81,7 +82,7 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
         ...OK_RPC,
       });
       await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
-        code: 'validation_error',
+        code: 'forbidden',
       });
       expect(stub.rpcCalls).toHaveLength(0);
     }
