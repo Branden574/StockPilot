@@ -1707,12 +1707,24 @@ export class PoImportsService {
           }
         }
         // Archive fresh orphans superseded by a sibling link (0 qty, unused).
+        // A refused archive is reported, never silent (small fixes slice 2
+        // review): the orphan would stay active and Expected with nobody told.
+        // Since 0395 the delete guard can refuse it too (an item holding
+        // stock), though a fresh orphan holds none. The approval goes on: its
+        // lines already point at the sibling.
         for (const oid of orphanIds) {
-          await this.ctx.supabase
+          const { error: archiveErr } = await this.ctx.supabase
             .from('inventory_items')
             .update({ status: 'archived', deleted_at: new Date().toISOString() })
             .eq('organization_id', this.ctx.organizationId)
             .eq('id', oid);
+          if (archiveErr) {
+            void reportError(new Error(`orphan archive failed: ${archiveErr.message}`), {
+              tag: 'po_import.approve.archive_orphan',
+              organizationId: this.ctx.organizationId,
+              extra: { itemId: oid, code: archiveErr.code ?? null, poImportId: input.poImportId },
+            });
+          }
         }
         if (orphanIds.length > 0) {
           // The orphans were Expected rows: the instant dataset and the
