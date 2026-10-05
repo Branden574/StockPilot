@@ -37,3 +37,19 @@ export function signedOutcome(status: string | null): SignedOutcome {
     redirectTo: '/dashboard/orders?status=all_active',
   };
 }
+
+/**
+ * What a used sign link says (L87, found again in the test-stage walk). The
+ * page's "already signed" panel said "looks like this order was already
+ * completed. Check your inbox for the confirmation email." for every status,
+ * so after a short hand-over it claimed a completion and an email that never
+ * happen. Its words now follow the status the hand-over left, as the
+ * thank-you panel's do. Only a token that resolves reaches this panel, and its
+ * holder signed or is a member, so the status is nothing they could not see.
+ */
+export function alreadySignedMessage(status: string | null): string {
+  if (status === 'completed') {
+    return 'Thanks — looks like this order was already completed. Check your inbox for the confirmation email.';
+  }
+  return `Thanks. ${signedOutcome(status).message}`;
+}

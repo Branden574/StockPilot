@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { formatOrderNumber } from '@stockpilot/core';
 
 import { SignatureCollector } from '@/components/orders/signature-collector';
+import { alreadySignedMessage } from '@/lib/orders/sign-outcome';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveSignatureToken, SIGNATURE_TOKEN_RE } from '@/server/lib/order-secrets';
 import {
@@ -96,7 +97,7 @@ export default async function OrderSignPage({
   const alreadySigned = order.signed_at !== null;
 
   if (expired || wrongStatus || alreadySigned) {
-    return <InvalidPanel reason={alreadySigned ? 'already' : 'invalid'} />;
+    return <InvalidPanel reason={alreadySigned ? 'already' : 'invalid'} status={order.status} />;
   }
 
   // Internal-user orders carry name/email in user_profiles, not on the
@@ -198,7 +199,7 @@ export default async function OrderSignPage({
  * benign case where the signer might rationally expect a different
  * outcome.
  */
-function InvalidPanel({ reason }: { reason: 'invalid' | 'already' }) {
+function InvalidPanel({ reason, status }: { reason: 'invalid' | 'already'; status: string }) {
   return (
     <div className="text-center">
       <header className="space-y-2">
@@ -210,7 +211,7 @@ function InvalidPanel({ reason }: { reason: 'invalid' | 'already' }) {
         </h1>
         <p className="text-muted-foreground mt-3 text-sm">
           {reason === 'already'
-            ? 'Thanks — looks like this order was already completed. Check your inbox for the confirmation email.'
+            ? alreadySignedMessage(status)
             : "This link is invalid, expired, or the order is no longer awaiting a signature. If you think this is wrong, get in touch with the warehouse."}
         </p>
       </header>

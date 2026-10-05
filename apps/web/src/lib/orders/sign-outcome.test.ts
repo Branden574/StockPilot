@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { signedOutcome } from './sign-outcome';
+import { alreadySignedMessage, signedOutcome } from './sign-outcome';
 
 /**
  * L87: after a hand-over that left units owed, the sign page said "The order
@@ -45,5 +45,30 @@ describe('signedOutcome', () => {
     expect(src).toContain('signedOutcome(');
     expect(src).not.toContain('The order is marked completed');
     expect(src).not.toContain('The order will be marked completed');
+  });
+});
+
+/**
+ * L87 (test stage): a used sign link said "looks like this order was already
+ * completed. Check your inbox for the confirmation email." for every status,
+ * so after a short hand-over it claimed a completion and an email that never
+ * happen. Its words now follow the status the hand-over left.
+ */
+describe('alreadySignedMessage', () => {
+  it('completed keeps the confirmation email line', () => {
+    expect(alreadySignedMessage('completed')).toBe(
+      'Thanks — looks like this order was already completed. Check your inbox for the confirmation email.',
+    );
+  });
+
+  it('backordered says the rest stays on backorder and promises no email', () => {
+    expect(alreadySignedMessage('backordered')).toBe(
+      'Thanks. What was handed over is recorded. The rest stays on backorder.',
+    );
+  });
+
+  it('any other status, or none, claims only the signature', () => {
+    expect(alreadySignedMessage('cancelled')).toBe('Thanks. Your signature is recorded.');
+    expect(alreadySignedMessage(null)).toBe('Thanks. Your signature is recorded.');
   });
 });
