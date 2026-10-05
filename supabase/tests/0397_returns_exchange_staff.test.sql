@@ -86,6 +86,7 @@
 --   M26 the item locks are a no-op (desk check F4)                       -> A10 (and races 11a, 12a)
 --   M27 the release ignores the order the caller saw                     -> R6
 --   M28 the replacement cancel accepts a missing revision                -> R6
+--   M29 the creation never logs its exchange requests                    -> C1, K4
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -671,14 +672,15 @@ select is(
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
-                        '_notify_replacement_order_changes', 'tg_returns_api_guard')),
+                        '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested')),
   '_notify_replacement_order_changes:true:false,_return_exchange_approve:false:false,_return_exchange_create:false:false,'
   || '_return_exchange_fulfilled:false:false,_return_exchange_item_ok:false:false,_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,'
   || '_return_exchange_quantity:false:false,_return_exchange_reason:false:false,_return_exchange_replay:false:false,'
   || '_return_exchange_requester_options:false:false,_return_lock_items:false:false,_return_replacement_cancel_order:false:false,'
   || '_return_replacement_class:false:false,_return_replacement_issue:true:false,_return_replacement_summary:false:false,'
   || 'tg_order_request_lines_replacement_guard:false:false,tg_order_requests_replacement_link:false:false,'
-  || 'tg_order_requests_replacement_status:true:false,tg_return_exchange_lines_validate:false:false,tg_returns_api_guard:false:false',
+  || 'tg_order_requests_replacement_status:true:false,tg_return_decisions_exchange_requested:false:false,'
+  || 'tg_return_exchange_lines_validate:false:false,tg_returns_api_guard:false:false',
   'A4: every helper, hook and guard has no EXECUTE for any API role; SECURITY INVOKER except the replacement issue (DEFINER, it inserts the order as postgres), the gate (DEFINER, C-5) and the replacement notify (DEFINER)');
 select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname collate "C"), '')
@@ -689,7 +691,8 @@ select is(
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
-                        '_notify_replacement_order_changes', 'tg_returns_api_guard', 'change_return_replacement',
+                        '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested',
+                        'change_return_replacement',
                         'cancel_return_replacement', 'release_return_replacement_early', 'return_exchange_candidates',
                         'return_exchange_options', 'return_exchange_flags')
       and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c where c = 'search_path=public, pg_temp'))
@@ -734,16 +737,18 @@ select is(
      from pg_trigger t
     where t.tgname in ('trg_order_requests_notify', 'trg_order_requests_notify_replacement', 'trg_order_requests_zz_replacement_status',
                        'trg_zz_order_requests_replacement_link_ins', 'trg_zz_order_requests_replacement_link_upd',
-                       'trg_zz_order_request_lines_replacement_guard', 'trg_return_exchange_lines_validate')
+                       'trg_zz_order_request_lines_replacement_guard', 'trg_return_exchange_lines_validate',
+                       'trg_return_decisions_exchange_requested')
       and not t.tgisinternal),
   'trg_order_requests_notify=CREATE TRIGGER trg_order_requests_notify AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NULL)) EXECUTE FUNCTION _notify_order_request_changes()' || E'\n'
   || 'trg_order_requests_notify_replacement=CREATE TRIGGER trg_order_requests_notify_replacement AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION _notify_replacement_order_changes()' || E'\n'
   || 'trg_order_requests_zz_replacement_status=CREATE TRIGGER trg_order_requests_zz_replacement_status BEFORE UPDATE OF status ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND (old.status IS DISTINCT FROM new.status))) EXECUTE FUNCTION tg_order_requests_replacement_status()' || E'\n'
+  || 'trg_return_decisions_exchange_requested=CREATE TRIGGER trg_return_decisions_exchange_requested AFTER INSERT ON public.return_decisions FOR EACH ROW WHEN ((new.kind = ''created''::text)) EXECUTE FUNCTION tg_return_decisions_exchange_requested()' || E'\n'
   || 'trg_return_exchange_lines_validate=CREATE TRIGGER trg_return_exchange_lines_validate BEFORE INSERT OR UPDATE ON public.return_exchange_lines FOR EACH ROW EXECUTE FUNCTION tg_return_exchange_lines_validate()' || E'\n'
   || 'trg_zz_order_request_lines_replacement_guard=CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_ins=CREATE TRIGGER trg_zz_order_requests_replacement_link_ins BEFORE INSERT ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION tg_order_requests_replacement_link()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_upd=CREATE TRIGGER trg_zz_order_requests_replacement_link_upd BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN ((old.replacement_for_return_id IS DISTINCT FROM new.replacement_for_return_id)) EXECUTE FUNCTION tg_order_requests_replacement_link()',
-  'A8: the notify split (ordinary orders keep _notify_order_request_changes behind a WHEN; replacements get their own), the gate on status changes of replacements only, the link guards, the lines guard and the exchange-line validation, each exactly as pinned');
+  'A8: the notify split (ordinary orders keep _notify_order_request_changes behind a WHEN; replacements get their own), the gate on status changes of replacements only, the link guards, the lines guard, the exchange-line validation and the exchange requests logged after the creation (desk check F9), each exactly as pinned');
 select is(
   (select pg_get_expr(i.indpred, i.indrelid) from pg_index i where i.indexrelid = 'public.order_requests_live_replacement_uniq'::regclass)
   || '|' || (select pg_get_constraintdef(c.oid) from pg_constraint c
@@ -857,8 +862,8 @@ select is(
                                order by d.seq)
                from public.return_decisions d where d.return_id = :'rC1')
   || '|' || (select count(*)::text from public.order_requests where replacement_for_return_id = :'rC1'),
-  'requested:true:1:-:staff:true:0:true|exchange_requested/staff/staff/true,created/staff/staff/false|0',
-  'C1: a staff exchange line keeps the request (item, quantity defaulted to the return''s, who asked) and its decision; nothing is ordered before approval');
+  'requested:true:1:-:staff:true:0:true|created/staff/staff/false,exchange_requested/staff/staff/true|0',
+  'C1: a staff exchange line keeps the request (item, quantity defaulted to the return''s, who asked) and its decision, logged right after the RMA''s creation (desk check F9); nothing is ordered before approval');
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oG,
                   pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL, 'quantity', 2))::text)))
@@ -1004,7 +1009,7 @@ select is(
   'E7: processing puts the Medium back on 31-C (on hand +1, 31-C +1, Staging +0, one return movement to 31-C) and the exchange reads completed (acceptance 36)');
 select is(
   (select string_agg(d.kind, ',' order by d.seq) from public.return_decisions d where d.return_id = :'rE'),
-  'exchange_requested,created,disposition_planned,exchange_approved,replacement_issued,approved,received,closed',
+  'created,exchange_requested,disposition_planned,exchange_approved,replacement_issued,approved,received,closed',
   'E8: the decision log keeps the chain: the request, the approval with its replacement, the receipt and the close (brief 35)');
 
 -- ══ H. Header inheritance ═════════════════════════════════════════════════
@@ -1140,7 +1145,7 @@ select is(
   || (select count(*)::text from public.order_requests where replacement_for_return_id = :'rSh') || ':'
   || (select status from public.return_exchange_lines where return_id = :'rSh') || ':'
   || (select string_agg(kind, ',' order by seq) from public.return_decisions where return_id = :'rSh'),
-  'P0001:replacement_unavailable:true:requested:0:requested:exchange_requested,created',
+  'P0001:replacement_unavailable:true:requested:0:requested:created,exchange_requested',
   'J1: with the Large at 0 free, the plain approval is refused with the numbers and NOTHING is written: no order, no hold, the RMA still requested (D19)');
 select pg_temp.approve(:mgr, :'rSh', pg_temp.xdec(:'rSh', 'approve', '{}'::jsonb, '{"whenShort":"backorder"}'::jsonb)) as "jSh2" \gset
 select is(
@@ -1392,7 +1397,7 @@ select is(
   || pg_temp.attempt('authenticated', :mgr,
        format($q$update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_by = %L where id = %L$q$,
               :mgr, pg_temp.live(:'rCt'))),
-  'received:approved:1:exchange_requested/counter,created/counter,disposition_planned/counter,exchange_approved/staff,'
+  'received:approved:1:created/counter,exchange_requested/counter,disposition_planned/counter,exchange_approved/staff,'
   || 'replacement_issued/staff,approved/counter,received/counter:ready_to_pick:true:ok:1',
   'G1: "Approve and receive" with an exchange approves, holds the replacement and receives the unit in one transaction (channel counter): the gate is open at once (brief 25)');
 select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1)) as "rAdd" \gset
@@ -1451,8 +1456,8 @@ select is(
   ((:'jDn'::jsonb)->>'status') || ':' || (select status from public.return_exchange_lines where return_id = :'rDn') || ':'
   || (select count(*)::text from public.order_requests where replacement_for_return_id = :'rDn') || ':'
   || (select string_agg(kind, ',' order by seq) from public.return_decisions where return_id = :'rDn') || ':' || pg_temp.xs(:'rDn', :mgr),
-  'denied:declined:0:exchange_requested,created,exchange_declined,denied:cancelled',
-  'K4: a denied exchange declines its lines and creates no order (no reservation can remain, brief 34)');
+  'denied:declined:0:created,exchange_requested,exchange_declined,denied:cancelled',
+  'K4: a denied exchange declines its lines and creates no order (no reservation can remain, brief 34); the log reads the creation first (desk check F9)');
 
 -- Desk check F3. oK5 / oK7: completed orders of 4 Mediums; pY / pZ: one unit
 -- each on 12-B. Each RMA returns 2 Mediums for 2 of the item, approved on
@@ -1757,7 +1762,7 @@ select is(
   (select xl.requested_by_kind || ':' || coalesce(xl.requested_by::text, 'none') || ':' || (xl.requested_item_id = :rL)::text
      from public.return_exchange_lines xl where xl.return_id = :'rY')
   || ':' || (select string_agg(d.kind || '/' || d.channel || '/' || d.actor_kind, ',' order by d.seq) from public.return_decisions d where d.return_id = :'rY'),
-  'requester:none:true:exchange_requested/token/requester,created/token/requester',
+  'requester:none:true:created/token/requester,exchange_requested/token/requester',
   'Y4: a requester''s exchange line records who asked (the anonymous token) and its channel');
 
 -- ══ M. The shape cases shared with core ═══════════════════════════════════

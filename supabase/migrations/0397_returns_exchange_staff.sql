@@ -769,8 +769,11 @@ $$;
 -- gated public bodies that call them are unchanged (preflight above).
 
 -- Create (plan 3.3.6): a line carrying `exchange: {itemId?, quantity?, note?}`
--- gets its exchange row and an exchange_requested decision, in the create's
--- own transaction. Staff tier for a staff create; the requester tier for a
+-- gets its exchange row in the create's own transaction; its
+-- exchange_requested decision is written right after the RMA's created
+-- decision by tg_return_decisions_exchange_requested (desk check F9: the log
+-- reads created first; _return_create_core, frozen, calls this hook before
+-- it appends created). Staff tier for a staff create; the requester tier for a
 -- token, portal or member create, where any miss answers the same
 -- exchange_item_not_eligible whatever the cause (no oracle). No item means
 -- "the warehouse will review" and needs a note. The quantity defaults to,
@@ -787,7 +790,6 @@ declare
   v_org   uuid;
   v_tier  text := case when p_actor->>'kind' = 'staff' then 'staff' else 'requester' end;
   v_kind  text := case p_actor->>'kind' when 'staff' then 'staff' when 'portal_customer' then 'portal_customer' else 'requester' end;
-  v_chan  text := coalesce(nullif(p_actor->>'channel', ''), 'staff');
   v_actor uuid;
   v_rl    record;
   v_item  uuid;
@@ -846,9 +848,6 @@ begin
                                               requested_quantity, request_note, requested_by_kind, requested_by)
     values (v_org, p_return_id, v_rl.id, v_item, v_qty, v_note, v_kind, v_actor)
     returning id into v_xl;
-    insert into public.return_decisions (organization_id, return_id, return_line_id, exchange_line_id, kind, channel,
-                                         item_id, quantity, actor_user_id, actor_kind)
-    values (v_org, p_return_id, v_rl.id, v_xl, 'exchange_requested', v_chan, v_item, v_qty, v_actor, v_kind);
   end loop;
 end;
 $$;
@@ -1962,6 +1961,34 @@ begin
 end;
 $$;
 
+-- The exchange requests of a new RMA, logged right after its created
+-- decision (desk check F9): AFTER INSERT on return_decisions WHEN kind is
+-- created. One exchange_requested decision per exchange line the create
+-- wrote and the log does not name yet, in the order of the lines' order
+-- lines, with the created decision's channel and actor (the create passes
+-- the same ones to both). Only the RX-1 create writes a created decision
+-- (no API role writes the log), so this fires once per RMA.
+create function public.tg_return_decisions_exchange_requested()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  insert into public.return_decisions (organization_id, return_id, return_line_id, exchange_line_id, kind, channel,
+                                       item_id, quantity, actor_user_id, actor_kind)
+  select xl.organization_id, xl.return_id, xl.return_line_id, xl.id, 'exchange_requested', new.channel,
+         xl.requested_item_id, xl.requested_quantity, new.actor_user_id, new.actor_kind
+    from public.return_exchange_lines xl
+    join public.return_lines rl on rl.id = xl.return_line_id
+   where xl.return_id = new.return_id and xl.status = 'requested'
+     and not exists (select 1 from public.return_decisions d
+                      where d.exchange_line_id = xl.id and d.kind = 'exchange_requested')
+   order by rl.order_request_line_id, xl.id;
+  return null;
+end;
+$$;
+
 -- The link column's guard (plan 3.6.4): an API-role insert naming it is
 -- refused (no API role holds INSERT on the column either: column grants are
 -- per column since 0388), and nobody may change it once written, whatever
@@ -2293,6 +2320,7 @@ revoke all on function public._return_exchange_on_deny(uuid, uuid) from public, 
 revoke all on function public._return_exchange_on_cancel(uuid, uuid, text) from public, anon, authenticated, service_role;
 revoke all on function public._return_exchange_replay(uuid, integer) from public, anon, authenticated, service_role;
 revoke all on function public.tg_return_exchange_lines_validate() from public, anon, authenticated, service_role;
+revoke all on function public.tg_return_decisions_exchange_requested() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_requests_replacement_link() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_request_lines_replacement_guard() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_requests_replacement_status() from public, anon, authenticated, service_role;
@@ -2333,7 +2361,7 @@ comment on function public._return_exchange_quantity(jsonb, numeric, numeric) is
 comment on function public._return_replacement_issue(uuid, jsonb, integer, jsonb) is
   'RX-2 (plan 3.6.1-3.6.3): creates the replacement order for an RMA as postgres, applying the order insert policy''s and both order guards'' rules itself: the original''s organization, warehouse, requester context and fulfilment (or the approver''s override; a delivery needs an active site the warehouse serves, P0001 replacement_site_not_available), a portal original''s active customer and portal user, a departed member as an email-only requester (D7), a deleted requester''s stamp carried; never notes, needed-by, workflow, token or signature columns; lines merged per item through the staff tier (P0001 exchange_item_not_eligible), cost stamped from the item, price 0 for a portal order (D9). Then the unchanged approve_partial in the same transaction (holds once), and under whenShort refuse a short line raises P0001 replacement_unavailable (detail [{itemId, needed, available}]) and the caller''s transaction rolls back. A second live replacement for the RMA gives P0001 return_changed. On the 0387 AL9d census of DEFINER order inserters on purpose. SECURITY DEFINER, lock_timeout 5s, EXECUTE for nobody.';
 comment on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) is
-  'RX-2 hook body (plan 3.3.6): a create line carrying exchange {itemId?, quantity?, note?} gets its return_exchange_lines row and an exchange_requested decision in the create''s transaction. Staff tier for a staff create; the requester tier for a token, portal or member create, where any miss is P0001 exchange_item_not_eligible whatever the cause. No item is "the warehouse will review" and needs a note (1 to 500 characters). Quantity defaults to, and is capped by, the line''s return quantity. SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 hook body (plan 3.3.6): a create line carrying exchange {itemId?, quantity?, note?} gets its return_exchange_lines row in the create''s transaction; its exchange_requested decision follows the created decision (tg_return_decisions_exchange_requested, desk check F9). Staff tier for a staff create; the requester tier for a token, portal or member create, where any miss is P0001 exchange_item_not_eligible whatever the cause. No item is "the warehouse will review" and needs a note (1 to 500 characters). Quantity defaults to, and is capped by, the line''s return quantity. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_approve(uuid, jsonb, uuid, integer) is
   'RX-2 hook body (plan 3.3.3 step 6): every requested exchange line gets one decision (P0001 return_decision_incomplete): approve (the requested item or a staff choice; a choice differing from a requested item is a substitution and needs a reason, kept with the previous item), decline (reason required), or add (G9: a staff exchange on a return-only line). Every approved item passes the staff tier; every quantity is whole, 1 to the returned quantity. When anything is approved, one replacement order carries every approved line at revision p_revision + 1 (_return_replacement_issue: created, held by approve_partial, short checked), and exchange_approved and replacement_issued decisions are appended. approve_return checked the orders module and orders:approve before its row lock. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_on_deny(uuid, uuid) is
@@ -2356,6 +2384,8 @@ comment on function public.return_exchange_flags(uuid) is
   'RX-2: the exchange facts the list view reads from the staff-only decision log, for any member of the RMA''s organization (or the service role): releasedEarly (the live replacement), counter (received at the counter), revision. No reason, name or rack. Null for anyone else. STABLE, SECURITY DEFINER, EXECUTE to authenticated and service_role.';
 comment on function public.tg_return_exchange_lines_validate() is
   'RX-2 (plan 3.1.3), BEFORE INSERT OR UPDATE on return_exchange_lines, every role (defence in depth: only the RX-2 functions write it): items, RMA and line in one organization; quantities at most the returned quantity (P0001 exchange_quantity_exceeds_return); the request fields never change (42501 exchange_request_immutable); status edges requested -> approved, declined or cancelled, approved -> approved at a newer revision or cancelled, cancelled -> approved only while the RMA is approved, received or closed; a replacement named is this RMA''s and its line carries the approved item (P0001 exchange_line_invalid). SECURITY INVOKER, no EXECUTE.';
+comment on function public.tg_return_decisions_exchange_requested() is
+  'RX-2 (desk check F9), AFTER INSERT on return_decisions WHEN kind = created: logs the new RMA''s exchange_requested decisions right after its created decision (one per requested exchange line the log does not name yet, in order-line order, with the created decision''s channel and actor), so the log reads created first; _return_create_core (RX-1, frozen) runs the exchange hook before it appends created. SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_requests_replacement_link() is
   'RX-2 (plan 3.6.4): an API-role insert naming replacement_for_return_id is refused (42501 replacement_link_server_only), and nobody changes the column once written (42501 replacement_link_immutable). SECURITY INVOKER, no EXECUTE.';
 comment on function public.tg_order_request_lines_replacement_guard() is
@@ -2494,6 +2524,11 @@ alter table public.return_decisions
          or (revision is not null and order_request_id is not null)));
 create index return_decisions_exchange_line_idx on public.return_decisions (exchange_line_id)
   where exchange_line_id is not null;
+create trigger trg_return_decisions_exchange_requested
+  after insert on public.return_decisions
+  for each row
+  when (new.kind = 'created')
+  execute function public.tg_return_decisions_exchange_requested();
 comment on column public.return_decisions.exchange_line_id is
   'RX-2: the return_exchange_lines row an exchange_requested, exchange_approved or exchange_declined decision is about (and only those kinds carry one).';
 
