@@ -4322,6 +4322,19 @@ describe('the small fixes release (slice 1)', () => {
     expect(text).toContain(sentence);
   });
 
+  // 1.27 shipped with security slice A3 (#321): the Settings pill shows the
+  // role in the Team list's words (apps/mobile/src/lib/role-pill.ts), not
+  // the web's role names, so the entry quotes the pill's own words.
+  it("names the app's role pill in the words the pill shows", () => {
+    const entry = release().entries.find((e) => e.id === 'everyday-fixes')!;
+    const pill = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/role-pill.ts'), 'utf8');
+    for (const word of ['MANAGER', 'STAFF']) {
+      expect(pill).toContain(`label: '${word}'`);
+      expect(entry.whatChanged).toContain(word);
+    }
+    expect(entry.whatChanged).not.toMatch(/Warehouse User|web's words/);
+  });
+
   it('offers Cancel only with orders:request, as the entry says (desk check F3)', () => {
     const entry = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
     expect(entry.howItAffectsYou).toContain('Cancel is offered only to people allowed to request orders');
