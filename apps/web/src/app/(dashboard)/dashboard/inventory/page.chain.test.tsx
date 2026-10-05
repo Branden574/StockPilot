@@ -508,6 +508,48 @@ describe('Items page: the table starts with the header, not after it', () => {
     expect(events).not.toContain('dataset:end');
   });
 
+  it('default view: the planned page-1 numbers reach the table together with the streamed dataset', async () => {
+    const firstPage = {
+      pageCount: 2,
+      pageItemCount: 1,
+      distinctSkus: 2,
+      placementRows: 2,
+      skuItemRowCounts: [],
+    };
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [ROW],
+      total: 2,
+      valueOnHand: 10,
+      ...LOOKUPS,
+      trends: {},
+      placement: {},
+      expectedCount: 0,
+      firstPage,
+    }));
+    h.datasetGate = new Promise(() => {}); // never settles
+    render(await callPage());
+    const props = m.tableProps.mock.calls[0]![0] as {
+      firstPage?: unknown;
+      instantPromise?: unknown;
+    };
+    expect(props.instantPromise).toBeInstanceOf(Promise);
+    expect(props.firstPage).toEqual(firstPage);
+  });
+
+  it('staff and deep links get no planned page (server mode, or the awaited dataset)', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect((m.tableProps.mock.calls[0]![0] as { firstPage?: unknown }).firstPage).toBeUndefined();
+
+    m.tableProps.mockClear();
+    h.role = 'manager';
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    const props = m.tableProps.mock.calls[0]![0] as { firstPage?: unknown; instant?: unknown };
+    expect(props).toHaveProperty('instant');
+    expect(props.firstPage).toBeUndefined();
+  });
+
   it('a deep link takes the awaited instant branch and starts no org-wide counting-units read', async () => {
     h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
     // A sort deep link: not the default view, and it filters nothing out.

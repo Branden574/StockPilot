@@ -102,6 +102,8 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
     selector({ add: vi.fn() }),
 }));
 
+import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
+
 import {
   InventoryTable,
   rowKeysToItemIds,
@@ -1688,60 +1690,82 @@ describe('InventoryTable streamed instant adoption (use() handoff)', () => {
     expect(screen.queryByText(/searching…/)).not.toBeInTheDocument();
   });
 
-  // REWRITTEN (not weakened). This test used to hand `renderStreaming` an
-  // ALREADY-RESOLVED promise and then assert "2 SKUs" as proof the table
-  // had flipped to instant mode. Neither half held: an already-settled
-  // promise passed at first render never pings the Suspense boundary in
-  // this environment, so adoption never ran — and server mode ALSO
-  // printed "2 SKUs" for its 2-row total, so the assertion passed on the
-  // pre-adoption footer. It could not have failed. It now resolves the
-  // promise AFTER first paint (the sibling test's pattern, which is also
-  // what streaming does in production) and asserts a string only instant
-  // mode produces, so it fails if adoption stops happening.
-  it('adopts the streamed dataset with no URL state: the visible rows stay identical (30-row payload IS page 1 of the derivation)', async () => {
+  // REWRITTEN AGAIN (owner bug 2026-10-05). This test used to pin the FLIP as
+  // the expected behaviour: the server painted "2 items ·" and adoption
+  // turned it into "2 SKUs". On a real org that flip was the bug the owner
+  // saw: page 1 re-shuffled, its families grew, the pager and the footer
+  // changed half a second after every refresh. The server now paints the
+  // planned page 1 with the numbers instant mode will print (`firstPage`), so
+  // adoption must change NOTHING on screen. Because nothing changes, the test
+  // proves adoption with BEHAVIOUR instead: once adopted, a search finds an
+  // off-page row locally with no network request, which server mode cannot.
+  it('adopts the streamed dataset with no URL state and nothing on screen changes (the planned page 1 IS page 1 of the derivation)', async () => {
+    const user = userEvent.setup();
     let resolvePayload!: (p: InstantAdoptedPayload | null) => void;
     const promise = new Promise<InstantAdoptedPayload | null>((resolve) => {
       resolvePayload = resolve;
     });
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
-    const pageRows = [
-      item({ id: 'a', name: 'Alpha Widget' }),
-      item({ id: 'b', name: 'Beta Gadget' }),
+    // Newest first: a single, then a two-size run whose second size sits
+    // BELOW an unrelated row. pageSize 2 makes page 1 close early (the run
+    // does not fit after the single), exactly the L4L shape at 30.
+    const dataset = [
+      item({ id: 'a', name: 'Alpha Widget', updated_at: '2026-01-05T00:00:00+00:00' }),
+      item({ id: 'b', name: 'Brick Tee - S', updated_at: '2026-01-04T00:00:00+00:00' }),
+      item({ id: 'c', name: 'Gamma Gadget', updated_at: '2026-01-03T00:00:00+00:00' }),
+      item({ id: 'd', name: 'Brick Tee - M', updated_at: '2026-01-02T00:00:00+00:00' }),
     ];
+    // What the cached loader plans: page 1 of the derivation over the view.
+    const derived = deriveInstantView(dataset, instantStateFromPageParams({}), 'items', 2);
+    expect(derived.pageItems.map((r) => r.id)).toEqual(['a']);
     const tree = (
       <InventoryTable
-        items={pageRows}
+        items={derived.pageItems}
         lookups={EMPTY_LOOKUPS}
-        total={2}
-        pageSize={30}
+        total={derived.total}
+        valueOnHand={derived.valueOnHand}
+        pageSize={2}
         instantPromise={promise}
+        firstPage={{
+          pageCount: derived.pageCount,
+          pageItemCount: derived.pageItems.length,
+          distinctSkus: 4,
+          placementRows: 4,
+          skuItemRowCounts: [['SKU-a', 1]],
+        }}
       />
     );
-    const { rerender } = render(tree);
+    const { container, rerender } = render(tree);
+    const screenText = () => ({
+      rows: [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent),
+      showing: screen.getAllByText(/^Showing/).map((n) => n.textContent),
+      pager: screen.getAllByRole('button', { name: /jump to page/i }).map((b) => b.textContent),
+      footer: [...container.querySelectorAll('p')]
+        .map((p) => p.textContent)
+        .filter((t) => t?.includes('on hand')),
+    });
 
-    // Pre-adoption: server mode, labelling its ITEM-ROW total honestly.
-    expect(await screen.findByText(/2 items ·/)).toBeInTheDocument();
+    const firstPaint = screenText();
+    // Instant mode's numbers, not server-mode arithmetic ("Showing 1–2 of
+    // 4", "Page 1 of 2", "4 items" before 2026-10-05).
+    expect(firstPaint.showing[0]).toBe('Showing 1–1 of 4');
+    expect(firstPaint.pager[0]).toBe('Page 1 of 3');
+    expect(firstPaint.footer[0]).toMatch(/^4 SKUs · /);
 
     await act(async () => {
-      resolvePayload({
-        items: [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name: 'Beta Gadget' })],
-        view: 'items',
-      } satisfies InstantAdoptedPayload);
+      resolvePayload({ items: dataset, view: 'items' } satisfies InstantAdoptedPayload);
     });
     // jsdom/React-act quirk, NOT a product behaviour: a promise resolved
     // outside a render pass does not ping the suspended boundary here, so
-    // `use()` only unblocks on the next render. Production streams the
-    // payload as an RSC-tracked promise and needs no nudge. Re-render the
-    // IDENTICAL tree (no prop changes) to supply that pass.
+    // `use()` only unblocks on the next render. Re-render the IDENTICAL tree.
     rerender(tree);
+    await act(async () => {});
 
-    // Post-adoption the footer flips to the complete instant totals — the
-    // "SKUs" label is reachable ONLY in instant mode, so this now fails if
-    // adoption stops happening.
-    expect(await screen.findByText(/2 SKUs/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+    expect(screenText()).toEqual(firstPaint);
+    // Adopted: an off-page row is found locally, with no request at all.
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'gamma');
+    expect(await screen.findByRole('link', { name: 'Gamma Gadget' })).toBeInTheDocument();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -1760,6 +1784,143 @@ describe('InventoryTable streamed instant adoption (use() handoff)', () => {
     const calledUrl = String(fetchSpy.mock.calls[0]![0]);
     expect(calledUrl).toContain('/api/items/search');
     expect(calledUrl).toContain('q=beta');
+  });
+});
+
+// THE PLANNED FIRST PAGE (owner bug 2026-10-05). On the streamed default view
+// the server paints page 1 of the instant derivation and hands the table its
+// numbers (`firstPage`). Until the dataset is adopted the table prints those,
+// never server-mode arithmetic; it stops using them when they no longer
+// describe the screen (a server-mode search), and keeps them when the dataset
+// never comes (a failed stream leaves the planned page on screen).
+describe('InventoryTable planned first page (streamed default view)', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', fetchSpy);
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+  });
+
+  const pending = () => new Promise<InstantAdoptedPayload | null>(() => {});
+  const footerText = () =>
+    Array.from(document.querySelectorAll('p'))
+      .map((p) => p.textContent ?? '')
+      .find((t) => t.includes('on hand') || t.includes('matching'))!;
+
+  it('a Model B family the plan kept whole is not marked partial, though the view spans several pages', () => {
+    // Without firstPage this exact render stamps "*" (server mode cannot
+    // know a 2-row SKU is complete on a 60-row view; see W-C above).
+    render(
+      <InventoryTable
+        items={[
+          item({ id: 'f1', name: 'Chromebook 14', sku: 'CB-14', quantity_on_hand: 4 }),
+          item({ id: 'f2', name: 'Chromebook 14', sku: 'CB-14', quantity_on_hand: 6 }),
+        ]}
+        lookups={EMPTY_LOOKUPS}
+        total={60}
+        pageSize={30}
+        instantPromise={pending()}
+        firstPage={{
+          pageCount: 3,
+          pageItemCount: 2,
+          distinctSkus: 59,
+          placementRows: 60,
+          skuItemRowCounts: [['CB-14', 2]],
+        }}
+      />,
+    );
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.queryByText('*')).not.toBeInTheDocument();
+    expect(footerText()).toMatch(/^59 SKUs · 60 rows · /);
+    expect(screen.getAllByText(/^Showing/)[0]).toHaveTextContent('Showing 1–2 of 60');
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 1 of 3',
+    );
+  });
+
+  it('a server-mode search during the wait is described as a search, not as the planned page', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ items: [item({ id: 'p1', name: 'Planned One' })], total: 1 })),
+    );
+    render(
+      <InventoryTable
+        items={[item({ id: 'p1', name: 'Planned One' }), item({ id: 'p2', name: 'Planned Two' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={60}
+        pageSize={30}
+        instantPromise={pending()}
+        firstPage={{
+          pageCount: 3,
+          pageItemCount: 2,
+          distinctSkus: 60,
+          placementRows: 60,
+          skuItemRowCounts: [],
+        }}
+      />,
+    );
+    expect(footerText()).toMatch(/^60 SKUs · /);
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'one');
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(footerText()).toMatch(/^Showing 1 matching/);
+    expect(screen.queryByRole('button', { name: /jump to page/i })).not.toBeInTheDocument();
+  });
+
+  it('when the dataset never comes (it resolves null), the planned numbers stay: they still describe the rows on screen', async () => {
+    const { rerender } = render(
+      <InventoryTable
+        items={[item({ id: 'n1', name: 'Only Row' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={40}
+        pageSize={30}
+        instantPromise={Promise.resolve(null)}
+        firstPage={{
+          pageCount: 2,
+          pageItemCount: 1,
+          distinctSkus: 40,
+          placementRows: 41,
+          skuItemRowCounts: [],
+        }}
+      />,
+    );
+    await act(async () => {});
+    rerender(
+      <InventoryTable
+        items={[item({ id: 'n1', name: 'Only Row' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={40}
+        pageSize={30}
+        instantPromise={Promise.resolve(null)}
+        firstPage={{
+          pageCount: 2,
+          pageItemCount: 1,
+          distinctSkus: 40,
+          placementRows: 41,
+          skuItemRowCounts: [],
+        }}
+      />,
+    );
+    await act(async () => {});
+    expect(footerText()).toMatch(/^40 SKUs · 41 rows · /);
+    expect(screen.getAllByText(/^Showing/)[0]).toHaveTextContent('Showing 1–1 of 40');
+  });
+
+  it('no firstPage (staff, viewers, over-cap orgs): server mode exactly as before', () => {
+    render(
+      <InventoryTable
+        items={[item({ id: 's1', name: 'Staff Row' })]}
+        lookups={EMPTY_LOOKUPS}
+        total={40}
+        pageSize={30}
+      />,
+    );
+    expect(footerText()).toMatch(/^40 items · /);
+    expect(screen.getAllByText(/^Showing/)[0]).toHaveTextContent('Showing 1–30 of 40');
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 1 of 2',
+    );
   });
 });
 

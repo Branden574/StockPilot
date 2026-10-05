@@ -14,7 +14,11 @@ import { Button } from '@/components/ui/button';
 import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { expandPlacementRows } from '@/lib/placements';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
-import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
+import {
+  deriveInstantView,
+  instantStateFromPageParams,
+  type InstantFirstPage,
+} from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -277,6 +281,10 @@ type SectionData = {
    *  and the page says so. Absent on the cached manager path, which sees every
    *  holding. */
   elsewhereUnavailable?: boolean;
+  /** Cached default view only (loader's `firstPage`): `items` is page 1 of
+   *  the instant derivation and this is what the table prints for it until
+   *  the streamed dataset lands. null/absent: server mode, fixed slices. */
+  firstPage?: InstantFirstPage | null;
 };
 
 /**
@@ -448,15 +456,18 @@ async function inventoryTableSection({
   // FIRST-ROWS-FIRST STREAMING (React 19 use()) — DEFAULT VIEW ONLY.
   // Instead of awaiting the full dataset pipeline before anything paints,
   // the default view server-renders immediately from the small cached
-  // 30-row payload (the loadInventoryList branch below) and ships the
+  // page-1 payload (the loadInventoryList branch below) and ships the
   // FULL instant dataset as an UNAWAITED promise (buildInstantAdoptedPayload,
   // attached to the final render). React streams that promise over the
   // same RSC response; the client table reads it with React.use() in an
   // invisible <InstantDatasetAdopter> and flips into instant mode (~<1s
-  // later) with zero visual change — the 30 cached rows ARE page 1 of the
-  // default derivation by the loader parity contract, and the table
-  // instance is preserved (search box / selection survive). The promise
-  // NEVER rejects: every failure resolves null → the table stays in
+  // later) with zero visual change: the cached rows ARE page 1 of the
+  // default derivation because the loader PLANS them with it (the payload's
+  // `firstPage`, which the table prints until the dataset lands). Until
+  // 2026-10-05 the cache held a fixed 30-row slice while instant mode pages
+  // group-aware, so the page re-shuffled half a second after every refresh.
+  // The table instance is preserved (search box / selection survive). The
+  // promise NEVER rejects: every failure resolves null → the table stays in
   // server mode (today's behavior). This replaces the reverted
   // effect+`.catch` handoff that crashed hydration (recurring bug
   // pattern #15).
@@ -599,9 +610,10 @@ async function inventoryTableSection({
   // data-affecting param takes the live path unchanged. The warehouse-
   // filter cookie changes the data, so it's part of the cache key. A
   // loader failure falls through to the live path. This IS the default
-  // view's first paint now: it renders in server mode over these 30 rows
-  // and STREAMS the full instant dataset behind it (instantPromise on the
-  // final render), instead of blocking on the awaited dataset branch above.
+  // view's first paint now: it renders the planned page 1 (payload.firstPage
+  // carries its pager and footer numbers) and STREAMS the full instant
+  // dataset behind it (instantPromise on the final render), instead of
+  // blocking on the awaited dataset branch above.
   if (isDefaultView && useSharedCaches) {
     try {
       const payload = await loadInventoryList(
@@ -624,6 +636,7 @@ async function inventoryTableSection({
         trends: new Map(Object.entries(payload.trends)),
         placementMap: new Map(Object.entries(payload.placement)),
         expectedCount: payload.expectedCount,
+        firstPage: payload.firstPage,
       };
     } catch (err) {
       console.warn('[inventory page] cached default view unavailable, using live path:', err);
@@ -838,8 +851,8 @@ async function inventoryTableSection({
   if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
 
   // FIRST-ROWS-FIRST STREAMING: on the DEFAULT manager+ Items view, ship
-  // the full instant dataset as an UNAWAITED promise alongside the 30-row
-  // server-mode render above. React streams it over the same RSC
+  // the full instant dataset as an UNAWAITED promise alongside the page-1
+  // render above. React streams it over the same RSC
   // response; the client table reads it with React.use() and flips into
   // instant mode without blocking this first paint. Created AFTER the
   // empty-state return so an empty org never spins up the loader.
@@ -855,9 +868,9 @@ async function inventoryTableSection({
   // WHOLE-DATASET counting units, exactly like the instant branch above — by
   // ORG rather than by row id, because this branch does not hold the dataset.
   //
-  // Server mode renders 30 rows, but this view also STREAMS the full dataset
+  // This branch renders one page, but this view also STREAMS the full dataset
   // (instantPromise) and the client then paginates it locally, so units derived
-  // from these 30 rows went missing on every page after the first: a size-run
+  // from that page's rows went missing on every page after the first: a size-run
   // header that should read "52 pairs total" fell back to a bare count as soon
   // as the user paged. Resolving what the ORG's groups define cannot be wrong
   // for any page the client renders, and it keeps the instant branch's cost
@@ -890,6 +903,10 @@ async function inventoryTableSection({
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
       instantPromise={instantPromise}
+      // The planned page 1's pager + footer numbers, for exactly the view
+      // that streams the dataset behind its first paint (the cached default
+      // view; null over the instant cap). Everyone else: server mode as before.
+      firstPage={instantPromise ? data.firstPage : undefined}
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
     />
