@@ -152,6 +152,27 @@ describe('InventoryRealtime', () => {
     await waitFor(() => expect(h.handlers.length).toBe(5));
     expect(h.channel).toHaveBeenCalledWith('org:org-1:inventory');
   });
+
+  // F4-1 desk check F2/F3: the receiving checklist editor and run pages show
+  // nothing live, and a refresh there replaced what an open edit or an open
+  // run form was based on. One prefix covers both pages; a purchase order
+  // (a uuid under the same section) still refreshes live.
+  it('opens no channel on the receiving checklist pages, and still does on a purchase order', async () => {
+    for (const path of [
+      '/dashboard/purchase-orders/receiving-checklist',
+      '/dashboard/purchase-orders/receiving-checks/0f400000-0000-4000-8000-000000000008',
+    ]) {
+      h.pathname.value = path;
+      const view = render(<InventoryRealtime organizationId="org-1" />);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.channel, path).not.toHaveBeenCalled();
+      view.unmount();
+    }
+    h.pathname.value = '/dashboard/purchase-orders/0f400000-0000-4000-8000-000000000002';
+    render(<InventoryRealtime organizationId="org-1" />);
+    await waitFor(() => expect(h.channel).toHaveBeenCalledTimes(1));
+  });
 });
 
 /**

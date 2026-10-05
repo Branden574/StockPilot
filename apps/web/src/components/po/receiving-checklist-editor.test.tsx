@@ -53,6 +53,17 @@ const LIVE = {
   retiredByName: null,
   runCount: 2,
 };
+/** Someone else published version 2 while version 1 was being edited. */
+const LIVE_V2 = {
+  ...LIVE,
+  id: 'v2',
+  versionNumber: 2,
+  title: 'Delivery checks (theirs)',
+  publishedAt: '2026-10-02T15:00:00Z',
+  publishedByName: 'Sam Ortiz',
+  runCount: 0,
+};
+const RETIRED_V1 = { ...LIVE, retiredAt: '2026-10-02T15:00:00Z', retiredByName: 'Sam Ortiz' };
 
 function editor(over: Partial<ChecklistEditorView> = {}): ChecklistEditorView {
   return {
@@ -175,6 +186,67 @@ describe('ReceivingChecklistEditor', () => {
     );
     await user.click(within(alert).getByRole('button', { name: C.reload }));
     expect(router.refresh).toHaveBeenCalled();
+  });
+
+  // Desk check F2 (mutation caught: the expected id read from the props at
+  // publish time). Editing began on v1; a refresh then brought v2 live. The
+  // publish still names v1, so the database refuses it as checklist_changed
+  // instead of replacing v2 with edits made from v1.
+  it('publishing names the version editing began on, even after a refresh brings a newer one', async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <ReceivingChecklistEditor editor={editor({ live: LIVE, nextVersionNumber: 2 })} />,
+    );
+    await user.click(screen.getByRole('button', { name: C.prepareVersion(2) }));
+    view.rerender(
+      <ReceivingChecklistEditor
+        editor={editor({ live: LIVE_V2, history: [RETIRED_V1], nextVersionNumber: 3 })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: C.publishVersion(3) }));
+    await user.click(screen.getAllByRole('button', { name: C.publishVersion(3) }).at(-1)!);
+    await waitFor(() => expect(publishReceivingChecklistAction).toHaveBeenCalledTimes(1));
+    expect(publishReceivingChecklistAction.mock.calls[0]![0].expectedCurrentId).toBe('v1');
+  });
+
+  // Desk check F2: only the explicit Reload after checklist_changed moves the
+  // base, to the version that reload brought; the edits stay.
+  it('Reload after a conflict keeps the edits and re-bases them on the version it loaded', async () => {
+    publishReceivingChecklistAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'x', details: { reason: 'checklist_changed' } },
+    });
+    const user = userEvent.setup();
+    const before = editor({ live: LIVE, nextVersionNumber: 2 });
+    const view = render(<ReceivingChecklistEditor editor={before} />);
+    await user.click(screen.getByRole('button', { name: C.prepareVersion(2) }));
+    const title = screen.getByRole('textbox', { name: C.titleLabel });
+    await user.clear(title);
+    await user.type(title, 'Edited title');
+    await user.click(screen.getByRole('button', { name: C.publishVersion(2) }));
+    await user.click(screen.getAllByRole('button', { name: C.publishVersion(2) }).at(-1)!);
+    const alert = await screen.findByRole('alert');
+    await user.click(within(alert).getByRole('button', { name: C.reload }));
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+    // A re-render before the reload lands carries the same props: nothing moves.
+    view.rerender(<ReceivingChecklistEditor editor={before} />);
+    expect(screen.getByRole('alert').textContent).toContain(C.publishChanged);
+    // The reload lands (new props from the server): v2 is live.
+    view.rerender(
+      <ReceivingChecklistEditor
+        editor={editor({ live: LIVE_V2, history: [RETIRED_V1], nextVersionNumber: 3 })}
+      />,
+    );
+    expect((screen.getByRole('textbox', { name: C.titleLabel }) as HTMLInputElement).value).toBe(
+      'Edited title',
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: C.publishVersion(3) }));
+    await user.click(screen.getAllByRole('button', { name: C.publishVersion(3) }).at(-1)!);
+    await waitFor(() => expect(publishReceivingChecklistAction).toHaveBeenCalledTimes(2));
+    expect(publishReceivingChecklistAction.mock.calls[0]![0].expectedCurrentId).toBe('v1');
+    expect(publishReceivingChecklistAction.mock.calls[1]![0].expectedCurrentId).toBe('v2');
+    expect(publishReceivingChecklistAction.mock.calls[1]![0].title).toBe('Edited title');
   });
 
   // Mutation caught: publish awaited bare (the button spun for good), and a

@@ -73,11 +73,32 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
   const [confirm, setConfirm] = React.useState<'publish' | 'turn_off' | null>(null);
   const [busy, setBusy] = React.useState(false);
   const pending = React.useRef<{ payload: string; clientPublishId: string } | null>(null);
+  /**
+   * The live version the staged edits started from (desk check F2), sent as
+   * the expected id: a version someone else published meanwhile is refused
+   * (checklist_changed) instead of being replaced by edits made from an older
+   * one. A refresh never moves it; only Reload after that refusal re-bases
+   * the edits, on the version the reload brought.
+   */
+  const [baseId, setBaseId] = React.useState<string | null>(null);
+  /** The props Reload was pressed on; the next, newer props re-base the edits. */
+  const [reloadFrom, setReloadFrom] = React.useState<ChecklistEditorView | null>(null);
+  if (reloadFrom !== null && reloadFrom !== editor) {
+    setReloadFrom(null);
+    setBaseId(editor.live?.id ?? null);
+    setError(null);
+  }
 
   useUnsavedWork('receiving-checklist-editor', C.editorTitle, () => editing || busy);
 
+  function reload() {
+    setReloadFrom(editor);
+    router.refresh();
+  }
+
   function begin(from: 'suggested' | 'blank' | 'live') {
     setError(null);
+    setBaseId(live?.id ?? null);
     if (from === 'live' && live) {
       setTitle(live.title);
       setSteps(
@@ -140,7 +161,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
       title,
       steps: checklistPublishPayload(steps),
       procedureId: procedureId || null,
-      expectedCurrentId: live?.id ?? null,
+      expectedCurrentId: baseId,
     };
     const payload = JSON.stringify(body);
     if (!pending.current || pending.current.payload !== payload) {
@@ -422,7 +443,7 @@ export function ReceivingChecklistEditor({ editor }: { editor: ChecklistEditorVi
           <div className="space-y-2">
             <p>{error.message}</p>
             {error.changed && (
-              <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+              <Button type="button" variant="outline" size="sm" onClick={reload}>
                 {C.reload}
               </Button>
             )}
