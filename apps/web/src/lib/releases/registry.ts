@@ -290,6 +290,23 @@ export const RELEASES: Release[] = [
           'Nothing changes in how orders are approved or picked. The rest stays on your order, and the order page shows where each item stands.',
         whatToDo: 'No action needed.',
       },
+      {
+        // Test stage (local walk): an approver assigned to some warehouses
+        // who pressed Approve, Deny or Save notes on another warehouse's order
+        // read "User does not have write access to warehouse <id>." The order
+        // service now answers with core ORDER_WAREHOUSE_WRITE_REFUSED_COPY.
+        // Only someone who approves orders can meet it.
+        id: 'order-other-warehouse-words',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Plain words for an order in another warehouse',
+        whatChanged:
+          'If you approve orders and open an order from a warehouse you don\'t work in, Approve, Deny, the pick slip, staging and notes now say "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask someone who works there."',
+        whyItMatters: 'The old message named the warehouse by a long internal code and did not say what to do.',
+        howItAffectsYou: 'Nothing changes in who can do what: only the words are new.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
     ],
   },
   {

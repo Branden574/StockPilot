@@ -24,6 +24,7 @@ import {
   isDeletedRequester,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderCancelOffer,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
@@ -4840,20 +4841,38 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     }
   });
 
-  it('is told to whoever can place an order request, as one fixed Orders entry with no link', () => {
+  // Test stage (local walk): the order service's refusal outside the caller's
+  // warehouses now reads in plain words (it named the warehouse's id), a
+  // change only someone who approves orders can meet, so it is its own entry
+  // for them.
+  it('is told to whoever can place an order request; the warehouse words only to people who approve orders', () => {
     const r = release();
     expect(r.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
-    expect(r.entries.map((e) => e.id)).toEqual(['order-partial-approval-held']);
-    const [entry] = r.entries;
-    expect(entry!.category).toBe('fixed');
-    expect(entry!.area).toBe('Orders');
-    expect(entry!.link).toBeUndefined();
+    expect(r.entries.map((e) => e.id)).toEqual(['order-partial-approval-held', 'order-other-warehouse-words']);
+    for (const entry of r.entries) {
+      expect(entry.category, entry.id).toBe('fixed');
+      expect(entry.area, entry.id).toBe('Orders');
+      expect(entry.link, entry.id).toBeUndefined();
+    }
+    expect(r.entries[0]!.audience).toBeUndefined();
+    expect(r.entries[1]!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
     const published: Release = { ...r, status: 'published' };
     const entriesFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
       visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.length ?? 0;
     expect(entriesFor('viewer', ['orders:request'])).toBe(1);
+    expect(entriesFor('staff', ['orders:request', 'orders:approve'])).toBe(2);
     expect(entriesFor('staff', ['members:read'])).toBe(0);
     expect(entriesFor('owner', [...PERMISSIONS], [])).toBe(0);
+  });
+
+  it('quotes the warehouse refusal as the order service says it, and claims no new rule', () => {
+    const entry = release().entries.find((e) => e.id === 'order-other-warehouse-words')!;
+    expect(entry.whatChanged).toContain(`"${ORDER_WAREHOUSE_WRITE_REFUSED_COPY}"`);
+    const svc = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
+    expect(svc).toContain('throw new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);');
+    expect(entry.howItAffectsYou).toContain('Nothing changes in who can do what');
+    expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|uuid|database|policy/i);
+    expect(entry.whatToDo).toBe('No action needed.');
   });
 
   it('quotes the notification word for word and the email as it reads, and claims nothing else', () => {
