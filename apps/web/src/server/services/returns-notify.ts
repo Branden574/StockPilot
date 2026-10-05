@@ -38,7 +38,9 @@ import { createNotification } from './notifications';
  *     (`email_order_status_changed`, fail-open), linked to their order. Email-
  *     only requesters get one email, never after a recorded public
  *     unsubscribe. B2B portal users get an email (and the portal shows the
- *     request).
+ *     request). A requester who deleted their account (the order's
+ *     requester_deleted_at, 0388/0393) hears nothing, not even at the
+ *     address the order kept (A3).
  *
  * DEDUPE: callers emit only after an RPC answered `changed: true`; a replay
  * sends nothing. Sending is best-effort after commit and never throws.
@@ -244,7 +246,7 @@ export async function notifyRequesterReturnEvent(
     const admin = createAdminClient();
     const { data: order, error } = await admin
       .from('order_requests')
-      .select('id, source, customer_id, requester_user_id, requester_email, requester_name, order_number')
+      .select('id, source, customer_id, requester_user_id, requester_email, requester_name, requester_deleted_at, order_number')
       .eq('id', rma.orderId)
       .eq('organization_id', rma.organizationId)
       .maybeSingle();
@@ -256,8 +258,13 @@ export async function notifyRequesterReturnEvent(
       requester_user_id: string | null;
       requester_email: string | null;
       requester_name: string | null;
+      requester_deleted_at: string | null;
       order_number: number | null;
     };
+    // A requester who deleted their account (0388 requester_deleted_at) is
+    // never told again, not even at the address the order kept (A3, 0393; the
+    // return prompt and the order emails follow the same rule).
+    if (o.requester_deleted_at) return;
     const title = REQUESTER_TITLES[rma.event];
     const handle = rma.returnNumber ?? formatOrderNumber(o.order_number) ?? 'your order';
     const isPortal = o.source === 'portal';

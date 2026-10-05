@@ -263,6 +263,32 @@ describe('buildReturnWorkbench', () => {
     expect(stub.fromCalls.filter((t) => t === 'returns')).toHaveLength(1);
   });
 
+  it('a requester and a closer who deleted their account read "Deleted user"; a recorded name or email keeps showing (A3, 0393)', async () => {
+    const STAMPS = { requested_by: '2026-10-04T00:00:00Z', closed_by: '2026-10-04T00:00:00Z' };
+    const base = {
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'stock_movements.select': { data: [], error: null },
+    };
+    const noName = { order_number: 103, warehouse_id: WH, requester_name: null, requester_email: null, completed_at: null };
+    const gone = header([LINE], { status: 'closed', closed_at: '2026-10-05T00:00:00Z', deleted_users: STAMPS, order_request: noName });
+    const { ctx, stub } = ctxFor({ ...base, 'returns.select': { data: [gone], error: null } });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.return).toMatchObject({ requesterName: 'Deleted user', requesterEmail: null, closedByName: 'Deleted user', receivedByName: null });
+    expect(String(stub.chainArgs.get('returns.select')?.[0]?.[0] ?? '')).toContain('deleted_users');
+
+    // The order kept an address: it keeps showing (requesterName stays null).
+    const kept = header([LINE], { deleted_users: STAMPS, order_request: { ...noName, requester_email: 'kept@example.com' } });
+    const k = ctxFor({ ...base, 'returns.select': { data: [kept], error: null } });
+    expect((await buildReturnWorkbench(k.ctx as never, RET)).return).toMatchObject({ requesterName: null, requesterEmail: 'kept@example.com' });
+
+    // A null column without a stamp is not a deleted person.
+    const plain = header([LINE], { order_request: noName });
+    const p = ctxFor({ ...base, 'returns.select': { data: [plain], error: null } });
+    expect((await buildReturnWorkbench(p.ctx as never, RET)).return).toMatchObject({ requesterName: null, closedByName: null });
+  });
+
   it('created at the counter opens with "Approve and receive"', async () => {
     const { ctx } = ctxFor({
       'returns.select': { data: [header([LINE], { status: 'requested' })], error: null },
@@ -327,6 +353,30 @@ describe('buildReturnListPage', () => {
     expect(images).toHaveBeenCalledTimes(1);
     const range = stub.chainArgs.get('return_overview.select')!.find((a) => a.length === 2 && a[0] === 0);
     expect(range).toEqual([0, 25]);
+  });
+
+  it('names a requester who deleted their account "Deleted user", after any name or email recorded (A3, 0393)', async () => {
+    const STAMP = { requested_by: '2026-10-04T00:00:00Z' };
+    const { ctx, stub } = ctxFor({
+      'return_overview.select': {
+        data: [
+          overview(1, { requested_by: null, deleted_users: STAMP }),
+          overview(2, { requested_by: null, deleted_users: STAMP, requester_email: 'kept@example.com' }),
+          overview(3, { requested_by: null, deleted_users: STAMP, requester_name: 'Pat Lee' }),
+          overview(4, { requested_by: null, deleted_users: null }),
+        ],
+        error: null,
+      },
+      'inventory_items.select': { data: [], error: null },
+    });
+    const page = await buildReturnListPage(ctx as never, { filter: 'all' });
+    expect(page.rows.map((r) => [r.requesterName, r.requesterEmail])).toEqual([
+      ['Deleted user', null],
+      [null, 'kept@example.com'],
+      ['Pat Lee', null],
+      [null, null],
+    ]);
+    expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(/requested_by, deleted_users$/);
   });
 
   it('the waiting list filters to approved and sorts by the oldest approval', async () => {

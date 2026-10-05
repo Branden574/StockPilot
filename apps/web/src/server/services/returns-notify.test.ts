@@ -182,6 +182,22 @@ describe('the requester messages', () => {
     expect(String(args.viewUrl)).toMatch(/\/portal$/);
   });
 
+  it('a requester who deleted their account hears nothing, not even at the address the order kept (A3, 0393)', async () => {
+    const stub = admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: null, requester_email: 'kept@example.com', requester_name: 'Kept', requester_deleted_at: '2026-10-04T00:00:00Z', order_number: 103 }],
+        error: null,
+      },
+    });
+    for (const event of ['request_received', 'approved', 'received', 'denied', 'cancelled'] as const) {
+      await notifyRequesterReturnEvent({ ...RMA, event, source: 'requester', channel: 'token' });
+    }
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(createNotification).not.toHaveBeenCalled();
+    expect(resolveReturnToken).not.toHaveBeenCalled();
+    expect(String(stub.chainArgs.get('order_requests.select')?.[0]?.[0] ?? '')).toContain('requester_deleted_at');
+  });
+
   it('a staff-created return tells the requester nothing', async () => {
     admin({});
     await notifyRequesterReturnEvent({ ...RMA, event: 'approved', source: 'internal' });

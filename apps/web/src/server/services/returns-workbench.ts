@@ -3,7 +3,9 @@ import 'server-only';
 import {
   availableReturnActions,
   can,
+  DELETED_USER_LABEL,
   inboundStateLabel,
+  isDeletedPerson,
   originalRowLabel,
   parseRestockOptions,
   returnLineLabel,
@@ -306,6 +308,39 @@ async function readNames(ctx: ServiceContext, userIds: string[]): Promise<Map<st
   return out;
 }
 
+/**
+ * The requester the header and the list show (0393, security slice A3): the
+ * name, else the email, that the RMA or its order recorded (a kept copy keeps
+ * showing); else "Deleted user" when the member who asked deleted their
+ * account (requested_by null and stamped in deleted_users: the rule of A3's
+ * returnRequesterLabel, core isDeletedPerson); else nothing. The screens show
+ * `requesterName ?? requesterEmail`, so the label rides in requesterName.
+ */
+export function requesterNameOf(
+  name: string | null,
+  email: string | null,
+  requestedBy: string | null | undefined,
+  marks: unknown,
+): string | null {
+  if (name !== null || email !== null) return name;
+  return isDeletedPerson(requestedBy, marks, 'requested_by') ? DELETED_USER_LABEL : null;
+}
+
+/**
+ * A stamp column's person ("Already closed by ..."): the member's name; for a
+ * null column stamped by 0393, "Deleted user"; otherwise null (the sentence's
+ * own words).
+ */
+function personNameOf(
+  id: string | null,
+  names: Map<string, string>,
+  marks: unknown,
+  column: string,
+): string | null {
+  if (id) return names.get(id) ?? null;
+  return isDeletedPerson(id, marks, column) ? DELETED_USER_LABEL : null;
+}
+
 /** The viewer's write access to a warehouse (advisory; the functions decide). */
 async function canWriteWarehouse(ctx: ServiceContext, warehouseId: string | null): Promise<boolean> {
   if (!warehouseId || ctx.role === 'viewer') return false;
@@ -339,6 +374,8 @@ type HeaderRow = {
   closed_at: string | null;
   denied_by: string | null;
   denied_at: string | null;
+  /** 0393: {requested_by|approved_by|received_by|closed_by|denied_by: when}. */
+  deleted_users?: unknown;
   created_at: string;
   order_request?:
     | { order_number: number | null; warehouse_id: string | null; requester_name: string | null; requester_email: string | null; completed_at: string | null }
@@ -390,7 +427,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     .select(
       `id, return_number, status, source, reason_code, notes, denial_reason, order_request_id,
        requester_name, requester_email, requested_by, approved_by, approved_at, received_by, received_at,
-       closed_by, closed_at, denied_by, denied_at, created_at,
+       closed_by, closed_at, denied_by, denied_at, deleted_users, created_at,
        order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, completed_at),
        lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied, created_at)`,
     )
@@ -607,18 +644,23 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       orderNumber: order?.order_number ?? null,
       warehouseId,
       warehouseName: warehouse?.name ?? null,
-      requesterName: h.requester_name ?? order?.requester_name ?? null,
+      requesterName: requesterNameOf(
+        h.requester_name ?? order?.requester_name ?? null,
+        h.requester_email ?? order?.requester_email ?? null,
+        h.requested_by,
+        h.deleted_users,
+      ),
       requesterEmail: h.requester_email ?? order?.requester_email ?? null,
       createdAt: h.created_at,
       approvedAt: h.approved_at,
       receivedAt: h.received_at,
       closedAt: h.closed_at,
       deniedAt: h.denied_at,
-      requestedByName: h.requested_by ? (names.get(h.requested_by) ?? null) : null,
-      approvedByName: h.approved_by ? (names.get(h.approved_by) ?? null) : null,
-      receivedByName: h.received_by ? (names.get(h.received_by) ?? null) : null,
-      closedByName: h.closed_by ? (names.get(h.closed_by) ?? null) : null,
-      deniedByName: h.denied_by ? (names.get(h.denied_by) ?? null) : null,
+      requestedByName: personNameOf(h.requested_by, names, h.deleted_users, 'requested_by'),
+      approvedByName: personNameOf(h.approved_by, names, h.deleted_users, 'approved_by'),
+      receivedByName: personNameOf(h.received_by, names, h.deleted_users, 'received_by'),
+      closedByName: personNameOf(h.closed_by, names, h.deleted_users, 'closed_by'),
+      deniedByName: personNameOf(h.denied_by, names, h.deleted_users, 'denied_by'),
     },
     revision,
     planSeq,
@@ -653,6 +695,8 @@ type OverviewRow = {
   created_at: string;
   approved_at: string | null;
   waiting_days: number | null;
+  requested_by?: string | null;
+  deleted_users?: unknown;
   line_count: number | null;
   unit_count: number | string | null;
   lines: Array<{ line_id: string; item_id: string; quantity: number | string }> | null;
@@ -670,7 +714,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
   let req = ctx.supabase
     .from('return_overview')
     .select(
-      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines',
+      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users',
     )
     .eq('organization_id', ctx.organizationId);
   if (filter.statuses) {
@@ -740,7 +784,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
         reasonCode: r.reason_code,
         orderRequestId: r.order_request_id,
         orderNumber: r.order_number,
-        requesterName: r.requester_name,
+        requesterName: requesterNameOf(r.requester_name, r.requester_email, r.requested_by, r.deleted_users),
         requesterEmail: r.requester_email,
         createdAt: r.created_at,
         approvedAt: r.approved_at,

@@ -602,8 +602,8 @@ select is(
     where a.attrelid = 'public.return_overview'::regclass and a.attnum > 0 and not a.attisdropped),
   'id,organization_id,return_number,status,source,reason_code,order_request_id,order_number,warehouse_id,'
   || 'requester_name,requester_email,requester_user_id,created_at,approved_at,received_at,closed_at,'
-  || 'line_count,unit_count,lines,waiting_days',
-  'A6: the view''s column order is pinned (RX-2 may only append after waiting_days)');
+  || 'line_count,unit_count,lines,waiting_days,requested_by,deleted_users',
+  'A6: the view''s column order is pinned; requested_by and deleted_users (0393) name a deleted requester (RX-2 may only append after deleted_users)');
 select is(
   (select string_agg(p.proname || ':' || p.prosecdef::text || ':' || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
                      || ':' || has_function_privilege('anon', p.oid, 'EXECUTE')::text

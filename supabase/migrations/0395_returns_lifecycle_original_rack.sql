@@ -22,7 +22,9 @@
 --   3. notification_preferences.push_return_requested (default on): the staff
 --      "new return request" push the service sends for requester returns.
 --   4. public.return_overview: the list's one read (security_invoker, so the
---      caller's RLS applies). RX-2 appends columns; it never reorders these.
+--      caller's RLS applies). It carries requested_by and deleted_users (0393)
+--      so the list names a requester who deleted their account "Deleted user".
+--      RX-2 appends columns; it never reorders these.
 --   5. The ledger helpers of Original rack (all SECURITY INVOKER, no API
 --      EXECUTE): ledger.return_line_sources, return_line_plans_original,
 --      return_line_restock_legs, return_restock_original.
@@ -166,6 +168,14 @@ begin
       v_bad := v_bad || format(' policy %s.%s drifted (%s);', r.tbl, r.pol, coalesce(r.got, 'missing'));
     end if;
   end loop;
+
+  -- Account deletion (0393, security slice A3) comes first: the list view
+  -- reads returns.deleted_users, its "Deleted user" stamp.
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'returns'
+                    and column_name = 'deleted_users') then
+    v_bad := v_bad || ' returns.deleted_users missing (push 0393 first);';
+  end if;
 
   -- Already applied (or half applied by hand): every new name must be free.
   if to_regclass('public.return_decisions') is not null
@@ -2549,13 +2559,15 @@ select r.id,
                 order by rl.created_at, rl.id), '[]'::jsonb)
           from public.return_lines rl where rl.return_id = r.id) as lines,
        case when r.status = 'approved' and r.approved_at is not null
-            then floor(extract(epoch from (now() - r.approved_at)) / 86400)::integer end as waiting_days
+            then floor(extract(epoch from (now() - r.approved_at)) / 86400)::integer end as waiting_days,
+       r.requested_by,
+       r.deleted_users
   from public.returns r
   left join public.order_requests o on o.id = r.order_request_id;
 revoke all on public.return_overview from public, anon, authenticated;
 grant select on public.return_overview to authenticated, service_role;
 comment on view public.return_overview is
-  'RX-1: one row per RMA for the returns list (security_invoker: the caller''s RLS applies). Lines carry ids, quantities and dispositions only; item names, costs and locations come from the batched item read. waiting_days counts days since approval while approved. RX-2 appends exchange columns after waiting_days.';
+  'RX-1: one row per RMA for the returns list (security_invoker: the caller''s RLS applies). Lines carry ids, quantities and dispositions only; item names, costs and locations come from the batched item read. waiting_days counts days since approval while approved. requested_by and deleted_users (0393) let the list name a requester who deleted their account "Deleted user" by core''s rule (null and stamped). RX-2 appends exchange columns after deleted_users.';
 
 -- ═══ 7. The write posture (plan 3.8, expand) ═══════════════════════════════
 -- returns:manage is fully grantable (G1), so the warehouse bounds it: a raw

@@ -690,6 +690,18 @@ actually fire.
     the app only with a hint (`close_return` raises them again, and the
     create does the same for the cap trigger's race-time
     `return_exceeds_fulfilled`), so nothing is mapped by its words.
+  - **Account deletion** (with 0393, security slice A3). Nothing RX-1 adds
+    refuses a deletion: `return_decisions.actor_user_id` has no foreign key,
+    and the five RMA person columns keep 0393's SET NULL keys and
+    `deleted_users` stamps (the API guard acts only for API roles, so the
+    referential action and the stamp pass). The workbench and the list name
+    a requester who deleted their account "Deleted user" (null and stamped,
+    core `isDeletedPerson`) only when neither the RMA nor its order recorded
+    a name or email, and the stamp columns' people the same way.
+    `return_overview` carries `requested_by` and `deleted_users` for that.
+    A requester whose account was deleted (the order's
+    `requester_deleted_at`) is sent no return message, in the app or by
+    email, not even at an address the order kept.
 - **Why it matters**: before 0395 any member with an admin or manager role
   could PATCH an RMA straight to `closed` without the close's stock step,
   forge another person's approval, flip `return_lines.applied`, or insert an
