@@ -785,6 +785,18 @@ describe('the storefront opened offline says so, in place and announced (simulat
   });
 });
 
+// Simulator walk D11 (M13): offline, the panel's Check and finish and Don't
+// send it were dimmed with "Needs a connection." only as their hint; a locked
+// checkout shows no offline note, so nothing on screen said why. Mutation
+// caught: the visible line dropped or shown online.
+describe('offline, the unconfirmed panel says on screen why its sends are off (simulator walk D11)', () => {
+  it('a visible "Needs a connection." line while offline, beside the dimmed sends', () => {
+    const panel = codeOnly(read(PANEL));
+    expect(panel).toMatch(/\{offline \? \(\s*<Body size=\{13\} color=\{c\.ink3\}>\s*\{ORDER_NEEDS_CONNECTION_COPY\}\s*<\/Body>\s*\) : null\}/);
+    expect(panel).toContain('const sendHint = offline ? ORDER_NEEDS_CONNECTION_COPY : undefined;');
+  });
+});
+
 // PO-4 review: the success screen drew from the answer shown now. Mutations
 // caught: Review and approve, the warehouse's name or the email read from the
 // live answer again.

@@ -33,7 +33,7 @@ const panelAnnouncer = createPanelAnnouncer();
  * final), See my orders. The cart stays locked until the key is settled. The
  * sentence is a role alert and is announced when it changes, by the panel on
  * the screen in focus only (iOS gives a Text no live region). Offline, both sends are off and say they need a
- * connection; a body an earlier build wrote is never resent (Check and finish
+ * connection, in their hint and in a line on screen; a body an earlier build wrote is never resent (Check and finish
  * is not offered).
  */
 export function UnconfirmedPanel({
@@ -106,6 +106,13 @@ export function UnconfirmedPanel({
           />
           <SmallAction label={ORDER_SEE_MY_ORDERS_COPY} variant="ghost" onPress={onSeeOrders} />
         </View>
+        {/* Why the sends are off, on screen too: a locked checkout shows no
+            offline note (simulator walk D11). */}
+        {offline ? (
+          <Body size={13} color={c.ink3}>
+            {ORDER_NEEDS_CONNECTION_COPY}
+          </Body>
+        ) : null}
       </View>
     </Card>
   );
