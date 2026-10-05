@@ -306,10 +306,10 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Return requests from requesters reach the people who manage returns',
         whatChanged:
-          'When a requester asks for a return (from their return link, the customer portal or the app), the people who manage returns at that warehouse get a notification that opens the return.',
+          'When a requester asks for a return from their return link or the customer portal, the people who manage returns at that warehouse get a notification that opens the return.',
         whyItMatters: 'A requested return used to wait until someone happened to open the returns list.',
         howItAffectsYou:
-          'You are not notified about returns you create yourself. Turn it off in Notifications: New return and exchange requests.',
+          'Returns created by staff send no notification. Turn it off in Notifications: New return and exchange requests.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/settings/notifications', label: 'Notification settings' },
         audience: { anyPermission: ['returns:manage'], modules: ['returns'] },

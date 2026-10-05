@@ -3844,4 +3844,16 @@ describe('returns remember the original rack (returns RX-1) is held as a draft',
     expect(r.entries[0]!.whatChanged).toContain('Nothing moves until the item is received.');
     expect(r.entries[1]!.howItAffectsYou).toContain('every return action needs a connection');
   });
+
+  it('says what RX-1 does for the request ping, and nothing it does not (desk check F12)', () => {
+    const ping = release().entries.find((e) => e.id === 'returns-request-notification')!;
+    const text = readerText({ ...release(), entries: [ping] }).join(' ');
+    // RX-1's requester paths are the return link and the customer portal; a
+    // member asking from the app is RX-3.
+    expect(ping.whatChanged).toContain('from their return link or the customer portal');
+    expect(text).not.toMatch(/\bthe app\b/i);
+    // A return staff create notifies nobody, not only its creator.
+    expect(ping.howItAffectsYou).toContain('Returns created by staff send no notification.');
+    expect(text).not.toMatch(/returns you create yourself/i);
+  });
 });
