@@ -33,6 +33,11 @@
 --        the same CHECK on a reference table) and validated;
 --    K19 the triggers on auth.users; K20 comments name 0394.
 -- X0. Coverage: the fixture names the subject in every marked column.
+-- X0b. Each marked column also names the subject on a row where no other
+--      person column of that row does, so every WHEN term of a table's
+--      _upd trigger is exercised on its own (test stage, mutation M23: on
+--      a row naming the subject in several columns an earlier column's
+--      stamp fires the trigger and masks a missing term).
 -- C1. Each relaxed NOT NULL column nulled for a live person by service_role
 --     fails its exactly-one CHECK (23514).
 -- S.  The schedule writer: no role moves or clears a live creator.
@@ -64,7 +69,7 @@
 
 begin;
 
-select plan(72);
+select plan(73);
 
 \set orgA    '\'03940000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03940000-0000-0000-0000-00000000000b\''
@@ -146,6 +151,23 @@ select plan(72);
 \set al3     '\'03940000-0000-0000-0000-000000000422\''
 \set al4     '\'03940000-0000-0000-0000-000000000423\''
 \set alB     '\'03940000-0000-0000-0000-000000000424\''
+-- X0b: rows naming the subject in one person column only.
+\set appr2   '\'03940000-0000-0000-0000-000000000501\''
+\set appr3   '\'03940000-0000-0000-0000-000000000502\''
+\set scan2   '\'03940000-0000-0000-0000-000000000503\''
+\set scan3   '\'03940000-0000-0000-0000-000000000504\''
+\set poi2    '\'03940000-0000-0000-0000-000000000505\''
+\set poi3    '\'03940000-0000-0000-0000-000000000506\''
+\set ret3    '\'03940000-0000-0000-0000-000000000507\''
+\set ret4    '\'03940000-0000-0000-0000-000000000508\''
+\set ret5    '\'03940000-0000-0000-0000-000000000509\''
+\set ret6    '\'03940000-0000-0000-0000-000000000510\''
+\set ret7    '\'03940000-0000-0000-0000-000000000511\''
+\set uom2    '\'03940000-0000-0000-0000-000000000512\''
+\set uom3    '\'03940000-0000-0000-0000-000000000513\''
+\set seAsg   '\'03940000-0000-0000-0000-000000000514\''
+\set seCr2   '\'03940000-0000-0000-0000-000000000515\''
+\set seUpd   '\'03940000-0000-0000-0000-000000000516\''
 \set sm1     '\'03940000-0000-0000-0000-000000000425\''
 \set rcptQ   '\'03940000-0000-0000-0000-000000000426\''
 \set retQ    '\'03940000-0000-0000-0000-000000000427\''
@@ -649,6 +671,31 @@ insert into public.returns (id, organization_id, order_request_id, status, reque
   (:retQ, :orgA, :oRet, 'approved', :stf, :q2,  null, null, null);
 insert into public.uom_conversions (id, organization_id, item_id, from_uom, to_uom, numerator, created_by, approved_by) values
   (:uom1, :orgA, :itA, 'ea', 'cs', 12, :sub, :sub);
+-- X0b: on tables with several person columns, one row per column naming the
+-- subject in that column only (the others name a live person or nothing).
+insert into public.approvals (id, organization_id, type, related_type, requested_by, payload, status, decided_by) values
+  (:appr2, :orgA, 'manual_adjustment', 'inventory_item', :sub, '{}'::jsonb, 'approved', :mgr),
+  (:appr3, :orgA, 'manual_adjustment', 'inventory_item', :stf, '{}'::jsonb, 'approved', :sub);
+insert into public.cycle_count_ai_scans
+  (id, organization_id, cycle_count_id, created_by, photo_storage_path, model_version, confirmed_at, confirmed_by) values
+  (:scan2, :orgA, :ccDone, :sub, '0394/scan-2.jpg', 'test-0394', null,  null),
+  (:scan3, :orgA, :ccDone, :stf, '0394/scan-3.jpg', 'test-0394', now(), :sub);
+insert into public.po_imports (id, organization_id, uploaded_by, approved_by, source_type, file_name, file_mime_type, file_size, storage_path, sha256) values
+  (:poi2, :orgA, :sub, null, 'csv', '0394-2.csv', 'text/csv', 10, '0394/po-2.csv', repeat('5', 64)),
+  (:poi3, :orgA, :stf, :sub, 'csv', '0394-3.csv', 'text/csv', 10, '0394/po-3.csv', repeat('6', 64));
+insert into public.returns (id, organization_id, order_request_id, status, requested_by, approved_by, received_by, closed_by, denied_by) values
+  (:ret3, :orgA, :oRet, 'requested', :sub, null, null, null, null),
+  (:ret4, :orgA, :oRet, 'approved',  :stf, :sub, null, null, null),
+  (:ret5, :orgA, :oRet, 'received',  :stf, null, :sub, null, null),
+  (:ret6, :orgA, :oRet, 'closed',    :stf, null, null, :sub, null),
+  (:ret7, :orgA, :oRet, 'denied',    :stf, null, null, null, :sub);
+insert into public.uom_conversions (id, organization_id, item_id, from_uom, to_uom, numerator, created_by, approved_by) values
+  (:uom2, :orgA, :itA, 'ea', 'pk', 6, :sub, null),
+  (:uom3, :orgA, :itA, 'ea', 'bx', 24, :stf, :sub);
+insert into public.schedule_events (id, organization_id, title, starts_at, status, assigned_user_id, created_by, updated_by) values
+  (:seAsg, :orgA, '0394 done, assigned only', now() - interval '2 days', 'completed', :sub, :mgr, :mgr),
+  (:seCr2, :orgA, '0394 created only',        now() + interval '4 days', 'scheduled', null, :sub, :mgr),
+  (:seUpd, :orgA, '0394 updated only',        now() + interval '5 days', 'scheduled', null, :mgr, :sub);
 insert into public.org_connections (id, organization_id, provider_id, created_by) values
   (:conn1, :orgA, 'test_provider_0394', :sub);
 insert into public.carrier_shipments (id, organization_id, order_request_id, purchased_by) values
@@ -692,6 +739,16 @@ select is(
     where not exists (select 1 from snap0 s where s.o_tbl = m.tbl and s.o_j ->> c.col = :sub)),
   '',
   'X0: the fixture names the subject in every one of the 27 marked person columns (a new marked column without a fixture fails here)');
+select is(
+  (select coalesce(string_agg(m.tbl || '.' || c.col, ',' order by m.tbl, c.col), '')
+     from marked m cross join lateral unnest(m.cols) c(col)
+    where cardinality(m.cols) > 1
+      and not exists (select 1 from snap0 s
+                       where s.o_tbl = m.tbl and s.o_j ->> c.col = :sub
+                         and not exists (select 1 from unnest(m.cols) o(col)
+                                          where o.col <> c.col and s.o_j ->> o.col = :sub))),
+  '',
+  'X0b: on every table with several marked columns, each column names the subject on a row where no other person column does, so each WHEN term of its _upd trigger is exercised on its own');
 
 -- ══ C1. The exactly-one CHECKs refuse a live person nulled ════════════════
 select is(
@@ -931,7 +988,10 @@ select is(
      join after_rows a on a.o_tbl = s.o_tbl and a.o_k = s.o_k
     where s.o_j ->> c.col = :sub
       and not (s.o_tbl = 'schedule_events' and c.col = 'assigned_user_id' and s.o_j ->> 'status' in ('scheduled', 'in_progress'))
-      and not (a.o_j ->> c.col is null and (a.o_j -> 'deleted_users' ->> c.col)::timestamptz = now())),
+      -- coalesce: a MISSING stamp makes the comparison NULL, and NOT NULL
+      -- would drop the row from this list (test stage: mutation M23 survived
+      -- D4 on a nullable column that way).
+      and not coalesce(a.o_j ->> c.col is null and (a.o_j -> 'deleted_users' ->> c.col)::timestamptz = now(), false)),
   '',
   'D4: every history column that named the subject is now null and stamped {column: now()} (stamps satisfy the exactly-one CHECKs, D1)');
 select is(
