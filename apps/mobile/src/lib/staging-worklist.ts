@@ -25,6 +25,7 @@ import {
   parseStagingItemFilter,
   STAGING_FILTER_EMPTY_COPY,
   stagingFilterInvalidCopy,
+  stagingReturnedSourceLabel,
   type BookStorageInfo,
   type StagingFilterChipCopy,
   type StagingFilterParse,
@@ -55,6 +56,10 @@ export interface StagingWorklistRow {
   receiptNumber: string | null;
   receivedAt: string | null;
   ageDays: number | null;
+  /** Returns RX-1: the RMA when a return restocked this stock into Staging
+   *  (the row then reads "Returned (RMA-…)"). */
+  sourceReturnId: string | null;
+  sourceReturnNumber: string | null;
   /**
    * A BOOK's recorded rack/crate summary (readBookStorage on the item), or
    * null for a non-book. The endpoint has always sent it; this parser used to
@@ -327,6 +332,18 @@ export function stagingSourceLabel(
 }
 
 /**
+ * A row's SOURCE cell: "Returned (RMA-…)" when a return restocked the stock
+ * into Staging (returns RX-1, core stagingReturnedSourceLabel), else the PO /
+ * receipt pair (stagingSourceLabel).
+ */
+export function stagingRowSourceLabel(
+  row: Pick<StagingWorklistRow, 'sourcePoNumber' | 'receiptNumber' | 'sourceReturnId' | 'sourceReturnNumber'>,
+): string {
+  if (row.sourceReturnId) return stagingReturnedSourceLabel(row.sourceReturnNumber);
+  return stagingSourceLabel(row.sourcePoNumber, row.receiptNumber);
+}
+
+/**
  * The staged/unplaced badge. Web prints the raw `sourceKind` under a CSS
  * `capitalize`, so the words on screen are "Staging" and "Unplaced" — not
  * "STAGED", which is a third word for a state neither surface names that way.
@@ -545,6 +562,8 @@ function normalizeRow(raw: unknown): StagingWorklistRow | null {
     receiptNumber: asNullableString(r.receiptNumber),
     receivedAt: asNullableString(r.receivedAt),
     ageDays: asNullableNumber(r.ageDays),
+    sourceReturnId: asNullableString(r.sourceReturnId),
+    sourceReturnNumber: asNullableString(r.sourceReturnNumber),
     bookStorage: normalizeBookStorage(r.bookStorage),
   };
 }

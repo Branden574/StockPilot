@@ -311,6 +311,22 @@ export function choiceToDecision(
     : { returnLineId, disposition: 'restock', restock: { target: target === 'source' ? 'staging' : target } };
 }
 
+/**
+ * The line's live decision: its highest-seq plan, or (no plan yet, a legacy
+ * RMA) its disposition with a restock landing in Staging, today's close.
+ */
+export function liveChoice(line: Pick<RestockOptionsLine, 'plan' | 'disposition'>): RestockChoice {
+  const plan = line.plan;
+  if (plan) {
+    return {
+      disposition: plan.disposition,
+      target: plan.disposition === 'restock' ? (plan.target ?? 'staging') : null,
+      locationId: plan.locationId,
+    };
+  }
+  return { disposition: line.disposition, target: line.disposition === 'restock' ? 'staging' : null, locationId: null };
+}
+
 /** True when two choices are the same decision. */
 export function sameChoice(a: RestockChoice, b: RestockChoice): boolean {
   return choiceKey(a) === choiceKey(b) && a.disposition === b.disposition;

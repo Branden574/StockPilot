@@ -373,3 +373,28 @@ describe('parseStagingWorklist', () => {
     expect(parseStagingWorklist({ rows: 'nope' })).toEqual({ rows: [], canPlace: false });
   });
 });
+
+describe('returns RX-1: the source of a unit a return restocked into Staging', () => {
+  it('parses the RMA and labels the row "Returned (RMA-…)"', async () => {
+    const { parseStagingWorklist, stagingRowSourceLabel } = await import('./staging-worklist');
+    const parsed = parseStagingWorklist({
+      rows: [
+        {
+          itemId: 'i1',
+          sourceLocationId: 's1',
+          sourceKind: 'staging',
+          quantity: 1,
+          sourcePoNumber: null,
+          receiptNumber: null,
+          sourceReturnId: 'r1',
+          sourceReturnNumber: 'RMA-20261005-ABC123',
+        },
+      ],
+      canPlace: true,
+    });
+    const row = parsed.rows[0]!;
+    expect(row.sourceReturnNumber).toBe('RMA-20261005-ABC123');
+    expect(stagingRowSourceLabel(row)).toBe('Returned (RMA-20261005-ABC123)');
+    expect(stagingRowSourceLabel({ ...row, sourceReturnId: null, sourcePoNumber: 'PO-1', receiptNumber: 'R-1' })).toBe('PO-1 / R-1');
+  });
+});

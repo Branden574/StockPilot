@@ -6,9 +6,11 @@
  *
  * Server contract these build against (PINNED — 2026-07-20 returns-access plan):
  *   POST /api/v1/orders/[id]/returns
- *     { reasonCode?, notes?, lines: [{ orderRequestLineId, quantity,
- *       disposition: 'restock' | 'scrap' }] }
- *   → { ok: true, return: {...} }
+ *     { reasonCode?, notes?, idempotencyKey?, itemIsHere?, lines: [{
+ *       orderRequestLineId, quantity, disposition: 'restock' | 'scrap' }] }
+ *   → { ok: true, return: {...}, replay }
+ * (returns RX-1: one database transaction; the key replays a resend; a body
+ * without one, from an older build, gets a fresh key on the server.)
  *
  * The budget math mirrors web's returnableLines derivation exactly
  * (RMAService.returnableLinesForOrder / the order-detail page): a line is
@@ -211,6 +213,10 @@ export interface ReturnableLine {
 export function returnableLines(
   status: string | null | undefined,
   lines: ReturnSourceLine[],
+  /** Live pending demand per line (pendingReturnQuantities); returns RX-1
+   *  subtracts it, as the server and the cap trigger do, so the sheet never
+   *  offers a quantity the server refuses (audit G9). */
+  pending: ReadonlyMap<string, number> = new Map(),
 ): ReturnableLine[] {
   if (!status || !RETURNABLE_ORDER_STATUSES.has(status)) return [];
   const out: ReturnableLine[] = [];
@@ -219,7 +225,8 @@ export function returnableLines(
     const fulfilled = Number.isFinite(l.quantityFulfilled) ? Math.max(0, l.quantityFulfilled) : 0;
     if (fulfilled <= 0) continue;
     const returned = Number.isFinite(l.returnedQuantity) ? Math.max(0, l.returnedQuantity) : 0;
-    const remaining = fulfilled - returned;
+    const waiting = Math.max(0, pending.get(l.orderRequestLineId) ?? 0);
+    const remaining = fulfilled - returned - waiting;
     if (remaining <= 0) continue;
     out.push({
       orderRequestLineId: l.orderRequestLineId,
@@ -228,6 +235,26 @@ export function returnableLines(
       quantityFulfilled: fulfilled,
       quantityRemaining: remaining,
     });
+  }
+  return out;
+}
+
+/**
+ * Live PENDING return demand per order line, from the returns the order
+ * screen already read (returns RX-1): every unapplied line on an RMA that is
+ * not cancelled or denied. The same number the server's remaining and the
+ * 0153 cap trigger subtract.
+ */
+export function pendingReturnQuantities(returns: readonly OrderReturnView[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of returns) {
+    if (r.status === 'cancelled' || r.status === 'denied') continue;
+    for (const l of r.lines) {
+      if (l.applied) continue;
+      const q = Number(l.quantity) || 0;
+      if (q <= 0) continue;
+      out.set(l.orderRequestLineId, (out.get(l.orderRequestLineId) ?? 0) + q);
+    }
   }
   return out;
 }
@@ -251,6 +278,10 @@ export function initialReturnDraft(lines: ReturnableLine[]): Record<string, Retu
 export interface CreateReturnBody {
   reasonCode?: ReturnReasonCode;
   notes?: string;
+  /** Returns RX-1: minted when the sheet opens; a resend replays the RMA. */
+  idempotencyKey?: string;
+  /** "The item is here" (off by default): the workbench offers Approve and receive. */
+  itemIsHere?: boolean;
   lines: {
     orderRequestLineId: string;
     quantity: number;
@@ -273,6 +304,8 @@ export function buildReturnPayload(input: {
   draft: Record<string, ReturnDraftLine>;
   reasonCode?: ReturnReasonCode | null;
   notes?: string;
+  idempotencyKey?: string | null;
+  itemIsHere?: boolean;
 }): BuildReturnPayloadResult {
   const selected: CreateReturnBody['lines'] = [];
   for (const l of input.lines) {
@@ -303,6 +336,8 @@ export function buildReturnPayload(input: {
     body: {
       ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
       ...(notes ? { notes } : {}),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.itemIsHere ? { itemIsHere: true } : {}),
       lines: selected,
     },
   };

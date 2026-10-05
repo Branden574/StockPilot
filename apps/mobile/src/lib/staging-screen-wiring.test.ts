@@ -114,7 +114,9 @@ describe('staging screen wiring', () => {
   });
 
   it('renders every cell through the shared formatters, so web and phone agree', () => {
-    expect(screen).toContain('stagingSourceLabel(row.sourcePoNumber, row.receiptNumber)');
+    // returns RX-1: the source cell also names a returning RMA
+    // (stagingRowSourceLabel falls back to stagingSourceLabel).
+    expect(screen).toContain('stagingRowSourceLabel(row)');
     expect(screen).toContain('stagingReceivedLabel(row.receivedAt)');
     expect(screen).toContain('stagingWarehouseLabel(row.warehouseId, warehouseNames)');
     expect(screen).toContain('stagingSourceKindLabel(row.sourceKind)');

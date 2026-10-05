@@ -163,7 +163,7 @@ describe('MODULE_REGISTRY', () => {
       '/settings', '/support', '/scan', '/zendesk', '/size-count/new',
       '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
       '/admin/vendor-mappings', '/admin/uom-conversions',
-      '/admin/audit', '/maintenance',
+      '/admin/audit', '/maintenance', '/returns',
     ]);
     for (const def of Object.values(MODULE_REGISTRY)) {
       for (const p of def.placements) {

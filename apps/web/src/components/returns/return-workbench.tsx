@@ -37,6 +37,7 @@ import {
   choiceToDecision,
   formatOrderNumber,
   isChoiceOffered,
+  liveChoice,
   preselectedChoice,
   processLabelFor,
   qtyReturningLabel,
@@ -544,11 +545,7 @@ function initialChoices(lines: ReturnWorkbenchLine[]): Record<string, RestockCho
 
 /** True when the choice equals the line's live plan (or its legacy default). */
 function planMatches(l: ReturnWorkbenchLine, choice: RestockChoice): boolean {
-  const plan = l.restock?.plan;
-  const live: RestockChoice = plan
-    ? { disposition: plan.disposition, target: plan.disposition === 'restock' ? (plan.target ?? 'staging') : null, locationId: plan.locationId }
-    : { disposition: l.disposition, target: l.disposition === 'restock' ? 'staging' : null, locationId: null };
-  return sameChoice(live, choice);
+  return sameChoice(liveChoice(l.restock ?? { plan: null, disposition: l.disposition }), choice);
 }
 
 function plannedSummary(l: ReturnWorkbenchLine): string {

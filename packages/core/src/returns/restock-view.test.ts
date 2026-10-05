@@ -7,6 +7,7 @@ import {
   damagedHint,
   inboundStateLabel,
   isChoiceOffered,
+  liveChoice,
   parseRestockOptions,
   preselectedChoice,
   processLabelFor,
@@ -198,5 +199,17 @@ describe('inbound state per line', () => {
     ).toBe('Returned to 31-C ×1 · 32-A ×2');
     expect(inboundStateLabel({ returnStatus: 'closed', applied: true, disposition: 'restock', legs: [] })).toBe('In Staging');
     expect(inboundStateLabel({ returnStatus: 'closed', applied: true, disposition: 'scrap' })).toBe('Scrapped');
+  });
+});
+
+describe('liveChoice', () => {
+  it('reads the live plan, else the legacy default (restock lands in Staging)', () => {
+    expect(liveChoice(line({ plan: { disposition: 'restock', target: 'source', locationId: R32, basis: 'manager_choice', seq: 3 } }))).toEqual({
+      disposition: 'restock',
+      target: 'source',
+      locationId: R32,
+    });
+    expect(liveChoice(line({ plan: null }))).toEqual({ disposition: 'restock', target: 'staging', locationId: null });
+    expect(liveChoice(line({ plan: null, disposition: 'scrap' }))).toEqual({ disposition: 'scrap', target: null, locationId: null });
   });
 });

@@ -1,4 +1,4 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useNetworkState } from 'expo-network';
 import {
@@ -25,6 +25,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   TextInput,
   View,
   type LayoutChangeEvent,
@@ -81,6 +82,7 @@ import {
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
+import { mintReturnKey } from '@/lib/returns-api';
 import {
   buildReturnPayload,
   describeLineFulfilment,
@@ -92,6 +94,7 @@ import {
   ORDER_RETURNS_SELECT,
   orderReturnSummary,
   parseOrderReturns,
+  pendingReturnQuantities,
   RETURN_REASONS,
   returnableLines,
   returnHandle,
@@ -189,6 +192,7 @@ import {
   PARTIAL_ACTION_TITLE,
   previewPartialFulfilment,
   READINESS_NEEDS_CONNECTION_COPY,
+  RETURNS_COPY,
   readinessOfflineCopy,
   shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
@@ -471,6 +475,10 @@ export default function OrderDetail() {
   const [returnNotes, setReturnNotes] = React.useState('');
   const [returnSubmitting, setReturnSubmitting] = React.useState(false);
   const [returnError, setReturnError] = React.useState<string | null>(null);
+  // Returns RX-1: one idempotency key per opened sheet (a resend replays the
+  // same RMA), and "The item is here", off by default.
+  const [returnKey, setReturnKey] = React.useState<string | null>(null);
+  const [returnItemIsHere, setReturnItemIsHere] = React.useState(false);
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
@@ -584,10 +592,17 @@ export default function OrderDetail() {
               quantityFulfilled: l.fulfilled,
               returnedQuantity: l.returned,
             })),
+            // The server's remaining: pending (unapplied, live) returns count.
+            pendingReturnQuantities(order.returns),
           )
         : [],
     [order],
   );
+  const canReadReturns =
+    role !== null &&
+    enabledModules.has('returns') &&
+    (can({ role: role as Role, permissions }, 'returns:read') ||
+      can({ role: role as Role, permissions }, 'returns:manage'));
   const showCreateReturn =
     canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
   // Order-level returned roll-up (SO-000085) — null when nothing was ever
@@ -1045,6 +1060,8 @@ export default function OrderDetail() {
     setReturnReason(null);
     setReturnNotes('');
     setReturnError(null);
+    setReturnKey(mintReturnKey());
+    setReturnItemIsHere(false);
     setReturnOpen(true);
   }
 
@@ -1068,12 +1085,14 @@ export default function OrderDetail() {
   async function submitReturn() {
     // Double-submit guard: the button is disabled while submitting, and this
     // re-check covers a queued second tap racing the state update.
-    if (!id || returnSubmitting) return;
+    if (!id || returnSubmitting || offline) return;
     const payload = buildReturnPayload({
       lines: orderReturnable,
       draft: returnDraft,
       reasonCode: returnReason,
       notes: returnNotes,
+      idempotencyKey: returnKey,
+      itemIsHere: returnItemIsHere,
     });
     if (!payload.ok) {
       setReturnError(payload.error);
@@ -1082,9 +1101,15 @@ export default function OrderDetail() {
     setReturnSubmitting(true);
     setReturnError(null);
     try {
-      await createOrderReturn(id, payload.body);
+      const created = await createOrderReturn(id, payload.body);
       setReturnOpen(false);
-      Alert.alert('Return created', 'Return created — pending approval.');
+      if (canReadReturns) {
+        // The RMA's workbench is where it is approved (and, with "The item
+        // is here", approved and received at once).
+        router.push(`/returns/${created.id}` as Href);
+      } else {
+        Alert.alert('Return created', 'Return created — pending approval.');
+      }
       await load();
     } catch (e) {
       // 4xx (over-budget, module off, permission revoked mid-session…) —
@@ -2960,7 +2985,15 @@ export default function OrderDetail() {
                 {`RETURNS${order.returns.length > 0 ? ` · ${order.returns.length}` : ''}`}
               </Eyebrow>
               {order.returns.map((r) => (
-                <Card key={r.id} padding={14}>
+                <Pressable
+                  key={r.id}
+                  disabled={!canReadReturns}
+                  onPress={() => router.push(`/returns/${r.id}` as Href)}
+                  accessibilityRole={canReadReturns ? 'link' : undefined}
+                  accessibilityLabel={canReadReturns ? `Open ${returnHandle(r)}, ${returnStatusLabel(r.status)}` : undefined}
+                  style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+                >
+                <Card padding={14}>
                   <View
                     style={{
                       flexDirection: 'row',
@@ -2999,7 +3032,13 @@ export default function OrderDetail() {
                       {r.notes}
                     </Body>
                   ) : null}
+                  {canReadReturns ? (
+                    <Mono size={10.5} color={c.ink4} style={{ marginTop: 8 }}>
+                      Open the return →
+                    </Mono>
+                  ) : null}
                 </Card>
+                </Pressable>
               ))}
               {order.returns.length > 0 ? (
                 <Mono size={10.5} color={c.ink4}>
@@ -3633,6 +3672,24 @@ export default function OrderDetail() {
                 </View>
               </View>
 
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Body size={14} color={c.ink}>
+                    {RETURNS_COPY.itemIsHere}
+                  </Body>
+                  <Body size={12} color={c.ink3}>
+                    {RETURNS_COPY.itemIsHereHelp}
+                  </Body>
+                </View>
+                <Switch
+                  value={returnItemIsHere}
+                  onValueChange={setReturnItemIsHere}
+                  disabled={returnSubmitting}
+                  accessibilityLabel={RETURNS_COPY.itemIsHere}
+                  accessibilityHint={RETURNS_COPY.itemIsHereHelp}
+                />
+              </View>
+
               <View style={{ gap: 8 }}>
                 <Eyebrow>NOTES</Eyebrow>
                 <TextInput
@@ -3660,11 +3717,19 @@ export default function OrderDetail() {
             {returnError ? (
               <Mono size={11} color="#b42318">{returnError}</Mono>
             ) : null}
+            {offline ? (
+              <Body size={12} color={c.ink3}>
+                {READINESS_NEEDS_CONNECTION_COPY}
+              </Body>
+            ) : null}
 
             <Pressable
               onPress={() => void submitReturn()}
-              disabled={returnSubmitting}
-              style={[styles.addBtn, { backgroundColor: c.ink, opacity: returnSubmitting ? 0.6 : 1 }]}
+              disabled={returnSubmitting || offline}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: returnSubmitting || offline }}
+              accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
+              style={[styles.addBtn, { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 }]}
             >
               {returnSubmitting ? (
                 <ActivityIndicator color={c.paper} />

@@ -34,6 +34,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="exceptions" options={{ drawerLabel: 'Exceptions' }} />
       <Drawer.Screen name="bundles" options={{ drawerLabel: 'Bundles' }} />
       <Drawer.Screen name="orders" options={{ drawerLabel: 'Orders' }} />
+      <Drawer.Screen name="returns" options={{ drawerLabel: 'Returns' }} />
       <Drawer.Screen name="rentals" options={{ drawerLabel: 'Rentals' }} />
       <Drawer.Screen name="categories" options={{ drawerLabel: 'Categories' }} />
       <Drawer.Screen name="tags" options={{ drawerLabel: 'Tags' }} />

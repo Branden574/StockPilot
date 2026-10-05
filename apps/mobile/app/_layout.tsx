@@ -253,6 +253,7 @@ function RootGate() {
         <Stack.Screen name="maintenance/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="maintenance/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="exceptions/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="returns/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="location/[id]" options={{ presentation: 'card' }} />
         {/* Book Order Totals: pushed over the drawer (or the Reports tab), so
             the shared Reports screen stays underneath and Back returns to it;
