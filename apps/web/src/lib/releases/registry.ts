@@ -238,9 +238,39 @@ export const RELEASES: Release[] = [
     // stagingReturnedSourceLabel), and a requester of a requester return now
     // hears about it (returns-notify.ts notifyRequesterReturnEvent: a member
     // as a notification under their Order status changes setting, anyone
-    // else by email unless they unsubscribed; nothing after a counter
-    // approval or receipt, nothing for a staff return, nothing to a requester
-    // who deleted their account).
+    // else by email; nothing after a counter approval or receipt, nothing for
+    // a staff return, nothing to a requester who deleted their account).
+    //
+    // Claims review (2026-10-05), each checked against the code:
+    // - The list had status chips before RX-1 (All, Requested, Approved,
+    //   Received, Closed, Denied, Cancelled: dab3a07d~1 returns/page.tsx), and
+    //   RX-1's filters are the same statuses under new names (core
+    //   RETURN_LIST_FILTERS; Closed takes closed, denied and cancelled). So
+    //   the list entry no longer says returns were hard to find: it names what
+    //   RX-1 added (the names, Closed holding denied and cancelled, the search,
+    //   the returning items with photos), and its title says "clearer
+    //   filters".
+    // - The process button reads Process return only for several items, or
+    //   when a destination must be chosen again; for one item it names where
+    //   the item goes, such as Return to 31-B (core processLabelFor, the web
+    //   workbench, the phone's processButtonLabel; walk R4), so the words say
+    //   both and the counter sentence ends "then process it".
+    // - No setting is only for return messages: a member's follow their Order
+    //   status changes setting (prefFlags 'email_order_status_changed').
+    //   Someone without an account is emailed unless their address
+    //   unsubscribed (return-update.ts, public_email_unsubscribes). A customer
+    //   portal requester has a user id on the order (portal.ts), so their
+    //   email goes as an account holder's and no unsubscribe check applies;
+    //   the words therefore say only someone without an account can
+    //   unsubscribe.
+    // - Manage returns now works when granted: before 0394 every return write
+    //   needed the manager role in the database (0153 policies, the caller's
+    //   client, process_return_disposition), so a staff member given the
+    //   permission was refused and the role matrix marked the grant as
+    //   rolling out. 0394 gates every RMA write on returns:manage plus write
+    //   access to the order's warehouse (user_can_access_inventory: owners,
+    //   admins and managers every warehouse, staff their assigned ones) and
+    //   core lists it as fully grantable, so the list entry says so.
     //
     // Not announced, on purpose: the two new webhook events, Return received
     // and Return cancelled, in Settings > Integrations (integrations:manage;
@@ -250,8 +280,9 @@ export const RELEASES: Release[] = [
     //
     // What a person can see: the RMA workbench and the destination choice on
     // the web and the phone, the returns list's filters and paging, the
-    // phone's Returns screens, Staging's source for returned stock, and the
-    // staff ping for requester returns with its preference. Who is told:
+    // phone's Returns screens, Staging's source for returned stock, a granted
+    // Manage returns that now works, and the staff ping for requester returns
+    // with its preference. Who is told:
     // anyone who can open Returns (the module on, returns:read or
     // returns:manage); the ping entry only to returns:manage. The words name
     // no number nobody measured, never say "book" for a recorded quantity, and
@@ -269,11 +300,11 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Send a returned item back to the rack it was picked from',
         whatChanged:
-          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. If it was picked from more than one rack, the return shows those racks. Nothing moves when you approve or receive the return: Process return puts every item where you chose, in one step.',
+          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. If it was picked from more than one rack, the return shows those racks. Nothing moves when you approve or receive the return: processing it puts every item where you chose, in one step. Its button reads Process return, or, for a single item, names where it goes (such as Return to 31-B).',
         whyItMatters:
           'A restocked return always landed in Staging and had to be put away by hand, even when everyone knew which rack it came from.',
         howItAffectsYou:
-          'The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return, use Approve and receive, then Process return. On the Staging page, stock a return put there shows Returned and the RMA as its source.',
+          'The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return, use Approve and receive, then process it. On the Staging page, stock a return put there shows Returned and the RMA as its source.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
         audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
@@ -282,13 +313,13 @@ export const RELEASES: Release[] = [
         id: 'returns-list-and-phone',
         category: 'improved',
         area: 'Returns',
-        title: 'Returns have filters, and their own screens on the phone',
+        title: 'Returns have clearer filters, a search, and their own screens on the phone',
         whatChanged:
-          'The returns list has filters (Awaiting approval, Waiting for returned item, Received, not processed, Closed), a search by RMA, SO number or requester, and photos of the returning items. In the mobile app on iPhone and iPad, after the latest update, Returns in the menu opens the same list and each return, with the same steps as the web.',
+          "The returns list's filters now say where each return stands (Awaiting approval, Waiting for returned item, Received, not processed, Closed). Closed now includes denied and cancelled returns. The list has a search by RMA, SO number or requester, and shows the returning items with their photos. In the mobile app on iPhone and iPad, after the latest update, Returns in the menu opens the same list and each return, with the same steps as the web.",
         whyItMatters:
-          'Returns waiting for the item, or received and not yet processed, were hard to find among closed ones, and the mobile app could start a return from an order but not approve, receive or process one.',
+          'The filters were named after statuses (Requested, Approved, Received), the list had no search and did not show what was coming back, and the mobile app could start a return from an order but not approve, receive or process one.',
         howItAffectsYou:
-          'Each return opens on one screen: what is coming back, the next step, and its history from the original pick to the close. On the phone every return action needs a connection.',
+          'Each return opens on one screen: what is coming back, the next step, and its history from the original pick to the close. On the phone every return action needs a connection. If an admin gives a staff member the "Manage returns" permission, they can now create, approve, receive and process returns for orders in the warehouses they are assigned to; before, only owners, admins and managers could.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
@@ -300,7 +331,7 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Return requests from requesters reach the people who manage returns',
         whatChanged:
-          'When a requester asks for a return from their return link or the customer portal, the people who manage returns at that warehouse get a notification that opens the return, on the web and in the mobile app after the latest update. The requester now hears when the request arrives and when it is approved, received, declined or cancelled, unless they turned these messages off: a member as a notification, anyone else by email.',
+          'When a requester asks for a return from their return link or the customer portal, the people who manage returns at that warehouse get a notification that opens the return, on the web and in the mobile app after the latest update. The requester now hears when the request arrives and when it is approved, received, declined or cancelled: a member as a notification, unless they turned off Order status changes, and anyone else by email. Someone without an account can unsubscribe from these emails.',
         whyItMatters: 'A requested return used to wait until someone happened to open the returns list.',
         howItAffectsYou:
           'Returns created by staff send no notification. When you use The item is here at the counter, the requester gets no approved or received message. Turn the new request notification off in Notifications: New return and exchange requests.',

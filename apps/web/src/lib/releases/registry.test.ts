@@ -18,6 +18,8 @@ import {
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
   EXCEPTION_RULES,
+  FULLY_GRANTABLE_PERMISSIONS,
+  hasPermission,
   HOLD_AVAILABLE_STOCK_LABEL,
   isDeletedRequester,
   MODULE_REGISTRY,
@@ -26,15 +28,20 @@ import {
   partialActionMovedOnCopy,
   PERMISSION_META,
   PERMISSIONS,
+  processLabelFor,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   releaseRegistrySchema,
+  RETURN_ACTION_LABELS,
+  returnListFilter,
+  RETURNS_COPY,
   stagingReturnedSourceLabel,
   VERIFICATION_SESSION_ENDED_COPY,
   type CountConfirmBlock,
   type ModuleId,
   type Release,
   type ReleaseViewer,
+  type RestockOptionsLine,
 } from '@stockpilot/core';
 
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
@@ -4033,12 +4040,14 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     const form = readFileSync(resolve(__dirname, '../../components/settings/notification-preferences-form.tsx'), 'utf8');
     expect(form).toContain("label: 'New return and exchange requests'");
     expect(all).toContain('Notifications: New return and exchange requests');
-    // Nothing moves at approval or receipt, only at Process return (brief 14;
-    // review: the old words said stock comes back at receipt), and the phone
-    // is online only.
-    expect(r.entries[0]!.whatChanged).toContain('Nothing moves when you approve or receive the return: Process return puts every item where you chose');
+    // Nothing moves at approval or receipt, only when the return is processed
+    // (brief 14; review: the old words said stock comes back at receipt), and
+    // the phone is online only.
+    expect(r.entries[0]!.whatChanged).toContain(
+      'Nothing moves when you approve or receive the return: processing it puts every item where you chose, in one step.',
+    );
     expect(all).not.toMatch(/until (it is|the item is) received\b(?! and processed)/i);
-    expect(r.entries[0]!.howItAffectsYou).toContain('use Approve and receive, then Process return');
+    expect(r.entries[0]!.howItAffectsYou).toContain('use Approve and receive, then process it.');
     expect(r.entries[1]!.howItAffectsYou).toContain('every return action needs a connection');
   });
 
@@ -4088,8 +4097,11 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     const ping = release().entries.find((e) => e.id === 'returns-request-notification')!;
     expect(ping.whatChanged).toContain('get a notification that opens the return, on the web and in the mobile app after the latest update.');
     expect(ping.whatChanged).toContain(
-      'The requester now hears when the request arrives and when it is approved, received, declined or cancelled, unless they turned these messages off: a member as a notification, anyone else by email.',
+      'The requester now hears when the request arrives and when it is approved, received, declined or cancelled: a member as a notification, unless they turned off Order status changes, and anyone else by email. Someone without an account can unsubscribe from these emails.',
     );
+    // Claims review: no setting is only for return messages, so the words
+    // name the one a member's follow and never "turned these messages off".
+    expect(ping.whatChanged).not.toMatch(/turned these messages off/);
     expect(ping.howItAffectsYou).toContain('When you use The item is here at the counter, the requester gets no approved or received message.');
     const notify = readFileSync(resolve(__dirname, '../../server/services/returns-notify.ts'), 'utf8');
     // Only a requester return, and never after a counter approval or receipt.
@@ -4110,5 +4122,96 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     expect(notify).toContain("if (o.requester_user_id && !isPortal) {");
     expect(notify).toContain("const flags = await prefFlags(admin, [o.requester_user_id], 'email_order_status_changed');");
     expect(notify).toContain('await sendReturnUpdateEmail(admin, {');
+    // That setting is the one Notifications labels Order status changes.
+    const form = readFileSync(resolve(__dirname, '../../components/settings/notification-preferences-form.tsx'), 'utf8');
+    expect(form).toMatch(/key: 'email_order_status_changed',\s+label: 'Order status changes',/);
+    // Only someone without an account can unsubscribe: the email checks the
+    // public opt-out only for a requester with no user id, and a customer
+    // portal order carries the portal user's id, so its email always goes.
+    const update = readFileSync(resolve(__dirname, '../../server/email/return-update.ts'), 'utf8');
+    expect(update).toContain('if (!args.isAccountHolder && (await isPublicAddressUnsubscribed(admin, args.to))) {');
+    expect(notify).toContain('isAccountHolder: Boolean(o.requester_user_id),');
+    const portal = readFileSync(resolve(__dirname, '../../server/services/portal.ts'), 'utf8');
+    expect(portal).toMatch(/source: 'portal',\s+customer_id: ctx\.customerId,\s+requester_user_id: ctx\.userId,/);
+  });
+
+  // Claims review 2026-10-05: the list had status chips before RX-1 (All,
+  // Requested, Approved, Received, Closed, Denied, Cancelled), so the words
+  // say what RX-1 added instead of saying returns were hard to find.
+  it('says what the returns list added, not that it had no filters (claims review)', () => {
+    const list = release().entries.find((e) => e.id === 'returns-list-and-phone')!;
+    expect(list.title).toBe('Returns have clearer filters, a search, and their own screens on the phone');
+    expect(list.whatChanged).toContain(
+      "The returns list's filters now say where each return stands (Awaiting approval, Waiting for returned item, Received, not processed, Closed). Closed now includes denied and cancelled returns.",
+    );
+    expect(list.whatChanged).toContain('The list has a search by RMA, SO number or requester, and shows the returning items with their photos.');
+    expect(list.whyItMatters).toContain(
+      'The filters were named after statuses (Requested, Approved, Received), the list had no search and did not show what was coming back',
+    );
+    expect(readerText(release()).join(' ')).not.toMatch(/hard to find|list has filters/i);
+    // RX-1's filters are the old statuses under new names (core).
+    expect(returnListFilter('awaiting_approval').statuses).toEqual(['requested']);
+    expect(returnListFilter('waiting_for_return').statuses).toEqual(['approved']);
+    expect(returnListFilter('received_not_processed').statuses).toEqual(['received']);
+    expect(returnListFilter('closed').statuses).toEqual(['closed', 'denied', 'cancelled']);
+    expect(RETURNS_COPY.listSearchPlaceholder).toBe('Search RMA, SO number or requester');
+  });
+
+  // Claims review: the process button reads Process return for several items
+  // (or a destination to choose again); for one item it names where it goes.
+  it('says the process button names where a single item goes, as the screens do (claims review)', () => {
+    const rack = release().entries[0]!;
+    expect(rack.whatChanged).toContain('Its button reads Process return, or, for a single item, names where it goes (such as Return to 31-B).');
+    expect(readerText(release()).join(' ')).not.toMatch(/Process return puts|then Process return/);
+    const line: RestockOptionsLine = {
+      returnLineId: 'rl-1',
+      itemId: 'item-1',
+      quantity: 1,
+      disposition: 'restock',
+      applied: false,
+      plan: null,
+      case: 'single_source',
+      notRecordedReason: null,
+      sources: [
+        { locationId: 'loc-31b', name: '31-B', kind: 'rack', type: null, drawn: 1, restored: 0, remaining: 1, cap: 1, valid: true, reason: null, writable: true },
+      ],
+      offerOriginal: true,
+      offerSourceIds: [],
+      preselect: 'original',
+    };
+    expect(processLabelFor(line, { disposition: 'restock', target: 'original', locationId: null }).button).toBe('Return to 31-B');
+    expect(processLabelFor(line, { disposition: 'restock', target: 'staging', locationId: null }).button).toBe('Leave in Staging');
+    expect(processLabelFor(line, { disposition: 'scrap', target: null, locationId: null }).button).toBe('Scrap');
+    expect(processLabelFor(line, { disposition: 'restock', target: null, locationId: null, needsChoice: 'gone' }).button).toBe('Process return');
+    expect(RETURN_ACTION_LABELS.process).toBe('Process return');
+    // The web workbench and the phone use the destination label for one open
+    // line only, and Process return otherwise.
+    const web = readFileSync(resolve(__dirname, '../../components/returns/return-workbench.tsx'), 'utf8');
+    expect(web).toContain("r.status === 'received' && openLines.length === 1 && openLines[0]!.restock");
+    expect(web).toContain("a === 'process' && processLabel ? processLabel.button : RETURN_ACTION_LABELS[a];");
+    const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/returns-view.ts'), 'utf8');
+    expect(phone).toContain('if (lines.length === 1) return processLabelFor(lines[0]!.restock!, choiceFor(lines[0]!, choices)).button;');
+    expect(phone).toContain('return RETURNS_COPY.processReturn;');
+  });
+
+  // Claims review: before 0394 every return write needed the manager role in
+  // the database, so a staff member given Manage returns was refused; 0394
+  // gates every RMA write on the permission plus the order's warehouse.
+  it('says a staff member given Manage returns can now work returns, in their warehouses (claims review)', () => {
+    const list = release().entries.find((e) => e.id === 'returns-list-and-phone')!;
+    expect(list.howItAffectsYou).toContain(
+      'If an admin gives a staff member the "Manage returns" permission, they can now create, approve, receive and process returns for orders in the warehouses they are assigned to; before, only owners, admins and managers could.',
+    );
+    expect(PERMISSION_META['returns:manage'].label).toBe('Manage returns');
+    expect(hasPermission('staff', 'returns:manage')).toBe(false);
+    expect(hasPermission('manager', 'returns:manage')).toBe(true);
+    // The role matrix no longer marks the grant as rolling out.
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('returns:manage')).toBe(true);
+    const mig = readFileSync(
+      resolve(__dirname, '../../../../../supabase/migrations/0394_returns_lifecycle_original_rack.sql'),
+      'utf8',
+    );
+    expect(mig).toContain("if not public.has_permission(v_org, 'returns:manage') then");
+    expect(mig).toContain("if not public.user_can_access_inventory(v_user, v_wh, null, 'write') then");
   });
 });
