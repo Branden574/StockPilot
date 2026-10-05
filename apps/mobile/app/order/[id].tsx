@@ -27,10 +27,11 @@ import {
   StyleSheet,
   Switch,
   TextInput,
+  useWindowDimensions,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
@@ -213,7 +214,10 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
+import { MIN_TAP } from '@/components/item-verification-card';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { useTheme } from '@/lib/use-theme';
 
 const BUCKET = 'order-attachments';
@@ -470,6 +474,13 @@ export default function OrderDetail() {
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
+  // The sheet's size at any text size (returns review, AX5 walk): bounded by
+  // the screen with its header and Submit pinned and the rest scrolling, the
+  // line rows stacked at large text (the exception sheets' layout).
+  const { height: windowHeight, fontScale } = useWindowDimensions();
+  const sheetInsets = useSafeAreaInsets();
+  const returnSheetLayout = exceptionSheetLayout({ windowHeight, availableHeight: null, topInset: sheetInsets.top });
+  const returnRowsStacked = shouldStackRow(fontScale);
   const [returnDraft, setReturnDraft] = React.useState<Record<string, ReturnDraftLine>>({});
   const [returnReason, setReturnReason] = React.useState<ReturnReasonCode | null>(null);
   const [returnNotes, setReturnNotes] = React.useState('');
@@ -3552,10 +3563,19 @@ export default function OrderDetail() {
               borderTopRightRadius: 18,
               padding: 18,
               gap: 12,
+              maxHeight: returnSheetLayout.sheetMaxHeight,
             }}
           >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Create return</Body>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <Body
+                size={15}
+                color={c.ink}
+                accessibilityRole="header"
+                maxFontSizeMultiplier={capTo(15, TYPE_CEILING.display)}
+                style={{ fontFamily: FONT.display, flex: 1 }}
+              >
+                Create return
+              </Body>
               <Pressable
                 onPress={() => {
                   if (!returnSubmitting) setReturnOpen(false);
@@ -3565,15 +3585,21 @@ export default function OrderDetail() {
                 accessibilityRole="button"
                 accessibilityLabel="Close"
                 accessibilityState={{ disabled: returnSubmitting }}
+                style={{ minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'flex-end', justifyContent: 'center' }}
               >
                 <X size={18} color={c.ink4} />
               </Pressable>
             </View>
-            <Mono size={11} color={c.ink4}>
-              {RETURNS_COPY.createReturnHelp}
-            </Mono>
 
-            <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 12 }}>
+            <ScrollView
+              // At large text the body takes all the room the bounded sheet
+              // leaves (it shrinks to fit between the header and Submit).
+              style={{ maxHeight: returnRowsStacked ? undefined : Math.max(returnSheetLayout.bodyMaxHeight, 380), flexShrink: 1 }}
+              contentContainerStyle={{ gap: 12 }}
+            >
+              <Mono size={11} color={c.ink4}>
+                {RETURNS_COPY.createReturnHelp}
+              </Mono>
               {orderReturnable.map((l) => {
                 const d = returnDraft[l.orderRequestLineId] ?? {
                   quantity: 0,
@@ -3588,8 +3614,9 @@ export default function OrderDetail() {
                     accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`}
                     accessibilityState={{ disabled }}
                     style={{
-                      width: 32,
-                      height: 32,
+                      minWidth: MIN_TAP,
+                      minHeight: MIN_TAP,
+                      paddingHorizontal: 8,
                       borderRadius: 8,
                       borderWidth: 1,
                       borderColor: c.hair,
@@ -3598,7 +3625,9 @@ export default function OrderDetail() {
                       opacity: disabled ? 0.35 : 1,
                     }}
                   >
-                    <Mono size={15} color={c.ink}>{label}</Mono>
+                    <Mono size={15} color={c.ink} maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}>
+                      {label}
+                    </Mono>
                   </Pressable>
                 );
                 return (
@@ -3606,9 +3635,15 @@ export default function OrderDetail() {
                     key={l.orderRequestLineId}
                     style={{ gap: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
                   >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Body size={14} color={c.ink} numberOfLines={2}>{l.name}</Body>
+                    <View
+                      style={{
+                        flexDirection: returnRowsStacked ? 'column' : 'row',
+                        alignItems: returnRowsStacked ? 'flex-start' : 'center',
+                        gap: 12,
+                      }}
+                    >
+                      <View style={returnRowsStacked ? { alignSelf: 'stretch' } : { flex: 1, minWidth: 0 }}>
+                        <Body size={14} color={c.ink} numberOfLines={returnRowsStacked ? undefined : 2}>{l.name}</Body>
                         <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
                           {`${l.sku ? `${l.sku} · ` : ''}${l.quantityRemaining} of ${l.quantityFulfilled} returnable`}
                         </Mono>
@@ -3651,7 +3686,7 @@ export default function OrderDetail() {
                               backgroundColor: on ? c.ink : 'transparent',
                             }}
                           >
-                            <Mono size={10.5} color={on ? c.paper : c.ink3}>
+                            <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
                               {disp === 'restock' ? 'Restock' : 'Scrap'}
                             </Mono>
                           </Pressable>
@@ -3686,7 +3721,9 @@ export default function OrderDetail() {
                           backgroundColor: on ? c.ink : 'transparent',
                         }}
                       >
-                        <Mono size={10.5} color={on ? c.paper : c.ink3}>{r.label}</Mono>
+                        <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
+                          {r.label}
+                        </Mono>
                       </Pressable>
                     );
                   })}
@@ -3750,12 +3787,20 @@ export default function OrderDetail() {
               accessibilityRole="button"
               accessibilityState={{ disabled: returnSubmitting || offline }}
               accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
-              style={[styles.addBtn, { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 }]}
+              style={[
+                styles.addBtn,
+                // The box grows with its capped label (Dynamic Type policy: a
+                // cap always comes with its box fix).
+                { height: undefined, minHeight: 44, paddingVertical: 10 },
+                { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
+              ]}
             >
               {returnSubmitting ? (
                 <ActivityIndicator color={c.paper} />
               ) : (
-                <Mono size={13} color={c.paper}>Submit return</Mono>
+                <Mono size={13} color={c.paper} maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}>
+                  Submit return
+                </Mono>
               )}
             </Pressable>
           </View>

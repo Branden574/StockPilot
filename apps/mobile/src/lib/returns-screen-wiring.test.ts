@@ -51,7 +51,7 @@ describe('the list filters', () => {
 
 describe('the create sheet and the order screen (returns review)', () => {
   const order = code(read('app/order/[id].tsx'));
-  const sheet = order.slice(order.indexOf('Create return</Body>'), order.indexOf('<Eyebrow>NOTES</Eyebrow>'));
+  const sheet = order.slice(order.indexOf('maxHeight: returnSheetLayout.sheetMaxHeight'), order.indexOf('Submit return\n'));
 
   it('says stock moves when the return is processed, from the shared copy (never at receipt)', () => {
     expect(order).toContain('{RETURNS_COPY.createReturnQueueNote}');
@@ -65,6 +65,17 @@ describe('the create sheet and the order screen (returns review)', () => {
     expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(2);
     expect(sheet).toContain("`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`");
     expect(sheet).toMatch(/accessibilityRole="button"\s+accessibilityLabel="Close"/);
+  });
+
+  it('fits the screen at the largest text sizes: bounded and scrolling, rows stacked, steppers and Submit grow (AX5 walk)', () => {
+    expect(order).toContain('const returnSheetLayout = exceptionSheetLayout(');
+    expect(order).toContain('const returnRowsStacked = shouldStackRow(fontScale);');
+    expect(sheet).toContain("flexDirection: returnRowsStacked ? 'column' : 'row'");
+    expect(sheet).toContain('minWidth: MIN_TAP,\n                      minHeight: MIN_TAP,');
+    expect(sheet).not.toMatch(/width: 32,\s+height: 32/);
+    expect(sheet).toContain('{ height: undefined, minHeight: 44, paddingVertical: 10 }');
+    // The help scrolls with the lines instead of pushing the header off screen.
+    expect(sheet.indexOf('<ScrollView')).toBeLessThan(sheet.indexOf('{RETURNS_COPY.createReturnHelp}'));
   });
 });
 
