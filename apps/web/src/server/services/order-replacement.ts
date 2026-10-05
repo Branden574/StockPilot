@@ -7,6 +7,7 @@ import {
   itemQuantityLabel,
   mapReturnError,
   parseExchangeStatus,
+  replacementChipState,
   returnLineLabel,
   slipExchangeLine,
   variantLabel,
@@ -267,12 +268,8 @@ export interface OrderExchangeChip {
   state: string | null;
 }
 
-/** The chip's second words (plan 3.6.9): only the two the gate decides. */
-export function exchangeChipState(status: ExchangeStatus): string | null {
-  if (status === 'waiting_for_return') return 'Waiting for return';
-  if (status === 'ready_to_pick') return 'Ready to pick';
-  return null;
-}
+/** The chip's second words (plan 3.6.9): core's, shared with the phone. */
+export const exchangeChipState = replacementChipState;
 
 /**
  * The chip for a page of orders: ONE batched `return_overview` read for the

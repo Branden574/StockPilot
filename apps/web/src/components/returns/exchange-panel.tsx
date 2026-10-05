@@ -26,6 +26,8 @@ import type {
 
 import {
   availableLabel,
+  exchangeReviewDecision,
+  exchangeReviewProblem,
   formatOrderNumber,
   qtyRequestedLabel,
   releasedBeforeReturnLine,
@@ -38,6 +40,7 @@ import {
   shortLabel,
   type ActionResult,
   type ExchangeCandidatesAnswer,
+  type ExchangeReviewState,
   type RailStep,
 } from '@stockpilot/core';
 
@@ -84,12 +87,9 @@ export function ExchangeRail({ rail }: { rail: RailStep[] }) {
   );
 }
 
-// ── The review state per exchange line (approval) ────────────────────────────
+// ── The review state per exchange line (approval): core's, shared with the phone ──
 
-export type ExchangeReviewState =
-  | { kind: 'as_requested' }
-  | { kind: 'change'; itemId: string | null; label: string | null; free: number | null; quantity: number; reason: string }
-  | { kind: 'decline'; reason: string };
+export type { ExchangeReviewState };
 
 export interface AddReplacementState {
   itemId: string | null;
@@ -99,29 +99,11 @@ export interface AddReplacementState {
   reason: string;
 }
 
-/** Why the approval cannot be sent yet for this line, or null. */
-export function reviewProblem(line: ReturnWorkbenchExchangeLine, state: ExchangeReviewState): string | null {
-  if (state.kind === 'as_requested') {
-    return line.requestedItemId ? null : `${RETURNS_COPY.chooseReplacement}: ${line.requestNote ?? RETURNS_COPY.replacementWarehouseReview}`;
-  }
-  if (state.kind === 'decline') return state.reason.trim() ? null : RETURNS_COPY.declineReasonLabel;
-  if (!state.itemId) return RETURNS_COPY.chooseReplacement;
-  if (state.itemId !== line.requestedItemId && !state.reason.trim()) return RETURNS_COPY.replacementReasonLabel;
-  return null;
-}
+/** Why the approval cannot be sent yet for this line, or null (core). */
+export const reviewProblem = exchangeReviewProblem;
 
-/** The decision the approval sends for one exchange line. */
-export function reviewDecision(line: ReturnWorkbenchExchangeLine, state: ExchangeReviewState): Record<string, unknown> {
-  if (state.kind === 'decline') return { action: 'decline', exchangeLineId: line.id, reason: state.reason.trim() };
-  if (state.kind === 'as_requested') return { action: 'approve', exchangeLineId: line.id };
-  return {
-    action: 'approve',
-    exchangeLineId: line.id,
-    itemId: state.itemId,
-    quantity: state.quantity,
-    ...(state.reason.trim() ? { reason: state.reason.trim() } : {}),
-  };
-}
+/** The decision the approval sends for one exchange line (core). */
+export const reviewDecision = exchangeReviewDecision;
 
 type CandidateLoader = (q: string) => Promise<ActionResult<ExchangeCandidatesAnswer>>;
 

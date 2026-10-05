@@ -252,3 +252,54 @@ export function approvalPreviewLines(input: {
   for (const l of input.lines) out.push(whenProcessedSentence(l.destination, l.returnedLabel));
   return out;
 }
+
+// ── The approval's exchange review (web and phone) ───────────────────────────
+
+/** One requested exchange line's choice at approval (plan RX-2 web UI):
+ *  approve as requested, change the replacement (with a reason when it
+ *  differs from the request), or decline with a reason. */
+export type ExchangeReviewState =
+  | { kind: 'as_requested' }
+  | { kind: 'change'; itemId: string | null; label: string | null; free: number | null; quantity: number; reason: string }
+  | { kind: 'decline'; reason: string };
+
+/** The fields of an exchange line the review reads. */
+export interface ExchangeReviewLine {
+  id: string;
+  requestedItemId: string | null;
+  requestNote: string | null;
+}
+
+/** Why the approval cannot be sent yet for this line, or null. */
+export function exchangeReviewProblem(line: ExchangeReviewLine, state: ExchangeReviewState): string | null {
+  if (state.kind === 'as_requested') {
+    return line.requestedItemId ? null : `${RETURNS_COPY.chooseReplacement}: ${line.requestNote ?? RETURNS_COPY.replacementWarehouseReview}`;
+  }
+  if (state.kind === 'decline') return state.reason.trim() ? null : RETURNS_COPY.declineReasonLabel;
+  if (!state.itemId) return RETURNS_COPY.chooseReplacement;
+  if (state.itemId !== line.requestedItemId && !state.reason.trim()) return RETURNS_COPY.replacementReasonLabel;
+  return null;
+}
+
+/** The decision the approval sends for one exchange line. */
+export function exchangeReviewDecision(line: ExchangeReviewLine, state: ExchangeReviewState): Record<string, unknown> {
+  if (state.kind === 'decline') return { action: 'decline', exchangeLineId: line.id, reason: state.reason.trim() };
+  if (state.kind === 'as_requested') return { action: 'approve', exchangeLineId: line.id };
+  return {
+    action: 'approve',
+    exchangeLineId: line.id,
+    itemId: state.itemId,
+    quantity: state.quantity,
+    ...(state.reason.trim() ? { reason: state.reason.trim() } : {}),
+  };
+}
+
+/** "Add a replacement" on a return-only line (G9): the decision, once an item is chosen. */
+export function addReplacementDecision(
+  returnLineId: string,
+  add: { itemId: string | null; quantity: number; reason?: string | null },
+): Record<string, unknown> | null {
+  if (!add.itemId) return null;
+  const reason = (add.reason ?? '').trim();
+  return { action: 'add', returnLineId, itemId: add.itemId, quantity: add.quantity, ...(reason ? { reason } : {}) };
+}

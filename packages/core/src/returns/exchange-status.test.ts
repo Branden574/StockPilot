@@ -136,3 +136,15 @@ describe('the list filters', () => {
     expect(parseReturnListFilter(undefined)).toBe('all');
   });
 });
+
+describe('replacementChipState (the orders list chip, web and phone)', () => {
+  it('words only the two gate states', async () => {
+    const { replacementChipState, EXCHANGE_STATUSES } = await import('./exchange-status');
+    expect(replacementChipState('waiting_for_return')).toBe('Waiting for return');
+    expect(replacementChipState('ready_to_pick')).toBe('Ready to pick');
+    for (const s of EXCHANGE_STATUSES.filter((x) => x !== 'waiting_for_return' && x !== 'ready_to_pick')) {
+      expect(replacementChipState(s)).toBeNull();
+    }
+    expect(replacementChipState(null)).toBeNull();
+  });
+});

@@ -132,6 +132,17 @@ export function exchangeRequesterSentence(status: ExchangeStatus, facts: Exchang
   }
 }
 
+/**
+ * The orders list's Exchange chip second words (plan 3.6.9, web and phone):
+ * only the two states the return-first gate decides, for the RMA's LIVE
+ * replacement; every other state shows the chip alone.
+ */
+export function replacementChipState(status: ExchangeStatus | null | undefined): string | null {
+  if (status === 'waiting_for_return') return 'Waiting for return';
+  if (status === 'ready_to_pick') return 'Ready to pick';
+  return null;
+}
+
 // ── The list filters (plan 3.10, graft G5) ─────────────────────────────────
 
 export const RETURN_LIST_FILTER_IDS = [

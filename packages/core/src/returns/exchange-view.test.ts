@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { EXCHANGE_STATUSES } from './exchange-status';
 import {
+  addReplacementDecision,
   approvalPreviewLines,
   exchangeCandidateRows,
   exchangeRail,
+  exchangeReviewDecision,
+  exchangeReviewProblem,
   parseExchangeCandidates,
   type ExchangeCandidate,
   type RailStep,
@@ -156,5 +159,42 @@ describe('what happens when you approve', () => {
       'The returned item is here, so picking can start.',
       'When processed, Cap goes into Staging.',
     ]);
+  });
+});
+
+describe('the approval review (web and phone)', () => {
+  const line = { id: 'x1', requestedItemId: 'l', requestNote: null };
+
+  it('as requested sends the line alone; a note-only request must be changed first', () => {
+    expect(exchangeReviewProblem(line, { kind: 'as_requested' })).toBeNull();
+    expect(exchangeReviewDecision(line, { kind: 'as_requested' })).toEqual({ action: 'approve', exchangeLineId: 'x1' });
+    expect(exchangeReviewProblem({ ...line, requestedItemId: null, requestNote: 'L please' }, { kind: 'as_requested' })).toBe(
+      'Choose the replacement: L please',
+    );
+  });
+
+  it('a change needs an item, and a reason when it differs from the request', () => {
+    const change = { kind: 'change' as const, itemId: null, label: null, free: null, quantity: 1, reason: '' };
+    expect(exchangeReviewProblem(line, change)).toBe('Choose the replacement');
+    expect(exchangeReviewProblem(line, { ...change, itemId: 'navy' })).toBe('Reason (required)');
+    expect(exchangeReviewProblem(line, { ...change, itemId: 'l' })).toBeNull();
+    expect(exchangeReviewDecision(line, { ...change, itemId: 'navy', reason: ' Out of L ' })).toEqual({
+      action: 'approve',
+      exchangeLineId: 'x1',
+      itemId: 'navy',
+      quantity: 1,
+      reason: 'Out of L',
+    });
+  });
+
+  it('a decline needs a reason; an add needs an item', () => {
+    expect(exchangeReviewProblem(line, { kind: 'decline', reason: ' ' })).toBe('Reason for declining the exchange (required)');
+    expect(exchangeReviewDecision(line, { kind: 'decline', reason: ' No stock ' })).toEqual({
+      action: 'decline',
+      exchangeLineId: 'x1',
+      reason: 'No stock',
+    });
+    expect(addReplacementDecision('rl1', { itemId: null, quantity: 1 })).toBeNull();
+    expect(addReplacementDecision('rl1', { itemId: 'l', quantity: 2 })).toEqual({ action: 'add', returnLineId: 'rl1', itemId: 'l', quantity: 2 });
   });
 });

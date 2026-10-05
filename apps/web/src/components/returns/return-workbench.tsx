@@ -50,6 +50,7 @@ import type { ReturnWorkbenchExchange } from '@/server/services/returns-exchange
 import type { ReturnWorkbench as Workbench, ReturnWorkbenchLine } from '@/server/services/returns-workbench';
 
 import {
+  addReplacementDecision,
   alreadyClosedSentence,
   alreadyReceivedSentence,
   approvalPreviewLines,
@@ -229,9 +230,8 @@ export function ReturnWorkbench({
     const out: Array<Record<string, unknown>> = [];
     for (const x of ex.lines) if (x.status === 'requested') out.push(reviewDecision(x, reviewFor(x.id)));
     for (const [returnLineId, a] of Object.entries(adds)) {
-      if (a?.itemId) {
-        out.push({ action: 'add', returnLineId, itemId: a.itemId, quantity: a.quantity, ...(a.reason.trim() ? { reason: a.reason.trim() } : {}) });
-      }
+      const d = a ? addReplacementDecision(returnLineId, a) : null;
+      if (d) out.push(d);
     }
     return out;
   }
