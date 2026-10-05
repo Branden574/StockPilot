@@ -969,6 +969,41 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     expect(screen.getByRole('button', { name: /Physical signature/ })).toBeInTheDocument();
   });
 
+  // L125: confirm_physical_signature admits a manager by role or the
+  // assigned driver (0248), as the phone offers it. A staff member granted
+  // orders:approve was offered Physical signature and then refused.
+  it('a staff approver who is not the driver is offered Collect signature but not Physical signature', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'staff' })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Physical signature/ })).toBeNull();
+  });
+
+  it('a manager approver and the assigned staff driver are offered Physical signature', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Physical signature/ })).toBeInTheDocument();
+    unmount();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          status: 'in_transit',
+          fulfillmentType: 'delivery',
+          assignedDeliveryUserId: 'me',
+          canApprove: true,
+          viewerRole: 'staff',
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Physical signature/ })).toBeInTheDocument();
+  });
+
   it('a staff approver keeps every one of them where it was', () => {
     const { unmount } = render(<ManagerActionsPanel {...baseProps({ status: 'pending_approval', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: /^Approve$/ })).toBeInTheDocument();
