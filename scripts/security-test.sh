@@ -646,7 +646,9 @@ PGTAP_TESTS=(
   # The two-session proofs (release against assign, last owner against a
   # joining member and against a transfer, two owners at once, the dry run
   # against a row lock) are scripts/db-concurrency/0394_account_delete_race.sh;
-  # the lock footprint is scripts/db-concurrency/0394_migration_lock_footprint.sh.
+  # the lock footprint is scripts/db-concurrency/0394_migration_lock_footprint.sh;
+  # the marker's write overhead on the log tables (ordinary writes never call
+  # it) is scripts/db-concurrency/0394_marker_write_overhead.sh.
   supabase/tests/0394_account_deletion_for_everyone.test.sql
 
   # AI read scoping.
