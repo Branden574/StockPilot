@@ -273,10 +273,11 @@ export const RELEASES: Release[] = [
     // receiving offered only to readers with stock:adjust), so the release
     // covers the slice and, as the slice 1 release does, each entry carries
     // its own audience and the release none: a reader sees the release only
-    // when an entry is theirs. It sits below the small fixes (slice 1) draft
-    // and phone ordering PO-2's draft, dated before them and after every
-    // published release (it can ship before or after them; the publishing
-    // follow-up keeps the order newest first).
+    // when an entry is theirs. It sits below the Items first-paint, weekly
+    // digest and phone ordering PO-2 drafts, dated before them, and above the
+    // small fixes (slice 1) release, published 2026-10-05, dated after every
+    // published release (it can ship before or after those drafts; the
+    // publishing follow-up keeps the order newest first).
     status: 'draft',
     title: 'Clearer order approvals and refusals, and receiving for those who can',
     summary:
