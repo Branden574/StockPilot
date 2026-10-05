@@ -279,6 +279,193 @@ export async function readAuthEmail(admin: AdminClient, userId: string): Promise
 }
 
 /**
+ * Desk check F-5: GoTrue's delete failed after a passing check. The common
+ * cause is the account trigger's own refusal: a member joined the person's
+ * solo organization between the check and the delete, so they are now the
+ * only owner of an organization with members (P0001 organization_last_owner,
+ * which GoTrue answers as a 500). Nothing was deleted, and signing the person
+ * out everywhere (SP-008) would punish them for a refusal. So the server asks
+ * the check once more: when it answers last_owner, the caller says the
+ * last-owner sentence and keeps the sessions; any other answer keeps SP-008.
+ * Never throws (checkAccountDeletable never does).
+ */
+export async function lateLastOwnerRefusal(
+  admin: AdminClient,
+  userId: string,
+  source: 'web' | 'mobile',
+): Promise<boolean> {
+  const recheck = await checkAccountDeletable(admin, userId, source);
+  if (recheck.ok || recheck.kind !== 'last_owner') return false;
+  void reportError(new Error('account deletion refused after the check: last owner'), {
+    tag: 'account.delete.late_last_owner',
+    level: 'info',
+    extra: { source },
+  });
+  return true;
+}
+
+/** O-A3-5: what the person created in an organization that keeps working after the deletion. */
+export interface CreatedStillActive {
+  apiKeys: number;
+  webhooks: number;
+  publicRequestLinks: number;
+  shareLinks: number;
+}
+
+/**
+ * What a deletion leaves for others to review, read BEFORE the delete (it
+ * nulls created_by and cascades the memberships) and used AFTER it succeeded:
+ *  - createdStillActive (O-A3-5): the API keys, webhooks (integration
+ *    endpoints), public request links and maintenance share links the person
+ *    created in the organization the audit row is filed under that still work
+ *    (not revoked, enabled, active). They keep working (they belong to the
+ *    organization); the counts go in the audit row so its admins can review
+ *    them. Null when there is no such organization or a read failed.
+ *  - soloPaidOrganizationIds (O-A3-2): organizations the person is the only
+ *    real member of (the deletion is allowed and leaves them with no members)
+ *    that have a Stripe subscription. Nothing cancels it, so the platform
+ *    admin is told (reportDeletionReviewFacts).
+ * Reads only; every failure is reported and never holds up the deletion.
+ */
+export interface DeletionReviewFacts {
+  createdStillActive: CreatedStillActive | null;
+  soloPaidOrganizationIds: string[];
+}
+
+type CountRead = { count: number | null; error: { message: string } | null };
+
+async function countCreatedStillActive(
+  admin: AdminClient,
+  userId: string,
+  organizationId: string,
+): Promise<CreatedStillActive> {
+  const head = { count: 'exact' as const, head: true };
+  const [apiKeys, webhooks, publicRequestLinks, shareLinks] = (await Promise.all([
+    admin
+      .from('api_keys')
+      .select('id', head)
+      .eq('created_by', userId)
+      .eq('organization_id', organizationId)
+      .is('revoked_at', null),
+    admin
+      .from('integration_endpoints')
+      .select('id', head)
+      .eq('created_by', userId)
+      .eq('organization_id', organizationId)
+      .eq('enabled', true),
+    admin
+      .from('public_request_links')
+      .select('id', head)
+      .eq('created_by', userId)
+      .eq('organization_id', organizationId)
+      .eq('active', true),
+    admin
+      .from('maintenance_request_share_links')
+      .select('id', head)
+      .eq('created_by', userId)
+      .eq('organization_id', organizationId)
+      .eq('active', true)
+      .is('revoked_at', null),
+  ])) as unknown as CountRead[];
+  const n = (r: CountRead | undefined): number => {
+    if (!r || r.error) throw new Error(r?.error?.message ?? 'count read failed');
+    return r.count ?? 0;
+  };
+  return {
+    apiKeys: n(apiKeys),
+    webhooks: n(webhooks),
+    publicRequestLinks: n(publicRequestLinks),
+    shareLinks: n(shareLinks),
+  };
+}
+
+async function soloOwnedOrganizationsWithSubscription(
+  admin: AdminClient,
+  userId: string,
+): Promise<string[]> {
+  const { data: ownedRows, error: ownedErr } = await admin
+    .from('organization_members')
+    .select('organization_id')
+    .eq('user_id', userId)
+    .eq('role', 'owner')
+    .not('accepted_at', 'is', null)
+    .is('impersonation_expires_at', null);
+  if (ownedErr) throw new Error(ownedErr.message);
+  const ownedIds = [
+    ...new Set(((ownedRows as { organization_id: string }[] | null) ?? []).map((r) => r.organization_id)),
+  ];
+  if (ownedIds.length === 0) return [];
+
+  const { data: otherRows, error: othersErr } = await admin
+    .from('organization_members')
+    .select('organization_id')
+    // in-list-bound: the orgs this one user owns (a handful)
+    .in('organization_id', ownedIds)
+    .neq('user_id', userId)
+    .not('accepted_at', 'is', null)
+    .is('impersonation_expires_at', null);
+  if (othersErr) throw new Error(othersErr.message);
+  const withOthers = new Set(
+    ((otherRows as { organization_id: string }[] | null) ?? []).map((r) => r.organization_id),
+  );
+  const soloIds = ownedIds.filter((id) => !withOthers.has(id));
+  if (soloIds.length === 0) return [];
+
+  const { data: orgRows, error: orgErr } = await admin
+    .from('organizations')
+    .select('id')
+    // in-list-bound: a subset of the orgs this one user owns
+    .in('id', soloIds)
+    .not('stripe_subscription_id', 'is', null);
+  if (orgErr) throw new Error(orgErr.message);
+  return ((orgRows as { id: string }[] | null) ?? []).map((o) => o.id);
+}
+
+export async function readDeletionReviewFacts(
+  admin: AdminClient,
+  userId: string,
+  organizationId: string | null,
+  source: 'web' | 'mobile',
+): Promise<DeletionReviewFacts> {
+  const [created, soloPaid] = await Promise.all([
+    (async (): Promise<CreatedStillActive | null> => {
+      if (!organizationId) return null;
+      try {
+        return await countCreatedStillActive(admin, userId, organizationId);
+      } catch (e) {
+        void reportError(e, { tag: 'account.delete.review_counts', level: 'warning', extra: { source } });
+        return null;
+      }
+    })(),
+    (async (): Promise<string[]> => {
+      try {
+        return await soloOwnedOrganizationsWithSubscription(admin, userId);
+      } catch (e) {
+        // Unknown whether a subscription keeps billing: reported, so a
+        // platform admin can look.
+        void reportError(e, { tag: 'account.delete.review_subscription', level: 'warning', extra: { source } });
+        return [];
+      }
+    })(),
+  ]);
+  return { createdStillActive: created, soloPaidOrganizationIds: soloPaid };
+}
+
+/**
+ * After the delete succeeded (O-A3-2): tell the platform admin which
+ * organizations the person leaves with no member while a Stripe subscription
+ * keeps billing. Ids only, no personal data. Nothing when there is none.
+ */
+export function reportDeletionReviewFacts(facts: DeletionReviewFacts, source: 'web' | 'mobile'): void {
+  if (facts.soloPaidOrganizationIds.length === 0) return;
+  void reportError(new Error('The only member of an organization with a Stripe subscription deleted their account'), {
+    tag: 'account.delete.solo_owner_subscription',
+    level: 'info',
+    extra: { source, organizationIds: facts.soloPaidOrganizationIds.join(',') },
+  });
+}
+
+/**
  * The `user.deactivated` audit row, written AFTER the delete succeeded.
  *
  * `user_id` is null: the profile is gone, and the row an earlier build wrote
@@ -292,6 +479,9 @@ export async function auditAccountDeleted(args: {
   userId: string;
   organizationId: string | null;
   reason: 'self_deletion' | 'self_deletion_mobile';
+  /** O-A3-5: what the person created in this organization that keeps working
+   *  (read before the delete by readDeletionReviewFacts); omitted when unread. */
+  createdStillActive?: CreatedStillActive | null;
 }): Promise<boolean> {
   let ip: string | null = null;
   let userAgent: string | null = null;
@@ -315,6 +505,16 @@ export async function auditAccountDeleted(args: {
       before: null,
       after: null,
       reason: args.reason,
+      ...(args.createdStillActive
+        ? {
+            created_still_active: {
+              api_keys: args.createdStillActive.apiKeys,
+              webhooks: args.createdStillActive.webhooks,
+              public_request_links: args.createdStillActive.publicRequestLinks,
+              share_links: args.createdStillActive.shareLinks,
+            },
+          }
+        : {}),
     },
     // 0394: the actor is the person who just deleted their account, so the
     // log reads "Deleted user", not "System" (the trigger keeps this stamp:

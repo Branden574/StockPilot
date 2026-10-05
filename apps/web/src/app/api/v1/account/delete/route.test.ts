@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit, insertAuditRowReported } from '@/server/services/audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE } from '@/server/lib/account-deletion';
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 import { POST } from './route';
@@ -48,10 +49,16 @@ const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
   data: { deletable: true } as unknown,
   error: null as { code?: string } | null,
 }));
+/** The admin client's table reads (O-A3-2, O-A3-5: read before the delete). */
+const adminTables: { stub: SupabaseStub | null } = { stub: null };
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({
     auth: { admin: { deleteUser, getUserById } },
     rpc,
+    from: (table: string) => {
+      if (!adminTables.stub) throw new Error('admin table read not expected in this test');
+      return adminTables.stub.client.from(table);
+    },
     storage: { from: storageFrom },
   })),
 }));
@@ -118,6 +125,8 @@ describe('POST /api/v1/account/delete', () => {
     isPlatformAdmin.mockImplementation(() => false);
     avatarList.mockResolvedValue({ data: [], error: null });
     avatarRemove.mockResolvedValue({ data: [], error: null });
+    // No API keys, webhooks, links or subscriptions unless a test says so.
+    adminTables.stub = makeSupabaseStub();
   });
 
   it('returns 401 without an auth context and never audits or deletes', async () => {
@@ -526,5 +535,95 @@ describe('POST /api/v1/account/delete', () => {
     expect(insertAuditRowReported).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
     expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("O-A3-5: the user.deactivated row records the organization's API keys, webhooks and links the person created that keep working", async () => {
+    adminTables.stub = makeSupabaseStub({
+      'api_keys.select': { data: null, error: null, count: 2 },
+      'integration_endpoints.select': { data: null, error: null, count: 1 },
+      'public_request_links.select': { data: null, error: null, count: 0 },
+      'maintenance_request_share_links.select': { data: null, error: null, count: 0 },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(insertAuditRowReported).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organization_id: 'org-1',
+        metadata: expect.objectContaining({
+          created_still_active: { api_keys: 2, webhooks: 1, public_request_links: 0, share_links: 0 },
+        }),
+      }),
+    );
+    // Counted in the organization the row is filed under, before the delete.
+    const args = adminTables.stub.chainArgsAll.get('api_keys.select')?.[0] ?? [];
+    expect(args).toEqual(expect.arrayContaining([['created_by', USER_ID], ['organization_id', 'org-1']]));
+    expect(adminTables.stub.fromCalls.indexOf('api_keys')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('O-A3-2: the only member of an organization with a Stripe subscription: the platform admin is told (info) after the delete', async () => {
+    adminTables.stub = makeSupabaseStub({
+      'organization_members.select': (call) =>
+        call.methods.includes('neq')
+          ? { data: [], error: null }
+          : { data: [{ organization_id: 'org-1' }], error: null },
+      'organizations.select': { data: [{ id: 'org-1' }], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub(), 'owner') as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(200);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'account.delete.solo_owner_subscription',
+        level: 'info',
+        extra: { source: 'mobile', organizationIds: 'org-1' },
+      }),
+    );
+  });
+
+  it('desk check F-5: a member joins between the check and the delete: the last-owner answer, sessions kept, nothing written', async () => {
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+    });
+    rpc
+      .mockResolvedValueOnce({ data: { deletable: true }, error: null })
+      .mockResolvedValueOnce({
+        data: {
+          deletable: false,
+          reason: 'blocked',
+          sqlstate: 'P0001',
+          constraint: 'organization_last_owner',
+          table: 'public.organization_members',
+        },
+        error: null,
+      });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub(), 'owner') as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe('last_owner');
+    expect(body.message).toBe(ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE);
+    expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(avatarList).not.toHaveBeenCalled();
+  });
+
+  it('desk check F-5: any other answer to the re-check keeps SP-008 (sessions revoked, 500)', async () => {
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(500);
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(USER_ID);
   });
 });

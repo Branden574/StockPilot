@@ -17,8 +17,11 @@ import {
   auditAccountDeleted,
   checkAccountDeletable,
   lastOwnerCopy,
+  lateLastOwnerRefusal,
   readAuthEmail,
+  readDeletionReviewFacts,
   removeAvatarObjects,
+  reportDeletionReviewFacts,
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
@@ -42,7 +45,8 @@ export const runtime = 'nodejs';
  *   body: { confirm: "DELETE" }
  *   200: { ok: true }                          // the account is gone (also when it was already gone)
  *   400: { error: "validation_error", message }
- *   403: { error: "last_owner", message }      // the only owner of an org with other members (0394)
+ *   403: { error: "last_owner", message }      // the only owner of an org with other members (0394),
+ *                                              // also when a member joined after the check (F-5)
  *   403: { error: "platform_admin", message }  // an allowlisted platform admin's account (O-A3-7)
  *   403: { error: "account_linked_records", message } // a record still refuses it (unexpected after 0394)
  *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes
@@ -53,7 +57,10 @@ export const runtime = 'nodejs';
  * (settings.tsx performDelete), so these answers need no phone change.
  * Nothing is written before the delete (no profile tombstone); the
  * `user.deactivated` row is written after it succeeded (0388), after the
- * person's avatar files are removed (0394). Ownership is transferred on the
+ * person's avatar files are removed (0394); it records the counts of the API
+ * keys, webhooks and links they created that keep working (O-A3-5), and a
+ * solo owner's organization with a Stripe subscription is reported to the
+ * platform admin (O-A3-2). Ownership is transferred on the
  * web Team page (O-A3-8), so the phone's last-owner sentence points there.
  */
 export async function POST(req: NextRequest) {
@@ -210,11 +217,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // What the deletion leaves for others to review, read now: the delete
+    // nulls created_by and cascades the memberships (O-A3-5 counts for the
+    // audit row, O-A3-2 subscriptions for the platform admin). Reads only; a
+    // failure is reported and never holds the deletion up.
+    const organizationId = ctx.organizationId ?? null;
+    const review = await readDeletionReviewFacts(admin, ctx.userId, organizationId, 'mobile');
+
     const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);
     // deleteUser can answer an error although the account is gone: GoTrue
     // committed and the reply was lost, or another request deleted it first
     // (404 user_not_found). Ask GoTrue again before answering (review R7).
     const settled = authErr ? await settleFailedDelete(admin, ctx.userId, authErr) : 'deleted';
+    // Desk check F-5: the account trigger refused inside GoTrue because a
+    // member joined after the check. Nothing was deleted, so the phone stays
+    // signed in and is told to transfer ownership on the web (no SP-008).
+    if (authErr && settled === 'not_deleted' && (await lateLastOwnerRefusal(admin, ctx.userId, 'mobile'))) {
+      return NextResponse.json(
+        { error: 'last_owner', message: ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE },
+        { status: 403 },
+      );
+    }
     if (authErr && settled === 'not_deleted') {
       // SP-008 on the phone: this used to log and answer { ok: true }, and the
       // phone signed out and said "Account deleted" while the account was
@@ -248,12 +271,16 @@ export async function POST(req: NextRequest) {
     // through audit()'s withContext() fallback, which redirects on /api (the
     // bug that dropped every mobile row once).
     if (settled === 'deleted') {
-      // The person's avatar files (O-A3-9), best-effort, then the audit row.
+      // O-A3-2: a subscription nothing cancels is the platform admin's to review.
+      reportDeletionReviewFacts(review, 'mobile');
+      // The person's avatar files (O-A3-9), best-effort, then the audit row
+      // (O-A3-5: with the counts of what they created that keeps working).
       await removeAvatarObjects(admin, ctx.userId);
       await auditAccountDeleted({
         userId: ctx.userId,
-        organizationId: ctx.organizationId ?? null,
+        organizationId,
         reason: 'self_deletion_mobile',
+        createdStillActive: review.createdStillActive,
       });
     }
 

@@ -24,8 +24,12 @@ import {
   accountDeleteRateKey,
   auditAccountDeleted,
   checkAccountDeletable,
+  type CreatedStillActive,
   lastOwnerCopy,
+  lateLastOwnerRefusal,
+  readDeletionReviewFacts,
   removeAvatarObjects,
+  reportDeletionReviewFacts,
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
@@ -490,8 +494,12 @@ const deleteAccountSchema = z.object({
  * the admin client: the profile and memberships cascade, every record the
  * person made stays and reads "Deleted user", and work assigned to them is
  * released (the 0394 account trigger). The `user.deactivated` audit row is
- * written only after the delete succeeded, and the person's avatar files are
- * removed. Nothing is written when the account cannot go.
+ * written only after the delete succeeded (with the counts of the API keys,
+ * webhooks and links the person created that keep working, O-A3-5), and the
+ * person's avatar files are removed. A solo owner's organization with a Stripe
+ * subscription is reported to the platform admin (O-A3-2). Nothing is written
+ * when the account cannot go; a refusal that arrives only at the delete itself
+ * (a member joined after the check, F-5) keeps the sessions.
  *
  * Refused, in order, before anything changes:
  *  - a StockPilot platform admin while their VERIFIED auth email is on the
@@ -568,6 +576,7 @@ export async function deleteOwnAccountAction(input: {
     const check = await checkAccountDeletable(admin, session.userId, 'web');
     // Whether THIS request deleted the account (and so writes the audit row).
     let deletedHere = false;
+    let createdStillActive: CreatedStillActive | null = null;
     if (!check.ok) {
       // A member joined between the read above and the check (the trigger is
       // the backstop): the generic last-owner sentence.
@@ -586,6 +595,11 @@ export async function deleteOwnAccountAction(input: {
       // so and end this browser's session below; the request that deleted it
       // wrote the audit row (review R7).
     } else {
+      // What the deletion leaves for others to review, read now: the delete
+      // nulls created_by and cascades the memberships (O-A3-5 counts for the
+      // audit row, O-A3-2 subscriptions for the platform admin). Reads only;
+      // a failure is reported and never holds the deletion up.
+      const review = await readDeletionReviewFacts(admin, session.userId, auditOrganizationId, 'web');
       // Now delete the auth user. Profile + membership rows cascade via the
       // user_profiles.id -> auth.users(id) on delete cascade FK; the person's
       // orders are kept (0388).
@@ -595,6 +609,12 @@ export async function deleteOwnAccountAction(input: {
       // (404 user_not_found). Ask GoTrue again before telling the person it
       // failed (review R7).
       const settled = authErr ? await settleFailedDelete(admin, session.userId, authErr) : 'deleted';
+      // Desk check F-5: the account trigger refused inside GoTrue because a
+      // member joined after the check. Nothing was deleted, so the person
+      // stays signed in and is told to transfer ownership (no SP-008).
+      if (authErr && settled === 'not_deleted' && (await lateLastOwnerRefusal(admin, session.userId, 'web'))) {
+        return err('conflict', ACCOUNT_DELETE_LAST_OWNER_COPY, { reason: 'last_owner' });
+      }
       if (authErr && settled === 'not_deleted') {
         // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══
         //
@@ -647,18 +667,25 @@ export async function deleteOwnAccountAction(input: {
         });
       }
       deletedHere = settled === 'deleted';
+      if (deletedHere) {
+        // O-A3-2: a subscription nothing cancels is the platform admin's to
+        // review; O-A3-5: the counts go in the audit row below.
+        reportDeletionReviewFacts(review, 'web');
+        createdStillActive = review.createdStillActive;
+      }
     }
 
     // The account is gone: its avatar files (O-A3-9, best-effort), then the
     // audit row (user_id null, the profile no longer exists; the entity id
-    // keeps who it was; stamped "Deleted user"), written by the request that
-    // deleted it.
+    // keeps who it was; stamped "Deleted user"; O-A3-5 counts), written by the
+    // request that deleted it.
     if (deletedHere) {
       await removeAvatarObjects(admin, session.userId);
       await auditAccountDeleted({
         userId: session.userId,
         organizationId: auditOrganizationId,
         reason: 'self_deletion',
+        createdStillActive,
       });
     }
 

@@ -117,8 +117,11 @@ const {
   cookieSignOut,
   platformAdmin,
   avatarStorage,
+  adminTables,
 } =
   vi.hoisted(() => ({
+    /** The admin client's table reads (O-A3-2, O-A3-5: read before the delete). */
+    adminTables: { from: null as null | ((table: string) => unknown) },
     logoStorage: {
       body: null as Uint8Array | null,
       remove: vi.fn(),
@@ -177,6 +180,10 @@ vi.mock('@/lib/supabase/admin', () => ({
       },
     },
     rpc: adminRpc,
+    from: (table: string) => {
+      if (!adminTables.from) throw new Error('admin table read not expected in this test');
+      return adminTables.from(table);
+    },
     storage: {
       from: vi.fn((bucket: string) =>
         bucket === 'user-avatars'
@@ -239,6 +246,10 @@ vi.mock('@/server/services/context', async () => {
 import { revalidatePath, revalidateTag } from 'next/cache';
 
 import { audit } from '@/server/services/audit';
+import {
+  ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_SIGNED_OUT_COPY,
+} from '@/server/lib/account-deletion';
 
 import {
   deleteOwnAccountAction,
@@ -522,6 +533,8 @@ describe('deleteOwnAccountAction', () => {
     (stubHolder.stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut =
       cookieSignOut;
     cookieSignOut.mockImplementation(async () => ({ error: null }));
+    // No API keys, webhooks, links or subscriptions unless a test says so.
+    adminTables.from = makeSupabaseStub().client.from;
   });
 
   it('rejects without the typed DELETE confirmation', async () => {
@@ -1110,6 +1123,104 @@ describe('deleteOwnAccountAction', () => {
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
       expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
       expect(cookieSignOut).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('what the deletion leaves for review (O-A3-5, O-A3-2)', () => {
+    it("O-A3-5: the user.deactivated row records the organization's API keys, webhooks and links the person created that keep working", async () => {
+      adminTables.from = makeSupabaseStub({
+        'api_keys.select': { data: null, error: null, count: 1 },
+        'integration_endpoints.select': { data: null, error: null, count: 0 },
+        'public_request_links.select': { data: null, error: null, count: 2 },
+        'maintenance_request_share_links.select': { data: null, error: null, count: 3 },
+      }).client.from;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organization_id: 'org-1',
+          metadata: expect.objectContaining({
+            created_still_active: { api_keys: 1, webhooks: 0, public_request_links: 2, share_links: 3 },
+          }),
+        }),
+      );
+    });
+
+    it('O-A3-2: the only member of an organization with a Stripe subscription: the platform admin is told (info) after the delete', async () => {
+      adminTables.from = makeSupabaseStub({
+        'organization_members.select': (call) =>
+          call.methods.includes('neq')
+            ? { data: [], error: null }
+            : { data: [{ organization_id: 'org-solo' }], error: null },
+        'organizations.select': { data: [{ id: 'org-solo' }], error: null },
+      }).client.from;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          tag: 'account.delete.solo_owner_subscription',
+          level: 'info',
+          extra: { source: 'web', organizationIds: 'org-solo' },
+        }),
+      );
+    });
+
+    it('O-A3-2: nothing is reported when the delete fails (the organization keeps its owner)', async () => {
+      adminTables.from = makeSupabaseStub({
+        'organization_members.select': (call) =>
+          call.methods.includes('neq')
+            ? { data: [], error: null }
+            : { data: [{ organization_id: 'org-solo' }], error: null },
+        'organizations.select': { data: [{ id: 'org-solo' }], error: null },
+      }).client.from;
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: { message: 'Invalid API key' } }));
+      await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const tags = reportErrorMock.mock.calls.map((c) => (c as unknown[])[1] as { tag?: string } | undefined);
+      expect(tags.map((t) => t?.tag)).not.toContain('account.delete.solo_owner_subscription');
+    });
+  });
+
+  describe('a member joins between the check and the delete (desk check F-5)', () => {
+    it('the last-owner sentence, the sessions are kept, nothing is written', async () => {
+      // The account trigger refuses inside GoTrue's delete (a 500); the
+      // account is still there, and the re-check now answers last_owner.
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({
+        error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+      }));
+      adminRpc
+        .mockImplementationOnce(async () => ({ data: { deletable: true }, error: null }))
+        .mockImplementationOnce(async () => ({
+          data: {
+            deletable: false,
+            reason: 'blocked',
+            sqlstate: 'P0001',
+            constraint: 'organization_last_owner',
+            table: 'public.organization_members',
+          },
+          error: null,
+        }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('conflict');
+        expect(result.error.message).toBe(ACCOUNT_DELETE_LAST_OWNER_COPY);
+      }
+      expect(adminRpc).toHaveBeenCalledTimes(2);
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).not.toHaveBeenCalled();
+      expect(avatarStorage.list).not.toHaveBeenCalled();
+    });
+
+    it('any other answer to the re-check keeps SP-008 (sessions revoked, the signed-out sentence)', async () => {
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({
+        error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.message).toBe(ACCOUNT_DELETE_SIGNED_OUT_COPY);
+      expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
     });
   });
 });
