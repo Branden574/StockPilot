@@ -24,6 +24,7 @@ import {
   isDeletedRequester,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
+  orderCancelOffer,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
   PERMISSION_META,
@@ -596,9 +597,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // scope fix's, the small fixes', F2-3's, the Sports fields', the count
     // difference words', Book Order Totals by charter's, F2-4's, F2-5's, the
     // count confirm's, the session-ended fix's, the two account deletion
-    // releases, the two order signature releases, the approval release and the
-    // three releases of 2026-10-05 after it).
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // releases, the two order signature releases, the approval release, the
+    // three releases of 2026-10-05 and slice 1's small fixes after it).
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -773,9 +774,9 @@ describe('F2-1 (order readiness) is published', () => {
     // fields', the count difference words', Book Order Totals by charter's,
     // F2-4's, F2-5's, the count confirm's, the session-ended fix's, the two
     // account deletion releases, the two order signature releases, the approval
-    // release and the three releases of 2026-10-05 were published after this
-    // one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // release, the three releases of 2026-10-05 and slice 1's small fixes were
+    // published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1035,9 +1036,9 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // fixes', F2-3's, the Sports fields', the count difference words', Book
     // Order Totals by charter's, F2-4's, F2-5's, the count confirm's, the
     // session-ended fix's, the two account deletion releases, the two order
-    // signature releases, the approval release and the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // signature releases, the approval release, the three releases of
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1303,9 +1304,9 @@ describe('Book Order Totals is published', () => {
     // small fixes', F2-3's, the Sports fields', the count difference words',
     // Book Order Totals by charter's, F2-4's, F2-5's, the count confirm's, the
     // session-ended fix's, the two account deletion releases, the two order
-    // signature releases, the approval release and the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // signature releases, the approval release, the three releases of
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1412,9 +1413,9 @@ describe('the report scope release is published', () => {
     // the Sports fields', the count difference words', Book Order Totals by
     // charter's, F2-4's, F2-5's, the count confirm's, the session-ended fix's,
     // the two account deletion releases, the two order signature releases, the
-    // approval release and the three releases of 2026-10-05 were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // approval release, the three releases of 2026-10-05 and slice 1's small
+    // fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1476,9 +1477,10 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     // The notice offers the newest unread release: the Sports fields', the
     // count difference words', Book Order Totals by charter's, F2-4's, F2-5's,
     // the count confirm's, the session-ended fix's, the two account deletion
-    // releases, the two order signature releases, the approval release and the
-    // three releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // releases, the two order signature releases, the approval release, the
+    // three releases of 2026-10-05 and slice 1's small fixes were published
+    // after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1597,9 +1599,10 @@ describe('the ended-session fix on exceptions is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the two account deletion
-    // releases, the two order signature releases, the approval release and the
-    // three releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // releases, the two order signature releases, the approval release, the
+    // three releases of 2026-10-05 and slice 1's small fixes were published
+    // after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the count confirm's and
     // F2-5's.
@@ -1719,9 +1722,9 @@ describe('count differences release 2 (confirm this count) is published', () => 
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the session-ended fix's, the
     // two account deletion releases, the two order signature releases, the
-    // approval release and the three releases of 2026-10-05 were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // approval release, the three releases of 2026-10-05 and slice 1's small
+    // fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-5's and F2-4's.
     const newer = Object.fromEntries(
@@ -1906,8 +1909,8 @@ describe('approval follows the permission is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and slice B's two.
     const newer = Object.fromEntries(
@@ -2132,9 +2135,9 @@ describe('account deletion for people who placed orders is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the two order signature
-    // releases, the approval release and the three releases of 2026-10-05 were
-    // published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // releases, the approval release, the three releases of 2026-10-05 and
+    // slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the refusal's and the
     // session-ended fix's.
@@ -2288,9 +2291,10 @@ describe('a refused account deletion says why, and is published with the account
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the account deletion
-    // release, the two order signature releases, the approval release and the
-    // three releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // release, the two order signature releases, the approval release, the
+    // three releases of 2026-10-05 and slice 1's small fixes were published
+    // after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the session-ended fix's and
     // the count confirm's.
@@ -2428,9 +2432,9 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the count confirm's, the
     // session-ended fix's, the two account deletion releases, the two order
-    // signature releases, the approval release and the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // signature releases, the approval release, the three releases of
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-4's and Book Order Totals
     // by charter's.
@@ -2591,9 +2595,9 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-5's, the count confirm's,
     // the session-ended fix's, the two account deletion releases, the two order
-    // signature releases, the approval release and the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // signature releases, the approval release, the three releases of
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -2709,9 +2713,10 @@ describe('the small-fixes release is published', () => {
     // The notice offers the newest unread release: F2-3's, the Sports fields',
     // the count difference words', Book Order Totals by charter's, F2-4's,
     // F2-5's, the count confirm's, the session-ended fix's, the two account
-    // deletion releases, the two order signature releases, the approval release
-    // and the three releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // deletion releases, the two order signature releases, the approval
+    // release, the three releases of 2026-10-05 and slice 1's small fixes were
+    // published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2911,9 +2916,10 @@ describe('Book Order Totals by charter and dates is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: F2-4's, F2-5's, the count
     // confirm's, the session-ended fix's, the two account deletion releases,
-    // the two order signature releases, the approval release and the three
-    // releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // the two order signature releases, the approval release, the three
+    // releases of 2026-10-05 and slice 1's small fixes were published after
+    // this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3041,9 +3047,9 @@ describe('count differences say what clears them (release 1) is published', () =
     // The notice offers the newest unread release: Book Order Totals by
     // charter's, F2-4's, F2-5's, the count confirm's, the session-ended fix's,
     // the two account deletion releases, the two order signature releases, the
-    // approval release and the three releases of 2026-10-05 were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // approval release, the three releases of 2026-10-05 and slice 1's small
+    // fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3171,9 +3177,9 @@ describe('the Sports required details release is published', () => {
     // The notice offers the newest unread release: the count difference words',
     // Book Order Totals by charter's, F2-4's, F2-5's, the count confirm's, the
     // session-ended fix's, the two account deletion releases, the two order
-    // signature releases, the approval release and the three releases of
-    // 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // signature releases, the approval release, the three releases of
+    // 2026-10-05 and slice 1's small fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3280,9 +3286,10 @@ describe('order secrets slice B (a digital signature on the order timeline) is p
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The notice offers the newest unread release: the approval release and the
-    // three releases of 2026-10-05 were published after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // The notice offers the newest unread release: the approval release, the
+    // three releases of 2026-10-05 and slice 1's small fixes were published
+    // after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, the signature image release
     // and the account deletion release.
@@ -3413,9 +3420,9 @@ describe('the signature image in the mobile app is for approvers and the driver,
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: the timeline release, the
-    // approval release and the three releases of 2026-10-05 were published
-    // after this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // approval release, the three releases of 2026-10-05 and slice 1's small
+    // fixes were published after this one.
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and the two account deletion
     // releases.
@@ -3529,29 +3536,28 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is a draft above every published release (the three releases of 2026-10-05 and slices B and D are below it), below only the small fixes, weekly digest and Items first-paint drafts, dated after every release but those three', () => {
+  it('is a draft above every published release (slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the Items first-paint and weekly digest drafts, dated after every release but those two', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
     // above the newest published release, dated after every published
-    // release. Re-pinned by the small fixes (slice 1, 2026-10-05; was: the
-    // only draft, at the top): their draft is dated later and sits above it.
-    // Re-pinned by the weekly digest fixes (2026-10-05): their draft is dated
-    // later still and sits above both. Re-pinned by the Items first-paint
-    // draft (2026-10-05; was: below the weekly digest and small fixes drafts
-    // only): it is dated later still and sits at the top.
+    // release. Re-pinned by the weekly digest fixes (2026-10-05): their draft
+    // is dated later and sits above it. Re-pinned by the Items first-paint
+    // draft (2026-10-05): it is dated later still and sits at the top.
+    // Re-pinned by the publishing of the small fixes (slice 1, 2026-10-05;
+    // was: below their draft, at 3): they are published now, the newest
+    // published release, directly below it.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(3);
+    expect(at).toBe(2);
     expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
     expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
-    expect(RELEASES[2]?.id).toBe('small-fixes-2026-10');
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
-      'small-fixes-2026-10',
       ID,
     ]);
     for (const id of [
+      'small-fixes-2026-10',
       'phone-place-order-2026-10',
       'returns-original-rack-2026-10',
       'account-deletion-everyone-2026-10',
@@ -3562,13 +3568,8 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(i, id).toBeGreaterThan(at);
       expect(RELEASES[i]?.status, id).toBe('published');
     }
-    expect(RELEASES[at + 1]?.id).toBe('phone-place-order-2026-10');
-    const above = new Set([
-      ID,
-      'small-fixes-2026-10',
-      'weekly-digest-and-fixes-2026-10',
-      'items-list-first-paint-2026-10',
-    ]);
+    expect(RELEASES[at + 1]?.id).toBe('small-fixes-2026-10');
+    const above = new Set([ID, 'weekly-digest-and-fixes-2026-10', 'items-list-first-paint-2026-10']);
     for (const r of RELEASES.filter((x) => !above.has(x.id))) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -3622,7 +3623,8 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
  * Don't send it and a resend under the same key each answering that order and
  * writing nothing, then cancelled while pending) were done. Pinned by id,
  * never by index. This follow-up publishes it, the newest release, a minute
- * after returns RX-1's; PO-2's draft sits above it.
+ * after returns RX-1's; PO-2's draft sits above it. Slice 1's small fixes were
+ * published above it later.
  */
 describe('placing an order in the mobile app (phone ordering PO-4) is published', () => {
   const ID = 'phone-place-order-2026-10';
@@ -3640,11 +3642,17 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The newest published release: the notice offers it.
-    expect(list.latestUnread?.id).toBe(ID);
+    // The notice offers the newest unread release: slice 1's small fixes were
+    // published after this one. Re-pinned by their publishing (was: this one,
+    // the newest).
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
-    // this one, returns RX-1's and account deletion for every member.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+    // once the newer release is read, this one, returns RX-1's and account
+    // deletion for every member.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toEqual([
       ID,
       'returns-original-rack-2026-10',
       'account-deletion-everyone-2026-10',
@@ -3659,21 +3667,22 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest, small fixes' and PO-2's drafts sit above it, returns RX-1's a minute below it", () => {
+  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the drafts and slice 1\'s small fixes above it are dated later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    // Re-pinned by the small fixes (slice 1, 2026-10-05; was: only PO-2's
-    // draft): their draft is dated later and sits above PO-2's. Re-pinned by
-    // the weekly digest fixes (2026-10-05): their draft sits above both.
-    // Re-pinned by the Items first-paint draft (2026-10-05): dated later
-    // still, at the top.
+    // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
+    // the top. Re-pinned by the Items first-paint draft (2026-10-05): dated
+    // later still, at the top. Re-pinned by the publishing of the small fixes
+    // (slice 1, 2026-10-05; was: the newest published release, with only
+    // drafts above it): the drafts stay at the top, newest first, and the
+    // small fixes, published, sit between them and this one.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
       'weekly-digest-and-fixes-2026-10',
-      'small-fixes-2026-10',
       'order-submit-once-2026-10',
+      'small-fixes-2026-10',
     ]);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -3829,12 +3838,24 @@ describe('account deletion for every member (slice A3) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    // The notice offers the newest unread release: returns RX-1's and phone
-    // ordering's were published after this one. A member who neither orders
-    // nor opens Returns is offered this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // The notice offers the newest unread release: returns RX-1's, phone
+    // ordering's and slice 1's small fixes were published after this one. A
+    // member who neither orders nor opens Returns is offered the small fixes,
+    // whose fixes for everyone reach every member, and this one once they are
+    // read (re-pinned by the small fixes' publishing; was: this one).
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe('small-fixes-2026-10');
+    const smallFixesRead = [
+      {
+        release_id: 'small-fixes-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-05T20:00:00Z',
+        read_at: '2026-10-05T20:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, member, smallFixesRead, null).latestUnread?.id).toBe(ID);
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the approval release and
     // slice B's timeline release.
@@ -3999,13 +4020,26 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The notice offers the newest unread release: phone ordering's was
-    // published a minute after this one. Someone who opens Returns but does
-    // not order is offered this one.
-    expect(list.latestUnread?.id).toBe('phone-place-order-2026-10');
+    // published a minute after this one, and slice 1's small fixes later.
+    // Someone who opens Returns but does not order is offered the small
+    // fixes, whose fixes for everyone reach every member, and this one once
+    // they are read (re-pinned by the small fixes' publishing; was: this one).
+    expect(list.latestUnread?.id).toBe('small-fixes-2026-10');
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
-    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe('small-fixes-2026-10');
+    const smallFixesRead = [
+      {
+        release_id: 'small-fixes-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-05T20:00:00Z',
+        read_at: '2026-10-05T20:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, returnsOnly, smallFixesRead, null).latestUnread?.id).toBe(ID);
     // An old phone build lists at most three unread releases, newest first:
-    // once the newer release is read, this one, A3's and the approval release.
+    // once the newer releases are read, this one, A3's and the approval
+    // release.
     const newer = Object.fromEntries(
       RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
     );
@@ -4251,36 +4285,82 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
   });
 });
 
-// Small fixes slice 1 (followups triage 2026-10-05): a DRAFT until the web
-// deploy is live and phones launch the OTA. Each entry is told only to the
-// people who can see its change.
-describe('the small fixes release (slice 1)', () => {
+/**
+ * Small fixes slice 1 (followups triage 2026-10-05; #325, 893da840, merged
+ * 2026-10-05 18:02:27Z; no migration) was held as a DRAFT until the web deploy
+ * (web build dd181604197c), the phone update with its phone half (OTA group
+ * c2e8f017, iOS update 01a10d3f, launched on phones) and the Demo Co
+ * production walk (67 checks passed, confirmed by an independent audit) were
+ * done. Pinned by id, never by index. This follow-up publishes it, the newest
+ * published release; the Items first-paint, weekly digest fixes' and PO-2's
+ * drafts sit above it. Each entry is told only to the people who can see its
+ * change.
+ */
+describe('the small fixes release (slice 1) is published', () => {
   const ID = 'small-fixes-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
+  const entry = (id: string) => release().entries.find((e) => e.id === id)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
 
-  it('is a draft, below only the Items first-paint and weekly digest drafts, dated after every release but those two', () => {
-    // Re-pinned by the weekly digest fixes (2026-10-05; was: the newest
-    // entry): their draft is dated later and sits above this one. Re-pinned
-    // by the Items first-paint draft (2026-10-05): dated later still, at the
-    // top.
-    expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
-    expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
-    expect(RELEASES[2]?.id).toBe(ID);
-    expect(release().status).toBe('draft');
-    const above = new Set([
+  it('is published after the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The newest published release: the notice offers it, to every member,
+    // since the fixes for everyone reach a member with no permission at all.
+    expect(list.latestUnread?.id).toBe(ID);
+    const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    // An old phone build lists at most three unread releases, newest first:
+    // this one, phone ordering's and returns RX-1's.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
       ID,
-      'weekly-digest-and-fixes-2026-10',
-      'items-list-first-paint-2026-10',
+      'phone-place-order-2026-10',
+      'returns-original-rack-2026-10',
     ]);
-    for (const r of RELEASES.filter((x) => !above.has(x.id))) {
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the walk ended (2026-10-05 19:01Z)
+    // and after EAS showed the phone update launching on iOS (19:23Z):
+    // never the draft's placeholder date.
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-05T19:23:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
+  });
+
+  it("is the newest published release (pinned by id): only the Items first-paint, weekly digest and PO-2 drafts sit above it, phone ordering's below it", () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    // Drafts go above the newest published release, newest first: the Items
+    // first-paint (#328), weekly digest fixes' (#326) and PO-2's stay at the
+    // top, dated later.
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'items-list-first-paint-2026-10',
+      'weekly-digest-and-fixes-2026-10',
+      'order-submit-once-2026-10',
+    ]);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    expect(RELEASES[at + 1]?.id).toBe('phone-place-order-2026-10');
   });
 
   it('tells each change only to the people who can see it', () => {
-    const published: Release = { ...release(), status: 'published' };
+    expect(release().audience).toBeUndefined();
     const ids = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+      visibleReleases([release()], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
     // Everyone: the grouped fixes for every member only.
     expect(ids('viewer', [], [])).toEqual(['everyday-fixes']);
     // An approver with Orders, Inventory and Receiving on sees the order and stock fixes.
@@ -4311,9 +4391,9 @@ describe('the small fixes release (slice 1)', () => {
   // the item is still kept; only stock adjusted to zero or written off, with
   // nothing held, lets the daily run delete it (archive-cleanup.ts).
   it('says auto-delete waits for the stock to be adjusted to zero or written off, not moved', () => {
-    const entry = release().entries.find((e) => e.id === 'auto-delete-keeps-stock')!;
-    expect(entry.howItAffectsYou).not.toMatch(/moved/);
-    expect(entry.howItAffectsYou).toContain('adjusted to zero or written off, nothing is held for it and nothing is due back');
+    const e = entry('auto-delete-keeps-stock');
+    expect(e.howItAffectsYou).not.toMatch(/moved/);
+    expect(e.howItAffectsYou).toContain('adjusted to zero or written off, nothing is held for it and nothing is due back');
   });
 
   // Review (2026-10-05): stock can come back to an item that holds nothing
@@ -4321,8 +4401,7 @@ describe('the small fixes release (slice 1)', () => {
   // batch, a return), so the run also keeps those items (archive-cleanup.ts
   // itemIdsStillHolding), and the entry says so.
   it('names the stock still due back that keeps an archived item', () => {
-    const entry = release().entries.find((e) => e.id === 'auto-delete-keeps-stock')!;
-    expect(entry.whatChanged).toContain(
+    expect(entry('auto-delete-keeps-stock').whatChanged).toContain(
       'nothing on an open purchase order, picked for an open order or due back on an open return',
     );
     const service = readFileSync(resolve(__dirname, '../../server/services/archive-cleanup.ts'), 'utf8');
@@ -4333,7 +4412,8 @@ describe('the small fixes release (slice 1)', () => {
 
   // Desk check F5 (owner rule 2026-09-25: every user-visible change gets a
   // line). The release holds at most 12 entries, so the smaller ones are
-  // grouped; each change in the slice that a person can see is named here.
+  // grouped; each change in the slice that a person can see is named here,
+  // but the offline Try again (1.33), left out on purpose (pinned below).
   it('has a line for every user-visible change in the slice', () => {
     expect(release().entries).toHaveLength(12);
     const text = readerText(release()).join(' ');
@@ -4344,7 +4424,7 @@ describe('the small fixes release (slice 1)', () => {
       'Cancel request',                           // 1.8, 1.31, F3
       'Physical signature',                       // 1.9
       'Waiting for signature',                    // 1.10
-      'the new order page says so',               // 1.11
+      'the new order page on the web says so',    // 1.11
       'what was handed over is recorded',         // 1.12
       'so does recording a Physical signature on the web', // 1.12, review
       'emailed at the address on their profile',  // 1.13
@@ -4358,8 +4438,8 @@ describe('the small fixes release (slice 1)', () => {
       'PICKING',                                  // 1.26
       'Add a note form',                          // 1.29
       'add a note to the receipt',                // 1.32
-      'no longer shows the note field or the hint about posting a receipt', // 1.30, review
-      'Try again no longer turns into a spinner', // 1.33
+      'The note field shows only on a PO with something left to receive', // 1.32, review
+      'no longer shows the hint about posting a receipt', // 1.30, review
       'card shows only to people who approve orders', // F10, review
       'says so under Variance', // review: the phone's variance caption
     ]) {
@@ -4396,9 +4476,9 @@ describe('the small fixes release (slice 1)', () => {
   // Review (2026-10-05): the web receive dialog never asks; it takes an
   // over-receipt and captions the variance. Only the phone asks.
   it('never says the web asks before an over-receipt', () => {
-    const entry = release().entries.find((e) => e.id === 'app-receive-more-than-ordered')!;
-    expect(entry.whatChanged).not.toMatch(/as the web does/);
-    expect(entry.whatChanged).toContain('The web already accepts it and shows how many are over ordered');
+    const e = entry('app-receive-more-than-ordered');
+    expect(e.whatChanged).not.toMatch(/as the web does/);
+    expect(e.whatChanged).toContain('The web already accepts it and shows how many are over ordered');
     const dialog = readFileSync(resolve(__dirname, '../../components/po/po-receive-dialog.tsx'), 'utf8');
     expect(dialog).not.toMatch(/more than ordered\?/);
     expect(dialog).toContain('over ordered');
@@ -4406,11 +4486,15 @@ describe('the small fixes release (slice 1)', () => {
 
   // Review (2026-10-05): everyday-fixes is told to phones too, so a web-only
   // change says so; and the phone's approver action is Cancel order, not the
-  // web's Cancel request, so the cancel entry names it.
-  it('says which changes are on the web, and names the app\'s own cancel words', () => {
-    const everyday = release().entries.find((e) => e.id === 'everyday-fixes')!;
+  // web's Cancel request, so the cancel entry names it. At publish, the
+  // offline Try again came out, so every change left in that entry is on the
+  // web, and its area says so.
+  it("says which changes are on the web, and names the app's own cancel words", () => {
+    const everyday = entry('everyday-fixes');
+    expect(everyday.area).toBe('Web app');
     expect(everyday.whatChanged).toContain('On the web, a refused Delete account says why inside the dialog');
-    const cancel = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
+    expect(everyday.whatChanged).toContain('With Orders turned off, the new order page on the web says so.');
+    const cancel = entry('cancel-own-order-request');
     expect(cancel.whatChanged).not.toMatch(/as on the web/);
     expect(cancel.whatChanged).toContain('with Cancel order');
     const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/order-cancel-action.ts'), 'utf8');
@@ -4424,19 +4508,157 @@ describe('the small fixes release (slice 1)', () => {
     expect(text).not.toMatch(/\bslips?\b/i);
   });
 
-  // Review (2026-10-05): the offline Try again sentence was never seen on a
-  // device (the simulator cannot go offline). The release carries the gate
-  // until the hardware check at the OTA walk; publishing removes it.
-  it('holds the offline Try again sentence behind the hardware check while it is a draft', () => {
+  // Review (2026-10-05) gated the offline Try again sentence (1.33) on an
+  // airplane-mode check on hardware at the OTA walk. The simulator shares the
+  // Mac's network and cannot go offline, so the walk could not run it (P5).
+  // At publish its sentence, its why, the words about the connection coming
+  // back and Try again in the entry's title came out, with the gate comment.
+  // The change itself shipped and stays (foreground-tick.ts).
+  it('says nothing about Try again while offline, which was never seen on a device', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/offline|spinner|connection comes back|tries again/i);
+    expect(text).not.toMatch(/Try again no longer|Try again works/);
+    const everyday = entry('everyday-fixes');
+    expect(everyday.title).toBe("The What's New notice, Delete account and the dashboard");
+    expect(everyday.howItAffectsYou).toBe('No change to what you can do.');
     const source = readFileSync(resolve(__dirname, './registry.ts'), 'utf8');
-    expect(release().status).toBe('draft');
-    expect(source).toContain('PUBLISH GATE (review 2026-10-05)');
-    expect(source).toContain('airplane-mode check on hardware');
+    expect(source).not.toContain('PUBLISH GATE');
+    expect(source).not.toContain('airplane-mode check on hardware');
+    const tick = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/foreground-tick.ts'), 'utf8');
+    expect(tick).toContain('if (await deps.isOnline()) await deps.retryWorkspace();');
   });
 
   it('offers Cancel only with orders:request, as the entry says (desk check F3)', () => {
-    const entry = release().entries.find((e) => e.id === 'cancel-own-order-request')!;
-    expect(entry.howItAffectsYou).toContain('Cancel is offered only to people allowed to request orders');
+    expect(entry('cancel-own-order-request').howItAffectsYou).toContain(
+      'Cancel is offered only to people allowed to request orders',
+    );
+  });
+
+  // Publish re-read: the phone half is an over-the-air update. The app loads
+  // it when it is opened again (use-ota-updates.ts: on a cold launch it checks,
+  // fetches and reloads), so every phone change is said after the latest
+  // update, and the entries for the app's own changes, and for a photo
+  // replaced in the app, say how to load it.
+  it('says every phone change after the latest update, and how to load it', () => {
+    const ota = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/use-ota-updates.ts'), 'utf8');
+    expect(ota).toContain('await Updates.checkForUpdateAsync();');
+    expect(ota).toContain('await Updates.reloadAsync();');
+    expect(release().summary).toContain('In the mobile app, after the latest update, you can cancel');
+    expect(entry('duplicate-item-photos-kept').whatChanged).toContain(
+      'or replacing it in the mobile app after the latest update',
+    );
+    expect(entry('duplicate-item-photos-kept').howItAffectsYou).toContain(
+      'on the web now, and in the mobile app after the latest update',
+    );
+    expect(entry('cancel-own-order-request').whatChanged).toMatch(/^After the latest update, /);
+    expect(entry('waiting-for-signature-link').whatChanged).toContain(
+      'In the mobile app, after the latest update, the Orders list leaves out',
+    );
+    expect(entry('clearer-stock-lines').howItAffectsYou).toContain('and in the mobile app after the latest update');
+    expect(entry('app-order-status-words').whatChanged).toMatch(/^In the mobile app, after the latest update, /);
+    expect(entry('app-receive-more-than-ordered').whatChanged).toMatch(/^After the latest update, /);
+    expect(entry('app-exception-sheet-closes-cleanly').whatChanged).toMatch(/^In the mobile app, after the latest update, /);
+    const reopen = 'close the app completely and open it again to load the latest update.';
+    for (const id of ['app-receive-more-than-ordered', 'app-exception-sheet-closes-cleanly']) {
+      expect(entry(id).whatToDo, id).toBe(`C${reopen.slice(1)}`);
+    }
+    for (const id of ['duplicate-item-photos-kept', 'cancel-own-order-request']) {
+      expect(entry(id).whatToDo, id).toBe(`No action needed on the web. In the mobile app, ${reopen}`);
+    }
+  });
+
+  // Publish re-read: on the web an approver is offered Cancel request (the
+  // button's one label) at every open status (walk W3: approved, pending,
+  // staged and backordered; not cancelled), so "no Cancel request once
+  // approved" and the old refusal are said of people who do not approve
+  // orders. Before the slice an approver could already cancel a backordered
+  // order in the app, so the why does not say cancelling needed the web.
+  it("says the cancel rules for the people they apply to, as core's orderCancelOffer has them", () => {
+    const e = entry('cancel-own-order-request');
+    expect(e.howItAffectsYou).toContain(
+      'If you do not approve orders, once your order is approved only someone who approves orders can cancel it, so neither the app nor the web offers you Cancel request then.',
+    );
+    expect(e.whyItMatters).not.toMatch(/Cancelling needed the web/);
+    expect(e.whyItMatters).toContain('only a backordered order');
+    expect(e.whyItMatters).toContain('someone who does not approve orders was offered Cancel request on their own order');
+    const open = { isOwnRequest: true, canRequest: true };
+    for (const status of ['approved', 'pending_approval', 'staged_for_pickup', 'backordered']) {
+      expect(orderCancelOffer({ status, canApprove: true, ...open }), status).toBe('approver');
+    }
+    expect(orderCancelOffer({ status: 'cancelled', canApprove: true, ...open })).toBeNull();
+    expect(orderCancelOffer({ status: 'pending_approval', canApprove: false, ...open })).toBe('requester');
+    expect(orderCancelOffer({ status: 'approved', canApprove: false, ...open })).toBeNull();
+    expect(orderCancelOffer({ status: 'pending_approval', canApprove: true, isOwnRequest: true, canRequest: false })).toBeNull();
+    const web = readFileSync(resolve(__dirname, '../../components/orders/cancel-order-button.tsx'), 'utf8');
+    expect(web).toContain('confirmLabel="Cancel request"');
+    expect(web).not.toMatch(/Cancel order/);
+  });
+
+  // Publish re-read: a Physical signature that completed the order already
+  // emailed a member who placed their own order the completion receipt
+  // (notifyEmail resolves their profile address); only one that left items
+  // owed gave them a notification and no email. Claims review: the why says
+  // "a notification", not "the notice in the app", since elsewhere in this
+  // release the app is the mobile app and the notification shows on the web
+  // too. The notification goes to the requester's id; the email needs an
+  // address, and the paper path passed the empty requester_email column.
+  it('says which Physical signature left a requester with a notification but no email', () => {
+    const e = entry('sign-page-partial-handover');
+    expect(e.whyItMatters).toContain(
+      'After a Physical signature that left items owed, a person who placed their own order got a notification but no email.',
+    );
+    expect(e.whyItMatters).not.toContain('the notice in the app');
+    const service = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
+    expect(service).toContain("defer(() => this.notifyEmail(row, 'completed'));");
+    expect(service).toContain(': await resolveRequesterContact(admin, {');
+    const notify = readFileSync(resolve(__dirname, '../../server/lib/order-handover-notify.ts'), 'utf8');
+    expect(notify).toContain('if (args.requesterUserId) {');
+    expect(notify).toContain('if (args.requesterEmail && !args.emailOptedOut) {');
+  });
+
+  // Publish re-read: the held sentence takes the place of "Nothing is on
+  // order."; a line with a draft PO, or with stock on order, says that
+  // instead, so the words name the lines that changed.
+  it('says which short lines now name the stock held for others', () => {
+    expect(entry('clearer-stock-lines').whatChanged).toContain(
+      'Where a short line said Nothing is on order while stock on the shelf is held for other orders or rentals, it now says so, for example: 10 on the shelf are held for other orders.',
+    );
+    const copy = readFileSync(resolve(__dirname, '../../../../../packages/core/src/orders/readiness-copy.ts'), 'utf8');
+    expect(copy).toContain("const held = u.awaiting <= 0 && !takenBy && !draft ? heldForOthersSentence(item) : null;");
+    expect(copy).toContain("else if (!draft && !held) parts.push('Nothing is on order.');");
+    expect(copy).toContain("return `${fq(held)} on the shelf ${isOne(held) ? 'is' : 'are'} held for ${forWhom}.`;");
+  });
+
+  // Publish re-read: the Timeline's sentence shows only to someone who cannot
+  // view the audit log, and the notes change is on the web.
+  it("says who sees the Timeline's sentence, and that the full-width notes are on the web", () => {
+    const e = entry('app-order-status-words');
+    expect(e.whatChanged).toContain("On the web, if you cannot view the audit log, an order's Timeline says:");
+    expect(e.whatChanged).toContain('The delivery request notes after placing an order on the web use the full width.');
+    const timeline = readFileSync(resolve(__dirname, '../../components/orders/order-timeline.tsx'), 'utf8');
+    expect(timeline).toContain('if (!canReadActivity) {');
+  });
+
+  // Publish re-read: the receipt's note field is new in the slice, so a
+  // draft never showed it; it and the receipt hint show only while a line has
+  // something left to receive.
+  it('says where the note field shows, not that a draft no longer shows it', () => {
+    const e = entry('app-receive-more-than-ordered');
+    expect(e.whatChanged).not.toMatch(/no longer shows the note field/);
+    expect(e.howItAffectsYou).toBe('Tap Receive anyway to post the receipt as entered.');
+    const screen = readFileSync(resolve(__dirname, '../../../../mobile/app/po/[id].tsx'), 'utf8');
+    expect(screen).toContain('!reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);');
+    const receive = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/po-receive.ts'), 'utf8');
+    expect(receive).toContain("export const OVER_RECEIPT_CONFIRM_LABEL = 'Receive anyway';");
+  });
+
+  // Publish re-read: before the slice an approver's waiting for signature
+  // card opened Needs approval, not their own requests.
+  it('says the card opened their own requests only for people who do not approve orders', () => {
+    expect(entry('everyday-fixes').whyItMatters).toContain(
+      'for people who do not approve orders it opened their own requests',
+    );
+    expect(entry('waiting-for-signature-link').whyItMatters).toContain('The dashboard link opened the Needs approval tab.');
   });
 });
 
