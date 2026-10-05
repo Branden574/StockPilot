@@ -3882,6 +3882,8 @@ export class OrderRequestsService {
           requested: totalRequested,
           owed: Math.max(0, totalRequested - totalFulfilled),
           emailOptedOut,
+          // The number the app shows (L91); null falls back to the short id.
+          orderNumber: formatOrderNumber(row.order_number),
         });
         void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
           id,
@@ -3901,6 +3903,7 @@ export class OrderRequestsService {
             emailOptedOut,
             // Display-only: how many units the remainder batch carried.
             unitsShipped: Math.max(0, totalFulfilled - priorFulfilled),
+            orderNumber: formatOrderNumber(row.order_number),
           });
         }
         // Completion receipt to the requester (notifyEmail honors prefs +

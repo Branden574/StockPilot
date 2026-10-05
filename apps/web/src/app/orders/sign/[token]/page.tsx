@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 import { SignatureCollector } from '@/components/orders/signature-collector';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveSignatureToken, SIGNATURE_TOKEN_RE } from '@/server/lib/order-secrets';
@@ -59,6 +61,7 @@ export default async function OrderSignPage({
   // handler. Every refusal is the one not-found an unknown token gets.
   const match = await resolveSignatureToken<{
     id: string;
+    order_number: number | null;
     organization_id: string;
     status: string;
     requester_name: string | null;
@@ -73,7 +76,7 @@ export default async function OrderSignPage({
   }>(
     admin,
     token,
-    'id, organization_id, status, requester_name, requester_email, requester_user_id, ' +
+    'id, order_number, organization_id, status, requester_name, requester_email, requester_user_id, ' +
       'requester_deleted_at, fulfillment_type, warehouse_id, delivery_charter_id, ' +
       'signature_token_expires_at, signed_at',
   );
@@ -162,6 +165,13 @@ export default async function OrderSignPage({
     lines,
   };
 
+  // The number the app, the emails and the print view use (L91); the short
+  // id only for an order without one.
+  const orderNumber = formatOrderNumber(order.order_number);
+  const orderLabel = orderNumber
+    ? `Order ${orderNumber}`
+    : `Order #${summary.id.slice(0, 8).toUpperCase()}`;
+
   return (
     <div className="space-y-6">
       <header className="text-center">
@@ -172,7 +182,7 @@ export default async function OrderSignPage({
           Sign for your order
         </h1>
         <p className="text-muted-foreground mt-2 text-sm">
-          Order #{summary.id.slice(0, 8).toUpperCase()}
+          {orderLabel}
         </p>
       </header>
       <SignatureCollector token={token} summary={summary} />

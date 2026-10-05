@@ -4,6 +4,8 @@ import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
@@ -452,6 +454,11 @@ export async function POST(req: NextRequest) {
   }
   const fullRow = statusRead.data;
   const newStatus = (fullRow as { status?: string } | null)?.status ?? null;
+  // The number the app shows (SO-000049) for the hand-over notices (L91);
+  // null for an order without one, and the notices fall back to the short id.
+  const orderNumber = formatOrderNumber(
+    (fullRow as { order_number?: number | null } | null)?.order_number ?? null,
+  );
   const isCompleted = newStatus === 'completed';
   const isBackordered = newStatus === 'backordered';
 
@@ -566,6 +573,7 @@ export async function POST(req: NextRequest) {
       requested: totals?.requested ?? null,
       owed: totals?.owed ?? null,
       emailOptedOut: requesterEmailOptedOut,
+      orderNumber,
     });
     // The signer's receipt below IS its counts ("received 2 of 5"), so it is
     // skipped without them rather than sent with zeros.
@@ -592,6 +600,7 @@ export async function POST(req: NextRequest) {
             unitsTotal: totals.requested,
             unitsPending: totals.owed,
             appUrl: env.NEXT_PUBLIC_APP_URL,
+            orderNumber,
           });
         } catch {
           /* best-effort — receipt failure never fails the fulfillment */
@@ -626,6 +635,7 @@ export async function POST(req: NextRequest) {
         // Display-only: how many units the remainder batch carried. Null (the
         // notice omits the count) when the line totals could not be read.
         unitsShipped: totals ? Math.max(0, totals.fulfilled - priorFulfilled) : null,
+        orderNumber,
       });
     }
     try {

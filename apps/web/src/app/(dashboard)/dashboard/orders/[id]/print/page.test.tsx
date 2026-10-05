@@ -134,3 +134,46 @@ describe('order print page: a line whose item the reader cannot read', () => {
     expect(rows.join('\n')).not.toMatch(/Deleted item|Unknown item/);
   });
 });
+
+// L91: the printout named the order "Order #11111111" while the app and its
+// emails name it SO-000049.
+describe('order print page: the order is named by its number (L91)', () => {
+  const request = {
+    id: '11111111-1111-1111-1111-111111111111',
+    warehouse_id: 'wh-1',
+    status: 'approved',
+    created_at: '2026-09-01T00:00:00Z',
+    approved_at: null,
+    notes: null,
+  };
+
+  it('an order with a number prints "Order SO-000049" in the header and the footer', async () => {
+    orderGet.mockResolvedValue({
+      request: { ...request, order_number: 49 },
+      lines: [],
+      warehouseName: 'DC4',
+      requesterDisplay: 'Pat',
+    });
+    stubWith(() => ({ data: [], error: null }));
+
+    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+
+    const text = container.textContent ?? '';
+    expect(text.match(/Order SO-000049/g)).toHaveLength(2);
+    expect(text).not.toContain('Order #');
+  });
+
+  it('an order without one keeps the short id', async () => {
+    orderGet.mockResolvedValue({
+      request: { ...request, order_number: null },
+      lines: [],
+      warehouseName: 'DC4',
+      requesterDisplay: 'Pat',
+    });
+    stubWith(() => ({ data: [], error: null }));
+
+    const { container } = render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+
+    expect((container.textContent ?? '').match(/Order #11111111/g)).toHaveLength(2);
+  });
+});

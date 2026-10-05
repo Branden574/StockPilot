@@ -53,11 +53,17 @@ const LEGACY = '4f'.repeat(32);
 const ORDER_ID = '0a000000-0000-4000-8000-000000000390';
 const ORG = 'org-l4l';
 
-function admin(column: string | null, side: string | null, requesterDeletedAt: string | null = null) {
+function admin(
+  column: string | null,
+  side: string | null,
+  requesterDeletedAt: string | null = null,
+  orderNumber: number | null = null,
+) {
   return makeSupabaseStub({
     'order_requests.select': servedLikePostgrest([
       {
         id: ORDER_ID,
+        order_number: orderNumber,
         organization_id: ORG,
         status: 'staged_for_pickup',
         requester_name: 'Reggie',
@@ -147,5 +153,22 @@ describe('/orders/sign/[token]', () => {
   it('an unknown or malformed token: the same not-found', async () => {
     await expect(open('1'.repeat(64))).rejects.toBeInstanceOf(NotFound);
     await expect(open('not-a-token')).rejects.toBeInstanceOf(NotFound);
+  });
+});
+
+// L91: the sign page named the order "Order #0A000000" while the app, its
+// emails and the print view name it SO-000049.
+describe('/orders/sign/[token]: the order is named by its number (L91)', () => {
+  it('an order with a number is "Order SO-000049"', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, 49).client;
+    const html = await open(RAW);
+    expect(html).toContain('Order SO-000049');
+    expect(html).not.toContain('Order #');
+  });
+
+  it('an order without one keeps the short id', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, null).client;
+    const html = await open(RAW);
+    expect(html).toContain('Order #0A000000');
   });
 });
