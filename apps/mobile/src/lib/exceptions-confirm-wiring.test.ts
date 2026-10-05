@@ -146,9 +146,9 @@ describe('the exceptions list: a confirmed row shows who confirmed it', () => {
 describe('the Acknowledge / Add note / Confirm this count sheet', () => {
   it('one component, three modes; the mode switches in place so the note is kept', () => {
     expect(sheet).toContain('const [mode, setMode] = React.useState<ExceptionSheetMode>(initialMode);');
-    // Remounted per opening only: the key is the opening's mode, not the
-    // current one.
-    expect(sheet).toContain('key={`${String(visible)}:${mode}`}');
+    // Remounted per opening only (L101: keyed on an opening count, so
+    // neither a mode switch nor closing remounts it; sheet-opening.test.ts).
+    expect(sheet).toContain('key={opening.count}');
     expect(sheet).toContain('initialMode={mode}');
     const sw = sheet.slice(sheet.indexOf('function switchToConfirm'), sheet.indexOf('function switchToConfirm') + 200);
     expect(sw).toContain("setMode('confirm_count');");

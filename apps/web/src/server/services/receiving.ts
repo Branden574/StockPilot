@@ -185,6 +185,32 @@ export class ReceivingService {
   }
 
   /**
+   * Each PO line's item, in one batched read of the receipt's PO lines. Null
+   * when the read fails. Used twice: to put the lines in lock order before the
+   * RPC (L27) and, after it, to find the items the receipt may revive.
+   */
+  private async itemIdsByPoLine(
+    poLineIds: readonly string[],
+  ): Promise<{ ok: true; map: Map<string, string | null> } | { ok: false; err: unknown }> {
+    try {
+      const ctx = this.ctx;
+      const rows = await fetchAllRowsByIds<{ id: string; item_id: string | null }>(
+        poLineIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('purchase_order_items')
+            .select('id, item_id')
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      return { ok: true, map: new Map(rows.map((r) => [r.id, r.item_id])) };
+    } catch (err) {
+      return { ok: false, err };
+    }
+  }
+
+  /**
    * Posts a receipt via the post_receipt_v2 RPC. Idempotency-key-protected:
    * same key + same payload returns the original receipt; same key + different
    * payload throws conflict.
@@ -195,10 +221,31 @@ export class ReceivingService {
 
     const requestHash = hashReceiptRequest(input);
 
+    // Lines in item order, then PO line order (L27). post_receipt_v2 takes
+    // each line's item lock in the order the lines arrive, so two receipts
+    // naming the same items in opposite orders could wait on each other; one
+    // order for every receipt removes that. Web and phone both post through
+    // here. The hash above sorts its own copy, so it is unchanged. When the
+    // item read fails the receipt still posts, in PO line order (the RPC
+    // checks every line itself).
+    const itemsRead = await this.itemIdsByPoLine(input.lines.map((l) => l.poLineId));
+    if (!itemsRead.ok) {
+      reportDegradedRead('receiving.line_lock_order', itemsRead.err, {
+        lines: input.lines.length,
+      });
+    }
+    const itemOf = itemsRead.ok ? itemsRead.map : new Map<string, string | null>();
+    const lines = [...input.lines].sort((a, b) => {
+      const ia = itemOf.get(a.poLineId) ?? '';
+      const ib = itemOf.get(b.poLineId) ?? '';
+      if (ia !== ib) return ia < ib ? -1 : 1;
+      return a.poLineId < b.poLineId ? -1 : a.poLineId > b.poLineId ? 1 : 0;
+    });
+
     const { data, error } = await this.ctx.supabase.rpc('post_receipt_v2', {
       p_purchase_order_id: input.purchaseOrderId,
       p_warehouse_id: input.warehouseId,
-      p_lines: input.lines.map((l) => ({
+      p_lines: lines.map((l) => ({
         po_line_id: l.poLineId,
         qty_received: l.qtyReceived,
         qty_accepted: l.qtyAccepted,
@@ -396,6 +443,7 @@ export class ReceivingService {
     await this.maybeAutoUnarchive(
       input.lines.filter((l) => Number(l.qtyAccepted) > 0).map((l) => l.poLineId),
       receipt.id,
+      itemsRead,
     );
 
     return receipt;
@@ -407,7 +455,11 @@ export class ReceivingService {
    * change. Idempotent — only affects rows whose status is still
    * 'archived' at update time.
    */
-  private async maybeAutoUnarchive(poLineIds: string[], receiptId: string): Promise<void> {
+  private async maybeAutoUnarchive(
+    poLineIds: string[],
+    receiptId: string,
+    itemsRead: Awaited<ReturnType<ReceivingService['itemIdsByPoLine']>>,
+  ): Promise<void> {
     try {
       if (poLineIds.length === 0) return;
 
@@ -424,24 +476,12 @@ export class ReceivingService {
         });
       };
 
-      // Resolve poLineId → item_id
-      let lines: Array<{ item_id: string | null }>;
-      try {
-        lines = await fetchAllRowsByIds<{ item_id: string | null }>(
-          poLineIds,
-          (batch) => (from, to) =>
-            ctx.supabase
-              .from('purchase_order_items')
-              .select('id, item_id')
-              .in('id', batch)
-              .order('id')
-              .range(from, to),
-        );
-      } catch (err) {
-        return skip('lines', err);
-      }
+      // poLineId → item_id, from the one read postReceipt made before the RPC.
+      if (!itemsRead.ok) return skip('lines', itemsRead.err);
       const itemIds = Array.from(
-        new Set(lines.map((l) => l.item_id).filter((x): x is string => !!x)),
+        new Set(
+          poLineIds.map((id) => itemsRead.map.get(id)).filter((x): x is string => !!x),
+        ),
       );
       if (itemIds.length === 0) return;
 

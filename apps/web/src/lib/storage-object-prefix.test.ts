@@ -194,6 +194,19 @@ describe('fetchObjectPrefix', () => {
     });
     expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
   });
+
+  // L65a: the 206 branch read its body outside any try, so a body read that
+  // failed (a dropped connection mid-body) threw out of a function whose
+  // contract is null on any failure, and record() answered an internal error.
+  it('a 206 whose body read rejects is null, not a thrown error', async () => {
+    const res = new Response(bodyOf(objectBytes(26)), {
+      status: 206,
+      headers: { 'content-range': 'bytes 0-25/26' },
+    });
+    vi.spyOn(res, 'arrayBuffer').mockRejectedValue(new TypeError('terminated'));
+    const fetchImpl = vi.fn(async () => res);
+    expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
 });
 
 /**

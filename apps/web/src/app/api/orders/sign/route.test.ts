@@ -111,6 +111,8 @@ interface Scenario {
   lineTotalsFailures?: number;
   /** The notification_preferences read fails. */
   prefReadFails?: boolean;
+  /** The order's number on the row read after the hand-over. */
+  orderNumber?: number | null;
 }
 
 const READ_ERROR = { message: 'connection reset' };
@@ -133,7 +135,10 @@ function buildAdmin(s: Scenario) {
     statusReads += 1;
     return statusReads <= (s.statusReadFailures ?? 0)
       ? { data: null, error: READ_ERROR }
-      : { data: { ...INTERNAL_ORDER, status: s.status }, error: null };
+      : {
+          data: { ...INTERNAL_ORDER, status: s.status, order_number: s.orderNumber ?? null },
+          error: null,
+        };
   };
 
   return makeSupabaseStub({
@@ -394,6 +399,94 @@ describe('POST /api/orders/sign — internal requester contact resolution', () =
   });
 });
 
+// L87: the sign page's words follow the status the hand-over left.
+describe('POST /api/orders/sign — answers the resulting status (L87)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a hand-over that completes the order answers completed', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+    });
+    const res = await POST(request());
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: 'completed' } });
+  });
+
+  it('a hand-over that leaves units owed answers backordered', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+    });
+    const res = await POST(request());
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: 'backordered' } });
+  });
+});
+
+// L91: the three hand-over notices printed "Order #XXXXXXXX" because this
+// path never passed the order number they accept; the app names it SO-000049.
+describe('POST /api/orders/sign — hand-over notices name the order by its number (L91)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('the partly-fulfilled notice and the signer receipt get SO-000049', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      orderNumber: 49,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackordered).toHaveBeenCalledWith(
+      expect.objectContaining({ orderNumber: 'SO-000049' }),
+    );
+    expect(sendPartialReceiptEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ orderNumber: 'SO-000049' }),
+    );
+  });
+
+  it('the backorder-shipped notice gets SO-000049', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 2,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      orderNumber: 49,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackorderShipped).toHaveBeenCalledWith(
+      expect.objectContaining({ orderNumber: 'SO-000049' }),
+    );
+  });
+
+  it('an order without a number passes none (the notices fall back to the short id)', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      orderNumber: null,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackordered).toHaveBeenCalledWith(
+      expect.objectContaining({ orderNumber: null }),
+    );
+  });
+});
+
 describe('POST /api/orders/sign — reads after the signature is recorded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -412,7 +505,8 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     const res = await POST(request());
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1' } });
+    // L87: the status could not be read, so none is claimed.
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: null } });
     expect(reportError).toHaveBeenCalledWith(
       READ_ERROR,
       expect.objectContaining({ tag: 'orders.sign.post_status_read', level: 'warning' }),

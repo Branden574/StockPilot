@@ -28,6 +28,212 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'small-fixes-2026-10',
+    revision: 1,
+    // Small fixes slice 1 (followups triage 2026-10-05, no migration). Held as
+    // a DRAFT until the web deploy is live and phones report launching the
+    // OTA that carries the phone half; the follow-up that publishes it sets
+    // the real publishedAt and re-reads these words against what shipped.
+    // Dated after the order submission draft (PO-2), the only other draft,
+    // and above it (newest first).
+    // Each entry says only what the code does, and is told to the people who
+    // can see the change: the permission or module the change sits behind.
+    // Every user-visible change in the slice has a line (owner rule
+    // 2026-09-25). A release holds at most 12 entries, so the smaller ones
+    // are grouped by who can see them: approvers' order fixes, order fixes
+    // for everyone with Orders, and fixes for everyone. Left out as not
+    // visible: the receipt lock order, the maintenance photo row's writer,
+    // photo signing past 1000 paths (it was slower, never missing), a photo
+    // read that loses its body, the shipping panel with Shipping off (it
+    // drew nothing; only the console showed the refusal), the cron log line,
+    // the phone's Orders read before sign-in, and the catalog removal at an
+    // involuntary sign-out.
+    //
+    // Review (2026-10-05) also left out, as nobody reaches them: the refusal
+    // of a component list naming one item twice (the bundle form already
+    // refuses a second add, and it is the only writer), the read-back that
+    // keeps two bundle saves at once from leaving a bundle empty, and the
+    // words of a closed order's slip refusal (the order page offers no slip
+    // then; only a stale tab or a typed address shows them, as raw JSON).
+    // The Settings role pill shipped with security slice A3 (#321), and that
+    // release (account-deletion-everyone-2026-10, published on 2026-10-05 in
+    // #323) tells it in What to do, so this one does not.
+    //
+    // PUBLISH GATE (review 2026-10-05): the sentence about Try again while
+    // offline (1.33) was never seen on a device. The simulator shares the
+    // Mac's network and cannot go offline, so only foreground-tick.test.ts
+    // covers it. Publish it only after the airplane-mode check on hardware
+    // at the OTA walk (a rentals detail offline: Try again stays put for 2
+    // minutes); if that check cannot run, take the sentence and its
+    // whyItMatters clause out first.
+    status: 'draft',
+    title: 'Fixes across orders, items, bundles, receiving and the mobile app',
+    summary:
+      'Order emails, the sign page and printouts use the order number. In the mobile app you can cancel your own order request while it waits for approval, and receive more than ordered after a confirm. Auto-delete keeps archived items that still have stock, removing a photo from a duplicated item keeps the other item\'s photo, and a failed save no longer leaves a bundle without its components.',
+    publishedAt: '2026-10-13T17:10:00Z',
+    entries: [
+      {
+        id: 'auto-delete-keeps-stock',
+        category: 'improved',
+        area: 'Items',
+        title: 'Auto-delete keeps archived items that still have stock on record',
+        whatChanged:
+          'When automatic deletion of archived items is on, an archived item is deleted after the retention period only once it holds nothing and nothing is due back to it: no stock on record, no stock on any location, nothing held for an order or a rental, and nothing on an open purchase order, picked for an open order or due back on an open return.',
+        whyItMatters:
+          "Archive anyway keeps an item's stock, so an archived item could still have stock on record, and deleting it made that stock disappear with the item.",
+        howItAffectsYou:
+          'An archived item that still has stock, or stock due back, stays in Archived. Once its stock is adjusted to zero or written off, nothing is held for it and nothing is due back, the daily run deletes it as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:delete'], modules: ['inventory'] },
+      },
+      {
+        id: 'duplicate-item-photos-kept',
+        category: 'fixed',
+        area: 'Items',
+        title: "Removing a photo from a duplicated item keeps the other item's photo",
+        whatChanged:
+          'A duplicated item shares its photo files with the item it was copied from. Removing the photo from one of them on the web, or replacing it in the mobile app, no longer deletes the files the other item still shows.',
+        whyItMatters: 'The other item lost its photo.',
+        howItAffectsYou: 'A photo you remove or replace changes only the item you are on.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'bundle-components-saved-whole',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'A failed save no longer leaves a bundle without its components',
+        whatChanged:
+          "Saving a bundle's components no longer removes the old ones before the new ones are saved, and a new bundle whose components cannot be saved is removed again, for managers as well as admins.",
+        whyItMatters: 'When saving the components failed part way, the bundle was left with no components.',
+        howItAffectsYou:
+          'If a save fails, the bundle still has its components, and a new bundle is not left behind. Try again.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['bundles:manage'], modules: ['bundles'] },
+      },
+      {
+        id: 'order-number-everywhere',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order emails, the sign page and printouts use the order number',
+        whatChanged:
+          'Order email subjects, the sign page, the printed order and the notices sent after a partial hand-over now name an order by its number, for example SO-000049, the number you see in the app.',
+        whyItMatters: 'They used a different code, such as WO-1A2B3C4D, that matched nothing in the app.',
+        howItAffectsYou: 'The number in an email or on a printout is the one on the order page.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'cancel-own-order-request',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Cancel your own order request in the mobile app',
+        whatChanged:
+          'While an order request you placed is waiting for approval, you can cancel it from its screen in the app, with an optional reason. People who approve orders can now cancel an open order in the app too, with Cancel order.',
+        whyItMatters:
+          'Cancelling needed the web. And on the web, Cancel request showed on your own order after it was approved, then was refused.',
+        howItAffectsYou:
+          'The app asks before it cancels. Once your order is approved, only someone who approves orders can cancel it, so neither the app nor the web offers you Cancel request then. Cancel is offered only to people allowed to request orders, since only they can cancel.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'sign-page-partial-handover',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'The sign page says what was handed over',
+        whatChanged:
+          'After a hand-over that leaves items owed, the sign page says what was handed over is recorded and the rest stays on backorder, and so does recording a Physical signature on the web. After a hand-over recorded with Physical signature, a person who placed their own order is emailed at the address on their profile about what was handed over, as after signing on the sign page.',
+        whyItMatters:
+          'The sign page said the order was completed, and Physical signature that the hand-over was complete, although the order was backordered. After a Physical signature, a person who placed their own order got only the notice in the app.',
+        howItAffectsYou:
+          'When a hand-over completes the order, the page says so, as before. If you turned off the Order completed email in your notification settings, these emails stay off.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'waiting-for-signature-link',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Waiting for signature, Physical signature and the app Orders list',
+        whatChanged:
+          "The dashboard's orders waiting for signature opens the orders list filtered to orders staged for pickup or in transit, named Waiting for signature, with a link back to all active orders. On the web, Physical signature is offered only to a Manager or Super Admin, or to the order's assigned driver, as in the app. The app's Orders list no longer shows public order requests that are not yet confirmed by email, as the web does.",
+        whyItMatters:
+          'The dashboard link opened the Needs approval tab. A staff member who approves orders was offered Physical signature and then refused. The app listed requests the web leaves out.',
+        howItAffectsYou:
+          'The list shows exactly the orders the dashboard counted. Collect signature is unchanged. A public request shows in both lists once it is confirmed and waits for approval.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'clearer-stock-lines',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Clearer stock lines on an order',
+        whatChanged:
+          'A line short because the stock on the shelf is held for other orders or rentals now says so, for example: 10 on the shelf are held for other orders. A draft PO that other orders already need part of says how much it covers for this order and how much of it they need.',
+        whyItMatters:
+          'The line said Nothing is on order, which hid why it was short, and a draft PO was counted in full for this order although other orders needed part of it.',
+        howItAffectsYou: 'You see these lines on the order page on the web and in the app.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'app-order-status-words',
+        category: 'fixed',
+        area: 'Orders',
+        title: "Clearer words on an order's screens",
+        whatChanged:
+          "The top of an order's screen in the app shows its status in the Orders list's words, such as PICKING. On the web, an order's Timeline says: Only people who can view the audit log can see this order's history. The delivery request notes after placing an order use the full width.",
+        whyItMatters:
+          'The app showed a code such as PICKING IN PROGRESS. The Timeline said No events yet to people who cannot view the audit log. The notes sat in a narrow column.',
+        howItAffectsYou: 'No change to what you can do.',
+        whatToDo: 'No action needed.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'app-receive-more-than-ordered',
+        category: 'improved',
+        area: 'Receiving',
+        title: 'Receive more than ordered in the app, with a note',
+        whatChanged:
+          'When you enter more than is left to receive on a PO in the app, it now asks you to confirm instead of refusing. The web already accepts it and shows how many are over ordered, and each line in the app now says so under Variance too. You can also add a note to the receipt. A draft PO, or one with nothing left to receive, no longer shows the note field or the hint about posting a receipt.',
+        whyItMatters: 'Suppliers sometimes ship more than ordered, and the app could not record it.',
+        howItAffectsYou: 'Tap Receive anyway to post the receipt as entered.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['receiving'] },
+      },
+      {
+        id: 'app-exception-sheet-closes-cleanly',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Exception sheets in the app close without a flash',
+        whatChanged:
+          "In the app, closing an exception's Acknowledge or Confirm this count sheet no longer shows the Add a note form for a moment while the sheet slides away.",
+        whyItMatters: 'The wrong form appeared as the sheet closed, which looked like something else had opened.',
+        howItAffectsYou: 'No change to what you can do. Each sheet still opens blank.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+      {
+        id: 'everyday-fixes',
+        category: 'fixed',
+        area: 'Web and app',
+        title: "The What's New notice, Delete account, the dashboard and Try again",
+        whatChanged:
+          "On the web, while the What's New notice shows, a page scrolls far enough that the buttons at its end, such as Start count, and the cart's Review order stay clear of it. On the web, a refused Delete account says why inside the dialog, and when you are the only owner the dialog links to the Team page. With Orders turned off, the new order page says so. The dashboard's orders waiting for signature card shows only to people who approve orders, whose list it opens. In the app, while offline, Try again no longer turns into a spinner every minute.",
+        whyItMatters:
+          "The notice sat over the end of a page. The reason for a refused Delete account showed only behind the dialog, where its Team page link could not be pressed. The new order page opened with Orders off. Everyone saw the whole organization's count on that card, and it opened their own requests. Offline, the app retried every minute and showed loading each time.",
+        howItAffectsYou:
+          'No change to what you can do. When the connection comes back, the app tries again at once, and Try again works as before.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request

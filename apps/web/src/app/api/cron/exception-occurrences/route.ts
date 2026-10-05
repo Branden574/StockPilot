@@ -141,8 +141,12 @@ export async function GET(req: NextRequest) {
     ).map((id) => ({ id }));
 
     let processed = 0;
-    // count_variance entries held because their count line was confirmed
-    // (0386), summed over the orgs applied: for the log, not the tally.
+    // Summed over the orgs applied, for the run's log line (L102) and the
+    // body. settled: count_variance entries held because their count line was
+    // confirmed (0386).
+    let raised = 0;
+    let resolved = 0;
+    let recountsClosed = 0;
     let settled = 0;
     for (const org of ordered) {
       if (Date.now() - startedAt >= SWEEP_DEADLINE_MS) break;
@@ -162,7 +166,12 @@ export async function GET(req: NextRequest) {
         outcome = { status: 'failed' };
       }
       tally[outcome.status] += 1;
-      if (outcome.status === 'applied') settled += outcome.settled;
+      if (outcome.status === 'applied') {
+        raised += outcome.raised;
+        resolved += outcome.resolved;
+        recountsClosed += outcome.recountsClosed;
+        settled += outcome.settled;
+      }
       processed += 1;
     }
     const deferred = ordered.length - processed;
@@ -174,11 +183,30 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // One line per run, counts only (no org ids): a successful run used to
+    // log nothing, so its work was visible only in the response (L102).
+    console.info(
+      '[cron.exception-occurrences]',
+      JSON.stringify({
+        orgs: ordered.length,
+        processed,
+        deferredForTime: deferred,
+        ...tally,
+        raised,
+        resolved,
+        recountsClosed,
+        settled,
+        ms: Date.now() - startedAt,
+      }),
+    );
+
     return NextResponse.json({
       orgs: ordered.length,
       processed,
       deferredForTime: deferred,
       ...tally,
+      raised,
+      resolved,
       settled,
     });
   } catch (err) {

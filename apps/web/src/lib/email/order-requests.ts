@@ -388,9 +388,11 @@ function truncateForPreheader(s: string, max = 80): string {
  */
 interface OrderEmailView {
   def: ReturnType<typeof esEmailById>;
-  /** Work-order handle used in subjects — the existing `WO-` + 8-char pattern. */
+  /** Work-order handle — the `WO-` + 8-char pattern. Only the fallback for an
+   *  order with no number, and the long reference beside the number. */
   woId: string;
-  /** Body display handle: SO-…| falls back to the WO- pattern (existing behavior). */
+  /** The order's name in subjects and bodies: SO-… (what the app shows),
+   *  falling back to the WO- handle for an order with no number (L91). */
   displayId: string;
   subject: string;
   preheader: string;
@@ -456,7 +458,8 @@ function buildView(a: TemplateArgs): OrderEmailView {
   const units = a.summary.unitCount;
   const lines = a.summary.lineCount;
 
-  const subject = def.subject({ orderId: woId });
+  // The order number the app shows (L91); WO- only when there is none.
+  const subject = def.subject({ orderId: displayId });
   const preheader = (() => {
     switch (a.kind) {
       case 'confirm_request':
@@ -1276,10 +1279,12 @@ export async function sendOrderRequestEmail(
   const def = esEmailById(REGISTRY_ID_BY_KIND[kind]);
   const html = renderHtml(args);
   const text = renderText(args);
-  // Subject: registry builder fed the existing `WO-` + 8-char handle —
-  // byte-identical copy, unchanged id semantics.
+  // Subject: the registry builder fed the order number the app shows
+  // (SO-000049), with the `WO-` + 8-char handle only as the fallback for an
+  // order without one (L91). Same string as the HTML title (buildView).
   const subject = def.subject({
-    orderId: `WO-${request.id.slice(0, 8).toUpperCase()}`,
+    orderId:
+      formatOrderNumber(request.order_number) ?? `WO-${request.id.slice(0, 8).toUpperCase()}`,
   });
 
   // Gmail clips past ~102KB and hides the unsubscribe footer — refuse to

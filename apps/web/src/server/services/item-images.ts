@@ -20,7 +20,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
-import { withStorageSignSlot } from './lib/storage-sign-limiter';
+import { objectsNamedByOtherImageRows } from './lib/item-image-shared-objects';
+import { SIGN_PATHS_PER_CALL, withStorageSignSlot } from './lib/storage-sign-limiter';
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
@@ -133,9 +134,11 @@ function isSignableItemImagePath(storagePath: string): boolean {
   return isValidStoragePath(storagePath, itemImageAnyPathShape());
 }
 
-/** ONE createSignedUrls covering `paths`. Never throws — per-path
- *  failures (and a whole-call failure) just leave paths out of the map,
- *  and the per-path signer falls back to its single-sign path. */
+/** createSignedUrls covering `paths`, in calls of at most
+ *  SIGN_PATHS_PER_CALL (storage-api answers 400 for the whole call past 1000
+ *  paths, L17), run together inside one sign slot. Never throws — per-path
+ *  failures (and a failed call) just leave paths out of the map, and the
+ *  per-path signer falls back to its single-sign path. */
 async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   // Drop malformed paths before the batch rather than after: createSignedUrls
@@ -143,15 +146,27 @@ async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   // otherwise be signed alongside the legitimate ones.
   const safePaths = paths.filter(isSignableItemImagePath);
   if (safePaths.length === 0) return out;
+  const chunks: string[][] = [];
+  for (let i = 0; i < safePaths.length; i += SIGN_PATHS_PER_CALL) {
+    chunks.push(safePaths.slice(i, i + SIGN_PATHS_PER_CALL));
+  }
   try {
     const admin = createAdminClient();
-    const { data, error } = await withStorageSignSlot(() =>
-      admin.storage.from('item-images').createSignedUrls(safePaths, SIGNED_URL_TTL_SEC),
+    const bucket = admin.storage.from('item-images');
+    const answers = await withStorageSignSlot(() =>
+      Promise.all(
+        chunks.map((chunk) =>
+          bucket.createSignedUrls(chunk, SIGNED_URL_TTL_SEC).catch(() => null),
+        ),
+      ),
     );
-    if (error || !data) return out;
-    for (const entry of data) {
-      if (entry.signedUrl && !entry.error && entry.path) {
-        out.set(entry.path, entry.signedUrl);
+    for (const answer of answers) {
+      // A failed call leaves its own paths to the single signer.
+      if (!answer || answer.error || !answer.data) continue;
+      for (const entry of answer.data) {
+        if (entry.signedUrl && !entry.error && entry.path) {
+          out.set(entry.path, entry.signedUrl);
+        }
       }
     }
   } catch {
@@ -1086,7 +1101,15 @@ export class ItemImagesService {
     // exists rather than a null the storage client would stringify.
     const objects = [img.storage_path as string];
     if (img.thumb_path) objects.push(img.thumb_path as string);
-    await this.ctx.supabase.storage.from('item-images').remove(objects);
+    // Duplicate copies an item's photo rows, not its files, so another row
+    // may name the same objects (L65b). Removing them would break the other
+    // item's photo, so an object another row still names is left in place;
+    // the row below is deleted either way (an orphaned object is harmless).
+    const shared = await objectsNamedByOtherImageRows(this.ctx.organizationId, imageId, objects);
+    const removable = shared === null ? [] : objects.filter((o) => !shared.has(o));
+    if (removable.length > 0) {
+      await this.ctx.supabase.storage.from('item-images').remove(removable);
+    }
     const { error } = await this.ctx.supabase
       .from('item_images')
       .delete()

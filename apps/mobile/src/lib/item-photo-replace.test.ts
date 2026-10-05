@@ -141,7 +141,7 @@ describe('replacePrimaryPhoto — the new row is written before anything is dest
     expect(removes[0].detail.paths).toEqual([ARGS.newPath]);
   });
 
-  it('inserts with row proof, then deletes only the OTHER primary rows, then their objects', async () => {
+  it('inserts with row proof, then deletes only the OTHER primary rows, and leaves their objects', async () => {
     const { client, log, tables, buckets } = makeFakeClient({
       insert: { data: { id: 'new-row' }, error: null },
       oldRows: {
@@ -156,7 +156,9 @@ describe('replacePrimaryPhoto — the new row is written before anything is dest
     const res = await replacePrimaryPhoto({ supabase: asClient(client), ...ARGS });
 
     expect(res).toEqual({ ok: true, imageId: 'new-row', warnings: [] });
-    expect(log.map((l) => l.op)).toEqual(['insert', 'select', 'delete', 'storage.remove']);
+    // L65b: the old objects are never removed. Duplicate copies an item's
+    // photo rows, not its files, so another item may still name them.
+    expect(log.map((l) => l.op)).toEqual(['insert', 'select', 'delete']);
 
     // Row proof on the insert — a 0-row insert must not read as success.
     expect(log[0].detail.cols).toBe('id');
@@ -174,12 +176,8 @@ describe('replacePrimaryPhoto — the new row is written before anything is dest
       'neq:id': 'new-row',
     });
     expect(log[2].detail).toEqual({ col: 'id', vals: ['old-1', 'old-2'] });
-    expect(log[3].detail).toEqual({
-      bucket: 'item-images',
-      paths: ['org-1/items/item-1/old.jpg'],
-    });
     expect(tables).toEqual(['item_images', 'item_images', 'item_images']);
-    expect(buckets).toEqual(['item-images']);
+    expect(buckets).toEqual([]);
   });
 
   it('order (b): a failed row delete leaves the old OBJECTS alone — never a dangling row', async () => {
@@ -202,22 +200,19 @@ describe('replacePrimaryPhoto — the new row is written before anything is dest
     expect(log.filter((l) => l.op === 'storage.remove')).toHaveLength(0);
   });
 
-  it('a failed old-object cleanup is a warning, never a lost photo', async () => {
-    const { client } = makeFakeClient({
+  it('leaves the previous photo object in place, since a duplicated item may still show it (L65b)', async () => {
+    const { client, log } = makeFakeClient({
       insert: { data: { id: 'new-row' }, error: null },
       oldRows: {
         data: [{ id: 'old-1', storage_path: 'org-1/items/item-1/old.jpg' }],
         error: null,
       },
-      remove: () => ({ error: { message: 'storage unreachable' } }),
     });
 
     const res = await replacePrimaryPhoto({ supabase: asClient(client), ...ARGS });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) throw new Error('unreachable');
-    expect(res.imageId).toBe('new-row');
-    expect(res.warnings.join(' ')).toContain('storage unreachable');
+    expect(res).toEqual({ ok: true, imageId: 'new-row', warnings: [] });
+    expect(log.filter((l) => l.op === 'storage.remove')).toHaveLength(0);
   });
 
   it('a failed lookup of the old rows still keeps the new photo', async () => {

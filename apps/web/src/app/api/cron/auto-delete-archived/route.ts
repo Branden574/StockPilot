@@ -78,15 +78,21 @@ export async function GET(req: Request) {
 
     let orgsProcessed = 0;
     let itemsDeleted = 0;
+    // Past retention but kept because they still hold stock (L15).
+    let itemsSkipped = 0;
     let orgsTruncated = 0; // hit the per-run cap → backlog drains next run
 
     for (const { orgId, settings } of candidates) {
       try {
         const ctx = await buildSystemContext(admin, orgId);
         if (!ctx) continue; // no owner/admin to attribute the deletions to → skip
-        const { deleted, truncated } = await purgeExpiredArchivedItems(ctx, settings.days);
+        const { deleted, truncated, skipped } = await purgeExpiredArchivedItems(
+          ctx,
+          settings.days,
+        );
         orgsProcessed++;
         itemsDeleted += deleted;
+        itemsSkipped += skipped;
         // Soft-deleted items vanish from the cached Items/Books default views.
         if (deleted > 0) revalidateInventoryList(orgId);
         if (truncated) {
@@ -103,7 +109,16 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({ orgsProcessed, itemsDeleted, orgsTruncated, candidates: candidates.length });
+    const summary = {
+      orgsProcessed,
+      itemsDeleted,
+      itemsSkipped,
+      orgsTruncated,
+      candidates: candidates.length,
+    };
+    // One line per run, counts only (no ids, names or org ids).
+    console.info('[cron.auto-delete-archived]', JSON.stringify(summary));
+    return NextResponse.json(summary);
   } catch (err) {
     void reportError(err, { tag: 'cron.auto-delete-archived' });
     return NextResponse.json(

@@ -1,6 +1,9 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
+import { reportError } from '@/lib/error-reporter';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import {
@@ -166,6 +169,17 @@ export interface DistributeInput {
  */
 export const BUNDLE_SKU_TAKEN =
   'A bundle with that SKU already exists. Choose another SKU, or use Auto to generate one.';
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A component set naming one item twice is refused before anything is
+ *  written: (bundle_id, item_id) is the table's key, so the second row would
+ *  fail the insert, or the upsert, part way through (L10). */
+function assertDistinctComponents(components: ReadonlyArray<{ itemId: string }>): void {
+  if (!componentItemsDistinct(components)) {
+    throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
+  }
+}
 
 function bundleWriteError(error: { code?: string; message: string }): ServiceError {
   if (error.code === '23505' && /bundles_org_sku_unique/.test(error.message)) {
@@ -492,6 +506,7 @@ export class BundlesService {
     if (input.components.length === 0) {
       throw new ServiceError('validation_error', 'A bundle needs at least one component');
     }
+    assertDistinctComponents(input.components);
 
     const { data: bundle, error } = await this.ctx.supabase
       .from('bundles')
@@ -518,7 +533,10 @@ export class BundlesService {
     const { error: cErr } = await this.ctx.supabase
       .from('bundle_components')
       .insert(componentsPayload);
-    if (cErr) throw new ServiceError('internal_error', cErr.message);
+    if (cErr) {
+      await this.undoCreate(bundle.id as string);
+      throw new ServiceError('internal_error', cErr.message);
+    }
 
     await audit(
       {
@@ -535,6 +553,90 @@ export class BundlesService {
     );
 
     return this.get(bundle.id as string);
+  }
+
+  /**
+   * Never leave a bundle with no components behind (L10): remove the one
+   * create() just made when its components could not be saved.
+   *
+   * With the SERVICE ROLE, because the caller's client cannot do it for
+   * everyone allowed to create: bundles_insert admits a manager (and
+   * bundles:manage is a manager default), but bundles_delete (0140) admits
+   * admins only, so for a manager RLS filters this DELETE to 0 rows with no
+   * error and the empty bundle stays. The service role skips that policy, so
+   * the call keeps itself to what the caller may undo: it runs only after
+   * create()'s own checks (module on, bundles:manage) and the caller's own
+   * RLS insert succeeded, and it names this org, the id that insert just
+   * returned and the caller as its creator. Its components failed as one
+   * statement, so none landed. Should anything else already name the row (a
+   * distribution's foreign key restricts the delete), the delete fails and
+   * is reported below.
+   *
+   * The row coming back confirms the removal; none coming back, or an error,
+   * is reported, since the bundle then stays with no components.
+   */
+  private async undoCreate(bundleId: string): Promise<void> {
+    let removed: number | null = null;
+    let detail: string | null = null;
+    try {
+      const { data, error } = await createAdminClient()
+        .from('bundles')
+        .delete()
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', bundleId)
+        .eq('created_by', this.ctx.userId)
+        .select('id');
+      if (error) detail = error.message;
+      else removed = (data ?? []).length;
+    } catch (e) {
+      detail = e instanceof Error ? e.message : String(e);
+    }
+    if (detail !== null || removed !== 1) {
+      void reportError(new Error('A bundle whose components failed could not be removed'), {
+        tag: 'bundles.create.undo',
+        organizationId: this.ctx.organizationId,
+        extra: { bundleId, ...(detail !== null ? { detail } : { removed }) },
+      });
+    }
+  }
+
+  /**
+   * After update()'s upsert and delete, read the set back; unless every item
+   * of this save's set is there, write the set again.
+   *
+   * The two statements are separate calls, so two saves of one bundle can
+   * interleave: A upserts {a}, B upserts {b}, A deletes everything but a, B
+   * deletes everything but b, and the bundle has NO components (review
+   * 2026-10-05, a rolled-back probe as a manager under RLS). assemble_bundle
+   * has no "no components" refusal, so it would then make kits from nothing.
+   * The second write is an upsert ONLY, never another delete: the last
+   * statement of two interleaved saves is then always one of them writing its
+   * whole set, so the bundle is never left empty. It may keep both sets (the
+   * old delete-then-insert's outcome of the same race); both saves are in the
+   * audit log, and the report names the bundle. A failed read-back proves
+   * nothing, so the set is written again then too (the upsert is idempotent).
+   */
+  private async rewriteComponentsIfDropped(
+    bundleId: string,
+    payload: Array<{ bundle_id: string; item_id: string; quantity: number; is_optional: boolean }>,
+  ): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('bundle_components')
+      .select('item_id')
+      .eq('bundle_id', bundleId);
+    const present = new Set(((data ?? []) as Array<{ item_id: string }>).map((r) => r.item_id));
+    const missing = error ? payload.length : payload.filter((p) => !present.has(p.item_id)).length;
+    if (missing === 0) return;
+
+    void reportError(new Error("A bundle's components were written again after a save"), {
+      tag: 'bundles.update.rewritten',
+      organizationId: this.ctx.organizationId,
+      extra: { bundleId, ...(error ? { readFailed: error.message } : { missing }) },
+    });
+    const { error: rErr } = await this.ctx.supabase
+      .from('bundle_components')
+      .upsert(payload, { onConflict: 'bundle_id,item_id' });
+    if (rErr) throw new ServiceError('internal_error', rErr.message);
   }
 
   async update(id: string, patch: UpdateBundleInput): Promise<BundleDetail> {
@@ -573,23 +675,39 @@ export class BundlesService {
       if (patch.components.length === 0) {
         throw new ServiceError('validation_error', 'A bundle needs at least one component');
       }
-      // Replace the component set wholesale — simplest correct path.
-      const { error: dErr } = await this.ctx.supabase
-        .from('bundle_components')
-        .delete()
-        .eq('bundle_id', id);
-      if (dErr) throw new ServiceError('internal_error', dErr.message);
-
+      assertDistinctComponents(patch.components);
+      // Write the new set first, then drop the rows left out of it (L10). The
+      // old delete-then-insert left a bundle with NO components when the
+      // insert failed; now a failed upsert changes nothing, and a failed
+      // delete leaves the new set plus rows that were to be dropped. The set
+      // is then read back, so a concurrent save's delete cannot leave the
+      // bundle empty (rewriteComponentsIfDropped).
       const payload = patch.components.map((c) => ({
         bundle_id: id,
         item_id: c.itemId,
         quantity: c.quantity,
         is_optional: c.isOptional ?? false,
       }));
-      const { error: iErr } = await this.ctx.supabase
+      const keep = payload.map((p) => p.item_id);
+      // The ids go into a PostgREST filter string below, so only uuids get
+      // there. Checked before the upsert, so a refusal writes nothing.
+      if (!keep.every((itemId) => UUID_SHAPE.test(itemId))) {
+        throw new ServiceError('validation_error', 'Invalid component item');
+      }
+      const { error: uErr } = await this.ctx.supabase
         .from('bundle_components')
-        .insert(payload);
-      if (iErr) throw new ServiceError('internal_error', iErr.message);
+        .upsert(payload, { onConflict: 'bundle_id,item_id' });
+      if (uErr) throw new ServiceError('internal_error', uErr.message);
+
+      const { error: dErr } = await this.ctx.supabase
+        .from('bundle_components')
+        .delete()
+        .eq('bundle_id', id)
+        // in-list-bound: one bundle's components; the bundle actions cap them at 100
+        .not('item_id', 'in', `(${keep.join(',')})`);
+      if (dErr) throw new ServiceError('internal_error', dErr.message);
+
+      await this.rewriteComponentsIfDropped(id, payload);
     }
 
     await audit(

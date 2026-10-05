@@ -832,3 +832,10 @@ html[data-sp-update-card] ol[data-sonner-toaster][data-y-position='bottom'] {
     bottom: calc(var(--mobile-offset-bottom) + var(--sp-update-card-offset, 0px));
   }
 }
+/* The same notice covered whatever sat at the end of a page (Start count, the
+   exception note box, a report's last column). The page's scroll area ends
+   the notice's height lower while it is up, so the last row scrolls clear of
+   it (L63a, L100, L136). */
+html[data-sp-update-card] #main-content {
+  padding-bottom: var(--sp-update-card-offset, 0px);
+}

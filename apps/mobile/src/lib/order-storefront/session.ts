@@ -660,6 +660,18 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     return promise;
   }
 
+  /**
+   * The account this scope was opened for is still the one signed in
+   * (account-epoch.ts: it ends the moment auth says the account is gone). A
+   * catalog or photo read that lands after it ended changes nothing and writes
+   * nothing to the device: an involuntary sign-out removes the catalog and the
+   * photo map, which holds signed photo URLs (L137), and a read still out then
+   * must not write them back (desk check F11).
+   */
+  function accountCurrent(): boolean {
+    return scopeEpoch !== null && deps.epoch() === scopeEpoch;
+  }
+
   async function readCatalogNow(gen: number): Promise<ReadonlyMap<string, StorefrontItem> | null> {
     const cs = callScope();
     const ds = draftScope();
@@ -668,14 +680,14 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     publish();
     try {
       const answer = await deps.api.catalog(cs, ds.warehouseId);
-      if (gen !== warehouseGen) return null;
+      if (gen !== warehouseGen || !accountCurrent()) return null;
       const readAt = deps.now();
       const before = setCatalogAnswer(answer, readAt, false);
       void deps.store.setItem(orderCatalogKey(ds), serializeCatalog(answer, readAt)).catch(() => undefined);
       publish();
       return before;
     } catch (e) {
-      if (gen !== warehouseGen) return null;
+      if (gen !== warehouseGen || !accountCurrent()) return null;
       const failure = storefrontReadFailure(e);
       if (failure.kind === 'other_organization') {
         catalog = { ...catalog, refreshing: false };
@@ -699,7 +711,7 @@ export function createStorefrontSession(deps: SessionDeps): StorefrontSession {
     if (!force && !photosNeedRefresh(photos.answer, deps.now(), photos.failed)) return;
     try {
       const answer = await deps.api.photos(cs, ds.warehouseId);
-      if (gen !== warehouseGen) return;
+      if (gen !== warehouseGen || !accountCurrent()) return;
       photos = { answer, failed: false };
       void deps.store.setItem(orderPhotosKey(ds), serializePhotos(answer)).catch(() => undefined);
       publish();

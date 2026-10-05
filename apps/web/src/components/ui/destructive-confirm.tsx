@@ -44,6 +44,19 @@ interface BaseProps {
    * destructive aesthetic.
    */
   tone?: 'destructive' | 'primary';
+  /**
+   * Why the last attempt was refused, shown inside the dialog above its
+   * buttons as a persistent role="alert" line. A toast alone sits behind an
+   * open dialog (L112). The caller sets it from the refusal and clears it on
+   * open and on each try.
+   */
+  error?: string | null;
+  /**
+   * One thing the person can do about `error`, shown inside the dialog right
+   * after it (only while there is an error). An open dialog takes every click
+   * outside it, so an action in a toast cannot be pressed.
+   */
+  errorAction?: { label: string; onClick: () => void } | null;
 }
 
 interface StandardProps extends BaseProps {
@@ -87,6 +100,8 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
     pending = false,
     onConfirm,
     tone = 'destructive',
+    error = null,
+    errorAction = null,
   } = props;
 
   const severity: Severity = props.severity ?? 'standard';
@@ -178,6 +193,19 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
             />
           </div>
         )}
+
+        {error ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-destructive text-sm">
+              {error}
+            </p>
+            {errorAction ? (
+              <Button type="button" variant="outline" size="sm" onClick={errorAction.onClick}>
+                {errorAction.label}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
 
         <DialogFooter>
           <Button

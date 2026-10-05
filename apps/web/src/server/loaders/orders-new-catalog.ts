@@ -25,6 +25,7 @@ import {
 } from '@/server/services/lib/fetch-by-ids';
 import { ServiceError } from '@/server/services/context';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { SIGN_PATHS_PER_CALL } from '@/server/services/lib/storage-sign-limiter';
 
 import type { Role } from '@stockpilot/core';
 
@@ -122,8 +123,10 @@ const SIGN_FAILURE_THROW_RATIO = 0.1;
  * server's default 1 MiB body limit (a 413) would stop an older storage at
  * ~8,450 paths of ~120 bytes (`{org}/items/{item}/{file}`). Either way the
  * whole map threw: no photos for anyone. 1000 paths is ~120 KB per body.
+ *
+ * SIGN_PATHS_PER_CALL (1000) is imported from storage-sign-limiter.ts, shared
+ * with the item-image batch signer (L17).
  */
-const SIGN_PATHS_PER_CALL = 1000;
 /**
  * Serialized-size warning for the map. Next 16 does not cache an
  * unstable_cache entry over 2 MB (incremental-cache/index.js: in production it

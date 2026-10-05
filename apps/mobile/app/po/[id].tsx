@@ -34,6 +34,15 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from '@/lib/po-draft-review';
+import {
+  OVER_RECEIPT_CONFIRM_LABEL,
+  OVER_RECEIPT_CONFIRM_TITLE,
+  overReceiptConfirmMessage,
+  overReceiptUnits,
+  RECEIPT_NOTES_LABEL,
+  receiptNotesForPost,
+  varianceCaption,
+} from '@/lib/po-receive';
 import { radius, space, theme } from '@/lib/theme';
 
 interface PoLine {
@@ -111,10 +120,17 @@ export default function PoReceiveScreen() {
    *  list — see the fail-loud note in `load`. */
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [posting, setPosting] = React.useState(false);
+  // The receipt's optional note (L21), sent with Post receipt.
+  const [notes, setNotes] = React.useState('');
   // Synchronous re-entry guard: blocks a double-tap from firing a second
   // post before React re-renders the disabled button (each post would
   // otherwise carry its own key = a duplicate receipt = double-counted stock).
   const submittingRef = React.useRef(false);
+  // The same guard for the over-receipt confirm, which asks BEFORE
+  // sendReceipt runs: set while the alert is up, so a second tap cannot
+  // queue a second confirm (the first post retires the key, and confirming
+  // the second would post the over-receipt again under a new one).
+  const confirmingRef = React.useRef(false);
   // One idempotency key per receive-intent, stable across retries so a network
   // blip after a server-side success doesn't post a second receipt. Reset only
   // after a successful post (the screen navigates away on success anyway).
@@ -382,6 +398,12 @@ export default function PoReceiveScreen() {
   // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
   // no Post receipt, and its lines one by one (no receiving runs).
   const reviewOnly = poIsReviewOnly(header?.status);
+  // A receipt can be posted only while a line has something left to receive:
+  // the footer's Post receipt, the Notes that go with a receipt and the
+  // attachment hint about posting one all follow it (a fully received PO
+  // showed a Notes field whose note could never be sent; review 2026-10-05).
+  const receivable =
+    !reviewOnly && lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   const blocks = React.useMemo(
     () => buildPoBlocks(lines, reviewOnly ? {} : groups),
     [lines, groups, reviewOnly],
@@ -437,23 +459,47 @@ export default function PoReceiveScreen() {
       return;
     }
 
-    // App-side over-receive guard. NOTE: the RPC no longer blocks over-receipt
-    // — migration 0285 (owner decision 2026-07-21) removed the
-    // over_receive_blocked guard because vendors legitimately over-ship, and
-    // the web receive dialog allows it. This check is therefore MOBILE-ONLY
-    // policy, not a mirror of a server rule. The RPC still refuses an
-    // already-'received' PO (po_already_closed).
-    for (const l of lines) {
-      const entered = Number((draft[l.id] ?? { received: '' }).received) || 0;
-      const remaining = Math.max(0, l.quantity_ordered - l.quantity_received);
-      if (entered > remaining) {
-        Alert.alert(
-          'Too many',
-          `${l.item?.name ?? 'This item'} has only ${remaining} left to receive — you entered ${entered}. Receiving more would over-receive the PO.`,
-        );
-        return;
-      }
+    // Over-receipt ASKS, it does not refuse (L21). Vendors over-ship, so the
+    // RPC no longer blocks it (migration 0285, owner decision 2026-07-21) and
+    // the web receive dialog takes it; this used to be a MOBILE-ONLY refusal.
+    // The RPC still refuses an already-'received' PO (po_already_closed).
+    const over = overReceiptUnits(lines, draft);
+    if (over > 0) {
+      // Checked and set synchronously, before the alert is presented.
+      if (confirmingRef.current || submittingRef.current) return;
+      confirmingRef.current = true;
+      Alert.alert(
+        OVER_RECEIPT_CONFIRM_TITLE,
+        overReceiptConfirmMessage(over),
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => {
+              confirmingRef.current = false;
+            },
+          },
+          {
+            text: OVER_RECEIPT_CONFIRM_LABEL,
+            onPress: () => void sendReceipt(),
+          },
+        ],
+        {
+          // Android only, should the alert ever be made cancelable: a tap
+          // outside it would close it with no button pressed.
+          onDismiss: () => {
+            confirmingRef.current = false;
+          },
+        },
+      );
+      return;
     }
+    await sendReceipt();
+  }
+
+  async function sendReceipt() {
+    confirmingRef.current = false;
+    if (!header?.destination_warehouse_id) return;
 
     // camelCase because this is the API route's body (the shared
     // postReceiptSchema), NOT the RPC's snake_case p_lines — see the post
@@ -525,6 +571,8 @@ export default function PoReceiveScreen() {
             warehouseId: header.destination_warehouse_id,
             idempotencyKey,
             lines: payloadLines,
+            // The optional note (L21); left out when nothing was typed.
+            notes: receiptNotesForPost(notes),
           },
         },
       );
@@ -723,7 +771,12 @@ export default function PoReceiveScreen() {
                       {reviewOnly ? null : (
                         <>
                           <Metric label="Already" value={l.quantity_received} />
-                          <Metric label="Variance" value={variance} tone="primary" />
+                          <Metric
+                            label="Variance"
+                            value={variance}
+                            tone={variance < 0 ? 'danger' : 'primary'}
+                            caption={remaining > 0 ? varianceCaption(variance) : undefined}
+                          />
                         </>
                       )}
                     </View>
@@ -809,39 +862,49 @@ export default function PoReceiveScreen() {
               </View>
             )}
 
-            <Text style={styles.attachHint}>
-              Documents save as soon as you add them — you don&apos;t need to post a
-              receipt to keep an attachment.
-            </Text>
+            {receivable ? (
+              <View style={styles.notesBlock}>
+                <Text style={styles.qtyLabel}>{RECEIPT_NOTES_LABEL}</Text>
+                <TextInput
+                  value={notes}
+                  onChangeText={setNotes}
+                  multiline
+                  maxLength={2000}
+                  placeholder="Anything to note about this delivery"
+                  placeholderTextColor={theme.textMuted}
+                  accessibilityLabel={RECEIPT_NOTES_LABEL}
+                  style={[styles.qtyInput, styles.notesInput]}
+                />
+              </View>
+            ) : null}
+
+            {/* Only a PO that can be received has a receipt to post (L77): a
+                draft is read-only here, and a fully received PO has nothing
+                left to post. */}
+            {receivable ? (
+              <Text style={styles.attachHint}>
+                Documents save as soon as you add them — you don&apos;t need to post a
+                receipt to keep an attachment.
+              </Text>
+            ) : null}
             <PoAttachments poId={id} />
           </ScrollView>
 
           {reviewOnly ? null : (
             <View style={styles.footer}>
-              {(() => {
-                const anyReceivable = lines.some(
-                  (l) => l.quantity_ordered - l.quantity_received > 0,
-                );
-                return (
-                  <Pressable
-                    onPress={postReceipt}
-                    disabled={posting || !anyReceivable}
-                    style={({ pressed }) => [
-                      styles.postBtn,
-                      pressed && { opacity: 0.85 },
-                      (posting || !anyReceivable) && { opacity: 0.5 },
-                    ]}
-                  >
-                    <Text style={styles.postBtnText}>
-                      {posting
-                        ? 'Posting…'
-                        : anyReceivable
-                          ? 'Post receipt'
-                          : 'Fully received'}
-                    </Text>
-                  </Pressable>
-                );
-              })()}
+              <Pressable
+                onPress={postReceipt}
+                disabled={posting || !receivable}
+                style={({ pressed }) => [
+                  styles.postBtn,
+                  pressed && { opacity: 0.85 },
+                  (posting || !receivable) && { opacity: 0.5 },
+                ]}
+              >
+                <Text style={styles.postBtnText}>
+                  {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
+                </Text>
+              </Pressable>
             </View>
           )}
         </>
@@ -975,10 +1038,13 @@ function Metric({
   label,
   value,
   tone,
+  caption,
 }: {
   label: string;
   value: number;
-  tone?: 'primary';
+  tone?: 'primary' | 'danger';
+  /** What the number means, under it (the Variance's web words). */
+  caption?: string;
 }) {
   return (
     <View style={styles.metric}>
@@ -987,10 +1053,12 @@ function Metric({
         style={[
           styles.metricValue,
           tone === 'primary' && { color: theme.primary },
+          tone === 'danger' && { color: theme.destructive },
         ]}
       >
         {value}
       </Text>
+      {caption ? <Text style={styles.metricCaption}>{caption}</Text> : null}
     </View>
   );
 }
@@ -1052,6 +1120,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: space.sm,
   },
+  notesBlock: { marginTop: space.lg, gap: space.xs },
+  notesInput: { minHeight: 72, textAlignVertical: 'top', fontVariant: [] },
   attachHint: {
     color: theme.textMuted,
     fontSize: 12,
@@ -1164,6 +1234,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  metricCaption: {
+    color: theme.textMuted,
+    fontSize: 11,
     marginTop: 2,
   },
   qtyRow: {

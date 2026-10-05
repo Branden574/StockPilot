@@ -143,6 +143,7 @@ import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/o
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
 import { focusScrollY, orderScreenFocus } from '@/lib/order-focus';
+import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
   describeHoldError,
@@ -152,6 +153,7 @@ import {
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
 import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
+import { orderHeaderEyebrow } from '@/lib/orders-list';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -1689,6 +1691,24 @@ export default function OrderDetail() {
     setSignatureModalVisible(true);
   }
 
+  // The web's confirm, with its optional reason (iOS's prompt field).
+  function promptCancel(offer: PhoneOrderCancel) {
+    Alert.prompt(
+      offer.confirmTitle,
+      offer.confirmMessage,
+      [
+        { text: offer.keepLabel, style: 'cancel' },
+        {
+          text: offer.confirmLabel,
+          style: 'destructive',
+          onPress: (reason?: string) =>
+            void act({ action: 'cancel', reason: cancelReasonForPost(reason) }, 'cancelorder'),
+        },
+      ],
+      'plain-text',
+    );
+  }
+
   function promptPhysicalSignature() {
     Alert.prompt(
       'Physical signature',
@@ -1944,6 +1964,14 @@ export default function OrderDetail() {
     isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
+  // Cancel (L93): core's orderCancelOffer, the web order page's rule. The
+  // effective orders:request too: the service asserts it for every cancel.
+  const cancelOffer = phoneOrderCancel({
+    status: st,
+    canApproveOrders: rpApprove,
+    isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
+    canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
+  });
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'
@@ -1993,7 +2021,13 @@ export default function OrderDetail() {
           },
         ]}
       >
-        {isBusy ? <ActivityIndicator color={fg} /> : <Mono size={13} color={fg}>{label}</Mono>}
+        {isBusy ? (
+          <ActivityIndicator color={fg} />
+        ) : (
+          <Mono size={13} color={fg} style={{ flexShrink: 1, textAlign: 'center' }}>
+            {label}
+          </Mono>
+        )}
       </Pressable>
     );
   };
@@ -2264,7 +2298,7 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{`ORDER${order.orderNumber ? ` ${formatOrderNumber(order.orderNumber)}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
+            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>
@@ -2843,30 +2877,24 @@ export default function OrderDetail() {
                       ),
                     'default',
                   )}
-                  {actionBtn(
-                    'Cancel order',
-                    'cancelorder',
-                    () =>
-                      Alert.alert(
-                        'Cancel this order?',
-                        'The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released.',
-                        [
-                          { text: 'Keep order', style: 'cancel' },
-                          {
-                            text: 'Cancel order',
-                            style: 'destructive',
-                            onPress: () => void act({ action: 'cancel' }, 'cancelorder'),
-                          },
-                        ],
-                      ),
-                    'danger',
-                  )}
                 </>
               ) : null}
               {connectionNotice}
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>
+            </View>
+          ) : null}
+
+          {/* Cancel (L93): the web's rule through core, for an approver at
+              every open status and for the requester while their order
+              waits for approval. Inside the actions section's flow when it
+              shows, on its own otherwise. */}
+          {cancelOffer ? (
+            <View style={{ gap: 8 }}>
+              {hasPipelineActions ? null : <Eyebrow>ORDER</Eyebrow>}
+              {actionBtn(cancelOffer.label, 'cancelorder', () => promptCancel(cancelOffer), 'danger')}
+              {hasPipelineActions ? null : connectionNotice}
             </View>
           ) : null}
 
@@ -3982,12 +4010,17 @@ const styles = StyleSheet.create({
   // order's heading 3pt off its top (4 -> 1), so both sit where they did.
   topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  // Dynamic Type: a minimum height, never a fixed one. Every order action
+  // (actionBtn) and the screen's other buttons draw through this around an
+  // uncapped label; a fixed 44 cut the label at AX5 ("Cancel reque", the
+  // lower half of each glyph gone; review 2026-10-05). The label wraps.
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 16,
-    height: 44,
+    paddingVertical: 10,
+    minHeight: 44,
     borderRadius: 10,
     justifyContent: 'center',
   },

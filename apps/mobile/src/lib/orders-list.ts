@@ -6,6 +6,7 @@ import {
   ORDERS_LIST_LOAD_FAILED_TITLE_COPY,
   ORDERS_LIST_RELOAD_FAILED_COPY,
   ORDER_STATUS_META,
+  formatOrderNumber,
   isOrderStatusKey,
   type OrderStatusColor,
   type Permission,
@@ -41,6 +42,14 @@ export function orderStatusPill(status: string): { label: string; status: PillSt
   if (!isOrderStatusKey(status)) return { label: status.replace(/_/g, ' ').toUpperCase(), status: 'default' };
   const meta = ORDER_STATUS_META[status];
   return { label: meta.label.toUpperCase(), status: PILL_FOR_COLOR[meta.color] };
+}
+
+/** The order screen's header line, "ORDER SO-000049 · PICKING": the status
+ *  in the same words as the list's pill, never its raw key (L83a). The org's
+ *  renamed statuses come in a later slice. */
+export function orderHeaderEyebrow(orderNumber: number | null, status: string): string {
+  const number = orderNumber ? formatOrderNumber(orderNumber) : null;
+  return `ORDER${number ? ` ${number}` : ''} · ${orderStatusPill(status).label}`;
 }
 
 /** "+" and the empty state's "Place an order": the Orders module is on and

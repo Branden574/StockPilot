@@ -53,11 +53,18 @@ const LEGACY = '4f'.repeat(32);
 const ORDER_ID = '0a000000-0000-4000-8000-000000000390';
 const ORG = 'org-l4l';
 
-function admin(column: string | null, side: string | null, requesterDeletedAt: string | null = null) {
+function admin(
+  column: string | null,
+  side: string | null,
+  requesterDeletedAt: string | null = null,
+  orderNumber: number | null = null,
+  rowOverrides: Record<string, unknown> = {},
+) {
   return makeSupabaseStub({
     'order_requests.select': servedLikePostgrest([
       {
         id: ORDER_ID,
+        order_number: orderNumber,
         organization_id: ORG,
         status: 'staged_for_pickup',
         requester_name: 'Reggie',
@@ -70,6 +77,7 @@ function admin(column: string | null, side: string | null, requesterDeletedAt: s
         signature_token_expires_at: null,
         signed_at: null,
         signature_token: column,
+        ...rowOverrides,
       },
     ]),
     'order_request_secrets.select': servedLikePostgrest(
@@ -147,5 +155,58 @@ describe('/orders/sign/[token]', () => {
   it('an unknown or malformed token: the same not-found', async () => {
     await expect(open('1'.repeat(64))).rejects.toBeInstanceOf(NotFound);
     await expect(open('not-a-token')).rejects.toBeInstanceOf(NotFound);
+  });
+});
+
+// L91: the sign page named the order "Order #0A000000" while the app, its
+// emails and the print view name it SO-000049.
+describe('/orders/sign/[token]: the order is named by its number (L91)', () => {
+  it('an order with a number is "Order SO-000049"', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, 49).client;
+    const html = await open(RAW);
+    expect(html).toContain('Order SO-000049');
+    expect(html).not.toContain('Order #');
+  });
+
+  it('an order without one keeps the short id', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, null).client;
+    const html = await open(RAW);
+    expect(html).toContain('Order #0A000000');
+  });
+});
+
+// L87, found again in the test-stage walk: opening a used link after a short
+// hand-over said "looks like this order was already completed. Check your
+// inbox for the confirmation email." The order was backordered, and a
+// backordered hand-over sends no completion receipt. The used link's words now
+// follow the status, as the thank-you panel's do.
+describe('/orders/sign/[token]: a used link says what the hand-over left (L87)', () => {
+  const SIGNED = '2026-10-05T14:30:00.000Z';
+
+  it('backordered: what was handed over is recorded and the rest stays on backorder, with no email promised', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, 5, { status: 'backordered', signed_at: SIGNED }).client;
+    const html = await open(RAW);
+    expect(html).toContain('This order is already signed');
+    expect(html).toContain('What was handed over is recorded. The rest stays on backorder.');
+    expect(html).not.toContain('completed');
+    expect(html).not.toContain('confirmation email');
+  });
+
+  it('completed keeps its words and its confirmation email', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, 5, { status: 'completed', signed_at: SIGNED }).client;
+    const html = await open(RAW);
+    expect(html).toContain('This order is already signed');
+    expect(html).toContain(
+      'looks like this order was already completed. Check your inbox for the confirmation email.',
+    );
+  });
+
+  it('any other status claims nothing beyond the signature', async () => {
+    adminHolder.client = admin(DIGEST, RAW, null, 5, { status: 'cancelled', signed_at: SIGNED }).client;
+    const html = await open(RAW);
+    expect(html).toContain('This order is already signed');
+    expect(html).toContain('Your signature is recorded.');
+    expect(html).not.toContain('completed');
+    expect(html).not.toContain('confirmation email');
   });
 });

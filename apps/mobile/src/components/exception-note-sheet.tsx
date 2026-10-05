@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import type { ExceptionSheetConfirm } from '@/lib/exception-confirm-view';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
+import { sheetOpeningAfter, type SheetOpening } from '@/lib/sheet-opening';
 import {
   actOnException,
   clientEventIdFor,
@@ -134,17 +135,23 @@ export function ExceptionNoteSheet({
   // Whether a request is under way, for Android's back button (the Modal's
   // onRequestClose), which sits outside the content that owns the state.
   const busyRef = React.useRef(false);
+  // Which opening this is: the content's key (L101). Updated while rendering
+  // when `visible` changes, so the opening's first frame already has its key.
+  const [opening, setOpening] = React.useState<SheetOpening>({ visible, count: 0 });
+  if (opening.visible !== visible) setOpening(sheetOpeningAfter(opening, visible));
   function requestCloseIfIdle() {
     if (busyRef.current) return;
     onClose();
   }
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={requestCloseIfIdle}>
-      {/* Remounted per opening (key), so every opening starts blank with no
-          earlier attempt to resend. Switching to Confirm inside an opening
-          does not remount it. */}
+      {/* Remounted per opening (key: the opening count), so every opening
+          starts blank with no earlier attempt to resend. Neither switching to
+          Confirm inside an opening nor closing remounts it: keyed on visible
+          and mode, the content remounted in another mode while the sheet slid
+          out (L101). */}
       <SheetContent
-        key={`${String(visible)}:${mode}`}
+        key={opening.count}
         busyRef={busyRef}
         initialMode={mode}
         occurrence={occurrence}

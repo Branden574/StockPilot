@@ -1001,9 +1001,15 @@ describe('InventoryService.archive / softDelete — no fictional stock_movements
     expect(payload).not.toHaveProperty('quantity_on_hand');
   });
 
-  it('softDelete() on an item WITH stock on hand writes NO stock_movements row and still emits inventory.item.deleted', async () => {
+  // L15: softDelete() now refuses an item that still holds stock, with the
+  // archive guard's words (the refusal is pinned below). The original
+  // property is proved on an item with nothing on record.
+  it('softDelete() writes NO stock_movements row and still emits inventory.item.deleted', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: ITEM_WITH_STOCK, error: null },
+      'inventory_items.select': {
+        data: { ...ITEM_WITH_STOCK, quantity_on_hand: 0 },
+        error: null,
+      },
       'inventory_items.update': { data: null, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
@@ -1027,6 +1033,18 @@ describe('InventoryService.archive / softDelete — no fictional stock_movements
     const payload = updateArgs[0]![0] as Record<string, unknown>;
     expect(payload).toHaveProperty('deleted_at');
     expect(payload).not.toHaveProperty('quantity_on_hand');
+  });
+
+  it('softDelete() refuses an item that still has stock on record, and writes nothing', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM_WITH_STOCK, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.softDelete('itm-stock')).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
   });
 
   it('archive() on an item with ZERO stock also writes no stock_movements row (unchanged behavior)', async () => {

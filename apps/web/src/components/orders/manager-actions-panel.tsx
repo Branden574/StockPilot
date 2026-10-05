@@ -65,6 +65,7 @@ import {
   availableOrderActions,
   derivePickingStatus,
   describeDepartureRisk,
+  isManagerOrAbove,
   previewPartialFulfilment,
   type CompletionConfirmCopy,
   type DepartureAction,
@@ -79,6 +80,7 @@ import {
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
+import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
 interface Props {
@@ -252,6 +254,10 @@ export function ManagerActionsPanel({
   // Internal notes, which ask read access only.
   const approves = canApprove && viewerRole !== 'viewer';
   const isDriverHere = assignedDeliveryUserId !== null && assignedDeliveryUserId === viewerUserId;
+  // confirm_physical_signature (0248) admits a manager by role or the assigned
+  // driver, not every approver (L125); the phone offers it the same way
+  // (orderManagerActions physicalSignature).
+  const offersPhysicalSignature = isManagerOrAbove(viewerRole) || isDriverHere;
 
   // Single source of truth for which picking affordances THIS viewer gets.
   // Never branch on status/role for picking here — read the shared machine.
@@ -591,7 +597,8 @@ export function ManagerActionsPanel({
       return;
     }
     setPhysicalSigOpen(false);
-    toast.success('Physical signature recorded — order hand-over complete.');
+    // What the hand-over left: completed, or the rest on backorder (review).
+    toast.success(physicalSignatureRecordedMessage(res.data.status));
     router.refresh();
   }
 
@@ -948,19 +955,21 @@ export function ManagerActionsPanel({
                 <ClipboardCheck className="h-3.5 w-3.5" />
                 Collect signature
               </Button>
-              <Button
-                variant="outline"
-                onClick={() =>
-                  guardDeparture('signature', () => {
-                    setPhysicalSignerName('');
-                    setPhysicalSigOpen(true);
-                  })
-                }
-                disabled={busy !== null}
-              >
-                <PenLine className="h-3.5 w-3.5" />
-                Physical signature
-              </Button>
+              {offersPhysicalSignature && (
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    guardDeparture('signature', () => {
+                      setPhysicalSignerName('');
+                      setPhysicalSigOpen(true);
+                    })
+                  }
+                  disabled={busy !== null}
+                >
+                  <PenLine className="h-3.5 w-3.5" />
+                  Physical signature
+                </Button>
+              )}
             </>
           )}
 

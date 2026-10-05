@@ -279,6 +279,11 @@ const LATENT_KINDS: OrderRequestEmailKind[] = [
 // The row id 99999999-… → the existing WO- + 8-char handle.
 const WO = 'WO-99999999';
 
+/** The HTML <title> is the escaped subject. */
+function escapeForTitle(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Byte-identical subject strings from the es registry (typographic
 // apostrophes and em dashes are intentional — do not "fix" them).
 const EXPECTED_SUBJECTS: Record<OrderRequestEmailKind, string> = {
@@ -339,6 +344,21 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
       expect(args.subject).toBe(
         esEmailById(KIND_TO_ID[kind]).subject({ orderId: WO }),
       );
+    }
+  });
+
+  // L91: the app names an order SO-000049; its emails named it WO-xxxxxxxx in
+  // the subject (and the HTML title). An order with a number now uses it;
+  // WO- stays the fallback for an order without one (asserted above).
+  it('subjects (and the HTML title) use the order number when the order has one', async () => {
+    vi.stubEnv('ES_LATENT_ORDER_EMAILS', '1');
+    for (const kind of [...LIVE_KINDS, ...LATENT_KINDS]) {
+      vi.clearAllMocks();
+      wireFullAdmin();
+      const args = await send(kind, { order_number: 49 } as Partial<OrderRequestRow>);
+      expect(args.subject).toBe(EXPECTED_SUBJECTS[kind].replace(WO, 'SO-000049'));
+      expect(args.subject).not.toContain('WO-');
+      expect(args.html).toContain(`<title>${escapeForTitle(args.subject)}</title>`);
     }
   });
 

@@ -88,14 +88,11 @@ export default function OrdersScreen() {
   const [unconfirmed, setUnconfirmed] = React.useState(0);
 
   const load = React.useCallback(async () => {
-    if (!orgId) return;
-    // Non-approvers must have a user id to scope to their own requests; without
-    // one, show nothing rather than risk the full queue.
-    if (!canApprove && !userId) {
-      setRows([]);
-      setLoading(false);
-      return;
-    }
+    // No organization or no signed-in user: read nothing. After a sign-out the
+    // list reloaded on focus with no session and the read went out as anon
+    // (L107). It also keeps a non-approver, who must be scoped to their own
+    // requests, from ever reading the full queue.
+    if (!orgId || !userId) return;
     let query = supabase
       .from('order_requests')
       .select(
@@ -108,8 +105,11 @@ export default function OrdersScreen() {
          requester:user_profiles!requester_user_id (full_name, email),
          lines:order_request_lines (id)`,
       )
-      .eq('organization_id', orgId);
-    if (!canApprove) query = query.eq('requester_user_id', userId!);
+      .eq('organization_id', orgId)
+      // Public submissions not yet confirmed by email are limbo rows the web
+      // never lists (OrderRequestsService.list); neither does the phone (L84).
+      .neq('status', 'pending_confirmation');
+    if (!canApprove) query = query.eq('requester_user_id', userId);
     const [{ data, error }, unsettled] = await Promise.all([
       query.order('created_at', { ascending: false }).limit(100),
       userId ? unsettledSendsOnDevice(userId, orgId) : Promise.resolve(0),

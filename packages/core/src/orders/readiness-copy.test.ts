@@ -288,6 +288,124 @@ describe('line sentences (F2 plan section 6)', () => {
     );
   });
 
+  // L76 (owner wording Q15): a draft PO other orders already need part of was
+  // said to cover this line in full. Other orders' committed shortfall takes
+  // what is on order first and then the drafts (readiness.ts draftable), so a
+  // draft covers only what is left of it. SO-9's shape: a draft of 180, 50 of
+  // it needed by other orders, nothing open on order.
+  it('a draft other orders already need part of covers only the rest, and says how much they need (L76)', () => {
+    const draft = (remaining: number) => ({
+      rows: [{ poId: 'd', poNumber: 'PO-0009', remaining }],
+      hiddenRemaining: 0,
+      truncated: false,
+      truncatedRemaining: 0,
+    });
+    expect(
+      lineSentence([{ item: 'a', requested: 200 }], [item('a', { drafts: draft(180), committedOtherShortfall: 50 })]),
+    ).toBe('200 short. Draft PO-0009 covers 130 but has not been ordered; 50 of it is needed by other orders.');
+    // The line needs less than what is left: it is covered, and the claim is still named.
+    expect(
+      lineSentence([{ item: 'a', requested: 20 }], [item('a', { drafts: draft(180), committedOtherShortfall: 50 })]),
+    ).toBe('20 short. Draft PO-0009 covers 20 but has not been ordered; 50 of it is needed by other orders.');
+    // Other orders need all of it: it covers nothing here.
+    expect(
+      lineSentence([{ item: 'a', requested: 10 }], [item('a', { drafts: draft(40), committedOtherShortfall: 50 })]),
+    ).toBe('10 short. Draft PO-0009 has not been ordered; all of it is needed by other orders.');
+    // An open PO takes the claim first: the draft is untouched.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 4 }],
+        [item('a', { inbound: inbound([po('PO-0042', '2026-10-03T00:00:00Z', 5)]), committedOtherShortfall: 5, drafts: draft(4) })],
+      ),
+    ).toBe('4 short. What is on order is already needed by other orders. Draft PO-0009 covers 4 but has not been ordered.');
+    // Several drafts.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 200 }],
+        [
+          item('a', {
+            committedOtherShortfall: 50,
+            drafts: {
+              rows: [
+                { poId: 'd1', poNumber: 'PO-1', remaining: 100 },
+                { poId: 'd2', poNumber: 'PO-2', remaining: 80 },
+              ],
+              hiddenRemaining: 0,
+              truncated: false,
+              truncatedRemaining: 0,
+            },
+          }),
+        ],
+      ),
+    ).toBe('200 short. 2 draft POs cover 130 but have not been ordered; 50 of the units on them are needed by other orders.');
+  });
+
+  // Review (2026-10-05): with several drafts, "50 of them are needed" read as
+  // 50 of the POs. The claimed part is units on the drafts, and the words say
+  // so; one draft keeps the owner's Q15 words ("50 of it").
+  it('several drafts name the claimed part as units on them, never "of them" (review)', () => {
+    const drafts = (a: number, b: number) => ({
+      rows: [
+        { poId: 'd1', poNumber: 'PO-1', remaining: a },
+        { poId: 'd2', poNumber: 'PO-2', remaining: b },
+      ],
+      hiddenRemaining: 0,
+      truncated: false,
+      truncatedRemaining: 0,
+    });
+    // Other orders need all of them.
+    expect(
+      lineSentence([{ item: 'a', requested: 10 }], [item('a', { committedOtherShortfall: 50, drafts: drafts(20, 20) })]),
+    ).toBe('10 short. 2 draft POs have not been ordered; all of the units on them are needed by other orders.');
+    // One unit claimed.
+    expect(
+      lineSentence([{ item: 'a', requested: 10 }], [item('a', { committedOtherShortfall: 1, drafts: drafts(20, 20) })]),
+    ).toBe('10 short. 2 draft POs cover 10 but have not been ordered; 1 of the units on them is needed by other orders.');
+    // Drafts the reader cannot open are named as Draft POs, with the same words.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 200 }],
+        [item('a', { committedOtherShortfall: 50, drafts: { ...drafts(100, 80), hiddenRemaining: 20 } })],
+      ),
+    ).toMatch(/^200 short\. Draft POs cover \d+ but have not been ordered; 50 of the units on them are needed by other orders\.$/);
+  });
+
+  // L45c (owner wording Q16): a line short only because the units on the
+  // shelf are held for other orders (or rentals) said "Nothing is on order.",
+  // which hid the cause. It now says the units are held.
+  it('a line short because the shelf is held for others says so, not "Nothing is on order." (L45c)', () => {
+    const shelf = { here: { rack: 10, site: 0, unplaced: 0, staging: 0 } };
+    expect(
+      lineSentence([{ item: 'a', requested: 4 }], [item('a', { ...shelf, heldOtherOrders: 10 })]),
+    ).toBe('4 short. 10 on the shelf are held for other orders.');
+    expect(
+      lineSentence([{ item: 'a', requested: 4 }], [item('a', { ...shelf, heldRentals: 10 })]),
+    ).toBe('4 short. 10 on the shelf are held for rentals.');
+    expect(
+      lineSentence([{ item: 'a', requested: 4 }], [item('a', { ...shelf, heldOtherOrders: 9, heldRentals: 1 })]),
+    ).toBe('4 short. 10 on the shelf are held for other orders and rentals.');
+    // One unit.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 2 }],
+        [item('a', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 }, heldOtherOrders: 1 })],
+      ),
+    ).toBe('2 short. 1 on the shelf is held for other orders.');
+    // Held counts never exceed what is on record.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 2 }],
+        [item('a', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 }, heldOtherOrders: 5 })],
+      ),
+    ).toBe('2 short. 1 on the shelf is held for other orders.');
+    // The purchase_orders module off: the cause is still named.
+    expect(
+      lineSentence([{ item: 'a', requested: 4 }], [item('a', { ...shelf, heldOtherOrders: 10, inbound: null, drafts: null })]),
+    ).toBe('4 short. 10 on the shelf are held for other orders.');
+    // Nothing held: unchanged.
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a')])).toBe('4 short. Nothing is on order.');
+  });
+
   it('screen-reader labels name the line, its state and the number', () => {
     const { line } = only(assess('pending_approval', [{ item: 'a', requested: 4 }], [item('a', { here: { rack: 0, site: 0, unplaced: 0, staging: 4 } })]));
     expect(readinessLineAccessibilityLabel({ ...line, position: 2 })).toBe('Line 2, Needs put-away, 4 in Staging');

@@ -91,13 +91,26 @@ import { MaintenanceAttachmentsService } from './maintenance-attachments';
 // explicitly (landmine #22, mirrored from maintenance-requests.test.ts).
 const ENABLED_MODULES = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'maintenance_requests']);
 
+/**
+ * The caller's client answers `canned`, except the attachment INSERT: since
+ * L40 finalize records the row with the service role, so a canned
+ * `maintenance_request_attachments.insert` answers on the admin client
+ * (`adminDb`), whose attachment reads ("is this upload recorded?") answer
+ * nothing recorded.
+ */
 function build(
   canned: Parameters<typeof makeSupabaseStub>[0] = {},
   overrides: Parameters<typeof makeServiceContext>[1] = {},
 ) {
-  const stub = makeSupabaseStub(canned);
+  const { 'maintenance_request_attachments.insert': insertAnswer, ...userCanned } = canned;
+  const stub = makeSupabaseStub(userCanned);
+  const adminDb = makeSupabaseStub({
+    'maintenance_request_attachments.select': { data: [], error: null },
+    ...(insertAnswer ? { 'maintenance_request_attachments.insert': insertAnswer } : {}),
+  });
+  createAdminClientMock.mockReturnValue({ from: adminDb.client.from, storage: adminStorage });
   const ctx = makeServiceContext(stub.client, { enabledModules: ENABLED_MODULES, ...overrides });
-  return { stub, ctx };
+  return { stub, ctx, adminDb };
 }
 
 /** Override the CTX (user-authed) client's storage.from() to add
@@ -137,6 +150,9 @@ function prefixFor(bytes: Uint8Array, totalSize = bytes.byteLength) {
   return { prefix: bytes, totalSize };
 }
 
+/** The service-role client's storage, built fresh in beforeEach. */
+let adminStorage: { from: ReturnType<typeof vi.fn> };
+
 const REQ_ID = '11111111-1111-4111-8111-111111111111';
 const OPEN_REQUEST_ROW = { id: REQ_ID, requester_user_id: 'user-test', archived_at: null, cancelled_at: null };
 
@@ -159,16 +175,17 @@ beforeEach(() => {
   const adminRows = makeSupabaseStub({
     'maintenance_request_attachments.select': { data: [], error: null },
   });
+  adminStorage = {
+    from: vi.fn(() => ({
+      remove: adminRemoveMock,
+      createSignedUrls: adminCreateSignedUrlsMock,
+      download: adminDownloadMock,
+      upload: adminUploadMock,
+    })),
+  };
   createAdminClientMock.mockReturnValue({
     from: adminRows.client.from,
-    storage: {
-      from: vi.fn(() => ({
-        remove: adminRemoveMock,
-        createSignedUrls: adminCreateSignedUrlsMock,
-        download: adminDownloadMock,
-        upload: adminUploadMock,
-      })),
-    },
+    storage: adminStorage,
   });
   fetchObjectPrefixMock.mockResolvedValue(null);
   adminRemoveMock.mockResolvedValue({ data: null, error: null });
@@ -442,11 +459,86 @@ describe('createUploadUrl (mint)', () => {
   });
 });
 
+// L40: finalize recorded the row through the caller's client, and the 0317
+// INSERT policy that allowed it also let a requester insert a row directly,
+// skipping the byte checks and the metadata strip. finalize now records the
+// row with the service role, after restating every check that policy made
+// (uploaded_by is the caller, module on, kind allowed, request open, the
+// requester or a manager), so the policy can be dropped later.
+describe('finalize records the row with the service role (L40)', () => {
+  it('writes the row through the admin client; the caller\'s client inserts nothing', async () => {
+    const bytes = pngBytes(2, 3);
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
+    const { stub, ctx, adminDb } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+      'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+    });
+
+    await new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+      path: `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`,
+      originalFilename: 'x.png',
+      declaredMime: 'image/png',
+    });
+
+    expect(stub.chainsAll.get('maintenance_request_attachments.insert')).toBeUndefined();
+    const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.uploaded_by).toBe(ctx.userId);
+    expect(insert.organization_id).toBe(ctx.organizationId);
+  });
+
+  it('checks the request again just before the row: one closed while the photo was processed records nothing', async () => {
+    const bytes = pngBytes(2, 3);
+    fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
+    let reads = 0;
+    const { ctx, adminDb } = build({
+      'maintenance_requests.select': () => {
+        reads += 1;
+        return reads === 1
+          ? { data: OPEN_REQUEST_ROW, error: null }
+          : { data: { ...OPEN_REQUEST_ROW, resolved_at: '2026-10-05T00:00:00Z' }, error: null };
+      },
+      'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'x.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(reads).toBe(2);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    // The upload is cleaned up like any refusal.
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`]);
+  });
+
+  it('refuses with the module off before reading anything, and records nothing', async () => {
+    const { ctx, adminDb } = build(
+      { 'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null } },
+      { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS) },
+    );
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path: `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`,
+        originalFilename: 'x.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toThrow();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+  });
+});
+
 describe('finalize', () => {
   it('range-reads the object, sniffs REAL bytes, and inserts a row whose mime_type/byte_size/width/height come from the SNIFF, never the client', async () => {
     const bytes = pngBytes(2, 3);
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
     });
@@ -464,7 +556,7 @@ describe('finalize', () => {
     expect(res).toEqual({ id: 'att-1', width: 2, height: 3 });
     expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), path);
 
-    const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+    const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
     expect(insert.mime_type).toBe('image/png');
     expect(insert.byte_size).toBe(bytes.byteLength);
     expect(insert.width).toBe(2);
@@ -492,7 +584,7 @@ describe('finalize', () => {
     const prefix = new Uint8Array(4096);
     prefix.set(pngBytes(2, 3));
     fetchObjectPrefixMock.mockResolvedValue({ prefix, totalSize: 10240 });
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
     });
@@ -504,7 +596,7 @@ describe('finalize', () => {
       declaredMime: 'image/png',
     });
 
-    const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+    const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
     expect(insert.byte_size).toBe(10240);
     expect(insert.byte_size).not.toBe(4096);
     expect(audit).toHaveBeenCalledWith(
@@ -522,7 +614,7 @@ describe('finalize', () => {
     const prefix = new Uint8Array(4096).fill(0x20);
     prefix.set(new TextEncoder().encode('<html><script>alert(1)</script>'));
     fetchObjectPrefixMock.mockResolvedValue({ prefix, totalSize: 5 * 1024 * 1024 });
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
     const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
@@ -537,13 +629,13 @@ describe('finalize', () => {
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
 
     expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   it('Important 7 — safe_filename is sanitized: a path-traversal-shaped original_filename never reaches the insert verbatim', async () => {
     const bytes = pngBytes(2, 3);
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
     });
@@ -555,7 +647,7 @@ describe('finalize', () => {
       declaredMime: 'image/png',
     });
 
-    const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+    const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
     expect(insert.original_filename).toBe('../../etc/passwd.jpg');
     expect(insert.safe_filename).toBe('etc-passwd-jpg');
   });
@@ -563,7 +655,7 @@ describe('finalize', () => {
   it('MUTATION GUARD — REJECTS a body whose magic bytes are not an image (photo test 6): deletes the uploaded object and throws validation_error invalid_image, writing NO row', async () => {
     const bytes = new TextEncoder().encode('<html><script>alert(1)</script>');
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
     const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
@@ -580,13 +672,13 @@ describe('finalize', () => {
     // Storage-delete-on-reject, pinned via call recording (both master + the
     // derived thumb).
     expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   it('rejects a declaredMime mismatch (JPEG bytes + image/png declared) — the sniff itself still correctly detects jpeg (bytes win over the lying declaration), but finalize refuses the inconsistency and deletes the object', async () => {
     const bytes = jpegBytes(10, 20);
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
     const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
@@ -601,12 +693,12 @@ describe('finalize', () => {
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
 
     expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   it('MUTATION GUARD — oversize: rejects an object larger than MAINTENANCE_MAX_PHOTO_BYTES and deletes it. The prefix is a perfectly VALID png — only totalSize is over — so this pins the size gate to the FULL object size, which a prefix-length gate would wave through', async () => {
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(pngBytes(2, 3), MAINTENANCE_MAX_PHOTO_BYTES + 1));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
     const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
@@ -620,7 +712,7 @@ describe('finalize', () => {
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
     expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   // ── CRITICAL 1/2 — path-traversal past the org/bucket boundary ───────────
@@ -702,7 +794,7 @@ describe('finalize', () => {
   it('MUTATION GUARD — cap re-check: rejects finalize once the request already holds MAINTENANCE_MAX_PHOTOS attachments, and rolls back the uploaded object (Important 3 — a mint-time count check alone is bypassable: 0315 lets any accepted org member PUT directly to storage, and mint itself can be called MAINTENANCE_MAX_PHOTOS times concurrently before any of them finalizes)', async () => {
     const bytes = pngBytes(2, 3);
     fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
       'maintenance_request_attachments.select': { data: [], error: null, count: MAINTENANCE_MAX_PHOTOS },
     });
@@ -717,7 +809,7 @@ describe('finalize', () => {
       }),
     ).rejects.toMatchObject({ code: 'conflict' });
     expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   it('MUTATION GUARD (data-loss guard) — 23505 duplicate storage_path: throws conflict without removing storage (the winning row still references it), never deletes the object', async () => {
@@ -750,7 +842,7 @@ describe('finalize', () => {
 
   it('never writes a row when the object was never actually uploaded (the prefix read fails) — no phantom rows', async () => {
     fetchObjectPrefixMock.mockResolvedValue(null);
-    const { stub, ctx } = build({
+    const { ctx, adminDb } = build({
       'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
     });
     const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.jpg`;
@@ -761,7 +853,7 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
-    expect(stub.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 
   it('enforces the same ownership gate as mint — a non-owner/non-manage caller cannot finalize onto someone else\'s request', async () => {
@@ -807,7 +899,7 @@ describe('finalize', () => {
     it('records kind on the INSERT payload — chainArgs pin on the insert object — defaulting to \'requester\' when omitted', async () => {
       const bytes = pngBytes(2, 3);
       fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-      const { stub, ctx } = build({
+      const { ctx, adminDb } = build({
         'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
         'maintenance_request_attachments.insert': { data: { id: 'att-1' }, error: null },
       });
@@ -819,14 +911,14 @@ describe('finalize', () => {
         declaredMime: 'image/png',
       });
 
-      const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+      const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
       expect(insert.kind).toBe('requester');
     });
 
     it('kind=\'resolution\' lands on the INSERT payload verbatim for a manage-holder, and the live cap re-check is scoped by .eq(\'kind\', \'resolution\')', async () => {
       const bytes = pngBytes(2, 3);
       fetchObjectPrefixMock.mockResolvedValue(prefixFor(bytes));
-      const { stub, ctx } = build(
+      const { stub, ctx, adminDb } = build(
         {
           'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
           'maintenance_request_attachments.select': { data: [], error: null, count: 0 },
@@ -843,7 +935,7 @@ describe('finalize', () => {
         kind: 'resolution',
       });
 
-      const insert = stub.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
+      const insert = adminDb.chainArgs.get('maintenance_request_attachments.insert')![0]![0] as Record<string, unknown>;
       expect(insert.kind).toBe('resolution');
       const capArgs = stub.chainArgs.get('maintenance_request_attachments.select')!;
       expect(capArgs).toContainEqual(['kind', 'resolution']);

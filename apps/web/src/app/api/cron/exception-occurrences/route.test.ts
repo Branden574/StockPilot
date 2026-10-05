@@ -200,6 +200,41 @@ describe('GET /api/cron/exception-occurrences — the sweep', () => {
   });
 });
 
+// L102: on success the cron logged nothing; its counts were only in the
+// response body. It now writes one summary line per run (counts only), and the
+// body carries raised and resolved too.
+describe('GET /api/cron/exception-occurrences — one log line per run (L102)', () => {
+  it('logs exactly one line with the summed counts and the time taken, and returns raised and resolved', async () => {
+    orgsStub({ orgs: ['o1', 'o2', 'o3'] });
+    syncOrg
+      .mockResolvedValueOnce({ ...APPLIED, raised: 2, resolved: 1, recountsClosed: 1, settled: 3 })
+      .mockResolvedValueOnce({ status: 'throttled', lastSyncedAt: '2026-10-05T00:00:00Z' })
+      .mockResolvedValueOnce({ ...APPLIED, raised: 1, resolved: 4, recountsClosed: 0, settled: 0 });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const res = await GET(req('Bearer test-cron-secret'));
+    const body = (await res.json()) as Record<string, number>;
+
+    expect(body).toMatchObject({ raised: 3, resolved: 5, settled: 3, applied: 2, throttled: 1 });
+    const lines = info.mock.calls.filter((args: unknown[]) => args[0] === '[cron.exception-occurrences]');
+    expect(lines).toHaveLength(1);
+    const logged = JSON.parse(String(lines[0]?.[1])) as Record<string, unknown>;
+    expect(logged).toMatchObject({
+      orgs: 3,
+      processed: 3,
+      raised: 3,
+      resolved: 5,
+      recountsClosed: 1,
+      settled: 3,
+      applied: 2,
+      throttled: 1,
+    });
+    expect(typeof logged.ms).toBe('number');
+    // Counts only: no org ids.
+    expect(String(lines[0]?.[1])).not.toMatch(/o1|o2|o3/);
+  });
+});
+
 describe('the cron imports the shared helpers', () => {
   it('uses the shared secretsEqual and pastes no copy of either helper', () => {
     // The daily-briefing guard caps the route copies (6 and 19, both at their

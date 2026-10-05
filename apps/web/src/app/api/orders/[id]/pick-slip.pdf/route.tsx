@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { closedOrderSlipAnswer } from '@/lib/orders/slip-availability';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -33,6 +34,10 @@ export async function GET(
   try {
     const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);
+    // A closed or backordered order says why its slip is unavailable, never
+    // "Generate ... first", which nobody could do (L132).
+    const closed = closedOrderSlipAnswer(detail.request.status);
+    if (closed) return NextResponse.json(closed, { status: 409 });
     if (
       detail.request.status !== 'pick_slip_generated' &&
       detail.request.status !== 'picking_in_progress' &&

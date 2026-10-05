@@ -69,7 +69,14 @@ vi.mock('next/link', async () => {
 // only cares about ReportProblemButton's props; what the rest of the page
 // renders is covered elsewhere (or not this task's concern).
 vi.mock('@/components/orders/add-items-dialog', () => ({ AddItemsDialog: () => null }));
-vi.mock('@/components/orders/cancel-order-button', () => ({ CancelOrderButton: () => null }));
+// L85: who is offered Cancel request, recorded.
+const cancelButtonProps = vi.fn();
+vi.mock('@/components/orders/cancel-order-button', () => ({
+  CancelOrderButton: (props: Record<string, unknown>) => {
+    cancelButtonProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/manager-actions-panel', () => ({
   ManagerActionsPanel: (props: Record<string, unknown>) => {
     managerActionsProps(props);
@@ -140,7 +147,14 @@ vi.mock('@/components/orders/draft-shortfall-po-dialog', () => ({
 /** The views the page handed its dialog (null: no Change offered). */
 const handedViews = () =>
   reviseDialogProps.mock.calls.map(([p]) => (p as { change: unknown }).change).filter((c) => c !== null);
-vi.mock('@/components/orders/shipping-panel', () => ({ ShippingPanel: () => null }));
+// L50b: whether the shipping panel mounts, recorded.
+const shippingPanelProps = vi.fn();
+vi.mock('@/components/orders/shipping-panel', () => ({
+  ShippingPanel: (props: Record<string, unknown>) => {
+    shippingPanelProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/status-badge', () => ({ OrderStatusBadge: () => null }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 vi.mock('@/components/onboarding/help-tip', () => ({ HelpTip: () => null }));
@@ -394,6 +408,114 @@ beforeEach(() => {
   checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
   readinessResult.mockImplementation(async () => READINESS_FAILED);
   canStartCountMock.mockReturnValue(false);
+});
+
+// L85: a requester was offered Cancel request after their order was
+// approved, and the service then refused it. The page now offers it to the
+// requester only while the order waits for approval (core orderCancelOffer);
+// an approver still gets it at every open status.
+// L89: the timeline is told whether the viewer can see activity.
+describe('orders/[id]: the timeline knows whether the viewer can see activity (L89)', () => {
+  it('a staff requester without activity_logs:read', async () => {
+    await renderPage();
+    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: false }));
+  });
+
+  it('a viewer granted activity_logs:read', async () => {
+    ctxHolder.current = {
+      role: 'staff',
+      permissions: new Set(['orders:read', 'activity_logs:read']),
+    };
+    await renderPage();
+    expect(orderTimelineProps).toHaveBeenCalledWith(expect.objectContaining({ canReadActivity: true }));
+  });
+});
+
+// L50b: the shipping panel fetched /api/v1/orders/<id>/shipping on every
+// delivery order, and with the Shipping module off that answered 403 in the
+// console. The panel now mounts only with the module on.
+describe('orders/[id]: the shipping panel follows the Shipping module (L50b)', () => {
+  const deliveryOrder = () =>
+    detailFixture({
+      request: requestFixture({
+        status: 'in_transit',
+        fulfillment_type: 'delivery',
+        delivery_charter_id: 'charter-1',
+      }),
+    });
+
+  it('with Shipping off, no panel (and so no request that answers 403)', async () => {
+    orderGet.mockResolvedValue(deliveryOrder());
+    checkModuleAccessMock.mockImplementation(async (id: string) => ({
+      enabled: id !== 'shipping',
+      canManage: false,
+    }));
+    await renderPage();
+    expect(checkModuleAccessMock).toHaveBeenCalledWith('shipping');
+    expect(shippingPanelProps).not.toHaveBeenCalled();
+  });
+
+  it('with Shipping on, the panel mounts', async () => {
+    orderGet.mockResolvedValue(deliveryOrder());
+    await renderPage();
+    expect(shippingPanelProps).toHaveBeenCalled();
+  });
+});
+
+describe('orders/[id]: Cancel request (L85)', () => {
+  // A requester holds orders:request (the staff default); the beforeEach's
+  // set is orders:read only.
+  const asRequester = () => {
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:request']) };
+  };
+
+  it('the requester (no approve) is offered it while the order waits for approval', async () => {
+    asRequester();
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: ORDER_ID, status: 'pending_approval' }),
+    );
+  });
+
+  it('the requester (no approve) is not offered it once the order is approved', async () => {
+    asRequester();
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved', requester_user_id: 'u1' }) }));
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+  });
+
+  it('an approver is offered it on an approved order', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:request', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }) }));
+    await renderPage();
+    expect(cancelButtonProps).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved' }));
+  });
+
+  // Desk check F3: svc.cancel asserts orders:request for every cancel,
+  // approvers included, so without it the button only led to a refusal.
+  it('is not offered without orders:request, to an approver or to the requester', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['orders:read', 'orders:approve']),
+    };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'approved' }) }));
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read']) };
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }) }),
+    );
+    await renderPage();
+    expect(cancelButtonProps).not.toHaveBeenCalled();
+  });
 });
 
 describe('orders/[id]: the order read', () => {

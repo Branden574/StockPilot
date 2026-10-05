@@ -66,8 +66,8 @@ export interface OrderManagerActions {
   /** Collect signature (the digital sign page). */
   digitalSignature: boolean;
   physicalSignature: boolean;
-  /** Resume fulfillment, Close as delivered-partial and Cancel order at
-   *  backordered. */
+  /** Resume fulfillment and Close as delivered-partial at backordered.
+   *  Cancel order is offered by phoneOrderCancel (order-cancel-action.ts). */
   backorderedActions: boolean;
 }
 

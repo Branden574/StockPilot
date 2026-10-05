@@ -4,6 +4,8 @@ import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
@@ -25,6 +27,10 @@ import {
   SIGNATURE_TOKEN_RE,
   type SignatureTokenVia,
 } from '@/server/lib/order-secrets';
+import {
+  requesterEmailOptedOut as readRequesterEmailOptOut,
+  resolveRequesterContact,
+} from '@/server/lib/requester-contact';
 import { insertAuditRowReported } from '@/server/services/audit';
 import { isModuleEnabled, mfaGateError, type ServiceContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
@@ -42,57 +48,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const DATA_URL_RE = /^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/;
-
-/**
- * Resolve WHO to email for this order's requester.
- *
- * SP-020: `OrderRequestsService.create()` fills `requester_name` /
- * `requester_email` ONLY for on-behalf-of (external) orders — a member who
- * submits their own order gets `requester_user_id` set and BOTH name/email
- * columns NULL. This route used to read the columns directly, so every
- * internal requester silently dropped out of the recipient set: no completion
- * receipt, no "partially fulfilled" notice, no "backordered items shipped"
- * notice, and their `email_order_completed` opt-out was never even read
- * (the read was gated on the always-NULL email column). The PAPER signature
- * path did email them, because it goes through the service's
- * `resolveRecipient()` -> `user_profiles` lookup. This mirrors that
- * resolution so both hand-over paths behave identically.
- *
- * Fails CLOSED-safe: if the profile read errors we return no address, which
- * degrades to the old in-app-notification-only behaviour rather than failing
- * a signature that the DB has already recorded.
- */
-async function resolveRequesterContact(
-  admin: ReturnType<typeof createAdminClient>,
-  order: {
-    requester_user_id: string | null;
-    requester_name: string | null;
-    requester_email: string | null;
-    requester_deleted_at?: string | null;
-  },
-): Promise<{ email: string | null; name: string | null }> {
-  // A requester who deleted their account is never emailed again (A3), not
-  // even at the address the order recorded (the copy is kept, O-A3-6).
-  if (order.requester_deleted_at) return { email: null, name: null };
-  if (order.requester_email) {
-    return { email: order.requester_email, name: order.requester_name ?? null };
-  }
-  if (!order.requester_user_id) return { email: null, name: null };
-  try {
-    const { data } = await admin
-      .from('user_profiles')
-      .select('email, full_name')
-      .eq('id', order.requester_user_id)
-      .maybeSingle();
-    const profile = data as { email?: string | null; full_name?: string | null } | null;
-    return {
-      email: profile?.email ?? null,
-      name: profile?.full_name ?? order.requester_name ?? null,
-    };
-  } catch {
-    return { email: null, name: order.requester_name ?? null };
-  }
-}
 
 const submitSchema = z.object({
   token: z.string().regex(SIGNATURE_TOKEN_RE),
@@ -446,10 +401,17 @@ export async function POST(req: NextRequest) {
       level: 'warning',
       extra: { orderId: order.id },
     });
-    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+    // The status is unknown, so none is claimed (L87: the sign page's words
+    // follow the status it is given).
+    return NextResponse.json({ ok: true, data: { id: order.id, status: null } }, { status: 200 });
   }
   const fullRow = statusRead.data;
   const newStatus = (fullRow as { status?: string } | null)?.status ?? null;
+  // The number the app shows (SO-000049) for the hand-over notices (L91);
+  // null for an order without one, and the notices fall back to the short id.
+  const orderNumber = formatOrderNumber(
+    (fullRow as { order_number?: number | null } | null)?.order_number ?? null,
+  );
   const isCompleted = newStatus === 'completed';
   const isBackordered = newStatus === 'backordered';
 
@@ -509,26 +471,10 @@ export async function POST(req: NextRequest) {
   // A failed read counts as OPTED OUT (fail closed): these emails are optional
   // for a member, and mailing someone who muted them is worse than one missed
   // notice. The in-app notices and the signer's receipt are unaffected.
-  let requesterEmailOptedOut = false;
-  if (order.requester_user_id) {
-    const { data: prefRow, error: prefErr } = await admin
-      .from('notification_preferences')
-      .select('email_order_completed')
-      .eq('user_id', order.requester_user_id)
-      .maybeSingle();
-    if (prefErr) {
-      requesterEmailOptedOut = true;
-      await reportError(prefErr, {
-        tag: 'orders.sign.pref_read',
-        level: 'warning',
-        extra: { orderId: order.id },
-      });
-    } else {
-      requesterEmailOptedOut =
-        ((prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true) ===
-        false;
-    }
-  }
+  const requesterEmailOptedOut = await readRequesterEmailOptOut(admin, order.requester_user_id, {
+    tag: 'orders.sign.pref_read',
+    orderId: order.id,
+  });
 
   // Returns Phase B (B4) + returns-access Unit A: ONLY a completed order is
   // RETURNABLE. A backordered hand-over must NOT mint a return token or email
@@ -564,6 +510,7 @@ export async function POST(req: NextRequest) {
       requested: totals?.requested ?? null,
       owed: totals?.owed ?? null,
       emailOptedOut: requesterEmailOptedOut,
+      orderNumber,
     });
     // The signer's receipt below IS its counts ("received 2 of 5"), so it is
     // skipped without them rather than sent with zeros.
@@ -590,6 +537,7 @@ export async function POST(req: NextRequest) {
             unitsTotal: totals.requested,
             unitsPending: totals.owed,
             appUrl: env.NEXT_PUBLIC_APP_URL,
+            orderNumber,
           });
         } catch {
           /* best-effort — receipt failure never fails the fulfillment */
@@ -601,7 +549,10 @@ export async function POST(req: NextRequest) {
       orderNumber: order.id.slice(0, 8).toUpperCase(),
       status: 'backordered',
     });
-    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, data: { id: order.id, status: 'backordered' } },
+      { status: 200 },
+    );
   }
 
   if (isCompleted && fullRow) {
@@ -621,6 +572,7 @@ export async function POST(req: NextRequest) {
         // Display-only: how many units the remainder batch carried. Null (the
         // notice omits the count) when the line totals could not be read.
         unitsShipped: totals ? Math.max(0, totals.fulfilled - priorFulfilled) : null,
+        orderNumber,
       });
     }
     try {
@@ -669,5 +621,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+  // The resulting status, so the sign page says what happened (L87).
+  return NextResponse.json({ ok: true, data: { id: order.id, status: newStatus } }, { status: 200 });
 }

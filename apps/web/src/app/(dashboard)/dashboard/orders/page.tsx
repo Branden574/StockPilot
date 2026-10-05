@@ -174,6 +174,21 @@ export default async function OrdersPage({
           })}
         </nav>
       )}
+      {/* A filter that is not a tab (the dashboard's "waiting for signature"
+          card, L88): say what the list shows, and the way back. */}
+      {canApprove && !TAB_ORDER.includes(tab) && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span className="border-border bg-muted/40 rounded-md border px-2 py-0.5 font-medium">
+            {TAB_LABELS[tab]}
+          </span>
+          <Link
+            href="/dashboard/orders?status=all_active"
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Show all active orders
+          </Link>
+        </div>
+      )}
 
       <div className="mt-6">
         {loadFailed ? (
@@ -191,7 +206,11 @@ export default async function OrdersPage({
           canApprove ? (
             <EmptyState
               icon={ShoppingCart}
-              title={`Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
+              title={
+                tab === 'awaiting_signature'
+                  ? 'No orders waiting for signature'
+                  : `Nothing in ${TAB_LABELS[tab].toLowerCase()}`
+              }
               description="No requests are sitting in this stage. Switch tabs above to see other stages of the queue."
             />
           ) : (
