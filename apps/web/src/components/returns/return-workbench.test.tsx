@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RestockOptionsLine, RestockSource } from '@stockpilot/core';
 
@@ -325,5 +328,61 @@ describe('ReturnWorkbench states', () => {
     );
     expect(screen.getByText("You don't have permission to manage returns.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Receive' })).not.toBeInTheDocument();
+  });
+});
+
+// Production 2026-10-05: React #418 on /dashboard/returns/[id]. The page
+// server-renders the workbench, and History prints relative times
+// ("3 minutes ago"). When a minute passes between the server render and
+// hydration the browser prints "4 minutes ago", the text no longer matches
+// and React throws away the server HTML. The <time> tolerates the drift with
+// suppressHydrationWarning, as comment-thread.tsx and notifications-list.tsx do.
+describe('ReturnWorkbench hydrates across a clock tick', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  it('History rendered on the server and hydrated a minute later: no hydration error', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = Date.parse('2026-10-05T16:00:00.000Z');
+    vi.setSystemTime(t0);
+    // 3.5 minutes before the server render: "3 minutes ago", then "4".
+    const at = new Date(t0 - 210_000).toISOString();
+    const ui = (
+      <ReturnWorkbench
+        workbench={bench('approved', {}, { chain: [{ at, kind: 'approved', label: 'Approved', actorName: 'Dana Lee' }] })}
+      />
+    );
+    const html = renderToString(ui);
+    expect(html).toContain('3 minutes ago');
+
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    vi.setSystemTime(t0 + 60_000);
+    const errors: unknown[] = [];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args);
+    });
+    // The workbench's effects update state while it hydrates; tell React this
+    // is a test so the act() below flushes them without a warning.
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previous = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      await act(async () => {
+        hydrateRoot(container, ui, { onRecoverableError: (e) => errors.push(e) });
+      });
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = previous;
+      consoleError.mockRestore();
+    }
+    expect(errors).toEqual([]);
+    // React keeps the server's words until the next render; the exact time is
+    // in the title and the datetime attribute.
+    const time = within(container).getByText(/minutes ago/);
+    expect(time.tagName).toBe('TIME');
+    expect(time.getAttribute('datetime')).toBe(at);
   });
 });
