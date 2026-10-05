@@ -557,10 +557,14 @@ reset role;
 
 set local "request.jwt.claim.sub" to :u_vwr;
 set local role to 'authenticated';
+-- Re-pinned by 0396 (was P0002 item_not_found): the viewer can read itemA, so
+-- the 0396 wrapper gate answers first (42501 forbidden, hint permission: a
+-- viewer has neither stock:adjust nor stock:transfer; 0396 K2 pins the hint).
+-- No existence oracle: the viewer can already SELECT the item.
 select throws_ok(format($$select public.adjust_stock(%L, 1, 'adjust', %L)$$, :itemA, :locW1),
-  'P0002', 'item_not_found', 'D12: a whT1 VIEWER adjusting: P0002 (unchanged)');
+  '42501', 'forbidden', 'D12: a whT1 VIEWER adjusting: 42501 forbidden, the wrapper''s permission gate (0396)');
 select throws_ok(format($$select public.transfer_stock(%L, %L, %L, 1)$$, :itemA, :locW1, :locW1b),
-  'P0002', 'item_not_found', 'D13: a whT1 VIEWER transferring: P0002 (unchanged)');
+  '42501', 'forbidden', 'D13: a whT1 VIEWER transferring: 42501 forbidden, the wrapper''s permission gate (0396)');
 reset role;
 
 set local "request.jwt.claim.sub" to :u_lone;
