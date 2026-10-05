@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Migration 0396 (L8) gates six stock ledger functions on the permission the
+ * Migration 0395 (L8) gates six stock ledger functions on the permission the
  * app checks first and refuses with 42501 'forbidden', hint permission. The
  * message is the same word the functions' role floors raise, so each call
  * site must ask dbGuardRefusal BEFORE its own arms: an `includes('forbidden')`
@@ -38,7 +38,7 @@ function firstStatement(branch: string): string {
   );
 }
 
-describe('0396: each gated RPC asks dbGuardRefusal first in its error branch', () => {
+describe('0395: each gated RPC asks dbGuardRefusal first in its error branch', () => {
   const sites: Array<[string, string, string, RegExp]> = [
     ['cycle-counts.ts', 'post_cycle_count', 'count_post',
       /^throw dbGuardRefusal\(error, 'count_post'\) \?\? mapPostCycleCountError\(/],

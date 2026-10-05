@@ -6007,7 +6007,7 @@ export class InventoryService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
-    // 0396: the database refuses to soft-delete an item with stock on record
+    // 0395: the database refuses to soft-delete an item with stock on record
     // or a holding (23514, hint item_holds_stock), for every caller.
     if (error) throw dbGuardRefusal(error) ?? new ServiceError('internal_error', error.message);
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.soft_delete');
@@ -6160,7 +6160,7 @@ export class InventoryService {
       ...(drawMode ? { p_mode: drawMode } : {}),
     });
     if (error) {
-      // 0396: adjust_stock refuses a caller without stock:adjust itself (42501
+      // 0395: adjust_stock refuses a caller without stock:adjust itself (42501
       // forbidden, hint permission). assertPermission above stops that first,
       // so this is a permission revoked mid-request; checked before the
       // 'forbidden' arm below, which reads any other 42501 as a warehouse one.
@@ -6443,7 +6443,7 @@ export class InventoryService {
       p_notes: input.notes ?? null,
     });
     if (error) {
-      // 0396: transfer_stock refuses a caller without stock:transfer itself
+      // 0395: transfer_stock refuses a caller without stock:transfer itself
       // (42501 forbidden, hint permission); before the 'forbidden' arm below,
       // which would call it a warehouse refusal.
       const guard = dbGuardRefusal(error, 'transfer');

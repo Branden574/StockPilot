@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0396 (order and stock guards, small fixes slice
+# Lock footprint of migration 0395 (order and stock guards, small fixes slice
 # 2). The push runs the whole file as one batch, so every table lock a
 # statement takes is held until the file commits. CREATE TRIGGER takes SHARE
 # ROW EXCLUSIVE on inventory_items; ALTER POLICY takes ACCESS EXCLUSIVE on its
@@ -51,10 +51,10 @@
 #
 # The migration sessions ALWAYS roll back, so the script changes nothing but
 # its own fixture rows (removed at the start, the end and by the EXIT trap).
-# It needs the pre-0396 head. LOCAL stack only (docker container
+# It needs the pre-0395 head. LOCAL stack only (docker container
 # supabase_db_stockpilot). Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0396_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0395_migration_lock_footprint.sh
 # (MIG=<path> runs it against the file under another number after a rebase.)
 
 set -uo pipefail
@@ -111,19 +111,19 @@ HEAD_NOW="$(q "select max(version) from supabase_migrations.schema_migrations")"
 HAS_FN="$(q "select count(*) from pg_proc where proname = 'tg_inventory_items_no_delete_with_stock'")"
 echo "local head $HEAD_NOW; tg_inventory_items_no_delete_with_stock present: $HAS_FN; file $(basename "$MIG")"
 if [ "$HAS_FN" != "0" ]; then
-  echo "needs the pre-0396 head (supabase db reset --local --version <the migration before it>, then the QA reseed)"
+  echo "needs the pre-0395 head (supabase db reset --local --version <the migration before it>, then the QA reseed)"
   exit 1
 fi
 POL_BEFORE="$(q "select md5(string_agg(policyname || coalesce(qual, '') || coalesce(with_check, ''), '' order by policyname)) from pg_policies where tablename in ('order_requests', 'order_request_lines')")"
 
 cleanup_rows
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$REQ', '0396-lock-req@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0396 Lock Org', '0396-lock');
+insert into auth.users (id, email, raw_user_meta_data) values ('$REQ', '0395-lock-req@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0395 Lock Org', '0395-lock');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$REQ', 'staff', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0396 Lock Main', 'WH-0396-LK', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0395 Lock Main', 'WH-0395-LK', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0396-LK', 10, 'active');
+  ('$ITEM', '$ORG', '$WH', 'Lock item', 'SKU-0395-LK', 10, 'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
   values ('$ORD', '$ORG', '$WH', 'pending_approval', 'internal', '$REQ', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested) values ('$LINE', '$ORD', '$ITEM', 1);
@@ -206,16 +206,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0396-lock-file-%'"
+ where a.application_name like '0395-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0396-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0395-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0396-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0395-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   # Sample the file's locks while it runs: whenever it is paused between
@@ -261,7 +261,7 @@ run_behind 3b-short-order-reader "select count(*) from public.order_requests;" 0
 
 # ── 4 and 5. The two deadlock shapes, each already holding its first lock ─
 shape() { # shape <label> <first lock sql> <second step sql>
-  local label="$1" app="0396-lock-shape-$1"
+  local label="$1" app="0395-lock-shape-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(1.5);\n%s\ncommit;\nselect 'SHAPE_DONE';\n" "$app" "$2" "$3" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/$label.s.out" 2>&1 &
   local sp=$!
@@ -299,14 +299,14 @@ shape "5b-stock-shape" \
 
 # ── 6. While the file holds its locks, new readers wait only for the hold ─
 {
-  echo "set application_name = '0396-lock-migration-6';"
+  echo "set application_name = '0395-lock-migration-6';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/6m.out" 2> "$TMP/6m.err" &
 BG+=("$!")
-if ! wait_sleeping 0396-lock-migration-6; then
+if ! wait_sleeping 0395-lock-migration-6; then
   bad "6: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/6m.err")"
 else
   for target in public.order_requests auth.users; do
@@ -338,10 +338,10 @@ sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s
 if grep -q 'do \$lock\$' "$TMP/no-prelude.sql" || ! grep -q "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql"; then
   bad "7: could not build the no-prelude control file"
 else
-  printf "set application_name = '0396-lock-control';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_request_lines set quantity_picked = null where order_request_id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$ORD" "$ORD" \
+  printf "set application_name = '0395-lock-control';\nbegin;\nselect 1 from public.order_requests where id = '%s' for update;\nselect pg_sleep(1.5);\nupdate public.order_request_lines set quantity_picked = null where order_request_id = '%s';\ncommit;\nselect 'SHAPE_DONE';\n" "$ORD" "$ORD" \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.s.out" 2>&1 &
   sp=$!
-  if wait_sleeping 0396-lock-control; then
+  if wait_sleeping 0395-lock-control; then
     { echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.m.out" 2> "$TMP/7.m.err"
     wait "$sp"
     S40="$(grep -c '40P01' "$TMP/7.s.out" || true)"
@@ -362,7 +362,7 @@ HEAD_AFTER="$(q "select max(version) from supabase_migrations.schema_migrations"
 FN_AFTER="$(q "select count(*) from pg_proc where proname = 'tg_inventory_items_no_delete_with_stock'")"
 POL_AFTER="$(q "select md5(string_agg(policyname || coalesce(qual, '') || coalesce(with_check, ''), '' order by policyname)) from pg_policies where tablename in ('order_requests', 'order_request_lines')")"
 if [ "$HEAD_AFTER" = "$HEAD_NOW" ] && [ "$FN_AFTER" = "0" ] && [ "$POL_AFTER" = "$POL_BEFORE" ]; then
-  ok "the stack is unchanged (head $HEAD_NOW, no 0396 trigger function, the order policies as before)"
+  ok "the stack is unchanged (head $HEAD_NOW, no 0395 trigger function, the order policies as before)"
 else
   bad "the stack changed under the script (head $HEAD_AFTER, functions $FN_AFTER, policies changed: $([ "$POL_AFTER" = "$POL_BEFORE" ] && echo no || echo yes))"
 fi

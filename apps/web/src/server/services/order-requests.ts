@@ -2778,7 +2778,7 @@ export class OrderRequestsService {
       ) {
         const status = (row as { status: OrderRequestStatus }).status;
         if (status !== 'pending_approval') {
-          // 0396: the same answer cancel_order_request's own refusal maps to
+          // 0395: the same answer cancel_order_request's own refusal maps to
           // (hint requester_pending_only, below): 403 forbidden with the core
           // sentence, so the refusal reads the same whichever layer answers.
           throw new ServiceError('forbidden', ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
@@ -2796,7 +2796,7 @@ export class OrderRequestsService {
       p_reason: reason ?? null,
     });
     if (error) {
-      // 0396: the function now refuses a requester's cancel past pending
+      // 0395: the function now refuses a requester's cancel past pending
       // approval itself (42501 forbidden, hint requester_pending_only). The
       // read above normally stops it first; this is the status changing in
       // between, or that read and the function disagreeing. Checked before
@@ -4451,7 +4451,7 @@ export class OrderRequestsService {
   async setInternalNotes(id: string, notes: string | null): Promise<void> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
-    // 'write', as every other user-client write to the order (0396, L129a):
+    // 'write', as every other user-client write to the order (0395, L129a):
     // order_requests_update now requires write access to the order's
     // warehouse (user_can_access_warehouse 'write'), so this gate says the
     // same thing the policy enforces. Owners, admins and

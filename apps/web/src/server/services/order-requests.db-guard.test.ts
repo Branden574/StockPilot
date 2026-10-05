@@ -13,7 +13,7 @@ import { OrderRequestsService } from './order-requests';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 /**
- * Migration 0396 (small fixes slice 2) makes the database refuse what the
+ * Migration 0395 (small fixes slice 2) makes the database refuse what the
  * order service already refused, and the service maps each refusal to words.
  *
  *   N1    cancel_order_request refuses a requester past pending approval
@@ -42,7 +42,7 @@ function svc(
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('OrderRequestsService.cancel — the requester window answered by the database (0396 N1)', () => {
+describe('OrderRequestsService.cancel — the requester window answered by the database (0395 N1)', () => {
   it('maps the function refusal to a 403 with the cancel sentence, not "someone else\'s order"', async () => {
     // The service read the order at pending_approval; it was approved before
     // the function locked it.
@@ -121,7 +121,7 @@ describe('OrderRequestsService.cancel — the requester window answered by the d
   });
 });
 
-describe('OrderRequestsService.setInternalNotes — write access to the order\'s warehouse (0396 L129a)', () => {
+describe('OrderRequestsService.setInternalNotes — write access to the order\'s warehouse (0395 L129a)', () => {
   it('refuses a viewer granted orders:approve before any write (the policy would match no row)', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-a' }, error: null },

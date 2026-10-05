@@ -125,7 +125,7 @@ interface SummaryLineItem {
 }
 
 /**
- * What an approval actually held (0396, L86): approve_partial holds only what
+ * What an approval actually held (0395, L86): approve_partial holds only what
  * is free, so an approved order can be partly held. Per item, the units still
  * owed (requested minus fulfilled) against the order's active holds. Read for
  * the approved email only; null when the holds could not be read, and the
@@ -168,7 +168,7 @@ const DEGRADED_SUMMARY: SummaryData = {
 };
 
 /**
- * Which of the approved email's four wordings applies (0396, L86): the holds
+ * Which of the approved email's four wordings applies (0395, L86): the holds
  * could not be read, every unit is held, part is held, or nothing is held
  * (approve_partial approves even when nothing is free; the database's
  * notification then says "Nothing is held yet; your order is waiting for
@@ -184,7 +184,7 @@ export function heldState(held: HeldSummary | null): HeldState {
 
 /**
  * The subject line, from the registry, for both the sent email and the HTML
- * title. 0396 (L86): an approval that held nothing says it is waiting for
+ * title. 0395 (L86): an approval that held nothing says it is waiting for
  * stock, not that packing has started.
  */
 function emailSubject(kind: OrderRequestEmailKind, held: HeldSummary | null, orderId: string): string {
@@ -260,7 +260,7 @@ async function fetchSummary(row: OrderRequestRow, kind: OrderRequestEmailKind): 
           .eq('id', row.approved_by)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    // The approved email says whether every unit is held (0396, L86).
+    // The approved email says whether every unit is held (0395, L86).
     kind === 'approved'
       ? admin
           .from('stock_reservations')
@@ -558,7 +558,7 @@ function buildView(a: TemplateArgs): OrderEmailView {
       case 'submitted':
         return def.preheader({ submittedAt: submittedOn, warehouse: wh });
       case 'approved':
-        // 0396 (L86): the preheader says "Reserved N units", so N is what
+        // 0395 (L86): the preheader says "Reserved N units", so N is what
         // was held when only part of the order could be; when nothing could
         // be, it says so instead of "Reserved 0 units".
         if (heldState(a.summary.held) === 'none') return `Approved. ${NOTHING_HELD_YET}`;
@@ -655,7 +655,7 @@ function strongHtml(s: string): string {
 }
 
 /**
- * The approved email's opening sentence (0396, L86), for both renderers:
+ * The approved email's opening sentence (0395, L86), for both renderers:
  * every unit held, part held, nothing held yet, or (the holds could not be
  * read) neither claim. `greet` is hi(...) already escaped for the renderer it
  * is used in; the numbers are plain integers.
@@ -886,7 +886,7 @@ function buildKindBody(a: TemplateArgs, v: OrderEmailView): KindBody {
     }
 
     case 'approved': {
-      // 0396 (L86): approve_partial holds only what is free, which may be
+      // 0395 (L86): approve_partial holds only what is free, which may be
       // nothing, so the prose says every unit only when every unit is held,
       // and nothing is said to be packing when nothing is held.
       const held = a.summary.held;

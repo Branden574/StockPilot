@@ -340,8 +340,8 @@ select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n                  or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
-  -- Re-pinned by 0396 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1|7a2302dec888970054738b0dad420fd3):
-  -- 0396 adds the requester's window and the restock link; 0396 R1 proves that
+  -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1|7a2302dec888970054738b0dad420fd3):
+  -- 0395 adds the requester's window and the restock link; 0395 R1 proves that
   -- removing them gives 0390's body (47cabcd1), whose role term this checks.
   '535fc49935f15adc8d7dfa78836a06af|2a2c6626a1e3b5db5884a793eb067576',
   'R4: cancel_order_request has 0390''s body (md5 47cabcd1), and putting the role term back gives production''s pre-0390 body exactly (7a2302de): the gate is the only change');
@@ -367,8 +367,8 @@ select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, 'public.has_permission(v_req.organization_id, ''orders:approve'')',
                                               E'public.has_org_role(v_req.organization_id, ''manager'')\n          or public.has_permission(v_req.organization_id, ''orders:approve'')'))
      from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')),
-  -- Re-pinned by 0396 (was 293ce0e76d195bb13105cfd1c067de82|a7fabd5fb3d07467135006b56581e46c):
-  -- 0396 adds the movement link; 0396 R2 proves that removing it gives 0390's
+  -- Re-pinned by 0395 (was 293ce0e76d195bb13105cfd1c067de82|a7fabd5fb3d07467135006b56581e46c):
+  -- 0395 adds the movement link; 0395 R2 proves that removing it gives 0390's
   -- body (293ce0e7), whose role term this checks.
   '14e49293fa670dc2e05a1c1b6930bce5|5d4e4cc624c2ec460e907e9952cee106',
   'R8: reopen_picking has 0390''s body (md5 293ce0e7), and putting the role term back gives production''s pre-0390 body exactly (a7fabd5f): the gate is the only change');
@@ -428,8 +428,8 @@ select is(
   E'approve_order_request=a133a783f3d4c2257e9979cb5ec90683\n'
   'approve_partial=76cf3cf8d6f10908f3e63e66cffbf8fc\n'
   'assign_picking=87c2d7c6289af3e12179ddc8c13ce4c1\n'
-  -- Re-pinned by 0396 (was 60198cff2d40c936d4d1cd11e050de14 and, for reopen_picking,
-  -- 53b3b2e29c611896d4a99987c0983c18): the bodies carry 0396's blocks; 0396 R11
+  -- Re-pinned by 0395 (was 60198cff2d40c936d4d1cd11e050de14 and, for reopen_picking,
+  -- 53b3b2e29c611896d4a99987c0983c18): the bodies carry 0395's blocks; 0395 R11
   -- proves the definitions are otherwise production's.
   'cancel_order_request=79a8dcaf652b4ef59075c0f532666fee\n'
   'close_partial=eca9e0f511b63c157f278adf05f34955\n'
@@ -728,9 +728,9 @@ select is(
   -- Predicted from production's text minus the role term (sec-orders
   -- D-NOTES step 2); the method reproduces production's pre-0390 values
   -- e5873a6e / 5fe018ed / a8bb4e38. Verify on the stack.
-  -- Re-pinned by 0396 (was f9fe86e630f9a912cd35ca9f0f0fe621 and
+  -- Re-pinned by 0395 (was f9fe86e630f9a912cd35ca9f0f0fe621 and
   -- 0116460a0227c2c7b08eb457b8a9c4e0): the lines policy also refuses a kit and the
-  -- update policy also requires write access to the order's warehouse (0396 H1-H3,
+  -- update policy also requires write access to the order's warehouse (0395 H1-H3,
   -- predicted from production's text plus each term; verify on the stack). The
   -- warehouse term is user_can_access_warehouse alone, so the role term stays
   -- gone (H2 above); the insert policy is unchanged.

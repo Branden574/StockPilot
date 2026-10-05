@@ -1,11 +1,11 @@
 /**
- * The database's own refusals that carry a hint (migration 0396, small fixes
+ * The database's own refusals that carry a hint (migration 0395, small fixes
  * slice 2), in the words the web and the phone both show.
  *
  * The web services map each hint to a ServiceError with one of these
  * sentences; the phone reaches every one of these actions through the API, so
  * it shows the service's sentence (the adjust, move, receive, count and order
- * screens all put the server's message on screen). Before 0396 the app
+ * screens all put the server's message on screen). Before 0395 the app
  * refused these cases itself and the database did not, so a hint normally
  * appears only when the two disagree for a moment: a status that changed
  * between the service's read and the call, a permission revoked mid-request,
@@ -32,7 +32,7 @@ export const ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY =
 export const ITEM_HOLDS_STOCK_COPY =
   'This item still holds stock, so it cannot be deleted. It can be deleted once it has no stock on record and none on any location: adjust its stock to zero or write it off first.';
 
-/** The ledger actions 0396 gates, each with the permission the app asks first. */
+/** The ledger actions 0395 gates, each with the permission the app asks first. */
 export type DbPermissionAction =
   | 'adjust'
   | 'transfer'
@@ -67,7 +67,7 @@ export function dbPermissionRefusedCopy(action: DbPermissionAction): string {
 export type DbGuardHint = 'requester_pending_only' | 'item_holds_stock' | 'permission';
 
 /**
- * Which 0396 refusal a PostgREST error is, or null for any other error. Keyed
+ * Which 0395 refusal a PostgREST error is, or null for any other error. Keyed
  * on the SQLSTATE and the hint together: the message stays 'forbidden' on the
  * 42501s (so older mappings that only read the message still refuse), and a
  * hint alone could come from any function.

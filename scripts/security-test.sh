@@ -675,7 +675,7 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0394_return_close_races.sh; the lock footprint is
   # scripts/db-concurrency/0394_migration_lock_footprint.sh.
   supabase/tests/0394_returns_lifecycle_original_rack.test.sql
-  # Order and stock guards (0396, small fixes slice 2): the requester cancels
+  # Order and stock guards (0395, small fixes slice 2): the requester cancels
   # their own order only at pending approval; cancel and reopen link their
   # movements to the order; the adjust, transfer, count-post, receipt-post,
   # receipt-reverse and kit-assembly wrappers refuse a direct call without the
@@ -1073,7 +1073,7 @@ WEB_TESTS=(
   src/app/api/v1/public/returns/route.test.ts
   src/components/returns/create-return-dialog.test.tsx
   'src/app/returns/request/[token]/requester-return-form.test.tsx'
-  # 0396: each database refusal (the cancel window, a missing stock or kit
+  # 0395: each database refusal (the cancel window, a missing stock or kit
   # permission, an item that holds stock) reaches the user as its own
   # sentence, mapped before the older 'forbidden' arms; the notes editor asks
   # write access to the order's warehouse, as the update policy now does.
@@ -1178,7 +1178,7 @@ MOBILE_TESTS=(
 # ═══════════════════════════════════════════════════════════════════════════
 CORE_TESTS=(
   src/constants/permissions.test.ts
-  # 0396: the database refusals' hints and words, shared by web and phone.
+  # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts
   src/schemas/inventory.test.ts

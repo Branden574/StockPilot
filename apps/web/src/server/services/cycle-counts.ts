@@ -1917,7 +1917,7 @@ export class CycleCountsService {
       // cycle_count_negative_result (v4 0339), cycle_count_location_out_of_org
       // and cycle_count_location_out_of_scope (0342/0343), and
       // cycle_count_line_superseded (0369, with DETAIL superseded_lines=<n>).
-      // 0396: and forbidden with hint permission (the wrapper asks
+      // 0395: and forbidden with hint permission (the wrapper asks
       // stock:adjust, as assertPermission above does), mapped first.
       throw dbGuardRefusal(error, 'count_post') ?? mapPostCycleCountError(error.message, error.details);
     }

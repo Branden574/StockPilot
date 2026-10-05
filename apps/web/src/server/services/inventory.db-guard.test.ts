@@ -28,7 +28,7 @@ vi.mock('./audit', () => ({
 import { ADJUST_LOCATION_WRITE_REFUSED, InventoryService, TRANSFER_WAREHOUSE_WRITE_REFUSED } from './inventory';
 
 /**
- * Migration 0396 (L8, L15): the stock ledger wrappers refuse a direct call by
+ * Migration 0395 (L8, L15): the stock ledger wrappers refuse a direct call by
  * someone without the permission the app checks first (42501 'forbidden',
  * hint permission), and the database refuses to soft-delete an item that
  * still has stock on record or a holding (23514, hint item_holds_stock). The
@@ -51,7 +51,7 @@ const FORBIDDEN = { message: 'forbidden', code: '42501' };
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('InventoryService.adjustStock — the stock:adjust refusal from the database (0396 L8)', () => {
+describe('InventoryService.adjustStock — the stock:adjust refusal from the database (0395 L8)', () => {
   function build(error: { message: string; code?: string; hint?: string }) {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: ITEM, error: null },
@@ -76,7 +76,7 @@ describe('InventoryService.adjustStock — the stock:adjust refusal from the dat
   });
 });
 
-describe('InventoryService.transferStock — the stock:transfer refusal from the database (0396 L8)', () => {
+describe('InventoryService.transferStock — the stock:transfer refusal from the database (0395 L8)', () => {
   const INPUT = { itemId: 'itm-1', fromLocationId: 'loc-a', toLocationId: 'loc-b', quantity: 2 };
   function build(error: { message: string; code?: string; hint?: string }) {
     const stub = makeSupabaseStub({ 'rpc:transfer_stock': { data: null, error } });
@@ -98,7 +98,7 @@ describe('InventoryService.transferStock — the stock:transfer refusal from the
   });
 });
 
-describe('InventoryService.softDelete — an item that holds stock (0396 L15)', () => {
+describe('InventoryService.softDelete — an item that holds stock (0395 L15)', () => {
   it('says the item still holds stock, and what makes it deletable, when the database refuses the delete', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: ITEM, error: null },

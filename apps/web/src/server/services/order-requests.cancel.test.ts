@@ -21,7 +21,7 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
  * RPC refused only terminal statuses and then accepted owner-or-manager, so a
  * requester reaching the DB directly could cancel an APPROVED, mid-pick order
  * — releasing its reservations and restocking picked units out from under the
- * picker who claimed it. Since 0396 the function refuses that too (hint
+ * picker who claimed it. Since 0395 the function refuses that too (hint
  * requester_pending_only, mapped in order-requests.db-guard.test.ts); this
  * guard still answers first, without a round trip, and these tests pin it.
  */
@@ -57,7 +57,7 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
       },
       ...OK_RPC,
     });
-    // 403, as the function's own refusal maps (0396, hint requester_pending_only).
+    // 403, as the function's own refusal maps (0395, hint requester_pending_only).
     await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
       code: 'forbidden',
     });

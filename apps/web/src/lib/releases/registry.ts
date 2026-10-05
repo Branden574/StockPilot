@@ -255,9 +255,9 @@ export const RELEASES: Release[] = [
   {
     id: 'order-partial-approval-held-2026-10',
     revision: 1,
-    // Small fixes slice 2 (migration 0396, L86): a partly approved order's
+    // Small fixes slice 2 (migration 0395, L86): a partly approved order's
     // notification (in the app and as a push) and approval email say what is
-    // held, or that nothing is held yet, instead of "every unit is reserved". Held as a DRAFT until 0396 is
+    // held, or that nothing is held yet, instead of "every unit is reserved". Held as a DRAFT until 0395 is
     // pushed and the web deploy with the email variant is live (the push text
     // comes from the database, so no phone update is needed); the follow-up
     // that publishes it sets the real publishedAt and re-reads these words

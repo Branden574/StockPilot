@@ -1,8 +1,8 @@
 -- supabase/tests/0395_order_stock_guards.test.sql
--- pgTAP proof for migration 0396 (small fixes, slice 2): order and stock
+-- pgTAP proof for migration 0395 (small fixes, slice 2): order and stock
 -- guards the web app applied, now applied by the database for every caller.
--- Written to fail against the pre-0396 head (0392, or whatever merged
--- before it) in every section but P and the fixture checks.
+-- Written to fail against the pre-0395 head (0394, after security A3 and
+-- returns RX-1) in every section but P and the fixture checks.
 --
 -- Personas (one org, plus a second org for foreign checks):
 --   own    owner                 adm    admin
@@ -17,11 +17,11 @@
 --   Every staff member and the viewer is assigned to warehouse A only;
 --   warehouse B is the other warehouse of the same organization.
 --
--- R.  One change per body: md5(prosrc) is 0396's and removing the added text
+-- R.  One change per body: md5(prosrc) is 0395's and removing the added text
 --     gives production's body exactly (R1-R10); the same on the whole
 --     definition (R11).
 -- P.  Posture of the ten unchanged (SECURITY mode, SET clauses, owner,
---     EXECUTE), the comments say what 0396 enforces.
+--     EXECUTE), the comments say what 0395 enforces.
 -- N.  N1: the requester cancels their own order at pending approval only;
 --     an approver cancels at every open status.
 -- L.  L115: a drawn cancel's restock and a reopen's movement carry the order
@@ -142,22 +142,22 @@ select plan(57);
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,   '0396-own@test.local',   '{}'::jsonb),
-  (:adm,   '0396-adm@test.local',   '{}'::jsonb),
-  (:mgr,   '0396-mgr@test.local',   '{}'::jsonb),
-  (:mgrNo, '0396-mgrno@test.local', '{}'::jsonb),
-  (:stf,   '0396-stf@test.local',   '{}'::jsonb),
-  (:stfNo, '0396-stfno@test.local', '{}'::jsonb),
-  (:stfAp, '0396-stfap@test.local', '{}'::jsonb),
-  (:req,   '0396-req@test.local',   '{}'::jsonb),
-  (:drv,   '0396-drv@test.local',   '{}'::jsonb),
-  (:vwr,   '0396-vwr@test.local',   '{}'::jsonb),
-  (:outZ,  '0396-outz@test.local',  '{}'::jsonb)
+  (:own,   '0395-own@test.local',   '{}'::jsonb),
+  (:adm,   '0395-adm@test.local',   '{}'::jsonb),
+  (:mgr,   '0395-mgr@test.local',   '{}'::jsonb),
+  (:mgrNo, '0395-mgrno@test.local', '{}'::jsonb),
+  (:stf,   '0395-stf@test.local',   '{}'::jsonb),
+  (:stfNo, '0395-stfno@test.local', '{}'::jsonb),
+  (:stfAp, '0395-stfap@test.local', '{}'::jsonb),
+  (:req,   '0395-req@test.local',   '{}'::jsonb),
+  (:drv,   '0395-drv@test.local',   '{}'::jsonb),
+  (:vwr,   '0395-vwr@test.local',   '{}'::jsonb),
+  (:outZ,  '0395-outz@test.local',  '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (orders among them).
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0396 Guards A', '0396-guards-a'),
-  (:orgZ, '0396 Guards Z', '0396-guards-z');
+  (:orgA, '0395 Guards A', '0395-guards-a'),
+  (:orgZ, '0395 Guards Z', '0395-guards-z');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,   'owner',   now()),
   (:orgA, :adm,   'admin',   now()),
@@ -171,11 +171,11 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :vwr,   'viewer',  now()),
   (:orgZ, :outZ,  'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA, :orgA, '0396 Main',  'WH-0396A', 'active'),
-  (:whB, :orgA, '0396 Annex', 'WH-0396B', 'active'),
-  (:whZ, :orgZ, '0396 Zed',   'WH-0396Z', 'active');
+  (:whA, :orgA, '0395 Main',  'WH-0395A', 'active'),
+  (:whB, :orgA, '0395 Annex', 'WH-0395B', 'active'),
+  (:whZ, :orgZ, '0395 Zed',   'WH-0395Z', 'active');
 insert into public.charters (id, organization_id, name, code, status) values
-  (:chA, :orgA, '0396 Charter', 'CH-0396', 'active');
+  (:chA, :orgA, '0395 Charter', 'CH-0395', 'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,   :whA, true),
   (:orgA, :stfNo, :whA, true),
@@ -199,15 +199,15 @@ select id as "locS" from public.locations where warehouse_id = :whA and kind = '
 -- Opening stock lands in each warehouse's Unplaced bucket (tg_seed_initial_level).
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, is_bundle, deleted_at) values
-  (:itA,    :orgA, :whA, '0396-A',    'Guard item',                 100, 'active',   'none', false, null),
-  (:itB,    :orgA, :whB, '0396-B',    'Annex item',                  50, 'active',   'none', false, null),
-  (:itP,    :orgA, :whA, '0396-P',    'Scarce item',                 10, 'active',   'none', false, null),
-  (:itKit,  :orgA, :whA, '0396-KIT',  'Kit stock',                    0, 'active',   'none', true,  null),
-  (:itD0,   :orgA, :whA, '0396-D0',   'Empty archived item',          0, 'archived', 'none', false, null),
-  (:itDQ,   :orgA, :whA, '0396-DQ',   'Archived with stock on record', 5, 'archived', 'none', false, null),
-  (:itDH,   :orgA, :whA, '0396-DH',   'Archived with a holding only',  0, 'archived', 'none', false, null),
-  (:itGone, :orgA, :whA, '0396-GONE', 'Deleted with stock on record',  3, 'archived', 'none', false, now() - interval '30 days'),
-  (:itNone, :orgA, :whA, '0396-NONE', 'Out of stock',                  0, 'active',   'none', false, null);
+  (:itA,    :orgA, :whA, '0395-A',    'Guard item',                 100, 'active',   'none', false, null),
+  (:itB,    :orgA, :whB, '0395-B',    'Annex item',                  50, 'active',   'none', false, null),
+  (:itP,    :orgA, :whA, '0395-P',    'Scarce item',                 10, 'active',   'none', false, null),
+  (:itKit,  :orgA, :whA, '0395-KIT',  'Kit stock',                    0, 'active',   'none', true,  null),
+  (:itD0,   :orgA, :whA, '0395-D0',   'Empty archived item',          0, 'archived', 'none', false, null),
+  (:itDQ,   :orgA, :whA, '0395-DQ',   'Archived with stock on record', 5, 'archived', 'none', false, null),
+  (:itDH,   :orgA, :whA, '0395-DH',   'Archived with a holding only',  0, 'archived', 'none', false, null),
+  (:itGone, :orgA, :whA, '0395-GONE', 'Deleted with stock on record',  3, 'archived', 'none', false, now() - interval '30 days'),
+  (:itNone, :orgA, :whA, '0395-NONE', 'Out of stock',                  0, 'active',   'none', false, null);
 -- A holding with nothing on record (the shape the guard must still see).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
   (:orgA, :itDH, :'locA', 2);
@@ -216,13 +216,13 @@ insert into public.item_stock_levels (organization_id, item_id, location_id, qua
 -- count with no lines, an ordered purchase order and a reversed receipt. Each
 -- body refuses them for its own reason once the gate has passed.
 insert into public.bundles (id, organization_id, name, sku, is_active, preassembly_enabled) values
-  (:bnA, :orgA, '0396 Kit', 'BNDL-0396', false, true);
+  (:bnA, :orgA, '0395 Kit', 'BNDL-0395', false, true);
 insert into public.cycle_counts (id, organization_id, warehouse_id, status, started_by) values
   (:ccA, :orgA, :whA, 'in_progress', :mgr);
 insert into public.purchase_orders (id, organization_id, po_number, status) values
-  (:poA, :orgA, 'PO-0396', 'ordered');
+  (:poA, :orgA, 'PO-0395', 'ordered');
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash) values
-  (:rcA, :orgA, :poA, :whA, 'R-0396', 'reversed', :mgr, 'hash-0396');
+  (:rcA, :orgA, :poA, :whA, 'R-0395', 'reversed', :mgr, 'hash-0395');
 
 -- Orders at their status, inserted by the superuser (the insert guard holds
 -- API roles only; the transition trigger fires on UPDATE only). Delivery
@@ -366,8 +366,8 @@ select is(
   'F1: the personas hold what the matrices assume (the revoked manager and staff member, the default staff set, the granted approver, a requester without approve, a viewer without stock:adjust)');
 select is(
   (select string_agg(i.sku || '=' || i.quantity_on_hand::int || '/' || coalesce((select sum(l.quantity)::int from public.item_stock_levels l where l.item_id = i.id), 0), ' ' order by i.sku)
-     from public.inventory_items i where i.organization_id = :orgA and i.sku in ('0396-A', '0396-D0', '0396-DH', '0396-DQ', '0396-GONE', '0396-P')),
-  '0396-A=100/100 0396-D0=0/0 0396-DH=0/2 0396-DQ=5/5 0396-GONE=3/3 0396-P=10/10',
+     from public.inventory_items i where i.organization_id = :orgA and i.sku in ('0395-A', '0395-D0', '0395-DH', '0395-DQ', '0395-GONE', '0395-P')),
+  '0395-A=100/100 0395-D0=0/0 0395-DH=0/2 0395-DQ=5/5 0395-GONE=3/3 0395-P=10/10',
   'F2: stock on record and holdings: the opening stock sits in Unplaced, DH holds 2 with nothing on record, D0 holds nothing');
 
 
@@ -423,7 +423,7 @@ $b0$, ''), $b1$
 $b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.cancel_order_request(uuid, text)')),
   '535fc49935f15adc8d7dfa78836a06af|47cabcd1fe4f52fb7b2b6b6b64b68da1',
-  'R1: cancel_order_request has 0396''s body (md5 535fc499), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
+  'R1: cancel_order_request has 0395''s body (md5 535fc499), and removing the added text gives production''s body exactly (47cabcd1): the requester''s window (N1) and the restock link (L115) are the only changes');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$
@@ -444,7 +444,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.reopen_picking(uuid, text)')),
   '14e49293fa670dc2e05a1c1b6930bce5|293ce0e76d195bb13105cfd1c067de82',
-  'R2: reopen_picking has 0396''s body (md5 14e49293), and removing the added text gives production''s body exactly (293ce0e7): the movement link (L115) is the only change');
+  'R2: reopen_picking has 0395''s body (md5 14e49293), and removing the added text gives production''s body exactly (293ce0e7): the movement link (L115) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$
@@ -453,7 +453,7 @@ select is(
           or not public.module_enabled(v_req.organization_id, 'orders')$b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.confirm_physical_signature(uuid, text)')),
   'c0d1c11d31dd86e072f05b72f299535c|f7a14a46d2c70f635c3da844c786ce67',
-  'R3: confirm_physical_signature has 0396''s body (md5 c0d1c11d), and removing the added text gives production''s body exactly (f7a14a46): the driver''s membership and module terms (L129b) are the only change');
+  'R3: confirm_physical_signature has 0395''s body (md5 c0d1c11d), and removing the added text gives production''s body exactly (f7a14a46): the driver''s membership and module terms (L129b) are the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$        -- S2 (L86): approve_partial holds only what is free, which may be
@@ -484,7 +484,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public._notify_order_request_changes()')),
   '8d9de81d81de84af3e2589e6044506bf|a223ae83810149728156b8e299c7425e',
-  'R4: _notify_order_request_changes has 0396''s body (md5 8d9de81d), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
+  'R4: _notify_order_request_changes has 0395''s body (md5 8d9de81d), and removing the added text gives production''s body exactly (a223ae83): the partial-approval sentence (L86) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -506,7 +506,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.adjust_stock(uuid, numeric, text, uuid, text, text, text)')),
   '329b71a0add8df3e1a13bdd609e7e652|c8cdaf566ec1ed69b8e9ae56791822da',
-  'R5: adjust_stock has 0396''s body (md5 329b71a0), and removing the added text gives production''s body exactly (c8cdaf56): the stock:adjust gate (L8) is the only change');
+  'R5: adjust_stock has 0395''s body (md5 329b71a0), and removing the added text gives production''s body exactly (c8cdaf56): the stock:adjust gate (L8) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -528,7 +528,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.transfer_stock(uuid, uuid, uuid, numeric, text)')),
   'a95dbf8d8fc9e0450aa5a2d733197843|849690c9313d2d8abfc70eb2b3120d90',
-  'R6: transfer_stock has 0396''s body (md5 a95dbf8d), and removing the added text gives production''s body exactly (849690c9): the stock:transfer gate (L8) is the only change');
+  'R6: transfer_stock has 0395''s body (md5 a95dbf8d), and removing the added text gives production''s body exactly (849690c9): the stock:transfer gate (L8) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -550,7 +550,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.post_cycle_count(uuid)')),
   'b6b00e4d720aad8032a76ec122c4612c|ecc566f4079270480df1d9504358ea73',
-  'R7: post_cycle_count has 0396''s body (md5 b6b00e4d), and removing the added text gives production''s body exactly (ecc566f4): the stock:adjust gate (L8) is the only change');
+  'R7: post_cycle_count has 0395''s body (md5 b6b00e4d), and removing the added text gives production''s body exactly (ecc566f4): the stock:adjust gate (L8) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -572,7 +572,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.assemble_bundle(uuid, numeric, uuid, text)')),
   'bcc4fbe7461ba3c02b5e0c2d18988fcf|7b3f769cb33ef6767557e0b9c4377ddb',
-  'R8: assemble_bundle has 0396''s body (md5 bcc4fbe7), and removing the added text gives production''s body exactly (7b3f769c): the bundles:manage gate (L8) is the only change');
+  'R8: assemble_bundle has 0395''s body (md5 bcc4fbe7), and removing the added text gives production''s body exactly (7b3f769c): the bundles:manage gate (L8) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -594,7 +594,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.post_receipt_v2(uuid, uuid, jsonb, text, text, text)')),
   '15f5db367d297a58acc1065bae4ffe69|efc01e2e0ea98531c92c7db27f17695c',
-  'R9: post_receipt_v2 has 0396''s body (md5 15f5db36), and removing the added text gives production''s body exactly (efc01e2e): the stock:adjust gate (L8) is the only change');
+  'R9: post_receipt_v2 has 0395''s body (md5 15f5db36), and removing the added text gives production''s body exactly (efc01e2e): the stock:adjust gate (L8) is the only change');
 
 select is(
   (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S2 (L8): a direct call answers to the permission the app checks
@@ -616,7 +616,7 @@ select is(
 $b0$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.reverse_receipt(uuid, text)')),
   'f2f13dc2951ad3a5de4aaf034487cac9|e277d737103a5cb561860c229f6631e7',
-  'R10: reverse_receipt has 0396''s body (md5 f2f13dc2), and removing the added text gives production''s body exactly (e277d737): the stock:adjust gate (L8) is the only change');
+  'R10: reverse_receipt has 0395''s body (md5 f2f13dc2), and removing the added text gives production''s body exactly (e277d737): the stock:adjust gate (L8) is the only change');
 
 select is(
   (select string_agg(d.fn || '=' || d.m, E'\n' order by d.fn collate "C") from (
@@ -826,10 +826,10 @@ $b0$, '')) as m
   'reopen_picking=d5d629e4134fd7581280a1bd05cbcef9|aba2579ec63fcd5400abae9cf5591ac2\n'
   'reverse_receipt=774eb447eaf4d8340522f159295a9377|4c049069d229b92b9b121d723cff081e\n'
   'transfer_stock=6a21d824bb893511cf72d192acb6043a|6231a20a470cd1991d32de9effe472c8',
-  'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0396''s, and removing the added text gives production''s definition exactly: arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');
+  'R11: for each of the ten, the whole definition (pg_get_functiondef) is 0395''s, and removing the added text gives production''s definition exactly: arguments and defaults, result, volatility, SECURITY mode and SET clauses are unchanged, not only the body');
 
 
--- ══ P. The ten keep their posture; the comments say what 0396 enforces ════
+-- ══ P. The ten keep their posture; the comments say what 0395 enforces ════
 select is(
   (select string_agg(p.proname || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|'
                      || pg_get_userbyid(p.proowner) || '|'
@@ -926,21 +926,21 @@ select is(
 
 -- ══ K. L8: a direct ledger call answers to the permission ══════════════════
 select is(
-  pg_temp.attempt('authenticated', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')) || ' / '
+  pg_temp.attempt('authenticated', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')) || ' / '
   || pg_temp.attempt('authenticated', :stfNo, format('select public.transfer_stock(%L, %L, %L, 1)', :itA, :'locA', :'locS')),
   '42501:permission:forbidden / 42501:permission:forbidden',
   'K1: staff whose stock:adjust and stock:transfer are revoked can no longer adjust or move stock by calling the function directly (42501, hint permission), as the app already refused them');
 select is(
-  pg_temp.attempt('authenticated', :stf, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')) || ' / '
+  pg_temp.attempt('authenticated', :stf, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')) || ' / '
   || pg_temp.attempt('authenticated', :stf, format('select public.transfer_stock(%L, %L, %L, 1)', :itA, :'locA', :'locS')) || ' / '
-  || pg_temp.attempt('authenticated', :vwr, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')),
+  || pg_temp.attempt('authenticated', :vwr, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')),
   'ok:1 / ok:1 / 42501:permission:forbidden',
   'K2: staff with the default set still adjust and move stock directly; a viewer (no stock:adjust) is refused, now naming the permission');
 select is(
-  pg_temp.attempt('authenticated', :mgrNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')) || ' / '
+  pg_temp.attempt('authenticated', :mgrNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')) || ' / '
   || pg_temp.attempt('authenticated', :mgrNo, format('select public.transfer_stock(%L, %L, %L, 1)', :itA, :'locA', :'locS')) || ' / '
   || pg_temp.attempt('authenticated', :mgrNo, format('select public.post_cycle_count(%L)', :ccA)) || ' / '
-  || pg_temp.attempt('authenticated', :mgrNo, format($q$select public.post_receipt_v2(%L, %L, '[]'::jsonb, 'key-0396', 'hash-0396')$q$, :poA, :whA)) || ' / '
+  || pg_temp.attempt('authenticated', :mgrNo, format($q$select public.post_receipt_v2(%L, %L, '[]'::jsonb, 'key-0395', 'hash-0395')$q$, :poA, :whA)) || ' / '
   || pg_temp.attempt('authenticated', :mgrNo, format($q$select public.reverse_receipt(%L, 'Wrong count')$q$, :rcA)) || ' / '
   || pg_temp.attempt('authenticated', :mgrNo, format('select * from public.assemble_bundle(%L, 1, %L)', :bnA, :whA)),
   '42501:permission:forbidden / 42501:permission:forbidden / 42501:permission:forbidden / '
@@ -948,21 +948,21 @@ select is(
   'K3: a manager whose stock:adjust, stock:transfer and bundles:manage are revoked is refused by each wrapper (adjust, transfer, count post, receipt post, receipt reversal, kit assembly) before its body runs');
 select is(
   (select string_agg((position(':permission:' in v.r) = 0)::text, ',' order by v.n) from (values
-     (1, pg_temp.attempt('authenticated', :mgr, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA'))),
+     (1, pg_temp.attempt('authenticated', :mgr, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA'))),
      (2, pg_temp.attempt('authenticated', :mgr, format('select public.transfer_stock(%L, %L, %L, 1)', :itA, :'locA', :'locS'))),
      (3, pg_temp.attempt('authenticated', :mgr, format('select public.post_cycle_count(%L)', :ccA))),
-     (4, pg_temp.attempt('authenticated', :mgr, format($q$select public.post_receipt_v2(%L, %L, '[]'::jsonb, 'key-0396', 'hash-0396')$q$, :poA, :whA))),
+     (4, pg_temp.attempt('authenticated', :mgr, format($q$select public.post_receipt_v2(%L, %L, '[]'::jsonb, 'key-0395', 'hash-0395')$q$, :poA, :whA))),
      (5, pg_temp.attempt('authenticated', :mgr, format($q$select public.reverse_receipt(%L, 'Wrong count')$q$, :rcA))),
      (6, pg_temp.attempt('authenticated', :mgr, format('select * from public.assemble_bundle(%L, 1, %L)', :bnA, :whA)))) v(n, r)),
   'true,true,true,true,true,true',
   'K4: the same six calls by a manager holding the permissions pass the gate and get their body''s own answer');
 select is(
-  pg_temp.attempt('authenticated', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 nested probe')$q$, :itA, :'locA'),
+  pg_temp.attempt('authenticated', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 nested probe')$q$, :itA, :'locA'),
                   $p$select set_config('stockpilot.ledger', pg_current_xact_id()::text, true)$p$),
   'ok:1',
   'K5: inside another ledger call of the same transaction (the flag holds this transaction''s id, as post_receipt_v2 and reverse_receipt leave it when they call adjust_stock) the gate is not asked again');
 select is(
-  pg_temp.attempt('service_role', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')),
+  pg_temp.attempt('service_role', :stfNo, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')),
   'ok:1',
   'K6: the admin client (service_role) is not held, even carrying the claims of someone whose stock:adjust is revoked');
 select is(
@@ -975,7 +975,7 @@ select is(
   'ok:1:1 / ok:1:1 / ok:1:1',
   'K7: the order functions still move stock for members whose stock:adjust is revoked (cancel and reopen by the revoked manager, complete_picking by the revoked staff member): they run as postgres, and each movement carries its order');
 select is(
-  pg_temp.attempt('authenticated', :outZ, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0396 probe')$q$, :itA, :'locA')),
+  pg_temp.attempt('authenticated', :outZ, format($q$select public.adjust_stock(%L, 1, 'add', %L, '0395 probe')$q$, :itA, :'locA')),
   'P0002:-:item_not_found',
   'K8: a row the caller cannot read is left to the body, which answers as before (another organization''s manager: item_not_found)');
 
@@ -1147,7 +1147,7 @@ select is(
     where schemaname = 'public' and policyname in ('order_requests_update', 'order_request_lines_insert')),
   E'order_request_lines.order_request_lines_insert|INSERT|{authenticated}|PERMISSIVE|1148ba4defc9bcae9e744bd8a04dd82c\n'
   'order_requests.order_requests_update|UPDATE|{authenticated}|PERMISSIVE|be9f2fbb6ee66d910763de1815365cdd',
-  'H3: both policies are still PERMISSIVE, for authenticated, with 0396''s text (pg_policies md5, the 0390 H3 form)');
+  'H3: both policies are still PERMISSIVE, for authenticated, with 0395''s text (pg_policies md5, the 0390 H3 form)');
 select is(
   (select coalesce(string_agg(tablename || '.' || policyname, ',' order by tablename, policyname), '')
      from pg_policies

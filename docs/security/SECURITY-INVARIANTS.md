@@ -355,7 +355,7 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
   stale entry, and no entry whose body has grown a write: `INSERT INTO`,
   `MERGE INTO [ONLY]`, `UPDATE [ONLY]` of any table, unqualified or quoted, or
-  `DELETE FROM [ONLY]`; one detector shared with INV-30 and INV-31 since 0396,
+  `DELETE FROM [ONLY]`; one detector shared with INV-30 and INV-31 since 0395,
   which also caught the forms the old `update public.` pattern missed), with
   INV-29, INV-30 and INV-30b as the controls (INV-30b plants one probe per
   write form and two reads that must not match). INV-29 and INV-30 plant their own probes

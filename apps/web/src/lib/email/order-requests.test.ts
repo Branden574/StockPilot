@@ -217,7 +217,7 @@ function wireFullAdmin(
     },
     'order_request_lines.select': { data: items, error: null },
     // Every unit of the default lines held: the approved email's ordinary case
-    // (0396, L86; the part-held and nothing-held wordings are proven in
+    // (0395, L86; the part-held and nothing-held wordings are proven in
     // order-requests.partial-approval.test.ts).
     'stock_reservations.select': {
       data: items.map((l) => ({ item_id: l.item_id, quantity: l.quantity_requested })),

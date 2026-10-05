@@ -903,15 +903,15 @@ select is(
                     'public.user_can_access_warehouse(uuid, uuid, text)'::regprocedure,
                     'public.tg_order_requests_workflow_guard()'::regprocedure)),
   E'_dispatch_push_for_notification()|17f00da160feb6a7d6609cca4fb6337e|true|{"search_path=public, net, extensions"}|postgres\n'
-  -- Re-pinned by 0396 (was a223ae83810149728156b8e299c7425e): the approved notification
-  -- says when only part is held (0396 R4); placing an order is unchanged.
+  -- Re-pinned by 0395 (was a223ae83810149728156b8e299c7425e): the approved notification
+  -- says when only part is held (0395 R4); placing an order is unchanged.
   '_notify_order_request_changes()|8d9de81d81de84af3e2589e6044506bf|true|{search_path=public}|postgres\n'
   '_notify_recipients(uuid)|679e6193e3dbe5644055e835e8209043|true|{search_path=public}|postgres\n'
   '_validate_order_request_status_transition()|dee8cd4782ec83abdb31a2b48fcd4ef2|false|{search_path=public}|postgres\n'
   'assign_order_request_number()|03097df3cded3d0ea42676855abc6a25|true|{search_path=public}|postgres\n'
   -- 0390 re-pin (was 7a2302dec888970054738b0dad420fd3): slice D's one gate edit.
-  -- Re-pinned by 0396 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
-  -- pending approval, and the restock movements carry the order (0396 R1:
+  -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
+  -- pending approval, and the restock movements carry the order (0395 R1:
   -- removing both gives 0390's body exactly); nothing proven here reads either.
   'cancel_order_request(uuid,text)|535fc49935f15adc8d7dfa78836a06af|true|{"search_path=public, extensions"}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
@@ -945,8 +945,8 @@ select is(
   -- Re-pinned by 0392 (was 4af4ea31b970b21b27942ed7f8bb36d1|8): only the
   -- insert guard's md5 moved (0392 adds the admin-client secret rule); the
   -- same query with its old md5 substituted gives the old value.
-  -- Re-pinned by 0396 (was 1683653e88f385f3b905640f92f3e6ac|8): only the md5s of
-  -- _notify_order_request_changes and cancel_order_request moved (0396 R4, R1);
+  -- Re-pinned by 0395 (was 1683653e88f385f3b905640f92f3e6ac|8): only the md5s of
+  -- _notify_order_request_changes and cancel_order_request moved (0395 R4, R1);
   -- the same rows with their old md5s give the old value.
   '5bbe75b394bcda67a7c7470514d6d746|8',
   'Z2: the set fingerprint of the first eight (0385 Z1 form, grants included) equals production''s at build start (it moved from the plan''s 5992f083...|8 only by 0390''s cancel_order_request edit)');
@@ -959,11 +959,11 @@ select is(
         and c.relname in ('order_requests', 'order_request_lines', 'idempotency_keys', 'warehouses', 'warehouse_charters')
       group by c.relname) x),
   E'idempotency_keys=7c0b897aca77ae4e04596b5f08a6f58b|2\n'
-  -- Re-pinned by 0396 (was 3741951ce4f5bce8394bfe6e5d7a8378|4 and
+  -- Re-pinned by 0395 (was 3741951ce4f5bce8394bfe6e5d7a8378|4 and
   -- 28cf8d6f9b07075076b13a24c2d3d984|4): order_request_lines_insert refuses a kit
   -- and order_requests_update requires write access to the order's warehouse
-  -- (0396 H1, H2); computed from production's rows plus those terms (the
-  -- deparsed shape 0396 predicts); verify on the stack.
+  -- (0395 H1, H2); computed from production's rows plus those terms (the
+  -- deparsed shape 0395 predicts); verify on the stack.
   'order_request_lines=5e7d2cb7801930574bdde61feeb39fd8|4\n'
   'order_requests=36246435ba27eadd5c30276ed6ce7bb2|4\n'
   'warehouse_charters=ca05c428fb9052aedb108faa0e8a6048|2\n'

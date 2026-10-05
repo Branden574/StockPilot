@@ -281,7 +281,7 @@ select is(
 -- opening-stock copy in duplicate_inventory_item (a brand-new item, never on
 -- an open count) and the 0340 location dedup helper. A new invoker writer
 -- outside the ledger shows up here.
--- Changed on purpose by 0396 (L19; was array['public.duplicate_inventory_item']
+-- Changed on purpose by 0395 (L19; was array['public.duplicate_inventory_item']
 -- with the INSERT-only regex 'insert\s+into\s+(public\.)?stock_movements'):
 -- the census now reads 0387's writer forms (INSERT INTO, MERGE INTO [ONLY],
 -- UPDATE [ONLY], DELETE FROM [ONLY], optional quoted public), and it found

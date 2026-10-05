@@ -5,14 +5,14 @@ import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 import type { OrderRequestRow } from '@/server/services/order-requests';
 
 /**
- * L86 (migration 0396): approve_partial holds only what is free, but the
+ * L86 (migration 0395): approve_partial holds only what is free, but the
  * approved email said "we’ve reserved every unit on this request" either way.
  * It now reads the order's active holds and says every unit only when every
  * unit is held, "N of M units ... the rest is waiting for stock" when only part
  * is, "Nothing is reserved yet; your order is waiting for stock." when nothing
  * is (approve_partial approves even then), and neither when the holds could
  * not be read. The requester's in-app notification and push make the same
- * distinction in the database (_notify_order_request_changes, 0396 suite
+ * distinction in the database (_notify_order_request_changes, 0395 suite
  * A1-A5).
  */
 

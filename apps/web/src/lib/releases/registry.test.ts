@@ -3551,7 +3551,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(at).toBe(2);
     expect(RELEASES[0]?.id).toBe('items-list-first-paint-2026-10');
     expect(RELEASES[1]?.id).toBe('weekly-digest-and-fixes-2026-10');
-    // Re-pinned by 0396 (was: the Items first-paint and weekly digest drafts
+    // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
@@ -3681,7 +3681,7 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // (slice 1, 2026-10-05; was: the newest published release, with only
     // drafts above it): the drafts stay at the top, newest first, and the
     // small fixes, published, sit between them and this one.
-    // Re-pinned by 0396 (was: without it): the partial-approval draft (small
+    // Re-pinned by 0395 (was: without it): the partial-approval draft (small
     // fixes slice 2) sits below PO-2's draft, above the small fixes.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
@@ -4348,7 +4348,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
     // first-paint (#328), weekly digest fixes' (#326) and PO-2's stay at the
-    // top, dated later. Re-pinned by 0396 (was: those three): the
+    // top, dated later. Re-pinned by 0395 (was: those three): the
     // partial-approval draft (small fixes slice 2) sits below PO-2's.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
       'items-list-first-paint-2026-10',
@@ -4802,9 +4802,9 @@ describe('the Items first-paint release', () => {
 });
 
 /**
- * Small fixes slice 2 (migration 0396, L86): a partly approved order's
+ * Small fixes slice 2 (migration 0395, L86): a partly approved order's
  * notification and approval email say what is held. Held as a DRAFT until
- * 0396 is pushed and the web deploy with the email variant is live (the push
+ * 0395 is pushed and the web deploy with the email variant is live (the push
  * text comes from the database: no phone update). Pinned by id, never by
  * index. The publishing follow-up sets 'published' and the real publishedAt,
  * re-reads the words against what shipped, and flips the first pin here.
@@ -4860,7 +4860,7 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     const r = release();
     const entry = r.entries[0]!;
     const text = readerText(r).join(' ');
-    // The sentence _notify_order_request_changes writes (0396), quoted exactly.
+    // The sentence _notify_order_request_changes writes (0395), quoted exactly.
     // Found by name: the migration's number is fixed only when it is pushed.
     const dir = resolve(__dirname, '../../../../../supabase/migrations');
     const file = readdirSync(dir).filter((f) => f.endsWith('_order_stock_guards.sql'));

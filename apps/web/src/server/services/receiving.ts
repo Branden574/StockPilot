@@ -265,7 +265,7 @@ export class ReceivingService {
       p_notes: input.notes ?? null,
     });
     if (error) {
-      // 0396: post_receipt_v2 refuses a caller without stock:adjust itself
+      // 0395: post_receipt_v2 refuses a caller without stock:adjust itself
       // (42501 forbidden, hint permission), as assertPermission above does.
       const guard = dbGuardRefusal(error, 'receipt_post');
       if (guard) throw guard;
@@ -588,7 +588,7 @@ export class ReceivingService {
       p_reason: input.reason,
     });
     if (error) {
-      // 0396: reverse_receipt refuses a caller without stock:adjust itself
+      // 0395: reverse_receipt refuses a caller without stock:adjust itself
       // (42501 forbidden, hint permission); before the 'forbidden' arm.
       const guard = dbGuardRefusal(error, 'receipt_reverse');
       if (guard) throw guard;

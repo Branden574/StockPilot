@@ -9,7 +9,7 @@ import {
 import { ServiceError } from '../context';
 
 /**
- * A 0396 database refusal as the ServiceError the app shows, or null for any
+ * A 0395 database refusal as the ServiceError the app shows, or null for any
  * other error (each call site then maps the rest exactly as before). Call it
  * first in an RPC's error branch: the 42501s keep the message 'forbidden', so
  * a later `includes('forbidden')` arm would otherwise put a different

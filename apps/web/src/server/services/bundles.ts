@@ -812,7 +812,7 @@ export class BundlesService {
       p_notes: notes ?? null,
     });
     if (error) {
-      // 0396: assemble_bundle refuses a caller without bundles:manage itself
+      // 0395: assemble_bundle refuses a caller without bundles:manage itself
       // (42501 forbidden, hint permission), as assertPermission above does.
       const guard = dbGuardRefusal(error, 'kit_assemble');
       if (guard) throw guard;

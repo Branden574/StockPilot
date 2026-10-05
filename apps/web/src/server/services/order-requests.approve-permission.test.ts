@@ -265,7 +265,7 @@ describe('cancel: the requester self-cancel window follows orders:approve (0390)
 
     const staff = cancelStub('approved');
     await expect(svc(staff, { role: 'staff', userId: 'u1' }).cancel('ord-1', null)).rejects.toMatchObject({
-      // 0396: the sentence moved to core and the code is 403, both shared
+      // 0395: the sentence moved to core and the code is 403, both shared
       // with the function's own refusal (hint requester_pending_only).
       code: 'forbidden',
       message: ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,

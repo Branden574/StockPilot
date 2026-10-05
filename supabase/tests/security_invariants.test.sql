@@ -203,9 +203,9 @@ insert into _sec_inv_public_bucket_allow (id, why) values
 create temporary table _sec_inv_path_check_gap (relname text, attname text, why text not null,
   primary key (relname, attname));
 
--- ── The writer detector allowlists E and F are audited with (0396, L19) ────
+-- ── The writer detector allowlists E and F are audited with (0395, L19) ────
 --
--- An allowlisted entry must never write. Until 0396 the detector was
+-- An allowlisted entry must never write. Until 0395 the detector was
 -- \m(insert\s+into|update\s+public\.|delete\s+from)\M, which missed MERGE INTO,
 -- UPDATE ONLY, an unqualified UPDATE and a quoted "public". It is now 0387's
 -- writer forms, for any table: INSERT INTO, MERGE INTO [ONLY], DELETE FROM
@@ -977,7 +977,7 @@ select is(
 
 delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
 
--- INV-30b. MUTATION CONTROL for the writer detector itself (0396, L19): one
+-- INV-30b. MUTATION CONTROL for the writer detector itself (0395, L19): one
 -- probe per writer form must match, and the read-only shapes that share a
 -- keyword must not. A detector that lost a form would let an allowlisted
 -- predicate grow that write unnoticed.

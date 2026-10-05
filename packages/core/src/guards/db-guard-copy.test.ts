@@ -11,7 +11,7 @@ import {
 import * as core from '../index';
 
 describe('dbGuardHint', () => {
-  it('names each 0396 refusal by its SQLSTATE and hint together', () => {
+  it('names each 0395 refusal by its SQLSTATE and hint together', () => {
     expect(dbGuardHint({ code: '42501', hint: 'requester_pending_only' })).toBe('requester_pending_only');
     expect(dbGuardHint({ code: '42501', hint: 'permission' })).toBe('permission');
     expect(dbGuardHint({ code: '23514', hint: 'item_holds_stock' })).toBe('item_holds_stock');
@@ -28,7 +28,7 @@ describe('dbGuardHint', () => {
   });
 });
 
-describe('the 0396 refusal words', () => {
+describe('the 0395 refusal words', () => {
   it('names the permission each gated action needs, as Settings > Roles names it', () => {
     const actions: DbPermissionAction[] = [
       'adjust',

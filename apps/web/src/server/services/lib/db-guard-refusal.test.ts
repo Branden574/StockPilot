@@ -11,7 +11,7 @@ import {
 import { ServiceError } from '../context';
 import { dbGuardRefusal } from './db-guard-refusal';
 
-describe('dbGuardRefusal (0396 hints)', () => {
+describe('dbGuardRefusal (0395 hints)', () => {
   it('maps the requester window to a 403 with the cancel sentence', () => {
     const e = dbGuardRefusal({ code: '42501', hint: 'requester_pending_only' });
     expect(e).toBeInstanceOf(ServiceError);
