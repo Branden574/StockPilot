@@ -276,11 +276,11 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Send a returned item back to the rack it was picked from',
         whatChanged:
-          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received. Process return then puts every item where you chose, in one step.',
+          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. Nothing moves when you approve or receive the return: Process return puts every item where you chose, in one step.',
         whyItMatters:
           'A restocked return always landed in Staging and had to be put away by hand, even when everyone knew which rack it came from.',
         howItAffectsYou:
-          "The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return and use Approve and receive.",
+          "The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return, use Approve and receive, then Process return.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
         audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },

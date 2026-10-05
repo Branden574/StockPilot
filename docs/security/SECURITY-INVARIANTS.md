@@ -603,20 +603,41 @@ actually fire.
     TRIGGER, REFERENCES or MAINTAIN on either.
   - **Guards** (`trg_returns_zz_api_guard`, `trg_return_lines_zz_api_guard`,
     INVOKER, firing only when `current_user` is `authenticated` or `anon`):
-    an API insert of an RMA must be `requested`, `internal` and unstamped
-    (`return_insert_through_rpc`); `requested_by` is the caller
+    an API insert of an RMA must be `requested`, `internal`, unstamped and
+    carry no requester name or email (`return_insert_through_rpc`), and its
+    RMA number is replaced by the server's; `requested_by` is the caller
     (`return_stamp_forged`); its order must be an order of the RMA's own
     organization the caller can see (`order_not_found`, P0002) in a
-    warehouse the caller may write (`warehouse_write`); an update moves one
+    warehouse the caller may write (`warehouse_write`), completed or
+    delivered (`order_not_returnable`, the create functions' rule); an update moves one
     edge, sets only that edge's stamps naming the caller, with the time
     forced to `now()` (`return_stamp_forged`); no API update reaches `closed`
     (`return_close_through_rpc`); an API line insert must be unapplied and
     belong to a `requested` RMA the caller can see in the same organization
     (`return_line_insert_through_rpc`), name a line of that RMA's own order
     (`return_invalid`, so no other order loses return budget), and come from
-    a caller who may write the order's warehouse (`warehouse_write`). The old tabs' raw create, approve,
-    deny, receive and cancel keep working within these rules; closing (the
-    only edge that moves stock) is function-only.
+    a caller who may write the order's warehouse (`warehouse_write`), and
+    then, with the RMA held FOR SHARE (an approval, denial or cancel in
+    flight is waited for and the status read again, so no line slips into an
+    RMA approved a moment ago), only on an internal RMA the caller inserted
+    itself that no function wrote (no decision row): a requester's RMA,
+    another member's, or a function-created one takes no raw line. The old
+    tabs' raw create, approve, deny, receive and cancel keep working within
+    these rules; closing (the only edge that moves stock) is function-only.
+  - **Accepted until RX-4** (review 2026-10-05): the raw edges above and the
+    frozen wrapper `public.process_return_disposition` still move an RMA
+    forward outside the functions for a `returns:manage` holder with write
+    access to the order's warehouse. Such an edge writes no decision, no
+    audit row and no requester notification, and the raw policies and the
+    wrapper do not check the Returns module. Every stock rule still holds on
+    that path (status gate, budget, latch, the planned-rack revalidation,
+    holdings = on hand). RX-4 revokes the remaining INSERT, the eight UPDATE
+    columns and the wrapper's EXECUTE. The read boundary is also wider than
+    the app's `returns:read` gate: every member reads `returns`,
+    `return_lines` and `return_overview` (requester email and the denial
+    reason included); only `return_decisions` needs `returns:read` or
+    `returns:manage`. MFA step-up is enforced by the web service, not inside
+    the functions (plan follow-up 13.3).
   - **Decisions.** `return_decisions` is append-only (an UPDATE raises
     `return_decisions_append_only` for every role, the owner included);
     `authenticated` holds SELECT only, and its one policy shows rows to
@@ -641,20 +662,30 @@ actually fire.
     (PostgREST retries those forever). The functions never trust a key row
     in `idempotency_keys` they did not write (managers may write that table
     through the API): a create replays only an RMA of its own organization
-    and order (else `idempotency_conflict`), and an approval takes over a key
-    row with no `approved` decision at the next revision instead of
-    answering `return_changed` or a false replay.
+    and order that the same caller created (the staff path: its
+    `requested_by` and `created` decision; the requester path: a requester
+    RMA created on the same channel by the same actor, the token path keyed
+    per order), else `idempotency_conflict`; an approval takes over a key row
+    with no `approved` decision at the next revision instead of answering
+    `return_changed` or a false replay, and a replay answers the next
+    revision and the exchange hook's replacement, never the stored response.
   - **The restock destination.** A restock to a rack is honoured only for a
     location the pick provenance proves (`stock_movements.draw`, 0373): the
     server offers `original` or a `source` location from the line's own
-    draws, capped at what is still unreturned there, and refuses anything
+    draws of a handed-over order (an order in flight, or picks not handed
+    over, are no provenance), a `source` capped at what is still unreturned
+    there less the line's returns no rack leg recorded, and refuses anything
     else (`restock_location_not_offered`). `close_return` revalidates every
     destination under lock just before it moves stock (archived, no longer
     a placement, moved warehouse, inactive warehouse, deleted item) and
     refuses with `restock_location_unavailable` rather than falling back
     silently; a rack in a warehouse the closer may not stock is refused
     `restock_location_forbidden` (the holdings writer's own gate, answered
-    with a hint). The restated `ledger.process_return_disposition` keeps
+    with a hint), and a Staging or scrap leg in an item's current warehouse
+    the closer may not write is refused `warehouse_write` (detail `itemId`).
+    `close_return`'s legs, and the workbench, history and Staging-worklist
+    reads, count ledger movements only (`via_ledger`), so a member's direct
+    insert into `stock_movements` never reads as a leg of a return. The restated `ledger.process_return_disposition` keeps
     today's net-zero scrap and holdings = on hand; its bare refusals reach
     the app only with a hint (`close_return` raises them again, and the
     create does the same for the cap trigger's race-time

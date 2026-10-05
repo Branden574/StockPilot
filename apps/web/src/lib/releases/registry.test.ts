@@ -3840,8 +3840,12 @@ describe('returns remember the original rack (returns RX-1) is held as a draft',
     const form = readFileSync(resolve(__dirname, '../../components/settings/notification-preferences-form.tsx'), 'utf8');
     expect(form).toContain("label: 'New return and exchange requests'");
     expect(all).toContain('Notifications: New return and exchange requests');
-    // Nothing moves at approval (brief 14), and the phone is online only.
-    expect(r.entries[0]!.whatChanged).toContain('Nothing moves until the item is received.');
+    // Nothing moves at approval or receipt, only at Process return (brief 14;
+    // review: the old words said stock comes back at receipt), and the phone
+    // is online only.
+    expect(r.entries[0]!.whatChanged).toContain('Nothing moves when you approve or receive the return: Process return puts every item where you chose');
+    expect(all).not.toMatch(/until (it is|the item is) received\b(?! and processed)/i);
+    expect(r.entries[0]!.howItAffectsYou).toContain('use Approve and receive, then Process return');
     expect(r.entries[1]!.howItAffectsYou).toContain('every return action needs a connection');
   });
 
