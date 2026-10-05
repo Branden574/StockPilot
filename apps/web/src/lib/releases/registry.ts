@@ -244,6 +244,79 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'returns-original-rack-2026-10',
+    revision: 1,
+    // Returns RX-1 (migration 0395: every return runs through gated server
+    // functions; Original rack). Held as a DRAFT until 0395 is pushed and
+    // verified, the web deploy is READY, the OTA with the phone screens is
+    // published and the Demo Co walk passed (returns plan 10.1 R5-R8); RX-5
+    // publishes it, sets the real publishedAt and re-reads these words
+    // against what shipped. It sits directly below the phone-ordering drafts
+    // (PO-4 and PO-2, dated later; PO-2's test pins it after every published
+    // release) and above every published release; the publishing follow-up
+    // keeps the order newest first.
+    //
+    // What a person can see: the RMA workbench and the destination choice on
+    // the web and the phone, the returns list's filters and paging, the
+    // phone's Returns screens, and the staff ping for requester returns with
+    // its preference. Who is told: anyone who can open Returns (the module on,
+    // returns:read or returns:manage); the ping entry only to returns:manage.
+    // The words name no number nobody measured, never say "book" for a
+    // recorded quantity, and claim no inspection.
+    status: 'draft',
+    title: 'Returns remember the rack an item came from',
+    summary:
+      'When you approve a return you now choose Restock or Scrap, and for Restock you can send the item straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received and processed. Returns also have their own screens on the phone, and return requests from requesters notify the people who manage returns.',
+    publishedAt: '2026-10-11T17:00:00Z',
+    audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+    entries: [
+      {
+        id: 'returns-original-rack',
+        category: 'new',
+        area: 'Returns',
+        title: 'Send a returned item back to the rack it was picked from',
+        whatChanged:
+          'Returns now remember where an item came from. When you approve a return you choose Restock or Scrap for each item, and for Restock you can send it straight back to the rack it was picked from, or leave it in Staging. Nothing moves until the item is received. Process return then puts every item where you chose, in one step.',
+        whyItMatters:
+          'A restocked return always landed in Staging and had to be put away by hand, even when everyone knew which rack it came from.',
+        howItAffectsYou:
+          "The rack is offered only when StockPilot recorded the pick, so older orders offer Staging or Scrap. If that rack was removed or moved before you process the return, nothing moves and the return asks you to choose again; Leave in Staging is always one tap away. At the counter, switch on The item is here when you start the return and use Approve and receive.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-list-and-phone',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Returns have filters, and their own screens on the phone',
+        whatChanged:
+          'The returns list has filters (Awaiting approval, Waiting for returned item, Received, not processed, Closed), a search by RMA, SO number or requester, and photos of the returning items. On the phone and the iPad, Returns in the menu opens the same list and each return, with the same steps as the web.',
+        whyItMatters:
+          'Returns waiting for the item, or received and not yet processed, were hard to find among closed ones, and the phone could not work a return at all.',
+        howItAffectsYou:
+          'Each return opens on one screen: what is coming back, the next step, and its history from the original pick to the close. On the phone every return action needs a connection.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-request-notification',
+        category: 'new',
+        area: 'Returns',
+        title: 'Return requests from requesters reach the people who manage returns',
+        whatChanged:
+          'When a requester asks for a return (from their return link, the customer portal or the app), the people who manage returns at that warehouse get a notification that opens the return.',
+        whyItMatters: 'A requested return used to wait until someone happened to open the returns list.',
+        howItAffectsYou:
+          'You are not notified about returns you create yourself. Turn it off in Notifications: New return and exchange requests.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Notification settings' },
+        audience: { anyPermission: ['returns:manage'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
     id: 'approval-follows-permission-2026-10',
     revision: 1,
     // Security slice D (migration 0390, pushed 2026-10-04 05:32:44Z;

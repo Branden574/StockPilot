@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  availableReturnListFilters,
   COMPLETION_CONFIRM_LABEL,
   CONFIRM_COUNT_LABEL,
   confirmCountDialogCopy,
@@ -3517,9 +3518,14 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Re-pinned by 0393 (was: the only other draft is PO-4's phone draft).
-    // A3's account deletion draft sits below this one and is dated earlier.
+    // A3's account deletion draft sits below this one and is dated earlier,
+    // and returns RX-1's draft sits below A3's (dated earlier still; it
+    // publishes on its own clock, RX-5).
     for (const r of RELEASES.filter((x) => x.id !== ID && x.status === 'draft')) {
-      expect(['phone-place-order-2026-10', 'account-deletion-everyone-2026-10'], r.id).toContain(r.id);
+      expect(
+        ['phone-place-order-2026-10', 'account-deletion-everyone-2026-10', 'returns-original-rack-2026-10'],
+        r.id,
+      ).toContain(r.id);
     }
     const a3 = RELEASES.findIndex((r) => r.id === 'account-deletion-everyone-2026-10');
     expect(a3).toBeGreaterThan(at);
@@ -3767,5 +3773,75 @@ describe('account deletion for every member (slice A3) is held as a draft', () =
     // members cannot until ownership moves).
     expect(text).not.toMatch(/every (screen|page|record)|everywhere|anyone can delete|all records/i);
     expect(text).not.toMatch(/\bbooks?\b|\d+ ?%|token|hash|database|trigger|platform admin/i);
+  });
+});
+
+/**
+ * Returns RX-1 (migration 0395: gated return functions, Original rack): held
+ * as a DRAFT until 0395 is pushed and verified, the web deploy is READY, the
+ * OTA with the phone's Returns screens is published and the Demo Co walk
+ * passed (returns plan 10.1). Pinned by id, never by index. RX-5 publishes it,
+ * sets the real publishedAt, re-reads its words against what shipped and
+ * flips the first pin here.
+ */
+describe('returns remember the original rack (returns RX-1) is held as a draft', () => {
+  const ID = 'returns-original-rack-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  it('sits among the drafts above every published release', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES[at + 1]?.status).toBe('published');
+  });
+
+  it('is told to whoever can open Returns; the request ping only to people who manage returns', () => {
+    const r = release();
+    expect(r.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'returns-original-rack',
+      'returns-list-and-phone',
+      'returns-request-notification',
+    ]);
+    const [rack, list, ping] = r.entries;
+    expect(rack!.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
+    expect(list!.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
+    expect(ping!.audience).toEqual({ anyPermission: ['returns:manage'], modules: ['returns'] });
+    expect(ping!.link?.href).toBe('/dashboard/settings/notifications');
+  });
+
+  it('uses the words the screens print, and claims nothing the product does not do', () => {
+    const r = release();
+    const all = readerText(r).join(' ');
+    // The copy guard's banned words (returns-copy.test.ts), plus no numbers.
+    expect(all).not.toMatch(/\bbooks?\b|verified|inspected|certif|guarantee|exchange for|%/i);
+    // The screens' own labels, so the note and the product never disagree.
+    for (const label of ['Leave in Staging', 'Approve and receive', 'The item is here', 'Process return']) {
+      expect(all).toContain(label);
+    }
+    for (const f of availableReturnListFilters({ exchanges: false }).filter((x) => x.id !== 'all')) {
+      expect(all).toContain(f.label);
+    }
+    const form = readFileSync(resolve(__dirname, '../../components/settings/notification-preferences-form.tsx'), 'utf8');
+    expect(form).toContain("label: 'New return and exchange requests'");
+    expect(all).toContain('Notifications: New return and exchange requests');
+    // Nothing moves at approval (brief 14), and the phone is online only.
+    expect(r.entries[0]!.whatChanged).toContain('Nothing moves until the item is received.');
+    expect(r.entries[1]!.howItAffectsYou).toContain('every return action needs a connection');
   });
 });
