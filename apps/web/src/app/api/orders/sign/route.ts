@@ -446,7 +446,9 @@ export async function POST(req: NextRequest) {
       level: 'warning',
       extra: { orderId: order.id },
     });
-    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+    // The status is unknown, so none is claimed (L87: the sign page's words
+    // follow the status it is given).
+    return NextResponse.json({ ok: true, data: { id: order.id, status: null } }, { status: 200 });
   }
   const fullRow = statusRead.data;
   const newStatus = (fullRow as { status?: string } | null)?.status ?? null;
@@ -601,7 +603,10 @@ export async function POST(req: NextRequest) {
       orderNumber: order.id.slice(0, 8).toUpperCase(),
       status: 'backordered',
     });
-    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, data: { id: order.id, status: 'backordered' } },
+      { status: 200 },
+    );
   }
 
   if (isCompleted && fullRow) {
@@ -669,5 +674,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+  // The resulting status, so the sign page says what happened (L87).
+  return NextResponse.json({ ok: true, data: { id: order.id, status: newStatus } }, { status: 200 });
 }

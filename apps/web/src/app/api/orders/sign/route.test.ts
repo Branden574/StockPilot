@@ -394,6 +394,35 @@ describe('POST /api/orders/sign — internal requester contact resolution', () =
   });
 });
 
+// L87: the sign page's words follow the status the hand-over left.
+describe('POST /api/orders/sign — answers the resulting status (L87)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a hand-over that completes the order answers completed', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+    });
+    const res = await POST(request());
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: 'completed' } });
+  });
+
+  it('a hand-over that leaves units owed answers backordered', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+    });
+    const res = await POST(request());
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: 'backordered' } });
+  });
+});
+
 describe('POST /api/orders/sign — reads after the signature is recorded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -412,7 +441,8 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     const res = await POST(request());
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1' } });
+    // L87: the status could not be read, so none is claimed.
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1', status: null } });
     expect(reportError).toHaveBeenCalledWith(
       READ_ERROR,
       expect.objectContaining({ tag: 'orders.sign.post_status_read', level: 'warning' }),

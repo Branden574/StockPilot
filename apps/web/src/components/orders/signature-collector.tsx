@@ -9,11 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad';
+import { signedOutcome, type SignedOutcome } from '@/lib/orders/sign-outcome';
 
 import type { OrderSignSummary } from '@/app/orders/sign/[token]/page';
 
 const REDIRECT_SECONDS = 5;
-const REDIRECT_DESTINATION = '/dashboard/orders?status=completed';
 
 /**
  * Public signature surface for `/orders/sign/<token>`.
@@ -48,7 +48,9 @@ export function SignatureCollector({
   const [signerName, setSignerName] = React.useState(summary.requesterName ?? '');
   const [signerEmail, setSignerEmail] = React.useState(summary.requesterEmail ?? '');
   const [submitting, setSubmitting] = React.useState(false);
-  const [submitted, setSubmitted] = React.useState(false);
+  // What the hand-over left the order as (L87): set from the sign route's
+  // answer, null until it is recorded.
+  const [submitted, setSubmitted] = React.useState<SignedOutcome | null>(null);
   const [countdown, setCountdown] = React.useState(REDIRECT_SECONDS);
 
   function toggleOnBehalfOf(next: boolean) {
@@ -63,15 +65,15 @@ export function SignatureCollector({
   }
 
   // After the success state mounts, count down once per second and
-  // navigate to /dashboard/orders?status=completed when we hit 0. The
-  // redirect lands a logged-in dashboard user on the completed list
-  // so they can see the order they just signed off on. A public
-  // (anonymous) signer hits the login page — which is fine: the order
-  // is already completed and the email receipt is on its way.
+  // navigate to the orders list the order now sits in (completed, or
+  // backordered after a short hand-over) when we hit 0, so a logged-in
+  // dashboard user sees the order they just signed off on. A public
+  // (anonymous) signer hits the login page, which is fine: the signature
+  // is already recorded.
   React.useEffect(() => {
     if (!submitted) return;
     if (countdown <= 0) {
-      router.push(REDIRECT_DESTINATION);
+      router.push(submitted.redirectTo);
       return;
     }
     const timer = setTimeout(() => setCountdown((n) => n - 1), 1000);
@@ -106,7 +108,9 @@ export function SignatureCollector({
     // unmounting us mid-success-state. A plain route handler call
     // never refreshes the page tree, so the "Thank you" panel below
     // stays put.
-    let res: { ok: true; data: { id: string } } | { ok: false; error: { code: string; message: string } };
+    let res:
+      | { ok: true; data: { id: string; status?: string | null } }
+      | { ok: false; error: { code: string; message: string } };
     try {
       const httpRes = await fetch('/api/orders/sign', {
         method: 'POST',
@@ -129,7 +133,7 @@ export function SignatureCollector({
       toast.error(res.error.message);
       return;
     }
-    setSubmitted(true);
+    setSubmitted(signedOutcome(res.data.status ?? null));
   }
 
   if (submitted) {
@@ -138,8 +142,13 @@ export function SignatureCollector({
       <div className="border-border bg-card rounded-2xl border p-6 text-center">
         <h2 className="font-display text-xl">Thank you</h2>
         <p className="text-muted-foreground mt-2 text-sm">
-          The order is marked completed. A digital receipt is on its way to{' '}
-          <span className="text-foreground font-medium">{signerEmail.trim()}</span>.
+          {submitted.message}
+          {submitted.receiptOnItsWay ? (
+            <>
+              {' '}A digital receipt is on its way to{' '}
+              <span className="text-foreground font-medium">{signerEmail.trim()}</span>.
+            </>
+          ) : null}
         </p>
         <p className="text-muted-foreground mt-4 text-xs">
           Returning to orders in{' '}
@@ -193,8 +202,8 @@ export function SignatureCollector({
                 <span className="text-foreground font-medium">
                   {summary.requesterName}
                 </span>
-                . The order will be marked completed and they&apos;ll be
-                notified by email.
+                . What you take is recorded on their order, and they&apos;ll
+                be notified.
               </span>
             </span>
           </label>
