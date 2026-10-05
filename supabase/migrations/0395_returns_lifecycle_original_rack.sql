@@ -72,10 +72,11 @@
 -- shelf/bin, never Staging, Unplaced or a Site), has the kind and warehouse
 -- its draws recorded, is organization-level or in the item's warehouse, sits
 -- in an active warehouse, and the item is not deleted. The close re-derives
--- the legs under FOR SHARE locks on the locations, re-checks every rule and
--- the remaining quantity, and raises restock_location_unavailable,
--- restock_plan_stale or restock_plan_mismatch rather than falling back: the
--- RMA stays received and nothing moves.
+-- the legs under FOR SHARE locks on the locations and their warehouses (so
+-- an archive, a move or a deactivation is serialised with the close),
+-- re-checks every rule and the remaining quantity, and raises
+-- restock_location_unavailable, restock_plan_stale or restock_plan_mismatch
+-- rather than falling back: the RMA stays received and nothing moves.
 --
 -- ── STOCK SEMANTICS KEPT ───────────────────────────────────────────────────
 -- Staging restock and scrap are 0373's legs, byte-identical (scrap stays
@@ -491,17 +492,32 @@ declare
   v_new  numeric;
   v_sum  numeric := 0;
   v_leg  record;
+  v_locs uuid[];
 begin
   select organization_id into v_org from public.inventory_items where id = p_item_id;
 
   -- Lock the planned locations FOR SHARE, in id order, then derive the legs
   -- again under those locks: an archive or a move that commits first is seen;
   -- one that comes later waits for this close.
+  select coalesce(array_agg(g.location_id), '{}'::uuid[]) into v_locs
+    from ledger.return_line_restock_legs(p_line_id) g;
   perform 1
      from public.locations l
-    where l.id in (select g.location_id from ledger.return_line_restock_legs(p_line_id) g)
+    where l.id = any (v_locs)
     order by l.id
       for share of l;
+  -- And their warehouses (desk check F8): a deactivation updates the
+  -- warehouse row, not the location, so the location lock alone does not hold
+  -- it off. A status change that commits first is seen by the derivation
+  -- below; a later one waits for this close. Locations, then warehouses, each
+  -- in id order; nothing locks a warehouse row and then a location (a
+  -- warehouse update is a single row, and a location's foreign key takes KEY
+  -- SHARE, which FOR SHARE does not block).
+  perform 1
+     from public.warehouses w
+    where w.id in (select l.warehouse_id from public.locations l where l.id = any (v_locs))
+    order by w.id
+      for share of w;
 
   for v_leg in
     select g.location_id, g.quantity, g.remaining, g.valid, g.problem
@@ -2130,7 +2146,7 @@ comment on function ledger.return_line_plans_original(uuid) is
 comment on function ledger.return_line_restock_legs(uuid) is
   'RX-1: the live original-rack plan re-derived now: single_source gives one leg (the whole line), full_remainder one leg per location (what is still out there), source one leg at the chosen proven location; anything else raises P0001 restock_plan_stale. Rows carry the remaining quantity and validity for the caller to enforce. SECURITY INVOKER, no API EXECUTE.';
 comment on function ledger.return_restock_original(uuid, uuid, uuid, numeric, uuid) is
-  'RX-1: the rack leg of ledger.process_return_disposition. Locks the planned locations FOR SHARE in id order, re-derives the legs under those locks, refuses an invalid or over-remaining leg (P0001 restock_location_unavailable, detail {rule, locationId}) and a leg on a location a signed-in caller below manager may not write (42501 restock_location_forbidden, detail {rule location_write, locationId}: apply_holding_delta''s own gate, answered with a hint), then per leg: on hand +q, ledger.apply_holding_delta(item, location, +q), one return movement with to_location_id and the RMA reference. The legs must sum to the line (P0001 restock_plan_mismatch). SECURITY INVOKER, no API EXECUTE; runs inside the wrapper''s ledger transaction.';
+  'RX-1: the rack leg of ledger.process_return_disposition. Locks the planned locations FOR SHARE in id order, then their warehouses FOR SHARE in id order (a deactivation is serialised with the close), re-derives the legs under those locks, refuses an invalid or over-remaining leg (P0001 restock_location_unavailable, detail {rule, locationId}) and a leg on a location a signed-in caller below manager may not write (42501 restock_location_forbidden, detail {rule location_write, locationId}: apply_holding_delta''s own gate, answered with a hint), then per leg: on hand +q, ledger.apply_holding_delta(item, location, +q), one return movement with to_location_id and the RMA reference. The legs must sum to the line (P0001 restock_plan_mismatch). SECURITY INVOKER, no API EXECUTE; runs inside the wrapper''s ledger transaction.';
 comment on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) is
   'RX-1 hook stub: refuses any line carrying an exchange (P0001 exchange_not_available). RX-2 replaces the body (exchange lines). SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_approve(uuid, jsonb, uuid, integer) is

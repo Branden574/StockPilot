@@ -25,7 +25,11 @@
 #      race, follow-up 13.1, recorded rather than fixed here). 4b: the archive
 #      holds; the close waits on the rack row, then re-derives its legs under
 #      the lock, sees the archive and refuses restock_location_unavailable:
-#      nothing moves, the RMA stays received.
+#      nothing moves, the RMA stays received. 4c (desk check F8): a warehouse
+#      deactivation holds the warehouse row; the close waits on it (the rack
+#      leg locks each location's warehouse FOR SHARE), then sees the warehouse
+#      inactive and refuses restock_location_unavailable (rule
+#      warehouse_inactive): nothing moves. The warehouse is reactivated after.
 #   5. Create replay. 5a: the same key from two sessions: B waits on the key,
 #      then replays A's RMA (one RMA). 5b: two different keys, each for the
 #      whole line: the fulfilled cap's order-line lock serialises them and
@@ -60,17 +64,20 @@ WH='03951111-0000-0000-0000-0000000000b1'
 R1='03951111-0000-0000-0000-000000000c31'
 RA='03951111-0000-0000-0000-000000000c32'
 RB='03951111-0000-0000-0000-000000000c33'
+RC='03951111-0000-0000-0000-000000000c34'
 IT='03951111-0000-0000-0000-0000000000e1'
 IT4A='03951111-0000-0000-0000-0000000000e2'
 IT4B='03951111-0000-0000-0000-0000000000e3'
 IT5A='03951111-0000-0000-0000-0000000000e4'
 IT5B='03951111-0000-0000-0000-0000000000e5'
+IT4C='03951111-0000-0000-0000-0000000000e6'
 ORDER='03951111-0000-0000-0000-000000000101'
 L='03951111-0000-0000-0000-000000000201'
 L4A='03951111-0000-0000-0000-000000000202'
 L4B='03951111-0000-0000-0000-000000000203'
 L5A='03951111-0000-0000-0000-000000000204'
 L5B='03951111-0000-0000-0000-000000000205'
+L4C='03951111-0000-0000-0000-000000000206'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -198,14 +205,16 @@ insert into public.warehouses (id, organization_id, name, code, status) values (
 insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at) values
   ('$R1', '$ORG', '$WH', '31-C', 'shelf', 'rack', now() - interval '30 minutes'),
   ('$RA', '$ORG', '$WH', '32-A', 'shelf', 'rack', now() - interval '29 minutes'),
-  ('$RB', '$ORG', '$WH', '33-B', 'shelf', 'rack', now() - interval '28 minutes');
+  ('$RB', '$ORG', '$WH', '33-B', 'shelf', 'rack', now() - interval '28 minutes'),
+  ('$RC', '$ORG', '$WH', '34-C', 'shelf', 'rack', now() - interval '27 minutes');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, primary_location_id) values
   ('$IT',   '$ORG', '$WH', '0395-2S',    '2S return shirt',         20, 'active', 'none', '$R1'),
   ('$IT4A', '$ORG', '$WH', '0395-2S-4A', '2S return shirt archive', 2,  'active', 'none', '$RA'),
   ('$IT4B', '$ORG', '$WH', '0395-2S-4B', '2S return shirt archive2', 2, 'active', 'none', '$RB'),
   ('$IT5A', '$ORG', '$WH', '0395-2S-5A', '2S return shirt key',     2,  'active', 'none', '$R1'),
-  ('$IT5B', '$ORG', '$WH', '0395-2S-5B', '2S return shirt cap',     2,  'active', 'none', '$R1');
+  ('$IT5B', '$ORG', '$WH', '0395-2S-5B', '2S return shirt cap',     2,  'active', 'none', '$R1'),
+  ('$IT4C', '$ORG', '$WH', '0395-2S-4C', '2S return shirt closed wh', 2, 'active', 'none', '$RC');
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup');
@@ -214,7 +223,8 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   ('$L4A', '$ORDER', '$IT4A', 1,  0),
   ('$L4B', '$ORDER', '$IT4B', 1,  0),
   ('$L5A', '$ORDER', '$IT5A', 1,  0),
-  ('$L5B', '$ORDER', '$IT5B', 1,  0);
+  ('$L5B', '$ORDER', '$IT5B', 1,  0),
+  ('$L4C', '$ORDER', '$IT4C', 1,  0);
 SQL
 then
   echo "fixture setup failed"; exit 1
@@ -227,7 +237,7 @@ if [ "$(sed -n 's/^P=//p' "$TMP/pick.out")/$(sed -n 's/^P=//p' "$TMP/sign.out")"
   echo "fixture: the pick or the hand-over failed:"; cat "$TMP/pick.out" "$TMP/sign.out"; exit 1
 fi
 check "fixture: every pick carries its recorded draw" \
-  "$(q "select count(*) from public.stock_movements where reference_type = 'order_request' and reference_id = '$ORDER' and movement_type = 'transfer' and quantity_change < 0 and via_ledger and draw is not null")" "5"
+  "$(q "select count(*) from public.stock_movements where reference_type = 'order_request' and reference_id = '$ORDER' and movement_type = 'transfer' and quantity_change < 0 and via_ledger and draw is not null")" "6"
 
 ans() { sed -n 's/^R=//p' "$TMP/$1.$2.out"; }
 # jget <dotted path> [more paths]: the values at those paths of the JSON on
@@ -372,6 +382,19 @@ check "4b: the refusal names the archived rack" "$(grep -c '"rule": "archived"' 
 waited archclose "4b"
 check "4b: nothing moved; the RMA stays received; the line unapplied" \
   "$(item_snap "$IT4B" "$RB")/$(status_of "$R")/$(q "select applied::text from public.return_lines where return_id = '$R'")" \
+  "$S0/received/false"
+
+echo "== 4c. a warehouse deactivation holds; the close waits on the warehouse row, then refuses"
+R="$(new_rma 9 "$L4C")"
+check "4c: set up (approved to 34-C, received)" "$(approve_now "$R" original)/$(receive_now "$R")" "approved/received"
+S0="$(item_snap "$IT4C" "$RC")"
+race whclose - "update public.warehouses set status = 'inactive' where id = '$WH';" commit "$MGR" "$(close_sql "$R")"
+q "update public.warehouses set status = 'active' where id = '$WH'" >/dev/null
+check "4c: the close is refused restock_location_unavailable" "$(refused whclose B P0001 restock_location_unavailable)" "1/1"
+check "4c: the refusal names the inactive warehouse" "$(grep -c '"rule": "warehouse_inactive"' "$TMP/whclose.B.out")" "1"
+waited whclose "4c"
+check "4c: nothing moved; the RMA stays received; the line unapplied" \
+  "$(item_snap "$IT4C" "$RC")/$(status_of "$R")/$(q "select applied::text from public.return_lines where return_id = '$R'")" \
   "$S0/received/false"
 
 # ═══ 5. Create replay ═════════════════════════════════════════════════════

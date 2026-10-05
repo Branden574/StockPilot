@@ -81,6 +81,7 @@
 --   M21 close_return passes the body's bare tokens through (F7)      -> I6
 --   M22 the rack leg leaves the location gate to the bare writer (F7) -> I7
 --   M23 the create passes the cap trigger's bare token through (F7)  -> race 5b
+--   M24 the rack leg does not lock the locations' warehouses (F8)    -> race 4c
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
