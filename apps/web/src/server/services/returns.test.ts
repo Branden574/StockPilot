@@ -232,7 +232,7 @@ describe('approve (approve_return)', () => {
       p_decision: DECISION,
       p_receive_now: false,
     });
-    expect(answer).toEqual({ changed: true, replay: false, status: 'approved', revision: 1 });
+    expect(answer).toEqual({ changed: true, replay: false, status: 'approved', revision: 1, replacement: null });
     expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.approved', 'return.disposition_planned']);
     expect(auditMock.mock.calls[0]![0]).toMatchObject({
       extra: { revision: 1, channel: 'staff', plan: [{ returnLineId: RLINE_ID, disposition: 'restock', target: 'original', locationId: null }] },

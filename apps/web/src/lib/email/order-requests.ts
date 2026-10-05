@@ -33,6 +33,7 @@ import {
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveTrackToken } from '@/server/lib/order-secrets';
+import { sendReplacementOrderEmail } from '@/server/email/replacement-update';
 
 import type {
   DetailCell,
@@ -1378,7 +1379,9 @@ export interface OrderRequestEmailResult {
   error?: string;
   /** True when nothing was sent on purpose. `ok` stays true. */
   skipped?: boolean;
-  skipReason?: 'kill_switch' | 'unsubscribed';
+  /** 'replacement': an exchange replacement order's email that is never sent
+   *  or was reworded and suppressed (returns RX-2). */
+  skipReason?: 'kill_switch' | 'unsubscribed' | 'replacement';
 }
 
 export async function sendOrderRequestEmail(
@@ -1398,6 +1401,28 @@ export async function sendOrderRequestEmail(
     throw new Error(
       'confirm_request email requires a confirmationToken — refusing to send empty CTA.',
     );
+  }
+
+  // Returns RX-2: an exchange replacement order (created and approved by its
+  // RMA, no track token) never gets the ordinary order emails; its few
+  // emails are reworded, link the RMA's token page for an email-only
+  // requester (A-3), and the requester's completion email is the return
+  // prompt's replacement branch. See server/email/replacement-update.ts.
+  // Every caller passes a full row (select '*' or an RPC row), so the column
+  // is present on a replacement.
+  if (request.replacement_for_return_id) {
+    const outcome = await sendReplacementOrderEmail(createAdminClient(), {
+      order: request,
+      kind,
+      to: recipientEmail,
+      recipientName,
+      appUrl,
+    });
+    return outcome === 'failed'
+      ? { ok: false, error: 'replacement_email_failed' }
+      : outcome === 'sent'
+        ? { ok: true }
+        : { ok: true, skipped: true, skipReason: 'replacement' };
   }
 
   // Owner decision 2026-07-20: the packing + staged emails are LIVE by

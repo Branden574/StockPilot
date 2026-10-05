@@ -4,6 +4,8 @@ import {
   availableReturnActions,
   can,
   DELETED_USER_LABEL,
+  exchangeStatusStaffLabel,
+  parseExchangeStatus,
   inboundStateLabel,
   isDeletedPerson,
   originalRowLabel,
@@ -12,6 +14,7 @@ import {
   returnListFilter,
   RETURN_LIST_PAGE_SIZE,
   variantLabel,
+  type ExchangeStatus,
   type InboundLeg,
   type RestockOptionsLine,
   type ReturnActions,
@@ -24,6 +27,16 @@ import { ServiceError, type ServiceContext } from './context';
 import { ItemImagesService } from './item-images';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { buildReturnChainEvents, loadOriginalPicks, type ReturnChainEvent } from './return-history';
+import {
+  buildExchangeView,
+  EXCHANGE_LINES_EMBED,
+  exchangeItemIds,
+  readExchangeTier2,
+  readFreeStock,
+  readReplacementDetail,
+  type RawExchangeLine,
+  type ReturnWorkbenchExchange,
+} from './returns-exchange-workbench';
 
 /**
  * The RMA workbench and the returns list (returns RX-1, plan section 4 and
@@ -77,6 +90,12 @@ export interface ReturnWorkbenchDecision {
   channel: string;
   revision: number | null;
   returnLineId: string | null;
+  /** RX-2: the exchange line, the items and the replacement order a decision names. */
+  exchangeLineId: string | null;
+  itemId: string | null;
+  previousItemId: string | null;
+  quantity: number | null;
+  orderRequestId: string | null;
   disposition: string | null;
   restockTarget: string | null;
   locationId: string | null;
@@ -136,6 +155,8 @@ export interface ReturnWorkbench {
   chain: ReturnChainEvent[];
   viewer: { canManageReturns: boolean; canApproveOrders: boolean; canReadDecisions: boolean };
   actions: ReturnActions;
+  /** RX-2: the REPLACEMENT column, the outbound rail and the exchange facts. */
+  exchange: ReturnWorkbenchExchange;
 }
 
 export interface ReturnListQuery {
@@ -170,8 +191,13 @@ export interface ReturnListRow {
   /** The first two returning items; `moreItems` counts the rest. */
   items: ReturnListRowItem[];
   moreItems: number;
-  /** RX-1: every RMA is a return (RX-2 adds exchanges). */
-  type: 'return';
+  /** RX-2: a return, or an exchange (the view's kind column). */
+  type: 'return' | 'exchange';
+  /** RX-2: the view's exchange status and its staff words ('none' for a return). */
+  exchangeStatus: ExchangeStatus;
+  exchangeStatusLabel: string | null;
+  /** The live (else newest) replacement's SO number. */
+  replacementOrderNumber: number | null;
 }
 
 export interface ReturnListPage {
@@ -390,6 +416,7 @@ type HeaderRow = {
     applied: boolean | null;
     created_at: string;
   }> | null;
+  exchange_lines?: RawExchangeLine[] | null;
 };
 
 type DecisionRow = {
@@ -398,6 +425,11 @@ type DecisionRow = {
   channel: string;
   revision: number | null;
   return_line_id: string | null;
+  exchange_line_id?: string | null;
+  item_id?: string | null;
+  previous_item_id?: string | null;
+  quantity?: number | string | null;
+  order_request_id?: string | null;
   disposition: string | null;
   restock_target: string | null;
   location_id: string | null;
@@ -429,7 +461,8 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
        requester_name, requester_email, requested_by, approved_by, approved_at, received_by, received_at,
        closed_by, closed_at, denied_by, denied_at, deleted_users, created_at,
        order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, completed_at),
-       lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied, created_at)`,
+       lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied, created_at),
+       ${EXCHANGE_LINES_EMBED}`,
     )
     .eq('organization_id', ctx.organizationId)
     .eq('id', id)
@@ -443,19 +476,23 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   );
   const itemIds = [...new Set(rawLines.map((l) => l.item_id))];
   const warehouseId = order?.warehouse_id ?? null;
+  // RX-2: the exchange lines came with the RMA; their items join the reads.
+  const rawExchange = h.exchange_lines ?? [];
+  const exchangeIds = exchangeItemIds(rawExchange);
+  const allItemIds = [...new Set([...itemIds, ...exchangeIds])];
 
   // Tier 2, in parallel.
-  const [optionsRes, decisionsRes, items, movementsRes, warehouseRes, writeOk] = await Promise.all([
+  const [optionsRes, decisionsRes, items, movementsRes, warehouseRes, writeOk, exchangeTier2, freeStock] = await Promise.all([
     ctx.supabase.rpc('return_restock_options', { p_return_id: id }),
     ctx.supabase
       .from('return_decisions')
       .select(
-        'seq, kind, channel, revision, return_line_id, disposition, restock_target, location_id, basis, reason, actor_user_id, actor_kind, created_at',
+        'seq, kind, channel, revision, return_line_id, exchange_line_id, item_id, previous_item_id, quantity, order_request_id, disposition, restock_target, location_id, basis, reason, actor_user_id, actor_kind, created_at',
       )
       .eq('organization_id', ctx.organizationId)
       .eq('return_id', id)
       .order('seq', { ascending: true }),
-    readItems(ctx, itemIds, 'returns.workbench.items'),
+    readItems(ctx, allItemIds, 'returns.workbench.items'),
     ctx.supabase
       .from('stock_movements')
       .select('item_id, movement_type, quantity_change, to_location_id, created_at')
@@ -472,6 +509,8 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       ? ctx.supabase.from('warehouses').select('id, name').eq('id', warehouseId).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     canWriteWarehouse(ctx, warehouseId),
+    readExchangeTier2(ctx, id, rawExchange.length > 0),
+    readFreeStock(ctx, exchangeIds),
   ]);
 
   let options: ReturnType<typeof parseRestockOptions> | null = null;
@@ -504,8 +543,23 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   for (const l of options?.lines ?? []) for (const s of l.sources) if (s.name) sourceNames.set(s.locationId, s.name);
   const missingLocations = locationIds.filter((lid) => !sourceNames.has(lid));
   const itemNames = new Map<string, string | null>(itemIds.map((iid) => [iid, items.get(iid)?.name ?? null]));
-  const [images, names, locationRows, picks] = await Promise.all([
-    readImages(ctx, itemIds, 'returns.workbench.images'),
+  const liveReplacement =
+    exchangeTier2.replacements.find((r) => r.status !== 'cancelled' && r.status !== 'denied') ?? null;
+  // The exchange items' labels ("New Hire Shirt, L") for the chain and the picks.
+  const exchangeLabels = new Map<string, string>(
+    exchangeIds.map((iid) => [iid, returnLineLabel(items.get(iid)?.name ?? null, variantOf(items.get(iid)))]),
+  );
+  const liveItemIds = liveReplacement
+    ? [
+        ...new Set(
+          rawExchange
+            .filter((l) => l.replacement_order_request_id === liveReplacement.id && l.approved_item_id)
+            .map((l) => l.approved_item_id as string),
+        ),
+      ]
+    : [];
+  const [images, names, locationRows, picks, replacementDetail, replacementPicks] = await Promise.all([
+    readImages(ctx, allItemIds, 'returns.workbench.images'),
     readNames(ctx, [
       h.requested_by,
       h.approved_by,
@@ -529,6 +583,20 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         })
       : Promise.resolve([] as Array<{ id: string; name: string }>),
     loadOriginalPicks(ctx, h.order_request_id, itemIds, itemNames),
+    liveReplacement
+      ? readReplacementDetail(ctx, { id: liveReplacement.id, warehouse_id: liveReplacement.warehouse_id }).catch((err) => {
+          reportDegradedRead('returns.workbench.replacement_detail', err, { returnId: id });
+          return null;
+        })
+      : Promise.resolve(null),
+    liveReplacement && liveItemIds.length > 0
+      ? loadOriginalPicks(
+          ctx,
+          liveReplacement.id,
+          liveItemIds,
+          new Map(liveItemIds.map((iid) => [iid, exchangeLabels.get(iid) ?? null])),
+        )
+      : Promise.resolve([]),
   ]);
   const locationName = new Map<string, string>(sourceNames);
   for (const r of locationRows) locationName.set(r.id, r.name);
@@ -591,6 +659,11 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     channel: d.channel,
     revision: d.revision,
     returnLineId: d.return_line_id,
+    exchangeLineId: d.exchange_line_id ?? null,
+    itemId: d.item_id ?? null,
+    previousItemId: d.previous_item_id ?? null,
+    quantity: d.quantity === null || d.quantity === undefined ? null : numberOf(d.quantity),
+    orderRequestId: d.order_request_id ?? null,
     disposition: d.disposition,
     restockTarget: d.restock_target,
     locationId: d.location_id,
@@ -618,6 +691,14 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     itemNames,
     lineLabels,
     originalRacks,
+    exchangeNames: {
+      items: exchangeLabels,
+      orders: new Map(exchangeTier2.replacements.map((r) => [r.id, r.order_number])),
+    },
+    replacementPicks,
+    replacement: liveReplacement
+      ? { orderNumber: liveReplacement.order_number, completedAt: liveReplacement.completed_at }
+      : null,
     decisions: named,
     movements: movements.map((m) => ({
       itemId: m.item_id,
@@ -626,6 +707,37 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       toLocationName: m.to_location_id ? (locationName.get(m.to_location_id) ?? null) : null,
       rack: m.to_location_id !== null,
       createdAt: m.created_at,
+    })),
+  });
+
+  // RX-2: the REPLACEMENT column and the rail.
+  const exchangeItem = (itemId: string | null) => {
+    if (!itemId) return null;
+    const it = items.get(itemId);
+    const img = images.get(itemId);
+    return {
+      name: it?.name ?? null,
+      sku: it?.sku ?? null,
+      variant: variantOf(it),
+      deleted: Boolean(it?.deleted_at),
+      imageUrl: img?.url ?? null,
+      thumbUrl: img?.thumbUrl ?? null,
+    };
+  };
+  const exchange = buildExchangeView({
+    returnStatus: h.status,
+    rawLines: rawExchange,
+    overview: exchangeTier2.overview,
+    replacements: exchangeTier2.replacements,
+    detail: replacementDetail,
+    itemOf: exchangeItem,
+    freeOf: (itemId) => (itemId && freeStock.has(itemId) ? (freeStock.get(itemId) as number) : null),
+    decisions: named.map((d) => ({
+      kind: d.kind,
+      reason: d.reason,
+      actorName: d.actorName,
+      createdAt: d.createdAt,
+      orderRequestId: d.orderRequestId,
     })),
   });
 
@@ -672,11 +784,15 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
     viewer,
     actions: availableReturnActions({
       status: h.status,
-      exchangeStatus: 'none',
+      exchangeStatus: exchange.status,
+      hasExchange: exchange.kind === 'exchange',
+      replacementClass: exchange.replacement?.class ?? 'none',
+      hasApprovedExchange: exchange.hasApprovedExchange,
       viewerCanManageReturns: canManageReturns,
       viewerCanApproveOrders: viewer.canApproveOrders,
       itemIsHere: createdOnCounter,
     }),
+    exchange,
   };
 }
 
@@ -700,6 +816,10 @@ type OverviewRow = {
   line_count: number | null;
   unit_count: number | string | null;
   lines: Array<{ line_id: string; item_id: string; quantity: number | string }> | null;
+  // RX-2 (0397's appended columns).
+  kind?: string | null;
+  exchange_status?: string | null;
+  replacement_order_number?: number | null;
 };
 
 export async function buildReturnListPage(ctx: ServiceContext, query: ReturnListQuery): Promise<ReturnListPage> {
@@ -714,7 +834,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
   let req = ctx.supabase
     .from('return_overview')
     .select(
-      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users',
+      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number',
     )
     .eq('organization_id', ctx.organizationId);
   if (filter.statuses) {
@@ -722,8 +842,22 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
     req = req.in('status', [...filter.statuses]);
   }
   if (filter.sort === 'approved_asc') req = req.not('approved_at', 'is', null);
+  // RX-2: returns only, exchanges, and the two replacement views (plan 3.10, G5).
+  if (filter.kind) req = req.eq('kind', filter.kind);
+  if (filter.exchangeStatuses && !filter.orRequestedShort) {
+    // in-list-bound: exchange statuses are a fixed enum of fifteen codes
+    req = req.in('exchange_status', [...filter.exchangeStatuses]);
+  }
 
   const clauses: string[] = [];
+  if (filter.exchangeStatuses && filter.orRequestedShort) {
+    // "Replacement unavailable": unavailable, or a requested exchange whose
+    // requested item is short right now (advice).
+    // in-list-bound: exchange statuses are a fixed enum of fifteen codes
+    clauses.push(
+      `or(exchange_status.in.(${filter.exchangeStatuses.join(',')}),and(exchange_status.eq.requested,requested_short.is.true))`,
+    );
+  }
   if (cursor) {
     const op = ascending ? 'gt' : 'lt';
     clauses.push(`or(${sortCol}.${op}."${cursor.k}",and(${sortCol}.eq."${cursor.k}",id.${op}.${cursor.i}))`);
@@ -802,7 +936,13 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
           };
         }),
         moreItems: Math.max(0, total - 2),
-        type: 'return' as const,
+        type: r.kind === 'exchange' ? ('exchange' as const) : ('return' as const),
+        exchangeStatus: parseExchangeStatus(r.exchange_status ?? 'none'),
+        exchangeStatusLabel:
+          r.kind === 'exchange'
+            ? exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), { returnStatus: r.status })
+            : null,
+        replacementOrderNumber: r.replacement_order_number ?? null,
       };
     }),
   };

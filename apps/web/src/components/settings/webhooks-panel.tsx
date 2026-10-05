@@ -40,6 +40,7 @@ const EVENTS: ReadonlyArray<readonly [string, string]> = [
   ['return.closed', 'Return closed'],
   ['return.received', 'Return received'],
   ['return.cancelled', 'Return cancelled'],
+  ['return.exchange_approved', 'Exchange approved'],
   // Inventory
   ['stock.low', 'Low stock'],
   ['cycle_count.completed', 'Cycle count complete'],

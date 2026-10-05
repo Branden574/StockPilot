@@ -376,7 +376,10 @@ describe('buildReturnListPage', () => {
       ['Pat Lee', null],
       [null, null],
     ]);
-    expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(/requested_by, deleted_users$/);
+    // RX-2 appends kind, exchange_status and the replacement number after 0393's two.
+    expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(
+      /requested_by, deleted_users, kind, exchange_status, replacement_order_number$/,
+    );
   });
 
   it('the waiting list filters to approved and sorts by the oldest approval', async () => {

@@ -108,14 +108,15 @@ describe('GET /api/orders/export.csv', () => {
     expect(header).toBe(
       'order_number,requester,requester_email,charter_destination,warehouse,status,' +
         'fulfillment_type,source,line_count,total_quantity,total_cost,created_at,' +
-        'approved_at,completed_at',
+        'approved_at,completed_at,exchange_replacement_for',
     );
     // order_number = first 8 hex chars uppercased; charter wins over warehouse;
     // total_cost is fixed to 2 dp.
     expect(firstRow).toBe(
       'ABCDEF12,Jane Picker,jane@example.com,North Charter (NCH),Main WH,completed,' +
         'delivery,internal,3,12,145.50,2026-05-01T10:00:00.000Z,' +
-        '2026-05-01T11:00:00.000Z,2026-05-02T09:00:00.000Z',
+        // Returns RX-2: blank for an ordinary order.
+        '2026-05-01T11:00:00.000Z,2026-05-02T09:00:00.000Z,',
     );
   });
 

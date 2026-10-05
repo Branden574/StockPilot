@@ -805,6 +805,16 @@ export async function renderPickSlipPdf(
           </View>
         </View>
 
+        {/* Returns RX-2: an exchange replacement says so, once (core slipExchangeLine). */}
+        {detail.replacement?.slipLine ? (
+          <View style={styles.notesWrap}>
+            <View style={styles.notesLabelCol}>
+              <Text style={styles.eyebrow}>EXCHANGE</Text>
+            </View>
+            <Text style={styles.notesBody}>{detail.replacement.slipLine}</Text>
+          </View>
+        ) : null}
+
         {/* Requester notes */}
         {request.notes ? (
           <View style={styles.notesWrap}>

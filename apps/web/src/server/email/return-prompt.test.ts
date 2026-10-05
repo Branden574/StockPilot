@@ -462,3 +462,58 @@ describe('maybeSendReturnPrompt', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Returns RX-2 (X-4): an exchange replacement's completion email is "Your
+ * exchange is complete" (or "Your replacement was handed over" while the RMA
+ * is still open), carrying the replacement's OWN return link, under the same
+ * 0278 marker: at most once, and never the ordinary prompt as well.
+ */
+describe('maybeSendReturnPrompt: the exchange replacement branch (RX-2)', () => {
+  const RMA_ID = '22222222-2222-4222-8222-222222222222';
+  const REPLACEMENT = { ...COMPLETED_ORDER, source: 'internal', requester_user_id: null, replacement_for_return_id: RMA_ID };
+  const rmaRow = (status: string) => ({
+    data: [{ id: RMA_ID, return_number: 'RMA-20261005-ABC123', status, order_request_id: 'orig', order_request: { order_number: 103 } }],
+    error: null,
+  });
+
+  it('closed RMA: ONE "exchange complete" email linking the replacement\'s own return page, marker claimed first', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [REPLACEMENT], error: null },
+      'returns.select': rmaRow('closed'),
+      'public_email_unsubscribes.select': { data: [], error: null },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: true });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; html: string; text: string; to: string };
+    expect(mail.to).toBe('requester@example.com');
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: exchange complete');
+    expect(mail.text).toContain('Your exchange is complete.');
+    expect(mail.text).toContain(`Start a return: ${APP_URL}/returns/request/${TOKEN}`);
+    expect(mail.html).not.toContain('Need to return anything');
+    // The marker was claimed by the guarded update before the send.
+    expect(stub.chainsAll.get('order_requests.update')?.[0]).toContain('is');
+  });
+
+  it('RMA still open: "Your replacement was handed over."', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [REPLACEMENT], error: null },
+      'returns.select': rmaRow('approved'),
+      'public_email_unsubscribes.select': { data: [], error: null },
+    });
+    await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; text: string };
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: replacement handed over');
+    expect(mail.text).toContain('Your replacement was handed over.');
+  });
+
+  it('at most once: a replacement already prompted sends nothing', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [{ ...REPLACEMENT, return_prompt_sent_at: '2026-10-05T00:00:00Z' }], error: null },
+      'returns.select': rmaRow('closed'),
+    });
+    expect(await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL })).toEqual({ sent: false, reason: 'already_sent' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+});

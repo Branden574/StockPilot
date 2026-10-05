@@ -718,3 +718,56 @@ describe('return-update (returns RX-1)', () => {
     expect(def.from).toBe(FULFILLMENT_ORDERS_FROM);
   });
 });
+
+describe('return-update: the exchange events (returns RX-2)', () => {
+  const base = {
+    returnNumber: 'RMA-20261005-ABC123',
+    orderNumber: 'SO-000103',
+    recipientFirstName: 'Pat Lee',
+    recipientEmail: 'pat@example.com',
+    viewUrl: 'https://app.example.com/returns/request/tok',
+    urls: URLS,
+  };
+
+  it.each([
+    ['exchange_approved', 'exchange approved', 'Your exchange was approved.', 'Your replacement is reserved.'],
+    ['exchange_approved_short', 'exchange approved', 'Your exchange was approved.', 'Your replacement is not in stock yet. The warehouse will follow up.'],
+    ['replacement_changed', 'replacement changed', 'Your replacement was changed.', 'The warehouse will let you know when it is ready.'],
+    ['replacement_cancelled', 'replacement cancelled', 'Your replacement was cancelled.', 'The warehouse will follow up.'],
+    ['replacement_ready_pickup', 'replacement ready', 'Your replacement is ready.', 'Ready for pickup.'],
+    ['replacement_ready_delivery', 'replacement ready', 'Your replacement is ready.', 'Ready for delivery.'],
+    ['replacement_on_the_way', 'replacement on the way', 'Your replacement is on the way.', 'It is out for delivery.'],
+    ['replacement_partly_handed_over', 'part of your replacement handed over', 'Part of your replacement was handed over.', 'The rest will follow.'],
+    ['replacement_handed_over', 'replacement handed over', 'Your replacement was handed over.', 'Thank you.'],
+    ['exchange_complete', 'exchange complete', 'Your exchange is complete.', 'Thank you.'],
+  ] as const)('%s: "%s"', (event, summary, lead, sentence) => {
+    const r = renderReturnUpdateEmail({ ...base, event });
+    expect(r.subject).toBe(`Return RMA-20261005-ABC123: ${summary}`);
+    expect(r.html).toContain(lead);
+    expect(r.text).toContain(lead);
+    expect(r.text).toContain(sentence);
+    for (const out of [r.html, r.text, r.subject, r.preheader]) {
+      expect(out).not.toMatch(/\brack\b|staging|scrap|restock|disposition|on record|cost/i);
+      expect(out).not.toMatch(/\bbooks?\b/i);
+    }
+    expect(() => assertEmailWeight(r.html)).not.toThrow();
+  });
+
+  it('the requester words match core (one vocabulary for the app and the email)', async () => {
+    const { RETURNS_COPY } = await import('@stockpilot/core');
+    const words = (event: Parameters<typeof renderReturnUpdateEmail>[0]['event']) => {
+      const r = renderReturnUpdateEmail({ ...base, event });
+      return r.preheader;
+    };
+    expect(words('exchange_approved')).toBe(RETURNS_COPY.requesterExchangeApprovedReserved);
+    expect(words('exchange_approved_short')).toBe(RETURNS_COPY.requesterExchangeApprovedShort);
+    expect(words('replacement_partly_handed_over')).toBe(RETURNS_COPY.requesterPartlyHandedOver);
+  });
+
+  it('the completion email can carry its own button words (the replacement\'s return page)', () => {
+    const r = renderReturnUpdateEmail({ ...base, event: 'exchange_complete', ctaLabel: 'Start a return' });
+    expect(r.html).toContain('Start a return');
+    expect(r.html).not.toContain('View your return');
+    expect(r.text).toContain('Start a return: https://app.example.com/returns/request/tok');
+  });
+});

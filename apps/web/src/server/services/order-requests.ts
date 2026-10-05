@@ -53,6 +53,7 @@ import {
   partialActionMovedOnCopy,
   resolveOrgTimezone,
   resolveRequesterIdentity,
+  RETURN_ERROR_WORDS,
   shouldTopUpHolds,
   wallClockString,
   wallClockToInstant,
@@ -104,6 +105,13 @@ import {
 } from './order-submission';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import {
+  loadOrderExchangeChips,
+  loadReplacementInfo,
+  replacementRefusal,
+  type OrderExchangeChip,
+  type OrderReplacementInfo,
+} from './order-replacement';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 
@@ -200,6 +208,10 @@ export interface OrderRequestRow {
    *  (mig 0330; the /r/track `&t=` scope status emails embed) lives in
    *  order_request_secrets (server/lib/order-secrets resolveTrackToken). */
   public_track_token: string | null;
+  /** Returns RX-2 (0397): the RMA this order is the exchange replacement for.
+   *  Set only by the RMA's functions, never changed. Absent from a narrow
+   *  select. */
+  replacement_for_return_id?: string | null;
 }
 
 export interface OrderRequestLineRow {
@@ -299,6 +311,10 @@ export interface OrderRequestSummary {
   assignedPickerName: string | null;
   assignedDeliveryUserId: string | null;
   assignedDeliveryUserName: string | null;
+  /** Returns RX-2: the RMA this order replaces items for (the "Exchange" chip). */
+  replacementForReturnId?: string | null;
+  /** The chip's RMA number and gate words, from one batched read per page. */
+  exchange?: OrderExchangeChip | null;
 }
 
 /** One flattened order-history row for CSV export (see exportRows). */
@@ -324,6 +340,8 @@ export interface OrderExportRow {
   approvedAt: string | null;
   /** completed_at, falling back to delivered_at for older rows. */
   completedAt: string | null;
+  /** Returns RX-2: the RMA number an exchange replacement order belongs to. */
+  replacementForReturnNumber?: string | null;
 }
 
 export interface OrderRequestDetail {
@@ -364,6 +382,30 @@ export interface OrderRequestDetail {
    * it can never drift out of sync with reality.
    */
   pickSlipStale: boolean;
+  /**
+   * Returns RX-2: the exchange replacement block (banner, return-first gate,
+   * early release, fixed lines, the slips' and the driver's lines). Null for
+   * an ordinary order.
+   */
+  replacement?: OrderReplacementInfo | null;
+}
+
+/** Returns RX-2: one step of the prepare chain (plan 3.3.8). */
+export type PrepareStep = 'pick_slip' | 'claim' | 'pick' | 'packing_slips' | 'stage';
+
+export interface PrepareStepResult {
+  step: PrepareStep;
+  /** done (this call did it), already (it was done), refused (the chain stopped here). */
+  outcome: 'done' | 'already' | 'refused';
+  reason?: string;
+  message?: string;
+}
+
+export interface PrepareForHandoverResult {
+  ran: PrepareStepResult[];
+  /** The order's status after the chain (staged_for_pickup or _delivery when it got there). */
+  status: OrderRequestStatus;
+  fulfillmentType: 'pickup' | 'delivery';
 }
 
 /**
@@ -905,6 +947,7 @@ export class OrderRequestsService {
          requester_name, requester_org_label, source, notes,
          created_at, updated_at, approved_at, delivered_at,
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
+         replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          lines:order_request_lines (quantity_requested),
          requester:user_profiles!requester_user_id (full_name, email)`,
@@ -979,6 +1022,20 @@ export class OrderRequestsService {
       }
     }
 
+    // Returns RX-2: the Exchange chip's RMA number and gate words, ONE batched
+    // return_overview read for the page's replacement rows (none when the page
+    // has no replacement), never one read per row.
+    const chips = await loadOrderExchangeChips(
+      this.ctx,
+      rows.map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          id: r.id as string,
+          replacementForReturnId: (r.replacement_for_return_id as string | null | undefined) ?? null,
+        };
+      }),
+    );
+
     return rows.map((row) => {
       const r = row as Record<string, unknown>;
       const wh = r.warehouse as { name?: string } | { name?: string }[] | null;
@@ -1040,6 +1097,8 @@ export class OrderRequestsService {
         assignedPickerName: displayProfile(pickerProfile),
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
         assignedDeliveryUserName: displayProfile(driverProfile),
+        replacementForReturnId: (r.replacement_for_return_id as string | null | undefined) ?? null,
+        exchange: chips.get(r.id as string) ?? null,
       } satisfies OrderRequestSummary;
     });
   }
@@ -1107,7 +1166,8 @@ export class OrderRequestsService {
            warehouse:warehouses!warehouse_id (name),
            charter:charters!delivery_charter_id (name, code),
            lines:order_request_lines (quantity_requested, unit_cost_at_request),
-           requester:user_profiles!requester_user_id (full_name, email)`,
+           requester:user_profiles!requester_user_id (full_name, email),
+           replacement_return:returns!order_requests_replacement_return_fkey (return_number)`,
           // Only the first page needs the exact count — it's stable across
           // the loop and re-counting each page would be wasted work.
           offset === 0 ? { count: 'exact' } : undefined,
@@ -1156,6 +1216,7 @@ export class OrderRequestsService {
       const wh = flatten<{ name?: string | null }>(r.warehouse);
       const ch = flatten<{ name?: string | null; code?: string | null }>(r.charter);
       const reqProfile = flatten<{ full_name?: string | null; email?: string | null }>(r.requester);
+      const replacementReturn = flatten<{ return_number?: string | null }>(r.replacement_return);
       const lines =
         (r.lines as Array<{ quantity_requested: number; unit_cost_at_request: number }> | null) ??
         [];
@@ -1199,6 +1260,7 @@ export class OrderRequestsService {
         completedAt:
           ((r.completed_at as string | null) ?? null) ||
           ((r.delivered_at as string | null) ?? null),
+        replacementForReturnNumber: replacementReturn?.return_number ?? null,
       };
     });
 
@@ -1321,6 +1383,19 @@ export class OrderRequestsService {
       hdr.assigned_picker_id ? this.lookupUserProfile(hdr.assigned_picker_id) : Promise.resolve(null),
     ]);
     profilesRead.catch(() => {});
+    // Returns RX-2: an exchange replacement's block (banner, gate, release,
+    // the slips' and the driver's lines), read beside the lines. The database
+    // enforces every rule it words, so a failed read only loses the words.
+    const replacementRead: Promise<OrderReplacementInfo | null> = hdr.replacement_for_return_id
+      ? loadReplacementInfo(this.ctx, hdr).catch((err: unknown) => {
+          void reportSrvError(err instanceof Error ? err : new Error(String(err)), {
+            tag: 'order-requests.get.replacement',
+            level: 'warning',
+            extra: { orderId: id },
+          });
+          return null;
+        })
+      : Promise.resolve(null);
     const [linesRes, rsRes, whRes] = await Promise.all([
       this.ctx.supabase
         .from('order_request_lines')
@@ -1421,6 +1496,7 @@ export class OrderRequestsService {
 
     // Requester and picker profiles: started with the batch above.
     const [profile, pickerProfile] = await profilesRead;
+    const replacement = await replacementRead;
 
     // Resolved name/email safe for a name cell — SAME fallback the list()
     // path uses: free-text column wins, else the joined profile, else null.
@@ -1489,6 +1565,7 @@ export class OrderRequestsService {
           return !Number.isNaN(created) && created > printed;
         });
       })(),
+      replacement,
     };
   }
 
@@ -1819,7 +1896,7 @@ export class OrderRequestsService {
   }> {
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('order_requests')
-      .select('id, status, warehouse_id, requester_user_id, pick_slip_generated_at, order_number')
+      .select('id, status, warehouse_id, requester_user_id, pick_slip_generated_at, order_number, replacement_for_return_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -1832,7 +1909,18 @@ export class OrderRequestsService {
       requester_user_id: string | null;
       pick_slip_generated_at: string | null;
       order_number: number | null;
+      replacement_for_return_id?: string | null;
     };
+
+    // Returns RX-2: an exchange replacement's lines are fixed (0397's lines
+    // guard refuses them for every API role); its items change only through
+    // its RMA ("Change or cancel in RMA-..."). Refused here first, in core's
+    // words, before any other rule.
+    if (h.replacement_for_return_id) {
+      throw new ServiceError('forbidden', RETURN_ERROR_WORDS.replacementLinesFixed, {
+        reason: 'replacement_lines_fixed',
+      });
+    }
 
     // Ship gate — once it's out the door (or dead) the contents are final.
     const SHIPPED_OR_CLOSED: OrderRequestStatus[] = [
@@ -2784,7 +2872,7 @@ export class OrderRequestsService {
     if (!can(this.ctx, 'orders:approve')) {
       const { data: row, error: rowErr } = await this.ctx.supabase
         .from('order_requests')
-        .select('status, requester_user_id')
+        .select('status, requester_user_id, replacement_for_return_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', id)
         .maybeSingle();
@@ -2795,6 +2883,13 @@ export class OrderRequestsService {
       // after approval: releasing its reservations, or restocking units out
       // from under the picker who claimed it. Deny.
       if (rowErr) throw new ServiceError('internal_error', rowErr.message);
+      // Returns RX-2: an exchange replacement is cancelled only through its
+      // RMA (0397's cancel guard refuses everyone else, the requester too).
+      if (row && (row as { replacement_for_return_id?: string | null }).replacement_for_return_id) {
+        throw new ServiceError('forbidden', RETURN_ERROR_WORDS.replacementCancelViaReturn, {
+          reason: 'replacement_cancel_via_return',
+        });
+      }
       if (
         row &&
         (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId
@@ -2856,6 +2951,9 @@ export class OrderRequestsService {
       // the 'forbidden' arm, which would call it someone else's order.
       const guard = dbGuardRefusal(error);
       if (guard) throw guard;
+      // Returns RX-2: the cancel guard on a replacement, by its hint.
+      const refusal = replacementRefusal(error);
+      if (refusal) throw refusal;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order request not found');
@@ -3545,7 +3643,14 @@ export class OrderRequestsService {
       .eq('status', 'approved')
       .select('*')
       .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (updErr) {
+      // Returns RX-2: the return-first gate (0397) holds an exchange
+      // replacement until its RMA has the returned item or a manager
+      // released it early; refused by its hint in core's words.
+      const refusal = replacementRefusal(updErr);
+      if (refusal) throw refusal;
+      throw new ServiceError('internal_error', updErr.message);
+    }
     if (!updated)
       throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     await audit(
@@ -3689,6 +3794,10 @@ export class OrderRequestsService {
     await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('resume_fulfillment', { p_id: id });
     if (error) {
+      // Returns RX-2: a backordered replacement resumes into picking only
+      // once the return-first gate is open.
+      const refusal = replacementRefusal(error);
+      if (refusal) throw refusal;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
@@ -3957,6 +4066,9 @@ export class OrderRequestsService {
           emailOptedOut,
           // The number the app shows (L91); null falls back to the short id.
           orderNumber: formatOrderNumber(row.order_number),
+          // Returns RX-2: an exchange replacement's notices are reworded.
+          replacementForReturnId: row.replacement_for_return_id ?? null,
+          orderSource: row.source,
         });
         void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
           id,
@@ -3977,6 +4089,8 @@ export class OrderRequestsService {
             // Display-only: how many units the remainder batch carried.
             unitsShipped: Math.max(0, totalFulfilled - priorFulfilled),
             orderNumber: formatOrderNumber(row.order_number),
+            replacementForReturnId: row.replacement_for_return_id ?? null,
+            orderSource: row.source,
           });
         }
         // Completion receipt to the requester (notifyEmail honors prefs +
@@ -4160,6 +4274,111 @@ export class OrderRequestsService {
     // fails closed without it). Honors email_order_status_changed prefs.
     defer(() => this.notifyEmail(updated as OrderRequestRow, 'packing_slip_generated'));
     return updated as OrderRequestRow;
+  }
+
+  /**
+   * Returns RX-2, "Get replacement ready" (plan 3.3.8): run the existing
+   * order steps in order, each with its OWN gates and transaction, skipping
+   * the ones already done: the pick slip (the return-first gate applies), a
+   * claim when the viewer is not a manager and nobody claimed it, the
+   * one-click pick (the draw is recorded, as on the pick screen), the packing
+   * slips, staging. It stops at the first refusal (earlier steps stay done)
+   * and at staged for pickup or delivery: the signature is a person's
+   * moment, never taken here. No gate is bypassed.
+   *
+   * Known limit (B 5.4): the one-click pick takes placed holdings in the
+   * engine's order; the digital pick screen stays for exact per-rack picks.
+   */
+  async prepareForHandover(
+    id: string,
+    opts: { stopAt?: 'staged' } = {},
+  ): Promise<PrepareForHandoverResult> {
+    assertModuleEnabled(this.ctx, 'orders');
+    void opts; // 'staged' is the only stop: the chain never signs.
+    const read = async () => {
+      const { data, error } = await this.ctx.supabase
+        .from('order_requests')
+        .select('status, fulfillment_type, assigned_picker_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (!data) throw new ServiceError('not_found', 'Order not found');
+      return data as {
+        status: OrderRequestStatus;
+        fulfillment_type: 'pickup' | 'delivery';
+        assigned_picker_id: string | null;
+      };
+    };
+    const ran: PrepareStepResult[] = [];
+    const run = async (step: PrepareStep, fn: () => Promise<unknown>): Promise<boolean> => {
+      try {
+        await fn();
+        ran.push({ step, outcome: 'done' });
+        return true;
+      } catch (e) {
+        if (!(e instanceof ServiceError)) throw e;
+        ran.push({
+          step,
+          outcome: 'refused',
+          reason: typeof e.details?.reason === 'string' ? (e.details.reason as string) : e.code,
+          message: e.message,
+        });
+        return false;
+      }
+    };
+    const finish = (cur: { status: OrderRequestStatus; fulfillment_type: 'pickup' | 'delivery' }) => ({
+      ran,
+      status: cur.status,
+      fulfillmentType: cur.fulfillment_type,
+    });
+
+    let cur = await read();
+    const PICKING: OrderRequestStatus[] = ['pick_slip_generated', 'picking_in_progress'];
+    const AFTER_SLIP: OrderRequestStatus[] = [
+      ...PICKING,
+      'picking_complete',
+      'packing_slip_generated',
+      'staged_for_pickup',
+      'staged_for_delivery',
+    ];
+
+    if (cur.status === 'approved') {
+      if (!(await run('pick_slip', () => this.generatePickSlip(id)))) return finish(cur);
+      cur = await read();
+    } else if (AFTER_SLIP.includes(cur.status)) {
+      ran.push({ step: 'pick_slip', outcome: 'already' });
+    } else {
+      // Backordered, in transit, completed, cancelled: nothing to prepare.
+      return finish(cur);
+    }
+
+    if (PICKING.includes(cur.status)) {
+      const isManager = this.ctx.role === 'owner' || this.ctx.role === 'admin' || this.ctx.role === 'manager';
+      if (!isManager && !cur.assigned_picker_id) {
+        if (!(await run('claim', () => this.claimPicking(id)))) return finish(cur);
+      }
+      if (!(await run('pick', () => this.completePicking(id)))) return finish(await read());
+      cur = await read();
+    } else {
+      ran.push({ step: 'pick', outcome: 'already' });
+    }
+
+    if (cur.status === 'picking_complete') {
+      if (!(await run('packing_slips', () => this.generatePackingSlips(id)))) return finish(cur);
+      cur = await read();
+    } else {
+      ran.push({ step: 'packing_slips', outcome: 'already' });
+    }
+
+    if (cur.status === 'packing_slip_generated') {
+      const target = cur.fulfillment_type === 'delivery' ? 'staged_for_delivery' : 'staged_for_pickup';
+      if (!(await run('stage', () => this.stageOrder(id, target)))) return finish(cur);
+      cur = await read();
+    } else {
+      ran.push({ step: 'stage', outcome: 'already' });
+    }
+    return finish(cur);
   }
 
   async stageOrder(

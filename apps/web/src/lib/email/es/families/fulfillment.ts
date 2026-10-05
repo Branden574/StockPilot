@@ -811,8 +811,25 @@ export function renderReturnPromptEmail(p: ReturnPromptParams): RenderedEmail {
 
 // ── 5 · Return Update (`return-update`, returns RX-1) ───────────────
 
-/** What happened to the requester's return. */
-export type ReturnUpdateEvent = 'request_received' | 'approved' | 'received' | 'denied' | 'cancelled';
+/** What happened to the requester's return (RX-1) or exchange (RX-2). */
+export type ReturnUpdateEvent =
+  | 'request_received'
+  | 'approved'
+  | 'received'
+  | 'denied'
+  | 'cancelled'
+  // RX-2: the exchange, from the RMA's functions (changed: true only).
+  | 'exchange_approved'
+  | 'exchange_approved_short'
+  | 'replacement_changed'
+  | 'replacement_cancelled'
+  // RX-2: the replacement order's own edges (plan 3.6.7, reworded).
+  | 'replacement_ready_pickup'
+  | 'replacement_ready_delivery'
+  | 'replacement_on_the_way'
+  | 'replacement_partly_handed_over'
+  | 'replacement_handed_over'
+  | 'exchange_complete';
 
 export interface ReturnUpdateParams {
   event: ReturnUpdateEvent;
@@ -824,6 +841,10 @@ export interface ReturnUpdateParams {
   recipientEmail: string;
   /** The requester's own page for this order (token page or portal), or null. */
   viewUrl: string | null;
+  /** The button's words when not the registry's "View your return" (the
+   *  exchange-complete email links the replacement's own return page:
+   *  "Start a return"). */
+  ctaLabel?: string | null;
   urls: PrefFooterUrls;
 }
 
@@ -866,6 +887,68 @@ const RETURN_UPDATE_WORDS: Record<
     lead: 'Your return request was cancelled.',
     sentence: 'Contact the warehouse if you have questions about this request.',
   },
+  // RX-2 (plan 3.6.7, 3.6.8; core RETURNS_COPY requester words). No reason,
+  // rack, quantity on record or staff name.
+  exchange_approved: {
+    summary: 'exchange approved',
+    badge: 'Approved',
+    lead: 'Your exchange was approved.',
+    sentence: 'Your replacement is reserved.',
+  },
+  exchange_approved_short: {
+    summary: 'exchange approved',
+    badge: 'Approved',
+    lead: 'Your exchange was approved.',
+    sentence: 'Your replacement is not in stock yet. The warehouse will follow up.',
+  },
+  replacement_changed: {
+    summary: 'replacement changed',
+    badge: 'Replacement changed',
+    lead: 'Your replacement was changed.',
+    sentence: 'The warehouse will let you know when it is ready.',
+  },
+  replacement_cancelled: {
+    summary: 'replacement cancelled',
+    badge: 'Replacement cancelled',
+    lead: 'Your replacement was cancelled.',
+    sentence: 'The warehouse will follow up.',
+  },
+  replacement_ready_pickup: {
+    summary: 'replacement ready',
+    badge: 'Ready',
+    lead: 'Your replacement is ready.',
+    sentence: 'Ready for pickup.',
+  },
+  replacement_ready_delivery: {
+    summary: 'replacement ready',
+    badge: 'Ready',
+    lead: 'Your replacement is ready.',
+    sentence: 'Ready for delivery.',
+  },
+  replacement_on_the_way: {
+    summary: 'replacement on the way',
+    badge: 'On the way',
+    lead: 'Your replacement is on the way.',
+    sentence: 'It is out for delivery.',
+  },
+  replacement_partly_handed_over: {
+    summary: 'part of your replacement handed over',
+    badge: 'Partly handed over',
+    lead: 'Part of your replacement was handed over.',
+    sentence: 'The rest will follow.',
+  },
+  replacement_handed_over: {
+    summary: 'replacement handed over',
+    badge: 'Handed over',
+    lead: 'Your replacement was handed over.',
+    sentence: 'Thank you.',
+  },
+  exchange_complete: {
+    summary: 'exchange complete',
+    badge: 'Complete',
+    lead: 'Your exchange is complete.',
+    sentence: 'Thank you. If something is wrong with the replacement, you can start a return from here.',
+  },
 };
 
 export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
@@ -890,7 +973,7 @@ export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
       ? [
           section(
             '0 36px 30px',
-            ctaRow({ primary: { label: def.cta, href: p.viewUrl } }),
+            ctaRow({ primary: { label: p.ctaLabel ?? def.cta, href: p.viewUrl } }),
           ),
           section('0 36px 24px', linkFallback(p.viewUrl)),
         ]
@@ -914,7 +997,7 @@ export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
     '',
     words.lead,
     `Return ${handle}${p.orderNumber ? ` from order ${p.orderNumber}` : ''}. ${words.sentence}`,
-    ...(p.viewUrl ? ['', `${def.cta}: ${p.viewUrl}`] : []),
+    ...(p.viewUrl ? ['', `${p.ctaLabel ?? def.cta}: ${p.viewUrl}`] : []),
     '',
     prefFooterText(`Updates on a return requested for orders placed by ${p.recipientEmail}.`, p.urls),
   ].join('\n');

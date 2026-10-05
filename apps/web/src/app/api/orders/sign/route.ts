@@ -511,6 +511,8 @@ export async function POST(req: NextRequest) {
       owed: totals?.owed ?? null,
       emailOptedOut: requesterEmailOptedOut,
       orderNumber,
+      // Returns RX-2: an exchange replacement's notices are reworded.
+      ...replacementFactsOf(fullRow),
     });
     // The signer's receipt below IS its counts ("received 2 of 5"), so it is
     // skipped without them rather than sent with zeros.
@@ -573,6 +575,7 @@ export async function POST(req: NextRequest) {
         // notice omits the count) when the line totals could not be read.
         unitsShipped: totals ? Math.max(0, totals.fulfilled - priorFulfilled) : null,
         orderNumber,
+        ...replacementFactsOf(fullRow),
       });
     }
     try {
@@ -623,4 +626,19 @@ export async function POST(req: NextRequest) {
 
   // The resulting status, so the sign page says what happened (L87).
   return NextResponse.json({ ok: true, data: { id: order.id, status: newStatus } }, { status: 200 });
+}
+
+/**
+ * Returns RX-2: the hand-over notices' replacement facts from the re-read
+ * row (select '*'), so they need no read of their own. An unexpected shape
+ * passes nothing and the notice reads the order itself.
+ */
+function replacementFactsOf(row: unknown): { replacementForReturnId?: string | null; orderSource?: string | null } {
+  if (!row || typeof row !== 'object') return {};
+  const r = row as { replacement_for_return_id?: unknown; source?: unknown };
+  if (r.replacement_for_return_id === undefined || typeof r.source !== 'string') return {};
+  return {
+    replacementForReturnId: typeof r.replacement_for_return_id === 'string' ? r.replacement_for_return_id : null,
+    orderSource: r.source,
+  };
 }

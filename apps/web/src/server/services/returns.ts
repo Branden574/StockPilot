@@ -4,11 +4,20 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   can,
+  exchangeStatusStaffLabel,
   formatOrderNumber,
+  itemQuantityLabel,
   mapReturnError,
+  originalExchangeLine,
+  parseExchangeCandidates,
+  parseExchangeStatus,
+  returnLineLabel,
+  RETURNS_COPY,
+  variantLabel,
   parseReturnBody,
   parseRestockOptions,
   randomRequestUuid,
+  type ExchangeCandidatesAnswer,
   type OrderReturnView,
   type RestockOptions,
   type ReturnApproveDecision,
@@ -17,6 +26,8 @@ import {
   type ReturnStepsRequest,
 } from '@stockpilot/core';
 
+import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { orderIdForReturnToken } from '@/server/lib/order-secrets';
 
 import { audit, insertAuditRowReported } from './audit';
@@ -28,8 +39,9 @@ import {
   type ServiceContext,
 } from './context';
 import { dispatchEvent } from './integration-events';
-import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import type { PrepareForHandoverResult } from './order-requests';
 import { notifyRequesterReturnEvent, notifyStaffNewReturnRequest } from './returns-notify';
 import {
   buildReturnListPage,
@@ -279,7 +291,9 @@ export async function loadOrderReturns(
     closed_at: string | null;
     lines: RawLine[] | RawLine | null;
   };
-  return ((data as Raw[] | null) ?? []).map((r) => {
+  const rows = (data as Raw[] | null) ?? [];
+  const exchangeLines = await loadOriginalExchangeLines(client, organizationId, rows.map((r) => r.id));
+  return rows.map((r) => {
     const rawLines = Array.isArray(r.lines) ? r.lines : r.lines ? [r.lines] : [];
     return {
       id: r.id,
@@ -296,8 +310,97 @@ export async function loadOrderReturns(
         disposition: l.disposition,
         applied: l.applied === true,
       })),
+      exchangeLines: exchangeLines.get(r.id) ?? [],
     };
   });
+}
+
+/**
+ * Returns RX-2 (plan 3.6.9): the original order's returns section names each
+ * RMA's exchange, "Exchange: Large ×1 → SO-000103 (Waiting for returned
+ * item)", from ONE batched return_overview read for the order's RMAs (none
+ * when the order has none) and one item read for the labels. A failed read
+ * leaves the lines out (reported); the RMA rows still show.
+ */
+async function loadOriginalExchangeLines(
+  client: SupabaseClient,
+  organizationId: string,
+  returnIds: string[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (returnIds.length === 0) return out;
+  type Ov = {
+    id: string;
+    status: string;
+    kind: string | null;
+    exchange_status: string | null;
+    replacement_order_number: number | null;
+    exchange_lines: Array<{
+      status: string;
+      requested_item_id: string | null;
+      requested_quantity: number | string | null;
+      approved_item_id: string | null;
+      approved_quantity: number | string | null;
+    }> | null;
+  };
+  try {
+    const rows = await fetchAllRowsByIds<Ov>(returnIds, (batch) => (from, to) =>
+      client
+        .from('return_overview')
+        .select('id, status, kind, exchange_status, replacement_order_number, exchange_lines')
+        .eq('organization_id', organizationId)
+        .eq('kind', 'exchange')
+        .in('id', batch)
+        .order('id')
+        .range(from, to),
+    );
+    if (rows.length === 0) return out;
+    const itemIds = new Set<string>();
+    for (const r of rows) {
+      for (const x of r.exchange_lines ?? []) {
+        const id = x.approved_item_id ?? x.requested_item_id;
+        if (id) itemIds.add(id);
+      }
+    }
+    const items = itemIds.size
+      ? await fetchAllRowsByIds<{ id: string; name: string | null; variant_size: string | null; variant_width: string | null; variant_color: string | null; jersey_number: string | null }>(
+          [...itemIds],
+          (batch) => (from, to) =>
+            client
+              .from('inventory_items')
+              .select('id, name, variant_size, variant_width, variant_color, jersey_number')
+              .eq('organization_id', organizationId)
+              .in('id', batch)
+              .order('id')
+              .range(from, to),
+        )
+      : [];
+    const label = new Map(
+      items.map((i) => [
+        i.id,
+        returnLineLabel(
+          i.name,
+          variantLabel({ size: i.variant_size, width: i.variant_width, color: i.variant_color, jerseyNumber: i.jersey_number }),
+        ),
+      ]),
+    );
+    for (const r of rows) {
+      const status = parseExchangeStatus(r.exchange_status);
+      const words = exchangeStatusStaffLabel(status, { returnStatus: r.status });
+      const sentences: string[] = [];
+      for (const x of r.exchange_lines ?? []) {
+        if (x.status === 'declined' || x.status === 'cancelled') continue;
+        const id = x.approved_item_id ?? x.requested_item_id;
+        const qty = Number(x.approved_quantity ?? x.requested_quantity) || 0;
+        const what = id ? itemQuantityLabel(label.get(id) ?? 'Item', qty) : RETURNS_COPY.replacementWarehouseReview;
+        sentences.push(originalExchangeLine(what, x.status === 'approved' ? r.replacement_order_number : null, words));
+      }
+      if (sentences.length > 0) out.set(r.id, sentences);
+    }
+  } catch (err) {
+    reportDegradedRead('orders.returns.exchange_lines', err, { returns: returnIds.length });
+  }
+  return out;
 }
 
 // ── Database refusals ─────────────────────────────────────────────────────
@@ -313,6 +416,8 @@ export function returnRpcError(
   const details: Record<string, unknown> = { reason: mapped.reason };
   if (mapped.retryable) details.retryable = true;
   if (mapped.detail) details.detail = mapped.detail;
+  // RX-2: replacement_unavailable's [{itemId, needed, available}] (the numbers first, D19).
+  else if (mapped.detailList) details.detail = mapped.detailList;
   else if (error.details && /^[a-z_]+$/.test(error.details.trim())) details.detail = error.details.trim();
   return new ServiceError(mapped.code, mapped.message, details);
 }
@@ -341,6 +446,82 @@ export interface ReturnApproveAnswer {
   replay: boolean;
   status: ReturnStatus;
   revision: number;
+  /** RX-2: the linked replacement order the approval created (null for a return only). */
+  replacement: ReturnReplacementSummary | null;
+}
+
+/** RX-2: a replacement order as the RMA functions answer it (_return_replacement_summary). */
+export interface ReturnReplacementSummary {
+  orderId: string;
+  orderNumber: number | null;
+  status: string | null;
+  /** Something owed is not held (approved "on backorder", or short since). */
+  short: boolean;
+  revision: number | null;
+  lines: Array<{ itemId: string; orderLineId: string | null; requested: number; held: number }>;
+}
+
+/** RX-2: change_return_replacement's answer (substitution or a re-issue after a cancel). */
+export interface ReturnReplacementChangeAnswer {
+  changed: boolean;
+  replay: boolean;
+  status: ReturnStatus;
+  revision: number;
+  /** 'substitute' (the live replacement was swapped) or 'reissue' (a new one after a cancel). */
+  mode: 'substitute' | 'reissue' | null;
+  cancelledOrderId: string | null;
+  replacement: ReturnReplacementSummary | null;
+}
+
+/** RX-2: cancel_return_replacement's answer. */
+export interface ReturnReplacementCancelAnswer {
+  changed: boolean;
+  status: ReturnStatus;
+  revision: number | null;
+  cancelledOrderId: string | null;
+  /** The picked batch went back to Staging on record (X-1). */
+  drawn: boolean;
+  /** It was out for delivery: ask the driver to bring it back. */
+  inTransit: boolean;
+}
+
+/** RX-2: release_return_replacement_early's answer. */
+export interface ReturnReleaseEarlyAnswer {
+  changed: boolean;
+  replay: boolean;
+  status: ReturnStatus;
+  orderId: string | null;
+  releasedAt: string | null;
+  /** The return was already received: nothing to release. */
+  notNeeded: boolean;
+}
+
+/** RX-2: the prepare chain's answer (plan 3.3.8). */
+export interface ReturnPrepareAnswer extends PrepareForHandoverResult {
+  orderId: string;
+}
+
+/** The replacement summary in an RMA function's answer, read defensively. */
+export function parseReplacementSummary(raw: unknown): ReturnReplacementSummary | null {
+  const r = asObject(raw);
+  const orderId = str(r.orderId);
+  if (!orderId) return null;
+  return {
+    orderId,
+    orderNumber: num(r.orderNumber),
+    status: str(r.status),
+    short: r.short === true,
+    revision: num(r.revision),
+    lines: (Array.isArray(r.lines) ? r.lines : []).map((raw2) => {
+      const l = asObject(raw2);
+      return {
+        itemId: str(l.itemId) ?? '',
+        orderLineId: str(l.orderLineId),
+        requested: Number(l.requested) || 0,
+        held: Number(l.held) || 0,
+      };
+    }),
+  };
 }
 
 export interface ReturnPlanAnswer {
@@ -515,6 +696,11 @@ export class RMAService {
     const parsed = parseReturnBody('create', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
     const body = parsed.value;
+    // RX-2 kill switch (plan 10.2): with RETURNS_EXCHANGE_CREATE=off a new
+    // exchange is refused before anything runs; returns go through.
+    if (!exchangeCreateEnabled() && body.lines.some((l) => l.exchange)) {
+      throw returnRpcError({ hint: 'exchange_not_available' });
+    }
 
     await this.assertOrderInActiveOrg(orderRequestId);
 
@@ -562,6 +748,7 @@ export class RMAService {
             lineCount: created.lines.length,
             source: 'internal',
             channel,
+            exchangeLines: request.lines.filter((l) => l.exchange).length,
           },
         },
         this.ctx,
@@ -621,6 +808,11 @@ export class RMAService {
     this.gate();
     const parsed = parseReturnBody('approve', input.decision);
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    // RX-2 kill switch: adding a replacement to a return-only line is a new
+    // exchange (G9); approving a requested one is the lifecycle and stays on.
+    if (!exchangeCreateEnabled() && (parsed.value.exchange ?? []).some((x) => x.action === 'add')) {
+      throw returnRpcError({ hint: 'exchange_not_available' });
+    }
     const facts = await this.factsInActiveOrg(id);
     const { data, error } = await this.ctx.supabase.rpc('approve_return', {
       p_return_id: id,
@@ -636,6 +828,7 @@ export class RMAService {
       replay: answer.replay === true,
       status,
       revision: num(answer.revision) ?? input.expectedRevision + 1,
+      replacement: parseReplacementSummary(answer.replacement),
     };
 
     if (result.changed) {
@@ -676,14 +869,49 @@ export class RMAService {
           actorId: this.ctx.userId,
         });
       }
+      // RX-2: the exchange approved with its linked replacement order.
+      if (result.replacement) {
+        const exchangeLines = await this.approvedExchangeLines(id);
+        await audit(
+          {
+            event: 'return.exchange_approved',
+            entityType: 'return',
+            entityId: id,
+            warehouseId: facts.warehouseId,
+            extra: {
+              revision: result.revision,
+              channel,
+              replacementOrderId: result.replacement.orderId,
+              replacementOrderNumber: result.replacement.orderNumber,
+              short: result.replacement.short,
+              exchangeLines,
+            },
+          },
+          this.ctx,
+        );
+        void dispatchEvent(this.ctx.organizationId, 'return.exchange_approved', {
+          returnId: id,
+          returnNumber: facts.returnNumber,
+          originalOrderId: facts.orderRequestId,
+          exchangeLines,
+          replacementOrderId: result.replacement.orderId,
+          replacementOrderNumber: formatOrderNumber(result.replacement.orderNumber),
+        });
+        await this.recordReplacementIssued(id, facts, result.replacement, result.revision);
+      }
       await notifyRequesterReturnEvent({
         organizationId: this.ctx.organizationId,
         returnId: id,
         returnNumber: facts.returnNumber,
         orderId: facts.orderRequestId,
-        event: 'approved',
+        event: result.replacement
+          ? result.replacement.short
+            ? 'exchange_approved_short'
+            : 'exchange_approved'
+          : 'approved',
         source: facts.source,
         channel,
+        linkOrderId: result.replacement?.orderId ?? null,
       });
     }
     return result;
@@ -760,6 +988,9 @@ export class RMAService {
     const parsed = parseReturnBody('cancel', input);
     if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
     const facts = await this.factsInActiveOrg(id);
+    // RX-2: the live replacement before the cancel (cancel_return cancels an
+    // undrawn one in the same transaction, X-2), for the order's own trail.
+    const liveBefore = await this.liveReplacement(id);
     const { data, error } = await this.ctx.supabase.rpc('cancel_return', {
       p_return_id: id,
       p_expected_revision: parsed.value.expectedRevision ?? null,
@@ -768,6 +999,14 @@ export class RMAService {
     if (error) throw returnRpcError(error);
     const answer = await this.transitionAnswer(data, 'cancelled', null, null);
     if (answer.changed) {
+      if (liveBefore) {
+        const after = await this.orderStatus(liveBefore.id);
+        if (after === 'cancelled') {
+          await this.recordReplacementCancelled(id, facts, liveBefore.id, liveBefore.orderNumber, 'return.cancelled');
+          // A picked replacement went back to Staging (holds released either way).
+          invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.cancel');
+        }
+      }
       await audit(
         { event: 'return.cancelled', entityType: 'return', entityId: id, reason: parsed.value.reason ?? undefined },
         this.ctx,
@@ -961,6 +1200,391 @@ export class RMAService {
     }
     const workbench = await this.workbench(id);
     return { ran, workbench };
+  }
+
+  // ── The exchange (RX-2) ──────────────────────────────────────────────
+
+  /**
+   * Change the replacement (a substitution: the undrawn live replacement is
+   * cancelled and a new one created and held in ONE transaction) or issue a
+   * new one after a replacement cancel (C-1). Needs a reason; idempotent on
+   * (RMA, expected revision). A picked or handed-over replacement is refused
+   * (replacement_already_drawn, replacement_handed_over).
+   */
+  async changeReplacement(id: string, raw: unknown): Promise<ReturnReplacementChangeAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('changeReplacement', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    const body = parsed.value;
+    const facts = await this.factsInActiveOrg(id);
+    const { data, error } = await this.ctx.supabase.rpc('change_return_replacement', {
+      p_return_id: id,
+      p_expected_revision: body.expectedRevision,
+      p_lines: body.lines,
+      p_reason: body.reason,
+      p_when_short: body.whenShort,
+      p_replacement: body.replacement ?? null,
+    });
+    if (error) throw returnRpcError(error);
+    const answer = asObject(data);
+    const mode = answer.mode === 'substitute' || answer.mode === 'reissue' ? answer.mode : null;
+    const result: ReturnReplacementChangeAnswer = {
+      changed: answer.changed === true,
+      replay: answer.replay === true,
+      status: (str(answer.status) ?? 'approved') as ReturnStatus,
+      revision: num(answer.revision) ?? body.expectedRevision + 1,
+      mode,
+      cancelledOrderId: str(answer.cancelledOrderId),
+      replacement: parseReplacementSummary(answer.replacement),
+    };
+    if (result.changed) {
+      // The substituted replacement's holds were released and the new one's
+      // taken: the items' free counts on the lists.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.replacement_change');
+      if (result.cancelledOrderId) {
+        await this.recordReplacementCancelled(id, facts, result.cancelledOrderId, null, 'return.replacement_changed');
+      }
+      await audit(
+        {
+          event: mode === 'reissue' ? 'return.replacement_issued' : 'return.replacement_changed',
+          entityType: 'return',
+          entityId: id,
+          warehouseId: facts.warehouseId,
+          reason: body.reason,
+          extra: {
+            revision: result.revision,
+            mode,
+            cancelledOrderId: result.cancelledOrderId,
+            replacementOrderId: result.replacement?.orderId ?? null,
+            replacementOrderNumber: result.replacement?.orderNumber ?? null,
+            short: result.replacement?.short ?? false,
+            lines: body.lines,
+          },
+        },
+        this.ctx,
+      );
+      if (result.replacement) await this.recordReplacementIssued(id, facts, result.replacement, result.revision);
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'replacement_changed',
+        source: facts.source,
+        linkOrderId: result.replacement?.orderId ?? null,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Keep the return, drop the replacement (X-1, X-2): undrawn, its holds are
+   * released; picked or staged, the picked batch goes back to Staging on
+   * record; handed over, refused. Needs a reason. Nothing live answers
+   * changed false.
+   */
+  async cancelReplacement(id: string, raw: unknown): Promise<ReturnReplacementCancelAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('cancelReplacement', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'reason_required' });
+    const facts = await this.factsInActiveOrg(id);
+    const live = await this.liveReplacement(id);
+    const { data, error } = await this.ctx.supabase.rpc('cancel_return_replacement', {
+      p_return_id: id,
+      p_expected_revision: parsed.value.expectedRevision ?? null,
+      p_reason: parsed.value.reason,
+    });
+    if (error) throw returnRpcError(error);
+    const answer = asObject(data);
+    const result: ReturnReplacementCancelAnswer = {
+      changed: answer.changed === true,
+      status: (str(answer.status) ?? 'approved') as ReturnStatus,
+      revision: num(answer.revision),
+      cancelledOrderId: str(answer.cancelledOrderId),
+      drawn: answer.drawn === true,
+      inTransit: answer.inTransit === true,
+    };
+    if (result.changed && result.cancelledOrderId) {
+      await this.recordReplacementCancelled(
+        id,
+        facts,
+        result.cancelledOrderId,
+        live?.id === result.cancelledOrderId ? live.orderNumber : null,
+        'return.replacement_cancelled',
+      );
+      // A picked replacement went back to Staging; an undrawn one freed its holds.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.replacement_cancel');
+      if (result.inTransit) {
+        // Drop the driver's live point, as an ordinary cancel does (best-effort).
+        try {
+          await this.ctx.supabase.from('delivery_locations').delete().eq('order_request_id', result.cancelledOrderId);
+        } catch {
+          /* non-fatal */
+        }
+      }
+      await audit(
+        {
+          event: 'return.replacement_cancelled',
+          entityType: 'return',
+          entityId: id,
+          warehouseId: facts.warehouseId,
+          reason: parsed.value.reason,
+          extra: {
+            revision: result.revision,
+            cancelledOrderId: result.cancelledOrderId,
+            drawn: result.drawn,
+            inTransit: result.inTransit,
+          },
+        },
+        this.ctx,
+      );
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'replacement_cancelled',
+        source: facts.source,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Release the live replacement for picking before the returned item
+   * arrives (brief 24), with a reason (1 to 500 characters). Opens the gate
+   * for that order only; idempotent; a received RMA answers not needed.
+   */
+  async releaseEarly(id: string, raw: unknown): Promise<ReturnReleaseEarlyAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('releaseEarly', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'reason_required' });
+    const facts = await this.factsInActiveOrg(id);
+    const { data, error } = await this.ctx.supabase.rpc('release_return_replacement_early', {
+      p_return_id: id,
+      p_reason: parsed.value.reason,
+    });
+    if (error) throw returnRpcError(error);
+    const answer = asObject(data);
+    const result: ReturnReleaseEarlyAnswer = {
+      changed: answer.changed === true,
+      replay: answer.replay === true,
+      status: (str(answer.status) ?? 'approved') as ReturnStatus,
+      orderId: str(answer.orderId),
+      releasedAt: str(answer.releasedAt),
+      notNeeded: answer.reason === 'not_needed',
+    };
+    if (result.changed) {
+      await audit(
+        {
+          event: 'return.replacement_released',
+          entityType: 'return',
+          entityId: id,
+          warehouseId: facts.warehouseId,
+          reason: parsed.value.reason,
+          extra: { replacementOrderId: result.orderId },
+        },
+        this.ctx,
+      );
+      if (result.orderId) void broadcastOrderChanged(this.ctx.organizationId, result.orderId);
+    }
+    return result;
+  }
+
+  /**
+   * The replacement candidates for one returned line of this RMA (staff
+   * tier): the returned item's size siblings first, then name and SKU
+   * matches, free stock = on hand minus every active hold, under the
+   * caller's item scope (return_exchange_candidates, security invoker).
+   */
+  async candidates(id: string, raw: unknown): Promise<ExchangeCandidatesAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('candidates', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    const facts = await this.factsInActiveOrg(id);
+    return this.readCandidates(facts.orderRequestId, parsed.value.line, parsed.value.q);
+  }
+
+  /** The same before an RMA exists (the create dialog's Exchange choice). */
+  async candidatesForOrder(orderRequestId: string, raw: unknown): Promise<ExchangeCandidatesAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('candidates', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    await this.assertOrderInActiveOrg(orderRequestId);
+    return this.readCandidates(orderRequestId, parsed.value.line, parsed.value.q);
+  }
+
+  private async readCandidates(orderId: string, lineId: string, q: string): Promise<ExchangeCandidatesAnswer> {
+    const { data, error } = await this.ctx.supabase.rpc('return_exchange_candidates', {
+      p_order_id: orderId,
+      p_order_request_line_id: lineId,
+      p_query: q.length >= 2 ? q : null,
+      p_limit: 30,
+    });
+    if (error) throw returnRpcError(error);
+    return parseExchangeCandidates(data);
+  }
+
+  /**
+   * "Get replacement ready" (plan 3.3.8): the live replacement through the
+   * existing order steps, each with its own gates and transaction (pick slip,
+   * a claim when the viewer is not a manager, the one-click pick, the packing
+   * slips, staging), skipping what is done and stopping at the first refusal
+   * and before the signature.
+   */
+  async prepareReplacement(id: string, raw: unknown = {}): Promise<ReturnPrepareAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('prepare', raw ?? {});
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+    await this.factsInActiveOrg(id);
+    const live = await this.liveReplacement(id);
+    if (!live) {
+      throw new ServiceError('conflict', 'This exchange has no replacement order to prepare.', {
+        reason: 'replacement_not_live',
+      });
+    }
+    const { OrderRequestsService } = await import('./order-requests');
+    const prepared = await new OrderRequestsService(this.ctx).prepareForHandover(live.id, {
+      stopAt: parsed.value.stopAt ?? 'staged',
+    });
+    return { ...prepared, orderId: live.id };
+  }
+
+  /** The approved exchange lines as the integration event names them. */
+  private async approvedExchangeLines(id: string): Promise<
+    Array<{ returnedItemId: string | null; quantity: number; replacementItemId: string | null; approvedQuantity: number }>
+  > {
+    try {
+      const [xRes, lRes] = await Promise.all([
+        this.ctx.supabase
+          .from('return_exchange_lines')
+          .select('return_line_id, approved_item_id, approved_quantity')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('return_id', id)
+          .eq('status', 'approved'),
+        this.ctx.supabase
+          .from('return_lines')
+          .select('id, item_id, quantity')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('return_id', id),
+      ]);
+      if (xRes.error || lRes.error) return [];
+      const lines = new Map(
+        ((lRes.data as Array<{ id: string; item_id: string; quantity: number | string }> | null) ?? []).map((l) => [l.id, l]),
+      );
+      return ((xRes.data as Array<{ return_line_id: string; approved_item_id: string | null; approved_quantity: number | string | null }> | null) ?? []).map(
+        (x) => {
+          const l = lines.get(x.return_line_id);
+          return {
+            returnedItemId: l?.item_id ?? null,
+            quantity: Number(l?.quantity) || 0,
+            replacementItemId: x.approved_item_id,
+            approvedQuantity: Number(x.approved_quantity) || 0,
+          };
+        },
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The replacement order's own trail (plan RX-2): the RPC path never calls
+   * OrderRequestsService.create() or approve(), so their audit entries and
+   * events are written here, carrying the link.
+   */
+  private async recordReplacementIssued(
+    id: string,
+    facts: ReturnFacts,
+    repl: ReturnReplacementSummary,
+    revision: number,
+  ): Promise<void> {
+    const extra = {
+      replacementForReturnId: id,
+      returnNumber: facts.returnNumber,
+      originalOrderId: facts.orderRequestId,
+      revision,
+    };
+    await audit(
+      { event: 'order_request.created', entityType: 'order_request', entityId: repl.orderId, warehouseId: facts.warehouseId, extra },
+      this.ctx,
+    );
+    await audit(
+      { event: 'order_request.approved', entityType: 'order_request', entityId: repl.orderId, warehouseId: facts.warehouseId, extra },
+      this.ctx,
+    );
+    const orderNumber = formatOrderNumber(repl.orderNumber) ?? repl.orderId.slice(0, 8).toUpperCase();
+    void dispatchEvent(this.ctx.organizationId, 'order.created', {
+      id: repl.orderId,
+      orderNumber,
+      replacementForReturnId: id,
+      returnNumber: facts.returnNumber,
+    });
+    void dispatchEvent(this.ctx.organizationId, 'order.approved', {
+      id: repl.orderId,
+      orderNumber,
+      approvedBy: this.ctx.userId,
+      replacementForReturnId: id,
+      returnNumber: facts.returnNumber,
+    });
+    // Holds changed: the items' free counts on the lists.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.replacement');
+  }
+
+  /** A replacement cancelled by its RMA: the order's own trail and event. */
+  private async recordReplacementCancelled(
+    id: string,
+    facts: ReturnFacts,
+    orderId: string,
+    orderNumber: number | null,
+    via: 'return.cancelled' | 'return.replacement_changed' | 'return.replacement_cancelled',
+  ): Promise<void> {
+    await audit(
+      {
+        event: 'order_request.cancelled',
+        entityType: 'order_request',
+        entityId: orderId,
+        warehouseId: facts.warehouseId,
+        extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, originalOrderId: facts.orderRequestId, via },
+      },
+      this.ctx,
+    );
+    void dispatchEvent(this.ctx.organizationId, 'order.cancelled', {
+      id: orderId,
+      orderNumber: formatOrderNumber(orderNumber) ?? orderId.slice(0, 8).toUpperCase(),
+      cancelledBy: this.ctx.userId,
+      replacementForReturnId: id,
+      returnNumber: facts.returnNumber,
+    });
+    void broadcastOrderChanged(this.ctx.organizationId, orderId);
+  }
+
+  /** The RMA's live replacement (not cancelled or denied), if any. */
+  private async liveReplacement(id: string): Promise<{ id: string; status: string; orderNumber: number | null } | null> {
+    const { data, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id, status, order_number')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('replacement_for_return_id', id)
+      // in-list-bound: the two dead order statuses
+      .not('status', 'in', '(cancelled,denied)')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message, { reason: 'failed' });
+    if (!data) return null;
+    const row = data as { id: string; status: string; order_number: number | null };
+    return { id: row.id, status: row.status, orderNumber: row.order_number };
+  }
+
+  private async orderStatus(orderId: string): Promise<string | null> {
+    const { data } = await this.ctx.supabase
+      .from('order_requests')
+      .select('status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', orderId)
+      .maybeSingle();
+    return (data as { status?: string } | null)?.status ?? null;
   }
 
   // ── Internals ──────────────────────────────────────────────────────────
@@ -1284,6 +1908,7 @@ export async function createRequesterReturn(
 ): Promise<RequesterReturnCreated> {
   const parsed = parseReturnBody('requester', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
   if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+  refuseRequesterExchange(parsed.value.lines);
   const ctx = await loadRequesterReturnContext(admin, token);
   if (!ctx) throw new ServiceError('not_found', 'This return link is invalid or has expired.');
   return createRequesterRpc(admin, ctx, parsed.value, { channel: 'token', userId: null });
@@ -1302,9 +1927,23 @@ export async function createPortalReturn(
 ): Promise<RequesterReturnCreated> {
   const parsed = parseReturnBody('requester', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
   if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+  refuseRequesterExchange(parsed.value.lines);
   const ctx = await loadPortalReturnContext(admin, scope);
   if (!ctx) throw new ServiceError('not_found', 'This order could not be found.');
   return createRequesterRpc(admin, ctx, parsed.value, { channel: 'portal', userId: scope.portalUserId });
+}
+
+/**
+ * The requester's own exchange (the token page, the B2B portal, a member
+ * requester) arrives in RX-3 with its pages, options and messages. Until
+ * then a requester body that names an exchange is refused here, in the
+ * kill switch's words, before anything runs: 0397's database already
+ * accepts the requester tier, so the server is what holds it back.
+ */
+function refuseRequesterExchange(lines: Array<{ exchange?: unknown }>): void {
+  if (lines.some((l) => l.exchange !== undefined && l.exchange !== null)) {
+    throw returnRpcError({ hint: 'exchange_not_available' });
+  }
 }
 
 async function createRequesterRpc(

@@ -13,6 +13,9 @@ import { sendEmail } from '@/lib/email/resend';
 import { normalizeUnsubscribeEmail } from '@/lib/email/unsubscribe';
 import { reportError } from '@/lib/error-reporter';
 
+import { loadReplacementEmailFacts } from './replacement-update';
+import { sendReturnUpdateEmail } from './return-update';
+
 /**
  * The one-time "Need to return anything from your order?" prompt (returns-
  * access Unit A). Extracted from the digital sign route so EVERY app-side
@@ -96,7 +99,7 @@ export async function maybeSendReturnPrompt(
     const { data: row, error: rowErr } = await admin
       .from('order_requests')
       .select(
-        'id, organization_id, status, requester_email, requester_name, requester_user_id, requester_deleted_at, order_number, return_prompt_sent_at',
+        'id, organization_id, status, source, requester_email, requester_name, requester_user_id, requester_deleted_at, order_number, return_prompt_sent_at, replacement_for_return_id',
       )
       .eq('id', orderId)
       .maybeSingle();
@@ -112,6 +115,8 @@ export async function maybeSendReturnPrompt(
       requester_deleted_at: string | null;
       order_number: number | null;
       return_prompt_sent_at: string | null;
+      source?: string | null;
+      replacement_for_return_id?: string | null;
     };
 
     if (order.status !== 'completed') return { sent: false, reason: 'not_completed' };
@@ -207,6 +212,23 @@ export async function maybeSendReturnPrompt(
     if (!claimed) return { sent: false, reason: 'lost_race' };
 
     try {
+      if (order.replacement_for_return_id) {
+        // Returns RX-2 (X-4): an exchange replacement's completion email is
+        // "Your exchange is complete" (or "Your replacement was handed over"
+        // while the RMA is still open), carrying the replacement's OWN return
+        // link minted above. The ordinary order emails skip a replacement's
+        // completion for the requester, so this is the one email.
+        const sent = await sendReplacementCompletionEmail(admin, {
+          returnId: order.replacement_for_return_id,
+          to: order.requester_email,
+          recipientName: order.requester_name,
+          appUrl: opts.appUrl,
+          token,
+          isAccountHolder: Boolean(order.requester_user_id),
+        });
+        if (!sent) return { sent: false, reason: 'send_failed' };
+        return { sent: true };
+      }
       await sendReturnPromptEmail({
         to: order.requester_email,
         recipientName: order.requester_name,
@@ -348,4 +370,39 @@ async function sendReturnPromptEmail(args: {
     from: FULFILLMENT_ORDERS_FROM,
     headers: delivery.headers,
   });
+}
+
+/** The replacement completion email's button (it opens the replacement's own return page). */
+const REPLACEMENT_RETURN_CTA = 'Start a return';
+
+/**
+ * Returns RX-2 (X-4): the replacement's completion email through the return-
+ * update family, the button opening the replacement's own return page. True
+ * when sent (a recorded public opt-out also answers true: nothing to retry).
+ */
+async function sendReplacementCompletionEmail(
+  admin: SupabaseClient,
+  args: {
+    returnId: string;
+    to: string;
+    recipientName: string | null;
+    appUrl: string;
+    token: string;
+    isAccountHolder: boolean;
+  },
+): Promise<boolean> {
+  const facts = await loadReplacementEmailFacts(admin, args.returnId);
+  const base = args.appUrl.replace(/\/+$/, '');
+  const result = await sendReturnUpdateEmail(admin, {
+    event: facts?.returnStatus === 'closed' ? 'exchange_complete' : 'replacement_handed_over',
+    to: args.to,
+    recipientName: args.recipientName,
+    returnNumber: facts?.returnNumber ?? null,
+    orderNumber: formatOrderNumber(facts?.originalOrderNumber ?? null),
+    isAccountHolder: args.isAccountHolder,
+    viewUrl: `${base}/returns/request/${args.token}`,
+    appUrl: args.appUrl,
+    ctaLabel: REPLACEMENT_RETURN_CTA,
+  });
+  return result.sent || result.reason === 'suppressed';
 }

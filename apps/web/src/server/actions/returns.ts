@@ -7,13 +7,17 @@ import { ServiceError } from '@/server/services/context';
 import {
   RMAService,
   type ReturnPlanAnswer,
+  type ReturnPrepareAnswer,
+  type ReturnReleaseEarlyAnswer,
+  type ReturnReplacementCancelAnswer,
+  type ReturnReplacementChangeAnswer,
   type ReturnStepResult,
   type ReturnTransitionAnswer,
 } from '@/server/services/returns';
 import type { ReturnWorkbench } from '@/server/services/returns-workbench';
 import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
-import { err, ok, parseReturnBody, type ActionResult } from '@stockpilot/core';
+import { err, ok, parseReturnBody, type ActionResult, type ExchangeCandidatesAnswer } from '@stockpilot/core';
 
 /**
  * Server actions over RMAService (returns RX-1). Approve, receive and
@@ -58,7 +62,13 @@ export async function createReturnFromOrderAction(input: {
   orderRequestId: string;
   reasonCode?: 'damaged' | 'wrong_item' | 'end_of_year' | 'overage' | 'other';
   notes?: string;
-  lines: Array<{ orderRequestLineId: string; quantity: number; disposition: 'restock' | 'scrap' }>;
+  lines: Array<{
+    orderRequestLineId: string;
+    quantity: number;
+    disposition: 'restock' | 'scrap';
+    /** RX-2: "Exchange for another size or item" (refused while the kill switch is off). */
+    exchange?: { itemId?: string | null; quantity?: number | null; note?: string | null } | null;
+  }>;
   itemIsHere?: boolean;
   idempotencyKey?: string;
 }): Promise<ActionResult<{ id: string; returnNumber: string | null; replay: boolean; channel: 'staff' | 'counter' }>> {
@@ -172,6 +182,132 @@ export async function buyReturnLabelAction(id: string): Promise<ActionResult<Car
     const shipment = await svc.buyReturnLabel(id);
     revalidateReturn(id);
     return ok(shipment);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+// ── The exchange (RX-2) ─────────────────────────────────────────────────────
+
+function revalidateReplacement(id: string, orderIds: Array<string | null | undefined>) {
+  revalidateReturn(id);
+  revalidatePath('/dashboard/orders');
+  for (const o of orderIds) if (o) revalidatePath(`/dashboard/orders/${o}`);
+}
+
+/**
+ * Change the replacement (a substitution) or issue a new one after a
+ * replacement cancel (C-1): the twin of POST /api/v1/returns/[id]/replacement.
+ * The answer carries the whole workbench.
+ */
+export async function changeReturnReplacementAction(input: {
+  id: string;
+  body: unknown;
+}): Promise<ActionResult<{ answer: ReturnReplacementChangeAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('changeReplacement', input.body);
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'return_invalid' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.changeReplacement(input.id, parsed.value);
+    revalidateReplacement(input.id, [answer.cancelledOrderId, answer.replacement?.orderId]);
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** Cancel the replacement, keep the return (X-1, X-2): /replacement/cancel's twin. */
+export async function cancelReturnReplacementAction(input: {
+  id: string;
+  body: unknown;
+}): Promise<ActionResult<{ answer: ReturnReplacementCancelAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('cancelReplacement', input.body);
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'reason_required' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.cancelReplacement(input.id, parsed.value);
+    revalidateReplacement(input.id, [answer.cancelledOrderId]);
+    if (answer.drawn) {
+      revalidatePath('/dashboard/inventory');
+      revalidatePath('/dashboard/staging');
+      await revalidateInventoryListForCurrentOrg();
+    }
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** Release the replacement before the return is received (brief 24): /replacement/release's twin. */
+export async function releaseReturnReplacementAction(input: {
+  id: string;
+  reason: string;
+}): Promise<ActionResult<{ answer: ReturnReleaseEarlyAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('releaseEarly', { reason: input.reason ?? '' });
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'reason_required' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.releaseEarly(input.id, parsed.value);
+    revalidateReplacement(input.id, [answer.orderId]);
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** "Get replacement ready" (plan 3.3.8): /replacement/prepare's twin. Never signs. */
+export async function prepareReturnReplacementAction(input: {
+  id: string;
+}): Promise<ActionResult<{ answer: ReturnPrepareAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.prepareReplacement(input.id, {});
+    revalidateReplacement(input.id, [answer.orderId]);
+    if (answer.ran.some((r) => r.step === 'pick' && r.outcome === 'done')) {
+      revalidatePath('/dashboard/inventory');
+      await revalidateInventoryListForCurrentOrg();
+    }
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** The replacement picker's search for one returned line of an RMA. */
+export async function returnExchangeCandidatesAction(input: {
+  id: string;
+  line: string;
+  q?: string | null;
+}): Promise<ActionResult<ExchangeCandidatesAnswer>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('candidates', { line: input.line, q: input.q ?? null });
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'return_invalid' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    return ok(await svc.candidates(input.id, parsed.value));
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/** The same before the RMA exists (the create dialog's Exchange choice). */
+export async function orderExchangeCandidatesAction(input: {
+  orderRequestId: string;
+  line: string;
+  q?: string | null;
+}): Promise<ActionResult<ExchangeCandidatesAnswer>> {
+  if (!UUID_RE.test(input?.orderRequestId ?? '')) {
+    return err('validation_error', 'That order id is not valid.', { reason: 'return_invalid' });
+  }
+  const parsed = parseReturnBody('candidates', { line: input.line, q: input.q ?? null });
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'return_invalid' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    return ok(await svc.candidatesForOrder(input.orderRequestId, parsed.value));
   } catch (e) {
     return toResult(e);
   }

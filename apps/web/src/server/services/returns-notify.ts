@@ -216,7 +216,24 @@ export async function notifyStaffNewReturnRequest(
   }
 }
 
-export type RequesterReturnEvent = ReturnUpdateEmailEvent;
+/**
+ * The RMA's own events a requester hears (RX-1, and RX-2's exchange events).
+ * The replacement ORDER's edges (ready, on the way, handed over) are the
+ * notify trigger's in-app pings and the replacement emails
+ * (server/email/replacement-update.ts), never sent from here.
+ */
+export type RequesterReturnEvent = Extract<
+  ReturnUpdateEmailEvent,
+  | 'request_received'
+  | 'approved'
+  | 'received'
+  | 'denied'
+  | 'cancelled'
+  | 'exchange_approved'
+  | 'exchange_approved_short'
+  | 'replacement_changed'
+  | 'replacement_cancelled'
+>;
 
 const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
   request_received: RETURNS_COPY.requesterReceivedReturnRequest,
@@ -224,13 +241,21 @@ const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
   received: RETURNS_COPY.requesterItemReceived,
   denied: RETURNS_COPY.requesterReturnDeclined,
   cancelled: RETURNS_COPY.requesterReturnCancelled,
+  // RX-2 (plan 3.6.8): no reason text ever reaches a requester.
+  exchange_approved: RETURNS_COPY.requesterExchangeApprovedReserved,
+  exchange_approved_short: RETURNS_COPY.requesterExchangeApprovedShort,
+  replacement_changed: RETURNS_COPY.requesterReplacementChanged,
+  replacement_cancelled: RETURNS_COPY.requesterReplacementCancelled,
 };
 
 /** Whether this event reaches the requester at all, given how it happened. */
 export function requesterHearsEvent(event: RequesterReturnEvent, input: { source: string; channel?: string | null }): boolean {
   if (input.source !== 'requester') return false;
-  // A counter approval or receipt happened with the requester standing there.
-  if ((event === 'approved' || event === 'received') && input.channel === 'counter') return false;
+  // A counter approval or receipt happened with the requester standing there
+  // (G11): the exchange approval too.
+  const counterSilent =
+    event === 'approved' || event === 'received' || event === 'exchange_approved' || event === 'exchange_approved_short';
+  if (counterSilent && input.channel === 'counter') return false;
   return true;
 }
 
@@ -239,7 +264,14 @@ export function requesterHearsEvent(event: RequesterReturnEvent, input: { source
  * Never throws.
  */
 export async function notifyRequesterReturnEvent(
-  rma: ReturnNotifyRma & { event: RequesterReturnEvent; source: string; channel?: string | null },
+  rma: ReturnNotifyRma & {
+    event: RequesterReturnEvent;
+    source: string;
+    channel?: string | null;
+    /** RX-2: a member requester's link opens this order (the replacement)
+     *  instead of the original. */
+    linkOrderId?: string | null;
+  },
 ): Promise<void> {
   if (!requesterHearsEvent(rma.event, rma)) return;
   try {
@@ -280,8 +312,12 @@ export async function notifyRequesterReturnEvent(
           type: `return.${rma.event}`,
           title,
           body: handle,
-          link: `/dashboard/orders/${rma.orderId}`,
-          metadata: { return_id: rma.returnId, order_request_id: rma.orderId, return_number: rma.returnNumber },
+          link: `/dashboard/orders/${rma.linkOrderId ?? rma.orderId}`,
+          metadata: {
+            return_id: rma.returnId,
+            order_request_id: rma.linkOrderId ?? rma.orderId,
+            return_number: rma.returnNumber,
+          },
         });
       }
       return;

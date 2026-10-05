@@ -9,6 +9,7 @@ import {
 import {
   Addresses,
   BrandBand,
+  ExchangeLine,
   FooterCode,
   FooterContact,
   LinesTable,
@@ -76,6 +77,8 @@ export async function renderCustomerPackingSlipPdf(
           pickupNote={request.pickup_location_notes}
           isPickup={isPickup}
         />
+
+        <ExchangeLine line={detail.replacement?.slipLine} />
 
         <LinesTable
           lines={lines}

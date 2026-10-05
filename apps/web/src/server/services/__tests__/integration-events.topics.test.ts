@@ -134,3 +134,18 @@ describe('describeEvent — new lifecycle types', () => {
     expect(noReason.summary).toContain('RMA-20260618-A1B2C3');
   });
 });
+
+describe('return.exchange_approved (returns RX-2)', () => {
+  it('is registered, subscribable by a public key, and reads without a symbol', async () => {
+    const { PUBLIC_HOOK_EVENT_TYPES } = await import('../integration-events');
+    expect(INTEGRATION_EVENT_TYPES as readonly string[]).toContain('return.exchange_approved');
+    expect(PUBLIC_HOOK_EVENT_TYPES).toContain('return.exchange_approved');
+    const { title, summary } = describeEvent('return.exchange_approved', {
+      returnId: 'r1',
+      returnNumber: 'RMA-20261005-ABC123',
+      replacementOrderNumber: 'SO-000104',
+    });
+    expect(title).toBe('Exchange approved');
+    expect(summary).toBe('Return RMA-20261005-ABC123 was approved with an exchange; replacement order SO-000104.');
+  });
+});

@@ -13,6 +13,7 @@ import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { createNotification } from '@/server/services/notifications';
+import { replacementOrderFor, sendReplacementOrderEmail } from '@/server/email/replacement-update';
 
 import type { FulfillmentLineItem } from '@/lib/email/es/families/fulfillment';
 
@@ -103,6 +104,59 @@ async function fetchOrgName(organizationId: string): Promise<string | null> {
   }
 }
 
+/**
+ * Returns RX-2: an exchange replacement's hand-over notices. True when the
+ * order is a replacement (the caller then sends nothing of its own): the
+ * in-app notice is the notify trigger's reworded ping (0397), a partial
+ * hand-over emails "Part of your replacement was handed over" (reworded, the
+ * RMA's links), and the completion email is the return prompt's replacement
+ * branch. Never throws.
+ */
+async function handledAsReplacement(
+  args: {
+    orderId: string;
+    requesterUserId: string | null;
+    requesterEmail: string | null;
+    requesterName: string | null;
+    appUrl: string;
+    emailOptedOut: boolean;
+    replacementForReturnId?: string | null;
+    orderSource?: string | null;
+  },
+  edge: 'backordered' | 'completed',
+): Promise<boolean> {
+  try {
+    const admin = createAdminClient();
+    // The caller's row answers when it carries both facts; else one read.
+    const facts =
+      args.replacementForReturnId !== undefined && args.orderSource
+        ? args.replacementForReturnId
+          ? { returnId: args.replacementForReturnId, source: args.orderSource }
+          : null
+        : await replacementOrderFor(admin, args.orderId);
+    if (!facts) return false;
+    const returnId = facts.returnId;
+    if (edge === 'backordered' && args.requesterEmail && !args.emailOptedOut) {
+      await sendReplacementOrderEmail(admin, {
+        order: {
+          id: args.orderId,
+          source: facts.source,
+          requester_user_id: args.requesterUserId,
+          requester_email: args.requesterEmail,
+          replacement_for_return_id: returnId,
+        },
+        kind: 'backordered',
+        to: args.requesterEmail,
+        recipientName: args.requesterName,
+        appUrl: args.appUrl,
+      });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Partial hand-over (order → backordered): in-app+push, plus email unless opted out. */
 export async function notifyRequesterBackordered(args: {
   organizationId: string;
@@ -121,7 +175,16 @@ export async function notifyRequesterBackordered(args: {
   emailOptedOut: boolean;
   /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
   orderNumber?: string | null;
+  /**
+   * Returns RX-2: the order's replacement_for_return_id when the caller holds
+   * the row (read by id otherwise). A replacement's partial hand-over is
+   * announced by the notify trigger in the app ("Part of your replacement was
+   * handed over. The rest will follow.") and by the replacement email.
+   */
+  replacementForReturnId?: string | null;
+  orderSource?: string | null;
 }): Promise<void> {
+  if (await handledAsReplacement(args, 'backordered')) return;
   const orderNo = orderLabel(args.orderId, args.orderNumber);
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
   const title = `Order ${orderNo}: partially fulfilled`;
@@ -194,7 +257,12 @@ export async function notifyRequesterBackorderShipped(args: {
   unitsShipped?: number | null;
   /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
   orderNumber?: string | null;
+  /** Returns RX-2: see notifyRequesterBackordered. A replacement's completion
+   *  is the notify trigger's ping and the return prompt's replacement email. */
+  replacementForReturnId?: string | null;
+  orderSource?: string | null;
 }): Promise<void> {
+  if (await handledAsReplacement(args, 'completed')) return;
   const orderNo = orderLabel(args.orderId, args.orderNumber);
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
   const title = `Order ${orderNo}: backordered items shipped`;

@@ -388,6 +388,14 @@ export type AuditEvent =
   // revalidation (nothing moved; written after the failure).
   | 'return.disposition_planned'
   | 'return.restock_location_unavailable'
+  // Returns RX-2 (0397): an exchange approved (its linked replacement order
+  // created and held), a replacement changed or issued again, cancelled, or
+  // released for picking before the returned item arrived.
+  | 'return.exchange_approved'
+  | 'return.replacement_changed'
+  | 'return.replacement_issued'
+  | 'return.replacement_cancelled'
+  | 'return.replacement_released'
   // Recurring PO templates — time-based standing orders (Task 3).
   | 'recurring_po_template.created'
   | 'recurring_po_template.updated'

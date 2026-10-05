@@ -724,6 +724,33 @@ export function LinesTable({
   );
 }
 
+/**
+ * Returns RX-2: the one line an exchange replacement's slips carry, "Exchange
+ * replacement for RMA-… (returned item: New Hire Shirt, M ×1, received)"
+ * (core slipExchangeLine, built server-side). Nothing for an ordinary order.
+ */
+export function ExchangeLine({ line }: { line: string | null | undefined }) {
+  if (!line) return null;
+  return (
+    <View
+      style={{
+        marginTop: 12,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderTop: '1pt solid #e2e8f0',
+        borderBottom: '1pt solid #e2e8f0',
+        borderLeft: '1pt solid #e2e8f0',
+        borderRight: '1pt solid #e2e8f0',
+      }}
+    >
+      <Text style={{ fontSize: 8, fontFamily: 'Helvetica-Bold', letterSpacing: 1.2, color: colors.ink, marginBottom: 3 }}>
+        EXCHANGE
+      </Text>
+      <Text style={{ fontSize: 10, color: colors.ink, lineHeight: 1.4 }}>{line}</Text>
+    </View>
+  );
+}
+
 export function FooterCode({ code }: { code: string }) {
   return <Text style={styles.footerCode}>{code}</Text>;
 }

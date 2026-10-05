@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -25,6 +26,8 @@ const ORDER_DETAIL_FIELDS = [
   'assigned_picker_id',
   'picking_claimed_at',
   'picking_claimed_by',
+  // Returns RX-2: the RMA an exchange replacement belongs to (not a secret).
+  'replacement_for_return_id',
 ] as const;
 
 function allowListedOrder(row: Record<string, unknown>): Record<string, unknown> {
@@ -54,6 +57,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       warehouseName: detail.warehouseName,
       requesterName: detail.requesterName,
       requesterEmail: detail.requesterEmail,
+      // Returns RX-2: the replacement block (banner, gate, release, the
+      // driver's "Collect the returned item" line); null for an ordinary
+      // order. And the kill switch, so a create sheet hides "Exchange".
+      replacement: detail.replacement ?? null,
+      exchangesEnabled: exchangeCreateEnabled(),
     });
   } catch (e) {
     if (e instanceof ServiceError) {

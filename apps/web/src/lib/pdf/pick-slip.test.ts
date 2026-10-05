@@ -119,6 +119,20 @@ describe('renderPickSlipPdf', () => {
     expect(claimed.byteLength).toBeGreaterThan(unclaimed.byteLength);
   }, 30000);
 
+  // Returns RX-2: an exchange replacement's slip carries one line naming its
+  // RMA and the returned item (received or not yet received).
+  it('prints the exchange line for a replacement (and nothing for an ordinary order)', async () => {
+    const replacement = await renderPickSlipPdf({
+      ...baseDetail,
+      replacement: {
+        slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: New Hire Shirt, M ×1, not yet received)',
+      },
+    } as any);
+    const plain = await renderPickSlipPdf(baseDetail);
+    expect(replacement.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    expect(replacement.byteLength).toBeGreaterThan(plain.byteLength);
+  }, 30000);
+
   it('renders even when there are no item images', async () => {
     const buf = await renderPickSlipPdf(baseDetail);
     expect(buf.byteLength).toBeGreaterThan(2000);

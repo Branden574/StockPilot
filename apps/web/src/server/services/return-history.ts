@@ -18,7 +18,10 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
  *   the inbound legs (returned to a rack, into Staging, scrapped), from the
  *                RMA's own movements
  *
- * RX-2 adds the replacement order, its holds and its pick to the same list.
+ * RX-2 adds the exchange to the same list: the exchange requested, approved
+ * (with the item chosen and, for a substitution, the item it replaced),
+ * declined, the replacement order issued (its SO number), changed, cancelled
+ * and released early, and the live replacement's pick and hand-over.
  * Staff-only words (reasons, racks): the requester tracking page never reads
  * this (RX-3 has its own redacted payload).
  */
@@ -35,7 +38,17 @@ export type ReturnChainKind =
   | 'cancelled'
   | 'returned_to_rack'
   | 'into_staging'
-  | 'scrapped';
+  | 'scrapped'
+  // RX-2: the exchange and its replacement order.
+  | 'exchange_requested'
+  | 'exchange_approved'
+  | 'exchange_declined'
+  | 'replacement_issued'
+  | 'replacement_changed'
+  | 'replacement_cancelled'
+  | 'released_early'
+  | 'replacement_picked'
+  | 'replacement_handed_over';
 
 export interface ReturnChainEvent {
   at: string;
@@ -59,6 +72,19 @@ export interface ChainDecision {
   actorName: string | null;
   actorKind: string;
   createdAt: string;
+  /** RX-2: the item an exchange decision names, the item it replaced, the quantity and the order. */
+  itemId?: string | null;
+  previousItemId?: string | null;
+  quantity?: number | null;
+  orderRequestId?: string | null;
+}
+
+/** RX-2: what the exchange decisions' labels name (item labels, SO numbers). */
+export interface ChainExchangeNames {
+  /** Item id -> "New Hire Shirt, L". */
+  items: Map<string, string>;
+  /** Replacement order id -> its SO number. */
+  orders: Map<string, number | null>;
 }
 
 /** One of the RMA's own movements (return legs and the scrap write-off). */
@@ -82,9 +108,33 @@ function decisionLabel(
   d: ChainDecision,
   lineLabels: Map<string, string> | undefined,
   originalRacks: Map<string, string> | undefined,
+  names?: ChainExchangeNames,
 ): string | null {
   const counter = d.channel === 'counter' ? ' at the counter' : '';
+  const item = (id: string | null | undefined) => (id ? (names?.items.get(id) ?? 'an item') : null);
+  const qty = d.quantity && d.quantity > 0 ? ` ×${d.quantity}` : '';
+  const so = d.orderRequestId ? formatOrderNumber(names?.orders.get(d.orderRequestId) ?? null) : null;
   switch (d.kind) {
+    case 'exchange_requested': {
+      const what = item(d.itemId);
+      const who = d.actorKind === 'staff' ? ' by staff' : ' by the requester';
+      return what ? `Exchange requested${who}: ${what}${qty}` : `Exchange requested${who}: warehouse will review`;
+    }
+    case 'exchange_approved': {
+      const what = item(d.itemId) ?? 'the replacement';
+      const was = d.previousItemId && d.previousItemId !== d.itemId ? ` (instead of ${item(d.previousItemId)})` : '';
+      return `Exchange approved: ${what}${qty}${was}`;
+    }
+    case 'exchange_declined':
+      return d.reason ? `Exchange declined: ${d.reason}` : 'Exchange declined';
+    case 'replacement_issued':
+      return `Replacement order ${so ?? 'created'}${so ? ' created' : ''} and reserved`;
+    case 'replacement_changed':
+      return d.reason ? `Replacement changed: ${d.reason}` : 'Replacement changed';
+    case 'replacement_cancelled':
+      return d.reason ? `Replacement cancelled: ${d.reason}` : 'Replacement cancelled';
+    case 'released_early':
+      return d.reason ? `Released before the return: ${d.reason}` : 'Released before the return';
     case 'created':
       return d.actorKind === 'staff' ? `Return created by staff${counter}` : 'Return requested by the requester';
     case 'disposition_planned': {
@@ -128,6 +178,11 @@ export function buildReturnChainEvents(input: {
   lineLabels?: Map<string, string>;
   /** Line id -> the original rack(s) a plan of "original" means. */
   originalRacks?: Map<string, string>;
+  /** RX-2: the names exchange decisions print. */
+  exchangeNames?: ChainExchangeNames;
+  /** RX-2: the live replacement's picks (its recorded draw) and hand-over. */
+  replacementPicks?: Array<{ at: string; itemName: string | null; quantity: number; racks: Array<{ name: string; quantity: number }> }>;
+  replacement?: { orderNumber: number | null; completedAt: string | null } | null;
 }): ReturnChainEvent[] {
   const so = formatOrderNumber(input.orderNumber);
   const events: Array<ReturnChainEvent & { order: number }> = [];
@@ -146,9 +201,30 @@ export function buildReturnChainEvents(input: {
     events.push({ at: input.completedAt, kind: 'handed_over', label: `Handed over${so ? ` (${so})` : ''}`, actorName: null, order: order++ });
   }
   for (const d of input.decisions) {
-    const label = decisionLabel(d, input.lineLabels, input.originalRacks);
+    const label = decisionLabel(d, input.lineLabels, input.originalRacks, input.exchangeNames);
     if (!label) continue;
     events.push({ at: d.createdAt, kind: d.kind as ReturnChainKind, label, actorName: d.actorName, order: order++ });
+  }
+  // RX-2: the replacement's own pick (0373 provenance) and hand-over.
+  const rso = formatOrderNumber(input.replacement?.orderNumber ?? null);
+  for (const p of input.replacementPicks ?? []) {
+    const from = formatRackHoldings(p.racks);
+    events.push({
+      at: p.at,
+      kind: 'replacement_picked',
+      label: `Replacement picked: ${p.itemName ?? 'item'} ×${p.quantity}${from ? ` from ${from}` : ''}${rso ? ` (${rso})` : ''}`,
+      actorName: null,
+      order: order++,
+    });
+  }
+  if (input.replacement?.completedAt) {
+    events.push({
+      at: input.replacement.completedAt,
+      kind: 'replacement_handed_over',
+      label: `Replacement handed over${rso ? ` (${rso})` : ''}`,
+      actorName: null,
+      order: order++,
+    });
   }
   // A scrap is written as +q return (no rack) then -q loss in the same close
   // (net zero). Read as ONE event, "Scrapped", never "Into Staging" first

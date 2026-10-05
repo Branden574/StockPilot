@@ -205,3 +205,47 @@ describe('the requester messages', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 });
+
+describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
+  it('a counter exchange approval is silent; changes and cancels reach the requester of a requester-sourced RMA', () => {
+    expect(requesterHearsEvent('exchange_approved', { source: 'requester', channel: 'counter' })).toBe(false);
+    expect(requesterHearsEvent('exchange_approved_short', { source: 'requester', channel: 'counter' })).toBe(false);
+    expect(requesterHearsEvent('exchange_approved', { source: 'requester', channel: 'staff' })).toBe(true);
+    expect(requesterHearsEvent('replacement_changed', { source: 'requester' })).toBe(true);
+    expect(requesterHearsEvent('replacement_cancelled', { source: 'requester' })).toBe(true);
+    expect(requesterHearsEvent('replacement_changed', { source: 'internal' })).toBe(false);
+  });
+
+  it('a member hears "replacement reserved" linked to the replacement order', async () => {
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: 'req-1', requester_email: null, requester_name: 'R', order_number: 103 }],
+        error: null,
+      },
+      'notification_preferences.select': { data: [], error: null },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'exchange_approved', source: 'requester', channel: 'staff', linkOrderId: 'repl-1' });
+    expect(createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'return.exchange_approved',
+        title: 'Your exchange was approved. Your replacement is reserved.',
+        link: '/dashboard/orders/repl-1',
+        metadata: expect.objectContaining({ order_request_id: 'repl-1', return_id: 'ret-1' }),
+      }),
+    );
+  });
+
+  it('an email-only requester gets the reworded email on their RMA page, never a reason', async () => {
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: null, requester_email: 'pat@example.com', requester_name: 'Pat', order_number: 103 }],
+        error: null,
+      },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'replacement_cancelled', source: 'requester' });
+    const [, args] = sendEmail.mock.calls[0]! as unknown as [unknown, Record<string, unknown>];
+    expect(args).toMatchObject({ event: 'replacement_cancelled', to: 'pat@example.com' });
+    expect(String(args.viewUrl)).toMatch(/\/returns\/request\/tok-uuid$/);
+    expect(Object.keys(args)).not.toContain('reason');
+  });
+});
