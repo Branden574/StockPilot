@@ -12,6 +12,7 @@ import { Pressable, View } from 'react-native';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -28,6 +29,8 @@ interface MovementRow {
   item_id: string;
   item: { name: string; sku: string } | null;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0394: user_id null and stamped). */
+  actor_deleted: boolean;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -64,7 +67,7 @@ export default function MovementsScreen() {
       .from('stock_movements')
       .select(
         `id, movement_type, quantity_change, previous_quantity, new_quantity,
-         reason, created_at, item_id,
+         reason, created_at, item_id, user_id, deleted_users,
          item:inventory_items!item_id (name, sku),
          actor:user_profiles!user_id (full_name, email)`,
       )
@@ -122,6 +125,7 @@ export default function MovementsScreen() {
           item_id: r.item_id as string,
           item: Array.isArray(item) ? item[0] ?? null : item,
           actor: Array.isArray(actor) ? actor[0] ?? null : actor,
+          actor_deleted: isRowPersonDeleted(r),
         };
       }),
     );
@@ -163,7 +167,7 @@ function MovementCard({ m, onPress }: { m: MovementRow; onPress: () => void }) {
   const Icon = isAdd ? Plus : m.quantity_change < 0 ? Minus : RotateCcw;
   const pipColor = isAdd ? ACCENT.mint : m.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
   const verb = TYPE_LABEL[m.movement_type] ?? m.movement_type;
-  const actor = m.actor?.full_name ?? m.actor?.email ?? 'system';
+  const actor = actorText(m.actor, m.actor_deleted);
   return (
     <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
       <Card padding={14}>

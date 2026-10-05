@@ -400,6 +400,12 @@ describe('buildAuditCardModel', () => {
     expect(buildAuditCardModel(row).actorName).toBe('system');
   });
 
+  // 0394: the actor deleted their account (user_id null and stamped).
+  it('names a stamped null actor "Deleted user", never "system"', () => {
+    const row = { ...auditRow({ id: 'a3d', actor: null }), actor_deleted: true };
+    expect(buildAuditCardModel(row).actorName).toBe('Deleted user');
+  });
+
   it('falls back to email when full_name is missing', () => {
     const row = auditRow({ id: 'a4', actor: { full_name: null, email: 'ada@example.com' } });
     expect(buildAuditCardModel(row).actorName).toBe('ada@example.com');

@@ -47,6 +47,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { deleteOrgData } from '@/lib/db';
+import { DELETE_ACCOUNT_CONFIRM_COPY } from '@/lib/deleted-user-labels';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { clearOfflineCache } from '@/lib/offline-cache';
@@ -668,9 +669,11 @@ function SettingRow({
  * Step 2: type-DELETE prompt — calls /api/v1/account/delete, which asks
  *         the database first and then deletes the auth user (0388).
  * On success, the auth context is torn down via signOut so the app
- * lands back at the sign-in screen. Any refusal (linked records, try
- * again, a failed delete) arrives as a non-2xx with a message: it is
- * shown and the app stays signed in.
+ * lands back at the sign-in screen. Any refusal (the only owner of an
+ * organization with other members, a platform admin, try again, a failed
+ * delete) arrives as a non-2xx with a message: it is shown and the app
+ * stays signed in. Since 0394 every member can delete their account; the
+ * last owner is pointed to the web Team page (O-A3-8).
  */
 /** useAuth().signOut: after a deletion it is called to discard, not to ask. */
 type SignOutFn = (opts?: { afterAccountDeleted?: boolean }) => Promise<void> | void;
@@ -678,7 +681,7 @@ type SignOutFn = (opts?: { afterAccountDeleted?: boolean }) => Promise<void> | v
 function confirmDeleteAccount(signOut: SignOutFn): void {
   Alert.alert(
     'Delete your account?',
-    'This permanently removes your profile, biometric pairing, push tokens, and access to all StockPilot organizations you belong to. Inventory data owned by your organization is retained for org members.\n\nIf you are the sole owner of an organization with other members, transfer ownership first.\n\nThis cannot be undone.',
+    DELETE_ACCOUNT_CONFIRM_COPY,
     [
       { text: 'Cancel', style: 'cancel' },
       {

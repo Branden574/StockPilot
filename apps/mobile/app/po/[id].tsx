@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PoAttachments } from '@/components/po-attachments';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
+import { receiverText } from '@/lib/deleted-user-labels';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
 import { readPoRunGroups, readReceiptTotals } from '@/lib/id-reads';
@@ -182,7 +183,7 @@ export default function PoReceiveScreen() {
     if (!id || !orgId) return;
     const { data: receiptRows, error: receiptsErr } = await supabase
       .from('receipts')
-      .select('id, receipt_number, status, received_at, received_by')
+      .select('id, receipt_number, status, received_at, received_by, deleted_users')
       .eq('organization_id', orgId)
       .eq('purchase_order_id', id)
       .order('received_at', { ascending: false });
@@ -233,7 +234,8 @@ export default function PoReceiveScreen() {
           receipt_number: r.receipt_number as string,
           status: r.status as string,
           received_at: (r.received_at as string | null) ?? null,
-          received_by_name: nameById.get(r.received_by as string) ?? 'Unknown',
+          // "Deleted user" when the receiver deleted their account (0394).
+          received_by_name: receiverText(nameById, r),
           accepted: t.accepted,
           rejected: t.rejected,
         };

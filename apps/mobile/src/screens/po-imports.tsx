@@ -81,7 +81,7 @@ export default function POImportsScreen() {
       .from('po_imports')
       .select(
         `id, source_type, file_name, file_size, status, parse_error,
-         approved_po_id, created_at, uploaded_by,
+         approved_po_id, created_at, uploaded_by, deleted_users,
          vendor:suppliers!vendor_id (name)`,
       )
       .eq('organization_id', orgId)
@@ -111,7 +111,12 @@ export default function POImportsScreen() {
           approved_po_id: (r.approved_po_id as string | null) ?? null,
           created_at: r.created_at as string,
           vendor: Array.isArray(vendor) ? vendor[0] ?? null : vendor,
-          uploader: poImportUploaderLabel(uploaders, (r.uploaded_by as string | null) ?? null),
+          // The import's stamp reads "Deleted user" (0394).
+          uploader: poImportUploaderLabel(
+            uploaders,
+            (r.uploaded_by as string | null) ?? null,
+            r.deleted_users,
+          ),
         };
       }),
     );

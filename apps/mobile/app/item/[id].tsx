@@ -130,6 +130,7 @@ import {
   validateSerialInput,
 } from '@/lib/serials';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -238,6 +239,8 @@ interface MovementRow {
   note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0394: user_id null and stamped). */
+  actor_deleted?: boolean;
   /**
    * The kind of record that CAUSED this movement (order_request |
    * cycle_count | return | bundle — the only values any writer ever sets on
@@ -284,6 +287,8 @@ interface AuditRow {
   metadata: Record<string, unknown> | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /** The actor deleted their account (0394: user_id null and stamped). */
+  actor_deleted?: boolean;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -864,6 +869,7 @@ export default function ItemDetail() {
           `id, movement_type, quantity_change, previous_quantity, new_quantity,
            moved_quantity, reason, notes, created_at,
            reference_type, reference_id, from_location_id, to_location_id,
+           user_id, deleted_users,
            actor:user_profiles!user_id (full_name, email)`,
           { count: 'exact' },
         )
@@ -993,6 +999,7 @@ export default function ItemDetail() {
           note_editable: movementNoteEditable(rawReason, rawNotes),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+          actor_deleted: isRowPersonDeleted(r),
           // Legacy pick/cancel rows get the type/id they have always MEANT, so
           // the card links to the order like every other referenced movement.
           reference_type:
@@ -1086,7 +1093,7 @@ export default function ItemDetail() {
       } = await supabase
         .from('audit_logs')
         .select(
-          `id, event, metadata, created_at,
+          `id, event, metadata, created_at, user_id, deleted_users,
            actor:user_profiles!user_id (full_name, email)`,
           { count: 'exact' },
         )
@@ -1107,6 +1114,7 @@ export default function ItemDetail() {
           metadata: (r.metadata as Record<string, unknown> | null) ?? null,
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+          actor_deleted: isRowPersonDeleted(r),
         };
       });
       return { ok: true, rows: mapped, count: count ?? 0 };
@@ -2318,7 +2326,7 @@ function MovementCard({
   const Icon = isAdd ? Plus : movement.quantity_change < 0 ? Minus : RotateCcw;
   const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
   const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
-  const actor = movement.actor?.full_name ?? movement.actor?.email ?? 'system';
+  const actor = actorText(movement.actor, movement.actor_deleted);
   // Source reference (Unit 3, web parity): what CAUSED this movement — an
   // order, cycle count, return, or bundle. referenceHref is null whenever
   // the type is unrecognized OR has no native detail screen (currently:
