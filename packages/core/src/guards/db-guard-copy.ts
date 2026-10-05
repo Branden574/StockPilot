@@ -25,6 +25,15 @@ export const ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY =
   'Only a pending order can be cancelled by the person who placed it. Ask someone who approves orders to cancel it.';
 
 /**
+ * The app's refusal of an order action by someone without write access to
+ * the order's warehouse (L129a: the order update policy asks the same, so a
+ * raw write matches no row). It names no warehouse id: the caller may not be
+ * able to read the warehouse at all.
+ */
+export const ORDER_WAREHOUSE_WRITE_REFUSED_COPY =
+  "This order is in a warehouse you don't work in, so you can't change it. Ask someone who works there.";
+
+/**
  * The database refuses the delete while the item has stock on record or a
  * non-zero holding on any location, so the sentence says exactly that. Moving
  * stock keeps it on the item, so a move is not offered.

@@ -10,6 +10,7 @@ import {
   HOLD_NOT_APPLICABLE_COPY,
   HOLD_NOT_APPROVER_COPY,
   HOLD_ORDER_NOT_FOUND_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   type ModuleId,
   type Role,
 } from '@stockpilot/core';
@@ -148,9 +149,10 @@ describe('POST /api/v1/orders/[id]/transition — a warehouse refusal is 403 for
     asCaller({ data: null, error: null });
     const res = await POST(req({ action: 'approve' }), { params });
     expect(res.status).toBe(403);
+    // Test stage (L129a walk): the plain sentence, never the warehouse id.
     expect(await res.json()).toEqual({
       error: 'forbidden',
-      message: 'User does not have write access to warehouse wh-1.',
+      message: ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
     });
     expect(reportError).not.toHaveBeenCalled();
   });

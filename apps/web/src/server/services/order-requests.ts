@@ -19,6 +19,7 @@ import {
   lineOwedUnits,
   NEEDED_BY_BUSY_COPY,
   ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   NEEDED_BY_CLOSED_COPY,
   NEEDED_BY_IN_PAST_COPY,
   NEEDED_BY_MODULE_OFF_COPY,
@@ -66,7 +67,7 @@ import {
   type OrderSummary,
 } from '@stockpilot/core';
 
-import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
@@ -4494,7 +4495,18 @@ export class OrderRequestsService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Order request not found');
     const warehouseId = (data as { warehouse_id: string }).warehouse_id;
-    await assertWarehouseAccess(warehouseId, op, this.ctx);
+    try {
+      await assertWarehouseAccess(warehouseId, op, this.ctx);
+    } catch (e) {
+      // L129a (0395): the order update policy refuses the same caller (a raw
+      // write matches no row). Say it in plain words, never the warehouse's
+      // id; still a ForbiddenError, so holdStock words its own refusal and
+      // every route answers 403. A viewer keeps the read-only sentence.
+      if (op === 'write' && isWarehouseForbidden(e) && this.ctx.role !== 'viewer') {
+        throw new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
+      }
+      throw e;
+    }
     return warehouseId;
   }
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ITEM_HOLDS_STOCK_COPY,
   ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   dbGuardHint,
   dbPermissionFor,
   dbPermissionRefusedCopy,
@@ -60,6 +61,7 @@ describe('the 0395 refusal words', () => {
   it('says what to do in plain words, with no code word and never "book"', () => {
     const all = [
       ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+      ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
       ITEM_HOLDS_STOCK_COPY,
       ...(['adjust', 'transfer', 'count_post', 'receipt_post', 'receipt_reverse', 'kit_assemble'] as const).map(
         dbPermissionRefusedCopy,
@@ -81,12 +83,20 @@ describe('the 0395 refusal words', () => {
     expect(ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).toBe(
       'Only a pending order can be cancelled by the person who placed it. Ask someone who approves orders to cancel it.',
     );
+    // L129a (test stage): an approver outside the order's warehouse was told
+    // "User does not have write access to warehouse <uuid>." The sentence names
+    // no id and says who can act.
+    expect(ORDER_WAREHOUSE_WRITE_REFUSED_COPY).toBe(
+      "This order is in a warehouse you don't work in, so you can't change it. Ask someone who works there.",
+    );
+    expect(ORDER_WAREHOUSE_WRITE_REFUSED_COPY).not.toMatch(/[0-9a-f]{8}-|access to warehouse/i);
   });
 
   it('is exported from the package entry point', () => {
     expect(core.dbGuardHint).toBe(dbGuardHint);
     expect(core.ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY).toBe(ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY);
     expect(core.ITEM_HOLDS_STOCK_COPY).toBe(ITEM_HOLDS_STOCK_COPY);
+    expect(core.ORDER_WAREHOUSE_WRITE_REFUSED_COPY).toBe(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
     expect(core.dbPermissionRefusedCopy).toBe(dbPermissionRefusedCopy);
   });
 });

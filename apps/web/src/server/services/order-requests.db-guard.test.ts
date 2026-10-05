@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY, type ModuleId, type Role } from '@stockpilot/core';
+import {
+  ORDER_CANCEL_REQUESTER_PENDING_ONLY_COPY,
+  ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
+  type ModuleId,
+  type Role,
+} from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -154,7 +159,7 @@ describe('OrderRequestsService.setInternalNotes — write access to the order\'s
     });
     await expect(
       svc(stub, { role: 'staff', permissions: ['orders:approve'] }).setInternalNotes('ord-1', 'Gate code 12'),
-    ).rejects.toThrow('User does not have write access to warehouse wh-b.');
+    ).rejects.toThrow(ORDER_WAREHOUSE_WRITE_REFUSED_COPY);
     expect(stub.chains.get('order_requests.update')).toBeUndefined();
   });
 });
