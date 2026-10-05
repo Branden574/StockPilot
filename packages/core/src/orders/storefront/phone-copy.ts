@@ -176,7 +176,7 @@ export function restoredCartChangedCopy(counts: {
     );
   }
   if (parts.length === 0) return null;
-  return `Since this cart was saved, ${parts.join(', and ')}. They are marked below.`;
+  return `Since this cart was saved, ${parts.join(', and ')}. They are marked in your cart.`;
 }
 
 // ── Success ─────────────────────────────────────────────────────────────────

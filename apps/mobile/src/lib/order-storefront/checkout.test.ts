@@ -217,7 +217,7 @@ describe('a restored cart, checked against the catalog as it is now', () => {
     expect(r.cart.lines).toEqual([{ itemId: A, quantity: 5 }, { itemId: B, quantity: 1 }]);
     expect([...r.notOrderable]).toEqual([B]);
     expect(r.notice).toBe(
-      "Since this cart was saved, 1 item can't be ordered from here anymore, and 1 line asks for more than is available now. They are marked below.",
+      "Since this cart was saved, 1 item can't be ordered from here anymore, and 1 line asks for more than is available now. They are marked in your cart.",
     );
   });
 
