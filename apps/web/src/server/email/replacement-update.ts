@@ -30,14 +30,18 @@ import { sendReturnUpdateEmail, type ReturnUpdateEmailEvent } from './return-upd
  *   completed             to the requester: nothing here (the return prompt's
  *       replacement branch is the one completion email, carrying the
  *       replacement's own return link, at most once); to anyone else who
- *       signed: "Your replacement was handed over." (or "Your exchange is
- *       complete." once the RMA is closed), without a link (the RMA token
- *       page opens the requester's return)
+ *       signed: "The exchange replacement was handed over. Thank you for
+ *       signing for it.", without a link (the RMA token page opens the
+ *       requester's return) and never "your exchange" (review P14: it said
+ *       "Your exchange is complete ... you can start a return from here"
+ *       with no button, to a third party)
  *
- * LINKS (A-3): a member requester opens the replacement order in the app; a
- * B2B portal requester opens /portal; an email-only requester opens the RMA's
- * token page they already hold (the ORIGINAL order's return link). A link is
- * never built from a missing token: without one the email has no button.
+ * LINKS (A-3): a member requester opens the replacement order in the app
+ * ("View your replacement", review P14); a B2B portal requester opens
+ * /portal; an email-only requester opens the RMA's token page they already
+ * hold (the ORIGINAL order's return link); both keep "View your return". A
+ * link is never built from a missing token: without one the email has no
+ * button.
  *
  * Words: the return-update family (core's requester words): no reason, rack,
  * quantity on record or staff name.
@@ -91,6 +95,23 @@ export async function loadReplacementEmailFacts(
   }
 }
 
+/** What the requester's button opens (see LINKS above): one rule for the URL and its words. */
+export function replacementLinkTarget(
+  order: Pick<ReplacementEmailOrder, 'source' | 'requester_user_id'>,
+): 'portal' | 'replacement_order' | 'return_page' {
+  if (order.source === 'portal') return 'portal';
+  if (order.requester_user_id) return 'replacement_order';
+  return 'return_page';
+}
+
+/** A member's button opens the replacement order, so it says so (review P14). */
+const REPLACEMENT_ORDER_CTA = 'View your replacement';
+
+/** The button's words; null keeps the registry's "View your return". */
+export function replacementCtaLabel(order: Pick<ReplacementEmailOrder, 'source' | 'requester_user_id'>): string | null {
+  return replacementLinkTarget(order) === 'replacement_order' ? REPLACEMENT_ORDER_CTA : null;
+}
+
 /** Where the requester's button goes (see LINKS above). */
 export async function replacementViewUrl(
   admin: SupabaseClient,
@@ -99,8 +120,9 @@ export async function replacementViewUrl(
   appUrl: string,
 ): Promise<string | null> {
   const base = appUrl.replace(/\/+$/, '');
-  if (order.source === 'portal') return `${base}/portal`;
-  if (order.requester_user_id) return `${base}/dashboard/orders/${order.id}`;
+  const target = replacementLinkTarget(order);
+  if (target === 'portal') return `${base}/portal`;
+  if (target === 'replacement_order') return `${base}/dashboard/orders/${order.id}`;
   if (!facts.originalOrderId) return null;
   let token: string | null = null;
   try {
@@ -111,10 +133,15 @@ export async function replacementViewUrl(
   return token ? `${base}/returns/request/${token}` : null;
 }
 
-/** The order email kinds a replacement order sends, reworded; null = never sent. */
+/**
+ * The order email kinds a replacement order sends, reworded; null = never
+ * sent. The completion is never sent to the requester from here (the return
+ * prompt's replacement branch is their one completion email); anyone else
+ * who signed gets the receipt of the hand-over, whatever the RMA's status.
+ */
 export function replacementEventForOrderEmail(
   kind: string,
-  facts: Pick<ReplacementEmailFacts, 'returnStatus'>,
+  recipient: { toRequester: boolean },
 ): ReturnUpdateEmailEvent | null {
   switch (kind) {
     case 'staged_for_delivery':
@@ -124,7 +151,7 @@ export function replacementEventForOrderEmail(
     case 'backordered':
       return 'replacement_partly_handed_over';
     case 'completed':
-      return facts.returnStatus === 'closed' ? 'exchange_complete' : 'replacement_handed_over';
+      return recipient.toRequester ? null : 'replacement_signed_for';
     default:
       return null;
   }
@@ -163,13 +190,13 @@ export async function sendReplacementOrderEmail(
     if (!returnId) return 'skipped';
     const facts = await loadReplacementEmailFacts(admin, returnId);
     if (!facts) return 'skipped';
-    const event = replacementEventForOrderEmail(args.kind, facts);
-    if (!event) return 'skipped';
     const own = await requesterAddress(admin, args.order);
     const toRequester = own !== null && own.trim().toLowerCase() === args.to.trim().toLowerCase();
     // The requester's completion email is the return prompt's replacement
-    // branch (one email, with the replacement's own return link).
-    if (args.kind === 'completed' && toRequester) return 'skipped';
+    // branch (one email, with the replacement's own return link): the
+    // completion answers null for them here.
+    const event = replacementEventForOrderEmail(args.kind, { toRequester });
+    if (!event) return 'skipped';
     // Only the requester gets a link: the RMA token page opens their return,
     // so a signer who is someone else gets the receipt without a button.
     const viewUrl = toRequester ? await replacementViewUrl(admin, args.order, facts, args.appUrl) : null;
@@ -182,6 +209,7 @@ export async function sendReplacementOrderEmail(
       isAccountHolder: Boolean(args.order.requester_user_id),
       viewUrl,
       appUrl: args.appUrl,
+      ctaLabel: viewUrl ? replacementCtaLabel(args.order) : null,
     });
     return result.sent ? 'sent' : result.reason === 'suppressed' ? 'skipped' : 'failed';
   } catch (e) {

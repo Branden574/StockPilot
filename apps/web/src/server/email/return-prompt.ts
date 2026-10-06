@@ -138,14 +138,17 @@ export async function maybeSendReturnPrompt(
     // partial completion still has the earlier batch's fulfilled units.)
     const { data: lines, error: linesErr } = await admin
       .from('order_request_lines')
-      .select('quantity_fulfilled')
+      .select('quantity_requested, quantity_fulfilled')
       .eq('order_request_id', order.id);
     if (linesErr) return await readFailed(linesErr, 'orders.return-prompt.lines_read', orderId);
-    const totalFulfilled = ((lines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
-      (s, l) => s + (Number(l.quantity_fulfilled) || 0),
-      0,
-    );
+    const lineRows = (lines ?? []) as { quantity_requested?: number | null; quantity_fulfilled: number | null }[];
+    const totalFulfilled = lineRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
     if (totalFulfilled <= 0) return { sent: false, reason: 'zero_fulfilled' };
+    // Completed with part of it never sent (closed as delivered-partial): the
+    // notify trigger's rule (0396), a line asked for more than was handed over.
+    const partNeverSent = lineRows.some(
+      (l) => (Number(l.quantity_requested) || 0) > (Number(l.quantity_fulfilled) || 0),
+    );
 
     // Ensure the per-order return token (0156) exists. The mint happens for
     // EVERY structurally-qualifying completion — BEFORE any email-specific
@@ -217,7 +220,14 @@ export async function maybeSendReturnPrompt(
         // "Your exchange is complete" (or "Your replacement was handed over"
         // while the RMA is still open), carrying the replacement's OWN return
         // link minted above. The ordinary order emails skip a replacement's
-        // completion for the requester, so this is the one email.
+        // completion for the requester, so this is the one email. Closed
+        // with part never sent, it says so (review P14): "Your replacement
+        // order was closed." The words come from the order's own lines, not
+        // from the caller: the sign route, the paper signature and the order
+        // page's close-partial (which the database now refuses for a
+        // replacement). An RMA cancel that closes a part-handed-over
+        // replacement (cancel_return's hook) does not call this today; a
+        // caller that does gets the same words.
         const sent = await sendReplacementCompletionEmail(admin, {
           returnId: order.replacement_for_return_id,
           to: order.requester_email,
@@ -225,6 +235,7 @@ export async function maybeSendReturnPrompt(
           appUrl: opts.appUrl,
           token,
           isAccountHolder: Boolean(order.requester_user_id),
+          partNeverSent,
         });
         if (!sent) return { sent: false, reason: 'send_failed' };
         return { sent: true };
@@ -379,6 +390,9 @@ const REPLACEMENT_RETURN_CTA = 'Start a return';
  * Returns RX-2 (X-4): the replacement's completion email through the return-
  * update family, the button opening the replacement's own return page. True
  * when sent (a recorded public opt-out also answers true: nothing to retry).
+ * Part never sent comes first (the order's own news, whatever the RMA's
+ * status), then a closed RMA's "Your exchange is complete", else "Your
+ * replacement was handed over".
  */
 async function sendReplacementCompletionEmail(
   admin: SupabaseClient,
@@ -389,12 +403,17 @@ async function sendReplacementCompletionEmail(
     appUrl: string;
     token: string;
     isAccountHolder: boolean;
+    partNeverSent: boolean;
   },
 ): Promise<boolean> {
   const facts = await loadReplacementEmailFacts(admin, args.returnId);
   const base = args.appUrl.replace(/\/+$/, '');
   const result = await sendReturnUpdateEmail(admin, {
-    event: facts?.returnStatus === 'closed' ? 'exchange_complete' : 'replacement_handed_over',
+    event: args.partNeverSent
+      ? 'replacement_closed_partial'
+      : facts?.returnStatus === 'closed'
+        ? 'exchange_complete'
+        : 'replacement_handed_over',
     to: args.to,
     recipientName: args.recipientName,
     returnNumber: facts?.returnNumber ?? null,

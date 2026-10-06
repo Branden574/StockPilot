@@ -40,15 +40,24 @@ beforeEach(() => {
 
 describe('replacementEventForOrderEmail', () => {
   it('rewords staged for delivery, in transit, a partial hand-over and the completion; never the rest', () => {
-    const open = { returnStatus: 'approved' };
-    expect(replacementEventForOrderEmail('staged_for_delivery', open)).toBe('replacement_ready_delivery');
-    expect(replacementEventForOrderEmail('in_transit', open)).toBe('replacement_on_the_way');
-    expect(replacementEventForOrderEmail('backordered', open)).toBe('replacement_partly_handed_over');
-    expect(replacementEventForOrderEmail('completed', open)).toBe('replacement_handed_over');
-    expect(replacementEventForOrderEmail('completed', { returnStatus: 'closed' })).toBe('exchange_complete');
+    const requester = { toRequester: true };
+    expect(replacementEventForOrderEmail('staged_for_delivery', requester)).toBe('replacement_ready_delivery');
+    expect(replacementEventForOrderEmail('in_transit', requester)).toBe('replacement_on_the_way');
+    expect(replacementEventForOrderEmail('backordered', requester)).toBe('replacement_partly_handed_over');
     for (const kind of ['submitted', 'confirm_request', 'approved', 'denied', 'cancelled', 'packing_slip_generated']) {
-      expect(replacementEventForOrderEmail(kind, open)).toBeNull();
+      expect(replacementEventForOrderEmail(kind, requester)).toBeNull();
+      expect(replacementEventForOrderEmail(kind, { toRequester: false })).toBeNull();
     }
+  });
+
+  // Re-pinned by the returns RX-2 review fix (P14; was: completed answered
+  // replacement_handed_over, or exchange_complete once the RMA was closed,
+  // for whoever it was sent to). The requester's completion email is the
+  // return prompt's replacement branch, so nothing here; anyone else who
+  // signed gets the receipt, never "your exchange" and never a button.
+  it('completion: nothing for the requester here; the signer receipt for anyone else, whatever the RMA status', () => {
+    expect(replacementEventForOrderEmail('completed', { toRequester: true })).toBeNull();
+    expect(replacementEventForOrderEmail('completed', { toRequester: false })).toBe('replacement_signed_for');
   });
 });
 
@@ -95,9 +104,58 @@ describe('sendReplacementOrderEmail', () => {
       await sendReplacementOrderEmail(admin(), { order: EMAIL_ONLY, kind: 'completed', to: 'front.desk@example.com', recipientName: null, appUrl: APP }),
     ).toBe('sent');
     const mail = sendEmailMock.mock.calls[0]![0] as unknown as { text: string; html: string };
-    expect(mail.text).toContain('Your replacement was handed over.');
     expect(mail.text).not.toContain('tok-orig');
     expect(mail.html).not.toContain('tok-orig');
+  });
+
+  // Review fix (P14): the signer was told "Your exchange is complete. ... you
+  // can start a return from here." with no button, about someone else's
+  // exchange. Now a receipt of the hand-over they signed for.
+  it.each(['approved', 'received', 'closed'])('the signer receipt (RMA %s): the hand-over they signed for, no button', async (status) => {
+    expect(
+      await sendReplacementOrderEmail(admin({ ...RMA, status }), {
+        order: EMAIL_ONLY,
+        kind: 'completed',
+        to: 'front.desk@example.com',
+        recipientName: 'Dana',
+        appUrl: APP,
+      }),
+    ).toBe('sent');
+    const mail = sendEmailMock.mock.calls[0]![0] as unknown as { subject: string; text: string; html: string; to: string };
+    expect(mail.to).toBe('front.desk@example.com');
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: replacement handed over');
+    expect(mail.text).toContain('The exchange replacement was handed over.');
+    expect(mail.text).toContain('Thank you for signing for it.');
+    for (const out of [mail.subject, mail.text, mail.html]) {
+      expect(out).not.toMatch(/your exchange|your replacement|start a return|view your/i);
+    }
+    expect(mail.html).not.toContain('/returns/request/');
+    expect(mail.html).not.toContain('/dashboard/orders/');
+  });
+
+  // Review fix (P14): a member's button opens the replacement ORDER, so it
+  // says so; the RMA token page and the portal keep "View your return".
+  it('a member requester: "View your replacement", opening the replacement order', async () => {
+    const member = { ...EMAIL_ONLY, requester_user_id: 'u1', requester_email: 'member@example.com' };
+    expect(
+      await sendReplacementOrderEmail(admin(), { order: member, kind: 'in_transit', to: 'member@example.com', recipientName: null, appUrl: APP }),
+    ).toBe('sent');
+    const mail = sendEmailMock.mock.calls[0]![0] as unknown as { text: string; html: string };
+    expect(mail.html).toContain('View your replacement');
+    expect(mail.html).not.toContain('View your return');
+    expect(mail.text).toContain(`View your replacement: ${APP}/dashboard/orders/repl-1`);
+  });
+
+  it.each([
+    ['an email-only requester (the RMA token page)', EMAIL_ONLY, `${APP}/returns/request/tok-orig`],
+    ['a portal requester (the portal)', { ...EMAIL_ONLY, source: 'portal', requester_user_id: 'pu' }, `${APP}/portal`],
+  ])('%s keeps "View your return"', async (_label, order, url) => {
+    expect(
+      await sendReplacementOrderEmail(admin(), { order, kind: 'in_transit', to: 'pat@example.com', recipientName: null, appUrl: APP }),
+    ).toBe('sent');
+    const mail = sendEmailMock.mock.calls[0]![0] as unknown as { text: string; html: string };
+    expect(mail.text).toContain(`View your return: ${url}`);
+    expect(mail.html).not.toContain('View your replacement');
   });
 
   it("a member requester's own address comes from the profile (the row has none)", async () => {
