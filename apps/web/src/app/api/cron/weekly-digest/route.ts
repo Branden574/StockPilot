@@ -192,7 +192,8 @@ export async function GET(req: Request) {
         if (!orgRow) continue;
         const existing = byOrg.get(orgRow.id) ?? {
           orgName: orgRow.name,
-          // For the send time the footer states, in the org's zone.
+          // For the send time the footer states, and the day that decides
+          // OVERDUE, in the org's zone.
           timeZone: orgRow.timezone ?? null,
           recipients: [],
         };
@@ -223,8 +224,13 @@ export async function GET(req: Request) {
         // assignments and the purchase_orders:read permission. A failed read
         // throws to the per-org catch below, so nobody in the org is sent a
         // wider view than theirs.
+        //
+        // OVERDUE is decided in the org's own zone as of the run's start: a
+        // purchase order is overdue once the org's date is after its expected
+        // day (core isPastExpectedDay). Before, the Monday run (7 AM in Los
+        // Angeles) flagged every purchase order expected that Monday.
         const [source, readerData] = await Promise.all([
-          getDigestSource(admin, orgId),
+          getDigestSource(admin, orgId, { timeZone: group.timeZone, now: runStartedAt }),
           loadDigestReaderData(
             admin,
             orgId,

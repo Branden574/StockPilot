@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { cycleCountScopeLabel } from '@stockpilot/core';
+import { cycleCountScopeLabel, pastExpectedDayTest } from '@stockpilot/core';
 
 import { ServiceError } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
@@ -25,7 +25,23 @@ export interface DigestOpenPo {
   supplierName: string | null;
   expectedAt: string | null;
   status: string;
+  /** Past its expected day in the organization's zone (core isPastExpectedDay). */
   isOverdue: boolean;
+}
+
+/**
+ * When, and in which zone, a digest is built: the OVERDUE flag is decided for
+ * this moment in the organization's zone. A purchase order is overdue once the
+ * organization's date is AFTER its expected day (owner rule, 2026-10-06; core
+ * isPastExpectedDay). The flag used to compare the stored midnight UTC with
+ * the moment the digest was built, so the Monday digest (14:00 UTC, 7 AM in
+ * Los Angeles) flagged every purchase order expected that Monday as overdue.
+ */
+export interface DigestClock {
+  /** organizations.timezone as read; unset or unknown, core's documented
+   *  default zone (resolveOrgTimezone). */
+  timeZone: string | null;
+  now: Date;
 }
 
 export interface DigestCycleCount {
@@ -52,7 +68,8 @@ export interface DigestPayload {
   openPos: DigestOpenPo[];
   /** Every open purchase order the recipient may read (openPos lists at most 20). */
   openPosTotal: number;
-  /** Of openPosTotal, those past their expected date. */
+  /** Of openPosTotal, those past their expected day in the organization's
+   *  zone (DigestClock). */
   overduePosTotal: number;
   openCycleCounts: DigestCycleCount[];
 }
@@ -75,8 +92,9 @@ const PO_LIMIT = 20;
 export async function getDigestData(
   supabase: SupabaseClient,
   orgId: string,
+  clock: DigestClock,
 ): Promise<DigestPayload> {
-  return buildDigestPayload(await getDigestSource(supabase, orgId), null);
+  return buildDigestPayload(await getDigestSource(supabase, orgId, clock), null);
 }
 
 export function isDigestEmpty(p: DigestPayload): boolean {
@@ -158,14 +176,16 @@ export interface DigestSource {
 }
 
 /** Three independent reads (all org-scoped): low stock, open POs and
- *  in-progress cycle counts. */
+ *  in-progress cycle counts. The open POs' OVERDUE flag is decided for
+ *  `clock` (see DigestClock). */
 export async function getDigestSource(
   supabase: SupabaseClient,
   orgId: string,
+  clock: DigestClock,
 ): Promise<DigestSource> {
   const [lowStock, openPos, openCycleCounts] = await Promise.all([
     getLowStock(supabase, orgId),
-    getOpenPos(supabase, orgId),
+    getOpenPos(supabase, orgId, clock),
     getOpenCycleCounts(supabase, orgId),
   ]);
   return { lowStock, openPos, openCycleCounts };
@@ -568,7 +588,11 @@ async function getLowStock(
     });
 }
 
-async function getOpenPos(supabase: SupabaseClient, orgId: string): Promise<DigestSourcePo[]> {
+async function getOpenPos(
+  supabase: SupabaseClient,
+  orgId: string,
+  clock: DigestClock,
+): Promise<DigestSourcePo[]> {
   type Row = {
     id: string;
     po_number: string;
@@ -595,18 +619,20 @@ async function getOpenPos(supabase: SupabaseClient, orgId: string): Promise<Dige
       .range(from, to),
   );
 
-  const now = Date.now();
+  // The organization's day once for the whole list (core pastExpectedDayTest).
+  const isPast = pastExpectedDayTest(clock.now, clock.timeZone);
   return rows.map((r) => {
     const sup = Array.isArray(r.supplier) ? r.supplier[0] : r.supplier;
     const dest = Array.isArray(r.destination) ? r.destination[0] : r.destination;
-    const expectedAtMs = r.expected_at ? new Date(r.expected_at).getTime() : null;
     return {
       id: r.id,
       poNumber: r.po_number,
       supplierName: sup?.name ?? null,
       expectedAt: r.expected_at,
       status: r.status,
-      isOverdue: expectedAtMs != null && expectedAtMs < now,
+      // Past its expected DAY in the organization's zone, never the stored
+      // midnight UTC against the clock (DigestClock).
+      isOverdue: isPast(r.expected_at),
       destinationLocationId: r.destination_location_id ?? null,
       destinationWarehouseId: dest ? (dest.warehouse_id ?? null) : undefined,
     };

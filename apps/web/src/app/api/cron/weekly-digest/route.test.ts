@@ -466,3 +466,72 @@ describe('GET /api/cron/weekly-digest — the recipient pull names its membershi
     expect(isFilters).toContainEqual(['organization_members.impersonation_expires_at', null]);
   });
 });
+
+describe('GET /api/cron/weekly-digest — overdue in the organization zone', () => {
+  // The OVERDUE flag is decided per organization when its purchase orders are
+  // read (services/digest.ts, core isPastExpectedDay): a purchase order is
+  // overdue once the ORGANIZATION's date is after its expected day. So each
+  // org is read with its own zone and the run's start, never the server's day.
+  // On main the read took no zone, and the Monday run (7 AM in Los Angeles)
+  // flagged every purchase order expected that Monday as overdue.
+  it("reads each organization's open purchase orders in that organization's zone, as of the run's start", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-12T14:00:00.000Z'));
+      const sydneyRow = {
+        ...recipientRow('user-b', 'b@harbour.test'),
+        organization_members: [
+          {
+            organization_id: 'org-2',
+            accepted_at: '2026-01-01T00:00:00Z',
+            organizations: { id: 'org-2', name: 'Harbour', timezone: 'Australia/Sydney' },
+          },
+        ],
+      };
+      const noZoneRow = {
+        ...recipientRow('user-c', 'c@nozone.test'),
+        organization_members: [
+          {
+            organization_id: 'org-3',
+            accepted_at: '2026-01-01T00:00:00Z',
+            organizations: { id: 'org-3', name: 'No Zone', timezone: null },
+          },
+        ],
+      };
+      const stub = makeSupabaseStub({
+        'user_profiles.select': {
+          data: [recipientRow('user-a', 'a@acme.test'), sydneyRow, noZoneRow],
+          error: null,
+        },
+        'user_profiles.select.maybeSingle': {
+          data: { email_digest_optin: true, disabled_at: null },
+          error: null,
+        },
+        'organization_members.select.maybeSingle': {
+          data: { user_id: 'whichever', accepted_at: '2026-01-01T00:00:00Z', role: 'owner' },
+          error: null,
+        },
+      });
+      adminHolder.client = stub.client;
+      const { getDigestSource } = await import('@/server/services/digest');
+
+      await GET(buildRequest('Bearer test-cron-secret'));
+
+      const calls = vi.mocked(getDigestSource).mock.calls as unknown as Array<
+        [unknown, string, { timeZone: string | null; now: Date }]
+      >;
+      expect(calls.map(([client, orgId, clock]) => [client === stub.client, orgId, clock?.timeZone])).toEqual([
+        [true, 'org-1', 'America/Los_Angeles'],
+        [true, 'org-2', 'Australia/Sydney'],
+        // The documented default is applied where the rule is (core).
+        [true, 'org-3', null],
+      ]);
+      for (const [, , clock] of calls) {
+        expect(clock.now).toBeInstanceOf(Date);
+        expect(clock.now.toISOString()).toBe('2026-10-12T14:00:00.000Z');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

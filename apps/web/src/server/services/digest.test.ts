@@ -167,6 +167,10 @@ const HOT: ItemRow = {
   warehouse: { name: 'DC4' },
 };
 
+/** These read low stock; the open purchase orders' OVERDUE flag, which this
+ *  clock decides, is digest.overdue.test.ts's subject. */
+const CLOCK = { timeZone: 'America/Los_Angeles', now: new Date('2026-10-12T14:00:00.000Z') };
+
 function lowStockIds(groups: Awaited<ReturnType<typeof getDigestData>>['lowStock']): string[] {
   return groups.flatMap((g) => g.items.map((i) => i.id));
 }
@@ -179,7 +183,7 @@ describe('getDigestData low stock', () => {
     const items = [...Array.from({ length: 160 }, (_, i) => filler(i)), HOT];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toContain('hot');
     expect(payload.lowStock[0]?.warehouseName).toBe('DC4');
@@ -197,7 +201,7 @@ describe('getDigestData low stock', () => {
     ];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toContain('hot');
   });
@@ -206,7 +210,7 @@ describe('getDigestData low stock', () => {
     const items = [...Array.from({ length: 5 }, (_, i) => filler(i)), HOT];
     const { itemChains, client } = makeFakeClient(items);
 
-    await getDigestData(client, 'org-1');
+    await getDigestData(client, 'org-1', CLOCK);
 
     const steps = itemChains[0] ?? [];
     const or = steps.find((s) => s.method === 'or');
@@ -220,7 +224,7 @@ describe('getDigestData low stock', () => {
     const items = [filler(1, { id: 'zero', quantity_on_hand: 0, reorder_point: 0 })];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toEqual(['zero']);
   });
@@ -234,7 +238,7 @@ describe('getDigestData low stock', () => {
     ];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toEqual(['mine']);
   });
@@ -247,7 +251,7 @@ describe('getDigestData low stock', () => {
     ];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toEqual(['out']);
   });
@@ -265,7 +269,7 @@ describe('getDigestData low stock', () => {
     ];
     const { client, itemChains } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(lowStockIds(payload.lowStock)).toEqual(['really-out']);
     // Server-side, so the paging windows never carry the expected items.
@@ -277,7 +281,7 @@ describe('getDigestData low stock', () => {
     const items = [filler(1, { quantity_on_hand: 50, reorder_point: 10 })];
     const { client } = makeFakeClient(items);
 
-    const payload = await getDigestData(client, 'org-1');
+    const payload = await getDigestData(client, 'org-1', CLOCK);
 
     expect(payload.lowStock).toEqual([]);
   });
