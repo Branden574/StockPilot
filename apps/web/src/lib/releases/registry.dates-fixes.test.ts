@@ -3,13 +3,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  MODULE_REGISTRY,
-  PERMISSIONS,
-  type ModuleId,
-  type Release,
-  type ReleaseViewer,
-} from '@stockpilot/core';
+import { MODULE_REGISTRY, PERMISSIONS, type ModuleId, type ReleaseViewer } from '@stockpilot/core';
 
 import {
   buildReleaseList,
@@ -28,9 +22,13 @@ import { RELEASES } from './registry';
  * same draft: a purchase order is overdue, and a delivery late, only after
  * its expected date has passed in the organization's zone.
  *
- * Held as a DRAFT until the web deploy is live and the over-the-air update
- * with the phone part has reached phones. Each entry is told to whoever can
- * open the screen it is about.
+ * Held as a DRAFT until the web deploy was live (#335 in web build
+ * 78fd7fb5eea3, #338 in f6e8be37b217) and the over-the-air update with the
+ * phone part (OTA group e3111729, iOS update 01a1111c) had launched on
+ * phones (1 launch, 0 failed, read 2026-10-06 12:34Z).
+ * docs/whats-new-dates-link-submit publishes it, between the public link and
+ * PO-2 releases published with it. Each entry is told to whoever can open
+ * the screen it is about.
  */
 const ID = 'dates-fixes-2026-10';
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -38,52 +36,87 @@ const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 const REPO = resolve(__dirname, '../../../../..');
 const source = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
 
-describe('the dates fixes release is held as a draft', () => {
+// Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "the dates
+// fixes release is held as a draft").
+describe('the dates fixes release is published', () => {
   const everyone: ReleaseViewer = {
     role: 'owner',
     permissions: [...PERMISSIONS],
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
+  const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
 
-  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "is a
+  // draft, so no feed carries it, and preparing it changes nothing a client
+  // can observe": a draft, in no feed, no legacy list and no fingerprint).
+  it('is published after the web deploys and the phone update, so every feed carries it, and it is the notice for every member the public link release does not reach', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(
-      ID,
+    for (const viewer of [everyone, member]) {
+      expect(visibleReleases(RELEASES, viewer).map((r) => r.id)).toContain(ID);
+    }
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
+    // The public link release, published a minute later, is the notice for
+    // whoever manages public links; every other member is told this one
+    // first, since its digest line reaches every member.
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'public-link-sent-request-2026-10',
     );
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    // An old phone build lists it first for a member, with the notification
+    // settings link (the one entry that member is told).
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-06',
+      title: release().title,
+      body: release().summary,
+      cta: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+    });
+    // Publishing it changes what clients observe.
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(
       registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
     );
   });
 
-  it('is a draft just below the public link draft, dated after every other release but that one', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "is a
+  // draft just below the public link draft, dated after every other release
+  // but that one"): both are published now, a minute apart.
+  it('sits just below the public link release (published a minute later), dated after every other release, at a real time after the phone update launched', () => {
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
     // newest entry, at the top, dated after every other release): it is
     // dated later and sits above this one.
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBe(1);
     expect(RELEASES[0]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[0]?.status).toBe('published');
+    expect(Date.parse(RELEASES[0]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    // A real time on a whole minute, after EAS showed the phone update
+    // launching on iOS (read 2026-10-06 12:34Z): never the draft's
+    // placeholder date (2026-10-14T17:00Z).
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T12:34:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-07T00:00:00Z'),
+    );
   });
 });
 
 describe('the dates fixes release tells each change to whoever can see it', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: a copy
+  // forced to published): the release itself is published now.
   const ids = (
     role: ReleaseViewer['role'],
     permissions: ReleaseViewer['permissions'],
     modules: ModuleId[],
   ) => {
-    const published: Release = { ...release(), status: 'published' };
+    expect(release().status).toBe('published');
     return (
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map(
+      visibleReleases([release()], { role, permissions, enabledModules: modules })[0]?.entries.map(
         (e) => e.id,
       ) ?? []
     );
@@ -367,5 +400,36 @@ describe('the dates fixes release says only what shipped', () => {
 
   it('claims nothing it cannot stand behind: no numbers, no promises, no word for a recorded quantity', () => {
     expect(all()).not.toMatch(/\bbooks?\b|%|guarantee|always|never|instantly|verified/i);
+  });
+
+  // Publish re-read (docs/whats-new-dates-link-submit, 2026-10-06), against
+  // the code on main and what readers saw before the fixes.
+  it('says only what happened: no weekly digest has been sent, the old ETA was a day early, and the calendar ran ahead in US zones', () => {
+    // No weekly digest has been sent yet (each Monday run stopped before
+    // sending until #326, and the first run with it is 2026-10-12, after
+    // #338), so the line says what a preview counted and what the Monday
+    // digest would have counted, never that a digest listed anything.
+    const digest = entry('digest-overdue-purchase-orders');
+    expect(digest.whatChanged).toContain(
+      'counted a purchase order as overdue from the evening before its expected date: a preview sent that evening counted it, and the Monday digest would have counted one expected that Monday.',
+    );
+    expect(`${digest.whatChanged} ${digest.whyItMatters}`).not.toMatch(
+      /Monday's digest listed|the Monday it was sent/,
+    );
+    expect(digest.whyItMatters).toBe(
+      'A digest could count a purchase order as overdue on the day it was due, or the evening before.',
+    );
+    const weekly = RELEASES.find((r) => r.id === 'weekly-digest-and-fixes-2026-10')!;
+    expect(weekly.entries[0]!.whatChanged).toContain('so no weekly digest was ever sent');
+    expect(source('apps/web/vercel.json')).toContain('"schedule": "0 14 * * 1"');
+    // Before #335's update the Receive POs screen printed the ETA a day
+    // early, so the why does not lean on the ETA a reader saw.
+    expect(entry('phone-receive-overdue').whyItMatters).toBe(
+      'On the evening before a purchase order was due, the screen could already count it as overdue.',
+    );
+    // The server's month ran ahead of the organization's only west of UTC.
+    expect(entry('calendar-current-month').whatChanged).toMatch(
+      /^In US time zones, late in the day on the last day of a month, /,
+    );
   });
 });
