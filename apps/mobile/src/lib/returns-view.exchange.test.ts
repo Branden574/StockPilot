@@ -22,10 +22,13 @@ import {
   replacementHeldNow,
   replacementPickBlocked,
   replacementOrderLines,
+  replacementQuantityMax,
+  replacementQuantityStepLabel,
   replacementSideLines,
   returnRowExchange,
   reviewsForShortChange,
   shortSentences,
+  stepReplacementQuantity,
   workbenchActions,
   type MobileOrderReplacement,
 } from './returns-view';
@@ -233,6 +236,26 @@ describe('the approval review', () => {
     expect(reviewsForShortChange(declineOnly, {}, [{ itemId: 'item-l', needed: 1, available: 0 }], {})).toEqual({ reviews: {}, focusIds: [] });
     // A detail that cannot be read switches nothing.
     expect(reviewsForShortChange(two, {}, 'nonsense', {})).toEqual({ reviews: {}, focusIds: [] });
+  });
+
+  // Review fix P12: the phone could not change the replacement's quantity
+  // (the web's QuantityField at the approval's Change replacement, Add a
+  // replacement, and the Change and Issue dialogs). The stepper runs from 1
+  // to the returned quantity of its line, as the web's field does; the server
+  // refuses more and checks what the original line has left.
+  it('the replacement quantity steps from 1 to the returned quantity (review fix P12)', () => {
+    const w = wb('requested', exchange());
+    w.lines[0] = { ...w.lines[0]!, quantity: 3 };
+    expect(replacementQuantityMax(w, 'l1')).toBe(3);
+    expect(replacementQuantityMax(w, 'missing')).toBe(1);
+    expect(stepReplacementQuantity(1, 1, 3)).toBe(2);
+    expect(stepReplacementQuantity(3, 1, 3)).toBe(3);
+    expect(stepReplacementQuantity(1, -1, 3)).toBe(1);
+    // A quantity above the cap (an older approval) comes back within it.
+    expect(stepReplacementQuantity(5, -1, 3)).toBe(3);
+    expect(stepReplacementQuantity(Number.NaN, 1, 3)).toBe(2);
+    expect(replacementQuantityStepLabel(1, 'Walk Exchange Tee - M')).toBe('Increase the replacement quantity for Walk Exchange Tee - M');
+    expect(replacementQuantityStepLabel(-1, 'Walk Exchange Tee - M')).toBe('Decrease the replacement quantity for Walk Exchange Tee - M');
   });
 
   it('"What happens when you approve" names the replacement and the wait', () => {

@@ -38,6 +38,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { ReplacementPickerList } from '@/components/replacement-picker-list';
+import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
@@ -75,6 +76,7 @@ import {
   openLines,
   processButtonLabel,
   processingHint,
+  replacementQuantityMax,
   reviewsForShortChange,
   shortSentences,
   stepOutcomeMessage,
@@ -674,6 +676,17 @@ function SheetContent({
                         online={online}
                         disabled={submitting}
                       />
+                      {/* Review fix P12: how many, 1 to the returned quantity. */}
+                      <ReplacementQuantityStepper
+                        value={pick.quantity}
+                        max={replacementQuantityMax(wb, x.returnLineId)}
+                        label={label}
+                        disabled={submitting}
+                        onChange={(quantity) => {
+                          setPicks((prev) => ({ ...prev, [x.id]: { ...pick, quantity } }));
+                          setShortDetail(null);
+                        }}
+                      />
                     </View>
                   );
                 })
@@ -902,6 +915,13 @@ function ExchangeReview({
                 online={online}
                 disabled={disabled}
               />
+              <ReplacementQuantityStepper
+                value={add.quantity}
+                max={replacementQuantityMax(wb, l.id)}
+                label={label}
+                disabled={disabled}
+                onChange={(quantity) => onAdd(l.id, { ...add, quantity })}
+              />
               <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
                 {RETURNS_COPY.returnOnly}
               </Button>
@@ -979,15 +999,25 @@ function ExchangeReview({
           })}
         </View>
         {v.kind === 'change' ? (
-          <ReplacementPickerList
-            load={loaderFor(l.orderRequestLineId)}
-            needed={v.quantity}
-            selectedItemId={v.itemId}
-            onSelect={(row, rowLabel) => onReview(x.id, { ...v, itemId: row.itemId, label: rowLabel, free: row.free })}
-            label={label}
-            online={online}
-            disabled={disabled}
-          />
+          <>
+            <ReplacementPickerList
+              load={loaderFor(l.orderRequestLineId)}
+              needed={v.quantity}
+              selectedItemId={v.itemId}
+              onSelect={(row, rowLabel) => onReview(x.id, { ...v, itemId: row.itemId, label: rowLabel, free: row.free })}
+              label={label}
+              online={online}
+              disabled={disabled}
+            />
+            {/* Review fix P12: how many, 1 to the returned quantity. */}
+            <ReplacementQuantityStepper
+              value={v.quantity}
+              max={replacementQuantityMax(wb, l.id)}
+              label={label}
+              disabled={disabled}
+              onChange={(quantity) => onReview(x.id, { ...v, quantity })}
+            />
+          </>
         ) : null}
         {v.kind === 'change' || v.kind === 'decline' ? (
           <TextInput

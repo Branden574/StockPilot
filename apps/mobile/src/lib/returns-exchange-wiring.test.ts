@@ -206,6 +206,24 @@ describe('online only', () => {
     expect(sheet).toContain("AccessibilityInfo.sendAccessibilityEvent(target, 'focus');");
   });
 
+  // Review fix P12: the replacement's quantity is a stepper (1 to the
+  // returned quantity) in the approval's Change replacement, in Add a
+  // replacement, and in the Change and Issue sheets, as the web's field is.
+  it('a quantity stepper in the three places the web has its quantity field (review fix P12)', () => {
+    expect(sheet.match(/<ReplacementQuantityStepper/g)?.length).toBe(3);
+    expect(sheet).toContain('onChange={(quantity) => onReview(x.id, { ...v, quantity })}');
+    expect(sheet).toContain('onChange={(quantity) => onAdd(l.id, { ...add, quantity })}');
+    expect(sheet).toMatch(/onChange=\{\(quantity\) => \{\s*setPicks\(\(prev\) => \(\{ \.\.\.prev, \[x\.id\]: \{ \.\.\.pick, quantity \} \}\)\);/);
+    expect(sheet.match(/max=\{replacementQuantityMax\(wb, (l\.id|x\.returnLineId)\)\}/g)?.length).toBe(3);
+    const stepper = code(read('src/components/replacement-quantity-stepper.tsx'));
+    // 44 pt targets with a role and a name; the row stacks at the AX sizes.
+    expect(stepper.match(/minWidth: MIN_TAP,\s*minHeight: MIN_TAP,/g)?.length).toBe(1);
+    expect(stepper).toContain('accessibilityLabel={replacementQuantityStepLabel(delta, label)}');
+    expect(stepper).toContain('onPress={() => onChange(stepReplacementQuantity(value, delta, max))}');
+    expect(stepper).toContain('const stacked = shouldStackRow(fontScale);');
+    expect(stepper).toContain('maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}');
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {

@@ -533,6 +533,29 @@ export function reviewsForShortChange(
   return { reviews: next, focusIds };
 }
 
+/**
+ * The most a replacement line may ask for (review fix P12): its returned
+ * line's quantity, the web's quantity field's max. The server refuses more
+ * (exchange_quantity_exceeds_return) and checks what the original order line
+ * has left to exchange (exchange_already_sent). Never below 1.
+ */
+export function replacementQuantityMax(wb: Pick<MobileReturnWorkbench, 'lines'>, returnLineId: string): number {
+  const l = wb.lines.find((x) => x.id === returnLineId);
+  const q = l && Number.isFinite(l.quantity) ? Math.floor(l.quantity) : 1;
+  return Math.max(1, q);
+}
+
+/** One tap of the replacement quantity's stepper: a whole number from 1 to max. */
+export function stepReplacementQuantity(current: number, delta: number, max: number): number {
+  const from = Number.isFinite(current) ? Math.floor(current) : 1;
+  return Math.min(Math.max(from + delta, 1), Math.max(1, Math.floor(max)));
+}
+
+/** The stepper buttons' VoiceOver names ("Increase the replacement quantity for Walk Exchange Tee - M"). */
+export function replacementQuantityStepLabel(delta: number, label: string): string {
+  return `${delta > 0 ? 'Increase' : 'Decrease'} the replacement quantity for ${label}`;
+}
+
 /** The label the short sentences use for an item id (the exchange's own items). */
 export function exchangeItemLabel(wb: { exchange?: MobileReturnExchange | null }, itemId: string): string {
   for (const x of exchangeOf(wb).lines) {
