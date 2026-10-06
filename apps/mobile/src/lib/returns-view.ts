@@ -18,6 +18,7 @@ import {
   availableLabel,
   availableReturnActions,
   defaultExchangeReviewState,
+  exchangeActionConsequences,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
@@ -30,6 +31,8 @@ import {
   replacementShortLine,
   returnActionLabel,
   shortLabel,
+  type ExchangeConsequenceAction,
+  type ExchangeConsequenceKey,
   type ExchangeReviewState,
   type ExchangeReviewViewer,
   choiceNeededSentence,
@@ -449,6 +452,34 @@ export function exchangeWhatHappens(
     itemIsHere,
   });
   return sentences.map((text, i) => ({ key: `${i}`, text }));
+}
+
+/** The sheets that say what happens to the replacement (review fix P2). */
+const CONSEQUENCE_MODES: readonly ExchangeConsequenceAction[] = ['cancel', 'cancel_replacement', 'change_replacement', 'issue_replacement'];
+
+/**
+ * What a sheet says happens to the replacement (review fix P2, core
+ * exchangeActionConsequences: the web dialogs' words too): Cancel return
+ * (the replacement not handed over is cancelled too and named; what was
+ * handed over stays), Cancel replacement (the picked and in-transit warnings
+ * first, then what it does; never "The return stays open."), Change
+ * replacement and Issue a new replacement (what is created). Read from the
+ * live replacement the screen shows; every other sheet says nothing about it.
+ */
+export function exchangeSheetConsequences(
+  mode: string,
+  wb: { exchange?: MobileReturnExchange | null },
+): { key: ExchangeConsequenceKey; text: string }[] {
+  const action = CONSEQUENCE_MODES.find((a) => a === mode);
+  if (!action) return [];
+  const shown = exchangeOf(wb).replacement;
+  const live = shown?.live ? shown : null;
+  return exchangeActionConsequences(action, {
+    replacementStatus: live?.status ?? null,
+    anythingHandedOver: live ? live.class === 'handed_over' || live.lines.some((l) => l.fulfilled > 0) : false,
+    replacementOrderNumber: live?.orderNumber ?? null,
+    held: live ? live.held : null,
+  });
 }
 
 /** A refused approval's short items as sentences ("Walk New Hire Shirt, L: 0 available, 1 needed."). */

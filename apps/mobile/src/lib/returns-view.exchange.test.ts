@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { MobileExchangeLine, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
+import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
 import {
   NO_EXCHANGE,
   changeInRmaLabel,
@@ -9,6 +9,7 @@ import {
   exchangeItemLabel,
   exchangeReviewProblems,
   exchangeReviewStateFor,
+  exchangeSheetConsequences,
   exchangeWhatHappens,
   orderExchangeChip,
   orderReplacementLines,
@@ -283,6 +284,93 @@ describe('the REPLACEMENT side and the replacement order', () => {
     expect(
       prepareOutcomeMessage({ ran: [{ step: 'pick_slip', outcome: 'refused', message: 'Waiting for the returned item.' }], status: 'approved' }),
     ).toBe('Waiting for the returned item.');
+  });
+});
+
+// Review fix P2: the phone's four sheets that act on the replacement said
+// nothing about it (Cancel return asked only for a reason while its
+// replacement order was cancelled too). Each now says what happens, in core's
+// words (exchangeActionConsequences), the web dialogs' words too.
+describe('what each sheet says happens to the replacement (review fix P2)', () => {
+  const live = (over: Partial<MobileReplacement> = {}) =>
+    exchange({
+      status: 'waiting_for_return',
+      lines: [xline({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: L })],
+      hasApprovedExchange: true,
+      replacement: {
+        orderId: 'repl',
+        orderNumber: 104,
+        status: 'approved',
+        fulfillmentType: 'pickup',
+        live: true,
+        class: 'undrawn',
+        owed: 1,
+        held: 1,
+        short: false,
+        lines: [],
+        ...over,
+      },
+    });
+  const words = (mode: string, ex: MobileReturnExchange | undefined) => exchangeSheetConsequences(mode, { exchange: ex });
+
+  it('Cancel return names the replacement it cancels too, and frees what it holds', () => {
+    expect(words('cancel', live()).map((t) => t.text)).toEqual([
+      'The return closes as cancelled. Its replacement order SO-000104 is cancelled too and the reserved items are freed.',
+    ]);
+    // On backorder (nothing held): nothing is said to be freed.
+    expect(words('cancel', live({ held: 0, short: true })).map((t) => t.text)).toEqual([
+      'The return closes as cancelled. Its replacement order SO-000104 is cancelled too.',
+    ]);
+  });
+
+  it('Cancel return after a hand-over says what stays handed over', () => {
+    const part = live({
+      status: 'backordered',
+      class: 'handed_over',
+      owed: 1,
+      held: 0,
+      lines: [{ orderLineId: 'ol9', itemId: 'item-l', label: 'Walk New Hire Shirt, L', item: L, requested: 2, fulfilled: 1, held: 0, take: null }],
+    });
+    expect(words('cancel', part).map((t) => t.text)).toEqual([
+      'The return closes as cancelled. What was already handed over stays handed over; the rest of the replacement is never sent.',
+    ]);
+    expect(words('cancel', live({ status: 'completed', class: 'handed_over', owed: 0, held: 0 })).map((t) => t.text)).toEqual([
+      'The return closes as cancelled. The replacement was already handed over and stays as it is.',
+    ]);
+  });
+
+  it('Cancel return of a return only, or after the replacement was cancelled, says nothing about one', () => {
+    expect(words('cancel', undefined)).toEqual([]);
+    expect(words('cancel', live({ live: false, status: 'cancelled', class: 'none' }))).toEqual([]);
+  });
+
+  it('Cancel replacement keeps the picked and in-transit warnings first, then says what it does', () => {
+    expect(words('cancel_replacement', live({ status: 'in_transit', class: 'drawn', held: 0 }))).toEqual([
+      { key: 'drawn', text: 'The picked items go back to Staging on record. Put them in the staging area.' },
+      { key: 'in_transit', text: 'Ask the driver to bring it back.' },
+      {
+        key: 'effect',
+        text: 'The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+      },
+    ]);
+    expect(words('cancel_replacement', live())).toEqual([
+      {
+        key: 'effect',
+        text: 'The replacement order is cancelled and its reserved items are freed. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+      },
+    ]);
+  });
+
+  it('Change replacement and Issue a new replacement say what is created; other sheets say nothing', () => {
+    expect(words('change_replacement', live()).map((t) => t.text)).toEqual([
+      'The current replacement order is cancelled and a new one is created and reserved in the same step.',
+    ]);
+    expect(words('issue_replacement', live({ live: false, status: 'cancelled', class: 'none' })).map((t) => t.text)).toEqual([
+      'A new replacement order is created and reserved.',
+    ]);
+    for (const mode of ['approve', 'process', 'destination', 'deny', 'release', 'close_as_return_only']) {
+      expect(words(mode, live())).toEqual([]);
+    }
   });
 });
 

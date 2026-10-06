@@ -165,6 +165,22 @@ describe('online only', () => {
     expect(sheet).toContain('if (!ex.createEnabled || l.applied || !wb.viewer.canApproveOrders) return null;');
   });
 
+  // Review fix P2: Cancel return, Cancel replacement, Change replacement and
+  // Issue a new replacement say what happens to the replacement, from core
+  // (exchangeSheetConsequences over exchangeActionConsequences), first in the
+  // body; the picked and in-transit warnings are core's keys, announced as
+  // alerts, never the sheet's own checks of the replacement's class.
+  it('the four replacement sheets say what happens to it, from core (review fix P2)', () => {
+    expect(sheet).toContain('const consequences = exchangeSheetConsequences(mode, wb);');
+    expect(sheet).toMatch(/\{consequences\.map\(\(t\) => \(\s*<Body\s+key=\{t\.key\}/);
+    expect(sheet).toContain("accessibilityRole={t.key === 'effect' ? 'text' : 'alert'}");
+    expect(sheet).not.toContain("ex.replacement?.class === 'drawn'");
+    expect(sheet).not.toContain("ex.replacement?.status === 'in_transit'");
+    // First in the body, before the destinations, the review and the reason.
+    const body = sheet.slice(sheet.indexOf('<ScrollView'));
+    expect(body.indexOf('{consequences.map(')).toBeLessThan(body.indexOf('{needsDestinations'));
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {

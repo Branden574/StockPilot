@@ -68,6 +68,7 @@ import {
   exchangeOf,
   exchangeReviewProblems,
   exchangeReviewStateFor,
+  exchangeSheetConsequences,
   exchangeWhatHappens,
   initialChoices,
   lineLabel,
@@ -225,6 +226,9 @@ function SheetContent({
 
   const lines = openLines(wb);
   const ex = exchangeOf(wb);
+  // Review fix P2: what happens to the replacement (Cancel return, Cancel,
+  // Change and Issue a new replacement), in core's words.
+  const consequences = exchangeSheetConsequences(mode, wb);
   const needsDestinations = mode === 'approve' || mode === 'process' || mode === 'destination';
   // Desk check F6: after replacement_site_not_available the sheet asks where
   // the replacement goes (the warehouse's sites, or pickup) and sends again.
@@ -524,6 +528,20 @@ function SheetContent({
               </Mono>
             ) : null}
 
+            {/* Review fix P2: what happens to the replacement, first, so it is
+                read before the reason is typed. What to do with picked items
+                (Staging, the driver) is announced as an alert. */}
+            {consequences.map((t) => (
+              <Body
+                key={t.key}
+                size={13.5}
+                color={t.key === 'effect' ? c.ink3 : ACCENT.crit}
+                accessibilityRole={t.key === 'effect' ? 'text' : 'alert'}
+              >
+                {t.text}
+              </Body>
+            ))}
+
             {needsDestinations
               ? lines.map((l) => (
                   <LineDestination
@@ -674,17 +692,6 @@ function SheetContent({
                 {RETURNS_COPY.closeAsReturnOnlyHelp}
               </Body>
             ) : null}
-            {mode === 'cancel_replacement' && ex.replacement?.class === 'drawn' ? (
-              <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
-                {RETURNS_COPY.cancelDrawnReplacement}
-              </Body>
-            ) : null}
-            {mode === 'cancel_replacement' && ex.replacement?.status === 'in_transit' ? (
-              <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
-                {RETURNS_COPY.cancelInTransit}
-              </Body>
-            ) : null}
-
             {shortLines.length > 0 ? (
               <View style={{ gap: 6 }} accessibilityRole="alert">
                 {shortLines.map((t) => (
