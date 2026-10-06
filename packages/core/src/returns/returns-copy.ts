@@ -95,6 +95,8 @@ export const RETURNS_COPY = {
   // The replacement (RX-2)
   replacementRequested: 'Requested',
   replacementApproved: 'Approved',
+  replacementDeclined: 'Declined',
+  replacementCancelled: 'Cancelled',
   replacementWarehouseReview: 'Warehouse will review',
   replacementNoteFromRequester: 'Note from the requester',
   replacementChangedByWarehouse: 'Changed by the warehouse',

@@ -53,6 +53,16 @@ describe('the workbench', () => {
   it('labels an exchange approval "Approve return & exchange"', () => {
     expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
   });
+
+  // RX-2 simulator finding SIM-1: VoiceOver reads the REPLACEMENT card's one
+  // label, so the label carries the status the pill shows, and both come from
+  // core's exchangeLineStatusLabel (the web pill's rule), never a local ternary.
+  it("reads the REPLACEMENT card's status to VoiceOver, from the pill's own rule", () => {
+    expect(view).toContain('accessibilityLabel={replacementCardLabel(name, x)}');
+    expect(view).toContain('<Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>');
+    expect(view).not.toContain("'Declined'");
+    expect(code(read('src/lib/returns-view.ts'))).toContain('exchangeLineStatusLabel(x.status)');
+  });
 });
 
 describe('online only', () => {

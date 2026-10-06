@@ -12,6 +12,7 @@ import {
   orderExchangeChip,
   orderReplacementLines,
   prepareOutcomeMessage,
+  replacementCardLabel,
   replacementPickBlocked,
   replacementOrderLines,
   replacementSideLines,
@@ -195,6 +196,29 @@ describe('the REPLACEMENT side and the replacement order', () => {
     ]);
     expect(replacementSideLines(xline({ requestedFree: 0 })).at(-1)).toEqual({ key: 'free', text: 'Short: 0 available, 1 needed.', tone: 'crit' });
     expect(exchangeForLine(wb('requested', exchange()), 'l1')?.id).toBe('x1');
+  });
+
+  // RX-2 simulator finding SIM-1: the card is ONE accessible element, so
+  // VoiceOver reads only its label. The status pill (Approved, Declined,
+  // Cancelled) was left out of it, and a declined line read like a pending
+  // request. The label ends with the pill's words, as the RETURNING card's
+  // label ends with its own pill.
+  it('VoiceOver reads the card with its status, in the words of its pill', () => {
+    expect(replacementCardLabel('Walk New Hire Shirt, M', xline())).toBe(
+      'REPLACEMENT for Walk New Hire Shirt, M: Requested: Walk New Hire Shirt, L, Qty requested: 1, Available: 14, Requested',
+    );
+    const declined = xline({
+      status: 'declined',
+      approvedItemId: 'item-m',
+      approvedQuantity: 1,
+      approvedItem: { ...L, variant: 'Size M' },
+      changedByWarehouse: true,
+    });
+    expect(replacementCardLabel('Walk New Hire Shirt, S', declined)).toBe(
+      'REPLACEMENT for Walk New Hire Shirt, S: Requested: Walk New Hire Shirt, L, Approved: Walk New Hire Shirt, M (Changed by the warehouse), Qty requested: 1, Declined',
+    );
+    expect(replacementCardLabel('X', xline({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: L }))).toMatch(/, Approved$/);
+    expect(replacementCardLabel('X', xline({ status: 'cancelled' }))).toMatch(/, Cancelled$/);
   });
 
   it('the replacement order block: SO, reserved per line, the take line, the release (reason only for readers)', () => {

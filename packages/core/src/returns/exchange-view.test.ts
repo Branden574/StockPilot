@@ -5,6 +5,7 @@ import {
   addReplacementDecision,
   approvalPreviewLines,
   exchangeCandidateRows,
+  exchangeLineStatusLabel,
   exchangeRail,
   exchangeReviewDecision,
   exchangeReviewProblem,
@@ -211,5 +212,18 @@ describe('replacementSiteOptions (web and phone)', () => {
     expect(options[0]!.value).toEqual({ fulfillmentType: 'delivery', deliveryCharterId: 's1' });
     expect(options.at(-1)!.value).toEqual({ fulfillmentType: 'pickup', deliveryCharterId: null });
     expect(replacementSiteOptions(null).map((o) => o.key)).toEqual(['pickup']);
+  });
+});
+
+// RX-2 simulator finding SIM-1: the REPLACEMENT card's status words come from
+// one rule (the web pill, the phone pill and the phone card's VoiceOver label).
+describe('exchangeLineStatusLabel (the REPLACEMENT card, web and phone)', () => {
+  it('names each exchange line status the way the card shows it', () => {
+    expect((['requested', 'approved', 'declined', 'cancelled'] as const).map(exchangeLineStatusLabel)).toEqual([
+      'Requested',
+      'Approved',
+      'Declined',
+      'Cancelled',
+    ]);
   });
 });

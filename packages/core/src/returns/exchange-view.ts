@@ -26,6 +26,24 @@ import {
   type ProcessDestination,
 } from './returns-copy';
 
+// ── The REPLACEMENT card's status ──────────────────────────────────────────
+
+/** An exchange line's status (return_exchange_lines.status). */
+export type ExchangeLineStatus = 'requested' | 'approved' | 'declined' | 'cancelled';
+
+/**
+ * The words the REPLACEMENT card shows for its exchange line: the pill on the
+ * web and on the phone, and the end of the phone card's VoiceOver label (the
+ * card is one accessible element there, so the pill alone is never read;
+ * RX-2 simulator finding SIM-1). One rule for all three.
+ */
+export function exchangeLineStatusLabel(status: ExchangeLineStatus): string {
+  if (status === 'requested') return RETURNS_COPY.replacementRequested;
+  if (status === 'approved') return RETURNS_COPY.replacementApproved;
+  if (status === 'declined') return RETURNS_COPY.replacementDeclined;
+  return RETURNS_COPY.replacementCancelled;
+}
+
 // ── The outbound rail ──────────────────────────────────────────────────────
 
 export type RailStepId = 'requested' | 'reserved' | 'gate' | 'picking' | 'ready' | 'handed_over';

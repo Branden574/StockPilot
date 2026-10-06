@@ -26,6 +26,7 @@ import type {
 
 import {
   availableLabel,
+  exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber,
@@ -149,14 +150,7 @@ export function ReplacementSide({
   const requestedLabel = requested ? returnLineLabel(requested.name ?? 'Item', requested.variant) : null;
   const approved = line.approvedItem;
   const approvedLabel = approved ? returnLineLabel(approved.name ?? 'Item', approved.variant) : null;
-  const status =
-    line.status === 'requested'
-      ? RETURNS_COPY.replacementRequested
-      : line.status === 'approved'
-        ? RETURNS_COPY.replacementApproved
-        : line.status === 'declined'
-          ? 'Declined'
-          : 'Cancelled';
+  const status = exchangeLineStatusLabel(line.status);
 
   return (
     <article

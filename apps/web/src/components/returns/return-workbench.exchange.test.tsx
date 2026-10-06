@@ -316,6 +316,8 @@ describe('an approved exchange waiting for the returned item', () => {
       },
     });
     render(<ReturnWorkbench workbench={bench('closed', cancelled, { revision: 2 })} />);
+    // The pill's words come from core's exchangeLineStatusLabel (simulator finding SIM-1).
+    expect(within(screen.getByRole('article', { name: /^REPLACEMENT for / })).getByText('Cancelled')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Issue a new replacement' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close as return only' }));
     const dialog = await screen.findByRole('dialog');

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { AccessibilityInfo, ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
+  exchangeLineStatusLabel,
   formatOrderNumber,
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
@@ -31,6 +32,7 @@ import {
   exchangeForLine,
   exchangeOf,
   prepareOutcomeMessage,
+  replacementCardLabel,
   replacementOrderLines,
   replacementSideLines,
   returnStatusTone,
@@ -415,13 +417,7 @@ export function ReturnWorkbenchView({
                 // returning card on the iPad; a text label and an arrow, never
                 // colour alone.
                 <Card padding={14} style={{ ...(compact ? {} : styles.card), borderLeftWidth: 4, borderLeftColor: c.ink }}>
-                  <View
-                    style={{ gap: 4 }}
-                    accessible
-                    accessibilityLabel={`${RETURNS_COPY.replacement} for ${name}: ${replacementSideLines(x)
-                      .map((t) => t.text)
-                      .join(', ')}`}
-                  >
+                  <View style={{ gap: 4 }} accessible accessibilityLabel={replacementCardLabel(name, x)}>
                     <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
                     {replacementSideLines(x).map((t) => (
                       <Body
@@ -434,7 +430,7 @@ export function ReturnWorkbenchView({
                       </Body>
                     ))}
                     <View style={{ alignSelf: 'flex-start' }}>
-                      <Pill dot={false}>{x.status === 'requested' ? RETURNS_COPY.replacementRequested : x.status === 'approved' ? RETURNS_COPY.replacementApproved : x.status === 'declined' ? 'Declined' : 'Cancelled'}</Pill>
+                      <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
                     </View>
                   </View>
                 </Card>

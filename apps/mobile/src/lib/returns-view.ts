@@ -17,6 +17,7 @@ import {
   approvalPreviewLines,
   availableLabel,
   availableReturnActions,
+  exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber as formatSo,
@@ -329,6 +330,20 @@ export function replacementSideLines(x: MobileExchangeLine): { key: string; text
     });
   }
   return out;
+}
+
+/**
+ * The REPLACEMENT card's one VoiceOver label (the card is a single accessible
+ * element, so its pill is never read on its own): every line it shows, then
+ * the status its pill shows, as the RETURNING card's label ends with its own
+ * pill. RX-2 simulator finding SIM-1: a declined line read like a pending
+ * request because the status was missing.
+ */
+export function replacementCardLabel(returnedName: string, x: MobileExchangeLine): string {
+  const lines = replacementSideLines(x)
+    .map((t) => t.text)
+    .join(', ');
+  return `${RETURNS_COPY.replacement} for ${returnedName}: ${lines}, ${exchangeLineStatusLabel(x.status)}`;
 }
 
 function qtyRequestedText(n: number): string {
