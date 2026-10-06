@@ -109,6 +109,7 @@ import {
   loadOrderExchangeChips,
   loadReplacementInfo,
   replacementRefusal,
+  withReplacementHeld,
   type OrderExchangeChip,
   type OrderReplacementInfo,
 } from './order-replacement';
@@ -1565,7 +1566,9 @@ export class OrderRequestsService {
           return !Number.isNaN(created) && created > printed;
         });
       })(),
-      replacement,
+      // Returns RX-2 review fix P5: what the replacement holds decides its
+      // gate words (the reservations read above, no second read).
+      replacement: replacement ? withReplacementHeld(replacement, (rs ?? []) as Array<{ quantity: number }>) : null,
     };
   }
 

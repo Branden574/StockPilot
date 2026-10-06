@@ -1076,6 +1076,25 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     });
   });
 
+  // RX-2 review fix P5: a replacement approved on backorder holds nothing,
+  // so the gate line never says "Replacement reserved".
+  it('while gated, a replacement that holds nothing says it is not in stock yet', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, exchangeStatus: 'unavailable', held: 0 } })}
+      />,
+    );
+    expect(screen.getByText('Not in stock yet. Picking also waits for the returned item (RMA-20261005-ABC123).')).toBeInTheDocument();
+    expect(screen.queryByText(/Replacement reserved/)).toBeNull();
+    unmount();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, exchangeStatus: 'unavailable', held: 1 } })}
+      />,
+    );
+    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+  });
+
   it('released or received: the pick slip is back; no release without both permissions', () => {
     const { unmount } = render(
       <ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })} />,

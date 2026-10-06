@@ -34,6 +34,7 @@ const INFO = {
   revision: 1,
   canOpenReturn: true,
   canReleaseEarly: true,
+  held: 1,
   slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: Walk New Hire Shirt, M ×1, not yet received)',
   // Re-pinned by returns RX-2 review fix (P10): core's driver words.
   driverLine: 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123).',
@@ -55,6 +56,13 @@ describe('ReplacementBanner', () => {
     expect(screen.queryByText('Change or cancel this replacement from its RMA.')).toBeNull();
     // A pickup has no driver line.
     expect(screen.queryByText(/the driver collects/)).toBeNull();
+  });
+
+  // RX-2 review fix P5: the gate line follows what the order holds.
+  it('the gate line says not in stock yet when the replacement holds nothing', () => {
+    render(<ReplacementBanner replacement={{ ...INFO, exchangeStatus: 'unavailable', held: 0 }} fulfillmentType="pickup" />);
+    expect(screen.getByText('Not in stock yet. Picking also waits for the returned item (RMA-20261005-ABC123).')).toBeInTheDocument();
+    expect(screen.queryByText(/Replacement reserved/)).toBeNull();
   });
 
   // RX-2 review fix P9: each reader is told what THEY can do about it.

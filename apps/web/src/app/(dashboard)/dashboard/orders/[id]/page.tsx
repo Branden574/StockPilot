@@ -1755,6 +1755,8 @@ export default async function OrderDetailPage({
                       returnClosed: replacement.returnClosed,
                       canReleaseEarly: replacement.canReleaseEarly,
                       driverLine: replacement.driverLine,
+                      exchangeStatus: replacement.exchangeStatus,
+                      held: replacement.held,
                     }
                   : null
               }

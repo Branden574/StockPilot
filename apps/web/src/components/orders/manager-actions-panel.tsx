@@ -198,6 +198,11 @@ interface Props {
     returnClosed?: boolean;
     canReleaseEarly: boolean;
     driverLine: string | null;
+    /** The view's exchange status and what this order holds now: the gate
+     *  line says "Replacement reserved" only when something is held (review
+     *  fix P5, core's waitingForReturnLine). */
+    exchangeStatus?: string | null;
+    held?: number | null;
   } | null;
 }
 
@@ -772,7 +777,10 @@ export function ManagerActionsPanel({
             <>
               <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
                 <ClipboardList className="h-3.5 w-3.5" />
-                {waitingForReturnLine(replacement?.returnNumber ?? null)}
+                {waitingForReturnLine(replacement?.returnNumber ?? null, {
+                  exchangeStatus: replacement?.exchangeStatus ?? null,
+                  held: replacement?.held ?? null,
+                })}
               </span>
               {status === 'approved' && approves && replacement?.canReleaseEarly ? (
                 <Button variant="outline" onClick={() => setReleaseOpen(true)} disabled={busy !== null}>

@@ -112,8 +112,25 @@ export interface OrderReplacementInfo {
   canReleaseEarly: boolean;
   /** "Exchange replacement for RMA-… (returned item: …, received)" for the slips. */
   slipLine: string;
-  /** "Collect the returned item: …" for the driver's hand-over (null once received). */
+  /** "On delivery, the driver collects the returned item: …" for the
+   *  driver's hand-over (null once received; core's replacementDriverLine
+   *  decides when it shows). */
   driverLine: string | null;
+  /**
+   * What this order holds now (its active reservations), when the order
+   * detail read them (withReplacementHeld); null when unknown. The gate line
+   * says "Replacement reserved" only when something is held, "Not in stock
+   * yet" otherwise (review fix P5, core's waitingForReturnLine).
+   */
+  held: number | null;
+}
+
+/** The replacement block with what the order holds now (its active reservations). */
+export function withReplacementHeld(
+  info: OrderReplacementInfo,
+  reservations: ReadonlyArray<{ quantity: number | string | null }>,
+): OrderReplacementInfo {
+  return { ...info, held: reservations.reduce((sum, r) => sum + num(r.quantity), 0) };
 }
 
 type OverviewRow = {
@@ -272,6 +289,7 @@ export async function loadReplacementInfo(
       ctx.enabledModules.has('returns') && can(ctx, 'returns:manage') && can(ctx, 'orders:approve'),
     slipLine: slipExchangeLine(returnNumber, returnedWords, returnReceived),
     driverLine: returnedWords && !returnReceived ? collectReturnedItemLine(returnedWords, returnNumber) : null,
+    held: null,
   };
 }
 

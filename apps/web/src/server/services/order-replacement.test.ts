@@ -6,7 +6,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
-import { exchangeChipState, loadReplacementInfo, replacementRefusal } from './order-replacement';
+import { exchangeChipState, loadReplacementInfo, replacementRefusal, withReplacementHeld } from './order-replacement';
 
 /**
  * The replacement order's block on the order page, the slips and the phone
@@ -64,6 +64,17 @@ describe('replacementRefusal', () => {
     expect(replacementRefusal({ hint: 'returns_manage' })).toBeNull();
     expect(replacementRefusal({ message: 'replacement_waiting_for_return' })).toBeNull();
     expect(replacementRefusal(null)).toBeNull();
+  });
+});
+
+// RX-2 review fix P5: what the order holds decides the gate line's words.
+describe('withReplacementHeld', () => {
+  it('adds what the order holds from its active reservations', async () => {
+    const { ctx } = ctxFor({});
+    const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
+    expect(info?.held).toBeNull();
+    expect(withReplacementHeld(info!, [{ quantity: 1 }, { quantity: '2' }]).held).toBe(3);
+    expect(withReplacementHeld(info!, []).held).toBe(0);
   });
 });
 
