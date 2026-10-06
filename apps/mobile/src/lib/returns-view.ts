@@ -18,6 +18,7 @@ import {
   availableLabel,
   availableReturnActions,
   defaultExchangeReviewState,
+  earlierReplacementsLine,
   exchangeActionConsequences,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
@@ -26,6 +27,7 @@ import {
   releasedBeforeReturnLine,
   replacementBannerLines,
   replacementChipState,
+  replacementLineSummary,
   replacementRmaLinkLabel,
   replacementShortItems,
   replacementShortLine,
@@ -575,9 +577,10 @@ export function exchangeRailText(rail: readonly RailStep[]): string {
   return rail.map((s) => `${s.label} (${railStepStateWords(s)})`).join('  →  ');
 }
 
-/** The replacement order block's lines (SO, reserved per line, the pick hint,
- *  the release); with no replacement order, why there is none (review fix P4:
- *  declined, cancelled with the return, or not approved yet). */
+/** The replacement order block's lines (SO, each line as core words it,
+ *  the pick hint, the release, the earlier replacements); with no
+ *  replacement order, why there is none (review fix P4: declined, cancelled
+ *  with the return, or not approved yet). */
 export function replacementOrderLines(
   wb: { exchange?: MobileReturnExchange | null; return?: { status: string } | null },
   canReadDecisions: boolean,
@@ -591,13 +594,22 @@ export function replacementOrderLines(
   const so = formatSo(ex.replacement.orderNumber) ?? ex.replacement.orderId.slice(0, 8).toUpperCase();
   out.push({ key: 'so', text: `${RETURNS_COPY.replacementOrderHeading} ${so}${ex.replacement.live ? '' : ' (cancelled)'}` });
   for (const l of ex.replacement.lines) {
-    out.push({ key: `l-${l.orderLineId}`, text: `${l.label} ×${l.requested} · reserved ${l.held}` });
+    // Review fix P19: "· picked" once picked or staged (nothing is reserved
+    // then), the hand-over beside what is still reserved (core's rule).
+    out.push({
+      key: `l-${l.orderLineId}`,
+      text: replacementLineSummary({ label: l.label, requested: l.requested, fulfilled: l.fulfilled, held: l.held, status: ex.replacement.status }),
+    });
     if (l.take) out.push({ key: `t-${l.orderLineId}`, text: l.take });
   }
   if (ex.replacement.short) out.push({ key: 'short', text: RETURNS_COPY.notInStock });
   if (ex.releasedEarly) {
     out.push({ key: 'released', text: releasedBeforeReturnLine(ex.release?.byName ?? null, canReadDecisions ? (ex.release?.reason ?? null) : null) });
   }
+  // Review fix P22: the RMA's earlier replacements, in the order status words
+  // (the web lists them too), never a raw status code.
+  const earlier = earlierReplacementsLine(ex.history ?? []);
+  if (earlier) out.push({ key: 'earlier', text: earlier });
   return out;
 }
 

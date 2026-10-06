@@ -339,6 +339,49 @@ describe('the REPLACEMENT side and the replacement order', () => {
     ]);
   });
 
+  // Review fixes P19 and P22: after a pick the block read "· reserved 0"
+  // (nothing is reserved once picked), and earlier replacements were listed
+  // on the web only. Each line is core's replacementLineSummary, and the
+  // earlier ones are core's earlierReplacementsLine (order status words).
+  it('a picked replacement reads picked, a part hand-over both numbers; earlier replacements are listed (review fixes P19, P22)', () => {
+    const block = (status: string, line: Partial<MobileReplacement['lines'][number]>, history: MobileReturnExchange['history'] = []) =>
+      replacementOrderLines(
+        {
+          exchange: exchange({
+            status: 'in_progress',
+            history,
+            replacement: {
+              orderId: 'repl',
+              orderNumber: 104,
+              status,
+              fulfillmentType: 'pickup',
+              live: true,
+              class: 'drawn',
+              owed: 1,
+              held: 0,
+              short: false,
+              lines: [{ orderLineId: 'ol9', itemId: 'item-l', label: 'Walk New Hire Shirt, L', item: L, requested: 1, fulfilled: 0, held: 0, take: null, ...line }],
+            },
+          }),
+        },
+        true,
+      ).map((t) => t.text);
+    expect(block('picking_complete', {})[1]).toBe('Walk New Hire Shirt, L ×1 · picked');
+    expect(block('staged_for_pickup', {})[1]).toBe('Walk New Hire Shirt, L ×1 · picked');
+    expect(block('backordered', { requested: 2, fulfilled: 1 })[1]).toBe('Walk New Hire Shirt, L ×2 · handed over 1 · reserved 0');
+    expect(block('completed', { fulfilled: 1 })[1]).toBe('Walk New Hire Shirt, L ×1 · handed over 1');
+    expect(block('approved', { held: 1 })[1]).toBe('Walk New Hire Shirt, L ×1 · reserved 1');
+    const earlier = block('approved', { held: 1 }, [
+      { orderId: '0b000000-0000-0000-0000-000000000098', orderNumber: 98, status: 'cancelled' },
+      { orderId: '0b000000-0000-0000-0000-000000000097', orderNumber: 97, status: 'staged_for_pickup' },
+    ]);
+    expect(earlier.at(-1)).toBe('Earlier replacements: SO-000098 (cancelled), SO-000097 (staged (pickup))');
+    // Never a raw status code.
+    expect(block('approved', {}, [{ orderId: '0b000000-0000-0000-0000-000000000096', orderNumber: 96, status: 'some_new_status' }]).at(-1)).toBe(
+      'Earlier replacements: SO-000096',
+    );
+  });
+
   it('prepare: staged words, or the refusal', () => {
     expect(prepareOutcomeMessage({ ran: [{ step: 'stage', outcome: 'done' }], status: 'staged_for_pickup' })).toBe(
       'The replacement is staged. Hand it over on its order.',
