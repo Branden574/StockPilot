@@ -245,10 +245,31 @@ describe('what happens when you approve', () => {
       }),
     ).toEqual([
       'Nothing moves now. The returned item stays out until the return is processed.',
-      'A replacement order is created for Cap, L ×1; none is in stock right now (0 available, 1 needed).',
+      // RX-2 review fix P25: a plain Approve refuses a short replacement and
+      // asks first, so the preview never promises the order.
+      'Cap, L ×1 is not in stock right now (0 available, 1 needed). Approving asks first: put it on backorder or change the replacement.',
       'The returned item is here, so picking can start.',
       'When processed, Cap goes into Staging.',
     ]);
+  });
+});
+
+describe('what happens when you approve a short replacement (review fix P25)', () => {
+  it('says what is short and that approving asks first, for none and for some in stock', () => {
+    const preview = (quantity: number, available: number) =>
+      approvalPreviewLines({
+        lines: [],
+        exchanges: [{ returnedLabel: 'Walk Exchange Tee - M', decision: 'approve', replacementLabel: 'Walk Exchange Tee - 2XL', quantity, available }],
+        itemIsHere: false,
+      })[1];
+    expect(preview(1, 0)).toBe(
+      'Walk Exchange Tee - 2XL ×1 is not in stock right now (0 available, 1 needed). Approving asks first: put it on backorder or change the replacement.',
+    );
+    expect(preview(2, 1)).toBe(
+      'Walk Exchange Tee - 2XL ×2 is short right now (1 available, 2 needed). Approving asks first: put it on backorder or change the replacement.',
+    );
+    // In stock: the order and its reservation, as before.
+    expect(preview(2, 2)).toBe('A replacement order is created for Walk Exchange Tee - 2XL ×2 and 2 are reserved.');
   });
 });
 

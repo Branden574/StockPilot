@@ -726,14 +726,17 @@ export function createdAsReplacementLabel(returnNumber: string | null, revision:
 /**
  * "What happens when you approve" for an exchange line (plan section 6):
  * "A replacement order is created for New Hire Shirt, L ×1 and 1 is reserved."
- * or, when short, "... none is in stock right now (0 available, 1 needed)."
- * The SO number exists only after the approval, so it is not named here.
+ * When short, the plain Approve refuses and asks first (review fix P25), so no
+ * order is promised: "Walk Exchange Tee - 2XL ×1 is not in stock right now (0
+ * available, 1 needed). Approving asks first: put it on backorder or change
+ * the replacement." ("is short right now" when some is in stock). The SO
+ * number exists only after the approval, so it is not named here.
  */
 export function approveReplacementSentence(replacement: string, quantity: number, available: number | null): string {
   if (available !== null && available < quantity) {
     const held = Math.max(0, available);
-    const now = held === 0 ? 'none is in stock right now' : `only ${held} can be reserved now`;
-    return `A replacement order is created for ${replacement} ×${quantity}; ${now} (${held} available, ${quantity} needed).`;
+    const now = held === 0 ? 'is not in stock right now' : 'is short right now';
+    return `${replacement} ×${quantity} ${now} (${held} available, ${quantity} needed). Approving asks first: put it on backorder or change the replacement.`;
   }
   return `A replacement order is created for ${replacement} ×${quantity} and ${quantity} ${quantity === 1 ? 'is' : 'are'} reserved.`;
 }
