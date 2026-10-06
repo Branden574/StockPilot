@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   createPublicLinkAction,
   duplicatePublicLinkAction,
@@ -57,6 +58,10 @@ export function PublicLinksManager({
   const [togglingId, setTogglingId] = React.useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = React.useState<string | null>(null);
   const [confirmDisable, setConfirmDisable] = React.useState<PublicLinkRow | null>(null);
+  // Expiry and creation are days in the viewer's zone; the server's zone
+  // (UTC) would print the next day for an evening (React error #418). Printed
+  // once hydrated.
+  const hydrated = useHydrated();
 
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createName, setCreateName] = React.useState('');
@@ -202,7 +207,7 @@ export function PublicLinksManager({
                   <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
                     {link.expires_at ? (
                       <span className={expired ? 'text-destructive' : undefined}>
-                        {new Date(link.expires_at).toLocaleDateString()}
+                        {hydrated ? new Date(link.expires_at).toLocaleDateString() : null}
                       </span>
                     ) : (
                       'Never'
@@ -212,7 +217,7 @@ export function PublicLinksManager({
                     {link.entry_count}
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
-                    {new Date(link.created_at).toLocaleDateString()}
+                    {hydrated ? new Date(link.created_at).toLocaleDateString() : null}
                   </TableCell>
                   <TableCell>
                     {/* No Copy URL / Preview here (mig 0330): the token is

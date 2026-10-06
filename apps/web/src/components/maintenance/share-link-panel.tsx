@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   issueMaintenanceShareLinkAction,
   revokeMaintenanceShareLinkAction,
@@ -81,6 +82,9 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
   // A link exists if the server said so, or we just generated one.
   const hasActiveLink = generatedUrl !== null || status !== null;
   const expiresAt = generatedExpiresAt ?? status?.expiresAt ?? null;
+  // The expiry day is the viewer's; the server's zone (UTC) would print
+  // another day near midnight (React error #418). Printed once hydrated.
+  const hydrated = useHydrated();
 
   async function generate() {
     setGenerating(true);
@@ -173,7 +177,8 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
       {expiresAt ? (
         <p className="text-[11px] text-muted-foreground">
-          Expires {new Date(expiresAt).toLocaleDateString()}.
+          {/* A non-breaking space holds the line until then. */}
+          {hydrated ? `Expires ${new Date(expiresAt).toLocaleDateString()}.` : '\u00a0'}
         </p>
       ) : null}
 

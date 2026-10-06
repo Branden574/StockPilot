@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ClipboardList } from 'lucide-react';
+import { useHydrated } from '@/lib/use-hydrated';
 import { formatCurrency, formatDateShort } from '@/lib/utils';
 
 export interface PoInstantRow {
@@ -59,6 +60,18 @@ export function PoInstantTable({
         supplierName(po.supplier_id).toLowerCase().includes(needle),
     );
   }, [q, rows, supplierName]);
+
+  // Placed is an instant, shown as a day in the VIEWER's zone, which the server
+  // (UTC on Vercel) does not have: an evening order is the next day there, and
+  // hydrating that day threw React error #418. So it is printed once hydrated;
+  // a missing date is a dash at once.
+  const hydrated = useHydrated();
+  const placedDay = (iso: string | null) => (iso && !hydrated ? null : formatDateShort(iso));
+  // Expected is a DAY the buyer picked, stored as that day's UTC midnight
+  // (po-form sends new Date('YYYY-MM-DD')). Read in UTC it is the picked day on
+  // the server and in every browser, as on the PO's page and its PDF
+  // (lib/pdf/po.tsx); read in the viewer's zone it was the day before.
+  const expectedDay = (iso: string | null) => formatDateShort(iso, 'en-US', 'UTC');
 
   return (
     <>
@@ -127,10 +140,10 @@ export function PoInstantTable({
                       <PoStatusBadge status={po.status} />
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm tabular-nums">
-                      {formatDateShort(placed)}
+                      {placedDay(placed)}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm tabular-nums">
-                      {formatDateShort(po.expected_at)}
+                      {expectedDay(po.expected_at)}
                     </TableCell>
                     <TableCell className="text-right text-sm tabular-nums">
                       {po.line_count}

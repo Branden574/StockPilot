@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useHydrated } from '@/lib/use-hydrated';
 import {
   beginConnectAction,
   disconnectAction,
@@ -50,10 +51,17 @@ const STATUS_BADGE: Record<ConnectionStatus, { label: string; variant: 'default'
   disconnected: { label: 'Disconnected', variant: 'outline' },
 };
 
-function formatDate(iso: string | null): string {
+/**
+ * A date and time in the VIEWER's zone and locale. The server's zone (UTC on
+ * Vercel) differs in every hour, so hydrating it threw React error #418; until
+ * `hydrated` (useHydrated) a real date is a non-breaking space that holds the
+ * line, and a missing one is a dash at once.
+ */
+function formatDate(iso: string | null, hydrated: boolean): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return '—';
+  return hydrated ? d.toLocaleString() : '\u00a0';
 }
 
 /**
@@ -73,6 +81,7 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
   const [connecting, startConnect] = React.useTransition();
   const [disconnecting, startDisconnect] = React.useTransition();
   const [saving, startSave] = React.useTransition();
+  const hydrated = useHydrated();
   const [importing, startImport] = React.useTransition();
   const [importNote, setImportNote] = React.useState<string | null>(null);
   const [importWarehouseId, setImportWarehouseId] = React.useState(
@@ -199,7 +208,7 @@ export function SageIntacctCard(props: SageIntacctCardProps) {
               </div>
               <div>
                 <dt className="text-muted-foreground text-xs">Last connected</dt>
-                <dd className="font-medium">{formatDate(props.lastConnectedAt)}</dd>
+                <dd className="font-medium">{formatDate(props.lastConnectedAt, hydrated)}</dd>
               </div>
               {props.lastError && (
                 <div className="col-span-2">

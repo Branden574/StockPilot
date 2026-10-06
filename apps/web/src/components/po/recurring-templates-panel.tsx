@@ -23,6 +23,7 @@ import {
   setRecurringTemplateEnabledAction,
   updateRecurringTemplateAction,
 } from '@/server/actions/recurring-pos';
+import type { RecurringPoSeed } from '@/lib/purchase-orders/recurring-seed';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -108,12 +109,13 @@ interface Props {
   entitled: boolean;
   /** Labels for items saved template lines point at that `items` lacks. */
   lineLabels?: RecurringLineLabel[];
-  /** Pre-filled seed from "Make recurring" on the PO detail page. */
-  seed?: {
-    supplierId: string | null;
-    destinationLocationId: string | null;
-    lineItems: Array<{ itemId: string; quantityOrdered: number; unitCost: number }>;
-  } | null;
+  /**
+   * Pre-filled seed from "Make recurring" on the PO detail page: the create
+   * form opens filled in with it. Read ONCE, when the panel mounts; a seed
+   * that arrives later is applied by remounting the panel with a new `key`
+   * (RecurringTemplatesSeedLoader does).
+   */
+  seed?: RecurringPoSeed | null;
 }
 
 // ── Template form ────────────────────────────────────────────────────────────
@@ -208,6 +210,7 @@ export function RecurringTemplatesPanel({
 
   // Sync external initial list if the server re-renders the page.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the server's list replaces the optimistic one after revalidatePath
     setTemplates(initial);
   }, [initial]);
 
@@ -481,7 +484,11 @@ export function RecurringTemplatesPanel({
                               ? `(cap ${formatCurrency(tpl.max_auto_send_cents / 100)})`
                               : ''}
                           </p>
-                          <p className="text-muted-foreground text-xs">
+                          {/* The server renders "next ..." and "last ran ..."
+                              before the browser hydrates them; a minute
+                              between the two changes the words. Tolerate it
+                              instead of React error #418. */}
+                          <p className="text-muted-foreground text-xs" suppressHydrationWarning>
                             {rawLines.length} line{rawLines.length !== 1 ? 's' : ''} ·{' '}
                             {formatCurrency(tplTotal)} · next{' '}
                             {formatRelative(tpl.next_run_at)}

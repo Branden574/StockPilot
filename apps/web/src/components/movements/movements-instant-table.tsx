@@ -170,7 +170,7 @@ export function MovementsInstantTable({
                 return (
                   <TableRow key={m.id}>
                     <TableCell className="text-muted-foreground text-xs">
-                      <div>{formatRelative(m.createdAt)}</div>
+                      <div suppressHydrationWarning>{formatRelative(m.createdAt)}</div>
                       <LocalDateTime iso={m.createdAt} className="text-[11px] opacity-80" />
                     </TableCell>
                     <TableCell className="font-medium">{m.itemName ?? '—'}</TableCell>

@@ -43,10 +43,23 @@ export const RELEASES: Release[] = [
     // borrower's profile read fails (an outage-only path; the person sees
     // the usual try-again error). The digest's scope line says what each
     // email holds, not how the gap looked, since no digest was ever sent.
+    //
+    // Also told here: fix/recurring-seed-and-hydration (no migration, web
+    // only), so hold this release until that deploy is live too. It carries
+    // the Make recurring hand-off (make-recurring-works needs it) and the
+    // React #418 sweep; of the sweep, the lines below are what a person could
+    // see: the Purchase orders list's Expected day (a day early on every
+    // render) and the team calendar's today mark (tomorrow's, after a reload
+    // once the UTC date has turned: 4 or 5 PM Pacific). Left out as not
+    // visible: the other #418 fixes, which React recovered from by itself
+    // (relative times keep the server's words; other dates in the viewer's
+    // zone now appear as the page finishes loading instead of flipping from
+    // the server's day).
     status: 'draft',
-    title: 'The weekly digest email goes out, and fixes for warehouses, recurring orders and rentals',
+    title:
+      'The weekly digest email goes out, and fixes for warehouses, purchase orders, rentals and the calendar',
     summary:
-      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order works again, and a rental for a member records the member's own name.",
+      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order opens a new recurring order filled in from it, the purchase orders list shows each expected date as it was set, the team calendar marks today on the right day, and a rental for a member records the member's own name.",
     publishedAt: '2026-10-13T17:20:00Z',
     entries: [
       {
@@ -88,17 +101,41 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
       },
       {
+        // Needs BOTH halves live: the seed read (this release's branch) and
+        // the hand-off that opens the form filled in (fix/recurring-seed-and-
+        // hydration; the form never opened before it, since 2026-06-18). Not
+        // "again": the seed read failed from its first commit, so Make
+        // recurring never worked. The name is left blank and is required, so
+        // the words say name, review and save.
         id: 'make-recurring-works',
         category: 'fixed',
         area: 'Purchase orders',
-        title: 'Make recurring works again on a purchase order',
+        title: 'Make recurring works on a purchase order',
         whatChanged:
-          "Make recurring on a purchase order failed with an error. It works again: it opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
+          "Make recurring on a purchase order failed with an error. It now opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
         whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
         howItAffectsYou:
-          'On a purchase order, Make recurring takes you to Recurring purchase orders with the new one ready to review and save.',
+          'On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // The picked day is stored as its UTC midnight (the PO form and both
+        // PO imports). The instant list (an organization with up to 800 POs,
+        // PO_INSTANT_CAP) printed it in the viewer's zone, the day before in
+        // every US zone; the server-paged list printed it on Vercel's UTC, the
+        // picked day. Hence "could".
+        id: 'po-list-expected-date',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'The purchase orders list shows the expected date that was set',
+        whatChanged:
+          "In US time zones, the Expected column of the purchase orders list could show the day before the expected date set on the purchase order. It now shows the date that was set, as the purchase order's page and its PDF do.",
+        whyItMatters: "The list disagreed with the purchase order's own page by a day.",
+        howItAffectsYou:
+          "Each purchase order's expected date in the list now matches its page and its PDF.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
       },
       {
         id: 'rental-member-name',
@@ -112,6 +149,21 @@ export const RELEASES: Release[] = [
           'New rentals for a member show the name on their profile. Rentals made before keep the name they were saved with.',
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        // Only a page load does this (a reload, a bookmark, a link): moving to
+        // the calendar inside StockPilot drew it in the browser all along.
+        id: 'calendar-today',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar marks today on the right day',
+        whatChanged:
+          'Reloading the team calendar late in the day could mark tomorrow as today, and an event late in the day could show on the next day for a moment. Today and each event are now shown on your own day.',
+        whyItMatters: 'The calendar should show today, and each event, on the right day.',
+        howItAffectsYou:
+          "When you open the calendar, its events and today's mark appear as the page finishes loading, each on its own day.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
       },
     ],
   },

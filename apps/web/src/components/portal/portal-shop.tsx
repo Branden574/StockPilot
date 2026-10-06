@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { useHydrated } from '@/lib/use-hydrated';
 import { requestPortalReturnAction, submitPortalOrderAction } from '@/server/actions/portal';
 import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
 
@@ -81,6 +82,10 @@ export function PortalShop({
   // a return submitted (drives the in-portal confirmation banner).
   const [returnFormOrderId, setReturnFormOrderId] = React.useState<string | null>(null);
   const [returnPlacedOrderId, setReturnPlacedOrderId] = React.useState<string | null>(null);
+  // Order and return days are the viewer's; the server's zone (UTC) would
+  // print the next day for an evening order (React error #418). Printed once
+  // hydrated.
+  const hydrated = useHydrated();
 
   const byId = React.useMemo(() => new Map(catalog.map((c) => [c.itemId, c])), [catalog]);
   const cartLines = Object.entries(cart).filter(([, q]) => q > 0);
@@ -238,11 +243,13 @@ export function PortalShop({
                       <p className="text-sm font-medium">
                         #{o.id.slice(0, 8).toUpperCase()}
                         <span className="text-muted-foreground ml-2 font-normal">
-                          {new Date(o.created_at).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}
+                          {hydrated
+                            ? new Date(o.created_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })
+                            : null}
                         </span>
                       </p>
                       <p className="text-muted-foreground mt-0.5 truncate text-xs">
@@ -280,12 +287,13 @@ export function PortalShop({
                       {o.returns.map((ret) => (
                         <li key={ret.id} className="text-muted-foreground text-xs">
                           {RETURN_STATUS_LABELS[ret.status] ?? `Return ${ret.status}`}
-                          {' · '}
-                          {new Date(ret.created_at).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}
+                          {hydrated
+                            ? ` · ${new Date(ret.created_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })}`
+                            : null}
                         </li>
                       ))}
                     </ul>

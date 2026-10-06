@@ -237,7 +237,9 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                 {/* Relative for scanability + exact viewer-local date/time
                     always visible (owner ask 2026-07-15: every movement must
                     carry its accurate date+time, not just "2 months ago"). */}
-                <time dateTime={e.createdAt}>{formatRelative(e.createdAt)}</time>
+                <time dateTime={e.createdAt} suppressHydrationWarning>
+                  {formatRelative(e.createdAt)}
+                </time>
                 <LocalDateTime iso={e.createdAt} prefix=" · " />
                 {referenceDisplayLabel && (
                   <>
