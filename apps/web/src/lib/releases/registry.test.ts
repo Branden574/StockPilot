@@ -3595,7 +3595,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is a draft above every published release (the weekly digest release, the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the dates fixes draft, dated after every release but that one', () => {
+  it('is a draft above every published release (the weekly digest release, the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the public link and dates fixes drafts, dated after every release but those two', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
@@ -3616,9 +3616,12 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // Re-pinned by the dates fixes draft (fix/dates-in-org-and-utc,
     // 2026-10-06; was: at 0, the newest entry): dated later, it sits at the
     // top, directly above this one.
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: at 1,
+    // below the dates fixes draft): dated later still, it sits at the top.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(1);
-    expect(RELEASES[0]?.id).toBe('dates-fixes-2026-10');
+    expect(at).toBe(2);
+    expect(RELEASES[0]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[1]?.id).toBe('dates-fixes-2026-10');
     // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
@@ -3626,7 +3629,10 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // was: the weekly digest draft, this one and the partial-approval draft).
     // Re-pinned by the dates fixes draft (2026-10-06; was: this one and the
     // partial-approval draft).
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
+    // dates fixes draft, this one and the partial-approval draft).
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       ID,
       'order-partial-approval-held-2026-10',
@@ -3657,8 +3663,14 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // published now, dated before this draft, so this one is dated after
     // every other release. Re-pinned by the dates fixes draft (2026-10-06;
     // was: every release): that draft is dated later.
-    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'dates-fixes-2026-10')) {
+    // Re-pinned by the public link draft (fix/placed-cart-draft): dated later
+    // too, so every release below this one is dated earlier and both drafts
+    // above it later.
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
   });
 
@@ -3776,7 +3788,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Items first-paint release.
     // Re-pinned by the dates fixes draft (2026-10-06; was: without it): a
     // draft dated later, at the top.
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
+    // it): a draft dated later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
@@ -3785,6 +3800,7 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
       'small-fixes-2026-10',
     ]);
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'draft',
       'draft',
       'draft',
@@ -4514,7 +4530,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("sits directly below the Items first-paint release, published later, with the weekly digest release (published later still) and the PO-2 and partial-approval drafts above both; phone ordering's below it", () => {
+  it("sits directly below the Items first-paint release, published later, with the weekly digest release (published later still) and the drafts above both; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -4530,7 +4546,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // later still, below the two drafts and above the Items first-paint release.
     // Re-pinned by the dates fixes draft (2026-10-06; was: without it): a
     // draft dated later, at the top.
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
+    // it): a draft dated later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
@@ -4538,6 +4557,7 @@ describe('the small fixes release (slice 1) is published', () => {
       'items-list-first-paint-2026-10',
     ]);
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'draft',
       'draft',
       'draft',
@@ -4884,7 +4904,7 @@ describe('the weekly digest and fixes release', () => {
   };
   const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
 
-  it('is published at a real time after its production checks, below the two drafts and directly above the Items first-paint release', () => {
+  it('is published at a real time after its production checks, below the drafts and directly above the Items first-paint release', () => {
     // Re-pinned by the publishing of the weekly digest release (2026-10-06;
     // was: the newest entry, a draft dated after every release): published,
     // it sits below the drafts (PO-2's and the partial-approval one, dated
@@ -4900,7 +4920,11 @@ describe('the weekly digest and fixes release', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     // Re-pinned by the dates fixes draft (2026-10-06; was: PO-2's and the
     // partial-approval drafts): a draft dated later, at the top.
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
+    // dates fixes draft at the top): a draft dated later still, above it
+    // (the title no longer counts the drafts).
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
@@ -5085,13 +5109,22 @@ describe('the Items first-paint release', () => {
     // one, below the drafts, and is dated later.
     // Re-pinned by the dates fixes draft (2026-10-06; was: without it): a
     // draft dated later, at the top.
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: without
+    // it): a draft dated later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
       'weekly-digest-and-fixes-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
+      'draft',
+      'draft',
+      'draft',
+      'published',
+    ]);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }

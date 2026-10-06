@@ -55,9 +55,16 @@ describe('the dates fixes release is held as a draft', () => {
     );
   });
 
-  it('is the newest entry, at the top, dated after every other release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    for (const r of RELEASES.slice(1)) {
+  it('is a draft just below the public link draft, dated after every other release but that one', () => {
+    // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
+    // newest entry, at the top, dated after every other release): it is
+    // dated later and sits above this one.
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBe(1);
+    expect(RELEASES[0]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
