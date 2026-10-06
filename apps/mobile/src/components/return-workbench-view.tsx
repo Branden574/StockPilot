@@ -39,6 +39,7 @@ import {
   refusalRefreshesWorkbench,
   replacementCardLabel,
   replacementOrderHref,
+  replacementPhotoUrl,
   replacementOrderLines,
   replacementSideLines,
   returnStatusTone,
@@ -403,6 +404,8 @@ export function ReturnWorkbenchView({
             const name = l.item.name ?? 'Deleted item';
             const sub = [l.item.variant, l.item.sku].filter(Boolean).join(' · ');
             const x = exchangeForLine(wb, l.id);
+            // Review fix P11: the replacement's photo, as the returned item's.
+            const photo = x ? replacementPhotoUrl(x) : null;
             return (
               <View key={l.id} style={compact ? { gap: 10 } : styles.pair}>
               <Card padding={14} style={compact ? undefined : styles.card}>
@@ -443,20 +446,27 @@ export function ReturnWorkbenchView({
                 // returning card on the iPad; a text label and an arrow, never
                 // colour alone.
                 <Card padding={14} style={{ ...(compact ? {} : styles.card), borderLeftWidth: 4, borderLeftColor: c.ink }}>
-                  <View style={{ gap: 4 }} accessible accessibilityLabel={replacementCardLabel(name, x)}>
-                    <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
-                    {replacementSideLines(x).map((t) => (
-                      <Body
-                        key={t.key}
-                        size={t.tone === 'ink' ? 14.5 : 13}
-                        color={t.tone === 'ink' ? c.ink : t.tone === 'crit' ? ACCENT.crit : undefined}
-                        muted={t.tone === 'muted'}
-                      >
-                        {t.text}
-                      </Body>
-                    ))}
-                    <View style={{ alignSelf: 'flex-start' }}>
-                      <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
+                  <View style={{ flexDirection: 'row', gap: 12 }} accessible accessibilityLabel={replacementCardLabel(name, x)}>
+                    {photo ? (
+                      <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+                    ) : (
+                      <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
+                    )}
+                    <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                      <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
+                      {replacementSideLines(x).map((t) => (
+                        <Body
+                          key={t.key}
+                          size={t.tone === 'ink' ? 14.5 : 13}
+                          color={t.tone === 'ink' ? c.ink : t.tone === 'crit' ? ACCENT.crit : undefined}
+                          muted={t.tone === 'muted'}
+                        >
+                          {t.text}
+                        </Body>
+                      ))}
+                      <View style={{ alignSelf: 'flex-start' }}>
+                        <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
+                      </View>
                     </View>
                   </View>
                 </Card>

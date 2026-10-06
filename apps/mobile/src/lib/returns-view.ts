@@ -371,6 +371,17 @@ export function replacementSideLines(x: MobileExchangeLine): { key: string; text
   return out;
 }
 
+/** An item's photo for a card: its thumbnail first, else the full image. */
+export function itemPhotoUrl(item: { thumbUrl: string | null; imageUrl: string | null } | null | undefined): string | null {
+  return item?.thumbUrl || item?.imageUrl || null;
+}
+
+/** The REPLACEMENT card's photo (review fix P11): the approved item's, else
+ *  the one asked for; none for a note-only request. */
+export function replacementPhotoUrl(x: MobileExchangeLine): string | null {
+  return itemPhotoUrl(x.approvedItem ?? x.requestedItem);
+}
+
 /**
  * The REPLACEMENT card's one VoiceOver label (the card is a single accessible
  * element, so its pill is never read on its own): every line it shows, then

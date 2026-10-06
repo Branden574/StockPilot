@@ -2,6 +2,7 @@ import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -73,6 +74,7 @@ import {
   exchangeSheetConsequences,
   exchangeWhatHappens,
   initialChoices,
+  itemPhotoUrl,
   lineLabel,
   openLines,
   processButtonLabel,
@@ -904,6 +906,12 @@ function ExchangeReview({
 }) {
   const { c } = useTheme();
   const ex = exchangeOf(wb);
+  const thumb = (uri: string | null) =>
+    uri ? (
+      <Image source={{ uri }} style={[styles.thumb, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+    ) : (
+      <View style={[styles.thumb, { backgroundColor: c.paper2 }]} />
+    );
   const rows = wb.lines.map((l) => {
     const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
     const label = lineLabel(l);
@@ -967,6 +975,17 @@ function ExchangeReview({
           accessible
           accessibilityLabel={exchangeReviewHeaderLabel(label, x.requestedItem ? requested : null)}
         >
+          {/* Review fix P11: a small photo of each side (inside the one
+              accessible heading, so VoiceOver reads its words only). */}
+          {itemPhotoUrl(l.item) || itemPhotoUrl(x.requestedItem) ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              {thumb(itemPhotoUrl(l.item))}
+              <Body size={14} color={c.ink3}>
+                →
+              </Body>
+              {thumb(itemPhotoUrl(x.requestedItem))}
+            </View>
+          ) : null}
           <Body size={14} color={c.ink}>
             {label} → {requested}
           </Body>
@@ -1191,4 +1210,5 @@ const styles = StyleSheet.create({
   radioRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   chip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, minHeight: MIN_TAP, justifyContent: 'center' },
   option: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, justifyContent: 'center', gap: 2 },
+  thumb: { width: 40, height: 40, borderRadius: 8 },
 });

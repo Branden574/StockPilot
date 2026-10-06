@@ -73,6 +73,18 @@ describe('the workbench', () => {
     expect(view).toContain('const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;');
   });
 
+  // Review fix P11: the REPLACEMENT card shows the replacement's photo in the
+  // RETURNING card's 72 pt box (inside its one accessible element), and the
+  // approval review's heading small thumbnails of both sides.
+  it("shows the replacement's photo beside the returned item's (review fix P11)", () => {
+    expect(view).toContain('const photo = x ? replacementPhotoUrl(x) : null;');
+    expect(view.match(/style=\{\[styles\.photo, \{ backgroundColor: c\.paper2 \}\]\}/g)?.length).toBe(4);
+    const sheet = code(read('src/components/return-action-sheet.tsx'));
+    expect(sheet).toContain('itemPhotoUrl(l.item)');
+    expect(sheet).toContain('itemPhotoUrl(x.requestedItem)');
+    expect(sheet).toContain('styles.thumb');
+  });
+
   it('labels an exchange approval "Approve return & exchange"', () => {
     expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
   });

@@ -6,6 +6,7 @@ import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, Mobil
 import {
   NO_EXCHANGE,
   actionHelp,
+  itemPhotoUrl,
   changeInRmaLabel,
   exchangeApprovalDecisions,
   exchangeForLine,
@@ -21,6 +22,7 @@ import {
   replacementCardLabel,
   replacementGateLine,
   replacementOrderHref,
+  replacementPhotoUrl,
   replacementHeldNow,
   replacementPickBlocked,
   replacementOrderLines,
@@ -453,6 +455,20 @@ describe('the REPLACEMENT side and the replacement order', () => {
   it('Hand over opens the replacement order ready to sign; Open replacement just opens it', () => {
     expect(replacementOrderHref('o-104', 'hand_over')).toBe('/order/o-104?focus=sign');
     expect(replacementOrderHref('o-104', 'open_replacement')).toBe('/order/o-104');
+  });
+
+  // Review fix P11 (parity, brief 27 and 30): the phone showed no photo of
+  // the replacement. The REPLACEMENT card shows the chosen item's photo (the
+  // approved one, else the one asked for), the thumbnail first, as the
+  // RETURNING card does; nothing for a note-only request.
+  it("the replacement's photo: the approved item's, else the requested one's, thumbnail first (review fix P11)", () => {
+    const pic = (thumbUrl: string | null, imageUrl: string | null) => ({ ...L, thumbUrl, imageUrl });
+    expect(replacementPhotoUrl(xline({ requestedItem: pic('t-l', 'i-l') }))).toBe('t-l');
+    expect(replacementPhotoUrl(xline({ requestedItem: pic(null, 'i-l') }))).toBe('i-l');
+    expect(replacementPhotoUrl(xline({ requestedItem: pic('t-l', null), approvedItemId: 'item-m', approvedItem: pic('t-m', null) }))).toBe('t-m');
+    expect(replacementPhotoUrl(xline({ requestedItemId: null, requestedItem: null, requestNote: 'A bigger one' }))).toBeNull();
+    expect(itemPhotoUrl(null)).toBeNull();
+    expect(itemPhotoUrl(pic(null, null))).toBeNull();
   });
 
   it('prepare: staged words, or the refusal', () => {
