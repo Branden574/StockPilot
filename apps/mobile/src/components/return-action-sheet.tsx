@@ -228,6 +228,15 @@ function SheetContent({
   // the replacement goes (the warehouse's sites, or pickup) and sends again.
   const [sitePrompt, setSitePrompt] = React.useState(false);
   const [siteKey, setSiteKey] = React.useState<string | null>(null);
+  // RX-2 simulator finding SIM-5: the question in the body says why the site
+  // was refused, so the refusal is announced for VoiceOver but not pinned as a
+  // second line beside "Choose where the replacement goes." (with the title,
+  // the two lines left the body no room for the sites on an iPhone at AX5).
+  function askSite(words: string) {
+    setSitePrompt(true);
+    setError(null);
+    AccessibilityInfo.announceForAccessibility(words);
+  }
   const siteOptions = replacementSiteOptions(ex.deliverySites ?? []);
   const siteValue = sitePrompt ? (siteOptions.find((o) => o.key === siteKey)?.value ?? null) : null;
   const reasonText = reason.trim();
@@ -379,8 +388,8 @@ function SheetContent({
             const detail = (e as { details?: { detail?: unknown } }).details?.detail;
             setShortDetail(detail ?? []);
           }
-          if (returnErrorReason(e) === 'replacement_site_not_available') setSitePrompt(true);
-          setError(describeReturnError(e));
+          if (returnErrorReason(e) === 'replacement_site_not_available') askSite(describeReturnError(e));
+          else setError(describeReturnError(e));
           setBusy(false);
         }
         return;
@@ -405,8 +414,7 @@ function SheetContent({
         const step = res.ran[0];
         if (step && step.outcome === 'refused' && step.reason === 'replacement_site_not_available') {
           // Desk check F6: ask where the replacement goes, then send again.
-          setSitePrompt(true);
-          setError(stepOutcomeMessage(step, res.workbench, itemIsHere));
+          askSite(stepOutcomeMessage(step, res.workbench, itemIsHere));
           setBusy(false);
           return;
         }

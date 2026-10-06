@@ -127,11 +127,26 @@ describe('online only', () => {
   // (the warehouse's sites, or pickup) and sends the same request again.
   it('a refused delivery site asks where the replacement goes and sends the choice', () => {
     expect(sheet).toContain("step.reason === 'replacement_site_not_available'");
-    expect(sheet).toContain("if (returnErrorReason(e) === 'replacement_site_not_available') setSitePrompt(true);");
+    // Re-pinned on purpose by simulator finding SIM-5 (below): the refusal now
+    // opens the question through askSite.
+    expect(sheet).toContain("if (returnErrorReason(e) === 'replacement_site_not_available') askSite(describeReturnError(e));");
     expect(sheet).toContain('const siteOptions = replacementSiteOptions(ex.deliverySites ?? []);');
     expect(sheet).toContain('replacement: { whenShort, ...(siteValue ?? {}) }');
     expect(sheet).toContain('...(siteValue ? { replacement: siteValue } : {}),');
     expect(sheet).toMatch(/sitePrompt && !siteValue\s*\?\s*RETURNS_COPY\.chooseSite/);
+  });
+
+  // RX-2 simulator finding SIM-5 (iPhone 17 at AX5): after a refused site the
+  // sheet pinned the refusal under "Choose where the replacement goes.", two
+  // lines asking the same thing; with the title they left the body no height,
+  // so the sites could not be reached and the button sat partly off screen.
+  // The question in the body says why; the refusal is announced, not pinned.
+  it('a refused delivery site is asked in the body and announced, never pinned as a second line', () => {
+    expect(sheet).toMatch(
+      /function askSite\(words: string\) \{\s*setSitePrompt\(true\);\s*setError\(null\);\s*AccessibilityInfo\.announceForAccessibility\(words\);\s*\}/,
+    );
+    expect(sheet).toContain('askSite(stepOutcomeMessage(step, res.workbench, itemIsHere));');
+    expect(sheet.match(/setSitePrompt\(true\)/g)).toHaveLength(1);
   });
 
   // Desk check F9: "Close as return only" sends the revision the sheet shows
