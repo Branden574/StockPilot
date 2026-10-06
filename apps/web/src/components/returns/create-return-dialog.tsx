@@ -362,10 +362,14 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
 }
 
 function initialLineState(lines: ReturnableLine[]): Record<string, LineState> {
+  // Returns RX-2 review fix (counter taps): the only returnable line starts
+  // ticked, the counter's usual one-item return; with several, none is.
+  const returnable = lines.filter((l) => l.quantityRemaining > 0);
+  const only = returnable.length === 1 ? returnable[0]!.orderRequestLineId : null;
   const out: Record<string, LineState> = {};
   for (const l of lines) {
     out[l.orderRequestLineId] = {
-      selected: false,
+      selected: l.orderRequestLineId === only,
       quantity: String(l.quantityRemaining),
       disposition: 'restock',
     };

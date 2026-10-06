@@ -24,6 +24,9 @@ import { CreateReturnDialog } from './create-return-dialog';
 
 const ORDER = '11111111-1111-4111-8111-111111111111';
 const LINE = '22222222-2222-4222-8222-222222222222';
+// Re-pinned by returns RX-2 review fix (counter taps): the only returnable
+// line starts ticked, so these tests no longer tick it (that would untick it);
+// each asserts it is ticked instead. Claims kept.
 const LINES = [
   {
     orderRequestLineId: LINE,
@@ -57,7 +60,7 @@ describe('CreateReturnDialog request key', () => {
       .mockResolvedValueOnce({ ok: true, data: { id: 'r1', replay: false } });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     const dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     fireEvent.change(within(dialog).getByLabelText('Return quantity'), { target: { value: '2' } });
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
@@ -76,13 +79,13 @@ describe('CreateReturnDialog request key', () => {
     createAction.mockResolvedValue({ ok: false, error: { message: 'Busy. Try again.' } });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     let dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(2));
     expect(keyOf(createAction.mock.calls[1]!)).not.toBe(keyOf(createAction.mock.calls[0]!));
@@ -109,7 +112,7 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
     createAction.mockResolvedValue({ ok: true, data: { id: 'r1', replay: false } });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled />);
     const dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     expect(candidatesAction).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
     await waitFor(() => expect(candidatesAction).toHaveBeenCalledWith({ orderRequestId: ORDER, line: LINE, q: '' }));
@@ -127,7 +130,7 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
     candidatesAction.mockResolvedValue({ ok: true, data: { siblings: [], matches: [] } });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled />);
     const dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
     submit(dialog);
     await new Promise((r) => setTimeout(r, 10));
@@ -137,7 +140,36 @@ describe('CreateReturnDialog exchange choice (returns RX-2)', () => {
   it('with the kill switch off there is no Exchange choice', () => {
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled={false} />);
     const dialog = openDialog();
-    fireEvent.click(within(dialog).getByRole('checkbox'));
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
     expect(within(dialog).queryByLabelText('Exchange for another size or item')).toBeNull();
+  });
+});
+
+// RX-2 review fix (counter taps): the counter's most common return has one
+// line; it starts ticked. With several returnable lines nothing is ticked for
+// the person.
+describe('CreateReturnDialog starts the only returnable line ticked', () => {
+  const second = { ...LINES[0]!, orderRequestLineId: '55555555-5555-4555-8555-555555555555', itemName: 'Walk Shirt L', itemSku: 'WS-L' };
+
+  it('one returnable line: ticked, and Create return sends it with no other tap', async () => {
+    createAction.mockResolvedValue({ ok: true, data: { id: 'r1', replay: false } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
+    const dialog = openDialog();
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
+    submit(dialog);
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    expect((createAction.mock.calls[0]![0] as { lines: unknown[] }).lines).toEqual([
+      expect.objectContaining({ orderRequestLineId: LINE, quantity: 3 }),
+    ]);
+  });
+
+  it('two returnable lines: none ticked; one of them fully returned: the other is ticked', () => {
+    const { unmount } = render(<CreateReturnDialog orderId={ORDER} lines={[LINES[0]!, second]} />);
+    let dialog = openDialog();
+    expect(within(dialog).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, false]);
+    unmount();
+    render(<CreateReturnDialog orderId={ORDER} lines={[{ ...LINES[0]!, quantityRemaining: 0 }, second]} />);
+    dialog = openDialog();
+    expect(within(dialog).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, true]);
   });
 });
