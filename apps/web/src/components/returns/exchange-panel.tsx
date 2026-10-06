@@ -26,6 +26,7 @@ import type {
 
 import {
   availableLabel,
+  exchangeActionConsequences,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewOptions,
@@ -45,6 +46,7 @@ import {
   shortLabel,
   type ActionResult,
   type ExchangeCandidatesAnswer,
+  type ExchangeConsequenceKey,
   type ExchangeReviewState,
   type RailStep,
   type ReplacementDeliverySite,
@@ -507,19 +509,23 @@ export function CancelReplacementDialog({
   open,
   onOpenChange,
   busy,
-  drawn,
-  inTransit,
+  consequences,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   busy: boolean;
-  /** Picked or staged: the picked items go back to Staging on record (X-1). */
-  drawn: boolean;
-  inTransit: boolean;
+  /**
+   * What happens (core exchangeActionConsequences 'cancel_replacement'):
+   * picked, the items go back to Staging on record (X-1); in transit, ask the
+   * driver; then that the order is cancelled and the return itself does not
+   * change (review fix P2: never "The return stays open.").
+   */
+  consequences: ReadonlyArray<{ key: ExchangeConsequenceKey; text: string }>;
   onConfirm: (reason: string) => void;
 }) {
   const [reason, setReason] = React.useState('');
+  const effect = consequences.find((c) => c.key === 'effect')?.text ?? null;
   return (
     <Dialog
       open={open}
@@ -532,18 +538,16 @@ export function CancelReplacementDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{RETURNS_COPY.cancelReplacement}?</DialogTitle>
-          <DialogDescription>The return stays open. The reserved items are freed.</DialogDescription>
+          {/* What to do with what was picked comes first, then the effect. */}
+          {consequences
+            .filter((c) => c.key !== 'effect')
+            .map((c) => (
+              <p key={c.key} className="text-destructive text-sm" role="alert">
+                {c.text}
+              </p>
+            ))}
+          {effect ? <DialogDescription>{effect}</DialogDescription> : null}
         </DialogHeader>
-        {drawn ? (
-          <p className="text-destructive text-sm" role="alert">
-            {RETURNS_COPY.cancelDrawnReplacement}
-          </p>
-        ) : null}
-        {inTransit ? (
-          <p className="text-destructive text-sm" role="alert">
-            {RETURNS_COPY.cancelInTransit}
-          </p>
-        ) : null}
         <ReasonField
           id="cancel-replacement-reason"
           label={RETURNS_COPY.cancelReplacementReasonLabel}
@@ -751,9 +755,10 @@ export function ChangeReplacementDialog({
         <DialogHeader>
           <DialogTitle>{mode === 'issue' ? RETURNS_COPY.issueNewReplacement : RETURNS_COPY.changeReplacement}</DialogTitle>
           <DialogDescription>
-            {mode === 'issue'
-              ? 'A new replacement order is created and reserved.'
-              : 'The current replacement is cancelled and a new one is created and reserved, together.'}
+            {/* Review fix P2: core's words for what is created. */}
+            {exchangeActionConsequences(mode === 'issue' ? 'issue_replacement' : 'change_replacement', { replacementStatus: null })
+              .map((c) => c.text)
+              .join(' ')}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

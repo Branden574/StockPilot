@@ -504,7 +504,82 @@ describe('an approved exchange waiting for the returned item', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel replacement' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('The picked items go back to Staging on record. Put them in the staging area.')).toBeInTheDocument();
+    // RX-2 review fix P2: what happens, in core's words (nothing reserved
+    // after a pick, so nothing is said to be freed).
+    expect(
+      within(dialog).getByText(
+        'The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+      ),
+    ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Cancel replacement' })).toBeDisabled();
+  });
+
+  // RX-2 review fix P2: one set of words for what happens to the replacement
+  // (core exchangeActionConsequences), never "The return stays open." (the
+  // RMA may be closed).
+  it('Cancel replacement, Change and Issue say what happens to the replacement in core\'s words', async () => {
+    const { unmount } = render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel replacement' }));
+    const cancel = await screen.findByRole('dialog');
+    expect(
+      within(cancel).getByText(
+        'The replacement order is cancelled and its reserved items are freed. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(cancel).queryByText(/stays open/)).toBeNull();
+    unmount();
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change replacement' }));
+    const change = await screen.findByRole('dialog', { name: 'Change replacement' });
+    expect(
+      within(change).getByText('The current replacement order is cancelled and a new one is created and reserved in the same step.'),
+    ).toBeInTheDocument();
+  });
+
+  it('a replacement out for delivery: the cancel confirm also asks the driver to bring it back', async () => {
+    const out = { ...WAITING, status: 'out_for_delivery', replacement: { ...WAITING.replacement, status: 'in_transit', class: 'drawn', fulfillmentType: 'delivery' } };
+    render(<ReturnWorkbench workbench={bench('received', out)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel replacement' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Ask the driver to bring it back.')).toBeInTheDocument();
+  });
+
+  it('Cancel return names what happens to the replacement: cancelled too, part sent, or all sent', async () => {
+    const { unmount } = render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel return' }));
+    let dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText('The return closes as cancelled. Its replacement order SO-000104 is cancelled too and the reserved items are freed.'),
+    ).toBeInTheDocument();
+    unmount();
+    const partly = {
+      ...WAITING,
+      status: 'partly_handed_over',
+      replacement: {
+        ...WAITING.replacement,
+        status: 'backordered',
+        class: 'handed_over',
+        lines: [{ ...WAITING.replacement.lines[0]!, requested: 2, fulfilled: 1, held: 0 }],
+      },
+    };
+    const second = render(<ReturnWorkbench workbench={bench('approved', partly)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel return' }));
+    dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        'The return closes as cancelled. What was already handed over stays handed over; the rest of the replacement is never sent.',
+      ),
+    ).toBeInTheDocument();
+    second.unmount();
+    const all = {
+      ...WAITING,
+      status: 'handed_over_return_open',
+      replacement: { ...WAITING.replacement, status: 'completed', class: 'handed_over', lines: [{ ...WAITING.replacement.lines[0]!, fulfilled: 1, held: 0 }] },
+    };
+    render(<ReturnWorkbench workbench={bench('approved', all)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel return' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('The return closes as cancelled. The replacement was already handed over and stays as it is.')).toBeInTheDocument();
   });
 
   it('cancelling the RMA after an approved exchange needs a reason', async () => {

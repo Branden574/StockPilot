@@ -61,6 +61,7 @@ import {
   choiceNeededSentence,
   choiceToDecision,
   defaultExchangeReviewState,
+  exchangeActionConsequences,
   formatOrderNumber,
   isChoiceOffered,
   liveChoice,
@@ -583,6 +584,16 @@ export function ReturnWorkbench({
       };
     });
   const shortLines = Array.isArray(shortDetail) ? replacementShortItems(shortDetail as Array<Record<string, unknown>>) : [];
+  // Review fix P2: what happens to the live replacement, in core's words, for
+  // the Cancel return and Cancel replacement confirms.
+  const liveReplacement = ex.replacement?.live ? ex.replacement : null;
+  const replacementFacts = {
+    replacementStatus: liveReplacement?.status ?? null,
+    anythingHandedOver: (liveReplacement?.lines ?? []).some((l) => l.fulfilled > 0),
+    replacementOrderNumber: liveReplacement?.orderNumber ?? null,
+    held: liveReplacement ? liveReplacement.held : null,
+  };
+  const cancelReturnWords = exchangeActionConsequences('cancel', replacementFacts).map((c) => c.text);
 
   const showPickers = r.status === 'requested' || r.status === 'received' || mode === 'change_destination';
   const editable = wb.viewer.canManageReturns && busy === null;
@@ -936,9 +947,7 @@ export function ReturnWorkbench({
           <DialogHeader>
             <DialogTitle>Cancel this return?</DialogTitle>
             <DialogDescription>
-              {ex.hasApprovedExchange
-                ? 'The return closes as cancelled. A replacement not yet handed over is cancelled with it.'
-                : 'Nothing moves. The return closes as cancelled.'}
+              {cancelReturnWords.length > 0 ? cancelReturnWords.join(' ') : 'Nothing moves. The return closes as cancelled.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -976,8 +985,7 @@ export function ReturnWorkbench({
             open={cancelReplacementOpen}
             onOpenChange={setCancelReplacementOpen}
             busy={busy === 'cancel_replacement'}
-            drawn={ex.replacement?.class === 'drawn'}
-            inTransit={ex.replacement?.status === 'in_transit'}
+            consequences={exchangeActionConsequences('cancel_replacement', replacementFacts)}
             onConfirm={cancelReplacement}
           />
           {/* The two keyed dialogs are siblings: their keys must never be
