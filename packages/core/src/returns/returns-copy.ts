@@ -397,8 +397,25 @@ export function cancelReturnReplacementSentence(orderNumber: number | null, opts
   return `The return closes as cancelled. ${order} is cancelled too${freed}.`;
 }
 
-/** "Replacement reserved. Waiting for returned item (RMA-…)" (the gated order). */
-export function waitingForReturnLine(returnNumber: string | null): string {
+/** What the gate line knows about the replacement's hold. */
+export interface WaitingForReturnFacts {
+  /** The view's exchange status: 'unavailable' while something owed is not held. */
+  exchangeStatus?: string | null;
+  /** What the replacement holds now, when known (it decides over the status). */
+  held?: number | null;
+}
+
+/**
+ * The gated order's line: "Replacement reserved. Waiting for returned item
+ * (RMA-…)" only when something is held; for a replacement not in stock (on
+ * backorder, nothing held) "Not in stock yet. Picking also waits for the
+ * returned item (RMA-…)." (review fix P5). Without facts, the reserved words
+ * (an older server).
+ */
+export function waitingForReturnLine(returnNumber: string | null, facts: WaitingForReturnFacts = {}): string {
+  const notHeld =
+    typeof facts.held === 'number' && Number.isFinite(facts.held) ? facts.held <= 0 : facts.exchangeStatus === 'unavailable';
+  if (notHeld) return `Not in stock yet. Picking also waits for the returned item${returnNumber ? ` (${returnNumber})` : ''}.`;
   return `Replacement reserved. Waiting for returned item${returnNumber ? ` (${returnNumber})` : ''}`;
 }
 
@@ -457,6 +474,10 @@ export interface ReplacementBannerInput {
   /** The exchange status in staff words (they say when part was never sent). */
   exchangeStatusLabel: string;
   driverLine: string | null;
+  /** The view's exchange status (the gate line's hold words, review fix P5). Absent from an older server. */
+  exchangeStatus?: string | null;
+  /** What this replacement holds now, when the screen knows it. */
+  held?: number | null;
 }
 
 export type ReplacementBannerKey = 'title' | 'handed_over' | 'gate' | 'closed' | 'released' | 'driver' | 'change';
@@ -481,7 +502,9 @@ export function replacementBannerLines(
   const handedOver = info.live && info.handedOver === true;
   const inFlight = info.live && !handedOver;
   if (handedOver && info.exchangeStatusLabel) out.push({ key: 'handed_over', text: info.exchangeStatusLabel });
-  if (inFlight && info.waitingForReturn) out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber) });
+  if (inFlight && info.waitingForReturn) {
+    out.push({ key: 'gate', text: waitingForReturnLine(info.returnNumber, { exchangeStatus: info.exchangeStatus, held: info.held }) });
+  }
   if (inFlight && info.returnClosed === true) {
     out.push({ key: 'closed', text: returnCancelledReplacementLine(info.returnNumber) });
   }

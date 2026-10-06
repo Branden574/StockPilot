@@ -72,6 +72,7 @@ function allStrings(): string[] {
     itemQuantityLabel('New Hire Shirt, L', 1),
     exchangeReplacementBanner('RMA-20261005-ABC123', 100),
     waitingForReturnLine('RMA-20261005-ABC123'),
+    waitingForReturnLine('RMA-20261005-ABC123', { exchangeStatus: 'unavailable' }),
     returnCancelledReplacementLine('RMA-20261005-ABC123'),
     releasedBeforeReturnLine('Dana', 'Swap at delivery: the driver collects the returned item.'),
     changeOrCancelInRmaLabel('RMA-20261005-ABC123'),
@@ -242,6 +243,38 @@ describe('returns copy', () => {
     expect(replacementRmaLinkLabel({ ...handed, live: false })).toBe('Change or cancel in RMA-1');
     const { handedOver: _omit, ...older } = base;
     expect(replacementBannerLines(older, 'pickup').map((l) => l.key)).toEqual(['title', 'gate', 'change']);
+  });
+
+  // RX-2 review fix P5: a replacement approved on backorder holds nothing, so
+  // its order never says "Replacement reserved".
+  it('RX-2: the gate line says Not in stock yet when nothing is held (review fix P5)', () => {
+    const notInStock = 'Not in stock yet. Picking also waits for the returned item (RMA-1).';
+    const reserved = 'Replacement reserved. Waiting for returned item (RMA-1)';
+    expect(waitingForReturnLine('RMA-1', { exchangeStatus: 'unavailable' })).toBe(notInStock);
+    expect(waitingForReturnLine(null, { exchangeStatus: 'unavailable' })).toBe('Not in stock yet. Picking also waits for the returned item.');
+    expect(waitingForReturnLine('RMA-1', { held: 0 })).toBe(notInStock);
+    // "Replacement reserved" only when something is held.
+    expect(waitingForReturnLine('RMA-1', { held: 1, exchangeStatus: 'unavailable' })).toBe(reserved);
+    expect(waitingForReturnLine('RMA-1', { exchangeStatus: 'waiting_for_return' })).toBe(reserved);
+    expect(waitingForReturnLine('RMA-1')).toBe(reserved);
+    // The banner's gate line follows the same rule.
+    const info: ReplacementBannerInput = {
+      returnNumber: 'RMA-1',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      waitingForReturn: true,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      exchangeStatusLabel: 'Replacement unavailable (backordered)',
+      driverLine: null,
+    };
+    const gate = (over: Partial<ReplacementBannerInput>) =>
+      replacementBannerLines({ ...info, ...over }, 'pickup').find((l) => l.key === 'gate')?.text;
+    expect(gate({ exchangeStatus: 'unavailable' })).toBe(notInStock);
+    expect(gate({ exchangeStatus: 'waiting_for_return' })).toBe(reserved);
+    expect(gate({ exchangeStatus: 'unavailable', held: 1 })).toBe(reserved);
   });
 
   it('RX-2: words an early release the same on the web and the phone', () => {
