@@ -26,6 +26,7 @@ import type {
 
 import {
   availableLabel,
+  earlierReplacementEntries,
   exchangeActionConsequences,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
@@ -36,6 +37,7 @@ import {
   qtyRequestedLabel,
   RAIL_STEP_STATE_WORDS,
   releasedBeforeReturnLine,
+  replacementLineSummary,
   replacementShortItems,
   replacementShortLine,
   replacementSiteOptions,
@@ -420,13 +422,24 @@ export function ReplacementOrderSection({
           </p>
           {repl.lines.length > 0 ? (
             <ul className="space-y-1">
-              {repl.lines.map((l) => (
-                <li key={l.orderLineId} className="text-sm">
-                  <span className="font-medium">{l.label}</span> ×{l.requested}
-                  <span className="text-muted-foreground"> · reserved {l.held}</span>
-                  {l.take ? <span className="text-muted-foreground block text-xs">{l.take}</span> : null}
-                </li>
-              ))}
+              {repl.lines.map((l) => {
+                // Review fix P19: picked or staged, or part handed over, never
+                // "reserved 0" (core replacementLineSummary, the phone's too).
+                const summary = replacementLineSummary({
+                  label: l.label,
+                  requested: l.requested,
+                  fulfilled: l.fulfilled,
+                  held: l.held,
+                  status: repl.status,
+                });
+                return (
+                  <li key={l.orderLineId} className="text-sm">
+                    <span className="font-medium">{l.label}</span>
+                    {summary.slice(l.label.length)}
+                    {l.take ? <span className="text-muted-foreground block text-xs">{l.take}</span> : null}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
           {repl.short ? (
@@ -440,15 +453,16 @@ export function ReplacementOrderSection({
             </p>
           ) : null}
           {exchange.history.length > 0 ? (
+            // Review fix P22: the order status words (core), never a raw code.
             <p className="text-muted-foreground text-xs">
-              Earlier replacements:{' '}
-              {exchange.history.map((h, i) => (
+              {RETURNS_COPY.earlierReplacements}:{' '}
+              {earlierReplacementEntries(exchange.history).map((h, i) => (
                 <React.Fragment key={h.orderId}>
                   {i > 0 ? ', ' : null}
                   <Link href={`/dashboard/orders/${h.orderId}`} className="hover:underline">
-                    {formatOrderNumber(h.orderNumber) ?? h.orderId.slice(0, 8)}
-                  </Link>{' '}
-                  ({h.status.replace(/_/g, ' ')})
+                    {h.orderLabel}
+                  </Link>
+                  {h.statusWords ? ` (${h.statusWords})` : null}
                 </React.Fragment>
               ))}
             </p>

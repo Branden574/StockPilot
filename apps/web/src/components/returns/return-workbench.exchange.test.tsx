@@ -542,6 +542,43 @@ describe('an approved exchange waiting for the returned item', () => {
     expect(within(dialog).getByRole('button', { name: 'Cancel replacement' })).toBeDisabled();
   });
 
+  // RX-2 review fixes P19 and P22: a picked or partly handed-over line never
+  // reads "reserved 0", and earlier replacements carry the order status
+  // words, never a raw code.
+  it('the replacement block says picked or handed over, and lists earlier replacements in status words', () => {
+    const picked = {
+      ...WAITING,
+      status: 'ready_for_pickup',
+      replacement: { ...WAITING.replacement, status: 'staged_for_pickup', class: 'drawn', held: 0, lines: [{ ...WAITING.replacement.lines[0]!, held: 0, take: null }] },
+      history: [{ orderId: 'o-old', orderNumber: 101, status: 'cancelled' }, { orderId: 'o-older', orderNumber: 99, status: 'pick_slip_generated' }],
+    };
+    const { unmount } = render(<ReturnWorkbench workbench={bench('received', picked)} />);
+    const block = screen.getByRole('region', { name: 'Replacement order' });
+    expect(within(block).getByText((_, el) => el?.tagName === 'LI' && el.textContent === 'Walk New Hire Shirt, L ×1 · picked')).toBeInTheDocument();
+    expect(block.textContent).not.toContain('reserved 0');
+    const earlier = within(block).getByText((_, el) => el?.tagName === 'P' && (el.textContent ?? '').startsWith('Earlier replacements:'));
+    expect(earlier.textContent).toBe('Earlier replacements: SO-000101 (cancelled), SO-000099 (pick slip)');
+    expect(within(earlier).getByRole('link', { name: 'SO-000101' })).toHaveAttribute('href', '/dashboard/orders/o-old');
+    expect(earlier.textContent).not.toContain('_');
+    unmount();
+    const partly = {
+      ...WAITING,
+      status: 'partly_handed_over',
+      replacement: {
+        ...WAITING.replacement,
+        status: 'backordered',
+        class: 'handed_over',
+        held: 0,
+        lines: [{ ...WAITING.replacement.lines[0]!, label: 'Walk New Hire Shirt, XL', requested: 2, fulfilled: 1, held: 0, take: null }],
+      },
+    };
+    render(<ReturnWorkbench workbench={bench('approved', partly)} />);
+    const block2 = screen.getByRole('region', { name: 'Replacement order' });
+    expect(
+      within(block2).getByText((_, el) => el?.tagName === 'LI' && el.textContent === 'Walk New Hire Shirt, XL ×2 · handed over 1 · reserved 0'),
+    ).toBeInTheDocument();
+  });
+
   // RX-2 review fix P18: "Get replacement ready" draws stock and stages the
   // order, so what it does is said under the button first (nothing prints).
   it('Get replacement ready says what it does under the button, and the button points at it', () => {
