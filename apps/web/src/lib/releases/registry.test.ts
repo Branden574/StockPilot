@@ -3954,8 +3954,11 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     expect(phone.entries[1]!.whatChanged).toContain("or the app says why it can't be.");
     // The examples of a lost answer are the ones the open review survives; a
     // closed tab is checked when the page is opened again.
-    expect(once.whatChanged).toContain("(a slow or lost connection), the review stays open");
-    expect(once.whatChanged).not.toMatch(/closed tab/);
+    // Re-pinned by the claims review of #339 (2026-10-06; was: "(a slow or
+    // lost connection), the review stays open"): the send has no timeout, so
+    // a slow answer that arrives shows the outcome and no panel.
+    expect(once.whatChanged).toContain('(for example, the connection drops), the review stays open');
+    expect(once.whatChanged).not.toMatch(/closed tab|slow/);
     // The pending record is kept per account, organization and warehouse
     // (order-submission.ts orderPendingKey), and a new tab opens on the
     // first warehouse unless one is named.
@@ -3967,6 +3970,60 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     expect(once.howItAffectsYou).toContain(
       'If you reload the page, or open it for the same warehouse in another tab, it remembers and checks for you.',
     );
+  });
+
+  // Claims review of #339 (2026-10-06), against the New order page on main.
+  it('says what else #316 changed that a person sees: the selection waits for that warehouse, the cart is per account, refusals name the items, and the corrected promises', () => {
+    const r = release();
+    const [once, refusals, , labels] = r.entries;
+    const storefront = readFileSync(
+      resolve(__dirname, '../../components/orders/storefront/orders-storefront.tsx'),
+      'utf8',
+    );
+    // Start an order waits only on the open page's own pending request, and
+    // it opens the selection's warehouse, so another warehouse's items go in
+    // at once.
+    expect(storefront).toContain(
+      "const prefillWaits = liveKey !== null || submission.state.phase === 'placed';",
+    );
+    expect(once!.howItAffectsYou).toContain(
+      'and, for that warehouse, items you start an order with from Items wait until then.',
+    );
+    // The cart draft is the signed-in account's (order-draft:v2:<user>:)
+    // since #316; before it, the next person on a shared browser opened the
+    // last person's cart.
+    expect(storefront).toContain('draftPrefix={orderDraftPrefixFor(props.viewerUserId)}');
+    expect(once!.howItAffectsYou).toContain(
+      'Your cart and the pending order request are kept only for your account and organization on that browser: someone else who signs in there starts with their own cart and never sees or sends your request',
+    );
+    // The review lists the items; the reason for each is on its cart line.
+    expect(refusals!.whatChanged).toMatch(/^When an order request can't be placed, the page now says why, in place: /);
+    const cart = readFileSync(
+      resolve(__dirname, '../../components/orders/storefront/storefront-cart.tsx'),
+      'utf8',
+    );
+    expect(cart).toContain('{orderItemRefusalCopy(refused, item?.name ?? line.itemId)}');
+    // The success sentence names who hears about the order, Pick up at no
+    // longer promises a ready time, and approvers are offered Review and
+    // approve (orders:approve, not a viewer).
+    const overlays = readFileSync(
+      resolve(__dirname, '../../components/orders/storefront/storefront-overlays.tsx'),
+      'utf8',
+    );
+    expect(overlays).toContain('successSentForApprovalCopy(submitted.order.requestedFor)');
+    expect(overlays).toContain('{submitted && canApproveOrders && (');
+    expect(storefront).toContain('{storefrontPickupHintCopy(warehouseName)}');
+    const page = readFileSync(
+      resolve(__dirname, '../../app/(dashboard)/dashboard/orders/new/page.tsx'),
+      'utf8',
+    );
+    expect(page).toContain("canApproveOrders={can(ctx, 'orders:approve') && ctx.role !== 'viewer'}");
+    expect(labels!.whatChanged).toContain(
+      'After you submit, the page says who hears about it (on an order for someone else, emails about it go to that person) and, if you approve orders, offers Review and approve. Pick up at no longer promises a time it will be ready.',
+    );
+    expect(labels!.howItAffectsYou).toContain('such as For and Pickup or delivery in the setup bar');
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/business day|You'll get an email/);
   });
 });
 

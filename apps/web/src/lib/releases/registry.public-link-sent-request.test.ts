@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,10 +27,10 @@ import { RELEASES } from './registry';
  * checks: the module, and Manage public links or organization:update.
  *
  * Held as a DRAFT until the web deploy was live (web build 78fd7fb5eea3,
- * 2026-10-06 06:24:42Z). docs/whats-new-dates-link-submit publishes it, the
- * newest release, a minute after the dates fixes release. It was not
- * exercised in production (Demo Co has no public order link); the evidence
- * is #336's own test.
+ * built 2026-10-06 06:24:42Z, live 06:25:18Z).
+ * docs/whats-new-dates-link-submit publishes it, the newest release, a
+ * minute after the dates fixes release. It was not exercised in production
+ * (Demo Co has no public order link); the evidence is #336's own test.
  */
 const ID = 'public-link-sent-request-2026-10';
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -87,11 +90,14 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(registryFingerprint(RELEASES)).not.toBe(
       registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
     );
-    // A real time on a whole minute, after the web deploy (06:24:42Z) and
-    // a minute after the dates fixes release published with it: never the
+    // A real time on a whole minute, after the web deploy went live and a
+    // minute after the dates fixes release published with it: never the
     // draft's placeholder date (2026-10-15T17:00Z).
+    // Re-pinned by the claims review of #339 (2026-10-06; was: after
+    // 06:24:42Z, the build's builtAt): the build went live at 06:25:18Z,
+    // when Vercel marked it READY and assigned the alias.
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
-    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T06:24:42Z'));
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T06:25:18Z'));
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-07T00:00:00Z'));
   });
 
@@ -140,5 +146,24 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(entry.area).toBe('Public requests');
     expect(text).not.toMatch(/localStorage|local storage|\bkey\b|\bdraft\b|debounce|\bcache|cookie|\d+ ?ms\b/i);
     expect(r.summary).toContain('for the same warehouse');
+  });
+
+  // Claims review of #339 (2026-10-06): the page has two notes fields. Only
+  // the cart's Notes is kept with the request (the whole cart is saved once
+  // it holds anything, its Delivery choice too); the Your info card's Name,
+  // Email, Phone and Pickup notes are the page's own state, never kept.
+  it("names the notes that are kept, Notes, and says nothing under Your info is, Pickup notes included", () => {
+    const howItAffectsYou = release().entries[0]!.howItAffectsYou;
+    expect(howItAffectsYou).toContain(
+      'its items, its Notes, its Delivery choice and its delivery site are kept on that browser until it is sent (what is typed under Your info, including Pickup notes, never is)',
+    );
+    const dir = resolve(__dirname, '../../components/orders/public-v2');
+    const page = readFileSync(resolve(dir, 'public-orders-v2.tsx'), 'utf8');
+    expect(page).toContain("const [pickupNotes, setPickupNotes] = React.useState('');");
+    const card = readFileSync(resolve(dir, 'public-your-info-card.tsx'), 'utf8');
+    expect(card).toContain('<UserRound size={15} /> Your info');
+    expect(card).toContain('Pickup notes <span className="opt">Optional</span>');
+    const rail = readFileSync(resolve(dir, 'public-cart-rail.tsx'), 'utf8');
+    expect(rail).toContain("onChange={(e) => dispatch({ type: 'set-notes', value: e.target.value })}");
   });
 });
