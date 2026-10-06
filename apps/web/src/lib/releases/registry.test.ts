@@ -604,7 +604,11 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -784,7 +788,11 @@ describe('F2-1 (order readiness) is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1049,7 +1057,11 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1320,7 +1332,11 @@ describe('Book Order Totals is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1432,7 +1448,11 @@ describe('the report scope release is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1500,7 +1520,11 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1625,7 +1649,11 @@ describe('the ended-session fix on exceptions is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the count confirm's and
     // F2-5's.
@@ -1750,7 +1778,11 @@ describe('count differences release 2 (confirm this count) is published', () => 
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-5's and F2-4's.
     const newer = Object.fromEntries(
@@ -1939,7 +1971,11 @@ describe('approval follows the permission is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and slice B's two.
     const newer = Object.fromEntries(
@@ -2169,7 +2205,11 @@ describe('account deletion for people who placed orders is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the refusal's and the
     // session-ended fix's.
@@ -2329,7 +2369,11 @@ describe('a refused account deletion says why, and is published with the account
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the session-ended fix's and
     // the count confirm's.
@@ -2472,7 +2516,11 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-4's and Book Order Totals
     // by charter's.
@@ -2638,7 +2686,11 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -2760,7 +2812,11 @@ describe('the small-fixes release is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2966,7 +3022,11 @@ describe('Book Order Totals by charter and dates is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3099,7 +3159,11 @@ describe('count differences say what clears them (release 1) is published', () =
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3232,7 +3296,11 @@ describe('the Sports required details release is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3345,7 +3413,11 @@ describe('order secrets slice B (a digital signature on the order timeline) is p
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, the signature image release
     // and the account deletion release.
@@ -3481,7 +3553,11 @@ describe('the signature image in the mobile app is for approvers and the driver,
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and the two account deletion
     // releases.
@@ -3595,7 +3671,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is a draft above every published release (the weekly digest release, the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the public link and dates fixes drafts, dated after every release but those two', () => {
+  it('is a draft above every published release (slice 2\'s release, the weekly digest release, the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the public link and dates fixes drafts, dated after every release but those two', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
@@ -3631,13 +3707,18 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // partial-approval draft).
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
     // dates fixes draft, this one and the partial-approval draft).
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // the public link draft, the dates fixes draft, this one and the
+    // partial-approval draft): it is published now, so three drafts remain.
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
       ID,
-      'order-partial-approval-held-2026-10',
     ]);
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // without it): it is one of the published releases below this draft.
     for (const id of [
+      'order-partial-approval-held-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
       'small-fixes-2026-10',
@@ -3651,7 +3732,11 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(i, id).toBeGreaterThan(at);
       expect(RELEASES[i]?.status, id).toBe('published');
     }
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was: the
+    // partial-approval draft, right below this one): the same release, now
+    // published, the newest published release, directly below the drafts.
     expect(RELEASES[at + 1]?.id).toBe('order-partial-approval-held-2026-10');
+    expect(RELEASES[at + 1]?.status).toBe('published');
     // Re-pinned by the publishing of the weekly digest release (2026-10-06;
     // was: the Items first-paint release, then the small fixes, below the
     // partial-approval draft): the weekly digest release sits between them.
@@ -3747,7 +3832,11 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, returns RX-1's and account
     // deletion for every member.
@@ -3799,11 +3888,14 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
       'items-list-first-paint-2026-10',
       'small-fixes-2026-10',
     ]);
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // draft x4, published x3): the partial-approval release is published, in
+    // the same place, so three drafts sit above four published releases.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
       'draft',
       'draft',
       'draft',
-      'draft',
+      'published',
       'published',
       'published',
       'published',
@@ -3971,12 +4063,22 @@ describe('account deletion for every member (slice A3) is published', () => {
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // small-fixes-2026-10): its digest and warehouse entries reach every member,
     // so it is this member's notice too; the small fixes come once it is read,
     // and this one once both are.
+    // Checked again at the publishing of the slice 2 release (2026-10-06):
+    // unchanged, since every entry of that release needs a permission and a
+    // module this member does not have, so it never reaches them.
+    expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(
+      'order-partial-approval-held-2026-10',
+    );
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
       'weekly-digest-and-fixes-2026-10',
     );
@@ -4175,12 +4277,22 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // items-list-first-paint-2026-10): published after it, and every reader sees it.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // small-fixes-2026-10): its digest and warehouse entries reach every member,
     // so it is this reader's notice too; the small fixes come once it is read,
     // and this one once both are.
+    // Checked again at the publishing of the slice 2 release (2026-10-06):
+    // unchanged, since that release's entries need Orders or Receiving, which
+    // this reader does not have, so it never reaches them.
+    expect(visibleReleases(RELEASES, returnsOnly).map((r) => r.id)).not.toContain(
+      'order-partial-approval-held-2026-10',
+    );
     expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(
       'weekly-digest-and-fixes-2026-10',
     );
@@ -4496,8 +4608,18 @@ describe('the small fixes release (slice 1) is published', () => {
     // permission): published after both, its digest and warehouse entries
     // reach every member, so it is the notice for everyone; once it is read, a
     // member with no permission is offered this one.
-    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // weekly-digest-and-fixes-2026-10): published after it, and this reader
+    // (an owner with every module) is told its approval, receiving and item
+    // sheet entries.
+    expect(list.latestUnread?.id).toBe('order-partial-approval-held-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+    // Checked again at the publishing of the slice 2 release (2026-10-06):
+    // unchanged, since none of that release's entries reaches a member with
+    // no permission and no module.
+    expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(
+      'order-partial-approval-held-2026-10',
+    );
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
       'weekly-digest-and-fixes-2026-10',
     );
@@ -4515,11 +4637,18 @@ describe('the small fixes release (slice 1) is published', () => {
     // the weekly digest release, the Items first-paint release and this one.
     // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
     // the Items first-paint release, this one and phone ordering's).
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was: the
+    // weekly digest release, the Items first-paint release and this one): an
+    // owner with every module is told the slice 2 release first, and this one
+    // comes back into the three once that release is seen.
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      'order-partial-approval-held-2026-10',
       'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
-      ID,
     ]);
+    expect(
+      legacyAnnouncementsFor(RELEASES, everyone, { 'order-partial-approval-held-2026-10': true }).map((a) => a.id),
+    ).toEqual(['weekly-digest-and-fixes-2026-10', 'items-list-first-paint-2026-10', ID]);
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     // A real time on a whole minute, after the walk ended (2026-10-05 19:01Z)
@@ -4530,7 +4659,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("sits directly below the Items first-paint release, published later, with the weekly digest release (published later still) and the drafts above both; phone ordering's below it", () => {
+  it("sits directly below the Items first-paint release, published later, with the weekly digest and slice 2 releases (published later still) and the drafts above them; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -4556,11 +4685,14 @@ describe('the small fixes release (slice 1) is published', () => {
       'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
     ]);
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // draft x4, published x2): the partial-approval release is published, in
+    // the same place, below the three drafts.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
       'draft',
       'draft',
       'draft',
-      'draft',
+      'published',
       'published',
       'published',
     ]);
@@ -4904,7 +5036,7 @@ describe('the weekly digest and fixes release', () => {
   };
   const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
 
-  it('is published at a real time after its production checks, below the drafts and directly above the Items first-paint release', () => {
+  it("is published at a real time after its production checks, below the drafts and slice 2's release and directly above the Items first-paint release", () => {
     // Re-pinned by the publishing of the weekly digest release (2026-10-06;
     // was: the newest entry, a draft dated after every release): published,
     // it sits below the drafts (PO-2's and the partial-approval one, dated
@@ -4929,7 +5061,11 @@ describe('the weekly digest and fixes release', () => {
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // every release above this one a draft): the partial-approval release is
+    // published, later, directly above this one, and the three drafts above it.
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
+    expect(RELEASES[at - 1]?.id).toBe('order-partial-approval-held-2026-10');
     expect(RELEASES[at + 1]?.id).toBe('items-list-first-paint-2026-10');
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4939,14 +5075,32 @@ describe('the weekly digest and fixes release', () => {
     }
   });
 
-  it('reaches every member, so every feed carries it and it is the notice for everyone', () => {
+  it("reaches every member, so every feed carries it; it is the notice for everyone slice 2's release does not reach, and for the rest once that one is read", () => {
     // Re-pinned by the publishing of the weekly digest release (2026-10-06;
     // was: a draft no feed carried): the digest and warehouse entries have no
     // audience, so a member with no permission and no module is told too.
     for (const viewer of [everyone, member]) {
       expect(visibleReleases(RELEASES, viewer).map((r) => r.id)).toContain(ID);
-      expect(buildReleaseList(RELEASES, viewer, [], null).latestUnread?.id).toBe(ID);
     }
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // this one, for both readers): published later, it is the notice for an
+    // owner with every module, and this one comes once it is read. A member
+    // with no permission and no module is not told the slice 2 release, so
+    // this one stays their notice.
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'order-partial-approval-held-2026-10',
+    );
+    const slice2Read = [
+      {
+        release_id: 'order-partial-approval-held-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-06T12:00:00Z',
+        read_at: '2026-10-06T12:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, everyone, slice2Read, null).latestUnread?.id).toBe(ID);
     expect(visibleReleases(RELEASES, member).find((r) => r.id === ID)!.entries.map((e) => e.id)).toEqual([
       'weekly-digest-sent',
       'weekly-digest-your-view',
@@ -5095,7 +5249,7 @@ describe('the Items first-paint release', () => {
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is published at a real time after its production check, below the drafts and the weekly digest release, directly above the small fixes', () => {
+  it("is published at a real time after its production check, below the drafts, slice 2's release and the weekly digest release, directly above the small fixes", () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     // A whole minute after the production check of #328 ended (2026-10-05
@@ -5118,11 +5272,14 @@ describe('the Items first-paint release', () => {
       'order-partial-approval-held-2026-10',
       'weekly-digest-and-fixes-2026-10',
     ]);
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was:
+    // draft x4, published x1): the partial-approval release is published, in
+    // the same place, so three drafts sit above two published releases.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
       'draft',
       'draft',
       'draft',
-      'draft',
+      'published',
       'published',
     ]);
     for (const r of RELEASES.slice(0, at)) {
@@ -5222,33 +5379,95 @@ describe('the Items first-paint release', () => {
  * index. The publishing follow-up sets 'published' and the real publishedAt,
  * re-reads the words against what shipped, and flips the first pin here.
  */
-describe('a partly approved order says what is held (small fixes slice 2) is held as a draft', () => {
+/**
+ * Small fixes slice 2 (migration 0395, #329) was held as a DRAFT until 0395
+ * was pushed (2026-10-05 22:42:30Z), the web deploy was live (web build
+ * e5f58d5f739e), phones launched the over-the-air update carrying the phone
+ * half (OTA group 8a41e9eb, iOS update 01a10e3e: 2 launches, 0 failed) and
+ * the Demo Co production walk (69 checks passed) was confirmed by its
+ * independent audit (2026-10-06 ~03:50Z). This follow-up publishes it, below
+ * the drafts and directly above the weekly digest release, and re-reads its
+ * words against what shipped. Pinned by id, never by index.
+ *
+ * Re-pinned by the publishing of the slice 2 release (2026-10-06; was: "a
+ * partly approved order says what is held (small fixes slice 2) is held as a
+ * draft"): the release is published, and its words say "reserved".
+ */
+describe('a partly approved order says what is reserved (small fixes slice 2) is published', () => {
   const ID = 'order-partial-approval-held-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
+  const entryById = (id: string) => release().entries.find((e) => e.id === id)!;
   const everyone: ReleaseViewer = {
     role: 'owner',
     permissions: [...PERMISSIONS],
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+  // Re-pinned by the publishing of the slice 2 release (2026-10-06; was: "is
+  // a draft, so no feed carries it, and preparing it changes nothing a client
+  // can observe": a draft, in no feed, no legacy list and no fingerprint).
+  it('is published after 0395, the web deploy, the phone update, the Demo Co walk and its audit, so every feed it reaches carries it', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
+    // The newest published release, so it is the notice for whoever it
+    // reaches: an owner with every module, and a requester. A member with no
+    // permission and no module is not told it, so their notice stays the
+    // weekly digest release's.
+    expect(list.latestUnread?.id).toBe(ID);
+    const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['orders'] };
+    expect(buildReleaseList(RELEASES, requester, [], null).latestUnread?.id).toBe(ID);
+    const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+    expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
+    // An old phone build lists at most three unread releases, newest first,
+    // showing only the title and the summary (no link: no entry has one).
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      ID,
+      'weekly-digest-and-fixes-2026-10',
+      'items-list-first-paint-2026-10',
+    ]);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-06',
+      title: release().title,
+      body: release().summary,
+    });
+    // Publishing it changes what clients observe.
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    // A real time on a whole minute, after the walk's independent audit
+    // confirmed it (2026-10-06 ~03:50Z): never the draft's placeholder date
+    // (2026-10-10T17:10Z).
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T03:50:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-07T00:00:00Z'));
   });
 
-  it('sits among the drafts above every published release, dated after every published release and before the drafts above it', () => {
+  // Re-pinned by the publishing of the slice 2 release (2026-10-06; was: "sits
+  // among the drafts above every published release, dated after every
+  // published release and before the drafts above it"): published, it stays
+  // where it was, now the newest published release, below the three drafts.
+  it('sits below the drafts and directly above the weekly digest release, the newest published release, dated after every release below it and before the drafts above it', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at + 1).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'public-link-sent-request-2026-10',
+      'dates-fixes-2026-10',
+      'order-submit-once-2026-10',
+    ]);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES[at + 1]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
-    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -5289,9 +5508,11 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
       modules: ['orders'],
     });
     expect(r.entries[2]!.audience).toEqual({ anyPermission: ['purchase_orders:read'], modules: ['receiving'] });
-    const published: Release = { ...r, status: 'published' };
+    // Re-pinned by the publishing of the slice 2 release (2026-10-06; was: a
+    // copy forced to published): the release itself is published now.
+    expect(r.status).toBe('published');
     const idsFor = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['orders']) =>
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+      visibleReleases([r], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
     expect(idsFor('viewer', ['orders:request'])).toEqual(['order-partial-approval-held', 'app-order-item-refusals']);
     expect(idsFor('staff', ['orders:request', 'orders:approve'])).toEqual([
       'order-partial-approval-held',
@@ -5333,6 +5554,22 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     expect(entry.whatChanged).toMatch(/mobile app/);
     expect(entry.whatToDo).toContain('close the app completely and open it again');
     expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|ApiError|status code|403|409/i);
+    // Publish re-read (2026-10-06): the fix is the phone's own code, so it
+    // shows only after the latest update. A quantity does not "stay open":
+    // the sheet does, when another quantity fixes the change (a floor's 409
+    // keeps it open; 401, 403 and 404 close it with the reason in an alert).
+    // Its two examples are the server's own refusals.
+    expect(entry.title).toMatch(/^The mobile app says why/);
+    expect(entry.whatChanged).toMatch(/^In the mobile app, after the latest update, /);
+    expect(entry.whatChanged).toContain('When a different quantity would fix it, the sheet stays open and shows the reason.');
+    expect(entry.whatChanged).not.toContain('A quantity you can fix stays open');
+    expect(sheet).toContain('return status === 401 || status === 403 || status === 404;');
+    const helpers = readFileSync(resolve(__dirname, '../../../../mobile/src/components/add-order-items.ts'), 'utf8');
+    expect(helpers).toContain("if (e instanceof Error && e.name === 'ApiError') {");
+    const svc = readFileSync(resolve(__dirname, '../../server/services/order-requests.ts'), 'utf8');
+    expect(svc).toContain("`${it.name} isn't stocked at this order's warehouse.`");
+    expect(svc).toContain('of these are already picked and staged');
+    expect(entry.whatChanged).toContain('for example that units are already picked or that an item is not stocked at that warehouse');
   });
 
   it("says receiving follows the permission it needs, in the server's words, and that nothing changes in who can receive", () => {
@@ -5344,6 +5581,34 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     expect(entry.howItAffectsYou).toContain('Nothing changes in who can receive');
     expect(entry.whatToDo).toContain('close the app completely and open it again');
     expect(readerText({ ...release(), entries: [entry] }).join(' ')).not.toMatch(/\bbook\b|stock:adjust|database/i);
+    // Publish re-read (2026-10-06): the phone's half is its own code, so each
+    // phone sentence says "after the latest update". The note shows on a
+    // purchase order that is ready to receive (the web page's receivableHere,
+    // the phone's outstanding lines on a PO that is not a draft), not on every
+    // one. Reverse is the web's and stays with managers and up. The refusal
+    // began "Missing permission" (assertPermission's words, then the key).
+    // The phone's button is Transfer / put away, and the permission alone
+    // now decides it, for admins too.
+    expect(entry.whatChanged).toContain(
+      'and so do Scan, the quantities and Post receipt in the mobile app after the latest update.',
+    );
+    expect(entry.whatChanged).toContain('a purchase order ready to receive');
+    expect(entry.whatChanged).toContain('On the web, Reverse on a receipt shows only with it too.');
+    expect(entry.whatChanged).toContain(
+      'In the mobile app, after the latest update, Transfer / put away follows the Transfer stock permission for admins and managers too.',
+    );
+    expect(entry.howItAffectsYou).toContain('on the web now and in the mobile app after the latest update');
+    expect(entry.whyItMatters).toContain('a message that began "Missing permission"');
+    const page = readFileSync(resolve(__dirname, '../../app/(dashboard)/dashboard/purchase-orders/[id]/page.tsx'), 'utf8');
+    expect(page).toContain('const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;');
+    expect(page).toContain("const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;");
+    const context = readFileSync(resolve(__dirname, '../../server/services/context.ts'), 'utf8');
+    expect(context).toContain("throw new ServiceError('forbidden', `Missing permission: ${permission}`);");
+    const po = readFileSync(resolve(__dirname, '../../../../mobile/app/po/[id].tsx'), 'utf8');
+    expect(po).toContain('{!reviewOnly && !canReceive && hasOutstanding ? (');
+    const item = readFileSync(resolve(__dirname, '../../../../mobile/app/item/[id].tsx'), 'utf8');
+    expect(item).toContain("const canTransfer = showWriteCtaForRole(role, permissions, 'stock:transfer');");
+    expect(item).toContain('Transfer / put away');
   });
 
   it('quotes the warehouse refusal as the order service says it, names the actions, and says Cancel now follows it', () => {
@@ -5369,6 +5634,27 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     // update (44cad980, 5719842d), so the entry says to load it.
     expect(entry.whatToDo).toBe(
       'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
+    );
+    // Publish re-read (2026-10-06): the web's actions and the phone's are said
+    // apart. The phone shows the server's sentence for its order actions
+    // (runAction; Hold's describeHoldError keeps a sentence), so those say it
+    // since the web deploy; its needed-by check and item sheets are its own
+    // code, so those say it after the latest update. The old messages were
+    // of several kinds (the warehouse's code, "needs write access", Approve
+    // partial and Resume fulfillment's "Try again", the sheets' "did not hear
+    // back"), so the why says "some".
+    expect(entry.whatChanged).toContain('these changes to it on the web now say');
+    expect(entry.whatChanged).toContain(
+      'In the mobile app, Approve, Deny, Cancel, the pick slip, staging, Hold available stock and Claim and Release picking say it too',
+    );
+    expect(entry.whatChanged).toContain('after the latest update so do adding or changing items and the needed-by date');
+    expect(entry.whyItMatters).toContain('some only to try again');
+    expect(entry.whyItMatters).toContain('had not heard back from the server');
+    const order = readFileSync(resolve(__dirname, '../../../../mobile/app/order/[id].tsx'), 'utf8');
+    expect(order).toContain("Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');");
+    const neededBy = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/order-needed-by.ts'), 'utf8');
+    expect(neededBy).toContain(
+      'message: input.isViewer ? NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY : ORDER_WAREHOUSE_WRITE_REFUSED_COPY,',
     );
   });
 
@@ -5403,6 +5689,19 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     expect(text).not.toMatch(/\bheld\b/);
     expect(text).not.toMatch(/\bbook\b|filled automatically|as soon as stock arrives/i);
     expect(entry.whatToDo).toBe('No action needed.');
+    // Publish re-read (2026-10-06): the every-unit case quotes the
+    // notification's own sentence, and the why says what each message said
+    // before 0395 (the notification "Stock has been reserved." on every
+    // approval, the email "every unit"), with part or none reserved.
+    expect(entry.whatChanged).toContain(
+      'When every unit is reserved, the notification still says "Stock has been reserved." and the email that every unit is reserved.',
+    );
+    expect(entry.whatChanged).not.toContain('both still say so');
+    expect(entry.whyItMatters).toContain(
+      'The notification said "Stock has been reserved." and the email said every unit was reserved',
+    );
+    expect(email).toContain('we’ve reserved every unit on this request.');
+    expect(email).toContain('units on this request; the rest is waiting for stock.');
   });
 
   // Review (2026-10-05): "because the rest is not in stock yet" was wrong when
@@ -5417,5 +5716,43 @@ describe('a partly approved order says what is held (small fixes slice 2) is hel
     expect(entry.whatChanged).not.toMatch(/not in stock/i);
     expect(entry.howItAffectsYou).not.toMatch(/order page|where each item stands/i);
     expect(entry.howItAffectsYou).toContain('The rest stays on your order.');
+  });
+
+  // Publish re-read (2026-10-06): the phone half is an over-the-air update,
+  // which loads when the app is opened again with no prompt, so every phone
+  // claim says "after the latest update" where the phone's own code changed,
+  // and each entry with a phone change says how to load it. The summary is
+  // all an old phone build shows, and an order's page says nothing until a
+  // change is refused, so the summary says changes are refused in plain words.
+  it('says every phone change after the latest update, and how to load it', () => {
+    const ota = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/use-ota-updates.ts'), 'utf8');
+    expect(ota).toContain('await Updates.checkForUpdateAsync();');
+    expect(ota).toContain('await Updates.reloadAsync();');
+    // Re-pinned by the claims review (2026-10-06; was: "On the web now, and
+    // in the mobile app after the latest update, Approve and other changes
+    // ... and receiving is offered only to people who can receive stock."):
+    // the phone's Approve shows the server's sentence without the update
+    // (runAction, unchanged by #329), and the slice gates receiving on Adjust
+    // on-hand only, while posting a receipt also needs manager rank in the
+    // database (0349), so a staff member with default permissions is still
+    // offered it and refused. The summary says only what the slice changed.
+    expect(release().summary).toContain(
+      "Approve and other changes to an order in a warehouse you don't work in are now refused in plain words, and receiving is no longer offered without the Adjust on-hand permission. In the mobile app, the receiving change and the words for changing an order's items or needed-by date come with the latest update.",
+    );
+    expect(release().summary).not.toMatch(/offered only to people who can receive/);
+    expect(release().summary).not.toMatch(/says so in plain words/);
+    const reopen =
+      'No action needed. In the mobile app, close the app completely and open it again to load the latest update.';
+    for (const id of ['order-other-warehouse-words', 'receiving-follows-permission', 'app-order-item-refusals']) {
+      expect(entryById(id).whatToDo, id).toBe(reopen);
+      expect(entryById(id).whatChanged, id).toContain('after the latest update');
+    }
+    // The approval's words come from the database and the server, so its
+    // entry needs no phone update and says none.
+    const approval = entryById('order-partial-approval-held');
+    expect(approval.whatToDo).toBe('No action needed.');
+    for (const text of [approval.title, approval.whatChanged, approval.whyItMatters, approval.howItAffectsYou]) {
+      expect(text).not.toMatch(/update|mobile app/i);
+    }
   });
 });

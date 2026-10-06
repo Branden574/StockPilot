@@ -263,34 +263,87 @@ export const RELEASES: Release[] = [
   {
     id: 'order-partial-approval-held-2026-10',
     revision: 1,
-    // Small fixes slice 2 (migration 0395, L86): a partly approved order's
-    // notification (in the app and as a push) and approval email say what is
-    // reserved, or that nothing is reserved yet, instead of "every unit is
-    // reserved" (review, 2026-10-05: "reserved", the requester's word in the
-    // full approval's notification and in the email; the sentences said
-    // "held", the approver's word). Held as a DRAFT until 0395 is pushed, the
-    // web deploy is live and phones report launching the OTA that carries
-    // the phone half (Post receipt, Transfer and the needed-by sentence; the
-    // push text comes from the database); the follow-up that publishes it
-    // sets the real publishedAt and re-reads these words against what
-    // shipped. The database refusing what the app already refused is not
-    // visible to anyone using the app as intended, so it has no entry.
+    // Small fixes slice 2 (migration 0395, #329). PUBLISHED. 0395 was pushed
+    // to production at 2026-10-05 22:42:30Z and verified (verify-0395 R5: 20
+    // checks ok, no row written); #329 merged at 22:43:09Z as 140aaf08, and
+    // web build e5f58d5f739e went live at 22:43:37Z. The phone half (Scan,
+    // the quantities and Post receipt by permission, Transfer / put away by
+    // permission, the needed-by refusal and the item sheets' reasons) is OTA
+    // group 8a41e9eb from main 140aaf08: its iOS update 01a10e3e launched 2
+    // times for 2 users, 0 failed (eas update:insights, read 2026-10-06 after
+    // 06:00Z). Group 3dd13741 (iOS 01a10fd0, published 06:05Z from main
+    // 7cbf73b4) carries the same phone code. The Demo Co production walk
+    // passed 69 checks (its one FAIL line was the walk script reading the
+    // realtime toast first, corrected from the screenshot): SO-000026, 5
+    // asked of an item with 3 on hand, approved in part with a hold of 3 and
+    // no movement; the requester's notification read exactly "Part of your
+    // order is reserved; the rest is waiting for stock." on the web, and in
+    // the iPhone's inbox on the published bundle at the large size and at
+    // AX5; the order was cancelled with a reason, its hold released and no
+    // movement written; a soft delete of an item holding stock was refused
+    // (23514, item_holds_stock) and changed nothing; and the iPhone offered
+    // an admin receiving and Transfer / put away at both sizes. The
+    // independent audit CONFIRMED the walk (verify-0395 R8, 2026-10-06
+    // ~03:50Z). Published after all of them, below the drafts (the public
+    // link, dates fixes and PO-2 drafts, dated later) and directly above the
+    // weekly digest release (05:18Z), newest first.
     //
-    // Review (2026-10-05): the slice's review fixes are visible too (the one
-    // sentence for an order in another warehouse, Cancel following it, and
-    // receiving offered only to readers with stock:adjust), so the release
-    // covers the slice and, as the slice 1 release does, each entry carries
-    // its own audience and the release none: a reader sees the release only
-    // when an entry is theirs. It sits below the Items first-paint, weekly
-    // digest and phone ordering PO-2 drafts, dated before them, and above the
-    // small fixes (slice 1) release, published 2026-10-05, dated after every
-    // published release (it can ship before or after those drafts; the
-    // publishing follow-up keeps the order newest first).
-    status: 'draft',
-    title: 'Clearer order approvals and refusals, and receiving for those who can',
+    // Its words were re-read against what shipped. Demo Co has only admin
+    // and owner accounts, so what staff, viewers and members with a
+    // permission removed see rests on the local walks (six/s2-test: c06,
+    // c06b, c08, s2r-c10, s2r-c10b, s2r-c11, s2r-c12 and the iPhone and iPad
+    // simulators) and on the code. The approval email is not visible in
+    // production (nothing logs a sent one), so its words rest on s2r-c12 and
+    // the email's code. Corrected at publish:
+    // - The phone: its half is an over-the-air update, which loads when the
+    //   app is opened again, so the summary and the warehouse, receiving and
+    //   item sheet entries say "after the latest update" wherever the phone's
+    //   own code changed (the needed-by check, the item sheets, Scan, the
+    //   quantities and Post receipt, Transfer / put away). The phone's
+    //   Approve, Deny, Cancel, pick slip, staging, Hold, Claim and Release
+    //   show the server's sentence, so they say it since the web deploy.
+    // - The summary: an order's page says nothing until a change is refused,
+    //   so it says Approve and other changes are refused in plain words, not
+    //   that the order "says so".
+    // - The approval: before 0395 the notification said "Stock has been
+    //   reserved." and the email that every unit was reserved, with part or
+    //   none reserved, so the why quotes the one and says the other, and the
+    //   every-unit case quotes the notification instead of "both still say so".
+    // - The warehouse words: the web's actions and the phone's are said
+    //   apart. The why said the old messages named the warehouse's code or
+    //   said write access was needed; Approve partial and Resume fulfillment
+    //   on the web also said only "The order could not be updated. Try
+    //   again." (the actions answered the refusal as internal_error) and the
+    //   phone's item sheets that they had not heard back, so it says some did
+    //   each.
+    // - Receiving: the note shows instead of the controls on a purchase order
+    //   ready to receive (the web: ordered, expected or partly received, with
+    //   a destination; the phone: not a draft, something left to receive),
+    //   not on every one; Reverse is on the web only and stays with managers
+    //   and up, so it "shows only with it too" rather than "follows the same
+    //   permission"; the refusal read "Missing permission: stock:adjust", so
+    //   the words say it began "Missing permission"; the phone's button is
+    //   Transfer / put away, and an admin whose Transfer stock was removed no
+    //   longer sees it either. The schema's 600 characters for What changed
+    //   leave "on an item" out: the button is on the item screen only.
+    // - The item sheets: the sheet stays open when another quantity would fix
+    //   the change (a quantity does not "stay open").
+    //
+    // Who is told, per entry (no release-level audience, so a reader sees
+    // the release only when an entry is theirs): the approval to anyone who
+    // can place an order request (Orders on, orders:request); the warehouse
+    // words to staff, the only role that works in some warehouses, who
+    // approve (orders:approve) or pick (items:update), Orders on; receiving to
+    // readers of purchase orders where Receiving is on (Transfer rides
+    // along); the item sheets to whoever can change an order's items in the
+    // app, its requester or an approver (orders:request or orders:approve),
+    // Orders on. The database refusing what the app already refused is not
+    // visible to anyone using the app as intended, so it has no entry.
+    status: 'published',
+    title: 'Clearer order approvals and refusals, and receiving only with the permission it needs',
     summary:
-      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. An order in a warehouse you don't work in says so in plain words, and receiving is offered only to people who can receive stock.",
-    publishedAt: '2026-10-10T17:10:00Z',
+      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. Approve and other changes to an order in a warehouse you don't work in are now refused in plain words, and receiving is no longer offered without the Adjust on-hand permission. In the mobile app, the receiving change and the words for changing an order's items or needed-by date come with the latest update.",
+    publishedAt: '2026-10-06T06:42:00Z',
     entries: [
       {
         id: 'order-partial-approval-held',
@@ -303,9 +356,9 @@ export const RELEASES: Release[] = [
         // not where each item stands (that is the approver's, picker's and
         // buyer's view), while this entry is told to every requester.
         whatChanged:
-          'When your order request is approved but only part of it can be reserved, because the rest isn\'t available yet, the notification now says "Part of your order is reserved; the rest is waiting for stock." When none of it can be reserved yet, it says "Nothing is reserved yet; your order is waiting for stock." The approval email says how many units are reserved, for example 6 of 8, and that the rest is waiting for stock, or that nothing is reserved yet. When every unit is reserved, both still say so.',
+          'When your order request is approved but only part of it can be reserved, because the rest isn\'t available yet, the notification now says "Part of your order is reserved; the rest is waiting for stock." When none of it can be reserved yet, it says "Nothing is reserved yet; your order is waiting for stock." The approval email says how many units are reserved, for example 6 of 8, and that the rest is waiting for stock, or that nothing is reserved yet. When every unit is reserved, the notification still says "Stock has been reserved." and the email that every unit is reserved.',
         whyItMatters:
-          'Both used to say every unit was reserved even when only part was, so you could expect the whole order when only part of it was set aside for you.',
+          'The notification said "Stock has been reserved." and the email said every unit was reserved, even when only part of your order was reserved or none of it was, so you could expect the whole order when it had not all been set aside for you.',
         howItAffectsYou: 'Nothing changes in how orders are approved or picked. The rest stays on your order.',
         whatToDo: 'No action needed.',
         // The requester receives both messages: anyone who can place an
@@ -329,9 +382,9 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Plain words for an order in another warehouse',
         whatChanged:
-          'If you work in only some of your organization\'s warehouses and open an order from another one, every change to it now says "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask a manager.": Approve, Deny, Cancel, notes, the pick slip, staging, adding or changing items, Hold available stock and the needed-by date. In the mobile app, so do Claim and Release picking.',
+          'If you work in only some of your organization\'s warehouses and open an order from another one, these changes to it on the web now say "This order is in a warehouse you don\'t work in, so you can\'t change it. Ask a manager.": Approve, Deny, Cancel, notes, the pick slip, staging, adding or changing items, Hold available stock and the needed-by date. In the mobile app, Approve, Deny, Cancel, the pick slip, staging, Hold available stock and Claim and Release picking say it too, and after the latest update so do adding or changing items and the needed-by date.',
         whyItMatters:
-          'The old messages named the warehouse by a long internal code, or said only that write access was needed, and none said who could help. Cancel did not check the warehouse at all.',
+          'Some old messages named the warehouse by a long internal code, some said only that write access was needed and some only to try again. In the mobile app, adding or changing items said it had not heard back from the server. None said who could help, and Cancel did not check the warehouse at all.',
         howItAffectsYou:
           'If you approve orders, Cancel now follows the same rule as Approve: you can cancel an order only in a warehouse you work in. An order you placed yourself can still be cancelled while it waits for approval.',
         whatToDo:
@@ -347,18 +400,24 @@ export const RELEASES: Release[] = [
         // and 1 staff member without stock:adjust, each refused with "Missing
         // permission". The phone's Transfer also showed for a manager whose
         // stock:transfer was revoked (0 in production). Told to everyone who
-        // reads purchase orders where Receiving is on, since that is where the
-        // note appears; Transfer rides along (managers read purchase orders).
+        // reads purchase orders where Receiving is on, since posting a receipt
+        // needs the Receiving module; Transfer rides along (managers read
+        // purchase orders). Claims review (2026-10-06): posting also needs
+        // manager rank in the database (0349, has_org_role 'manager'), which
+        // these gates do not check, so a staff member with default
+        // permissions is still offered Receive and refused; the words claim
+        // only the Adjust on-hand gate. The receiving checklist slice (F4-1)
+        // gates Receive on that rank too.
         id: 'receiving-follows-permission',
         category: 'fixed',
         area: 'Receiving',
-        title: 'Receiving shows only to people who can receive',
+        title: 'Receiving is no longer offered without Adjust on-hand',
         whatChanged:
-          'On a purchase order, Receive items on the web, and Scan, the quantities and Post receipt in the mobile app, now show only if you have the Adjust on-hand permission, which receiving needs. Without it, the purchase order lists what was ordered and received and says "Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it." Reverse on a receipt follows the same permission. In the mobile app, Transfer on an item now follows the Transfer stock permission for managers too.',
+          'On a purchase order, Receive items on the web now shows only with the Adjust on-hand permission, which receiving needs, and so do Scan, the quantities and Post receipt in the mobile app after the latest update. Without it, a purchase order ready to receive shows "Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it." instead, and still lists what was ordered and received. On the web, Reverse on a receipt shows only with it too. In the mobile app, after the latest update, Transfer / put away follows the Transfer stock permission for admins and managers too.',
         whyItMatters:
-          'Everyone who could open a purchase order was offered receiving, and the receipt was then refused with "Missing permission".',
+          'Everyone who could open a purchase order was offered receiving, and without Adjust on-hand the receipt was then refused with a message that began "Missing permission". In the mobile app, an admin or manager without Transfer stock was offered Transfer / put away and refused the same way.',
         howItAffectsYou:
-          'Nothing changes in who can receive: only people who could post a receipt see the buttons now.',
+          'Nothing changes in who can receive. Without Adjust on-hand you no longer see these buttons, on the web now and in the mobile app after the latest update.',
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
@@ -374,9 +433,9 @@ export const RELEASES: Release[] = [
         id: 'app-order-item-refusals',
         category: 'fixed',
         area: 'Orders',
-        title: 'The app says why a change to an order’s items was refused',
+        title: "The mobile app says why a change to an order's items was refused",
         whatChanged:
-          'In the mobile app, when you add items to an order or change or remove a line and the change is refused, the app now shows the reason, for example that units are already picked or that an item is not stocked at that warehouse. A quantity you can fix stays open in the sheet with the reason under it.',
+          'In the mobile app, after the latest update, when you add items to an order or change or remove a line and the change is refused, the app shows the reason, for example that units are already picked or that an item is not stocked at that warehouse. When a different quantity would fix it, the sheet stays open and shows the reason.',
         whyItMatters:
           'The app said it did not hear back from the server and that the change might already have been applied, even though the server had answered and nothing had changed.',
         howItAffectsYou: 'Nothing changes in what you can add or change: only the message is right now.',
