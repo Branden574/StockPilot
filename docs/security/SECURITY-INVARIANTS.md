@@ -820,8 +820,11 @@ actually fire.
     cancelled return. The same trigger refuses `cancelled` and `denied`
     unless the RMA's functions set the transaction-bound flag
     `stockpilot.return_exchange` (`replacement_cancel_via_return`), so a
-    requester or a manager cancelling from the order page is refused and the
-    RMA stays in step. A replacement already picked is cancelled through
+    manager cancelling from the order page is refused and the RMA stays in
+    step; the requester's own cancel is refused one step earlier by
+    `cancel_order_request`'s pending-approval window (0395,
+    `requester_pending_only`), since a replacement is approved in the
+    transaction that creates it. A replacement already picked is cancelled through
     `cancel_order_request`'s drawn branch (the batch back to Staging, holds
     released); one handed over is never cancelled (`replacement_handed_over`).
   - **Fixed lines.** `trg_zz_order_request_lines_replacement_guard`

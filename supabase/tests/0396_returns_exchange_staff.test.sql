@@ -320,7 +320,16 @@ insert into public.inventory_items
   (:itZ, :orgZ, :whZ, '0396-Z',   'Zed shirt',   2, 7, 'active', 'none', null, null, null),
   (:zM,  :orgZ, :whZ, '0396-Z-M', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'M', 'M'),
   (:zL,  :orgZ, :whZ, '0396-Z-L', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'L', 'L');
+-- Since 0395 (small fixes slice 2, L15) an item holding stock cannot be
+-- soft-deleted (trg_zz_inventory_items_no_delete_with_stock). The deleted
+-- item here keeps its 2 units on record on purpose: it stands for a row
+-- deleted before 0395 (production keeps 11, with 78 units), the case where
+-- free stock would otherwise look positive, so the guard is off for this
+-- one statement (0394's I5 does the same). The exchange still refuses it
+-- (T1, exchange_item_not_eligible).
+alter table public.inventory_items disable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set deleted_at = now() where id = :itDel;
+alter table public.inventory_items enable trigger trg_zz_inventory_items_no_delete_with_stock;
 update public.inventory_items set is_rental = true where id = :itRent;
 update public.inventory_items set awaiting_first_receipt = true where id = :itAwait;
 update public.inventory_items set is_bundle = true where id = :itKit;
@@ -1671,11 +1680,19 @@ select is(
   'L4: an old tab''s raw status change on an RMA with an exchange is refused (the returns API guard''s RX-2 clause): only the functions keep the replacement in step');
 
 -- ══ Q. The cancel guard ═══════════════════════════════════════════════════
+-- Re-derived on 0395 (small fixes slice 2, N1; was the guard's answer for
+-- both callers): cancel_order_request now refuses the requester's own cancel
+-- past pending approval itself (42501 requester_pending_only), before its
+-- UPDATE reaches the guard, and a replacement is approved in the transaction
+-- that creates it, so the requester always meets that window first. Both
+-- callers are still refused and nothing changes; the manager, whom the window
+-- lets through, meets the guard. The web service refuses a replacement's
+-- cancel with the guard's words before calling, and the phone offers none.
 select is(
   pg_temp.attempt('authenticated', :req, format($q$select public.cancel_order_request(%L, 'Changed my mind')$q$, pg_temp.live(:'rB0')))
   || ' | ' || pg_temp.attempt('authenticated', :mgr, format($q$select public.cancel_order_request(%L, 'From the order page')$q$, pg_temp.live(:'rB0'))),
-  '42501:replacement_cancel_via_return:replacement_cancel_via_return | 42501:replacement_cancel_via_return:replacement_cancel_via_return',
-  'Q1: neither the requester nor a manager cancels a replacement from the order: only its RMA does (plan 3.6.5)');
+  '42501:requester_pending_only:forbidden | 42501:replacement_cancel_via_return:replacement_cancel_via_return',
+  'Q1: neither the requester nor a manager cancels a replacement from the order: only its RMA does (plan 3.6.5; the requester meets 0395''s window first)');
 select is(
   pg_temp.attempt('authenticated', :mgr, format('select public.cancel_order_request(%L)', pg_temp.live(:'rB0')),
                   $q$select set_config('stockpilot.return_exchange', 'on', true)$q$)
@@ -1895,25 +1912,41 @@ select is(
   'M1: declining an exchange, changing or cancelling a replacement needs a reason; an unknown exchange action is refused');
 
 -- ══ F. Frozen bodies, stock, the organization delete ══════════════════════
+-- Re-derived on 0395 (small fixes slice 2, production head since
+-- 2026-10-05 22:42Z; was the four 0394-era values named below), each
+-- unchanged by RX-2:
+--   _notify_order_request_changes (was a223ae83810149728156b8e299c7425e):
+--     the approved ping says when only part is held (0395 R4); a
+--     replacement never reaches it (the WHEN split, L1 and N2).
+--   cancel_order_request (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the
+--     requester cancels only at pending approval and the restocks carry the
+--     order (0395 R1); every RX-2 cancel runs with orders:approve, so the
+--     window never refuses it, and the restocks put stock back (quantity >
+--     0), which no pick read here matches.
+--   reopen_picking (was 293ce0e76d195bb13105cfd1c067de82): its movements
+--     carry the order (0395 R2); RX-2 never calls it.
+--   confirm_physical_signature (was f7a14a46d2c70f635c3da844c786ce67): the
+--     driver branch needs a member with Orders on (0395 R3); the hand-overs
+--     here sign as a manager, a branch 0395 left unchanged.
 select is(
   (select coalesce(string_agg(x.sig, ','), '')
      from (values
-       ('public._notify_order_request_changes()',                 'a223ae83810149728156b8e299c7425e'),
+       ('public._notify_order_request_changes()',                 '438e676429dda6fb9d2b8faee8d6dd59'),
        ('public._validate_order_request_status_transition()',     'dee8cd4782ec83abdb31a2b48fcd4ef2'),
        ('public.create_order_request(jsonb,jsonb)',               '4d65cef6c569a8c2c699fd9d5c8b77d5'),
        ('public.tg_order_requests_insert_guard()',                'caf69f8a23d03b9bfa6ea87a9cf94077'),
        ('public.tg_order_request_lines_guard()',                  'd899924c0f8fc1dfae4e8be7bd4c5cad'),
        ('public.tg_order_requests_workflow_guard()',              '55bceafc13d599f8d77d6a4180c28140'),
        ('public.approve_partial(uuid)',                           '40ca0878733b08a649773fe9b7efd4e0'),
-       ('public.cancel_order_request(uuid,text)',                 '47cabcd1fe4f52fb7b2b6b6b64b68da1'),
+       ('public.cancel_order_request(uuid,text)',                 '535fc49935f15adc8d7dfa78836a06af'),
        ('public.complete_picking(uuid)',                          'b8f1ef1fb01efa5c04c916c178129541'),
        ('public.resume_fulfillment(uuid)',                        '2e2d5aab1db5392250879bfa9ff4bccd'),
        ('public.hold_order_stock(uuid)',                          '3b0691d604823164daaa7f248616f00f'),
-       ('public.reopen_picking(uuid,text)',                       '293ce0e76d195bb13105cfd1c067de82'),
+       ('public.reopen_picking(uuid,text)',                       '14e49293fa670dc2e05a1c1b6930bce5'),
        ('public.order_readiness_facts(uuid)',                     '2f3fb057bacda8143377ecd9c2c5e6e2'),
        ('public.order_items_orderable(uuid,uuid[])',              'b4df95d74e32850923a430769f96f246'),
        ('public.assign_order_request_number()',                   '03097df3cded3d0ea42676855abc6a25'),
-       ('public.confirm_physical_signature(uuid,text)',           'f7a14a46d2c70f635c3da844c786ce67'),
+       ('public.confirm_physical_signature(uuid,text)',           'c0d1c11d31dd86e072f05b72f299535c'),
        ('public.caller_can_read_item(uuid)',                      '80523d2cc0fafe7fc6b3599903d7f014'),
        ('public._notify_recipients(uuid)',                        '679e6193e3dbe5644055e835e8209043'),
        ('public.create_return_request(uuid,jsonb,uuid)',          '36596e93f472b0f831a6a43bb316a294'),

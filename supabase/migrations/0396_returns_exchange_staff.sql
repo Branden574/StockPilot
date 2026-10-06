@@ -116,8 +116,11 @@ set lock_timeout = '5s';
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 -- RX-2 replaces only RX-1's hook bodies and its returns API guard, and calls
 -- the order functions unchanged. Every body it relies on, or replaces, must
--- be the one this file was written against (production head 0394,
--- 2026-10-05). Anything else is drift: stop before changing anything.
+-- be the one this file was written against (production head 0395, small
+-- fixes slice 2, re-read 2026-10-06; written on 0394 on 2026-10-05, and
+-- slice 2 moved two of these pins: the notify body's partial-approval words
+-- and cancel_order_request's requester window and linked restocks). Anything
+-- else is drift: stop before changing anything.
 do $preflight$
 declare
   v_bad text := '';
@@ -150,14 +153,14 @@ begin
         ('public._return_exchange_replay(uuid,integer)',                      '30a3a0b41500ded40148cd068e47feb7', false),
         ('public.tg_returns_api_guard()',                                     '939caf073462bbaf237bcdc4f6f9dc9a', false),
         -- The order bodies the exchange functions call or rely on, unchanged.
-        ('public._notify_order_request_changes()',                            'a223ae83810149728156b8e299c7425e', true),
+        ('public._notify_order_request_changes()',                            '438e676429dda6fb9d2b8faee8d6dd59', true),
         ('public._validate_order_request_status_transition()',                'dee8cd4782ec83abdb31a2b48fcd4ef2', false),
         ('public.create_order_request(jsonb,jsonb)',                          '4d65cef6c569a8c2c699fd9d5c8b77d5', false),
         ('public.tg_order_requests_insert_guard()',                           'caf69f8a23d03b9bfa6ea87a9cf94077', false),
         ('public.tg_order_request_lines_guard()',                             'd899924c0f8fc1dfae4e8be7bd4c5cad', false),
         ('public.tg_order_requests_workflow_guard()',                         '55bceafc13d599f8d77d6a4180c28140', false),
         ('public.approve_partial(uuid)',                                      '40ca0878733b08a649773fe9b7efd4e0', true),
-        ('public.cancel_order_request(uuid,text)',                            '47cabcd1fe4f52fb7b2b6b6b64b68da1', true),
+        ('public.cancel_order_request(uuid,text)',                            '535fc49935f15adc8d7dfa78836a06af', true),
         ('public.complete_picking(uuid)',                                     'b8f1ef1fb01efa5c04c916c178129541', true),
         ('public.order_items_orderable(uuid,uuid[])',                         'b4df95d74e32850923a430769f96f246', false),
         ('public.caller_can_read_item(uuid)',                                 '80523d2cc0fafe7fc6b3599903d7f014', true)
@@ -2160,8 +2163,10 @@ $$;
 --   order; otherwise P0001 replacement_waiting_for_return.
 --   Into cancelled or denied: only inside an RMA function, whose
 --   transaction-bound flag holds this transaction's id; otherwise 42501
---   replacement_cancel_via_return (a requester's own cancel, a manager on
---   the order page).
+--   replacement_cancel_via_return (a manager on the order page; the
+--   requester's own cancel is refused one step earlier by
+--   cancel_order_request's 0395 window, requester_pending_only, since a
+--   replacement is approved in the transaction that creates it).
 --   Every other edge passes.
 create function public.tg_order_requests_replacement_status()
 returns trigger
