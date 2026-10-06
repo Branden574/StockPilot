@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -334,6 +334,30 @@ describe('the order screen', () => {
     const fix = code(read('src/components/edit-order-line.ts'));
     expect(fix).toContain('label = readinessLineLabel(input.readinessLine, input.gate ?? {});');
     expect(fix).not.toContain('READINESS_STATES[');
+  });
+
+  // Review fix (0396, security F-1): the order header guard refuses a
+  // replacement's warehouse, delivery site or created date from anywhere but
+  // its RMA. The phone offers no such change on any order: no transition
+  // names one and nothing on the phone writes an order row directly.
+  it('offers no warehouse or delivery site change on any order, so none on a replacement (security F-1)', () => {
+    const ordersApi = code(read('src/lib/orders-api.ts'));
+    const union = ordersApi.slice(ordersApi.indexOf('export type OrderAction'), ordersApi.indexOf('export async function transitionOrder'));
+    expect(union.length).toBeGreaterThan(0);
+    expect(union).not.toMatch(/warehouse|charter|site/i);
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(path.join(ROOT, dir))) {
+        const rel = path.join(dir, name);
+        if (statSync(path.join(ROOT, rel)).isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) files.push(rel);
+      }
+    };
+    walk('src');
+    walk('app');
+    for (const f of files) {
+      expect(code(read(f)), f).not.toMatch(/from\(\s*'order_requests'\s*\)[\s\S]{0,200}?\.(update|upsert|delete)\(/);
+    }
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {

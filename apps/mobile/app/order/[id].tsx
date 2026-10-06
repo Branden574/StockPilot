@@ -2069,7 +2069,11 @@ export default function OrderDetail() {
   // button. Deriving from `availableOrderActions` (rather than re-checking
   // role + status inline) means mobile can never drift from web on who may
   // reopen picking or from which statuses.
-  const canReopenPicking =
+  // RX-2 review fix (0396, security F-1): the same ask also decides Close as
+  // delivered-partial, with the order's replacement facts, so an exchange
+  // replacement (closed only from its RMA; the header guard refuses it
+  // anywhere else) is never offered it.
+  const orderMachineActions =
     order && role
       ? availableOrderActions({
           status: st as OrderStatus,
@@ -2083,8 +2087,11 @@ export default function OrderDetail() {
           // 0390: reopen_picking asks orders:approve, so a granted staff
           // member is offered it and a revoked manager is not (as on the web).
           canApproveOrders: rpApprove,
-        }).includes('reopen_picking')
-      : false;
+          isReplacement: isReplacementOrder,
+        })
+      : [];
+  const canReopenPicking = orderMachineActions.includes('reopen_picking');
+  const machineOffersClosePartial = orderMachineActions.includes('close_partial');
   // Slice D (0390): the MANAGER ACTIONS section and each button in it follow
   // the rule the server applies to that action (the effective orders:approve
   // for approval-class actions, orders:assign_delivery for the driver, a
@@ -2100,6 +2107,7 @@ export default function OrderDetail() {
     isManagerByRole: isManager,
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    machineOffersClosePartial,
     machineOffersReopen: canReopenPicking,
     isViewerRole: role === 'viewer',
   });
@@ -3074,23 +3082,28 @@ export default function OrderDetail() {
                     )
                   )}
                   {stockNotice}
-                  {actionBtn(
-                    'Close as delivered-partial',
-                    'closepartial',
-                    () =>
-                      Alert.alert(
-                        'Close as delivered-partial?',
-                        'This ends the order and keeps the record of what was delivered. The remaining backordered units will NOT be fulfilled.',
-                        [
-                          { text: 'Keep open', style: 'cancel' },
-                          {
-                            text: 'Close order',
-                            onPress: () => void act({ action: 'close_partial' }, 'closepartial'),
-                          },
-                        ],
-                      ),
-                    'default',
-                  )}
+                  {/* RX-2 review fix F-1: as the shared machine offers it
+                      (never on an exchange replacement, which ends from its
+                      RMA). */}
+                  {managerActions.closePartial
+                    ? actionBtn(
+                        'Close as delivered-partial',
+                        'closepartial',
+                        () =>
+                          Alert.alert(
+                            'Close as delivered-partial?',
+                            'This ends the order and keeps the record of what was delivered. The remaining backordered units will NOT be fulfilled.',
+                            [
+                              { text: 'Keep open', style: 'cancel' },
+                              {
+                                text: 'Close order',
+                                onPress: () => void act({ action: 'close_partial' }, 'closepartial'),
+                              },
+                            ],
+                          ),
+                        'default',
+                      )
+                    : null}
                 </>
               ) : null}
               {connectionNotice}

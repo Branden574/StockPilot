@@ -39,6 +39,12 @@ export interface OrderManagerActionsInput {
    *  (core availableOrderActions with canApproveOrders, the web panel's own
    *  answer). */
   machineOffersReopen: boolean;
+  /** The shared order state machine offers close_partial (core
+   *  availableOrderActions with the order's replacement facts): never on an
+   *  exchange replacement, whose close the 0396 header guard refuses from
+   *  anywhere but its RMA (RX-2 review fix, security F-1). Omitted: offered
+   *  as before. */
+  machineOffersClosePartial?: boolean;
   /** Role viewer. The app refuses every write for a viewer
    *  (assertWarehouseAccess: "Read-only auditor cannot perform write
    *  operations."), and every approval-class action here asks warehouse
@@ -66,9 +72,12 @@ export interface OrderManagerActions {
   /** Collect signature (the digital sign page). */
   digitalSignature: boolean;
   physicalSignature: boolean;
-  /** Resume fulfillment and Close as delivered-partial at backordered.
+  /** Resume fulfillment at backordered (its stock gate decides enabled).
    *  Cancel order is offered by phoneOrderCancel (order-cancel-action.ts). */
   backorderedActions: boolean;
+  /** Close as delivered-partial at backordered, as the shared machine offers
+   *  it (never on an exchange replacement: RX-2 review fix F-1). */
+  closePartial: boolean;
 }
 
 /** The statuses whose actions are orders:approve actions: the web page's
@@ -129,6 +138,7 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
     // confirm_physical_signature: a manager by role or the assigned driver.
     physicalSignature: audience && handOver && (input.isManagerByRole || input.isAssignedDriver),
     backorderedActions: approver && st === 'backordered',
+    closePartial: approver && st === 'backordered' && input.machineOffersClosePartial !== false,
   };
   const showSection = audience && Object.values(gates).some(Boolean);
   return { showSection, ...gates };
