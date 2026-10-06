@@ -63,6 +63,11 @@ const SHEETS = [
   { file: 'src/components/exception-note-sheet.tsx', fn: 'SheetContent', name: 'Acknowledge / Add note / Confirm' },
   { file: 'src/components/exception-evidence-sheets.tsx', fn: 'AddSheetContent', name: 'Add a photo' },
   { file: 'src/components/exception-evidence-sheets.tsx', fn: 'RemoveSheetContent', name: 'Remove this photo?' },
+  // Returns RX-2 simulator finding SIM-2 (iPhone 17 at AX5): the order
+  // screen's "Release before return is received" sheet was a plain card with
+  // no height bound, so it ran off the top (title, Close and the first preset
+  // unreachable, nothing scrolled, no backdrop left to tap).
+  { file: 'src/components/release-replacement-sheet.tsx', fn: 'ReleaseSheetContent', name: 'Release before return is received' },
 ] as const;
 
 describe.each(SHEETS)('$name sheet ($fn)', ({ file, fn }) => {

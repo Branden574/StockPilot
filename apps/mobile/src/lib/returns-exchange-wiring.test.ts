@@ -133,6 +133,32 @@ describe('online only', () => {
   });
 });
 
+// RX-2 simulator finding SIM-2 (iPhone 17 at AX5): the order screen's release
+// sheet ran off the top of the screen. It now has the exception sheets' shape
+// (pinned in exception-sheets-keyboard-wiring.test.ts); here, what is
+// particular to it: the presets scroll with the reason, the title and the
+// button stay on screen, and its content remounts per opening (one keyboard
+// hook and a fresh reason each time).
+describe("the order screen's release sheet", () => {
+  const src = code(read('src/components/release-replacement-sheet.tsx'));
+
+  it('scrolls the presets and the reason in the body; the title and the button stay on screen', () => {
+    const open = src.indexOf('<ScrollView');
+    const close = src.indexOf('</ScrollView>');
+    expect(open).toBeGreaterThan(-1);
+    const body = src.slice(open, close);
+    expect(body).toContain('RETURNS_COPY.releasePresetInPerson');
+    expect(body).toContain('RETURNS_COPY.releasePresetDeliverySwap');
+    expect(body).toContain('<TextInput');
+    expect(src.indexOf('accessibilityRole="header"')).toBeLessThan(open);
+    expect(close).toBeLessThan(src.indexOf('<Button'));
+  });
+
+  it('remounts its content per opening', () => {
+    expect(src).toMatch(/<ReleaseSheetContent\s+key=\{String\(visible\)\}/);
+  });
+});
+
 describe('the order screen', () => {
   const screen = code(read('app/order/[id].tsx'));
 
