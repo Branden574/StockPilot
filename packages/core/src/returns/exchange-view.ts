@@ -432,7 +432,11 @@ export function exchangeReviewProblem(
 ): string | null {
   if (viewer && !viewer.canApproveOrders && state.kind !== 'decline') return RETURNS_COPY.noOrdersApprovePermission;
   if (state.kind === 'as_requested') {
-    return line.requestedItemId ? null : `${RETURNS_COPY.chooseReplacement}: ${line.requestNote ?? RETURNS_COPY.replacementWarehouseReview}`;
+    // A note-only request ("the warehouse will review") must be changed
+    // first. The problem never carries the requester's note (up to 500
+    // characters): it is pinned above the phone's button, and the note shows
+    // in the review body (review fix, simulator fault F-A).
+    return line.requestedItemId ? null : RETURNS_COPY.chooseReplacement;
   }
   if (state.kind === 'decline') return state.reason.trim() ? null : RETURNS_COPY.declineReasonLabel;
   if (!state.itemId) return RETURNS_COPY.chooseReplacement;

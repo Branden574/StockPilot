@@ -280,8 +280,27 @@ describe('the approval review (web and phone)', () => {
   it('as requested sends the line alone; a note-only request must be changed first', () => {
     expect(exchangeReviewProblem(line, { kind: 'as_requested' })).toBeNull();
     expect(exchangeReviewDecision(line, { kind: 'as_requested' })).toEqual({ action: 'approve', exchangeLineId: 'x1' });
+    // Re-pinned by returns RX-2 review fix (simulator fault F-A, 2026-10-06;
+    // claim kept: a note-only request must be changed first): the problem
+    // line no longer carries the requester's note (below).
     expect(exchangeReviewProblem({ ...line, requestedItemId: null, requestNote: 'L please' }, { kind: 'as_requested' })).toBe(
-      'Choose the replacement: L please',
+      'Choose the replacement',
+    );
+  });
+
+  // Simulator fault F-A (2026-10-06, sim-RX2/shots-fix iphone-P11-30): the
+  // problem line is pinned above the approval's button on the phone (and
+  // shown beside it on the web), and a "warehouse will review" note may hold
+  // 500 characters: inlined, it left the iPhone's AX5 sheet no body and its
+  // Approve button off screen. The note shows in the review body; the problem
+  // says what to do, in a few words, whatever the note.
+  it('never puts the requester note in the problem line (it is pinned above the button)', () => {
+    const note = 'Please send the next size up, the sleeves are short. '.repeat(9).trim();
+    const problem = exchangeReviewProblem({ ...line, requestedItemId: null, requestNote: note }, { kind: 'as_requested' });
+    expect(problem).toBe('Choose the replacement');
+    expect(problem!.length).toBeLessThan(40);
+    expect(exchangeReviewProblem({ ...line, requestedItemId: null, requestNote: null }, { kind: 'as_requested' })).toBe(
+      'Choose the replacement',
     );
   });
 
