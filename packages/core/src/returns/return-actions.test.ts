@@ -83,7 +83,9 @@ const TABLE: Row[] = [
   ['received', 'in_progress', 'drawn', 'process', ['change_destination', 'open_replacement', 'cancel_replacement']],
   ['received', 'ready_for_pickup', 'drawn', 'process', ['change_destination', 'hand_over', 'cancel_replacement']],
   ['received', 'handed_over_return_open', 'handed_over', 'process', ['change_destination', 'open_replacement']],
-  ['received', 'unavailable', 'undrawn', 'process', ['change_destination', 'open_replacement', 'cancel_replacement']],
+  // RX-2 review fix P16: a replacement not in stock can be changed at
+  // received too (approved and closed offer it; the database allows it).
+  ['received', 'unavailable', 'undrawn', 'process', ['change_replacement', 'change_destination', 'open_replacement', 'cancel_replacement']],
   ['closed', 'ready_to_pick', 'undrawn', 'get_replacement_ready', ['change_replacement', 'cancel_replacement']],
   ['closed', 'unavailable', 'undrawn', 'open_replacement', ['change_replacement', 'cancel_replacement']],
   ['closed', 'in_progress', 'undrawn', 'open_replacement', ['cancel_replacement']],

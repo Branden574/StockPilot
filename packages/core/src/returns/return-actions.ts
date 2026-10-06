@@ -38,6 +38,9 @@
  *                                                 Change replacement, Cancel replacement
  *   received    replacement_cancelled   Process return | Issue a new replacement, Close
  *                                                 as return only
+ *   received    unavailable             Process return | Change replacement, Change
+ *                                                 destination, Open replacement, Cancel
+ *                                                 replacement (review fix P16)
  *   received    anything else           Process return | Change destination, Open
  *                                                 replacement, Cancel replacement (not
  *                                                 handed over)
@@ -215,6 +218,11 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
           return { primary: 'process', secondary: ['issue_replacement', 'close_as_return_only'] };
         case 'declined':
           return { primary: 'process', secondary: ['change_destination'] };
+        case 'unavailable':
+          // Not in stock: change it here as at approved and closed (the
+          // database allows a change at received), instead of a cancel and a
+          // re-issue with two reasons.
+          return { primary: 'process', secondary: ['change_replacement', 'change_destination', 'open_replacement', 'cancel_replacement'] };
         default:
           return { primary: 'process', secondary: ['change_destination', openOrHand(), 'cancel_replacement'] };
       }
