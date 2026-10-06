@@ -214,6 +214,10 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
     expect(requesterHearsEvent('replacement_changed', { source: 'requester' })).toBe(true);
     expect(requesterHearsEvent('replacement_cancelled', { source: 'requester' })).toBe(true);
     expect(requesterHearsEvent('replacement_changed', { source: 'internal' })).toBe(false);
+    // RX-2 review fix P28: the staff-added approval is silent at the counter too.
+    expect(requesterHearsEvent('return_approved_replacement_added', { source: 'requester', channel: 'counter' })).toBe(false);
+    expect(requesterHearsEvent('return_approved_replacement_added_short', { source: 'requester', channel: 'counter' })).toBe(false);
+    expect(requesterHearsEvent('return_approved_replacement_added', { source: 'requester', channel: 'staff' })).toBe(true);
   });
 
   it('a member hears "replacement reserved" linked to the replacement order', async () => {

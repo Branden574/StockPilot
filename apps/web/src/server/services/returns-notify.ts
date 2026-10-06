@@ -263,13 +263,12 @@ export function requesterHearsEvent(event: RequesterReturnEvent, input: { source
   // A counter approval or receipt happened with the requester standing there
   // (G11): the exchange approval too.
   const counterSilent =
-    event === 'approved' ||
-    event === 'received' ||
-    event === 'exchange_approved' ||
-    event === 'exchange_approved_short' ||
-    event === 'return_approved_replacement_added' ||
-    event === 'return_approved_replacement_added_short';
+    event === 'approved' || event === 'received' || event === 'exchange_approved' || event === 'exchange_approved_short';
   if (counterSilent && input.channel === 'counter') return false;
+  // RX-2 review fix P28: an approval with a replacement staff added is the
+  // counter's approval too (the line above stays as RX-1 published it).
+  const addedAtCounter = event === 'return_approved_replacement_added' || event === 'return_approved_replacement_added_short';
+  if (addedAtCounter && input.channel === 'counter') return false;
   return true;
 }
 
