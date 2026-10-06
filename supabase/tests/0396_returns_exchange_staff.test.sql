@@ -589,6 +589,12 @@ returns jsonb language sql as $$
                                   where xl.return_id = p_rma and xl.status = 'requested' and p_action is not null), '[]'::jsonb))
          || case when p_repl is null then '{}'::jsonb else jsonb_build_object('replacement', p_repl) end
 $$;
+-- An RMA id from pg_temp.mk, or the nil uuid when the create was refused
+-- (the W section's tests then fail by name instead of aborting the file).
+create function pg_temp.as_uuid(p text) returns uuid language sql immutable as $$
+  select coalesce(case when p ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then p::uuid end,
+                  '00000000-0000-0000-0000-000000000000'::uuid)
+$$;
 -- The RMA's current revision, its exchange line, its live replacement.
 create function pg_temp.rev(p_rma uuid) returns integer language sql as $$
   select coalesce(max(d.revision), 0)::integer from public.return_decisions d
@@ -1980,7 +1986,7 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
 values (:oW1, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
 values (:lW1, :oW1, :gM, 1, 1);
-select pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1, jsonb_build_object('itemId', :gL))) as "rW1a" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1, jsonb_build_object('itemId', :gL)))) as "rW1a" \gset
 select pg_temp.approve(:mgr, :'rW1a', pg_temp.xdec(:'rW1a')) as "jW1a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rW1a', pg_temp.live(:'rW1a'))) as "jW1r" \gset
 select coalesce(pg_temp.live(:'rW1a'), '00000000-0000-0000-0000-000000000000'::uuid) as "oW1R" \gset
@@ -1990,7 +1996,7 @@ select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_p
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'The driver could not collect the Medium')$q$, :'rW1a', pg_temp.rev(:'rW1a'))) as "jW1c" \gset
 select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW1,
          pg_temp.xbody(:lW1, 1, jsonb_build_object('itemId', :gL))::text)) as "jW1x" \gset
-select pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1)) as "rW1b" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1))) as "rW1b" \gset
 select is(
   :'w1Pick' || ':' || :'w1Stage' || ':' || :'w1Sign' || ':' || ((:'jW1c'::jsonb)->>'status') || ':' || pg_temp.xs(:'rW1a', :mgr)
   || '|' || pg_temp.err(:'jW1x'::jsonb) || ':' || pg_temp.detail(:'jW1x'::jsonb)::text
@@ -2025,7 +2031,7 @@ select is(
 -- approval, on a change and on a re-issue.
 select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oK5,
          pg_temp.xbody(:lK5, 4, jsonb_build_object('itemId', :gL, 'quantity', 4))::text)) as "jW3x" \gset
-select pg_temp.mk(:mgr, :oK5, pg_temp.xbody(:lK5, 4, jsonb_build_object('itemId', :gL, 'quantity', 3))) as "rW3" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oK5, pg_temp.xbody(:lK5, 4, jsonb_build_object('itemId', :gL, 'quantity', 3)))) as "rW3" \gset
 select is(
   pg_temp.err(:'jW3x'::jsonb) || ':' || pg_temp.detail(:'jW3x'::jsonb)::text
   || '|' || (select xl.status || ':' || trim_scale(xl.requested_quantity)::text from public.return_exchange_lines xl where xl.return_id = :'rW3'::uuid),
@@ -2060,7 +2066,7 @@ select is(
 -- is picked, being packed, staged or on its way; before the pick it still
 -- cancels it (undone here), and Cancel replacement stays the path, after
 -- which the RMA cancel works. Nothing moves on a refusal.
-select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rW6" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL)))) as "rW6" \gset
 select pg_temp.approve(:mgr, :'rW6', pg_temp.xdec(:'rW6', 'approve', '{}'::jsonb,
          jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jW6a" \gset
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rW6', pg_temp.live(:'rW6'))) as "jW6r" \gset

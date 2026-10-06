@@ -106,6 +106,11 @@ L3='03971111-0000-0000-0000-000000000204'
 L='03971111-0000-0000-0000-000000000201'
 L2A='03971111-0000-0000-0000-000000000202'
 L2B='03971111-0000-0000-0000-000000000203'
+# The return-only RMAs of races 11 and 12 return from their own original line:
+# since the review fix every exchange writer also takes the exchange budget
+# lock of each original line it names (race 14), which would serialise two
+# RMAs sharing a line and hide the item-lock order these races prove.
+L2C='03971111-0000-0000-0000-000000000205'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -253,6 +258,7 @@ insert into public.order_request_lines (id, order_request_id, item_id, quantity_
   ('$L', '$ORDER', '$IM', 12, 0),
   ('$L2A', '$ORDER2', '$IM', 40, 40),
   ('$L2B', '$ORDER2', '$IM2', 40, 40),
+  ('$L2C', '$ORDER2', '$IM', 40, 40),
   ('$L3', '$ORDER3', '$IM', 2, 2);
 SQL
 then
@@ -469,9 +475,9 @@ create2_sql() { # create2_sql <key> <item for line A> <item for line B>: two exc
   printf "select 'R=' || public.create_return_request('%s', '%s'::jsonb, '%s')::text;" "$ORDER2" \
     "{\"reasonCode\":\"other\",\"lines\":[{\"orderRequestLineId\":\"$L2A\",\"quantity\":1,\"disposition\":\"restock\",\"exchange\":{\"itemId\":\"$2\"}},{\"orderRequestLineId\":\"$L2B\",\"quantity\":1,\"disposition\":\"restock\",\"exchange\":{\"itemId\":\"$3\"}}]}" "$1"
 }
-create_ro_sql() { # create_ro_sql <key>: a return-only line on ORDER2
+create_ro_sql() { # create_ro_sql <key>: a return-only line on ORDER2's own third line (L2C)
   printf "select 'R=' || public.create_return_request('%s', '%s'::jsonb, '%s')::text;" "$ORDER2" \
-    "{\"reasonCode\":\"other\",\"lines\":[{\"orderRequestLineId\":\"$L2A\",\"quantity\":1,\"disposition\":\"restock\"}]}" "$1"
+    "{\"reasonCode\":\"other\",\"lines\":[{\"orderRequestLineId\":\"$L2C\",\"quantity\":1,\"disposition\":\"restock\"}]}" "$1"
 }
 lines_json() { # every line of the RMA to Staging
   printf "(select jsonb_agg(jsonb_build_object('returnLineId', rl.id, 'disposition', 'restock', 'restock', jsonb_build_object('target', 'staging'))) from public.return_lines rl where rl.return_id = '%s')" "$1"
