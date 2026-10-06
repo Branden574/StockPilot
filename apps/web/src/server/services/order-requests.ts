@@ -51,6 +51,7 @@ import {
   parseOrderCreateRequest,
   parseWallClock,
   partialActionMovedOnCopy,
+  prepareStepRefusalWords,
   resolveOrgTimezone,
   resolveRequesterIdentity,
   RETURN_ERROR_WORDS,
@@ -4335,11 +4336,16 @@ export class OrderRequestsService {
         return true;
       } catch (e) {
         if (!(e instanceof ServiceError)) throw e;
+        const reason = typeof e.details?.reason === 'string' ? (e.details.reason as string) : e.code;
         ran.push({
           step,
           outcome: 'refused',
-          reason: typeof e.details?.reason === 'string' ? (e.details.reason as string) : e.code,
-          message: e.message,
+          reason,
+          // Returns RX-2 review fix P24: a plain permission refusal (no
+          // reason of its own) says the step in words, never the permission
+          // key; a refusal with its own reason (an MFA step-up, a gate)
+          // keeps its words (core prepareStepRefusalWords).
+          message: prepareStepRefusalWords(step, { code: reason, message: e.message }),
         });
         return false;
       }

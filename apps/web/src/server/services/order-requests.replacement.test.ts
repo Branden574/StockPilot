@@ -27,7 +27,13 @@ const RMA = 'rma-1';
 
 function svc(
   stub: ReturnType<typeof makeSupabaseStub>,
-  opts: { role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer'; userId?: string; permissions?: ReadonlySet<string> } = {},
+  opts: {
+    role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
+    userId?: string;
+    permissions?: ReadonlySet<string>;
+    /** An MFA step-up owed (the session at AAL1 with MFA required). */
+    stepUpOwed?: boolean;
+  } = {},
 ) {
   return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
     makeServiceContext(stub.client, {
@@ -35,6 +41,7 @@ function svc(
       userId: opts.userId ?? 'mgr-1',
       enabledModules: new Set<ModuleId>(['orders', 'returns']),
       ...(opts.permissions ? { permissions: opts.permissions } : {}),
+      ...(opts.stepUpOwed ? { mfaRequired: true, mfaSatisfied: false } : {}),
     }),
   );
 }
@@ -273,6 +280,36 @@ describe('prepareForHandover (plan 3.3.8)', () => {
     const claimed = chain('picking_in_progress', { picker: 'someone' });
     await svc(claimed.stub, { role: 'staff', permissions: staffPerms }).prepareForHandover(ORDER);
     expect(claimed.stub.rpcCalls.map((c) => c.name)[0]).toBe('complete_picking');
+  });
+
+  // RX-2 review fix P24: a step refused for a permission says the step in
+  // words, never the permission key ("Missing permission: items:update"); an
+  // MFA step-up keeps its own words.
+  it('a step refused for a permission says which step in words, never the permission key', async () => {
+    const noPick = chain('pick_slip_generated', { picker: 'someone' });
+    const outPick = await svc(noPick.stub, { role: 'staff', permissions: new Set(['orders:approve', 'orders:request']) }).prepareForHandover(ORDER);
+    expect(outPick.ran.at(-1)).toEqual({
+      step: 'pick',
+      outcome: 'refused',
+      reason: 'forbidden',
+      message: "You don't have permission to pick this replacement.",
+    });
+    const noStage = chain('packing_slip_generated');
+    const outStage = await svc(noStage.stub, { role: 'staff', permissions: new Set(['items:update', 'orders:request']) }).prepareForHandover(ORDER);
+    expect(outStage.ran.at(-1)).toMatchObject({ step: 'stage', outcome: 'refused', message: "You don't have permission to stage it." });
+    const noSlip = chain('approved');
+    const outSlip = await svc(noSlip.stub, { role: 'staff', permissions: new Set(['items:update', 'orders:request']) }).prepareForHandover(ORDER);
+    expect(outSlip.ran.at(-1)).toMatchObject({ step: 'pick_slip', outcome: 'refused', message: "You don't have permission to make its pick slip." });
+    for (const r of [...outPick.ran, ...outStage.ran, ...outSlip.ran]) expect(r.message ?? '').not.toMatch(/Missing permission|:update|:approve/);
+    // An MFA step-up is not a missing permission: its own words stay.
+    const stepUp = chain('approved');
+    const outMfa = await svc(stepUp.stub, { stepUpOwed: true }).prepareForHandover(ORDER);
+    expect(outMfa.ran.at(-1)).toMatchObject({
+      step: 'pick_slip',
+      outcome: 'refused',
+      reason: 'mfa_required',
+      message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    });
   });
 
   it('nothing to prepare for a handed-over or dead order', async () => {
