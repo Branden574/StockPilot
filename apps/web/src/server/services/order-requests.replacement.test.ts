@@ -67,6 +67,20 @@ describe('the replacement refusals are mapped by hint (plan 3.6.9)', () => {
     });
   });
 
+  // RX-2 review fix (0396 security F-1): the header guard refuses a
+  // replacement's close-partial by the cancel hint; mapped, never internal.
+  it('closePartial on a replacement meets the header guard in core\'s words, not internal_error', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'rpc:close_partial': { data: null, error: { code: '42501', hint: 'replacement_cancel_via_return', message: 'replacement_cancel_via_return' } },
+    });
+    await expect(svc(stub).closePartial(ORDER)).rejects.toMatchObject({
+      code: 'forbidden',
+      message: 'Change or cancel this replacement from its RMA.',
+      details: { reason: 'replacement_cancel_via_return' },
+    });
+  });
+
   it('cancel by the requester is refused before the call, in the requester\'s words', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {

@@ -1081,14 +1081,19 @@ export function ManagerActionsPanel({
                   Resume unlocks when owed items are back in stock.
                 </span>
               )}
-              <Button
-                variant="outline"
-                onClick={() => setClosePartialOpen(true)}
-                disabled={busy !== null}
-              >
-                <PackageX className="h-3.5 w-3.5" />
-                Close as delivered-partial
-              </Button>
+              {/* Core decides (availableOrderActions): never for an exchange
+                  replacement, whose close-partial the 0396 header guard
+                  refuses from anywhere but its RMA (security F-1). */}
+              {actions.includes('close_partial') && (
+                <Button
+                  variant="outline"
+                  onClick={() => setClosePartialOpen(true)}
+                  disabled={busy !== null}
+                >
+                  <PackageX className="h-3.5 w-3.5" />
+                  Close as delivered-partial
+                </Button>
+              )}
             </>
           )}
 

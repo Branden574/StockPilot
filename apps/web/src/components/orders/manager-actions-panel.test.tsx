@@ -1126,6 +1126,23 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     );
     // ...and never once the RMA was cancelled.
     expect(screen.queryByRole('button', { name: /Resume fulfillment/ })).toBeNull();
+    // Re-pinned by returns RX-2 review fix (0396 security F-1): the order
+    // header guard refuses a replacement's close-partial from anywhere but its
+    // RMA, so it is never offered here (core availableOrderActions).
+    expect(screen.queryByRole('button', { name: /Close as delivered-partial/ })).toBeNull();
+  });
+
+  it('a backordered replacement is never offered Close as delivered-partial; an ordinary order still is', () => {
+    const enabled = { approvePartial: 'hidden' as const, resume: 'enabled' as const, notice: null, canRetry: false };
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: { ...waiting, waitingForReturn: false } })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Resume fulfillment/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close as delivered-partial/ })).toBeNull();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled })} />);
     expect(screen.getByRole('button', { name: /Close as delivered-partial/ })).toBeInTheDocument();
   });
 

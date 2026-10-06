@@ -3917,6 +3917,11 @@ export class OrderRequestsService {
     await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('close_partial', { p_id: id });
     if (error) {
+      // Returns RX-2 (0396 security F-1): the header guard refuses a
+      // replacement's close-partial from anywhere but its RMA, by the cancel
+      // guard's hint; mapped before the message checks below.
+      const refusal = replacementRefusal(error);
+      if (refusal) throw refusal;
       const msg = error.message ?? '';
       if (msg.includes('order_request_not_found'))
         throw new ServiceError('not_found', 'Order not found.');
