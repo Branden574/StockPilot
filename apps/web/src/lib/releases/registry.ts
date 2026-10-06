@@ -62,7 +62,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: "Expected dates in the mobile app, the calendar's month and the digest's send time",
     summary:
-      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. On the web, the team calendar opens on your organization's current month late on the last day of a month, and the weekly digest setting gives the day and time the digest is sent in your workspace's time zone.",
+      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. On the web, the team calendar opens on your organization's current month even late on a month's last day, and the weekly digest setting gives the day and time the digest is sent in your workspace's time zone.",
     publishedAt: '2026-10-14T17:00:00Z',
     entries: [
       {
