@@ -713,6 +713,39 @@ export function approveReplacementSentence(replacement: string, quantity: number
   return `A replacement order is created for ${replacement} ×${quantity} and ${quantity} ${quantity === 1 ? 'is' : 'are'} reserved.`;
 }
 
+/** The approval's answer as its outcome words read it (approve_return; the
+ *  replacement is _return_replacement_summary, null for a return only). */
+export interface ApprovalOutcomeAnswer {
+  /** The RMA's status after the approval ('received' at the counter). */
+  status?: string | null;
+  replacement?: {
+    orderNumber: number | null;
+    /** Something owed is not held: it went on backorder. */
+    short?: boolean;
+    lines?: ReadonlyArray<{ held: number }>;
+  } | null;
+}
+
+/**
+ * What an approval did, in words (review fix P23, web and phone): "Approved.
+ * Replacement order SO-000012 created and 1 reserved.", on backorder
+ * "Approved. Replacement order SO-000016 is on backorder.", at the counter
+ * "Approved and received. Replacement order SO-000017 created and 1
+ * reserved."; with no replacement, "Return approved." or "Approved and
+ * received."
+ */
+export function approvalOutcomeLine(answer: ApprovalOutcomeAnswer, opts: { receiveNow?: boolean } = {}): string {
+  const counter = opts.receiveNow === true || answer.status === 'received';
+  const r = answer.replacement ?? null;
+  if (!r) return counter ? 'Approved and received.' : 'Return approved.';
+  const lead = counter ? 'Approved and received.' : 'Approved.';
+  const so = formatOrderNumber(r.orderNumber);
+  const order = so ? `Replacement order ${so}` : 'Replacement order';
+  if (r.short) return `${lead} ${order} is on backorder.`;
+  const held = (r.lines ?? []).reduce((sum, l) => sum + (Number.isFinite(l.held) ? l.held : 0), 0);
+  return `${lead} ${order} created and ${held} reserved.`;
+}
+
 /** "Picking waits until New Hire Shirt, M is received." (or, at the counter, it can start). */
 export function pickingWaitsSentence(returned: string | null, itemIsHere: boolean, plural = false): string {
   if (itemIsHere) return plural ? 'The returned items are here, so picking can start.' : 'The returned item is here, so picking can start.';

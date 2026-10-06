@@ -7,6 +7,7 @@ import {
   againstOrderLabel,
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approvalOutcomeLine,
   approveReplacementSentence,
   availableLabel,
   cancelReturnReplacementSentence,
@@ -113,6 +114,8 @@ function allStrings(): string[] {
     replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'backordered' }),
     replacementLineSummary({ label: 'Walk Exchange Tee - L', requested: 1, fulfilled: 0, held: 0, status: 'staged_for_pickup' }),
     earlierReplacementsLine([{ orderId: 'o1', orderNumber: 12, status: 'cancelled' }]) ?? '',
+    approvalOutcomeLine({ status: 'received', replacement: { orderNumber: 17, lines: [{ held: 1 }] } }),
+    approvalOutcomeLine({ replacement: { orderNumber: 16, short: true } }),
     cancelReturnReplacementSentence(12),
     cancelReturnReplacementSentence(null, { held: 0 }),
     ...Object.values(EXCHANGE_STATUS_STAFF_LABELS),
@@ -416,6 +419,27 @@ describe('returns copy', () => {
     expect(earlierReplacementsLine(history.slice(0, 1), { statusLabels: { cancelled: 'Voided' } })).toBe('Earlier replacements: SO-000012 (Voided)');
     // An unknown status: the order alone, never the raw code.
     expect(earlierReplacementsLine([{ orderId: 'o9', orderNumber: 9, status: 'some_new_status' }])).toBe('Earlier replacements: SO-000009');
+  });
+
+  // RX-2 review fix P23: an exchange approval says what it created, never
+  // only "Return approved." (web and phone, from the approval's answer).
+  it('RX-2: the approval outcome names the replacement order it created (review fix P23)', () => {
+    expect(approvalOutcomeLine({ status: 'approved', replacement: { orderNumber: 12, short: false, lines: [{ held: 1 }] } })).toBe(
+      'Approved. Replacement order SO-000012 created and 1 reserved.',
+    );
+    expect(approvalOutcomeLine({ status: 'approved', replacement: { orderNumber: 16, short: true, lines: [{ held: 0 }] } })).toBe(
+      'Approved. Replacement order SO-000016 is on backorder.',
+    );
+    expect(
+      approvalOutcomeLine({ status: 'received', replacement: { orderNumber: 17, short: false, lines: [{ held: 1 }] } }, { receiveNow: true }),
+    ).toBe('Approved and received. Replacement order SO-000017 created and 1 reserved.');
+    expect(approvalOutcomeLine({ replacement: { orderNumber: 18, lines: [{ held: 1 }, { held: 2 }] } })).toBe(
+      'Approved. Replacement order SO-000018 created and 3 reserved.',
+    );
+    // A return only (or every exchange declined): as before.
+    expect(approvalOutcomeLine({ status: 'approved', replacement: null })).toBe('Return approved.');
+    expect(approvalOutcomeLine({ status: 'received' }, { receiveNow: true })).toBe('Approved and received.');
+    expect(approvalOutcomeLine({ status: 'received' })).toBe('Approved and received.');
   });
 
   it('RX-2: words an early release the same on the web and the phone', () => {
