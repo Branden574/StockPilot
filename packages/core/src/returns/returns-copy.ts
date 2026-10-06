@@ -174,6 +174,17 @@ export const RETURNS_COPY = {
   releasePresetDeliverySwap: 'Swap at delivery: the driver collects the returned item.',
   cancelDrawnReplacement: 'The picked items go back to Staging on record. Put them in the staging area.',
   cancelInTransit: 'Ask the driver to bring it back.',
+  // RX-2 review fix P2: what happens to the replacement (web dialogs and phone
+  // sheets; return-actions.ts exchangeActionConsequences picks the sentence).
+  cancelReturnPartHandedOver:
+    'The return closes as cancelled. What was already handed over stays handed over; the rest of the replacement is never sent.',
+  cancelReturnAllHandedOver: 'The return closes as cancelled. The replacement was already handed over and stays as it is.',
+  cancelReplacementEffect:
+    'The replacement order is cancelled and its reserved items are freed. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+  cancelReplacementEffectNothingHeld:
+    'The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+  changeReplacementEffect: 'The current replacement order is cancelled and a new one is created and reserved in the same step.',
+  issueReplacementEffect: 'A new replacement order is created and reserved.',
   stillWaiting: 'Still waiting? Cancel the exchange to free the reserved items.',
 
   // Deny and cancel
@@ -371,6 +382,19 @@ export function exchangeReplacementBanner(returnNumber: string | null, originalO
   const rma = returnNumber ?? 'its RMA';
   const so = formatOrderNumber(originalOrderNumber);
   return so ? `Exchange replacement for ${rma} · Original order ${so}` : `Exchange replacement for ${rma}`;
+}
+
+/**
+ * Cancel return with a replacement not yet handed over (review fix P2): "The
+ * return closes as cancelled. Its replacement order SO-000012 is cancelled too
+ * and the reserved items are freed." (nothing is said to be freed when
+ * nothing is held).
+ */
+export function cancelReturnReplacementSentence(orderNumber: number | null, opts: { held?: number | null } = {}): string {
+  const so = formatOrderNumber(orderNumber);
+  const order = so ? `Its replacement order ${so}` : 'Its replacement order';
+  const freed = opts.held === 0 ? '' : ' and the reserved items are freed';
+  return `The return closes as cancelled. ${order} is cancelled too${freed}.`;
 }
 
 /** "Replacement reserved. Waiting for returned item (RMA-…)" (the gated order). */

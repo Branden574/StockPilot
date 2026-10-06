@@ -77,7 +77,8 @@
 
 import type { ExchangeStatus } from './exchange-status';
 import type { ReturnStatus } from '../orders/order-returns-view';
-import { RETURNS_COPY } from './returns-copy';
+import { RETURN_ERROR_WORDS } from './return-error-map';
+import { cancelReturnReplacementSentence, RETURNS_COPY } from './returns-copy';
 
 export type ReturnAction =
   | 'approve'
@@ -332,6 +333,75 @@ export const RETURN_ACTION_LABELS: Record<ReturnAction, string> = {
 export function returnActionLabel(action: ReturnAction, opts: { hasExchange?: boolean } = {}): string {
   if (action === 'approve' && opts.hasExchange) return RETURNS_COPY.approveReturnAndExchange;
   return RETURN_ACTION_LABELS[action];
+}
+
+// ── What happens to the replacement (review fix P2) ─────────────────────────
+
+/** The four actions whose dialog (web) or sheet (phone) says what happens to the replacement. */
+export type ExchangeConsequenceAction = 'cancel' | 'cancel_replacement' | 'change_replacement' | 'issue_replacement';
+
+/** effect: what the action does; drawn and in_transit: what to do with what was picked. */
+export type ExchangeConsequenceKey = 'effect' | 'drawn' | 'in_transit';
+
+/** The live replacement as the RMA shows it. */
+export interface ExchangeConsequenceFacts {
+  /** The live replacement's order status (null: none). */
+  replacementStatus: string | null;
+  /** Anything of it was handed over (quantity fulfilled above zero). */
+  anythingHandedOver?: boolean;
+  /** Its SO number (named when a return cancel cancels it too). */
+  replacementOrderNumber?: number | null;
+  /** What it holds now; at 0 nothing is said to be freed. Null or absent: unknown. */
+  held?: number | null;
+}
+
+/**
+ * The sentences a dialog or sheet shows for an action, in order (web and
+ * phone, one rule). Cancel return: a replacement not handed over is cancelled
+ * too (named), part handed over stays and the rest is never sent, all handed
+ * over stays as it is; with no live replacement nothing is said about one,
+ * and a replacement picked or on its way is refused by the database
+ * (replacement_in_progress), which is what it says. Cancel replacement: the
+ * picked items' Staging first when it was picked, the driver when in transit,
+ * then that the order is cancelled and the return itself does not change
+ * (never "The return stays open.": the RMA may be closed). Change and Issue
+ * say what is created.
+ */
+export function exchangeActionConsequences(
+  action: ExchangeConsequenceAction,
+  facts: ExchangeConsequenceFacts,
+): Array<{ key: ExchangeConsequenceKey; text: string }> {
+  const cls = replacementClassOf(facts.replacementStatus, facts.anythingHandedOver === true);
+  switch (action) {
+    case 'cancel':
+      if (cls === 'none') return [];
+      if (cls === 'undrawn') {
+        return [{ key: 'effect', text: cancelReturnReplacementSentence(facts.replacementOrderNumber ?? null, { held: facts.held }) }];
+      }
+      if (cls === 'drawn') return [{ key: 'effect', text: RETURN_ERROR_WORDS.replacementInProgress }];
+      return [
+        {
+          key: 'effect',
+          text: facts.replacementStatus === 'completed' ? RETURNS_COPY.cancelReturnAllHandedOver : RETURNS_COPY.cancelReturnPartHandedOver,
+        },
+      ];
+    case 'cancel_replacement': {
+      if (cls === 'drawn') {
+        return [
+          { key: 'drawn', text: RETURNS_COPY.cancelDrawnReplacement },
+          ...(facts.replacementStatus === 'in_transit' ? [{ key: 'in_transit' as const, text: RETURNS_COPY.cancelInTransit }] : []),
+          { key: 'effect', text: RETURNS_COPY.cancelReplacementEffectNothingHeld },
+        ];
+      }
+      return [
+        { key: 'effect', text: facts.held === 0 ? RETURNS_COPY.cancelReplacementEffectNothingHeld : RETURNS_COPY.cancelReplacementEffect },
+      ];
+    }
+    case 'change_replacement':
+      return [{ key: 'effect', text: RETURNS_COPY.changeReplacementEffect }];
+    case 'issue_replacement':
+      return [{ key: 'effect', text: RETURNS_COPY.issueReplacementEffect }];
+  }
 }
 
 /** The steps endpoint's order (plan 3.3.8): each step one RPC and one transaction. */

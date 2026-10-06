@@ -5,6 +5,7 @@ import { EXCHANGE_STATUSES, type ExchangeStatus } from './exchange-status';
 import { defaultExchangeReviewState, exchangeReviewDecision, exchangeReviewOptions, exchangeReviewProblem } from './exchange-view';
 import {
   availableReturnActions,
+  exchangeActionConsequences,
   REPLACEMENT_ACTIONS,
   replacementClassOf,
   RETURN_ACTION_LABELS,
@@ -322,5 +323,76 @@ describe('replacementClassOf (the SQL _return_replacement_class)', () => {
       expect(all, status).not.toContain('cancel_replacement');
       expect(all, status).not.toContain('change_replacement');
     }
+  });
+});
+
+// RX-2 review fix P2: what happens to the replacement, in one set of words for
+// the web dialogs and the phone sheets (Cancel return, Cancel replacement,
+// Change replacement, Issue a new replacement).
+describe('exchangeActionConsequences (web dialogs and phone sheets)', () => {
+  const texts = (lines: Array<{ key: string; text: string }>) => lines.map((l) => `${l.key}: ${l.text}`);
+
+  it('Cancel return: the replacement not handed over is cancelled too (named), part handed over, all handed over', () => {
+    expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'approved', replacementOrderNumber: 12, held: 1 }))).toEqual([
+      'effect: The return closes as cancelled. Its replacement order SO-000012 is cancelled too and the reserved items are freed.',
+    ]);
+    expect(
+      texts(exchangeActionConsequences('cancel', { replacementStatus: 'backordered', anythingHandedOver: true, replacementOrderNumber: 18 })),
+    ).toEqual([
+      'effect: The return closes as cancelled. What was already handed over stays handed over; the rest of the replacement is never sent.',
+    ]);
+    expect(
+      texts(exchangeActionConsequences('cancel', { replacementStatus: 'completed', anythingHandedOver: true, replacementOrderNumber: 17 })),
+    ).toEqual(['effect: The return closes as cancelled. The replacement was already handed over and stays as it is.']);
+    // Nothing reserved (on backorder): nothing is said to be freed.
+    expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'approved', replacementOrderNumber: 16, held: 0 }))).toEqual([
+      'effect: The return closes as cancelled. Its replacement order SO-000016 is cancelled too.',
+    ]);
+    // No live replacement (requested, declined, cancelled): nothing about one.
+    expect(exchangeActionConsequences('cancel', { replacementStatus: null })).toEqual([]);
+    expect(exchangeActionConsequences('cancel', { replacementStatus: 'cancelled' })).toEqual([]);
+    // Picked or on its way: the database refuses the cancel (replacement_in_progress).
+    expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'staged_for_pickup', replacementOrderNumber: 12 }))).toEqual([
+      'effect: The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+    ]);
+  });
+
+  it('Cancel replacement: freed and the return unchanged; picked first says Staging; in transit asks the driver', () => {
+    expect(texts(exchangeActionConsequences('cancel_replacement', { replacementStatus: 'approved', held: 1 }))).toEqual([
+      'effect: The replacement order is cancelled and its reserved items are freed. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+    ]);
+    expect(texts(exchangeActionConsequences('cancel_replacement', { replacementStatus: 'staged_for_pickup', held: 0 }))).toEqual([
+      'drawn: The picked items go back to Staging on record. Put them in the staging area.',
+      'effect: The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+    ]);
+    expect(texts(exchangeActionConsequences('cancel_replacement', { replacementStatus: 'in_transit' }))).toEqual([
+      'drawn: The picked items go back to Staging on record. Put them in the staging area.',
+      'in_transit: Ask the driver to bring it back.',
+      'effect: The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+    ]);
+    expect(texts(exchangeActionConsequences('cancel_replacement', { replacementStatus: 'approved', held: 0 }))).toEqual([
+      'effect: The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
+    ]);
+  });
+
+  it('Change replacement and Issue a new replacement say what is created', () => {
+    expect(texts(exchangeActionConsequences('change_replacement', { replacementStatus: 'approved' }))).toEqual([
+      'effect: The current replacement order is cancelled and a new one is created and reserved in the same step.',
+    ]);
+    expect(texts(exchangeActionConsequences('issue_replacement', { replacementStatus: null }))).toEqual([
+      'effect: A new replacement order is created and reserved.',
+    ]);
+  });
+
+  it('never says the return stays open (the RMA may be closed), whatever the replacement is', () => {
+    const statuses = [null, 'approved', 'pick_slip_generated', 'picking_in_progress', 'picking_complete', 'packing_slip_generated',
+      'staged_for_pickup', 'staged_for_delivery', 'in_transit', 'backordered', 'completed', 'cancelled', 'denied'];
+    for (const action of ['cancel', 'cancel_replacement', 'change_replacement', 'issue_replacement'] as const)
+      for (const replacementStatus of statuses)
+        for (const anythingHandedOver of [true, false])
+          for (const held of [0, 1, null]) {
+            const lines = exchangeActionConsequences(action, { replacementStatus, anythingHandedOver, held, replacementOrderNumber: 12 });
+            for (const l of lines) expect(l.text, `${action} ${String(replacementStatus)}`).not.toMatch(/stays open/i);
+          }
   });
 });
