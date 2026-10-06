@@ -640,6 +640,19 @@ export function replacementOrderLines(
   return out;
 }
 
+/**
+ * The refusals that mean the screen is behind the server (review fix S2):
+ * another person changed the return (return_changed), its status moved on
+ * (invalid_status_transition, whose words say it now shows the latest), or
+ * its replacement was picked or left meanwhile (replacement_in_progress, 0396:
+ * the RMA cancel is refused then). The workbench reloads and says why.
+ */
+const STALE_REFUSALS: readonly string[] = ['return_changed', 'invalid_status_transition', 'replacement_in_progress'];
+
+export function refusalRefreshesWorkbench(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && STALE_REFUSALS.includes(reason);
+}
+
 /** The words after "Get replacement ready" (plan 3.3.8). */
 export function prepareOutcomeMessage(answer: Pick<MobilePrepareAnswer, 'ran' | 'status'>): string {
   const refused = answer.ran.find((r) => r.outcome === 'refused');

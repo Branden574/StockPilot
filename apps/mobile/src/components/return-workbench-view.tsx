@@ -25,6 +25,7 @@ import {
   describeReturnError,
   getReturnWorkbench,
   prepareReturnReplacement,
+  returnErrorReason,
   runReturnSteps,
   type MobileReturnWorkbench,
 } from '@/lib/returns-api';
@@ -35,6 +36,7 @@ import {
   exchangeOf,
   exchangeRailText,
   prepareOutcomeMessage,
+  refusalRefreshesWorkbench,
   replacementCardLabel,
   replacementOrderLines,
   replacementSideLines,
@@ -137,6 +139,13 @@ export function ReturnWorkbenchView({
   // hint, when it is one of the secondary buttons.
   const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;
 
+  // Review fix S2: after a refusal that means the screen is behind the
+  // server, read the RMA again (and the iPad list beside it).
+  function refresh() {
+    void load();
+    onChanged?.();
+  }
+
   // RX-2: "Get replacement ready" is one tap (the server runs the order's own
   // steps, each with its gates, and stops before the signature).
   async function prepare() {
@@ -150,6 +159,7 @@ export function ReturnWorkbenchView({
       onChanged?.();
     } catch (e) {
       setNotice(describeReturnError(e));
+      if (refusalRefreshesWorkbench(returnErrorReason(e))) refresh();
     } finally {
       setBusy(false);
     }
@@ -167,6 +177,7 @@ export function ReturnWorkbenchView({
       onChanged?.();
     } catch (e) {
       setNotice(describeReturnError(e));
+      if (refusalRefreshesWorkbench(returnErrorReason(e))) refresh();
     } finally {
       setBusy(false);
     }

@@ -46,7 +46,10 @@ describe('the list filters', () => {
     const view = code(read('src/components/return-workbench-view.tsx'));
     expect(list).toMatch(/<ReturnWorkbenchView[^>]*onChanged=\{\(\) => scheduler\.schedule\(\(\) => void load\(\)\)\}/);
     // Receive, every sheet's answer, and (RX-2) "Get replacement ready".
-    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(3);
+    // Re-pinned by returns RX-2 review fix S2 (the claim is kept: the list
+    // reloads after every answer): also after a refusal that means the
+    // screen is behind (refresh()).
+    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(4);
   });
 });
 

@@ -110,3 +110,28 @@ describe('the words for a refusal (by reason, never by message text)', () => {
     expect(returnErrorReason(new Error('x'))).toBeNull();
   });
 });
+
+// RX-2 review fix (0396, stock S1): one exchange per original unit. The
+// refusal exchange_already_sent carries what the original line has left in
+// its detail ({quantity, available}); the phone gives that detail to core, so
+// the change and re-issue sheets say how many can still be exchanged, as the
+// web does (the approval and the create sheet show the server's own words).
+// Stock S2: replacement_in_progress (an RMA cancel while its replacement is
+// picked or on its way) has its own words.
+describe('the exchange refusals 0396 adds (review fixes S1 and S2)', () => {
+  it('words exchange_already_sent from its detail', () => {
+    const e = new apiMock.ApiError('x', 400, 'validation_error', { reason: 'exchange_already_sent', detail: { quantity: 2, available: 1 } });
+    expect(describeReturnError(e)).toBe('Only 1 of these can still be exchanged; the rest already got a replacement on an earlier return.');
+    const none = 'This item already got a replacement on an earlier return, so it can only be returned now.';
+    expect(describeReturnError(new apiMock.ApiError('x', 400, 'validation_error', { reason: 'exchange_already_sent', detail: { quantity: 1, available: 0 } }))).toBe(none);
+    // A detail that cannot be read: the nothing-left words, never a number guessed.
+    expect(describeReturnError(new apiMock.ApiError('x', 400, 'validation_error', { reason: 'exchange_already_sent' }))).toBe(none);
+    expect(describeReturnError(new apiMock.ApiError('x', 400, 'validation_error', { reason: 'exchange_already_sent', detail: 'junk' }))).toBe(none);
+  });
+
+  it('replacement_in_progress says to hand it over or cancel the replacement first', () => {
+    const e = new apiMock.ApiError('x', 409, 'conflict', { reason: 'replacement_in_progress', detail: 'picking_complete' });
+    expect(describeReturnError(e)).toBe('The replacement is already picked or on its way. Hand it over, or cancel the replacement first.');
+    expect(returnErrorReason(e)).toBe('replacement_in_progress');
+  });
+});

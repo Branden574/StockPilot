@@ -244,6 +244,20 @@ describe('online only', () => {
     expect(sheet).not.toContain('{RETURNS_COPY.returnOnly}');
   });
 
+  // Review fix (0396, stock S2): a refusal that means the screen is behind
+  // the server (return_changed, invalid_status_transition, and now
+  // replacement_in_progress) closes the sheet; the workbench reloads and its
+  // notice says why. Every request path checks it first.
+  it('a refusal that means the screen is behind closes the sheet and reloads the workbench (review fix S2)', () => {
+    expect(sheet).toMatch(
+      /function staleRefusal\(e: unknown\): boolean \{\s*if \(!refusalRefreshesWorkbench\(returnErrorReason\(e\)\)\) return false;\s*onDone\(\{ message: describeReturnError\(e\), workbench: null \}\);\s*return true;\s*\}/,
+    );
+    expect(sheet.match(/if \(staleRefusal\(e\)\) return;/g)?.length).toBe(2);
+    const view = code(read('src/components/return-workbench-view.tsx'));
+    expect(view.match(/if \(refusalRefreshesWorkbench\(returnErrorReason\(e\)\)\) refresh\(\);/g)?.length).toBe(2);
+    expect(view).toMatch(/function refresh\(\) \{\s*void load\(\);\s*onChanged\?\.\(\);\s*\}/);
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {

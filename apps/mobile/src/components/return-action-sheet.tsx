@@ -77,6 +77,7 @@ import {
   openLines,
   processButtonLabel,
   processingHint,
+  refusalRefreshesWorkbench,
   replacementQuantityMax,
   reviewsForShortChange,
   shortSentences,
@@ -233,6 +234,15 @@ function SheetContent({
   function requestClose() {
     if (submitting) return;
     onClose();
+  }
+  // Review fix S2: a refusal that means the screen is behind the server
+  // (another person changed the return, or its replacement was picked or
+  // left meanwhile: replacement_in_progress) closes the sheet; the workbench
+  // reloads and its notice says why, instead of offering the old actions.
+  function staleRefusal(e: unknown): boolean {
+    if (!refusalRefreshesWorkbench(returnErrorReason(e))) return false;
+    onDone({ message: describeReturnError(e), workbench: null });
+    return true;
   }
 
   const lines = openLines(wb);
@@ -419,6 +429,7 @@ function SheetContent({
             workbench: res.workbench,
           });
         } catch (e) {
+          if (staleRefusal(e)) return;
           if (returnErrorReason(e) === 'replacement_unavailable') {
             // The numbers first (D19); then "Approve, replacement on backorder".
             const detail = (e as { details?: { detail?: unknown } }).details?.detail;
@@ -492,6 +503,7 @@ function SheetContent({
       onDone({ message: res.changed ? 'Return cancelled.' : 'Already cancelled.', workbench: null });
       return;
     } catch (e) {
+      if (staleRefusal(e)) return;
       setError(describeReturnError(e));
       setBusy(false);
     }

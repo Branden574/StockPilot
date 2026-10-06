@@ -441,9 +441,14 @@ export function mintReturnKey(): string {
  */
 export function describeReturnError(e: unknown): string {
   if (e instanceof ApiError) {
-    const reason = (e.details as { reason?: unknown } | undefined)?.reason;
+    const details = e.details as { reason?: unknown; detail?: unknown } | undefined;
+    const reason = details?.reason;
     if (typeof reason === 'string' && reason !== 'failed') {
-      const mapped = mapReturnError({ hint: reason });
+      // The refusal's structured detail goes to core too: some words come
+      // from it (exchange_already_sent: what the original line has left,
+      // review fix S1).
+      const detail = details?.detail;
+      const mapped = mapReturnError({ hint: reason, details: detail && typeof detail === 'object' ? JSON.stringify(detail) : null });
       if (mapped.reason !== 'internal_error') return mapped.message;
     }
     if (e.status === 401) return mapReturnError({ hint: 'unauthenticated' }).message;

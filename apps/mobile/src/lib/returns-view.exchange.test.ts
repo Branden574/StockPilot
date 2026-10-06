@@ -26,6 +26,7 @@ import {
   replacementQuantityMax,
   replacementQuantityStepLabel,
   replacementSideLines,
+  refusalRefreshesWorkbench,
   returnRowExchange,
   reviewsForShortChange,
   shortSentences,
@@ -430,6 +431,19 @@ describe('the REPLACEMENT side and the replacement order', () => {
     );
     expect(actionHelp('receive')).toBeNull();
     expect(actionHelp(null)).toBeNull();
+  });
+
+  // Review fix (0396, stock S2): an RMA cancel while its replacement is
+  // picked or on its way is refused replacement_in_progress, a sign the
+  // screen is behind the server, like return_changed. The workbench reloads
+  // and says why instead of leaving the old actions up.
+  it('a refusal that means the screen is behind reloads the workbench (review fix S2)', () => {
+    for (const reason of ['return_changed', 'invalid_status_transition', 'replacement_in_progress']) {
+      expect(refusalRefreshesWorkbench(reason), reason).toBe(true);
+    }
+    for (const reason of ['reason_required', 'replacement_unavailable', 'replacement_site_not_available', 'exchange_already_sent', 'busy', null]) {
+      expect(refusalRefreshesWorkbench(reason), String(reason)).toBe(false);
+    }
   });
 
   it('prepare: staged words, or the refusal', () => {
