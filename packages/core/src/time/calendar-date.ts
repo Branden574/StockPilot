@@ -137,10 +137,25 @@ export function isPastExpectedDay(
   at: Date | string | number | null | undefined,
   timeZone: string | null | undefined,
 ): boolean {
-  const expectedDay = expectedDayOf(expectedAt);
-  if (expectedDay === null) return false;
+  return pastExpectedDayTest(at, timeZone)(expectedAt);
+}
+
+/**
+ * isPastExpectedDay for many purchase orders at one moment: the
+ * organization's day is worked out once, and the returned test compares each
+ * expected day with it. The same rule (isPastExpectedDay delegates here), for
+ * lists that would otherwise work the day out again for every row.
+ */
+export function pastExpectedDayTest(
+  at: Date | string | number | null | undefined,
+  timeZone: string | null | undefined,
+): (expectedAt: string | Date | null | undefined) => boolean {
   const day = orgDayOf(at, timeZone);
-  return day !== null && expectedDay < day;
+  return (expectedAt) => {
+    if (day === null) return false;
+    const expectedDay = expectedDayOf(expectedAt);
+    return expectedDay !== null && expectedDay < day;
+  };
 }
 
 /**

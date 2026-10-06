@@ -224,8 +224,11 @@ describe('the dates fixes release says only what shipped', () => {
     ].join('\n');
 
   it('says the phone changes come with the latest update, and how to load it', () => {
+    // Re-pinned by the review of #338 (2026-10-06; was: "... the Purchase
+    // orders and Receive POs screens"): the summary also says the phone's
+    // Receive POs overdue count comes with the update, within 500 characters.
     expect(release().summary).toContain(
-      'In the mobile app, after the latest update, the Purchase orders and Receive POs screens',
+      'In the mobile app, after the latest update, Purchase orders and Receive POs show each expected date as it was set, and Receive POs counts overdue ones as the web does.',
     );
     for (const id of ['phone-po-list-expected-date', 'phone-receive-expected-date']) {
       expect(entry(id).whatChanged, id).toContain(
@@ -277,13 +280,23 @@ describe('the dates fixes release says only what shipped', () => {
     expect(source('apps/web/src/server/services/purchase-orders.ts')).toContain(
       "lt('expected_at', cutoff)",
     );
+    // Re-pinned by the review of #338 (2026-10-06; was: isPastExpectedDay per
+    // row): the same rule, the organization's day worked out once per list.
     expect(source('apps/web/src/server/services/digest.ts')).toContain(
-      'isOverdue: isPastExpectedDay(r.expected_at, clock.now, clock.timeZone),',
+      'const isPast = pastExpectedDayTest(clock.now, clock.timeZone);',
     );
+    expect(source('apps/web/src/server/services/digest.ts')).toContain('isOverdue: isPast(r.expected_at),');
     expect(source('apps/web/src/server/services/reports.ts')).toContain(
       'if (!isPastExpectedDay(po.expected_at, po.received_at, timeZone)) {',
     );
-    expect(source('apps/mobile/src/lib/receive-overdue.ts')).toContain('isPastExpectedDay(');
+    // Re-pinned by the review of #338 (2026-10-06; was: isPastExpectedDay per
+    // purchase order): the same rule, the organization's day worked out once.
+    expect(source('apps/mobile/src/lib/receive-overdue.ts')).toContain(
+      'const isPast = pastExpectedDayTest(now, timeZone);',
+    );
+    expect(source('packages/core/src/time/calendar-date.ts')).toContain(
+      'return pastExpectedDayTest(at, timeZone)(expectedAt);',
+    );
   });
 
   it('names the overdue counts the way each screen does', () => {
@@ -303,8 +316,13 @@ describe('the dates fixes release says only what shipped', () => {
     expect(insights).toContain("'overdue inbound PO'");
     const briefingPage = source('apps/web/src/app/(dashboard)/dashboard/insights/page.tsx');
     expect(briefingPage).toContain('Today&apos;s briefing');
+    // Re-pinned by the review of #338 (2026-10-06; was: "Today's briefing and
+    // the morning briefing notification" counted from the day before): the
+    // notification runs at 13:00 UTC on weekdays, 6 AM Pacific, so it counted
+    // a purchase order due that same day; only the Insights page, opened after
+    // 5 PM, counted it from the evening before.
     expect(entry('briefing-overdue-purchase-orders').whatChanged).toContain(
-      "Today's briefing and the morning briefing notification",
+      "Today's briefing counted a purchase order as an overdue inbound PO from the evening before its expected date, and the morning briefing notification counted it on its expected date.",
     );
     const digest = source('apps/web/src/lib/email/es/families/digest.ts');
     expect(digest).toContain("`${plural(overdueTotal, 'purchase order')} overdue`");

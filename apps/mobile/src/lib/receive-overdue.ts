@@ -1,4 +1,4 @@
-import { isPastExpectedDay } from '@stockpilot/core';
+import { pastExpectedDayTest } from '@stockpilot/core';
 
 /**
  * How many of the Receive POs screen's purchase orders are OVERDUE, for its
@@ -21,9 +21,35 @@ export function receiveOverdueCount(
   now: Date,
   timeZone: string | null,
 ): number {
+  // The organization's day once, not once per purchase order.
+  const isPast = pastExpectedDayTest(now, timeZone);
   let overdue = 0;
   for (const po of pos) {
-    if (isPastExpectedDay(po.expected_at, now, timeZone)) overdue += 1;
+    if (isPast(po.expected_at)) overdue += 1;
   }
   return overdue;
+}
+
+/** The organization zone the screen last read, and whose it is. */
+export interface KnownOrgZone {
+  orgId: string;
+  zone: string | null;
+}
+
+/**
+ * The zone to keep after a read for `orgId` answered `read`. readOrgTimeZone
+ * never throws: a refused or failed read answers null, as an unset zone does.
+ * A null from a refresh must not replace a zone already read for the same
+ * organization (a Sydney organization would otherwise fall back to the
+ * default zone's day until the next good read); a different organization
+ * starts from what its own read answered.
+ */
+export function nextKnownOrgZone(
+  prev: KnownOrgZone | null,
+  orgId: string,
+  read: string | null,
+): KnownOrgZone {
+  if (read !== null) return { orgId, zone: read };
+  if (prev !== null && prev.orgId === orgId) return prev;
+  return { orgId, zone: null };
 }

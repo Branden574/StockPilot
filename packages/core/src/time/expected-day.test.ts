@@ -6,6 +6,7 @@ import {
   isPastExpectedDay,
   orgDayOf,
   pastExpectedDayCutoff,
+  pastExpectedDayTest,
 } from './calendar-date';
 
 /**
@@ -169,15 +170,29 @@ describe('when a purchase order is past its expected day', () => {
       for (let t = start; t <= end; t += 15 * 60 * 1000) {
         const cutoff = pastExpectedDayCutoff(t, zone);
         expect(cutoff, `${new Date(t).toISOString()} in ${zone}`).not.toBeNull();
+        // The list form (the day worked out once) is the same rule.
+        const isPast = pastExpectedDayTest(t, zone);
         for (const e of stored) {
+          const expected = Date.parse(e) < Date.parse(cutoff!);
           expect(isPastExpectedDay(e, t, zone), `${e} at ${new Date(t).toISOString()} in ${zone}`).toBe(
-            Date.parse(e) < Date.parse(cutoff!),
+            expected,
           );
+          expect(isPast(e), `list form: ${e} at ${new Date(t).toISOString()} in ${zone}`).toBe(expected);
           checked += 1;
         }
       }
     }
     expect(checked).toBe(zones.length * (((end - start) / (15 * 60 * 1000)) + 1) * stored.length);
+    // About 1.4 s alone; review (2026-10-06) saw it pass 5 s under full CPU
+    // load, so it states its own timeout.
+  }, 30_000);
+
+  it('the list form is never past for a missing or unreadable date or instant', () => {
+    expect(pastExpectedDayTest('not a date', LA)(OCT_10)).toBe(false);
+    expect(pastExpectedDayTest(Number.NaN, LA)(OCT_10)).toBe(false);
+    for (const e of [null, undefined, '', 'not a date']) {
+      expect(pastExpectedDayTest('2026-12-31T00:00:00.000Z', LA)(e), String(e)).toBe(false);
+    }
   });
 
   it('is never past for a missing or unreadable date or instant', () => {

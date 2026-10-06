@@ -25,7 +25,7 @@ import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { readOrgTimeZone } from '@/lib/order-readiness';
-import { receiveOverdueCount } from '@/lib/receive-overdue';
+import { nextKnownOrgZone, receiveOverdueCount, type KnownOrgZone } from '@/lib/receive-overdue';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -53,7 +53,8 @@ export default function Receive() {
   const { orgId } = useOrg();
   const [pos, setPos] = React.useState<OpenPo[]>([]);
   // organizations.timezone, for the OVERDUE count (null: core's default zone).
-  const [timeZone, setTimeZone] = React.useState<string | null>(null);
+  const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);
+  const timeZone = knownZone !== null && knownZone.orgId === orgId ? knownZone.zone : null;
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -77,7 +78,8 @@ export default function Receive() {
         .order('updated_at', { ascending: false }),
       readOrgTimeZone(supabase, orgId),
     ]);
-    setTimeZone(zone);
+    // A failed read on a refresh keeps the zone already read (nextKnownOrgZone).
+    setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));
     if (error) {
       console.warn('po list', error);
       setPos([]);

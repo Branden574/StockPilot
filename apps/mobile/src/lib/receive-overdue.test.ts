@@ -101,7 +101,10 @@ describe('the Receive POs screen counts overdue by that rule, in the organizatio
   // Mutation caught: the count compares the stored midnight with the clock again.
   it('counts through receiveOverdueCount, with the zone the screen read', () => {
     const src = screen();
-    expect(src).toContain("import { receiveOverdueCount } from '@/lib/receive-overdue';");
+    // Review (2026-10-06): the screen also keeps its zone through nextKnownOrgZone.
+    expect(src).toContain(
+      "import { nextKnownOrgZone, receiveOverdueCount, type KnownOrgZone } from '@/lib/receive-overdue';",
+    );
     expect(src).toContain('const overdueCount = receiveOverdueCount(pos, new Date(), timeZone);');
     expect(src).toContain("`${pos.length} OPEN${overdueCount > 0 ? ` · ${overdueCount} OVERDUE` : ''}`");
     expect(src).not.toMatch(/new Date\(p\.expected_at\)/);
@@ -112,10 +115,16 @@ describe('the Receive POs screen counts overdue by that rule, in the organizatio
   it("reads the organization's zone with the purchase orders, as the order screen does", () => {
     const src = screen();
     expect(src).toMatch(/import \{[^}]*\breadOrgTimeZone\b[^}]*\} from '@\/lib\/order-readiness';/);
-    expect(src).toContain('const [timeZone, setTimeZone] = React.useState<string | null>(null);');
+    // Re-pinned by the review (2026-10-06; was: a plain timeZone state set
+    // straight from the read): the zone is kept per organization, and a
+    // failed read on a refresh keeps the zone already read.
+    expect(src).toContain('const [knownZone, setKnownZone] = React.useState<KnownOrgZone | null>(null);');
+    expect(src).toContain(
+      'const timeZone = knownZone !== null && knownZone.orgId === orgId ? knownZone.zone : null;',
+    );
     expect(src).toMatch(/await Promise\.all\(\[\s*supabase\s*\.from\('purchase_orders'\)/);
     expect(src).toContain('readOrgTimeZone(supabase, orgId),');
-    expect(src).toContain('setTimeZone(zone);');
+    expect(src).toContain('setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));');
   });
 
   // The sweep: no phone source decides overdue or late by comparing an
@@ -138,5 +147,44 @@ describe('the Receive POs screen counts overdue by that rule, in the organizatio
       });
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+async function nextZone(
+  ...args: Parameters<typeof import('./receive-overdue').nextKnownOrgZone>
+): Promise<ReturnType<typeof import('./receive-overdue').nextKnownOrgZone>> {
+  const { nextKnownOrgZone } = await import('./receive-overdue');
+  return nextKnownOrgZone(...args);
+}
+
+describe('nextKnownOrgZone: a failed zone read on a refresh keeps the zone already read', () => {
+  // Review (2026-10-06): readOrgTimeZone answers null for a refused or failed
+  // read as for an unset zone, and the screen set the zone straight from it,
+  // so a refresh whose zone read failed put a Sydney organization on the
+  // default zone's day until the next good read.
+  it('keeps the same organization\'s zone when a later read answers null', async () => {
+    const first = await nextZone(null, 'org-a', 'Australia/Sydney');
+    expect(first).toEqual({ orgId: 'org-a', zone: 'Australia/Sydney' });
+    expect(await nextZone(first, 'org-a', null)).toEqual({ orgId: 'org-a', zone: 'Australia/Sydney' });
+  });
+
+  it('takes a new zone when the read answers one', async () => {
+    const first = await nextZone(null, 'org-a', 'Australia/Sydney');
+    expect(await nextZone(first, 'org-a', 'America/Los_Angeles')).toEqual({
+      orgId: 'org-a',
+      zone: 'America/Los_Angeles',
+    });
+  });
+
+  it("never carries one organization's zone to another", async () => {
+    const first = await nextZone(null, 'org-a', 'Australia/Sydney');
+    expect(await nextZone(first, 'org-b', null)).toEqual({ orgId: 'org-b', zone: null });
+    expect(await nextZone(first, 'org-b', 'UTC')).toEqual({ orgId: 'org-b', zone: 'UTC' });
+  });
+
+  it('the screen keeps its zone through nextKnownOrgZone', () => {
+    const screen = readFileSync(path.resolve(__dirname, '../../app/(drawer)/(tabs)/receive.tsx'), 'utf8');
+    expect(screen).toContain('setKnownZone((prev) => nextKnownOrgZone(prev, orgId, zone));');
+    expect(screen).not.toContain('setTimeZone(zone)');
   });
 });

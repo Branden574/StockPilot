@@ -130,7 +130,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: "Expected dates, overdue purchase orders, the calendar's month and the digest's send time",
     summary:
-      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. A purchase order now counts as overdue only once its expected date has passed in your organization's time zone, and a delivery received on its expected date counts as on time. On the web, the team calendar opens on your organization's current month, and the weekly digest setting gives the day and time the digest is sent.",
+      "In the mobile app, after the latest update, Purchase orders and Receive POs show each expected date as it was set, and Receive POs counts overdue ones as the web does. A purchase order now counts as overdue only once its expected date has passed in your organization's time zone, and a delivery received on its expected date counts as on time. On the web, the team calendar opens on your organization's current month, and the weekly digest setting gives the day and time it is sent.",
     publishedAt: '2026-10-14T17:00:00Z',
     entries: [
       {
@@ -202,7 +202,7 @@ export const RELEASES: Release[] = [
         area: 'Briefing',
         title: "Today's briefing counts a purchase order as overdue only after its expected date",
         whatChanged:
-          "In US time zones, Today's briefing and the morning briefing notification counted a purchase order as an overdue inbound PO from the day before its expected date. They now count it once its expected date has passed in your organization's time zone.",
+          "In US time zones, Today's briefing counted a purchase order as an overdue inbound PO from the evening before its expected date, and the morning briefing notification counted it on its expected date. They now count it once its expected date has passed in your organization's time zone.",
         whyItMatters: 'A purchase order still due that day was listed among the overdue inbound POs.',
         howItAffectsYou:
           'The overdue inbound PO count leaves out purchase orders expected today. They count from the next day.',

@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { cycleCountScopeLabel, isPastExpectedDay } from '@stockpilot/core';
+import { cycleCountScopeLabel, pastExpectedDayTest } from '@stockpilot/core';
 
 import { ServiceError } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
@@ -619,6 +619,8 @@ async function getOpenPos(
       .range(from, to),
   );
 
+  // The organization's day once for the whole list (core pastExpectedDayTest).
+  const isPast = pastExpectedDayTest(clock.now, clock.timeZone);
   return rows.map((r) => {
     const sup = Array.isArray(r.supplier) ? r.supplier[0] : r.supplier;
     const dest = Array.isArray(r.destination) ? r.destination[0] : r.destination;
@@ -630,7 +632,7 @@ async function getOpenPos(
       status: r.status,
       // Past its expected DAY in the organization's zone, never the stored
       // midnight UTC against the clock (DigestClock).
-      isOverdue: isPastExpectedDay(r.expected_at, clock.now, clock.timeZone),
+      isOverdue: isPast(r.expected_at),
       destinationLocationId: r.destination_location_id ?? null,
       destinationWarehouseId: dest ? (dest.warehouse_id ?? null) : undefined,
     };
