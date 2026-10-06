@@ -28,6 +28,103 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'dates-fixes-2026-10',
+    revision: 1,
+    // fix/dates-in-org-and-utc (no migration; web and phone). Held as a DRAFT
+    // until the web deploy is live AND the over-the-air update carrying the
+    // phone part has reached phones (iOS launches in eas update:insights for
+    // its group); the follow-up that publishes it sets the real publishedAt,
+    // moves it among the releases published by then, and re-reads these words
+    // against what shipped. Dated after every release, so it sits at the top
+    // (newest first).
+    //
+    // Every user-visible change in the branch has a line (owner rule
+    // 2026-09-25). The phone lines ride the over-the-air update, which loads
+    // when the app is opened again with no prompt, so they say "after the
+    // latest update" and their What to do says to close and reopen the app.
+    // Left out as not visible: the web purchase order page's Expected row, the
+    // purchase orders list's On the water ETA and server-paged Expected
+    // column, and the weekly digest email's expected dates. Each printed the
+    // day in the server's zone, which on Vercel (UTC) is the day that was set,
+    // so production already showed the right day; they now read it in UTC in
+    // any zone. The order readiness lines read it in UTC already (now through
+    // the same helper, core's formatCalendarDate).
+    //
+    // Who is told: each phone line, whoever the phone shows that screen to
+    // (Purchase orders: purchase_orders:read with Purchase orders on; Receive
+    // POs: Receiving on, no permission); the calendar line, whoever can open
+    // the calendar (the page's schedule:read or schedule:manage, Schedule on);
+    // the digest line, every member (the notification settings are each
+    // member's own).
+    status: 'draft',
+    title: "Expected dates in the mobile app, the calendar's month and the digest's send time",
+    summary:
+      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. On the web, the team calendar opens on your organization's current month late on the last day of a month, and the weekly digest setting gives the day and time the digest is sent in your workspace's time zone.",
+    publishedAt: '2026-10-14T17:00:00Z',
+    entries: [
+      {
+        id: 'phone-po-list-expected-date',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: "The mobile app's Purchase orders screen shows the expected date that was set",
+        whatChanged:
+          "In US time zones, the ETA on the mobile app's Purchase orders screen showed the day before the expected date set on the purchase order. In the mobile app, after the latest update, it shows the date that was set.",
+        whyItMatters:
+          "The phone named a different day than the purchase order's page on the web and its PDF.",
+        howItAffectsYou:
+          "Each ETA on the Purchase orders screen shows the same day as the purchase order's page on the web and its PDF.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        id: 'phone-receive-expected-date',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'The Receive POs screen shows the expected date that was set',
+        whatChanged:
+          "In US time zones, the ETA of each purchase order on the mobile app's Receive POs screen showed the day before the expected date set on it. In the mobile app, after the latest update, it shows the date that was set.",
+        whyItMatters: 'The ETA named the day before the one on the purchase order.',
+        howItAffectsYou:
+          "Each ETA on the Receive POs screen shows the same day as the purchase order's page on the web.",
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['receiving'] },
+      },
+      {
+        // The page picked the month from the server's clock in UTC, already
+        // the next month from 5 PM Pacific (4 PM in standard time) on a
+        // month's last day. Today drops ?m=, so it opened the same month.
+        id: 'calendar-current-month',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar opens on the current month at the end of a month',
+        whatChanged:
+          "Late in the day on the last day of a month, opening the team calendar or pressing Today showed the next month. The calendar now opens on the current month in your organization's time zone.",
+        whyItMatters: "That evening, today's events were a month away from where the calendar opened.",
+        howItAffectsYou:
+          "The calendar, and its Today button, open on your organization's current month.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        // The card said "Sent every Monday morning"; the cron runs at 14:00
+        // UTC on Mondays for every organization (Monday morning in US zones,
+        // 2:00 PM on UTC, Tuesday from UTC+10 east). The card now gives the
+        // footer's own words (digestScheduleLabel) for the next run.
+        id: 'digest-send-time',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'The weekly digest setting says when the digest is sent',
+        whatChanged:
+          "In your notification settings, the weekly inventory digest said it is sent every Monday morning. It now gives the day and time it is sent in your workspace's time zone, the same time the digest email's footer gives.",
+        whyItMatters:
+          'The digest goes out at the same moment for every workspace: Monday morning in US time zones, but not everywhere.',
+        howItAffectsYou: 'The setting and the email give the same day and time.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+    ],
+  },
+  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
