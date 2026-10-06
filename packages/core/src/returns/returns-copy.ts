@@ -185,6 +185,11 @@ export const RETURNS_COPY = {
   // Read-only reasons
   noManagePermission: "You don't have permission to manage returns.",
   noOrdersApprovePermission: 'Approving the replacement needs order approval permission.',
+  // RX-2 review fix P1: a requested exchange, for a viewer with Manage
+  // returns but not order approval (the review offers only the decline).
+  noOrdersApproveDeclineOnly:
+    'Approving the replacement needs order approval permission. You can still approve the return: choose Decline the exchange, return only.',
+  needsOrderApproval: 'Needs order approval permission.',
 
   // List
   listEmpty: 'No returns match this view.',

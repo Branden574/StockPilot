@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RETURN_STATUS_LABELS, type ReturnStatus } from '../orders/order-returns-view';
 import { EXCHANGE_STATUSES, type ExchangeStatus } from './exchange-status';
+import { defaultExchangeReviewState, exchangeReviewDecision, exchangeReviewOptions, exchangeReviewProblem } from './exchange-view';
 import {
   availableReturnActions,
   REPLACEMENT_ACTIONS,
@@ -146,10 +147,63 @@ describe('availableReturnActions (exchange rows, plan 3.9)', () => {
         viewerCanApproveOrders: false,
       }),
     ).toEqual({ primary: 'process', secondary: [], readOnlyReason: NO_ORDERS });
-    // A requested exchange can still be approved (the review declines what the viewer cannot approve).
-    expect(
-      availableReturnActions({ status: 'requested', exchangeStatus: 'requested', viewerCanManageReturns: true, viewerCanApproveOrders: false }),
-    ).toEqual({ primary: 'approve', secondary: ['deny', 'cancel'], readOnlyReason: null });
+  });
+
+  // RX-2 review fix P1: a viewer with Manage returns but not order approval
+  // can still approve the RETURN of a requested exchange: the review shows,
+  // offers only "Decline the exchange, return only" (the database asks for
+  // order approval only to approve or add a replacement), starts there, and
+  // says why the other two choices are off. Never an approval that would send
+  // an approve decision the database refuses.
+  it('the review declines what the viewer cannot approve', () => {
+    const requested = { status: 'requested' as const, exchangeStatus: 'requested' as const, viewerCanManageReturns: true };
+    expect(availableReturnActions({ ...requested, viewerCanApproveOrders: false })).toEqual({
+      primary: 'approve',
+      secondary: ['deny', 'cancel'],
+      readOnlyReason:
+        'Approving the replacement needs order approval permission. You can still approve the return: choose Decline the exchange, return only.',
+    });
+    expect(availableReturnActions({ ...requested, viewerCanApproveOrders: false, itemIsHere: true }).primary).toBe('approve_and_receive');
+
+    const line = { id: 'x1', requestedItemId: 'l', requestNote: null };
+    const viewer = { canApproveOrders: false };
+    expect(exchangeReviewOptions(line, viewer)).toEqual([
+      { kind: 'as_requested', label: 'Approve as requested. Needs order approval permission.', disabled: true },
+      { kind: 'change', label: 'Change replacement. Needs order approval permission.', disabled: true },
+      { kind: 'decline', label: 'Decline the exchange, return only', disabled: false },
+    ]);
+    // The review starts on the one choice this viewer can make.
+    const start = defaultExchangeReviewState(viewer);
+    expect(start).toEqual({ kind: 'decline', reason: '' });
+    // Approving or changing the replacement is refused before anything is
+    // sent; a decline with its reason goes.
+    expect(exchangeReviewProblem(line, { kind: 'as_requested' }, viewer)).toBe(NO_ORDERS);
+    expect(exchangeReviewProblem(line, { kind: 'change', itemId: 'l', label: 'L', free: 3, quantity: 1, reason: '' }, viewer)).toBe(NO_ORDERS);
+    expect(exchangeReviewProblem(line, start, viewer)).toBe('Reason for declining the exchange (required)');
+    expect(exchangeReviewProblem(line, { kind: 'decline', reason: 'No order approval' }, viewer)).toBeNull();
+    expect(exchangeReviewDecision(line, { kind: 'decline', reason: 'No order approval' })).toEqual({
+      action: 'decline',
+      exchangeLineId: 'x1',
+      reason: 'No order approval',
+    });
+
+    // With order approval nothing changes: every choice, starting as requested.
+    expect(availableReturnActions({ ...requested, viewerCanApproveOrders: true }).readOnlyReason).toBeNull();
+    expect(exchangeReviewOptions(line, { canApproveOrders: true })).toEqual([
+      { kind: 'as_requested', label: 'Approve as requested', disabled: false },
+      { kind: 'change', label: 'Change replacement…', disabled: false },
+      { kind: 'decline', label: 'Decline the exchange, return only', disabled: false },
+    ]);
+    expect(defaultExchangeReviewState({ canApproveOrders: true })).toEqual({ kind: 'as_requested' });
+    expect(exchangeReviewProblem(line, { kind: 'as_requested' }, { canApproveOrders: true })).toBeNull();
+    // A note-only request cannot be approved as requested by anyone.
+    expect(exchangeReviewOptions({ ...line, requestedItemId: null }, { canApproveOrders: true })[0]).toEqual({
+      kind: 'as_requested',
+      label: 'Approve as requested',
+      disabled: true,
+    });
+    // A return without an exchange says nothing about it.
+    expect(availableReturnActions({ status: 'requested', viewerCanManageReturns: true, viewerCanApproveOrders: false }).readOnlyReason).toBeNull();
   });
 
   it('a viewer who cannot manage returns sees the exchange read-only', () => {

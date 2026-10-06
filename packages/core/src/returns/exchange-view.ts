@@ -289,8 +289,64 @@ export interface ExchangeReviewLine {
   requestNote: string | null;
 }
 
-/** Why the approval cannot be sent yet for this line, or null. */
-export function exchangeReviewProblem(line: ExchangeReviewLine, state: ExchangeReviewState): string | null {
+/** Who is reviewing: approving or changing a replacement needs order approval. */
+export interface ExchangeReviewViewer {
+  canApproveOrders: boolean;
+}
+
+/** One choice of the review, as the web radio and the phone row show it. */
+export interface ExchangeReviewOption {
+  kind: ExchangeReviewState['kind'];
+  label: string;
+  disabled: boolean;
+}
+
+/** "Change replacement. Needs order approval permission." (an off choice opens nothing, so no ellipsis). */
+function needsOrderApprovalLabel(label: string): string {
+  return `${label.replace(/…$/, '')}. ${RETURNS_COPY.needsOrderApproval}`;
+}
+
+/**
+ * The review's three choices for one requested exchange line (review fix
+ * P1, web and phone): "Approve as requested" (off for a note-only request),
+ * "Change replacement…", "Decline the exchange, return only". A viewer
+ * without order approval may only decline (the database asks for order
+ * approval to approve or add a replacement, never to decline one): the other
+ * two are off and say why.
+ */
+export function exchangeReviewOptions(
+  line: Pick<ExchangeReviewLine, 'requestedItemId'>,
+  viewer: ExchangeReviewViewer,
+): ExchangeReviewOption[] {
+  const can = viewer.canApproveOrders;
+  return [
+    {
+      kind: 'as_requested',
+      label: can ? RETURNS_COPY.approveAsRequested : needsOrderApprovalLabel(RETURNS_COPY.approveAsRequested),
+      disabled: !can || !line.requestedItemId,
+    },
+    {
+      kind: 'change',
+      label: can ? RETURNS_COPY.changeReplacementEllipsis : needsOrderApprovalLabel(RETURNS_COPY.changeReplacementEllipsis),
+      disabled: !can,
+    },
+    { kind: 'decline', label: RETURNS_COPY.declineExchange, disabled: false },
+  ];
+}
+
+/** Where the review starts: as requested, or the decline for a viewer who can only decline. */
+export function defaultExchangeReviewState(viewer: ExchangeReviewViewer): ExchangeReviewState {
+  return viewer.canApproveOrders ? { kind: 'as_requested' } : { kind: 'decline', reason: '' };
+}
+
+/** Why the approval cannot be sent yet for this line, or null. With the
+ *  viewer, a choice they may not make is refused before anything is sent. */
+export function exchangeReviewProblem(
+  line: ExchangeReviewLine,
+  state: ExchangeReviewState,
+  viewer?: ExchangeReviewViewer,
+): string | null {
+  if (viewer && !viewer.canApproveOrders && state.kind !== 'decline') return RETURNS_COPY.noOrdersApprovePermission;
   if (state.kind === 'as_requested') {
     return line.requestedItemId ? null : `${RETURNS_COPY.chooseReplacement}: ${line.requestNote ?? RETURNS_COPY.replacementWarehouseReview}`;
   }

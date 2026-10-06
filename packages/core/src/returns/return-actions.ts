@@ -67,6 +67,11 @@
  * orders:approve and a reason). Change replacement needs a replacement that
  * was not picked; Cancel replacement one that was not handed over.
  *
+ * A requested exchange is still approved by a viewer without order approval
+ * (review fix P1): the database asks for it only to approve or add a
+ * replacement, so the review offers that viewer "Decline the exchange, return
+ * only" alone (exchange-view.ts exchangeReviewOptions) and the reason says so.
+ *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
 
@@ -293,7 +298,15 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
       secondary.splice(secondary.indexOf(promoted), 1);
     }
   }
-  return { primary, secondary, readOnlyReason: dropped ? RETURNS_COPY.noOrdersApprovePermission : null };
+  // Review fix P1: at requested such a viewer still approves the return,
+  // with the exchange declined (the review offers only that).
+  const readOnlyReason =
+    input.status === 'requested' && !canOrders
+      ? RETURNS_COPY.noOrdersApproveDeclineOnly
+      : dropped
+        ? RETURNS_COPY.noOrdersApprovePermission
+        : null;
+  return { primary, secondary, readOnlyReason };
 }
 
 /** The button words for an action. */
