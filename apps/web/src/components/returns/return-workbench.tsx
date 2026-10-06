@@ -686,7 +686,9 @@ export function ReturnWorkbench({
         ) : null}
       </section>
 
-      {hasExchange ? <ReplacementOrderSection exchange={ex} canReadDecisions={wb.viewer.canReadDecisions} /> : null}
+      {hasExchange ? (
+        <ReplacementOrderSection exchange={ex} canReadDecisions={wb.viewer.canReadDecisions} returnStatus={r.status} />
+      ) : null}
 
       {r.status === 'requested' && wb.viewer.canManageReturns ? (
         <section className="bg-card rounded-xl border p-4 text-sm" aria-label="What happens when you approve">

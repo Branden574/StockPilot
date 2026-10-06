@@ -435,6 +435,13 @@ export function buildExchangeView(input: {
       returnStatus: input.returnStatus,
       releasedEarly,
       fulfillmentType: replacement?.fulfillmentType ?? null,
+      // Review fix P21: a replacement closed with part never sent ends
+      // "Partly handed over", stopped (the same facts as the status label).
+      replacementStatus: input.overview?.replacement_status ?? null,
+      replacementOwed:
+        input.overview?.replacement_owed === undefined || input.overview?.replacement_owed === null
+          ? null
+          : num(input.overview.replacement_owed),
     }),
     hasApprovedExchange: lines.some((l) => l.approvedItemId !== null) || input.replacements.length > 0,
     createEnabled: exchangeCreateEnabled(),

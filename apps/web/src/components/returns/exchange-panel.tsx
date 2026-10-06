@@ -30,6 +30,7 @@ import {
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber,
+  noReplacementLine,
   qtyRequestedLabel,
   RAIL_STEP_STATE_WORDS,
   releasedBeforeReturnLine,
@@ -378,9 +379,12 @@ function ReasonField({
 export function ReplacementOrderSection({
   exchange,
   canReadDecisions,
+  returnStatus = null,
 }: {
   exchange: ReturnWorkbenchExchange;
   canReadDecisions: boolean;
+  /** The RMA's own status: a denied return's exchange reads declined. */
+  returnStatus?: string | null;
 }) {
   const repl = exchange.replacement;
   return (
@@ -436,7 +440,9 @@ export function ReplacementOrderSection({
           ) : null}
         </div>
       ) : (
-        <p className="text-muted-foreground text-sm">{RETURNS_COPY.noReplacementYet}</p>
+        // Why there is no replacement order: not yet approved, declined, or
+        // cancelled with the return (review fix P4, core noReplacementLine).
+        <p className="text-muted-foreground text-sm">{noReplacementLine(exchange.status, { returnStatus })}</p>
       )}
     </section>
   );

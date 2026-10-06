@@ -269,6 +269,43 @@ describe('a requested exchange', () => {
   });
 });
 
+// RX-2 review fix P4: after a stop nothing reads "next", and the empty
+// replacement block says why there is no order.
+describe('an exchange that ended before any replacement', () => {
+  it('declined: the later steps were not reached, and no replacement order because it was declined', () => {
+    render(
+      <ReturnWorkbench
+        workbench={bench('approved', {
+          status: 'declined',
+          statusLabel: 'Exchange declined',
+          lines: [exchangeLine({ status: 'declined' })],
+          rail: [
+            { id: 'requested', label: 'Requested', state: 'done' },
+            { id: 'reserved', label: 'Declined', state: 'stopped' },
+            { id: 'gate', label: 'Waiting for return', state: 'skipped' },
+            { id: 'picking', label: 'Picking', state: 'skipped' },
+          ],
+        })}
+      />,
+    );
+    const rail = screen.getByRole('list', { name: 'Replacement progress' });
+    expect(rail.textContent).toContain('Waiting for return · not reached');
+    expect(rail.textContent).not.toContain('· next');
+    expect(screen.getByText('No replacement order: the exchange was declined.')).toBeInTheDocument();
+    expect(screen.queryByText(/One is created when the exchange is approved/)).toBeNull();
+  });
+
+  it('cancelled with the return: says so; a still-requested exchange keeps "not yet"', () => {
+    const { unmount } = render(
+      <ReturnWorkbench workbench={bench('cancelled', { status: 'cancelled', statusLabel: 'Exchange cancelled', lines: [exchangeLine()] })} />,
+    );
+    expect(screen.getByText('No replacement order: the exchange was cancelled with the return.')).toBeInTheDocument();
+    unmount();
+    render(<ReturnWorkbench workbench={bench('requested', {})} />);
+    expect(screen.getByText('No replacement order yet. One is created when the exchange is approved.')).toBeInTheDocument();
+  });
+});
+
 describe('an approved exchange waiting for the returned item', () => {
   it('the rail says each state in words; the take line shows before preparing', () => {
     render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);

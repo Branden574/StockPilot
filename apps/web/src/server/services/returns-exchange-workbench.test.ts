@@ -149,6 +149,27 @@ describe('buildExchangeView', () => {
     expect(v.rail[2]).toMatchObject({ label: 'Released early', state: 'done' });
   });
 
+  // RX-2 review fix P21: a replacement closed with part never sent never
+  // ends "Handed over · done" on the rail.
+  it('a replacement closed with part never sent ends the rail "Partly handed over", stopped', () => {
+    const v = view({
+      returnStatus: 'closed',
+      rawLines: [line({ status: 'approved', approved_item_id: 'l', approved_quantity: 2, replacement_order_request_id: 'o-new' })],
+      overview: {
+        kind: 'exchange',
+        exchange_status: 'completed',
+        replacement_order_id: 'o-new',
+        released_early: true,
+        counter: false,
+        replacement_status: 'completed',
+        replacement_owed: 1,
+      },
+      replacements: [repl({ status: 'completed' })],
+    });
+    expect(v.rail.at(-1)).toEqual({ id: 'handed_over', label: 'Partly handed over', state: 'stopped' });
+    expect(v.statusLabel).toBe('Exchange completed; part of the replacement was not sent');
+  });
+
   it('a cancelled replacement is history: shown, not live, class none; earlier ones listed', () => {
     const v = view({
       rawLines: [line({ status: 'cancelled', approved_item_id: 'l', approved_quantity: 1, replacement_order_request_id: 'o-new' })],
