@@ -313,6 +313,44 @@ describe('approve with an exchange (approve_return + the 0396 hook)', () => {
   });
 });
 
+// RX-2 review fix (0396 stock S1): an exchange above what the original line
+// has left is refused with what is left, in core's words, on every path that
+// asks for one: the create dialog, the approval review and the change or
+// re-issue dialogs (each shows the service error's message).
+describe('exchange_already_sent reaches every exchange path in words', () => {
+  const ONE_LEFT = 'Only 1 of these can still be exchanged; the rest already got a replacement on an earlier return.';
+  const NONE_LEFT = 'This item already got a replacement on an earlier return, so it can only be returned now.';
+
+  it('the create dialog (create_return_request)', async () => {
+    const { svc } = svcFor({ 'rpc:create_return_request': rpcError('exchange_already_sent', 'P0001', '{"quantity": 2, "available": 1}') });
+    const e = await svc
+      .createFromOrder(ORDER_ID, {
+        lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, disposition: 'restock', exchange: { itemId: ITEM_L, quantity: 2 } }],
+      } as never)
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({ code: 'validation_error', message: ONE_LEFT, details: { reason: 'exchange_already_sent' } });
+  });
+
+  it('the approval review (the steps answer)', async () => {
+    const { svc } = svcFor({ 'rpc:approve_return': rpcError('exchange_already_sent', 'P0001', '{"quantity": 1, "available": 0}') });
+    const { ran } = await svc.runSteps(RET_ID, {
+      steps: ['approve'],
+      expectedRevision: 0,
+      approve: { lines: [{ returnLineId: RLINE_ID, disposition: 'restock' }], exchange: [{ action: 'approve', exchangeLineId: XLINE_ID }] },
+    } as never);
+    expect(ran[0]).toMatchObject({ step: 'approve', outcome: 'refused', reason: 'exchange_already_sent', message: NONE_LEFT });
+  });
+
+  it('the change and re-issue dialogs (change_return_replacement)', async () => {
+    const { svc } = svcFor({ 'rpc:change_return_replacement': rpcError('exchange_already_sent', 'P0001', '{"quantity": 2, "available": 1}') });
+    const e = await svc
+      .changeReplacement(RET_ID, { expectedRevision: 1, lines: [{ exchangeLineId: XLINE_ID, itemId: ITEM_L, quantity: 2 }], reason: 'Wrong size', whenShort: 'refuse' })
+      .catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: 'validation_error', message: ONE_LEFT, details: { reason: 'exchange_already_sent' } });
+  });
+});
+
 describe('the kill switch (RETURNS_EXCHANGE_CREATE=off, plan 10.2)', () => {
   it('refuses a new exchange on create before anything runs; a plain return still goes through', async () => {
     vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');

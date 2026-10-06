@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const runSteps = vi.hoisted(() => vi.fn());
+const cancelReturn = vi.hoisted(() => vi.fn());
 const releaseAction = vi.hoisted(() => vi.fn());
 const cancelReplacementAction = vi.hoisted(() => vi.fn());
 const declineAction = vi.hoisted(() => vi.fn());
@@ -19,7 +20,7 @@ const candidatesAction = vi.hoisted(() => vi.fn(async () => ({ ok: true, data: {
 vi.mock('@/server/actions/returns', () => ({
   runReturnStepsAction: runSteps,
   denyReturnAction: vi.fn(),
-  cancelReturnAction: vi.fn(),
+  cancelReturnAction: cancelReturn,
   planReturnDispositionsAction: vi.fn(),
   buyReturnLabelAction: vi.fn(),
   releaseReturnReplacementAction: releaseAction,
@@ -30,7 +31,8 @@ vi.mock('@/server/actions/returns', () => ({
   returnExchangeCandidatesAction: candidatesAction,
 }));
 const push = vi.hoisted(() => vi.fn());
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push }) }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push }) }));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return { default: ({ href, children }: { href: string; children: React.ReactNode }) => React.createElement('a', { href }, children) };
@@ -671,6 +673,32 @@ describe('an approved exchange waiting for the returned item', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel return' }));
     dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('The return closes as cancelled. The replacement was already handed over and stays as it is.')).toBeInTheDocument();
+  });
+
+  // RX-2 review fix (0396 stock S2): the RMA cancel is refused while the
+  // replacement is picked or on its way; the screen was stale, so it says the
+  // words, closes the confirm and redraws, as for any changed return.
+  it('a cancel refused because the replacement is on its way is a stale screen: its words, the confirm closes, the page redraws', async () => {
+    cancelReturn.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+        details: { reason: 'replacement_in_progress', detail: 'staged_for_pickup' },
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel return' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Reason (required: the exchange was approved)'), { target: { value: 'Customer kept it' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel return' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(refresh).toHaveBeenCalled();
   });
 
   it('cancelling the RMA after an approved exchange needs a reason', async () => {

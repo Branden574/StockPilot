@@ -109,6 +109,9 @@ type ChangeBody = {
   whenShort: 'refuse' | 'backorder';
 };
 
+/** Refusals that mean the screen was stale: the dialog closes and the page redraws. */
+const STALE_SCREEN_REASONS: ReadonlySet<string> = new Set(['replacement_in_progress', 'return_changed', 'invalid_status_transition']);
+
 /** A workbench payload from before RX-2 (or a test) has no exchange half. */
 const NO_EXCHANGE: ReturnWorkbenchExchange = {
   kind: 'return',
@@ -535,6 +538,13 @@ export function ReturnWorkbench({
     setBusy(null);
     if (!res.ok) {
       toast.error(res.error.message);
+      // A stale screen (0396: the replacement was picked or left meanwhile,
+      // or the return changed): its words, the confirm closes and the page
+      // redraws from server truth.
+      if (STALE_SCREEN_REASONS.has(String(res.error.details?.reason ?? ''))) {
+        setCancelOpen(false);
+        setCancelReason('');
+      }
       router.refresh();
       return;
     }
