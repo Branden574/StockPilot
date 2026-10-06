@@ -76,6 +76,18 @@ describe('online only', () => {
     expect(picker).toContain('const off = disabled || !online;');
   });
 
+  // RX-2 simulator finding SIM-3 (iPhone 17 at AX5): each row put the name
+  // beside its availability and cut the name at two lines, so every row read
+  // "Walk Exc…" and the size, the one thing that tells the rows apart, was
+  // lost. Past the AX threshold (shouldStackRow) the row stacks, the name on
+  // the full width and the availability under it, and the name is never cut
+  // (the Dynamic Type policy: item names are never capped).
+  it('stacks each row at the largest text sizes and never cuts the name', () => {
+    expect(picker).toContain('const stacked = shouldStackRow(fontScale);');
+    expect(picker).toMatch(/flexDirection: stacked \? 'column' : 'row'/);
+    expect(picker).not.toMatch(/numberOfLines=/);
+  });
+
   it('the sheets follow the live connection before anything else', () => {
     expect(sheet).toMatch(/const disabledReason = !online\s*\?\s*READINESS_NEEDS_CONNECTION_COPY/);
     expect(release).toMatch(/const disabledReason = !online\s*\?\s*READINESS_NEEDS_CONNECTION_COPY/);

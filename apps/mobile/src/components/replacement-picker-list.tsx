@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 
 import {
   exchangeCandidateRows,
@@ -12,6 +12,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, FieldLabel } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { describeReturnError } from '@/lib/returns-api';
 import { ACCENT, capTo, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -26,6 +27,11 @@ const INPUT_CAP = capTo(15, TYPE_CEILING.input);
  * "Short: 0 available, 1 needed."). The rows are radio buttons with their
  * state and availability in their label. Online only: offline nothing is
  * asked and the list says it needs a connection.
+ *
+ * At the AX text sizes each row stacks (shouldStackRow): the name takes the
+ * full width and the availability goes under it. The name is never cut: its
+ * size is what tells the rows apart (RX-2 simulator finding SIM-3, where
+ * every row read "Walk Exc…" on an iPhone at AX5).
  */
 export function ReplacementPickerList({
   load,
@@ -46,6 +52,8 @@ export function ReplacementPickerList({
   disabled?: boolean;
 }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stacked = shouldStackRow(fontScale);
   const [q, setQ] = React.useState('');
   const [answer, setAnswer] = React.useState<ExchangeCandidatesAnswer | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -101,11 +109,17 @@ export function ReplacementPickerList({
         accessibilityState={{ checked, disabled: off }}
         style={[
           styles.row,
-          { borderColor: checked ? c.ink : c.hair, backgroundColor: checked ? c.paper2 : 'transparent', minHeight: MIN_TAP },
+          {
+            flexDirection: stacked ? 'column' : 'row',
+            alignItems: stacked ? 'stretch' : 'center',
+            borderColor: checked ? c.ink : c.hair,
+            backgroundColor: checked ? c.paper2 : 'transparent',
+            minHeight: MIN_TAP,
+          },
         ]}
       >
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Body size={14} color={c.ink} numberOfLines={2}>
+        <View style={stacked ? undefined : { flex: 1, minWidth: 0 }}>
+          <Body size={14} color={c.ink}>
             {rowLabel}
             {same}
           </Body>
@@ -180,6 +194,6 @@ export function ReplacementPickerList({
 }
 
 const styles = StyleSheet.create({
-  row: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  row: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
 });
