@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { mapReturnError, replacementShortItems, RETURN_ERROR_TABLE, returnErrorKey, restockProblemWords } from './return-error-map';
+import {
+  exchangeAlreadySentWords,
+  mapReturnError,
+  replacementShortItems,
+  RETURN_ERROR_TABLE,
+  RETURN_ERROR_WORDS,
+  returnErrorKey,
+  restockProblemWords,
+} from './return-error-map';
 
 describe('the returns error map', () => {
   // One row per arm: each hint maps to its own entry, and only to it.
@@ -134,5 +142,45 @@ describe('RX-2 refusals', () => {
     expect(replacementShortItems(m.detailList)).toEqual([{ itemId: 'a', needed: 1, available: 0 }]);
     expect(mapReturnError({ hint: 'restock_location_unavailable', details: '{"rule":"archived"}' }).detailList).toBeNull();
     expect(replacementShortItems(null)).toEqual([]);
+  });
+});
+
+// RX-2 review fix (0396's contract): two refusals the database adds.
+describe('RX-2 review: cancelling a return under a replacement on its way, and an exchange already sent', () => {
+  it('replacement_in_progress is its own conflict (the workbenches treat it as a stale screen), never another refusal', () => {
+    const m = mapReturnError({ code: 'P0001', hint: 'replacement_in_progress', message: 'replacement_in_progress', details: 'staged_for_pickup' });
+    expect(m).toMatchObject({ reason: 'replacement_in_progress', code: 'conflict', status: 409 });
+    expect(m.message).toBe('The replacement is already picked or on its way. Hand it over, or cancel the replacement first.');
+    expect(RETURN_ERROR_WORDS.replacementInProgress).toBe(m.message);
+    // Distinguishable from the other stale-screen refusals and from the drawn
+    // cancel's words.
+    for (const other of ['invalid_status_transition', 'return_changed', 'replacement_already_drawn', 'replacement_handed_over']) {
+      expect(mapReturnError({ hint: other }).reason).not.toBe(m.reason);
+      expect(mapReturnError({ hint: other }).message).not.toBe(m.message);
+    }
+    // Specific before general: the hint wins over a lock wait's SQLSTATE.
+    expect(mapReturnError({ code: '55P03', hint: 'replacement_in_progress' }).reason).toBe('replacement_in_progress');
+  });
+
+  it('exchange_already_sent words what is left from its detail: nothing, or a whole number', () => {
+    const none = mapReturnError({ code: 'P0001', hint: 'exchange_already_sent', details: '{"quantity": 1, "available": 0}' });
+    expect(none).toMatchObject({ reason: 'exchange_already_sent', code: 'validation_error', status: 400 });
+    expect(none.message).toBe('This item already got a replacement on an earlier return, so it can only be returned now.');
+    const some = mapReturnError({ code: 'P0001', hint: 'exchange_already_sent', details: '{"quantity": 3, "available": 2}' });
+    expect(some.message).toBe('Only 2 of these can still be exchanged; the rest already got a replacement on an earlier return.');
+    expect(some.detail).toEqual({ quantity: 3, available: 2 });
+    // n as a whole number.
+    expect(exchangeAlreadySentWords({ quantity: 3, available: 1.75 })).toBe(
+      'Only 1 of these can still be exchanged; the rest already got a replacement on an earlier return.',
+    );
+  });
+
+  it('a malformed exchange_already_sent detail falls back to the nothing-left words', () => {
+    const zero = 'This item already got a replacement on an earlier return, so it can only be returned now.';
+    for (const details of [null, '', 'not json', '[1, 2]', '{"quantity": 2}', '{"available": "x"}', '{"available": -1}', '{"available": 0.5}']) {
+      expect(mapReturnError({ code: 'P0001', hint: 'exchange_already_sent', details }).message, String(details)).toBe(zero);
+    }
+    expect(exchangeAlreadySentWords(null)).toBe(zero);
+    expect(RETURN_ERROR_TABLE.exchange_already_sent!.message).toBe(zero);
   });
 });

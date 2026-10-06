@@ -83,6 +83,16 @@ export const RETURN_ERROR_WORDS = {
   notReturnable: 'Only orders that were handed over can be returned.',
   insufficientStock: 'Scrapping this line would take stock on record below zero.',
   replacementNoRequester: 'This replacement has no requester to send it to. Decline the exchange or ask an admin.',
+  // RX-2 review fix (0396): cancel_return under a replacement already picked,
+  // being packed, staged or in transit. The workbenches treat it as a stale
+  // screen (its own reason key) and refresh.
+  replacementInProgress: 'The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+  // RX-2 review fix (0396): more than the original order line has left to
+  // exchange (replacement units were already handed over for it under another
+  // RMA, or other RMAs claim it). The words with what is left come from the
+  // refusal's detail (exchangeAlreadySentWords); these are the nothing-left
+  // words and the fallback for a detail that cannot be read.
+  exchangeAlreadySent: 'This item already got a replacement on an earlier return, so it can only be returned now.',
   internal: 'Something went wrong. Try again.',
 } as const;
 
@@ -143,6 +153,13 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   replacement_requester_unavailable: { code: 'validation_error', status: 400, message: W.replacementNoRequester },
   exchange_line_invalid: { code: 'validation_error', status: 400, message: W.invalid },
   exchange_request_immutable: { code: 'forbidden', status: 403, message: W.notAllowed },
+  // RX-2 review fix (0396): the RMA cancel is refused while the live
+  // replacement is picked, being packed, staged or in transit (detail: the
+  // replacement's status), and an exchange is refused above what the original
+  // order line has left (detail: {"quantity": n, "available": m}; the message
+  // is worded from it in mapReturnError).
+  replacement_in_progress: { code: 'conflict', status: 409, message: W.replacementInProgress },
+  exchange_already_sent: { code: 'validation_error', status: 400, message: W.exchangeAlreadySent },
 };
 
 const BUSY: ReturnErrorEntry = { code: 'conflict', status: 409, message: W.busy, retryable: true };
@@ -218,11 +235,27 @@ function parseDetailList(details: string | null | undefined): Array<Record<strin
   }
 }
 
+/**
+ * exchange_already_sent's words from its detail ({"quantity": n, "available":
+ * m}): what is left to exchange on the original order line, as a whole
+ * number, or the nothing-left words when nothing is (or the detail cannot be
+ * read).
+ */
+export function exchangeAlreadySentWords(detail: Record<string, unknown> | null | undefined): string {
+  const raw = detail?.available;
+  const available = typeof raw === 'number' || typeof raw === 'string' ? Math.floor(Number(raw)) : Number.NaN;
+  if (!Number.isFinite(available) || available <= 0) return W.exchangeAlreadySent;
+  return `Only ${available} of these can still be exchanged; the rest already got a replacement on an earlier return.`;
+}
+
 /** One refusal -> its entry, the key that matched and any structured detail. */
 export function mapReturnError(err: ReturnDbError | null | undefined): MappedReturnError {
   const key = returnErrorKey(err);
   const detail = parseDetail(err?.details);
   const detailList = parseDetailList(err?.details);
+  if (key === 'exchange_already_sent') {
+    return { ...RETURN_ERROR_TABLE[key]!, message: exchangeAlreadySentWords(detail), reason: key, detail, detailList };
+  }
   if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail, detailList };
   const code = (err?.code ?? '').toUpperCase();
   if (code === '55P03' || code === '57014' || code === '40P01') return { ...BUSY, reason: 'busy', detail, detailList };
