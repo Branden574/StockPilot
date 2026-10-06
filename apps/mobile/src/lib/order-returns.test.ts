@@ -78,6 +78,17 @@ describe('returnableLines', () => {
 });
 
 describe('initialReturnDraft', () => {
+  // Returns RX-2 review (counter taps): with one returnable line the sheet
+  // starts it ticked at what can come back, as the web's create dialog does
+  // (one tap fewer at the counter); with several, nothing is chosen for the
+  // person.
+  it('starts the only returnable line ticked at what can come back (counter taps)', () => {
+    expect(
+      initialReturnDraft([{ orderRequestLineId: 'l-1', name: 'A', sku: null, quantityFulfilled: 3, quantityRemaining: 2 }]),
+    ).toEqual({ 'l-1': { quantity: 2, disposition: 'restock' } });
+    expect(initialReturnDraft([])).toEqual({});
+  });
+
   it('starts every line unselected (qty 0) with Restock as the default', () => {
     const lines: ReturnableLine[] = [
       { orderRequestLineId: 'l-1', name: 'A', sku: null, quantityFulfilled: 2, quantityRemaining: 2 },

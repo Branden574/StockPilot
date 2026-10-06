@@ -653,6 +653,15 @@ export function refusalRefreshesWorkbench(reason: string | null | undefined): bo
   return typeof reason === 'string' && STALE_REFUSALS.includes(reason);
 }
 
+/**
+ * Where Open replacement and Hand over go: the replacement's own order screen
+ * (its signature is the one hand-over). Hand over opens it with the paper
+ * signature ready (?focus=sign: returns RX-2 review, counter taps).
+ */
+export function replacementOrderHref(orderId: string, action: 'open_replacement' | 'hand_over'): string {
+  return action === 'hand_over' ? `/order/${orderId}?focus=sign` : `/order/${orderId}`;
+}
+
 /** The words after "Get replacement ready" (plan 3.3.8). */
 export function prepareOutcomeMessage(answer: Pick<MobilePrepareAnswer, 'ran' | 'status'>): string {
   const refused = answer.ran.find((r) => r.outcome === 'refused');

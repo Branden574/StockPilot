@@ -38,6 +38,7 @@ import {
   prepareOutcomeMessage,
   refusalRefreshesWorkbench,
   replacementCardLabel,
+  replacementOrderHref,
   replacementOrderLines,
   replacementSideLines,
   returnStatusTone,
@@ -226,8 +227,9 @@ export function ReturnWorkbenchView({
         return;
       case 'open_replacement':
       case 'hand_over':
-        // The replacement's own order screen: its signature is the one hand-over.
-        if (ex.replacement) router.push(`/order/${ex.replacement.orderId}` as Href);
+        // The replacement's own order screen: its signature is the one
+        // hand-over. Hand over opens it with the paper signature ready.
+        if (ex.replacement) router.push(replacementOrderHref(ex.replacement.orderId, a) as Href);
         return;
     }
   }

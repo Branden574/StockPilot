@@ -40,7 +40,10 @@ describe('the workbench', () => {
     ] as const) {
       expect(view).toMatch(new RegExp(`case '${action}':\\s*${effect.replace(/[()]/g, '\\$&')};`));
     }
-    expect(view).toMatch(/case 'open_replacement':\s*case 'hand_over':[\s\S]*?router\.push\(`\/order\/\$\{ex\.replacement\.orderId\}`/);
+    // Re-pinned by returns RX-2 review (counter taps; the claim is kept: both
+    // open the replacement's own order screen): Hand over opens it with the
+    // paper signature ready (replacementOrderHref, ?focus=sign).
+    expect(view).toMatch(/case 'open_replacement':\s*case 'hand_over':[\s\S]*?router\.push\(replacementOrderHref\(ex\.replacement\.orderId, a\) as Href\)/);
   });
 
   it('shows the REPLACEMENT side beside the returning card (stacked when compact), with a text label', () => {
@@ -372,6 +375,17 @@ describe('the order screen', () => {
     for (const f of files) {
       expect(code(read(f)), f).not.toMatch(/from\(\s*'order_requests'\s*\)[\s\S]{0,200}?\.(update|upsert|delete)\(/);
     }
+  });
+
+  // Returns RX-2 review (counter taps): ?focus=sign opens the paper
+  // signature once, as the tested helper decides (loaded, offered to this
+  // viewer, online, idle), through the same departure confirm as the button.
+  it('opens the paper signature on arrival from Hand over, once (counter taps)', () => {
+    expect(screen).toContain('const signOnArrival = React.useRef(false);');
+    expect(screen).toMatch(
+      /shouldOpenSignatureOnArrival\(\{\s*focus,\s*opened: signOnArrival\.current,\s*loaded: loadedOrder !== null,\s*offered: managerActions\.physicalSignature,\s*online: !offline,\s*busy: acting !== null,\s*\}\)/,
+    );
+    expect(screen).toMatch(/signOnArrival\.current = true;\s*confirmDeparture\('signature', promptPhysicalSignature\);/);
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {

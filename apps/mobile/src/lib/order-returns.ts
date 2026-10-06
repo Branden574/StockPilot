@@ -276,11 +276,17 @@ export interface ReturnDraftLine {
   exchangeItemId?: string | null;
 }
 
-/** Initial sheet state: nothing selected (qty 0), disposition Restock. */
+/**
+ * Initial sheet state, disposition Restock: nothing selected (qty 0), except
+ * the only returnable line, which starts ticked at what can come back (returns
+ * RX-2 review, counter taps: the web's create dialog starts it selected with
+ * that quantity, one tap fewer at the counter).
+ */
 export function initialReturnDraft(lines: ReturnableLine[]): Record<string, ReturnDraftLine> {
   const out: Record<string, ReturnDraftLine> = {};
+  const only = lines.length === 1;
   for (const l of lines) {
-    out[l.orderRequestLineId] = { quantity: 0, disposition: 'restock' };
+    out[l.orderRequestLineId] = { quantity: only ? l.quantityRemaining : 0, disposition: 'restock' };
   }
   return out;
 }

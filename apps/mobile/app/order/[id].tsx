@@ -163,7 +163,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
-import { focusScrollY, orderScreenFocus } from '@/lib/order-focus';
+import { focusScrollY, orderScreenFocus, shouldOpenSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
@@ -2121,6 +2121,29 @@ export default function OrderDetail() {
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
     canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
   });
+  // Returns RX-2 review (counter taps): the RMA's Hand over opens this
+  // screen with ?focus=sign. The paper signature opens once, through the same
+  // departure confirm as its button, when the order has loaded, is ready to
+  // hand over and this viewer may confirm it, online and idle; a reload or a
+  // cancelled prompt never opens it again.
+  const signOnArrival = React.useRef(false);
+  React.useEffect(() => {
+    if (
+      !shouldOpenSignatureOnArrival({
+        focus,
+        opened: signOnArrival.current,
+        loaded: loadedOrder !== null,
+        offered: managerActions.physicalSignature,
+        online: !offline,
+        busy: acting !== null,
+      })
+    ) {
+      return;
+    }
+    signOnArrival.current = true;
+    confirmDeparture('signature', promptPhysicalSignature);
+  });
+
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'

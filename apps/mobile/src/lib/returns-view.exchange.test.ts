@@ -20,6 +20,7 @@ import {
   prepareOutcomeMessage,
   replacementCardLabel,
   replacementGateLine,
+  replacementOrderHref,
   replacementHeldNow,
   replacementPickBlocked,
   replacementOrderLines,
@@ -444,6 +445,14 @@ describe('the REPLACEMENT side and the replacement order', () => {
     for (const reason of ['reason_required', 'replacement_unavailable', 'replacement_site_not_available', 'exchange_already_sent', 'busy', null]) {
       expect(refusalRefreshesWorkbench(reason), String(reason)).toBe(false);
     }
+  });
+
+  // Returns RX-2 review (counter taps): Hand over opens the replacement's
+  // order with the paper signature ready (?focus=sign); Open replacement
+  // just opens it.
+  it('Hand over opens the replacement order ready to sign; Open replacement just opens it', () => {
+    expect(replacementOrderHref('o-104', 'hand_over')).toBe('/order/o-104?focus=sign');
+    expect(replacementOrderHref('o-104', 'open_replacement')).toBe('/order/o-104');
   });
 
   it('prepare: staged words, or the refusal', () => {
