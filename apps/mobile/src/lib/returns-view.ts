@@ -35,13 +35,16 @@ import {
   type ExchangeConsequenceKey,
   type ExchangeReviewState,
   type ExchangeReviewViewer,
+  type RailStep,
   choiceNeededSentence,
   choiceToDecision,
   formatOrderNumber,
   isChoiceOffered,
   liveChoice,
+  noReplacementLine,
   preselectedChoice,
   processLabelFor,
+  railStepStateWords,
   READINESS_NEEDS_CONNECTION_COPY,
   RETURN_ACTION_LABELS,
   RETURN_WAITING_PROMPT_DAYS,
@@ -497,12 +500,27 @@ export function exchangeItemLabel(wb: { exchange?: MobileReturnExchange | null }
   return 'Item';
 }
 
-/** The replacement order block's lines (SO, reserved per line, the pick hint, the release). */
-export function replacementOrderLines(wb: { exchange?: MobileReturnExchange | null }, canReadDecisions: boolean): { key: string; text: string }[] {
+/**
+ * The outbound rail as the card prints it: every step with its state in
+ * core's words, "Requested (done)  →  Declined (stopped)  →  Waiting for
+ * return (not reached)  →  …" (review fixes P4 and P21: after a stop nothing
+ * reads "next"). VoiceOver reads core's exchangeRailAccessibilityLabel.
+ */
+export function exchangeRailText(rail: readonly RailStep[]): string {
+  return rail.map((s) => `${s.label} (${railStepStateWords(s)})`).join('  →  ');
+}
+
+/** The replacement order block's lines (SO, reserved per line, the pick hint,
+ *  the release); with no replacement order, why there is none (review fix P4:
+ *  declined, cancelled with the return, or not approved yet). */
+export function replacementOrderLines(
+  wb: { exchange?: MobileReturnExchange | null; return?: { status: string } | null },
+  canReadDecisions: boolean,
+): { key: string; text: string }[] {
   const ex = exchangeOf(wb);
   const out: { key: string; text: string }[] = [];
   if (!ex.replacement) {
-    if (ex.kind === 'exchange') out.push({ key: 'none', text: RETURNS_COPY.noReplacementYet });
+    if (ex.kind === 'exchange') out.push({ key: 'none', text: noReplacementLine(ex.status, { returnStatus: wb.return?.status ?? null }) });
     return out;
   }
   const so = formatSo(ex.replacement.orderNumber) ?? ex.replacement.orderId.slice(0, 8).toUpperCase();

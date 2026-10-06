@@ -1,3 +1,4 @@
+import { exchangeRail } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
 import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
@@ -7,6 +8,7 @@ import {
   exchangeApprovalDecisions,
   exchangeForLine,
   exchangeItemLabel,
+  exchangeRailText,
   exchangeReviewProblems,
   exchangeReviewStateFor,
   exchangeSheetConsequences,
@@ -284,6 +286,59 @@ describe('the REPLACEMENT side and the replacement order', () => {
     expect(
       prepareOutcomeMessage({ ran: [{ step: 'pick_slip', outcome: 'refused', message: 'Waiting for the returned item.' }], status: 'approved' }),
     ).toBe('Waiting for the returned item.');
+  });
+});
+
+// Review fixes P4 and P21: after a declined or cancelled exchange the rail
+// still read "next" for every later step (on screen nothing, but VoiceOver
+// said "Waiting for return, next; Picking, next; ...") and the empty block
+// promised "One is created when the exchange is approved.". The rail prints
+// every step's state in core's words, VoiceOver reads core's one label, and
+// the empty block says why there is no replacement order.
+describe('the rail and the empty replacement block (review fixes P4 and P21)', () => {
+  const declined = exchangeRail({ exchangeStatus: 'declined', returnStatus: 'approved', releasedEarly: false, fulfillmentType: null });
+
+  it("prints each step with its state in core's words; after a stop nothing reads next", () => {
+    expect(exchangeRailText(declined)).toBe(
+      'Requested (done)  →  Declined (stopped)  →  Waiting for return (not reached)  →  Picking (not reached)  →  Ready for pickup (not reached)  →  Handed over (not reached)',
+    );
+    const cancelledReplacement = exchangeRail({
+      exchangeStatus: 'replacement_cancelled',
+      returnStatus: 'approved',
+      releasedEarly: false,
+      fulfillmentType: 'pickup',
+    });
+    expect(exchangeRailText(cancelledReplacement)).toContain('Waiting for return (not started)');
+    // A replacement closed with part never sent ends "Partly handed over" (P21).
+    const partly = exchangeRail({
+      exchangeStatus: 'completed',
+      returnStatus: 'closed',
+      releasedEarly: false,
+      fulfillmentType: 'pickup',
+      replacementStatus: 'completed',
+      replacementOwed: 1,
+    });
+    expect(exchangeRailText(partly)).toMatch(/Partly handed over \(stopped\)$/);
+    // A live one still says what is next.
+    const waiting = exchangeRail({ exchangeStatus: 'waiting_for_return', returnStatus: 'approved', releasedEarly: false, fulfillmentType: 'pickup' });
+    expect(exchangeRailText(waiting)).toBe(
+      'Requested (done)  →  Reserved (done)  →  Waiting for return (now)  →  Picking (next)  →  Ready for pickup (next)  →  Handed over (next)',
+    );
+    expect(exchangeRailText([])).toBe('');
+  });
+
+  it('the empty replacement block says why there is no replacement order', () => {
+    const none = (status: MobileReturnExchange['status'], returnStatus = 'approved') =>
+      replacementOrderLines({ exchange: exchange({ status, lines: [xline({ status: status === 'declined' ? 'declined' : 'cancelled' })] }), return: { status: returnStatus } }, true).map(
+        (l) => l.text,
+      );
+    expect(none('declined')).toEqual(['No replacement order: the exchange was declined.']);
+    expect(none('cancelled', 'cancelled')).toEqual(['No replacement order: the exchange was cancelled with the return.']);
+    // A denied return's exchange reads declined, as its staff label does.
+    expect(none('cancelled', 'denied')).toEqual(['No replacement order: the exchange was declined.']);
+    expect(replacementOrderLines({ exchange: exchange(), return: { status: 'requested' } }, true).map((l) => l.text)).toEqual([
+      'No replacement order yet. One is created when the exchange is approved.',
+    ]);
   });
 });
 

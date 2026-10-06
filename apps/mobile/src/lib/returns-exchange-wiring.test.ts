@@ -50,6 +50,16 @@ describe('the workbench', () => {
     expect(view).toContain('replacementOrderLines(wb, wb.viewer.canReadDecisions)');
   });
 
+  // Review fixes P4 and P21: after a declined or cancelled exchange VoiceOver
+  // read every later step as "next" (the screen's own state words). The rail
+  // is now core's words on screen and in its one VoiceOver label.
+  it("prints the rail and reads it to VoiceOver in core's words (review fixes P4 and P21)", () => {
+    expect(view).toContain('accessibilityLabel={exchangeRailAccessibilityLabel(ex.rail)}');
+    expect(view).toContain('{exchangeRailText(ex.rail)}');
+    expect(view).not.toContain("'next'");
+    expect(view).not.toContain("' (now)'");
+  });
+
   it('labels an exchange approval "Approve return & exchange"', () => {
     expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
   });

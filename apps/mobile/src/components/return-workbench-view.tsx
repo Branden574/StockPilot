@@ -5,6 +5,7 @@ import { AccessibilityInfo, ActivityIndicator, Image, Pressable, RefreshControl,
 
 import {
   exchangeLineStatusLabel,
+  exchangeRailAccessibilityLabel,
   formatOrderNumber,
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
@@ -31,6 +32,7 @@ import {
   actionLabel,
   exchangeForLine,
   exchangeOf,
+  exchangeRailText,
   prepareOutcomeMessage,
   replacementCardLabel,
   replacementOrderLines,
@@ -337,14 +339,11 @@ export function ReturnWorkbenchView({
             <Card padding={14}>
               <View style={{ gap: 6 }}>
                 {ex.rail.length > 0 ? (
-                  <Body
-                    size={13}
-                    color={c.ink}
-                    accessibilityLabel={`Replacement progress: ${ex.rail.map((s) => `${s.label}, ${s.state === 'current' ? 'now' : s.state === 'upcoming' ? 'next' : s.state}`).join('; ')}`}
-                  >
-                    {ex.rail
-                      .map((s) => `${s.label}${s.state === 'current' ? ' (now)' : s.state === 'stopped' ? ' (stopped)' : s.state === 'done' ? ' (done)' : ''}`)
-                      .join('  →  ')}
+                  // Review fixes P4 and P21: every step's state in core's words
+                  // on screen and in one VoiceOver label (after a stop nothing
+                  // reads "next"; a part never sent ends Partly handed over).
+                  <Body size={13} color={c.ink} accessibilityLabel={exchangeRailAccessibilityLabel(ex.rail)}>
+                    {exchangeRailText(ex.rail)}
                   </Body>
                 ) : null}
                 {replacementOrderLines(wb, wb.viewer.canReadDecisions).map((t) =>
