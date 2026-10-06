@@ -187,8 +187,8 @@ interface Props {
    * While its RMA waits for the returned item (the return-first gate),
    * "Generate pick slip" and "Resume fulfillment" give way to the gate's
    * words and, for holders of returns:manage and orders:approve, "Release
-   * before return is received". A delivery shows the driver's read-only
-   * "Collect the returned item" line. Null for an ordinary order.
+   * before return is received". The driver's line is the banner's (review
+   * fix P10). Null for an ordinary order.
    */
   replacement?: {
     returnId: string;
@@ -197,6 +197,7 @@ interface Props {
     /** The RMA was cancelled or denied: never picked again (desk check F3). */
     returnClosed?: boolean;
     canReleaseEarly: boolean;
+    /** Kept for callers; the banner shows the driver's line (review fix P10). */
     driverLine: string | null;
     /** The view's exchange status and what this order holds now: the gate
      *  line says "Replacement reserved" only when something is held (review
@@ -1022,13 +1023,10 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {/* RX-2: the driver's read-only line for an exchange swap. */}
-          {(status === 'staged_for_delivery' || status === 'in_transit') && replacement?.driverLine ? (
-            <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" data-testid="collect-returned-item">
-              <Truck className="h-3.5 w-3.5" />
-              {replacement.driverLine}
-            </span>
-          ) : null}
+          {/* RX-2 review fix P10: the driver's line for an exchange swap shows
+              once, in the replacement banner (core's replacementDriverLine:
+              an early-released delivery not yet returned, never to the
+              requester), never repeated here. */}
 
           {(status === 'staged_for_pickup' || status === 'in_transit') && (approves || isDriverHere) && (
             <>

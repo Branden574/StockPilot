@@ -1129,14 +1129,19 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     expect(screen.getByRole('button', { name: /Close as delivered-partial/ })).toBeInTheDocument();
   });
 
-  it('a delivery swap shows the driver the returned item to collect, read-only', () => {
-    render(
-      <ManagerActionsPanel
-        {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })}
-      />,
-    );
-    expect(screen.getByTestId('collect-returned-item')).toHaveTextContent(
-      'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
-    );
+  // Re-pinned by returns RX-2 review fix P10: the driver's line shows once,
+  // in the banner above (core's replacementDriverLine decides when), never
+  // repeated in the panel.
+  it('a delivery swap: the panel never repeats the driver line the banner shows', () => {
+    for (const status of ['staged_for_delivery', 'in_transit'] as const) {
+      const { unmount } = render(
+        <ManagerActionsPanel
+          {...baseProps({ status, fulfillmentType: 'delivery', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })}
+        />,
+      );
+      expect(screen.queryByTestId('collect-returned-item')).toBeNull();
+      expect(screen.queryByText(/returned item: Walk New Hire Shirt/)).toBeNull();
+      unmount();
+    }
   });
 });
