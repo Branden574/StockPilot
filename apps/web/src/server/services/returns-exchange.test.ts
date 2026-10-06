@@ -277,6 +277,17 @@ describe('approve with an exchange (approve_return + the 0396 hook)', () => {
     expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'exchange_approved' }));
   });
 
+  // RX-2 review fix P23: the steps answer carries what the approval created,
+  // so both screens say it ("Approved. Replacement order SO-000104 created
+  // and 1 reserved."), never only "Return approved.".
+  it('the steps answer carries the approval\'s status and replacement for the outcome words', async () => {
+    const { svc } = svcFor({
+      'rpc:approve_return': { data: { changed: true, replay: false, revision: 1, status: 'approved', replacement: SUMMARY }, error: null },
+    });
+    const { ran } = await svc.runSteps(RET_ID, { steps: ['approve'], expectedRevision: 0, approve: DECISION } as never);
+    expect(ran).toEqual([{ step: 'approve', outcome: 'done', approval: { status: 'approved', replacement: SUMMARY } }]);
+  });
+
   it('a replay (changed false) writes and sends nothing', async () => {
     const { svc } = svcFor({
       'rpc:approve_return': {

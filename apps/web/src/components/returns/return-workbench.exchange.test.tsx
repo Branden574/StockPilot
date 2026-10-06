@@ -200,6 +200,20 @@ describe('a requested exchange', () => {
     });
   });
 
+  // RX-2 review fix P23: the approval says what it created.
+  it('the approval toast names the replacement order it created and what it reserved', async () => {
+    runSteps.mockResolvedValue({
+      ok: true,
+      data: {
+        ran: [{ step: 'approve', outcome: 'done', approval: { status: 'approved', replacement: { orderId: 'repl-1', orderNumber: 104, short: false, lines: [{ held: 1 }] } } }],
+        workbench: bench('approved', WAITING),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('requested', {})} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve return & exchange' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Approved. Replacement order SO-000104 created and 1 reserved.'));
+  });
+
   it('declining needs a reason before the approval can go', async () => {
     runSteps.mockResolvedValue({ ok: true, data: { ran: [{ step: 'approve', outcome: 'done' }], workbench: bench('approved', { status: 'declined' }) } });
     render(<ReturnWorkbench workbench={bench('requested', {})} />);

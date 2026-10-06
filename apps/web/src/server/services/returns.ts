@@ -572,6 +572,9 @@ export interface ReturnStepResult {
   /** RX-2: a refusal's structured detail (replacement_unavailable's
    *  [{itemId, needed, available}]: the numbers first, D19). */
   detail?: unknown;
+  /** RX-2 review fix P23: what a done approval created (the RMA's status and
+   *  the replacement order), for core's approvalOutcomeLine on both screens. */
+  approval?: { status: ReturnStatus; replacement: ReturnReplacementSummary | null };
 }
 
 /** The header facts the side effects need, read once after a change. */
@@ -1249,7 +1252,11 @@ export class RMAService {
             decision: body.approve as ReturnApproveDecision,
             receiveNow: body.receiveNow === true,
           });
-          ran.push({ step, outcome: r.changed ? 'done' : 'already' });
+          ran.push(
+            r.changed
+              ? { step, outcome: 'done', approval: { status: r.status, replacement: r.replacement } }
+              : { step, outcome: 'already' },
+          );
         } else if (step === 'receive') {
           const r = await this.receive(id);
           ran.push({ step, outcome: r.changed ? 'done' : 'already' });

@@ -56,6 +56,7 @@ import {
   addReplacementDecision,
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approvalOutcomeLine,
   approvalPreviewLines,
   availableReturnActions,
   choiceNeededSentence,
@@ -312,9 +313,11 @@ export function ReturnWorkbench({
       } else {
         toast.success(
           step.step === 'approve'
-            ? extra.receiveNow
-              ? 'Approved and received.'
-              : 'Return approved.'
+            ? // Review fix P23: what the approval created (core, the phone's words too).
+              approvalOutcomeLine(
+                { status: step.approval?.status ?? null, replacement: step.approval?.replacement ?? null },
+                { receiveNow: extra.receiveNow === true },
+              )
             : step.step === 'receive'
               ? 'Return received.'
               : 'Return processed.',
