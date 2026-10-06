@@ -834,7 +834,14 @@ export type ReturnUpdateEvent =
   // never sent (delivered-partial), and the hand-over receipt for a signer
   // who is not the requester (no button, never "your exchange").
   | 'replacement_closed_partial'
-  | 'replacement_signed_for';
+  | 'replacement_signed_for'
+  // RX-2 review fixes P28 and P15 (core's in-app words): a return the
+  // requester asked for, approved with a replacement staff added (not "your
+  // exchange", they asked for none), and a return kept as a return only after
+  // its replacement was cancelled. Sent once the web wires them.
+  | 'return_approved_replacement_added'
+  | 'return_approved_replacement_added_short'
+  | 'replacement_closed_return_only';
 
 export interface ReturnUpdateParams {
   event: ReturnUpdateEvent;
@@ -983,6 +990,27 @@ const RETURN_UPDATE_WORDS: Record<
     badge: 'Handed over',
     lead: 'The exchange replacement was handed over.',
     sentence: 'Thank you for signing for it.',
+  },
+  // Review fix P28: every exchange line was added by staff on a return the
+  // requester asked for.
+  return_approved_replacement_added: {
+    summary: 'approved',
+    badge: 'Approved',
+    lead: 'Your return was approved.',
+    sentence: 'The warehouse added a replacement for you, and it is reserved.',
+  },
+  return_approved_replacement_added_short: {
+    summary: 'approved',
+    badge: 'Approved',
+    lead: 'Your return was approved.',
+    sentence: 'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+  },
+  // Review fix P15: Close as return only after a replacement cancel.
+  replacement_closed_return_only: {
+    summary: 'return only',
+    badge: 'Return only',
+    lead: 'No replacement will be sent.',
+    sentence: 'Your return goes on as a return only.',
   },
 };
 

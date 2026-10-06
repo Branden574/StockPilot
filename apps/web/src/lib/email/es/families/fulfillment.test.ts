@@ -776,6 +776,22 @@ describe('return-update: the exchange events (returns RX-2)', () => {
     ],
     // Review fix (P14): the receipt for a signer who is not the requester.
     ['replacement_signed_for', 'replacement handed over', 'The exchange replacement was handed over.', 'Thank you for signing for it.'],
+    // Review fixes P28 and P15 (core's in-app words, 0c99857b): a return the
+    // requester asked for, approved with a replacement staff added; and a
+    // return kept as a return only after its replacement was cancelled.
+    [
+      'return_approved_replacement_added',
+      'approved',
+      'Your return was approved.',
+      'The warehouse added a replacement for you, and it is reserved.',
+    ],
+    [
+      'return_approved_replacement_added_short',
+      'approved',
+      'Your return was approved.',
+      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+    ],
+    ['replacement_closed_return_only', 'return only', 'No replacement will be sent.', 'Your return goes on as a return only.'],
   ] as const)('%s: "%s"', (event, summary, lead, sentence) => {
     const r = renderReturnUpdateEmail({ ...base, event });
     expect(r.subject).toBe(`Return RMA-20261005-ABC123: ${summary}`);
@@ -804,6 +820,9 @@ describe('return-update: the exchange events (returns RX-2)', () => {
     expect(words('exchange_approved')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedReserved}`);
     expect(words('exchange_approved_short')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedShort}`);
     expect(words('replacement_partly_handed_over')).toBe(RETURNS_COPY.requesterPartlyHandedOver);
+    expect(words('return_approved_replacement_added')).toBe(RETURNS_COPY.requesterReturnApprovedReplacementAdded);
+    expect(words('return_approved_replacement_added_short')).toBe(RETURNS_COPY.requesterReturnApprovedReplacementAddedShort);
+    expect(words('replacement_closed_return_only')).toBe(RETURNS_COPY.requesterReplacementClosedReturnOnly);
   });
 
   it('the completion email can carry its own button words (the replacement\'s return page)', () => {
@@ -834,6 +853,9 @@ describe('return-update: the exchange events (returns RX-2)', () => {
     'exchange_complete',
     'replacement_closed_partial',
     'replacement_signed_for',
+    'return_approved_replacement_added',
+    'return_approved_replacement_added_short',
+    'replacement_closed_return_only',
   ] as const)('%s without a link points at no button', (event) => {
     const r = renderReturnUpdateEmail({ ...base, event, viewUrl: null });
     for (const out of [r.html, r.text, r.preheader]) {
