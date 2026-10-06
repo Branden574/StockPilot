@@ -3,13 +3,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  MODULE_REGISTRY,
-  PERMISSIONS,
-  type ModuleId,
-  type Release,
-  type ReleaseViewer,
-} from '@stockpilot/core';
+import { MODULE_REGISTRY, PERMISSIONS, type ModuleId, type ReleaseViewer } from '@stockpilot/core';
 
 import {
   buildReleaseList,
@@ -28,9 +22,14 @@ import { RELEASES } from './registry';
  * same draft: a purchase order is overdue, and a delivery late, only after
  * its expected date has passed in the organization's zone.
  *
- * Held as a DRAFT until the web deploy is live and the over-the-air update
- * with the phone part has reached phones. Each entry is told to whoever can
- * open the screen it is about.
+ * Held as a DRAFT until the web deploy was live (#335 from 06:05Z, in
+ * 7cbf73b4's build 7851fcefca49 and in 78fd7fb5eea3; #338 in f6e8be37b217)
+ * and the over-the-air update with the phone part (OTA group e3111729, iOS
+ * update 01a1111c) had launched on phones (1 launch, 0 failed, read
+ * 2026-10-06 12:34Z).
+ * docs/whats-new-dates-link-submit publishes it, between the public link and
+ * PO-2 releases published with it. Each entry is told to whoever can open
+ * the screen it is about.
  */
 const ID = 'dates-fixes-2026-10';
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -38,52 +37,87 @@ const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 const REPO = resolve(__dirname, '../../../../..');
 const source = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
 
-describe('the dates fixes release is held as a draft', () => {
+// Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "the dates
+// fixes release is held as a draft").
+describe('the dates fixes release is published', () => {
   const everyone: ReleaseViewer = {
     role: 'owner',
     permissions: [...PERMISSIONS],
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
+  const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
 
-  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "is a
+  // draft, so no feed carries it, and preparing it changes nothing a client
+  // can observe": a draft, in no feed, no legacy list and no fingerprint).
+  it('is published after the web deploys and the phone update, so every feed carries it, and it is the notice for every member the public link release does not reach', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(
-      ID,
+    for (const viewer of [everyone, member]) {
+      expect(visibleReleases(RELEASES, viewer).map((r) => r.id)).toContain(ID);
+    }
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
+    // The public link release, published a minute later, is the notice for
+    // whoever manages public links; every other member is told this one
+    // first, since its digest line reaches every member.
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'public-link-sent-request-2026-10',
     );
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).toBe(
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    // An old phone build lists it first for a member, with the notification
+    // settings link (the one entry that member is told).
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+      id: ID,
+      date: '2026-10-06',
+      title: release().title,
+      body: release().summary,
+      cta: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+    });
+    // Publishing it changes what clients observe.
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(
       registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
     );
   });
 
-  it('is a draft just below the public link draft, dated after every other release but that one', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "is a
+  // draft just below the public link draft, dated after every other release
+  // but that one"): both are published now, a minute apart.
+  it('sits just below the public link release (published a minute later), dated after every other release, at a real time after the phone update launched', () => {
     // Re-pinned by the public link draft (fix/placed-cart-draft; was: the
     // newest entry, at the top, dated after every other release): it is
     // dated later and sits above this one.
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBe(1);
     expect(RELEASES[0]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[0]?.status).toBe('published');
+    expect(Date.parse(RELEASES[0]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    // A real time on a whole minute, after EAS showed the phone update
+    // launching on iOS (read 2026-10-06 12:34Z): never the draft's
+    // placeholder date (2026-10-14T17:00Z).
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T12:34:00Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
+      Date.parse('2026-10-07T00:00:00Z'),
+    );
   });
 });
 
 describe('the dates fixes release tells each change to whoever can see it', () => {
+  // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: a copy
+  // forced to published): the release itself is published now.
   const ids = (
     role: ReleaseViewer['role'],
     permissions: ReleaseViewer['permissions'],
     modules: ModuleId[],
   ) => {
-    const published: Release = { ...release(), status: 'published' };
+    expect(release().status).toBe('published');
     return (
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map(
+      visibleReleases([release()], { role, permissions, enabledModules: modules })[0]?.entries.map(
         (e) => e.id,
       ) ?? []
     );
@@ -106,12 +140,25 @@ describe('the dates fixes release tells each change to whoever can see it', () =
     ]);
   });
 
-  it("the phone's Receive POs overdue line: Receiving on, no permission, as the screen asks", () => {
-    expect(ids('viewer', [], ['receiving'])).toContain('phone-receive-overdue');
+  // Re-pinned by the claims review of #339 (2026-10-06; was: "Receiving on,
+  // no permission, as the screen asks", audience { modules: ['receiving'] }):
+  // the screen shows with Receiving on, but it lists purchase orders read
+  // under row-level security, which needs purchase_orders:read, so without
+  // it the screen is empty and its count has nothing to count.
+  it("the phone's Receive POs overdue line: purchase_orders:read with Receiving on, as the screen's rows ask", () => {
+    expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders', 'receiving'])).toContain(
+      'phone-receive-overdue',
+    );
+    expect(ids('viewer', [], ['purchase_orders', 'receiving'])).not.toContain(
+      'phone-receive-overdue',
+    );
     expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders'])).not.toContain(
       'phone-receive-overdue',
     );
-    expect(entry('phone-receive-overdue').audience).toEqual({ modules: ['receiving'] });
+    expect(entry('phone-receive-overdue').audience).toEqual({
+      anyPermission: ['purchase_orders:read'],
+      modules: ['receiving'],
+    });
   });
 
   it("the dashboard line: purchase_orders:read with Purchase orders on, as the count's rows and its link ask", () => {
@@ -184,12 +231,36 @@ describe('the dates fixes release tells each change to whoever can see it', () =
     });
   });
 
-  it("the phone's Receive POs line: Receiving on, no permission, as its drawer item and tab ask", () => {
-    expect(ids('viewer', [], ['purchase_orders', 'receiving'])).toContain(
+  // Re-pinned by the claims review of #339 (2026-10-06; was: "Receiving on,
+  // no permission, as its drawer item and tab ask", audience { modules:
+  // ['receiving'] }): the drawer item and tab ask only Receiving, but each
+  // ETA is a purchase order the member may read, as slice 2's receiving line
+  // already counts it.
+  it("the phone's Receive POs line: purchase_orders:read with Receiving on, as the screen's rows ask", () => {
+    expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders', 'receiving'])).toContain(
       'phone-receive-expected-date',
     );
-    expect(ids('viewer', [], ['purchase_orders'])).not.toContain('phone-receive-expected-date');
-    expect(entry('phone-receive-expected-date').audience).toEqual({ modules: ['receiving'] });
+    expect(ids('viewer', [], ['purchase_orders', 'receiving'])).not.toContain(
+      'phone-receive-expected-date',
+    );
+    expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders'])).not.toContain(
+      'phone-receive-expected-date',
+    );
+    expect(entry('phone-receive-expected-date').audience).toEqual({
+      anyPermission: ['purchase_orders:read'],
+      modules: ['receiving'],
+    });
+    // The screen reads purchase_orders with the member's own session, and
+    // the drawer item asks no permission: the rows are what row-level
+    // security lets the member read (purchase_orders_select, 0322).
+    const receive = source('apps/mobile/app/(drawer)/(tabs)/receive.tsx');
+    expect(receive).toContain(".from('purchase_orders')");
+    const policy = source('supabase/migrations/0322_quantity_guards_avatar_scope_override_clears.sql');
+    expect(policy).toContain("(select public.rls_orgs_with_permission('purchase_orders:read'))");
+    const slice2 = RELEASES.find((r) => r.id === 'order-partial-approval-held-2026-10')!;
+    expect(slice2.entries.find((e) => e.id === 'receiving-follows-permission')!.audience).toEqual(
+      entry('phone-receive-expected-date').audience,
+    );
   });
 
   it("the calendar line: the page's schedule:read or schedule:manage, Schedule on", () => {
@@ -321,8 +392,12 @@ describe('the dates fixes release says only what shipped', () => {
     // notification runs at 13:00 UTC on weekdays, 6 AM Pacific, so it counted
     // a purchase order due that same day; only the Insights page, opened after
     // 5 PM, counted it from the evening before.
+    // Re-pinned by the claims review of #339 (2026-10-06; was: "... from the
+    // evening before its expected date, and ..."): midnight UTC is the
+    // afternoon in Alaska and Hawaii, and 4 PM Pacific in winter, so the line
+    // says "late in the day before" with the Pacific times.
     expect(entry('briefing-overdue-purchase-orders').whatChanged).toContain(
-      "Today's briefing counted a purchase order as an overdue inbound PO from the evening before its expected date, and the morning briefing notification counted it on its expected date.",
+      "Today's briefing counted a purchase order as an overdue inbound PO from late in the day before its expected date (from 5 PM Pacific time, 4 PM in winter), and the morning briefing notification counted it on its expected date.",
     );
     const digest = source('apps/web/src/lib/email/es/families/digest.ts');
     expect(digest).toContain("`${plural(overdueTotal, 'purchase order')} overdue`");
@@ -367,5 +442,93 @@ describe('the dates fixes release says only what shipped', () => {
 
   it('claims nothing it cannot stand behind: no numbers, no promises, no word for a recorded quantity', () => {
     expect(all()).not.toMatch(/\bbooks?\b|%|guarantee|always|never|instantly|verified/i);
+  });
+
+  // Publish re-read (docs/whats-new-dates-link-submit, 2026-10-06), against
+  // the code on main and what readers saw before the fixes.
+  it('says only what happened: no weekly digest has been sent, the old ETA was a day early, and the calendar ran ahead in US zones', () => {
+    // No weekly digest has been sent yet (each Monday run stopped before
+    // sending until #326, and the first run with it is 2026-10-12, after
+    // #338), so the line says what a preview counted and what the Monday
+    // digest would have counted, never that a digest listed anything.
+    const digest = entry('digest-overdue-purchase-orders');
+    // Re-pinned by the claims review of #339 (2026-10-06; was: "... from the
+    // evening before its expected date: a preview sent that evening counted
+    // it, ..." and "..., or the evening before."): "late in the day before",
+    // as the other lines say it.
+    expect(digest.whatChanged).toContain(
+      'counted a purchase order as overdue from late in the day before its expected date (from 5 PM Pacific time, 4 PM in winter): a preview sent then counted it, and the Monday digest would have counted one expected that Monday.',
+    );
+    expect(`${digest.whatChanged} ${digest.whyItMatters}`).not.toMatch(
+      /Monday's digest listed|the Monday it was sent/,
+    );
+    expect(digest.whyItMatters).toBe(
+      'A digest could count a purchase order as overdue on the day it was due, or late in the day before.',
+    );
+    const weekly = RELEASES.find((r) => r.id === 'weekly-digest-and-fixes-2026-10')!;
+    expect(weekly.entries[0]!.whatChanged).toContain('so no weekly digest was ever sent');
+    expect(source('apps/web/vercel.json')).toContain('"schedule": "0 14 * * 1"');
+    // Before #335's update the Receive POs screen printed the ETA a day
+    // early, so the why does not lean on the ETA a reader saw.
+    // Re-pinned by the claims review of #339 (2026-10-06; was: "On the
+    // evening before a purchase order was due, ..."): "Late in the day
+    // before", true in every US zone.
+    expect(entry('phone-receive-overdue').whyItMatters).toBe(
+      'Late in the day before a purchase order was due, the screen could already count it as overdue.',
+    );
+    // The server's month ran ahead of the organization's only west of UTC.
+    expect(entry('calendar-current-month').whatChanged).toMatch(
+      /^In US time zones, late in the day on the last day of a month, /,
+    );
+  });
+});
+
+// Claims review of #339 (2026-10-06), against the code on main.
+describe('the dates fixes release says what a reader saw, in every US zone', () => {
+  it("the calendar line says only that the calendar opened on the next month: the next month's grid still showed today, unless that month began on a Sunday", () => {
+    // The grid is 42 days from the Sunday on or before the 1st, events load
+    // for the whole grid, and a day outside the month is only shaded, so on
+    // a month's last day the next month's first row still held today and its
+    // events. "today's events were a month away" was not true at most
+    // month-ends (Sep 30 2026 opened October, whose grid starts Sun Sep 27).
+    const calendar = source('apps/web/src/components/schedule/schedule-calendar.tsx');
+    expect(calendar).toContain('return new Date(year, month - 1, 1 - day);');
+    expect(calendar).toContain('for (let i = 0; i < 42; i++) {');
+    expect(calendar).toContain("!inMonth && 'bg-muted/20',");
+    const page = source('apps/web/src/app/(dashboard)/dashboard/schedule/page.tsx');
+    expect(page).toContain('const events = await svc.listInRange(gridStart, gridEnd);');
+    expect(entry('calendar-current-month').whyItMatters).toBe(
+      'Late that day, the calendar opened on the next month instead of the current one.',
+    );
+    expect(entry('calendar-current-month').whyItMatters).not.toMatch(/a month away|events/);
+  });
+
+  it('no zone-generic line says "evening": midnight UTC is the afternoon in Alaska and Hawaii, and 4 PM Pacific in winter', () => {
+    for (const e of release().entries) {
+      const text = `${e.whatChanged} ${e.whyItMatters} ${e.howItAffectsYou}`;
+      expect(text, e.id).not.toMatch(/evening/i);
+    }
+    for (const id of [
+      'phone-receive-overdue',
+      'dashboard-overdue-purchase-orders',
+      'briefing-overdue-purchase-orders',
+      'digest-overdue-purchase-orders',
+    ]) {
+      expect(entry(id).whatChanged, id).toContain('(from 5 PM Pacific time, 4 PM in winter)');
+    }
+  });
+
+  it('the digest setting is matched to the footer of the next digest email, as the card and a Monday email compute them', () => {
+    // The card names the NEXT run; a Monday email's footer names its own run
+    // ('this-week') and a preview's the next. In the week after a clock
+    // change the card and the last Monday email differ (Oct 26 2026: "7:00
+    // AM PDT" in that email, "6:00 AM PST" on the card from 14:00Z).
+    const settings = source('apps/web/src/app/(dashboard)/dashboard/settings/notifications/page.tsx');
+    expect(settings).toContain("digestScheduleLabel(org?.timezone, digestSendAt(new Date(), 'next'))");
+    const email = source('apps/web/src/lib/email/es/families/digest.ts');
+    expect(email).toContain("digestSendAt(now, preview ? 'next' : 'this-week')");
+    expect(entry('digest-send-time').howItAffectsYou).toBe(
+      'The setting gives the same day and time as the footer of the next digest email.',
+    );
   });
 });

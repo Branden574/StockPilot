@@ -30,12 +30,39 @@ export const RELEASES: Release[] = [
   {
     id: 'public-link-sent-request-2026-10',
     revision: 1,
-    // fix/placed-cart-draft (no migration, web only: the public order link is
-    // a web page, so no OTA). Held as a DRAFT until the web deploy is live;
-    // the follow-up that publishes it sets the real publishedAt and re-reads
-    // these words against what shipped. A draft at the top, dated after
-    // every release (newest first); it can ship before or after the drafts
-    // below it, and the publishing follow-up keeps the order newest first.
+    // The public order link fix (#336, b362eab2, merged 2026-10-06 06:24:12Z;
+    // no migration). PUBLISHED. Web only: the public order link is a web
+    // page, so there is no phone update to wait for. Web build 78fd7fb5eea3
+    // (built 06:24:42Z) went live at 06:25:18Z (Vercel READY, alias
+    // assigned; GitHub's production deployment of b362eab2 succeeded at
+    // 06:25:19Z), and the #335/#336 production check ran on it; every later
+    // build carries the fix. NOT
+    // exercised in production: Demo Co has no public order link (no link, no
+    // organization token, and its warehouse is not publicly orderable), so
+    // that check created no link and sent no request (its W3 and W4 were
+    // skipped). The evidence is #336's own test
+    // (public-orders-v2.sent-request-draft.test.tsx: after a sent request the
+    // browser keeps no draft and the next visit opens on Pickup with no site
+    // and no notes; a refused send keeps its draft), which failed before the
+    // fix and passes on main. Published with the dates fixes and PO-2
+    // releases, the newest of the three, at the top (newest first).
+    //
+    // Its words were re-read against what shipped and needed no correction.
+    // After a sent request the rail resets the cart, and an empty cart
+    // removes the browser's key (public-cart-rail.tsx, cart-context.tsx);
+    // every link to a warehouse shares that key, hence "for the same
+    // warehouse". The requester's name, email, phone and Pickup notes are
+    // page state, never kept on the browser, so the next request starts
+    // empty; "notes" is the request's Notes, the only notes the browser
+    // keeps. A public link with nothing kept opens on Pickup.
+    //
+    // Corrected by the claims review of #339 (2026-10-06): How it affects you
+    // said "its items, notes and delivery site are kept", and the page has
+    // two notes fields. Only the cart's Notes is kept (the whole cart is
+    // saved once it holds anything, its Delivery choice too); the Your info
+    // card's Name, Email, Phone and Pickup notes are page state
+    // (public-orders-v2.tsx, public-your-info-card.tsx). The line now names
+    // Notes and the Delivery choice and says Your info is never kept.
     //
     // What a person can see: after a request was sent from a public order
     // link, the browser kept the request's notes and, for a delivery, the
@@ -47,11 +74,11 @@ export const RELEASES: Release[] = [
     // requests settings page, as it checks (the module, and Manage public
     // links or organization:update); the people who use a link never sign
     // in, so they are not readers.
-    status: 'draft',
+    status: 'published',
     title: "A public order link no longer keeps the last request's notes and delivery site",
     summary:
       "After a request is sent from a public order link, the browser it was sent from no longer keeps that request's notes, Delivery choice or delivery site, so the next person to open a public order link for the same warehouse on that browser starts with an empty request.",
-    publishedAt: '2026-10-15T17:00:00Z',
+    publishedAt: '2026-10-06T12:42:00Z',
     audience: {
       anyPermission: ['public_links:manage', 'organization:update'],
       modules: ['public_requests'],
@@ -67,7 +94,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "On a shared computer, such as a front desk, the next person could send their request with someone else's notes or delivery site without noticing.",
         howItAffectsYou:
-          'Nothing changes while a request is being put together: its items, notes and delivery site are kept on that browser until it is sent, and a request that is refused or cannot reach StockPilot keeps them, so it can be sent again.',
+          'Nothing changes while a request is being put together: its items, its Notes, its Delivery choice and its delivery site are kept on that browser until it is sent (what is typed under Your info, including Pickup notes, never is), and a request that is refused or cannot reach StockPilot keeps them, so it can be sent again.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/settings/public-requests', label: 'Open public requests' },
         audience: {
@@ -80,18 +107,91 @@ export const RELEASES: Release[] = [
   {
     id: 'dates-fixes-2026-10',
     revision: 1,
-    // fix/dates-in-org-and-utc (no migration; web and phone). Held as a DRAFT
-    // until the web deploy is live AND the over-the-air update carrying the
-    // phone part has reached phones (iOS launches in eas update:insights for
-    // its group); the follow-up that publishes it sets the real publishedAt,
-    // moves it among the releases published by then, and re-reads these words
-    // against what shipped. Dated after every release, so it sits at the top
-    // (newest first).
+    // The dates fixes: #335 (fix/dates-in-org-and-utc, 7cbf73b4, merged
+    // 2026-10-06 06:03:22Z) and #338 (fix/overdue-by-org-day, cea6f8f3, merged
+    // 12:03:15Z); no migration, web and phone. PUBLISHED. #335's web part went
+    // live with its own production deployment (7cbf73b4, GitHub deployment
+    // success 06:05:14Z; web build 7851fcefca49) and is in web build
+    // 78fd7fb5eea3 (built 06:24:42Z, with #336), on which the production
+    // check ran; #338's went live in web build f6e8be37b217 (built 12:03:48Z;
+    // GitHub deployment success 12:04:54Z). Each web build id is the first 12
+    // hex of the sha256 of its commit (next.config.ts, Build identity), and
+    // each was recomputed from its merge commit. The phone part is OTA group
+    // e3111729 from main cea6f8f3: its iOS update 01a1111c (created
+    // 12:07:43Z) carries #335's expected dates and #338's Receive POs count,
+    // after group 3dd13741
+    // (06:05Z, #335's alone). Its served launch asset equals the local
+    // export, its source map holds nextKnownOrgZone and pastExpectedDayTest,
+    // and it launched 1 time for 1 user, 0 failed (eas update:insights, read
+    // 2026-10-06 12:34Z).
     //
-    // Every user-visible change in the branch has a line (owner rule
-    // 2026-09-25). The phone lines ride the over-the-air update, which loads
-    // when the app is opened again with no prompt, so they say "after the
-    // latest update" and their What to do says to close and reopen the app.
+    // The Demo Co production check of #335 (pr335-336-prodcheck, on web build
+    // 78fd7fb5eea3): the team calendar opened on October 2026 with Today
+    // marked, from Los Angeles and from Sydney (on Oct 5 both clocks name
+    // October, so that load cannot tell the new rule from the old one: they
+    // differ only in a month's last hours); the digest card read "Sent
+    // Mondays at 7:00 AM PDT, in your workspace's time zone."; PO-DEMO-001,
+    // given an expected date of Oct 11 through the web form, showed Oct 11 in
+    // the purchase orders list and 10/11/2026 on its page from both zones,
+    // and the date was cleared again; production logs held no server error
+    // from 06:24Z to 12:08Z. NOT checked on a phone when this was written:
+    // the simulator was held by another check, so the Purchase orders and
+    // Receive POs lines rest on the published bundle's code and on simulator
+    // runs of their branches with fixture data: #335's (a Los Angeles
+    // organization, both screens: ETAs Oct 10, Nov 1 and Jan 1 as set, where
+    // main showed Oct 9, Oct 31 and Dec 31) and #338's (Receive POs: no
+    // overdue count on the evening before, 1 overdue the next day, ETA Oct
+    // 10), and a Demo Co phone check of the expected date on this update
+    // gates the merge (its result is added here before merging). #338's
+    // dashboard, briefing, digest and scorecard rules were not exercised in
+    // production (no Demo Co purchase order has an expected date); they rest
+    // on #338's tests. Published with the public link and PO-2 releases,
+    // between them (newest first).
+    //
+    // Its words were re-read against what shipped. Corrected at publish:
+    // - The digest's overdue line: no weekly digest has been sent yet (the
+    //   first Monday run with #326 is 2026-10-12, after #338), so the words
+    //   no longer say a Monday digest listed that day's deliveries. They say
+    //   what the digest counted, what a preview sent that evening counted and
+    //   what the Monday digest would have counted.
+    // - The Receive POs overdue line's why: before #335's update the screen
+    //   printed the ETA a day early, so "while its ETA was the next day" was
+    //   not what every reader saw. It says the screen could count a purchase
+    //   order as overdue on the evening before it was due.
+    // - The calendar line: the server's month ran ahead only west of UTC
+    //   (east of it, it lagged early on the 1st), so it says "In US time
+    //   zones", as the other lines do.
+    //
+    // Corrected by the claims review of #339 (2026-10-06):
+    // - The calendar line's why said "today's events were a month away from
+    //   where the calendar opened". The grid is 42 days from the Sunday on or
+    //   before the 1st, events load for the whole grid and a day outside the
+    //   month is only shaded (schedule-calendar.tsx, the same before #335),
+    //   so the next month's grid still showed today, with its events, in its
+    //   first row unless that month began on a Sunday. It now says only that
+    //   the calendar opened on the next month.
+    // - Both Receive POs lines went to Receiving on alone. The screen reads
+    //   purchase orders under row-level security (purchase_orders_select,
+    //   0322, needs purchase_orders:read), so without that permission it
+    //   opens empty: they now need purchase_orders:read with Receiving on, as
+    //   slice 2's receiving line does. (The claims review's read-only count
+    //   on 2026-10-06 found no accepted non-owner member without
+    //   purchase_orders:read, so no reader was told wrongly.)
+    // - "the evening before" left out the US zones where midnight UTC is the
+    //   afternoon (Alaska, Hawaii), and 4 PM Pacific in winter: the briefing,
+    //   digest and Receive POs lines now say "late in the day before", with
+    //   the Pacific times where the line gives them.
+    // - The digest setting's How it affects you said the setting and the
+    //   email give the same day and time. The card names the next run, and a
+    //   Monday email's footer its own run (digest.ts, 'this-week'), which
+    //   differ in the week after a clock change, so it now names the footer
+    //   of the next digest email.
+    //
+    // Every user-visible change in the two pull requests has a line (owner
+    // rule 2026-09-25). The phone lines ride the over-the-air update, which
+    // loads when the app is opened again with no prompt, so they say "after
+    // the latest update" and their What to do says to close and reopen the
+    // app.
     // Left out as not visible: the web purchase order page's Expected row, the
     // purchase orders list's On the water ETA and server-paged Expected
     // column, and the weekly digest email's expected dates. Each printed the
@@ -105,19 +205,22 @@ export const RELEASES: Release[] = [
     //
     // Who is told: each phone line, whoever the phone shows that screen to
     // (Purchase orders: purchase_orders:read with Purchase orders on; Receive
-    // POs: Receiving on, no permission); the calendar line, whoever can open
-    // the calendar (the page's schedule:read or schedule:manage, Schedule on);
+    // POs: purchase_orders:read with Receiving on, since the screen lists only
+    // the purchase orders the member may read); the calendar line, whoever
+    // can open the calendar (the page's schedule:read or schedule:manage,
+    // Schedule on);
     // the digest line, every member (the notification settings are each
     // member's own).
     //
-    // fix/overdue-by-org-day (no migration; web and phone) adds five lines,
-    // after the two expected-date lines they follow from: a purchase order is
-    // overdue, and a delivery late, only after its expected date has passed in
-    // the organization's zone (core isPastExpectedDay). Each check compared
+    // #338 (no migration; web and phone) added five lines, after the two
+    // expected-date lines they follow from: a purchase order is overdue, and
+    // a delivery late, only after its expected date has passed in the
+    // organization's zone (core isPastExpectedDay). Each check compared
     // the stored midnight UTC with an instant, so in US zones a purchase order
-    // was overdue from the evening before its expected date (5 PM Pacific, 4 PM
-    // in winter) and a delivery received on its expected date was late. Who is
-    // told: the Receive POs count, Receiving on (as its other line); the
+    // was overdue from late in the day before its expected date (5 PM Pacific,
+    // 4 PM in winter) and a delivery received on its expected date was late.
+    // Who is told: the Receive POs count, purchase_orders:read with Receiving
+    // on (as its other line); the
     // dashboard count, purchase_orders:read (the rows it counts) with Purchase
     // orders on (the page it links to); the briefing, the Insights page's
     // items:update with AI on (the morning notification goes to owners and
@@ -127,11 +230,11 @@ export const RELEASES: Release[] = [
     // linked to it. The summary drops the calendar's "even late on a month's
     // last day" (the calendar line keeps it) to stay within its 500
     // characters.
-    status: 'draft',
+    status: 'published',
     title: "Expected dates, overdue purchase orders, the calendar's month and the digest's send time",
     summary:
       "In the mobile app, after the latest update, Purchase orders and Receive POs show each expected date as it was set, and Receive POs counts overdue ones as the web does. A purchase order now counts as overdue only once its expected date has passed in your organization's time zone, and a delivery received on its expected date counts as on time. On the web, the team calendar opens on your organization's current month, and the weekly digest setting gives the day and time it is sent.",
-    publishedAt: '2026-10-14T17:00:00Z',
+    publishedAt: '2026-10-06T12:41:00Z',
     entries: [
       {
         id: 'phone-po-list-expected-date',
@@ -158,7 +261,7 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           "Each ETA on the Receive POs screen shows the same day as the purchase order's page on the web.",
         whatToDo: 'Close the app completely and open it again to load the latest update.',
-        audience: { modules: ['receiving'] },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
       {
         // receive.tsx compared the stored midnight UTC with the phone's clock;
@@ -171,11 +274,11 @@ export const RELEASES: Release[] = [
         whatChanged:
           "In US time zones, the mobile app's Receive POs screen counted a purchase order as overdue from the day before its expected date (from 5 PM Pacific time, 4 PM in winter). In the mobile app, after the latest update, a purchase order counts as overdue once its expected date has passed in your organization's time zone.",
         whyItMatters:
-          'On the evening before a delivery was due, the screen could count a purchase order as overdue while its ETA was the next day.',
+          'Late in the day before a purchase order was due, the screen could already count it as overdue.',
         howItAffectsYou:
           'A purchase order expected today is not counted as overdue on the Receive POs screen. It counts from the next day.',
         whatToDo: 'Close the app completely and open it again to load the latest update.',
-        audience: { modules: ['receiving'] },
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
       {
         // PurchaseOrdersService.overdueCount filtered expected_at < now; it
@@ -202,7 +305,7 @@ export const RELEASES: Release[] = [
         area: 'Briefing',
         title: "Today's briefing counts a purchase order as overdue only after its expected date",
         whatChanged:
-          "In US time zones, Today's briefing counted a purchase order as an overdue inbound PO from the evening before its expected date, and the morning briefing notification counted it on its expected date. They now count it once its expected date has passed in your organization's time zone.",
+          "In US time zones, Today's briefing counted a purchase order as an overdue inbound PO from late in the day before its expected date (from 5 PM Pacific time, 4 PM in winter), and the morning briefing notification counted it on its expected date. They now count it once its expected date has passed in your organization's time zone.",
         whyItMatters: 'A purchase order still due that day was listed among the overdue inbound POs.',
         howItAffectsYou:
           'The overdue inbound PO count leaves out purchase orders expected today. They count from the next day.',
@@ -218,8 +321,8 @@ export const RELEASES: Release[] = [
         area: 'Notifications',
         title: 'The weekly digest counts a purchase order as overdue only after its expected date',
         whatChanged:
-          "In US time zones, the weekly inventory digest counted a purchase order expected on the Monday it was sent as overdue, and a preview sent the evening before a purchase order's expected date did the same. A purchase order now counts as overdue once its expected date has passed in your organization's time zone.",
-        whyItMatters: "Monday's digest listed that day's deliveries as overdue before they were due.",
+          "In US time zones, the weekly inventory digest counted a purchase order as overdue from late in the day before its expected date (from 5 PM Pacific time, 4 PM in winter): a preview sent then counted it, and the Monday digest would have counted one expected that Monday. A purchase order now counts as overdue once its expected date has passed in your organization's time zone.",
+        whyItMatters: 'A digest could count a purchase order as overdue on the day it was due, or late in the day before.',
         howItAffectsYou:
           "The digest's count of overdue purchase orders leaves out those expected that day. They count from the next day.",
         whatToDo: 'No action needed.',
@@ -253,8 +356,8 @@ export const RELEASES: Release[] = [
         area: 'Schedule',
         title: 'The team calendar opens on the current month at the end of a month',
         whatChanged:
-          "Late in the day on the last day of a month, opening the team calendar or pressing Today showed the next month. The calendar now opens on the current month in your organization's time zone.",
-        whyItMatters: "That evening, today's events were a month away from where the calendar opened.",
+          "In US time zones, late in the day on the last day of a month, opening the team calendar or pressing Today showed the next month. The calendar now opens on the current month in your organization's time zone.",
+        whyItMatters: 'Late that day, the calendar opened on the next month instead of the current one.',
         howItAffectsYou:
           "The calendar, and its Today button, open on your organization's current month.",
         whatToDo: 'No action needed.',
@@ -273,7 +376,7 @@ export const RELEASES: Release[] = [
           "In your notification settings, the weekly inventory digest said it is sent every Monday morning. It now gives the day and time it is sent in your workspace's time zone, the same time the digest email's footer gives.",
         whyItMatters:
           'The digest goes out at the same moment for every workspace: Monday morning in US time zones, but not everywhere.',
-        howItAffectsYou: 'The setting and the email give the same day and time.',
+        howItAffectsYou: 'The setting gives the same day and time as the footer of the next digest email.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
       },
@@ -282,15 +385,75 @@ export const RELEASES: Release[] = [
   {
     id: 'order-submit-once-2026-10',
     revision: 1,
-    // Phone ordering PO-2 (migration 0391: one create path, place_order_request
-    // and order_submissions). Held as a DRAFT until 0391 is pushed and
-    // verified, the web deploy is READY and the production smoke test that
-    // writes nothing has passed (phone-orders plan 10.1 step 8); the
-    // follow-up that publishes it (plan PO-5) sets the real publishedAt and
-    // re-reads these words against what shipped. A draft sits above the
-    // newest published release: slice D's release and slice B's two are
-    // published below it, and it is dated after them; the publishing
-    // follow-up keeps the order newest first.
+    // Phone ordering PO-2 (#316, c6086764, merged 2026-10-04 11:32:25Z;
+    // migration 0391: one create path, place_order_request and
+    // order_submissions). PUBLISHED (plan PO-5). 0391 was pushed to
+    // production at 2026-10-04 11:31:36-40Z and verified (verify-0391: the six
+    // functions equal their pins, order_submissions has row-level security
+    // and its 2 policies, the frozen functions unchanged); web build
+    // 64f2e87634bb deployed at 11:34Z. The production smoke test that writes
+    // nothing passed (101 lines refused, a foreign placer refused inside
+    // place_order_request, an unknown key's status none, nothing written), and
+    // the Demo Co check passed 28 checks, confirmed by its audit
+    // (prodwalk-po2: SO-000022 placed once from the New order page, with one
+    // placed web submission row and one created audit row carrying surface
+    // web; the same key through the phone route answered the same order and
+    // wrote nothing; cancelled while pending). Its one FAIL was a put-away
+    // step NOT DONE, with no write: no screen returns staged stock to a site,
+    // a gap that predates PO-2. Plan 10.1 step 9: the first Learn4Life web
+    // order after the deploy (2026-10-05 16:13:14Z) has exactly one
+    // order_submissions row (placed, web) and one order_request.created audit
+    // row, and went on to completed (read-only re-check 2026-10-06 12:32Z:
+    // still Learn4Life's only submission, none refused or withdrawn);
+    // Postgres logs from 2026-10-05 15:13Z (an hour before that order) to
+    // 2026-10-06 12:30Z, read by the orchestrator's PO-2 watch before this
+    // publication, hold no error mentioning place_order_request (recorded in
+    // its resume note and this publication's brief; not re-read here, since
+    // this publication reads production only through single SELECT files).
+    // Web only:
+    // the phone storefront is PO-4's release (published 2026-10-05 15:55Z), so
+    // there is no phone update to wait for. Published with the dates fixes
+    // and public link releases, the oldest of the three, directly above slice
+    // 2's release (06:42Z), newest first.
+    //
+    // Its words were re-read against what shipped, with the New order page's
+    // later changes (#320's shared words, #325's Orders module gate).
+    // Corrected at publish:
+    // - Check and finish: a resend can be refused (an item archived since, a
+    //   needed-by date now past), and the review then says why, so the line
+    //   adds "or the page says why it can't be", as PO-4's release does.
+    // - "a closed tab" left the examples of a lost answer: a closed tab keeps
+    //   no review open. Coming back to the page checks the request instead,
+    //   which How it affects you says.
+    // - Another tab: the pending order request is kept per warehouse, and a
+    //   new tab opens on the first warehouse unless one is named, so the
+    //   words say "for the same warehouse".
+    //
+    // Corrected by the claims review of #339 (2026-10-06):
+    // - Start an order: the selection waits only while the open page's own
+    //   request is unconfirmed (orders-storefront.tsx prefillWaits, the
+    //   page's own pending record), and Start an order opens the selection's
+    //   warehouse (start-order-prefill.ts), so it says "for that warehouse".
+    // - The cart is kept per account too: before #316 the New order draft
+    //   (order-draft:<warehouse>) belonged to no account, so on a shared
+    //   browser the next person to sign in opened the last person's cart,
+    //   with the name and email of an order placed for someone else
+    //   (cart-context.tsx). How it affects you now says so. A draft left
+    //   under the old key was adopted once, without that name and email, by
+    //   the first person to open that warehouse after the deploy.
+    // - "a slow or lost connection": the send has no timeout, so a slow
+    //   answer that arrives shows the outcome; the panel follows a dropped
+    //   connection, a server fault, busy or rate limited. It now says "for
+    //   example, the connection drops".
+    // - Refusals: the review lists the items that can't be ordered, and the
+    //   reason for each (archived, not available to you) is on its line in
+    //   the cart, so the entry says "the page now says why".
+    // - Labels: #316 also corrected two promises (the success sentence
+    //   promised an email to the person placing an order for someone else;
+    //   Pick up at promised "Ready within 1 business day of approval") and
+    //   added Review and approve for approvers (orders:approve, not a
+    //   viewer); the labels entry now tells them, and the plainer words
+    //   (For, Pickup or delivery, who reviews the order).
     //
     // What a person can see, on the web only (the phone storefront is PO-4,
     // with its own entry): the New order page's lost-answer panel (Check and
@@ -300,11 +463,11 @@ export const RELEASES: Release[] = [
     // words claim no number nobody measured and no detail of how the check
     // works. Who is told: anyone who can open the New order page (Orders on,
     // orders:request, which every role holds by default).
-    status: 'draft',
+    status: 'published',
     title: 'Submitting an order request twice no longer places two orders',
     summary:
       "If the New order page sends your order request but doesn't hear back, it now keeps your cart as it was and lets you check and finish, or choose not to send it, so the order is never placed twice. Refusals say what to fix, and the needed-by time is read in your organization's time zone.",
-    publishedAt: '2026-10-11T17:10:00Z',
+    publishedAt: '2026-10-06T12:40:00Z',
     audience: { anyPermission: ['orders:request'], modules: ['orders'] },
     entries: [
       {
@@ -313,11 +476,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "A lost answer can't place the same order twice",
         whatChanged:
-          "If the New order page sends your order request and doesn't hear back (a slow connection, a closed tab), the review stays open with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
+          "If the New order page sends your order request and doesn't hear back (for example, the connection drops), the review stays open with three choices: Check and finish, Don't send it and See my orders. Check and finish sends the same request again: if it was placed, you see it; if not, it is placed now, once, or the page says why it can't be. Don't send it stops it if it hasn't been placed yet (if it has, you see the order) and unlocks your cart.",
         whyItMatters:
           'Pressing Submit again after a lost answer could place the same order twice, and the approver then had to find and cancel the copy.',
         howItAffectsYou:
-          "Until you choose, your cart, the setup bar and the warehouse switch stay as they were sent, and items you start an order with from Items wait until then. If you reload the page or open it in another tab, it remembers and checks for you. The pending order request is kept only for your account and organization on that browser: someone else who signs in there never sees it or sends it, and if you switch to another organization, switch back to finish it.",
+          "Until you choose, your cart, the setup bar and the warehouse switch stay as they were sent, and, for that warehouse, items you start an order with from Items wait until then. If you reload the page, or open it for the same warehouse in another tab, it remembers and checks for you. Your cart and the pending order request are kept only for your account and organization on that browser: someone else who signs in there starts with their own cart and never sees or sends your request, and if you switch to another organization, switch back to finish it.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders/new', label: 'Place an order' },
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },
@@ -328,7 +491,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The review says why an order request was not placed',
         whatChanged:
-          "When an order request can't be placed, the review now says why, in place: for example an item that was archived or is no longer available to you, a delivery site that is no longer active, or a needed-by date that has passed. Items that can't be ordered are marked in your cart by name.",
+          "When an order request can't be placed, the page now says why, in place: for example an item that was archived or is no longer available to you, a delivery site that is no longer active, or a needed-by date that has passed. Items that can't be ordered are marked in your cart by name.",
         whyItMatters:
           'The reason used to flash by in a corner of the screen, and some reasons read as a server error.',
         howItAffectsYou:
@@ -354,10 +517,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Clearer labels on the New order page',
         whatChanged:
-          'The cart\'s button now reads Review order, because it opens the review, and the review\'s button reads Submit order request. Frequently ordered now says it counts the orders placed at that warehouse in the last 30 days, and its sort is Most ordered here. The Featured sort is gone: the list starts in name order.',
+          'The cart\'s button now reads Review order, because it opens the review, and the review\'s button reads Submit order request. Frequently ordered now says it counts the orders placed at that warehouse in the last 30 days, and its sort is Most ordered here. The Featured sort is gone: the list starts in name order. After you submit, the page says who hears about it (on an order for someone else, emails about it go to that person) and, if you approve orders, offers Review and approve. Pick up at no longer promises a time it will be ready.',
         whyItMatters:
-          'Some labels promised something the page did not do, such as a list based on your own orders.',
-        howItAffectsYou: 'Nothing else about placing an order changes.',
+          'Some words promised something the page did not do, such as a list based on your own orders, an email to you about an order placed for someone else, or a time it would be ready.',
+        howItAffectsYou:
+          'Other words are plainer too, such as For and Pickup or delivery in the setup bar, and the cart says someone who approves orders will review it. Nothing else about placing an order changes.',
         whatToDo: 'No action needed.',
       },
     ],
