@@ -363,6 +363,16 @@ export interface ExchangeReviewLine {
   requestNote: string | null;
 }
 
+/**
+ * The review header's accessible label (review fix P26): "Walk Exchange Tee -
+ * M, exchange for Walk Exchange Tee - L" (VoiceOver reads the visible "→" as
+ * "right arrow"); for a note-only request, "…, exchange: Warehouse will
+ * review".
+ */
+export function exchangeReviewHeaderLabel(returned: string, replacement: string | null): string {
+  return replacement ? `${returned}, exchange for ${replacement}` : `${returned}, exchange: ${RETURNS_COPY.replacementWarehouseReview}`;
+}
+
 /** Who is reviewing: approving or changing a replacement needs order approval. */
 export interface ExchangeReviewViewer {
   canApproveOrders: boolean;

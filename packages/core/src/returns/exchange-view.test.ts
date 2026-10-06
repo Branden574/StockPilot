@@ -9,6 +9,7 @@ import {
   exchangeRail,
   exchangeRailAccessibilityLabel,
   exchangeReviewDecision,
+  exchangeReviewHeaderLabel,
   exchangeReviewProblem,
   noReplacementLine,
   parseExchangeCandidates,
@@ -296,6 +297,16 @@ describe('the approval review (web and phone)', () => {
       quantity: 1,
       reason: 'Out of L',
     });
+  });
+
+  // RX-2 review fix P26: VoiceOver read the header's "→" as "right arrow".
+  it('names the exchange in words for the header\'s accessible label (review fix P26)', () => {
+    expect(exchangeReviewHeaderLabel('Walk Exchange Tee - M', 'Walk Exchange Tee - L')).toBe(
+      'Walk Exchange Tee - M, exchange for Walk Exchange Tee - L',
+    );
+    // A note-only request: the warehouse picks the replacement.
+    expect(exchangeReviewHeaderLabel('Walk Exchange Tee - M', null)).toBe('Walk Exchange Tee - M, exchange: Warehouse will review');
+    expect(exchangeReviewHeaderLabel('Walk Exchange Tee - M', 'Walk Exchange Tee - L')).not.toMatch(/→/);
   });
 
   it('a decline needs a reason; an add needs an item', () => {
