@@ -35,6 +35,20 @@ import {
 export interface ReadinessCopyOptions {
   /** The org's time zone, for dates and "Checked at". */
   timeZone?: string;
+  /**
+   * RX-2: an exchange replacement's return-first gate (order-state-machine's
+   * replacementGate). Only while it is 'waiting' (the returned item not
+   * received, nobody released it early) does a ready line read "Waiting for
+   * return" and the all-ready roll-up say the stock is held and picking waits
+   * (review fix P6); anything else reads as before.
+   */
+  replacementGate?: 'waiting' | 'open' | 'closed' | null;
+  /** RX-2: the RMA the gate waits for, named in the roll-up's detail line. */
+  returnNumber?: string | null;
+}
+
+function gateWaits(opts: ReadinessCopyOptions | undefined): boolean {
+  return opts?.replacementGate === 'waiting';
 }
 
 // ── Formatting ──────────────────────────────────────────────────────────────
@@ -354,14 +368,39 @@ function recordsDisagreeSentence(item: ReadinessItemAssessment): string {
   return `On record: ${fq(f.onHand)}, but its locations account for ${fq(q.locationsTotal)}. A count will settle it.`;
 }
 
+/** A line's chip: its words, tone and icon (never colour alone). */
+export interface ReadinessLineChip {
+  label: string;
+  tone: ReadinessTone;
+  icon: string;
+}
+
+/** The line chip while a replacement waits for its returned item (review fix P6). */
+export const READINESS_WAITING_FOR_RETURN_CHIP: ReadinessLineChip = {
+  label: 'Waiting for return',
+  tone: 'info',
+  icon: 'clock',
+};
+
+/**
+ * A line's chip, on the web and the phone: its state's words, tone and icon;
+ * a ready line of a replacement waiting for its returned item reads "Waiting
+ * for return" instead (RX-2 review fix P6; its sentence and hold stay).
+ */
+export function readinessLineChip(line: Pick<ReadinessLineAssessment, 'state'>, opts: ReadinessCopyOptions = {}): ReadinessLineChip {
+  if (line.state === 'ready' && gateWaits(opts)) return READINESS_WAITING_FOR_RETURN_CHIP;
+  const meta = READINESS_STATES[line.state];
+  return { label: meta.label, tone: meta.tone, icon: meta.icon };
+}
+
 /** The short label a line's chip shows. */
-export function readinessLineLabel(line: ReadinessLineAssessment): string {
-  return READINESS_STATES[line.state].label;
+export function readinessLineLabel(line: ReadinessLineAssessment, opts: ReadinessCopyOptions = {}): string {
+  return readinessLineChip(line, opts).label;
 }
 
 /** The screen-reader label for a line: "Line 2, Needs put-away, 4 in Staging". */
-export function readinessLineAccessibilityLabel(line: ReadinessLineAssessment): string {
-  const label = READINESS_STATES[line.state].label;
+export function readinessLineAccessibilityLabel(line: ReadinessLineAssessment, opts: ReadinessCopyOptions = {}): string {
+  const label = readinessLineChip(line, opts).label;
   const u = line.units;
   let detail: string;
   if (line.state === 'handed_over' || line.notes.includes('nothing_owed')) detail = 'nothing left to pick';
@@ -481,8 +520,10 @@ export interface ReadinessRollupCopy {
   neededBy: string | null;
   /** "Checked at 2:14 PM. Stock can change after this." (null when failed). */
   checkedAt: string | null;
-  /** A failed check's reason under the headline (readinessFailureDetail),
-   *  when it has one both platforms give; null otherwise. */
+  /** The line under the headline: a failed check's reason
+   *  (readinessFailureDetail), when it has one both platforms give, or, while
+   *  a replacement waits for its returned item, when picking starts; null
+   *  otherwise. */
   detail: string | null;
 }
 
@@ -496,10 +537,21 @@ export function readinessOfflineCopy(observedAt: string, opts: ReadinessCopyOpti
   return `You're offline. This is how the order looked at ${clock(observedAt, opts.timeZone)}.`;
 }
 
+/** "Picking starts once RMA-… is received, or a manager releases it early." */
+function gateDetail(returnNumber: string | null | undefined): string {
+  return `Picking starts once ${returnNumber ? returnNumber : 'the returned item'} is received, or a manager releases it early.`;
+}
+
 /**
  * The strip's roll-up. Null for a closed order (nothing is shown). Green
  * ("Ready to pick (5 of 5 lines)") only when every line is ready and every fact
  * was readable; there is never a positive "on track" claim.
+ *
+ * RX-2 review fix P6: while a replacement waits for its returned item
+ * (opts.replacementGate 'waiting'), the all-ready roll-up is never green: "Stock
+ * held (1 of 1 line). Picking waits for the returned item." (or "In stock" when
+ * not every line is held for this order), with when picking starts as its
+ * detail. A roll-up that is not all ready keeps its own words.
  */
 export function describeReadinessRollup(
   result: OrderReadinessResult,
@@ -559,6 +611,18 @@ export function describeReadinessRollup(
   // ready (a backordered order's finished lines).
   const owedCount = lineCount - counts.handed_over;
   const handedOver = counts.handed_over > 0 ? `${lines(counts.handed_over)} handed over` : null;
+  if (a.rollup.ready && gateWaits(opts)) {
+    const held = a.holdAnnotated && a.lines.every((l) => l.state === 'handed_over' || l.hold?.state === 'held');
+    return {
+      headline: `${held ? 'Stock held' : 'In stock'} (${owedCount} of ${owedCount} ${owedCount === 1 ? 'line' : 'lines'}). Picking waits for the returned item.`,
+      tone: READINESS_WAITING_FOR_RETURN_CHIP.tone,
+      icon: READINESS_WAITING_FOR_RETURN_CHIP.icon,
+      details: handedOver ? [handedOver] : [],
+      neededBy,
+      checkedAt,
+      detail: gateDetail(opts.returnNumber),
+    };
+  }
   if (a.rollup.ready) {
     return {
       headline: `Ready to pick (${owedCount} of ${owedCount} ${owedCount === 1 ? 'line' : 'lines'})`,

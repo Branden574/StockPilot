@@ -28,6 +28,8 @@ import {
   READINESS_MODULE_OFF_COPY,
   READINESS_ORDER_NOT_FOUND_COPY,
   readinessFailureDetail,
+  readinessLineChip,
+  readinessLineLabel,
   readinessOfflineCopy,
   readinessSummaryForRequester,
   REQUESTER_CHECK_FAILED_COPY,
@@ -857,6 +859,108 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
   });
 });
 
+// ── RX-2 review fix P6: an exchange replacement waiting for its return ─────
+
+// While the return-first gate holds (the replacement waits for its returned
+// item and nobody released it early), the stock card never says "Ready to
+// pick" in green beside a page that refuses the pick slip: it says the stock
+// is held and picking waits, and when it starts. After a release or the
+// receipt the normal words return; a short line keeps its own words; the
+// requester's card is unchanged.
+describe('a replacement waiting for its returned item (RX-2 review fix P6)', () => {
+  const GATE = { timeZone: TZ, replacementGate: 'waiting' as const, returnNumber: 'RMA-20261006-C27F66' };
+  const heldOne = () =>
+    assess('approved', [{ item: 'a', requested: 1 }], [item('a', { heldOwn: 1, here: { rack: 6, site: 0, unplaced: 0, staging: 0 } })]);
+
+  it('the roll-up says the stock is held and when picking starts, never green', () => {
+    expect(describeReadinessRollup({ state: 'ok', assessment: heldOne() }, GATE)).toEqual({
+      headline: 'Stock held (1 of 1 line). Picking waits for the returned item.',
+      tone: 'info',
+      icon: 'clock',
+      details: [],
+      neededBy: null,
+      checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+      detail: 'Picking starts once RMA-20261006-C27F66 is received, or a manager releases it early.',
+    });
+    const two = assess(
+      'approved',
+      [
+        { item: 'a', requested: 1 },
+        { item: 'b', requested: 2 },
+      ],
+      [
+        item('a', { heldOwn: 1, here: { rack: 3, site: 0, unplaced: 0, staging: 0 } }),
+        item('b', { heldOwn: 2, here: { rack: 2, site: 0, unplaced: 0, staging: 0 } }),
+      ],
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: two }, GATE)!.headline).toBe(
+      'Stock held (2 of 2 lines). Picking waits for the returned item.',
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: heldOne() }, { ...GATE, returnNumber: null })!.detail).toBe(
+      'Picking starts once the returned item is received, or a manager releases it early.',
+    );
+  });
+
+  it('the line reads Waiting for return, and keeps its shelf and hold words', () => {
+    const { line, item: it } = only(heldOne());
+    expect(readinessLineChip(line, GATE)).toEqual({ label: 'Waiting for return', tone: 'info', icon: 'clock' });
+    expect(readinessLineLabel(line, GATE)).toBe('Waiting for return');
+    expect(readinessLineAccessibilityLabel(line, GATE)).toBe('Line 1, Waiting for return, 1 on the shelf');
+    expect(describeReadinessLine(line, it, GATE)).toBe('1 on the shelf for this order.');
+    expect(describeReadinessHold(line.hold)).toBe('Held for this order');
+  });
+
+  it('after a release or the receipt (or for an ordinary order) the normal words return', () => {
+    const { line } = only(heldOne());
+    for (const replacementGate of ['open', null, undefined] as const) {
+      const opts = { timeZone: TZ, replacementGate, returnNumber: 'RMA-1' };
+      expect(describeReadinessRollup({ state: 'ok', assessment: heldOne() }, opts)).toMatchObject({
+        headline: 'Ready to pick (1 of 1 line)',
+        tone: 'success',
+        icon: 'check',
+        detail: null,
+      });
+      expect(readinessLineChip(line, opts)).toEqual({ label: 'Ready to pick', tone: 'success', icon: 'check' });
+      expect(readinessLineAccessibilityLabel(line, opts)).toBe('Line 1, Ready to pick, 1 on the shelf');
+    }
+    expect(readinessLineLabel(line)).toBe('Ready to pick');
+  });
+
+  it('a short line keeps its own words; stock in stock but not held is not called held', () => {
+    const short = assess(
+      'approved',
+      [
+        { item: 'a', requested: 1 },
+        { item: 'b', requested: 1 },
+      ],
+      [item('a', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }), item('b')],
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: short }, GATE)).toMatchObject({
+      headline: '1 line short',
+      tone: 'danger',
+      detail: null,
+    });
+    if (short.phase !== 'to_pick') throw new Error('to_pick expected');
+    expect(short.lines.map((l) => readinessLineLabel(l, GATE))).toEqual(['Waiting for return', 'Short']);
+
+    const notHeld = assess('approved', [{ item: 'a', requested: 1 }], [item('a', { heldOwn: 0, here: { rack: 4, site: 0, unplaced: 0, staging: 0 } })]);
+    const { line } = only(notHeld);
+    expect(describeReadinessHold(line.hold)).toBe('Not held: another order could take this stock.');
+    expect(describeReadinessRollup({ state: 'ok', assessment: notHeld }, GATE)).toMatchObject({
+      headline: 'In stock (1 of 1 line). Picking waits for the returned item.',
+      tone: 'info',
+      icon: 'clock',
+      detail: 'Picking starts once RMA-20261006-C27F66 is received, or a manager releases it early.',
+    });
+  });
+
+  it("the requester's card is unchanged", () => {
+    expect(describeReadinessForRequester({ state: 'ok', assessment: heldOne() }, GATE)).toMatchObject({
+      sentence: 'All items are in stock.',
+    });
+  });
+});
+
 // ── Honesty rules over EVERY sentence readiness can compose ────────────────
 
 function everything(): string[] {
@@ -899,6 +1003,14 @@ function everything(): string[] {
     describeShortPickLines([{ itemName: 'Pens', batch: 2, owed: 60 }, { itemName: null, batch: null, owed: 1 }])!,
   );
   out.push(describeReadinessRollup({ state: 'failed', message: 'x' })!.headline);
+  // RX-2 review fix P6: the gate's words are swept too.
+  for (const [status, lines, items] of scenarios) {
+    const a = assess(status, lines, items);
+    const gated = { timeZone: TZ, replacementGate: 'waiting' as const, returnNumber: 'RMA-20261006-C27F66' };
+    const r = describeReadinessRollup({ state: 'ok', assessment: a }, gated);
+    if (r) out.push(r.headline, ...r.details, ...(r.detail ? [r.detail] : []));
+    if (a.phase === 'to_pick') for (const l of a.lines) out.push(readinessLineLabel(l, gated), readinessLineAccessibilityLabel(l, gated));
+  }
   for (const m of [READINESS_ORDER_NOT_FOUND_COPY, READINESS_FORBIDDEN_COPY, READINESS_MODULE_OFF_COPY, READINESS_ORDER_CHANGED_COPY]) {
     out.push(describeReadinessRollup({ state: 'failed', message: m })!.detail!);
   }
