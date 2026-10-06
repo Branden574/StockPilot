@@ -28,6 +28,56 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'public-link-sent-request-2026-10',
+    revision: 1,
+    // fix/placed-cart-draft (no migration, web only: the public order link is
+    // a web page, so no OTA). Held as a DRAFT until the web deploy is live;
+    // the follow-up that publishes it sets the real publishedAt and re-reads
+    // these words against what shipped. A draft at the top, dated after
+    // every release (newest first); it can ship before or after the drafts
+    // below it, and the publishing follow-up keeps the order newest first.
+    //
+    // What a person can see: after a request was sent from a public order
+    // link, the browser kept the request's notes and, for a delivery, the
+    // Delivery choice and the site (`order-draft:public:<warehouse>`, the
+    // same key for every link to that warehouse), and the next visit opened
+    // with them. Left out as not visible: the branch's other change, a test
+    // made to wait for the placed order before it reads the New order draft
+    // (the page was right). Who is told: whoever can open the Public
+    // requests settings page, as it checks (the module, and Manage public
+    // links or organization:update); the people who use a link never sign
+    // in, so they are not readers.
+    status: 'draft',
+    title: "A public order link no longer keeps the last request's notes and delivery site",
+    summary:
+      "After a request is sent from a public order link, the browser it was sent from no longer keeps that request's notes, Delivery choice or delivery site, so the next person to open a public order link for the same warehouse on that browser starts with an empty request.",
+    publishedAt: '2026-10-15T17:00:00Z',
+    audience: {
+      anyPermission: ['public_links:manage', 'organization:update'],
+      modules: ['public_requests'],
+    },
+    entries: [
+      {
+        id: 'public-link-sent-request-blank',
+        category: 'fixed',
+        area: 'Public requests',
+        title: 'The next request on the same browser starts empty',
+        whatChanged:
+          "After a request was sent from a public order link, the browser it was sent from kept the request's notes and, for a delivery, the Delivery choice and the delivery site. The next person to open a public order link for the same warehouse on that browser found them already filled in. Sending a request now leaves none of them behind: the next request there starts with Pickup, no delivery site and no notes.",
+        whyItMatters:
+          "On a shared computer, such as a front desk, the next person could send their request with someone else's notes or delivery site without noticing.",
+        howItAffectsYou:
+          'Nothing changes while a request is being put together: its items, notes and delivery site are kept on that browser until it is sent, and a request that is refused or cannot reach StockPilot keeps them, so it can be sent again.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/public-requests', label: 'Open public requests' },
+        audience: {
+          anyPermission: ['public_links:manage', 'organization:update'],
+          modules: ['public_requests'],
+        },
+      },
+    ],
+  },
+  {
     id: 'dates-fixes-2026-10',
     revision: 1,
     // fix/dates-in-org-and-utc (no migration; web and phone). Held as a DRAFT

@@ -139,8 +139,17 @@ export function PublicCartRail({
       const ok = json as { id: string; trackUrl: string };
       // Clear the persisted PUBLIC draft (key is prefixed "public:<wh>" to
       // avoid colliding with a staff draft on a shared browser).
+      //
+      // `reset`, not `clear`: `clear` empties only the basket (it is the
+      // Clear all button) and keeps the notes, the pickup or delivery choice
+      // and the delivery site. The cart's saver runs 250 ms after this
+      // change, and a cart with notes or a site is not an empty cart, so it
+      // wrote them back under this browser's public key: the next person to
+      // open the link here started with the last person's notes, Delivery
+      // and site. A reset cart is empty, so the saver removes the key instead
+      // (as Done does on New order).
       clearCartDraft(draftKey);
-      dispatch({ type: 'clear' });
+      dispatch({ type: 'reset' });
       onSubmitted({ id: ok.id, email: email.trim(), trackUrl: ok.trackUrl });
     } catch {
       toast.error("Couldn't reach the server. Try again.");
