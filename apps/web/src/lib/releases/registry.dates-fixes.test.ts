@@ -24,6 +24,10 @@ import { RELEASES } from './registry';
  * fixes draft. Its own file so the release tests that other open branches edit
  * (registry.test.ts) change only where this draft moves the others.
  *
+ * fix/overdue-by-org-day (no migration, web and phone) adds its lines to the
+ * same draft: a purchase order is overdue, and a delivery late, only after
+ * its expected date has passed in the organization's zone.
+ *
  * Held as a DRAFT until the web deploy is live and the over-the-air update
  * with the phone part has reached phones. Each entry is told to whoever can
  * open the screen it is about.
@@ -87,12 +91,83 @@ describe('the dates fixes release tells each change to whoever can see it', () =
 
   it('has no release-wide audience: each entry carries its own', () => {
     expect(release().audience).toBeUndefined();
+    // fix/overdue-by-org-day added the five overdue and on-time lines, after
+    // the two expected-date lines they follow from.
     expect(release().entries.map((e) => e.id)).toEqual([
       'phone-po-list-expected-date',
       'phone-receive-expected-date',
+      'phone-receive-overdue',
+      'dashboard-overdue-purchase-orders',
+      'briefing-overdue-purchase-orders',
+      'digest-overdue-purchase-orders',
+      'supplier-scorecard-on-time',
       'calendar-current-month',
       'digest-send-time',
     ]);
+  });
+
+  it("the phone's Receive POs overdue line: Receiving on, no permission, as the screen asks", () => {
+    expect(ids('viewer', [], ['receiving'])).toContain('phone-receive-overdue');
+    expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders'])).not.toContain(
+      'phone-receive-overdue',
+    );
+    expect(entry('phone-receive-overdue').audience).toEqual({ modules: ['receiving'] });
+  });
+
+  it("the dashboard line: purchase_orders:read with Purchase orders on, as the count's rows and its link ask", () => {
+    // The count reads only the purchase orders the member may read
+    // (purchase_orders_select needs purchase_orders:read), and it links to
+    // the purchase orders page (Purchase orders on).
+    expect(ids('viewer', ['purchase_orders:read'], ['purchase_orders'])).toContain(
+      'dashboard-overdue-purchase-orders',
+    );
+    expect(ids('viewer', [], ['purchase_orders'])).not.toContain('dashboard-overdue-purchase-orders');
+    expect(ids('viewer', ['purchase_orders:read'], [])).not.toContain(
+      'dashboard-overdue-purchase-orders',
+    );
+    expect(entry('dashboard-overdue-purchase-orders').audience).toEqual({
+      anyPermission: ['purchase_orders:read'],
+      modules: ['purchase_orders'],
+    });
+  });
+
+  it("the briefing line: the briefing page's items:update with AI on", () => {
+    expect(ids('manager', ['items:update'], ['ai'])).toContain('briefing-overdue-purchase-orders');
+    expect(ids('manager', ['items:update'], [])).not.toContain('briefing-overdue-purchase-orders');
+    expect(ids('viewer', [], ['ai'])).not.toContain('briefing-overdue-purchase-orders');
+    expect(entry('briefing-overdue-purchase-orders').audience).toEqual({
+      anyPermission: ['items:update'],
+      modules: ['ai'],
+    });
+  });
+
+  it("the digest's overdue line: whoever the digest sends purchase orders to (purchase_orders:read)", () => {
+    // services/digest.ts canReadPo: the purchase order section needs
+    // purchase_orders:read; the digest checks no module.
+    expect(ids('viewer', ['purchase_orders:read'], [])).toContain('digest-overdue-purchase-orders');
+    expect(ids('viewer', [], ['purchase_orders'])).not.toContain('digest-overdue-purchase-orders');
+    expect(entry('digest-overdue-purchase-orders').audience).toEqual({
+      anyPermission: ['purchase_orders:read'],
+    });
+  });
+
+  it("the scorecard line: the report's reports:read with Purchase orders on, linked to it", () => {
+    expect(ids('viewer', ['reports:read'], ['purchase_orders'])).toContain(
+      'supplier-scorecard-on-time',
+    );
+    expect(ids('viewer', ['reports:read'], [])).not.toContain('supplier-scorecard-on-time');
+    expect(ids('viewer', [], ['purchase_orders'])).not.toContain('supplier-scorecard-on-time');
+    expect(entry('supplier-scorecard-on-time').audience).toEqual({
+      anyPermission: ['reports:read'],
+      modules: ['purchase_orders'],
+    });
+    expect(entry('supplier-scorecard-on-time').link).toEqual({
+      href: '/dashboard/reports/supplier-scorecard',
+      label: 'Open the supplier scorecard',
+    });
+    // The page's own gate: reports:read and the report's modules.
+    const access = source('apps/web/src/lib/reports/report-access.ts');
+    expect(access).toContain("'supplier-scorecard': ['purchase_orders'],");
   });
 
   it("the phone's Purchase orders line: purchase_orders:read with Purchase orders on, as the drawer's item asks", () => {
@@ -160,6 +235,86 @@ describe('the dates fixes release says only what shipped', () => {
         'Close the app completely and open it again to load the latest update.',
       );
     }
+    expect(entry('phone-receive-overdue').whatChanged).toContain(
+      'In the mobile app, after the latest update, a purchase order counts as overdue once its expected date has passed',
+    );
+    expect(entry('phone-receive-overdue').whatToDo).toBe(
+      'Close the app completely and open it again to load the latest update.',
+    );
+    // The web lines need no update.
+    for (const id of [
+      'dashboard-overdue-purchase-orders',
+      'briefing-overdue-purchase-orders',
+      'digest-overdue-purchase-orders',
+      'supplier-scorecard-on-time',
+    ]) {
+      expect(entry(id).whatToDo, id).toBe('No action needed.');
+      expect(entry(id).whatChanged, id).not.toContain('mobile app');
+    }
+  });
+
+  it('states the rule once, as the code decides it: overdue or late only after the expected date, in the organization zone', () => {
+    expect(release().summary).toContain(
+      "A purchase order now counts as overdue only once its expected date has passed in your organization's time zone, and a delivery received on its expected date counts as on time.",
+    );
+    for (const id of [
+      'phone-receive-overdue',
+      'dashboard-overdue-purchase-orders',
+      'briefing-overdue-purchase-orders',
+      'digest-overdue-purchase-orders',
+    ]) {
+      expect(entry(id).whatChanged, id).toContain(
+        "once its expected date has passed in your organization's time zone",
+      );
+    }
+    expect(entry('supplier-scorecard-on-time').whatChanged).toContain(
+      "only when it is received after its expected date, in your organization's time zone",
+    );
+    // Every surface decides it through core's one rule.
+    const core = source('packages/core/src/time/calendar-date.ts');
+    expect(core).toContain('export function isPastExpectedDay(');
+    expect(core).toContain('export function pastExpectedDayCutoff(');
+    expect(source('apps/web/src/server/services/purchase-orders.ts')).toContain(
+      "lt('expected_at', cutoff)",
+    );
+    expect(source('apps/web/src/server/services/digest.ts')).toContain(
+      'isOverdue: isPastExpectedDay(r.expected_at, clock.now, clock.timeZone),',
+    );
+    expect(source('apps/web/src/server/services/reports.ts')).toContain(
+      'if (!isPastExpectedDay(po.expected_at, po.received_at, timeZone)) {',
+    );
+    expect(source('apps/mobile/src/lib/receive-overdue.ts')).toContain('isPastExpectedDay(');
+  });
+
+  it('names the overdue counts the way each screen does', () => {
+    const receive = source('apps/mobile/app/(drawer)/(tabs)/receive.tsx');
+    expect(receive).toContain("` · ${overdueCount} OVERDUE`");
+    expect(entry('phone-receive-overdue').whatChanged).toContain(
+      "In US time zones, the mobile app's Receive POs screen counted a purchase order as overdue",
+    );
+    const dashboard = source('apps/web/src/app/(dashboard)/dashboard/page.tsx');
+    expect(dashboard).toContain(
+      "title: `${poOverdueCount} overdue purchase order${poOverdueCount === 1 ? '' : 's'}`,",
+    );
+    expect(entry('dashboard-overdue-purchase-orders').whatChanged).toContain(
+      "In US time zones, the dashboard's list of what needs attention counted a purchase order as overdue",
+    );
+    const insights = source('apps/web/src/server/services/insights.ts');
+    expect(insights).toContain("'overdue inbound PO'");
+    const briefingPage = source('apps/web/src/app/(dashboard)/dashboard/insights/page.tsx');
+    expect(briefingPage).toContain('Today&apos;s briefing');
+    expect(entry('briefing-overdue-purchase-orders').whatChanged).toContain(
+      "Today's briefing and the morning briefing notification",
+    );
+    const digest = source('apps/web/src/lib/email/es/families/digest.ts');
+    expect(digest).toContain("`${plural(overdueTotal, 'purchase order')} overdue`");
+    const scorecard = source('apps/web/src/app/(dashboard)/dashboard/reports/supplier-scorecard/page.tsx');
+    expect(scorecard).toContain('<TableHead className="text-right">On-time</TableHead>');
+    // The page's own note says the rule, not the old column comparison.
+    expect(scorecard).not.toContain('received_at ≤ expected_at');
+    expect(scorecard.replace(/\s+/g, ' ')).toContain(
+      'On-time = received on or before the expected date (the day it was received, in your organization&apos;s time zone)',
+    );
   });
 
   it('names the screens and the ETA the way the phone does', () => {

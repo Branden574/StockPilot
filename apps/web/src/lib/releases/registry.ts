@@ -109,10 +109,28 @@ export const RELEASES: Release[] = [
     // the calendar (the page's schedule:read or schedule:manage, Schedule on);
     // the digest line, every member (the notification settings are each
     // member's own).
+    //
+    // fix/overdue-by-org-day (no migration; web and phone) adds five lines,
+    // after the two expected-date lines they follow from: a purchase order is
+    // overdue, and a delivery late, only after its expected date has passed in
+    // the organization's zone (core isPastExpectedDay). Each check compared
+    // the stored midnight UTC with an instant, so in US zones a purchase order
+    // was overdue from the evening before its expected date (5 PM Pacific, 4 PM
+    // in winter) and a delivery received on its expected date was late. Who is
+    // told: the Receive POs count, Receiving on (as its other line); the
+    // dashboard count, purchase_orders:read (the rows it counts) with Purchase
+    // orders on (the page it links to); the briefing, the Insights page's
+    // items:update with AI on (the morning notification goes to owners and
+    // admins, who hold both); the digest's flag, purchase_orders:read (the
+    // digest sends purchase orders only to their readers, with no module
+    // check); the scorecard, the report's reports:read with Purchase orders on,
+    // linked to it. The summary drops the calendar's "even late on a month's
+    // last day" (the calendar line keeps it) to stay within its 500
+    // characters.
     status: 'draft',
-    title: "Expected dates in the mobile app, the calendar's month and the digest's send time",
+    title: "Expected dates, overdue purchase orders, the calendar's month and the digest's send time",
     summary:
-      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. On the web, the team calendar opens on your organization's current month even late on a month's last day, and the weekly digest setting gives the day and time the digest is sent in your workspace's time zone.",
+      "In the mobile app, after the latest update, the Purchase orders and Receive POs screens show each purchase order's expected date as it was set, not the day before. A purchase order now counts as overdue only once its expected date has passed in your organization's time zone, and a delivery received on its expected date counts as on time. On the web, the team calendar opens on your organization's current month, and the weekly digest setting gives the day and time the digest is sent.",
     publishedAt: '2026-10-14T17:00:00Z',
     entries: [
       {
@@ -141,6 +159,90 @@ export const RELEASES: Release[] = [
           "Each ETA on the Receive POs screen shows the same day as the purchase order's page on the web.",
         whatToDo: 'Close the app completely and open it again to load the latest update.',
         audience: { modules: ['receiving'] },
+      },
+      {
+        // receive.tsx compared the stored midnight UTC with the phone's clock;
+        // it now counts through core isPastExpectedDay in the organization's
+        // zone (lib/receive-overdue.ts), read with the purchase orders.
+        id: 'phone-receive-overdue',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'The Receive POs screen counts a purchase order as overdue only after its expected date',
+        whatChanged:
+          "In US time zones, the mobile app's Receive POs screen counted a purchase order as overdue from the day before its expected date (from 5 PM Pacific time, 4 PM in winter). In the mobile app, after the latest update, a purchase order counts as overdue once its expected date has passed in your organization's time zone.",
+        whyItMatters:
+          'On the evening before a delivery was due, the screen could count a purchase order as overdue while its ETA was the next day.',
+        howItAffectsYou:
+          'A purchase order expected today is not counted as overdue on the Receive POs screen. It counts from the next day.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['receiving'] },
+      },
+      {
+        // PurchaseOrdersService.overdueCount filtered expected_at < now; it
+        // now filters expected_at < the organization's today at midnight UTC
+        // (core pastExpectedDayCutoff, the same rule as a database filter).
+        id: 'dashboard-overdue-purchase-orders',
+        category: 'fixed',
+        area: 'Dashboard',
+        title: 'The dashboard counts a purchase order as overdue only after its expected date',
+        whatChanged:
+          "In US time zones, the dashboard's list of what needs attention counted a purchase order as overdue from the day before its expected date (from 5 PM Pacific time, 4 PM in winter). A purchase order now counts as overdue once its expected date has passed in your organization's time zone.",
+        whyItMatters:
+          'The count included purchase orders still due that day, under a line saying their expected receipt date had passed.',
+        howItAffectsYou:
+          'The overdue purchase orders count leaves out purchase orders expected today. They count from the next day.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // The same count (gatherInsightsForCtx), on the Insights page and in
+        // the daily-briefing cron's notification.
+        id: 'briefing-overdue-purchase-orders',
+        category: 'fixed',
+        area: 'Briefing',
+        title: "Today's briefing counts a purchase order as overdue only after its expected date",
+        whatChanged:
+          "In US time zones, Today's briefing and the morning briefing notification counted a purchase order as an overdue inbound PO from the day before its expected date. They now count it once its expected date has passed in your organization's time zone.",
+        whyItMatters: 'A purchase order still due that day was listed among the overdue inbound POs.',
+        howItAffectsYou:
+          'The overdue inbound PO count leaves out purchase orders expected today. They count from the next day.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // services/digest.ts compared the stored midnight UTC with the moment
+        // the digest was built (the Monday run is 14:00 UTC, 7 AM in Los
+        // Angeles); the flag is now decided in the organization's zone.
+        id: 'digest-overdue-purchase-orders',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'The weekly digest counts a purchase order as overdue only after its expected date',
+        whatChanged:
+          "In US time zones, the weekly inventory digest counted a purchase order expected on the Monday it was sent as overdue, and a preview sent the evening before a purchase order's expected date did the same. A purchase order now counts as overdue once its expected date has passed in your organization's time zone.",
+        whyItMatters: "Monday's digest listed that day's deliveries as overdue before they were due.",
+        howItAffectsYou:
+          "The digest's count of overdue purchase orders leaves out those expected that day. They count from the next day.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:read'] },
+      },
+      {
+        // ReportsService.supplierScorecard compared received_at <=
+        // expected_at; a delivery is now late only when received on a day,
+        // in the organization's zone, after the expected day. The page, its
+        // CSV and its PDF all read the service.
+        id: 'supplier-scorecard-on-time',
+        category: 'fixed',
+        area: 'Reports',
+        title: 'The supplier scorecard counts a delivery received on its expected date as on time',
+        whatChanged:
+          "In US time zones, the supplier scorecard's on-time rate counted a delivery received on its expected date as late. A delivery now counts as late only when it is received after its expected date, in your organization's time zone. The report's CSV and PDF downloads use the same rule.",
+        whyItMatters:
+          'Suppliers that delivered on the day they were expected had a lower on-time rate than they earned.',
+        howItAffectsYou:
+          'On-time rates can be higher than before for suppliers that delivered on their expected dates.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/reports/supplier-scorecard', label: 'Open the supplier scorecard' },
+        audience: { anyPermission: ['reports:read'], modules: ['purchase_orders'] },
       },
       {
         // The page picked the month from the server's clock in UTC, already
