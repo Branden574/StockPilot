@@ -385,7 +385,9 @@ export function buildExchangeView(input: {
         requested,
         fulfilled,
         held: detail?.heldByItem.get(l.item_id) ?? 0,
-        take: preparing && owed > 0 ? prepareTakeLine(label, owed, best?.name ?? null, best ? best.quantity : null) : null,
+        // Review fix P20: "Take … from 12-B" only when a rack holds the item;
+        // with nothing on a rack there is nothing to take.
+        take: preparing && owed > 0 && best ? prepareTakeLine(label, owed, best.name, best.quantity) : null,
       };
     });
     const owed = rLines.reduce((s, l) => s + Math.max(0, l.requested - l.fulfilled), 0);

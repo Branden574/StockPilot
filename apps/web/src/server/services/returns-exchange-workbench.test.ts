@@ -130,7 +130,10 @@ describe('buildExchangeView', () => {
     });
     expect(v.lines[0]).toMatchObject({ changedByWarehouse: true, approvedItem: items.navy, approvedFree: 0 });
     expect(v.replacement).toMatchObject({ short: true, held: 0, owed: 1 });
-    expect(v.replacement!.lines[0]!.take).toBe('Take Navy Shirt, L ×1');
+    // Re-pinned by returns RX-2 review fix P20: no rack holds it, so there is
+    // nothing to take ("Take … ×1" under "Not in stock right now" read as an
+    // instruction with nothing behind it). The claim stands: it is short.
+    expect(v.replacement!.lines[0]!.take).toBeNull();
     expect(v.rail[1]).toMatchObject({ label: 'Not in stock', state: 'current' });
   });
 
