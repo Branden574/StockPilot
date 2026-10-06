@@ -11,12 +11,27 @@
  * The hand-off is now tied to the navigation: the button stores the seed under
  * the PO's id and opens ?from=<that id>; the page takes it once and opens the
  * form only with the seed of the PO it was opened for.
+ *
+ * A destination the form does not offer (a staging area, a deleted location)
+ * showed blank and was saved anyway (the claims review of What's New #333,
+ * 2026-10-06): every purchase order the template created would have gone
+ * there. The form now opens with no destination and says where the purchase
+ * order went, so the buyer picks one.
  */
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createRecurringTemplateAction } from '@/server/actions/recurring-pos';
 import { hydrateAcrossClockShift } from '@/test/hydration';
+
+// Radix Select needs pointer-capture APIs happy-dom doesn't implement.
+beforeAll(() => {
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+});
 
 let searchParams = new URLSearchParams();
 vi.mock('next/navigation', () => ({
@@ -209,5 +224,140 @@ describe('RecurringTemplatesSeedLoader', () => {
     expect(screen.getAllByText(/Pro/).length).toBeGreaterThan(0);
     expect(screen.queryByText('New recurring template')).toBeNull();
     expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+});
+
+describe('Make recurring from a purchase order whose destination the form does not offer', () => {
+  // The form offers PROPS.locations (sites linked to a warehouse); these are not among them.
+  const STAGING = 'loc-staging';
+  const GONE = 'loc-gone';
+
+  const destination = () => screen.getByRole('combobox', { name: /Destination location/ });
+
+  /** Names the template, presses Create template, and returns what was sent. */
+  async function saveAs(name: string) {
+    fireEvent.change(screen.getByPlaceholderText('e.g. Weekly office supplies'), {
+      target: { value: name },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create template' }));
+    await waitFor(() => expect(createRecurringTemplateAction).toHaveBeenCalledTimes(1));
+    return vi.mocked(createRecurringTemplateAction).mock.calls[0]?.[0];
+  }
+
+  function openFrom(seedDestinationId: string) {
+    store({ poId: PO, ...SEED, destinationLocationId: seedDestinationId });
+    searchParams = new URLSearchParams({ from: PO });
+  }
+
+  beforeEach(() => {
+    vi.mocked(createRecurringTemplateAction).mockResolvedValue({ ok: true, data: { id: 'tpl-new' } });
+  });
+
+  it('a staging area: the form opens with no destination and names where the purchase order went; saving sends none', async () => {
+    openFrom(STAGING);
+
+    render(
+      <RecurringTemplatesSeedLoader
+        {...PROPS}
+        seedDestination={{ locationId: STAGING, name: 'Staging', deleted: false }}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'This purchase order went to "Staging", which is not a site you can pick here, so choose a destination.',
+      ),
+    ).toBeInTheDocument();
+    expect(destination()).toHaveTextContent('None');
+    // The rest of the purchase order is still brought over.
+    expect(screen.getAllByText('TechSource Distributors').length).toBeGreaterThan(0);
+    expect(screen.getByDisplayValue('50')).toBeInTheDocument();
+
+    expect(await saveAs('Monthly restock')).toMatchObject({
+      name: 'Monthly restock',
+      supplierId: 'sup-1',
+      destinationLocationId: null,
+    });
+  });
+
+  it('a deleted location: the form says it was deleted, opens with no destination, and saving sends none', async () => {
+    openFrom(GONE);
+
+    render(
+      <RecurringTemplatesSeedLoader
+        {...PROPS}
+        seedDestination={{ locationId: GONE, name: 'Old Annex', deleted: true }}
+      />,
+    );
+
+    expect(
+      screen.getByText('This purchase order went to a location that was deleted, so choose a destination.'),
+    ).toBeInTheDocument();
+    expect(destination()).toHaveTextContent('None');
+    expect(await saveAs('Monthly restock')).toMatchObject({ destinationLocationId: null });
+  });
+
+  it('the page could not read where it went: a destination the form does not offer is still not kept', async () => {
+    openFrom(STAGING);
+
+    render(<RecurringTemplatesSeedLoader {...PROPS} seedDestination={null} />);
+
+    expect(
+      screen.getByText("This purchase order went to a location you can't pick here, so choose a destination."),
+    ).toBeInTheDocument();
+    expect(destination()).toHaveTextContent('None');
+    expect(await saveAs('Monthly restock')).toMatchObject({ destinationLocationId: null });
+  });
+
+  it("the page's read of the purchase order decides, not the seed stored in the browser", async () => {
+    // The stored seed names a site the form offers; the purchase order itself
+    // goes to a staging area.
+    openFrom('loc-1');
+
+    render(
+      <RecurringTemplatesSeedLoader
+        {...PROPS}
+        seedDestination={{ locationId: STAGING, name: 'Staging', deleted: false }}
+      />,
+    );
+
+    expect(screen.getByText(/^This purchase order went to "Staging"/)).toBeInTheDocument();
+    expect(destination()).toHaveTextContent('None');
+    expect(await saveAs('Monthly restock')).toMatchObject({ destinationLocationId: null });
+  });
+
+  it('picking a destination clears the note, and the save sends the one picked', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    openFrom(STAGING);
+
+    render(
+      <RecurringTemplatesSeedLoader
+        {...PROPS}
+        seedDestination={{ locationId: STAGING, name: 'Staging', deleted: false }}
+      />,
+    );
+    expect(screen.getByText(/^This purchase order went to "Staging"/)).toBeInTheDocument();
+
+    await user.click(destination());
+    await user.click(within(await screen.findByRole('listbox')).getByRole('option', { name: 'North Site' }));
+
+    expect(screen.queryByText(/^This purchase order went to/)).toBeNull();
+    expect(destination()).toHaveTextContent('North Site');
+    expect(await saveAs('Monthly restock')).toMatchObject({ destinationLocationId: 'loc-2' });
+  });
+
+  it('a destination the form offers is kept, with no note', async () => {
+    openFrom('loc-1');
+
+    render(
+      <RecurringTemplatesSeedLoader
+        {...PROPS}
+        seedDestination={{ locationId: 'loc-1', name: 'Main Distribution Center', deleted: false }}
+      />,
+    );
+
+    expect(destination()).toHaveTextContent('Main Distribution Center');
+    expect(screen.queryByText(/^This purchase order went to/)).toBeNull();
+    expect(await saveAs('Monthly restock')).toMatchObject({ destinationLocationId: 'loc-1' });
   });
 });

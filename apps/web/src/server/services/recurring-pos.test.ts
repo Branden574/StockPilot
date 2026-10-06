@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/warehouse', () => ({
@@ -39,6 +40,7 @@ vi.mock('./item-images', () => ({
   },
 }));
 
+import { PurchaseOrdersService } from './purchase-orders';
 import { RecurringPoTemplatesService, recurringRunNotice, type RecurringRunSummary } from './recurring-pos';
 
 const NOW = new Date('2026-06-18T07:00:00.000Z');
@@ -538,8 +540,12 @@ describe('RecurringPoTemplatesService.create — destinationLocationId org-verif
   it('succeeds when destinationLocationId belongs to the caller\'s org', async () => {
     const SAME_ORG_LOC_ID = 'bbbbbbbb-0000-0000-0000-000000000001';
     const stub = makeSupabaseStub({
-      // location found in org → maybeSingle returns the row
-      'locations.select': { data: { id: SAME_ORG_LOC_ID }, error: null },
+      // location found in org → maybeSingle returns the row (a site linked to
+      // a warehouse, not deleted: the purchase order save's rule applies too)
+      'locations.select': {
+        data: { id: SAME_ORG_LOC_ID, name: 'Main Warehouse', warehouse_id: 'wh-a', deleted_at: null },
+        error: null,
+      },
       'recurring_po_templates.insert': { data: { id: 'tpl-new' }, error: null },
       'rpc:next_po_number': { data: 'PO-999', error: null },
     });
@@ -576,6 +582,136 @@ describe('RecurringPoTemplatesService.create — destinationLocationId org-verif
     expect(stub.fromCalls).not.toContain('locations');
     // Insert happened
     expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Template save: the destination its purchase orders are saved with
+// ─────────────────────────────────────────────────────────────────
+
+// Production 2026-10-06 (the claims review of What's New #333): Make recurring
+// on a purchase order that went to a staging area or a deleted location kept
+// that destination out of sight in the form, and the template save checked
+// only that the location is in the organization. The daily run saves every
+// purchase order a template creates through PurchaseOrdersService.create, so a
+// template is held to that save's destination rule, in its words, and it also
+// refuses a deleted location, which that save does not.
+
+const DEST = {
+  site: 'dddddddd-0000-4000-8000-000000000001',
+  staging: 'dddddddd-0000-4000-8000-000000000002',
+  noWarehouse: 'dddddddd-0000-4000-8000-000000000003',
+  deleted: 'dddddddd-0000-4000-8000-000000000004',
+  otherWarehouse: 'dddddddd-0000-4000-8000-000000000005',
+} as const;
+
+/** locations rows as the database holds them: every member reads them all,
+ *  deleted ones included (locations_select). */
+const destinationRows = servedLikePostgrest([
+  { id: DEST.site, organization_id: 'org-test', name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-a', deleted_at: null },
+  { id: DEST.staging, organization_id: 'org-test', name: 'Staging', kind: 'staging', type: 'other', warehouse_id: 'wh-a', deleted_at: null },
+  { id: DEST.noWarehouse, organization_id: 'org-test', name: 'District Office', kind: null, type: 'warehouse', warehouse_id: null, deleted_at: null },
+  { id: DEST.deleted, organization_id: 'org-test', name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-a', deleted_at: '2026-06-24T00:00:00Z' },
+  { id: DEST.otherWarehouse, organization_id: 'org-test', name: 'South Site', kind: null, type: 'warehouse', warehouse_id: 'wh-b', deleted_at: null },
+]);
+
+function destinationStub() {
+  return makeSupabaseStub({
+    'locations.select': destinationRows,
+    'recurring_po_templates.insert': { data: { id: 'tpl-new' }, error: null },
+    'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+    'rpc:next_po_number': { data: 'PO-100', error: null },
+    'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+  });
+}
+
+/** 'saved', or what the refusal said. */
+async function said(save: Promise<unknown>): Promise<string> {
+  try {
+    await save;
+    return 'saved';
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** A purchase order to `dest`, saved the way the daily run saves one. */
+function poSave(dest: string): Promise<string> {
+  const stub = destinationStub();
+  const svc = new PurchaseOrdersService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+  return said(
+    svc.create({
+      supplierId: null,
+      destinationLocationId: dest,
+      lines: [{ itemId: '00000000-0000-0000-0000-000000000001', quantityOrdered: 1, unitCost: 10 }],
+    }),
+  );
+}
+
+/** A template to `dest`: what the save said, and whether the row was written. */
+async function templateSave(dest: string, op: 'create' | 'update' = 'create') {
+  const stub = destinationStub();
+  const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+  const input = { ...CREATE_INPUT_BASE, destinationLocationId: dest };
+  const outcome = await said(op === 'create' ? svc.create(input) : svc.update('tpl-1', input));
+  const write = op === 'create' ? 'recurring_po_templates.insert' : 'recurring_po_templates.update';
+  return { outcome, written: stub.chainsAll.get(write) !== undefined };
+}
+
+/** The buyer may write to warehouse wh-a only (a staff member assigned to it). */
+function writeAccessToWarehouseAOnly() {
+  vi.mocked(assertWarehouseAccess).mockImplementation(async (warehouseId, op) => {
+    if (warehouseId !== 'wh-a') {
+      throw new ForbiddenError(`User does not have ${op ?? 'read'} access to warehouse ${warehouseId}.`);
+    }
+  });
+}
+
+describe('RecurringPoTemplatesService.create/update — the destination its purchase orders are saved with', () => {
+  afterEach(() => {
+    vi.mocked(assertWarehouseAccess).mockReset();
+  });
+
+  it('refuses a deleted destination, naming it, and does NOT insert: its purchase orders would go to a location that no longer exists', async () => {
+    expect(await templateSave(DEST.deleted)).toEqual({
+      outcome:
+        '"Old Annex" was deleted, so this template\'s purchase orders would go to a location that no longer exists. Choose another destination and save again.',
+      written: false,
+    });
+  });
+
+  it('refuses a deleted destination on update too, and does NOT update', async () => {
+    const { outcome, written } = await templateSave(DEST.deleted, 'update');
+    expect(outcome).toMatch(/^"Old Annex" was deleted, so this template's purchase orders would go to a location that no longer exists\./);
+    expect(written).toBe(false);
+  });
+
+  it('a staging area: the purchase order save accepts one (it is linked to its warehouse), so the template save does too, with no stricter rule', async () => {
+    expect(await poSave(DEST.staging)).toBe('saved');
+    expect(await templateSave(DEST.staging)).toEqual({ outcome: 'saved', written: true });
+  });
+
+  it('a location linked to no warehouse: refused as the purchase order save refuses it, in its words, and NOT written', async () => {
+    const po = await poSave(DEST.noWarehouse);
+    expect(po).toBe(
+      "That destination location isn't linked to a warehouse, so received stock would have nowhere to go. Pick a warehouse-backed location.",
+    );
+    expect(await templateSave(DEST.noWarehouse)).toEqual({ outcome: po, written: false });
+    expect(await templateSave(DEST.noWarehouse, 'update')).toEqual({ outcome: po, written: false });
+  });
+
+  it('a warehouse the buyer may not write to: refused as the purchase order save refuses it, and NOT written', async () => {
+    writeAccessToWarehouseAOnly();
+    const po = await poSave(DEST.otherWarehouse);
+    expect(po).toBe('User does not have write access to warehouse wh-b.');
+    expect(await templateSave(DEST.otherWarehouse)).toEqual({ outcome: po, written: false });
+  });
+
+  it('a site linked to a warehouse the buyer may write to: both save', async () => {
+    writeAccessToWarehouseAOnly();
+    expect(await poSave(DEST.site)).toBe('saved');
+    expect(await templateSave(DEST.site)).toEqual({ outcome: 'saved', written: true });
+    expect(await templateSave(DEST.site, 'update')).toEqual({ outcome: 'saved', written: true });
   });
 });
 

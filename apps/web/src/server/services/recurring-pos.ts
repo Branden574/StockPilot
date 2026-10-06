@@ -155,18 +155,51 @@ export class RecurringPoTemplatesService {
     );
   }
 
-  // ── assertDestinationLocationInOrg ───────────────────────────────────────
+  // ── assertDestination ─────────────────────────────────────────────────────
 
-  private async assertDestinationLocationInOrg(locationId: string | null | undefined) {
+  /**
+   * A template's destination is where every purchase order it creates goes.
+   * It must be a location of this organization that is not deleted, and it is
+   * held to the rule those purchase orders are saved with: the daily run saves
+   * each one through PurchaseOrdersService.create, whose
+   * resolveDestinationWarehouseId refuses a location linked to no warehouse,
+   * or to one the caller may not write to. The same method refuses it here,
+   * in the same words. Before 2026-10-06 this checked only the organization,
+   * so such a template saved, and then created nothing every period (the run
+   * counts a failed save and moves on).
+   *
+   * Deleted: the purchase order save does not refuse a deleted location (it
+   * checks the organization and the warehouse, the database only the
+   * organization, and deleted locations stay readable), so a template holding
+   * one would create purchase orders to a place that no longer exists, period
+   * after period, and nobody would see it in the form, which lists no deleted
+   * location. A template is a standing order, so it is refused here.
+   *
+   * A staging area is NOT refused: the purchase order save accepts one (it is
+   * linked to its warehouse), and a template is held to no stricter rule. The
+   * form never offers one, and Make recurring no longer keeps one out of sight
+   * (RecurringTemplatesPanel: the form opens with no destination and says
+   * where the purchase order went).
+   */
+  private async assertDestination(locationId: string | null | undefined): Promise<void> {
     if (!locationId) return;
     const { data, error } = await this.ctx.supabase
       .from('locations')
-      .select('id')
+      .select('id, name, deleted_at')
       .eq('id', locationId)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('validation_error', 'Destination location not found in your organization.');
+    const location = data as { name: string | null; deleted_at: string | null };
+    if (location.deleted_at) {
+      const name = (location.name ?? '').trim();
+      throw new ServiceError(
+        'validation_error',
+        `${name ? `"${name}"` : 'The destination location'} was deleted, so this template's purchase orders would go to a location that no longer exists. Choose another destination and save again.`,
+      );
+    }
+    await new PurchaseOrdersService(this.ctx).resolveDestinationWarehouseId(locationId);
   }
 
   // ── assertSupplierInOrg ───────────────────────────────────────────────────
@@ -246,7 +279,7 @@ export class RecurringPoTemplatesService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const parsed = recurringTemplateSchema.parse(input);
-    await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
+    await this.assertDestination(parsed.destinationLocationId);
     await this.assertSupplierInOrg(parsed.supplierId);
     await this.assertLinesOrderable(parsed.lineItems);
     const now = new Date();
@@ -295,7 +328,7 @@ export class RecurringPoTemplatesService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const parsed = recurringTemplateSchema.parse(input);
-    await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
+    await this.assertDestination(parsed.destinationLocationId);
     await this.assertSupplierInOrg(parsed.supplierId);
     await this.assertLinesOrderable(parsed.lineItems);
 
@@ -618,7 +651,13 @@ export class RecurringPoTemplatesService {
         } else {
           const total = lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
-          // Create the PO (always starts as draft).
+          // Create the PO (always starts as draft). The destination goes
+          // through the purchase order save's own rule: one linked to no
+          // warehouse is refused there, and the catch below counts a failure.
+          // A destination deleted AFTER the template was saved is not refused
+          // there, so the PO is created to it, as a hand-made PO to that
+          // location would be; only the template save refuses a deleted one
+          // (assertDestination).
           const po = await new PurchaseOrdersService(this.ctx).create({
             supplierId: tpl.supplier_id ?? null,
             destinationLocationId: tpl.destination_location_id ?? null,
