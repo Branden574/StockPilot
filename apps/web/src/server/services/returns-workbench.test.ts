@@ -221,6 +221,88 @@ describe('buildReturnWorkbench', () => {
     expect(reportError).toHaveBeenCalled();
   });
 
+  // RX-2 review fix P8: a replacement chosen at approval and changed since is
+  // named in the history ("Exchange approved: … (instead of …)"), never "an
+  // item", with ONE batched read of the decision items no line names now.
+  it('the history names every item an exchange decision names, from one batched read of those no line names now', async () => {
+    const S = itemId(7);
+    const L = itemId(8);
+    const M = itemId(2);
+    const exchangeLine = {
+      id: 'x1',
+      return_line_id: lineId(1),
+      status: 'approved',
+      requested_item_id: L,
+      requested_quantity: 1,
+      request_note: null,
+      requested_by_kind: 'staff',
+      approved_item_id: M,
+      approved_quantity: 1,
+      replacement_order_request_id: null,
+      revision: 2,
+      created_at: '2026-10-02T00:00:00Z',
+    };
+    const row = (id: string, size: string) => ({
+      id,
+      name: 'Walk Exchange Tee',
+      sku: null,
+      deleted_at: null,
+      variant_size: size,
+      variant_width: null,
+      variant_color: null,
+      jersey_number: null,
+      quantity_on_hand: 5,
+    });
+    const rows = new Map([
+      [itemId(1), row(itemId(1), 'M')],
+      [S, row(S, 'S')],
+      [L, row(L, 'L')],
+      [M, row(M, 'M')],
+    ]);
+    const reads: string[][] = [];
+    const decision = (seq: number, kind: string, item: string | null, previous: string | null) => ({
+      seq,
+      kind,
+      channel: 'staff',
+      revision: seq,
+      return_line_id: lineId(1),
+      exchange_line_id: 'x1',
+      item_id: item,
+      previous_item_id: previous,
+      quantity: 1,
+      order_request_id: null,
+      disposition: null,
+      restock_target: null,
+      location_id: null,
+      basis: null,
+      reason: kind === 'replacement_changed' ? 'Wrong size' : null,
+      actor_user_id: null,
+      actor_kind: 'staff',
+      created_at: `2026-10-0${seq}T00:00:00Z`,
+    });
+    const { ctx } = ctxFor({
+      'returns.select': { data: [header([LINE], { exchange_lines: [exchangeLine] })], error: null },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': {
+        data: [decision(3, 'exchange_approved', S, L), decision(4, 'replacement_changed', M, S)],
+        error: null,
+      },
+      'inventory_items.select': (call: MockCall) => {
+        const ids = (inFilters(call).find(([c]) => c === 'id')?.[1] ?? []) as string[];
+        reads.push(ids);
+        return { data: ids.map((id) => rows.get(id)).filter(Boolean), error: null };
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.find((e) => e.kind === 'exchange_approved')!.label).toBe(
+      'Exchange approved: Walk Exchange Tee, S ×1 (instead of Walk Exchange Tee, L)',
+    );
+    expect(wb.chain.map((e) => e.label).join(' | ')).not.toContain('an item');
+    // The S (named only by a decision) came from one read of just it.
+    expect(reads.filter((ids) => ids.includes(S))).toEqual([[S]]);
+  });
+
   it('a destination read that fails leaves the destinations out and is reported (actions are refused in the database anyway)', async () => {
     const { ctx } = ctxFor({
       'returns.select': { data: [header([LINE])], error: null },

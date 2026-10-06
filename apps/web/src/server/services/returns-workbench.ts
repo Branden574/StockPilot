@@ -552,6 +552,16 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   const exchangeLabels = new Map<string, string>(
     exchangeIds.map((iid) => [iid, returnLineLabel(items.get(iid)?.name ?? null, variantOf(items.get(iid)))]),
   );
+  // Review fix P8: every item an exchange decision names (a replacement chosen
+  // at approval and changed since, the item it replaced) is named in the
+  // history, never "an item": ONE batched read of those no line names now.
+  const decisionItemIds = [
+    ...new Set(
+      decisionRows
+        .flatMap((d) => [d.item_id, d.previous_item_id])
+        .filter((v): v is string => typeof v === 'string' && UUID_RE.test(v) && !items.has(v)),
+    ),
+  ];
   const liveItemIds = liveReplacement
     ? [
         ...new Set(
@@ -561,7 +571,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         ),
       ]
     : [];
-  const [images, names, locationRows, picks, replacementDetail, replacementPicks] = await Promise.all([
+  const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems] = await Promise.all([
     readImages(ctx, allItemIds, 'returns.workbench.images'),
     readNames(ctx, [
       h.requested_by,
@@ -600,7 +610,9 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
           new Map(liveItemIds.map((iid) => [iid, exchangeLabels.get(iid) ?? null])),
         )
       : Promise.resolve([]),
+    readItems(ctx, decisionItemIds, 'returns.workbench.decision_items'),
   ]);
+  for (const [iid, row] of decisionItems) exchangeLabels.set(iid, returnLineLabel(row.name, variantOf(row)));
   const locationName = new Map<string, string>(sourceNames);
   for (const r of locationRows) locationName.set(r.id, r.name);
 
