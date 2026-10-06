@@ -209,6 +209,25 @@ function submitAndConfirm() {
   fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
 }
 
+// ═══ WHAT THE TEST SEES WHEN THE SUCCESS SCREEN APPEARS ═══
+//
+// The placed render puts the Done button on screen, and the effect that
+// clears the placed order's draft (clearCartDraft) runs after it, in a later
+// task: an update that comes from the server's answer, not from a click, has
+// its effects scheduled separately. findByRole('Done') resolves as soon as the
+// button is in the page, so on a loaded runner the draft was read before that
+// effect ran and was still there (CI run 37417916740; a 2 ms stall after the
+// button appears fails it every time). The app was right; the test read too
+// early. Sending inside act settles the answer, the placed render and its
+// effects before anything is read.
+/** Review, then Submit, with the send and everything it renders settled. */
+async function submitAndSettle() {
+  fireEvent.click(screen.getByRole('button', { name: /review order/i }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
+  });
+}
+
 const savedDraft = (warehouseId: string) => {
   const raw = localStorage.getItem(`${orderDraftPrefixFor(USER)}${warehouseId}`);
   return raw ? (JSON.parse(raw) as { warehouseId: string; lines: unknown[] }) : null;
@@ -282,18 +301,28 @@ describe('OrdersStorefront — switching warehouse', () => {
     await switchWarehouse(view, 'Annex', ANNEX);
     fireEvent.click(screen.getByText('Add HDMI Cable'));
     await pastSaveDebounce();
+    // Saved before the send, so the null below is the placed order's clear.
+    expect(savedDraft(ANNEX)).toMatchObject({ lines: [{ itemId: 'cable', quantity: 1 }] });
 
-    submitAndConfirm();
+    await submitAndSettle();
 
-    await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1));
+    expect(createOrderRequestAction).toHaveBeenCalledTimes(1);
     expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
       warehouseId: ANNEX,
       lines: [{ itemId: 'cable', quantity: 1 }],
     });
 
-    await screen.findByRole('button', { name: 'Done' });
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
     expect(savedDraft(ANNEX)).toBeNull();
     expect(savedDraft(MAIN)).toMatchObject({ lines: [{ itemId: 'chromebook', quantity: 1 }] });
+
+    // Still gone a full save debounce later, with the success screen still up.
+    // The placed order's lines stay in the cart until Done, so any change to
+    // the cart after the clear would save them again 250 ms later; pressing
+    // Done at once, as this test did before, cancels that save unseen.
+    await pastSaveDebounce();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(savedDraft(ANNEX)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     // Done must not write the placed order back once the debounce has run.
