@@ -72,6 +72,9 @@ export const RETURN_ERROR_WORDS = {
   replacementWaiting: 'Waiting for the returned item.',
   replacementReturnCancelled: "This replacement's return was cancelled, so it isn't picked.",
   replacementCancelViaReturn: 'Change or cancel this replacement from its RMA.',
+  // RX-2 review fix P9: the same refusal for the replacement's requester (the
+  // order page's cancel, from an older screen), who cannot open the RMA.
+  replacementCancelViaReturnRequester: 'To change or cancel this replacement, contact the warehouse.',
   replacementLinesFixed: "A replacement's items come from its RMA and can't be edited here.",
   notAllowed: 'Not allowed.',
   reload: 'Reload the page to continue.',

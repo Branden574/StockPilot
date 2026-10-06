@@ -139,6 +139,8 @@ export const RETURNS_COPY = {
   cancelReturnReasonRequired: 'Reason (required: the exchange was approved)',
   getReplacementReadyHelp: 'Prints the pick slip, picks, prints the packing slips and stages it. Stops before the signature.',
   changeOrCancelHere: 'Change or cancel this replacement from its RMA.',
+  // RX-2 review fix P9: the replacement's requester, who cannot open the RMA.
+  replacementChangeContactWarehouse: 'To change or cancel this replacement, contact the warehouse.',
   releaseBeforeReturn: 'Release before return is received',
   releasedForPicking: 'Released for picking.',
   releaseNotNeeded: 'The return was already received.',
@@ -448,6 +450,13 @@ export function deliverToSiteLabel(siteName: string): string {
   return `Deliver to ${siteName}`;
 }
 
+/** "Only someone who manages returns can change or cancel this replacement
+ *  (RMA-…)." (a viewer of the replacement order who cannot open its RMA and
+ *  is not its requester; review fix P9). */
+export function replacementChangeOthersLine(returnNumber: string | null): string {
+  return `Only someone who manages returns can change or cancel this replacement${returnNumber ? ` (${returnNumber})` : ''}.`;
+}
+
 /** "Change or cancel in RMA-…" (replaces Cancel, Add items and Edit lines). */
 export function changeOrCancelInRmaLabel(returnNumber: string | null): string {
   return `Change or cancel in ${returnNumber ?? 'its RMA'}`;
@@ -478,24 +487,81 @@ export interface ReplacementBannerInput {
   exchangeStatus?: string | null;
   /** What this replacement holds now, when the screen knows it. */
   held?: number | null;
+  /** The RMA was received (or closed): nothing for a driver to collect. Absent from an older server. */
+  returnReceived?: boolean;
+  /** The viewer may open the RMA; the viewer's kind when none is passed. */
+  canOpenReturn?: boolean;
 }
 
-export type ReplacementBannerKey = 'title' | 'handed_over' | 'gate' | 'closed' | 'released' | 'driver' | 'change';
+/**
+ * The banner's lines by key. 'rma_link' is the RMA link itself ("Change or
+ * cancel in RMA-…"), for a viewer who can open the RMA; 'change' is a sentence
+ * for anyone else (review fix P9).
+ */
+export type ReplacementBannerKey = 'title' | 'handed_over' | 'gate' | 'closed' | 'released' | 'driver' | 'change' | 'rma_link';
+
+/** Who reads the replacement order's banner (review fixes P9 and P10). */
+export interface ReplacementBannerViewer {
+  /** The viewer may open the RMA (the returns module on, returns:read or returns:manage). */
+  canOpenRma: boolean;
+  /** The viewer is the order's requester. */
+  isRequester: boolean;
+}
+
+/**
+ * Someone who can open the RMA reads it as staff ('returns', even when they
+ * also asked for the order), else the order's requester, else anyone else
+ * with order access ('other': order staff without returns permissions, a
+ * driver).
+ */
+export type ReplacementBannerViewerKind = 'returns' | 'requester' | 'other';
+
+export function replacementBannerViewerKind(viewer: ReplacementBannerViewer): ReplacementBannerViewerKind {
+  if (viewer.canOpenRma) return 'returns';
+  return viewer.isRequester ? 'requester' : 'other';
+}
+
+function bannerViewer(info: Pick<ReplacementBannerInput, 'canOpenReturn'>, viewer?: ReplacementBannerViewer): ReplacementBannerViewer {
+  return viewer ?? { canOpenRma: info.canOpenReturn === true, isRequester: false };
+}
+
+/**
+ * The driver's line, in one place (review fix P10): only for a delivery that
+ * may leave before the returned item arrives (a manager released it early and
+ * the RMA is not received), while it is still to be handed over, and never for
+ * the requester (it is an instruction to staff). Null otherwise.
+ */
+export function replacementDriverLine(
+  info: Pick<ReplacementBannerInput, 'live' | 'handedOver' | 'releasedEarly' | 'returnReceived' | 'driverLine' | 'canOpenReturn'>,
+  fulfillmentType: 'pickup' | 'delivery' | null,
+  viewer?: ReplacementBannerViewer,
+): string | null {
+  const inFlight = info.live && info.handedOver !== true;
+  if (!inFlight || fulfillmentType !== 'delivery' || !info.releasedEarly || info.returnReceived === true) return null;
+  if (replacementBannerViewerKind(bannerViewer(info, viewer)) === 'requester') return null;
+  return info.driverLine || null;
+}
 
 /**
  * The replacement order's banner, line by line (web and phone, one rule;
  * plan 3.6.9). While the replacement is still to be handed over: the
  * return-first gate, an RMA cancelled under it, an early release, the
- * driver's line for a delivery, and where it is changed or cancelled. Once it
- * was handed over (its order completed) nothing is left to wait for, pick,
- * collect, change or cancel: the banner says how the exchange ended instead
- * (the staff exchange words, which say when part was never sent and when the
- * return was cancelled) and keeps an early release as history.
+ * driver's line for an early-released delivery (replacementDriverLine), and
+ * where it is changed or cancelled, for who is reading (review fix P9): the
+ * RMA link alone for someone who can open it, who to ask for the requester,
+ * who can for anyone else. Once it was handed over (its order completed)
+ * nothing is left to wait for, pick, collect, change or cancel: the banner
+ * says how the exchange ended instead (the staff exchange words, which say
+ * when part was never sent and when the return was cancelled) and keeps an
+ * early release as history. Without a viewer, the info's canOpenReturn
+ * decides.
  */
 export function replacementBannerLines(
   info: ReplacementBannerInput,
   fulfillmentType: 'pickup' | 'delivery' | null,
+  viewer?: ReplacementBannerViewer,
 ): Array<{ key: ReplacementBannerKey; text: string }> {
+  const who = bannerViewer(info, viewer);
   const out: Array<{ key: ReplacementBannerKey; text: string }> = [
     { key: 'title', text: exchangeReplacementBanner(info.returnNumber, info.originalOrderNumber) },
   ];
@@ -511,8 +577,14 @@ export function replacementBannerLines(
   if (info.releasedEarly) {
     out.push({ key: 'released', text: releasedBeforeReturnLine(info.release?.byName ?? null, info.release?.reason ?? null) });
   }
-  if (inFlight && fulfillmentType === 'delivery' && info.driverLine) out.push({ key: 'driver', text: info.driverLine });
-  if (inFlight) out.push({ key: 'change', text: RETURNS_COPY.changeOrCancelHere });
+  const driver = replacementDriverLine(info, fulfillmentType, who);
+  if (driver) out.push({ key: 'driver', text: driver });
+  if (inFlight) {
+    const kind = replacementBannerViewerKind(who);
+    if (kind === 'returns') out.push({ key: 'rma_link', text: changeOrCancelInRmaLabel(info.returnNumber) });
+    else if (kind === 'requester') out.push({ key: 'change', text: RETURNS_COPY.replacementChangeContactWarehouse });
+    else out.push({ key: 'change', text: replacementChangeOthersLine(info.returnNumber) });
+  }
   return out;
 }
 
@@ -528,9 +600,11 @@ export function originalExchangeLine(replacement: string, replacementOrderNumber
   return `Exchange: ${replacement}${target}${statusWords ? ` (${statusWords})` : ''}`;
 }
 
-/** The driver's read-only line: "Collect the returned item: New Hire Shirt, M ×1 (RMA-…)". */
+/** The driver's read-only line: "On delivery, the driver collects the returned
+ *  item: New Hire Shirt, M ×1 (RMA-…)." (review fix P10; shown only as
+ *  replacementDriverLine decides). */
 export function collectReturnedItemLine(returned: string, returnNumber: string | null): string {
-  return `Collect the returned item: ${returned}${returnNumber ? ` (${returnNumber})` : ''}`;
+  return `On delivery, the driver collects the returned item: ${returned}${returnNumber ? ` (${returnNumber})` : ''}.`;
 }
 
 /** The slips' line: "Exchange replacement for RMA-… (returned item: New Hire Shirt, M ×1, received)". */
