@@ -7,9 +7,12 @@ import {
   exchangeCandidateRows,
   exchangeLineStatusLabel,
   exchangeRail,
+  exchangeRailAccessibilityLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
+  noReplacementLine,
   parseExchangeCandidates,
+  RAIL_STEP_STATE_WORDS,
   replacementSiteOptions,
   type ExchangeCandidate,
   type RailStep,
@@ -65,6 +68,91 @@ describe('exchangeRail (plan RX-2: the outbound rail)', () => {
       state: 'stopped',
     });
     expect(exchangeRail({ ...base, exchangeStatus: 'replacement_cancelled' })[1]).toMatchObject({ label: 'Cancelled', state: 'stopped' });
+  });
+
+  // RX-2 review fix P4: after a stop nothing is "next". A declined or
+  // cancelled exchange's later steps were never reached; after a replacement
+  // cancel they have not started (a new replacement may still be issued).
+  // Each later step reads its plain name (never "Return received" or
+  // "Released early" for a step the replacement never reached).
+  it('after a stop the later steps are not reached, or not started after a replacement cancel (review fix P4)', () => {
+    expect(states(exchangeRail({ ...base, exchangeStatus: 'declined' }))).toBe(
+      'Requested:done > Declined:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(states(exchangeRail({ ...base, returnStatus: 'received', exchangeStatus: 'declined' }))).toBe(
+      'Requested:done > Declined:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(states(exchangeRail({ ...base, returnStatus: 'cancelled', exchangeStatus: 'cancelled', fulfillmentType: 'delivery' }))).toBe(
+      'Requested:done > Cancelled:stopped > Waiting for return:skipped > Picking:skipped > Out for delivery:skipped > Handed over:skipped',
+    );
+    expect(states(exchangeRail({ ...base, returnStatus: 'denied', exchangeStatus: 'cancelled' }))).toBe(
+      'Requested:done > Declined:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(
+      states(exchangeRail({ ...base, returnStatus: 'received', releasedEarly: true, exchangeStatus: 'replacement_cancelled' })),
+    ).toBe(
+      'Requested:done > Cancelled:stopped > Waiting for return:not_started > Picking:not_started > Ready for pickup:not_started > Handed over:not_started',
+    );
+  });
+
+  it('words every step state, and the rail as one accessible label (web and phone, review fix P4)', () => {
+    expect(RAIL_STEP_STATE_WORDS).toEqual({
+      done: 'done',
+      current: 'now',
+      upcoming: 'next',
+      stopped: 'stopped',
+      skipped: 'not reached',
+      not_started: 'not started',
+    });
+    expect(exchangeRailAccessibilityLabel(exchangeRail({ ...base, exchangeStatus: 'declined' }))).toBe(
+      'Replacement progress: Requested, done; Declined, stopped; Waiting for return, not reached; Picking, not reached; Ready for pickup, not reached; Handed over, not reached',
+    );
+    expect(exchangeRailAccessibilityLabel(exchangeRail({ ...base, exchangeStatus: 'replacement_cancelled' }))).toBe(
+      'Replacement progress: Requested, done; Cancelled, stopped; Waiting for return, not started; Picking, not started; Ready for pickup, not started; Handed over, not started',
+    );
+    expect(exchangeRailAccessibilityLabel(exchangeRail({ ...base, exchangeStatus: 'waiting_for_return' }))).toBe(
+      'Replacement progress: Requested, done; Reserved, done; Waiting for return, now; Picking, next; Ready for pickup, next; Handed over, next',
+    );
+    expect(exchangeRailAccessibilityLabel([])).toBe('');
+  });
+
+  // RX-2 review fix P21: a replacement closed with part never sent (closed as
+  // delivered-partial, or its rest ended with the RMA) never reads "Handed
+  // over · done".
+  it('ends "Partly handed over", stopped, when part of the replacement was never sent (review fix P21)', () => {
+    for (const exchangeStatus of ['completed', 'handed_over_return_open', 'handed_over_return_cancelled'] as const) {
+      const rail = exchangeRail({
+        ...base,
+        returnStatus: exchangeStatus === 'handed_over_return_cancelled' ? 'cancelled' : 'closed',
+        releasedEarly: true,
+        exchangeStatus,
+        replacementStatus: 'completed',
+        replacementOwed: 1,
+      });
+      expect(rail.slice(0, 5).every((r) => r.state === 'done'), exchangeStatus).toBe(true);
+      expect(rail[5], exchangeStatus).toEqual({ id: 'handed_over', label: 'Partly handed over', state: 'stopped' });
+    }
+    // Everything sent: handed over, done (and without the facts, as before).
+    expect(exchangeRail({ ...base, returnStatus: 'closed', exchangeStatus: 'completed', replacementStatus: 'completed', replacementOwed: 0 })[5]).toEqual({
+      id: 'handed_over',
+      label: 'Handed over',
+      state: 'done',
+    });
+    expect(exchangeRail({ ...base, returnStatus: 'closed', exchangeStatus: 'completed' })[5]).toMatchObject({ label: 'Handed over', state: 'done' });
+    // Still on backorder (the rest will follow): current, as before.
+    expect(exchangeRail({ ...base, exchangeStatus: 'partly_handed_over', replacementStatus: 'backordered', replacementOwed: 1 })[5]).toEqual({
+      id: 'handed_over',
+      label: 'Partly handed over',
+      state: 'current',
+    });
+  });
+
+  it('says why there is no replacement order: still requested, declined, or cancelled with the return (review fix P4)', () => {
+    expect(noReplacementLine('requested')).toBe('No replacement order yet. One is created when the exchange is approved.');
+    expect(noReplacementLine('declined')).toBe('No replacement order: the exchange was declined.');
+    expect(noReplacementLine('cancelled', { returnStatus: 'cancelled' })).toBe('No replacement order: the exchange was cancelled with the return.');
+    // A denied return's exchange reads declined, as its staff label does.
+    expect(noReplacementLine('cancelled', { returnStatus: 'denied' })).toBe('No replacement order: the exchange was declined.');
   });
 
   it('draws a rail for every exchange status', () => {

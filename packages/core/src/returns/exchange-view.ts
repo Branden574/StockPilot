@@ -14,7 +14,7 @@
  */
 
 import { sortBySizeOrder } from '../sports/size-order';
-import type { ExchangeStatus } from './exchange-status';
+import { replacementPartlySent, type ExchangeStatus } from './exchange-status';
 import {
   approveReplacementSentence,
   availableLabel,
@@ -47,9 +47,24 @@ export function exchangeLineStatusLabel(status: ExchangeLineStatus): string {
 // ── The outbound rail ──────────────────────────────────────────────────────
 
 export type RailStepId = 'requested' | 'reserved' | 'gate' | 'picking' | 'ready' | 'handed_over';
-/** done, the one being waited on (current), not reached (upcoming), or where
- *  the exchange stopped (declined, cancelled). */
-export type RailStepState = 'done' | 'current' | 'upcoming' | 'stopped';
+/**
+ * done; the one being waited on (current); still to come (upcoming, "next");
+ * where the exchange stopped (declined, cancelled, a replacement cancelled, or
+ * a replacement closed with part never sent); after a declined or cancelled
+ * exchange's stop, a step never reached (skipped); after a replacement
+ * cancel, a step not started (a new replacement may still be issued).
+ */
+export type RailStepState = 'done' | 'current' | 'upcoming' | 'stopped' | 'skipped' | 'not_started';
+
+/** Each step state in words: the web's step text and both screen readers. */
+export const RAIL_STEP_STATE_WORDS: Readonly<Record<RailStepState, string>> = {
+  done: RETURNS_COPY.railStateDone,
+  current: RETURNS_COPY.railStateNow,
+  upcoming: RETURNS_COPY.railStateNext,
+  stopped: RETURNS_COPY.railStateStopped,
+  skipped: RETURNS_COPY.railStateNotReached,
+  not_started: RETURNS_COPY.railStateNotStarted,
+};
 
 export interface RailStep {
   id: RailStepId;
@@ -65,14 +80,26 @@ export interface ExchangeRailInput {
   releasedEarly: boolean;
   /** The live replacement's fulfilment (the ready step's words). */
   fulfillmentType: 'pickup' | 'delivery' | null;
+  /** The replacement shown: its order status (review fix P21). */
+  replacementStatus?: string | null;
+  /** What that replacement still owes (requested minus handed over). */
+  replacementOwed?: number | null;
 }
 
 const RAIL_ORDER: readonly RailStepId[] = ['requested', 'reserved', 'gate', 'picking', 'ready', 'handed_over'];
+
+const PARTLY_SENT_END: readonly ExchangeStatus[] = ['completed', 'handed_over_return_open', 'handed_over_return_cancelled'];
 
 /**
  * Requested, Reserved or Not in stock, Waiting for return or Released early
  * (or Return received), Picking, Ready for pickup or Out for delivery, Handed
  * over (plan RX-2 web UI). Empty for a return without an exchange.
+ *
+ * Review fixes: after a stop nothing is next. A declined or cancelled
+ * exchange's later steps were never reached (skipped); after a replacement
+ * cancel they have not started; either way each reads its plain name (P4). A
+ * replacement closed with part never sent ends "Partly handed over", stopped
+ * (P21, exchange-status.ts replacementPartlySent).
  */
 export function exchangeRail(input: ExchangeRailInput): RailStep[] {
   const ex = input.exchangeStatus;
@@ -92,6 +119,8 @@ export function exchangeRail(input: ExchangeRailInput): RailStep[] {
   };
   let current: number;
   let stopped = false;
+  // What the steps after a stop are.
+  let after: RailStepState = 'upcoming';
   switch (ex) {
     case 'requested':
       current = 0;
@@ -101,7 +130,11 @@ export function exchangeRail(input: ExchangeRailInput): RailStep[] {
     case 'replacement_cancelled':
       current = 1;
       stopped = true;
+      after = ex === 'replacement_cancelled' ? 'not_started' : 'skipped';
       labels.reserved = ex === 'declined' || input.returnStatus === 'denied' ? RETURNS_COPY.railDeclined : RETURNS_COPY.railCancelled;
+      // The replacement never reached the gate: its plain name, never
+      // "Return received" or "Released early".
+      labels.gate = RETURNS_COPY.railWaitingForReturn;
       break;
     case 'unavailable':
       current = 1;
@@ -122,14 +155,55 @@ export function exchangeRail(input: ExchangeRailInput): RailStep[] {
       current = 5;
       break;
     default:
-      // completed, handed_over_return_open, handed_over_return_cancelled
-      current = RAIL_ORDER.length;
+      // completed, handed_over_return_open, handed_over_return_cancelled:
+      // every step done, unless part was never sent (P21).
+      if (
+        PARTLY_SENT_END.includes(ex) &&
+        replacementPartlySent({ replacementStatus: input.replacementStatus, replacementOwed: input.replacementOwed })
+      ) {
+        current = RAIL_ORDER.length - 1;
+        stopped = true;
+        labels.handed_over = RETURNS_COPY.railPartlyHandedOver;
+      } else {
+        current = RAIL_ORDER.length;
+      }
   }
   return RAIL_ORDER.map((id, i) => ({
     id,
     label: labels[id],
-    state: i < current ? 'done' : i === current ? (stopped ? 'stopped' : 'current') : 'upcoming',
+    state: i < current ? 'done' : i === current ? (stopped ? 'stopped' : 'current') : after,
   }));
+}
+
+/** A step's state in words ("done", "now", "next", "stopped", "not reached", "not started"). */
+export function railStepStateWords(step: Pick<RailStep, 'state'>): string {
+  return RAIL_STEP_STATE_WORDS[step.state];
+}
+
+/**
+ * The rail as one accessible label, for the web list and the phone's
+ * VoiceOver alike: "Replacement progress: Requested, done; Declined, stopped;
+ * Waiting for return, not reached; …". Empty for no rail.
+ */
+export function exchangeRailAccessibilityLabel(rail: readonly RailStep[]): string {
+  if (rail.length === 0) return '';
+  return `${RETURNS_COPY.railProgress}: ${rail.map((s) => `${s.label}, ${railStepStateWords(s)}`).join('; ')}`;
+}
+
+/**
+ * Why the exchange has no replacement order (the REPLACEMENT ORDER block,
+ * review fix P4): declined, cancelled with the return (a denied return's
+ * exchange reads declined, as its staff label does), or not yet approved.
+ */
+export function noReplacementLine(
+  status: ExchangeStatus,
+  facts: { returnStatus?: string | null; denied?: boolean } = {},
+): string {
+  if (status === 'declined') return RETURNS_COPY.noReplacementDeclined;
+  if (status === 'cancelled') {
+    return facts.denied || facts.returnStatus === 'denied' ? RETURNS_COPY.noReplacementDeclined : RETURNS_COPY.noReplacementCancelled;
+  }
+  return RETURNS_COPY.noReplacementYet;
 }
 
 // ── Replacement candidates ─────────────────────────────────────────────────

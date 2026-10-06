@@ -120,6 +120,9 @@ export const RETURNS_COPY = {
   returnStatusHeading: 'RETURN',
   replacementOrderHeading: 'Replacement order',
   noReplacementYet: 'No replacement order yet. One is created when the exchange is approved.',
+  // RX-2 review fix P4: an exchange that ended before any replacement.
+  noReplacementDeclined: 'No replacement order: the exchange was declined.',
+  noReplacementCancelled: 'No replacement order: the exchange was cancelled with the return.',
   exchangeKillSwitch: 'Exchanges are turned off right now. Request a return only.',
   releaseEarlyReasonLabel: 'Reason for releasing early (required)',
   cancelReplacementReasonLabel: 'Reason for cancelling the replacement (required)',
@@ -155,6 +158,15 @@ export const RETURNS_COPY = {
   railPartlyHandedOver: 'Partly handed over',
   railDeclined: 'Declined',
   railCancelled: 'Cancelled',
+  // Each step's state in words (the web step text and both screen readers;
+  // review fix P4: after a stop nothing reads "next").
+  railProgress: 'Replacement progress',
+  railStateDone: 'done',
+  railStateNow: 'now',
+  railStateNext: 'next',
+  railStateStopped: 'stopped',
+  railStateNotReached: 'not reached',
+  railStateNotStarted: 'not started',
 
   // Confirms
   releaseEarlyConfirm: 'Release the replacement before the returned item arrives? Add a reason.',
