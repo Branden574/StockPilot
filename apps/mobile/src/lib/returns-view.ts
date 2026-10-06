@@ -53,7 +53,9 @@ import {
   returnStatusLabel,
   sameChoice,
   unreadDestinationChoice,
+  waitingForReturnLine,
   whenProcessedSentence,
+  type OrderReadinessResult,
   type RestockChoice,
   type ReturnAction,
   type ReturnActions,
@@ -577,19 +579,61 @@ export interface MobileOrderReplacement {
   canReleaseEarly: boolean;
   slipLine: string;
   driverLine: string | null;
+  /** What this order holds now (its active holds), from a server with review
+   *  fix P5; null or absent: unknown. */
+  held?: number | null;
 }
 
 /**
- * The banner's sentences, in order (the RMA link is the screen's, for
- * canOpenReturn): core's replacementBannerLines, the web banner's rule too.
- * A replacement already handed over says how the exchange ended instead of
- * the gate, the closed RMA, the driver's line and "Change or cancel".
+ * What the replacement holds now, for the gate's words (review fix P5): the
+ * server's number when it sends one, else what the readiness this screen
+ * read holds for each owed line (only when every owed line's hold is known),
+ * else null, and core then decides by the exchange status.
+ */
+export function replacementHeldNow(
+  info: Pick<MobileOrderReplacement, 'held'>,
+  readiness: OrderReadinessResult | null | undefined,
+): number | null {
+  if (typeof info.held === 'number' && Number.isFinite(info.held)) return info.held;
+  if (!readiness || readiness.state !== 'ok') return null;
+  const a = readiness.assessment;
+  if (a.phase !== 'to_pick' || !a.holdAnnotated || a.linesCapped) return null;
+  let held = 0;
+  for (const l of a.lines) {
+    if (l.owed <= 0) continue;
+    if (!l.hold) return null;
+    held += l.hold.held;
+  }
+  return held;
+}
+
+/**
+ * The banner's sentences, in order: core's replacementBannerLines, the web
+ * banner's rule too, for who reads it (review fixes P9 and P10): someone who
+ * can open the RMA gets the RMA link itself (key 'rma_link', which the screen
+ * draws as the link), the requester who to ask, anyone else who can; the
+ * driver's line only for an early-released delivery, never to the requester.
+ * The gate says what the replacement holds (P5). A replacement already handed
+ * over says how the exchange ended instead.
  */
 export function orderReplacementLines(
   info: MobileOrderReplacement,
   fulfillmentType: 'pickup' | 'delivery' | null,
+  reader: { isRequester?: boolean; held?: number | null } = {},
 ): { key: string; text: string }[] {
-  return replacementBannerLines(info, fulfillmentType);
+  return replacementBannerLines({ ...info, held: reader.held ?? info.held ?? null }, fulfillmentType, {
+    canOpenRma: info.canOpenReturn,
+    isRequester: reader.isRequester === true,
+  });
+}
+
+/** The gate line beside "Release before return is received" (the web manager
+ *  panel's): core's words with what the replacement holds (review fix P5). */
+export function replacementGateLine(
+  info: Pick<MobileOrderReplacement, 'returnNumber' | 'exchangeStatus'>,
+  held: number | null,
+): string {
+  return waitingForReturnLine(info.returnNumber, { exchangeStatus: info.exchangeStatus, held });
 }
 
 /**

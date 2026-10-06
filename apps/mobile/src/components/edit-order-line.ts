@@ -5,7 +5,7 @@ import {
   describeUnpickedShortfall,
   orderReadinessPhase,
   PICKED_LINE_STATES,
-  READINESS_STATES,
+  readinessLineLabel,
   SHORT_LINE_ONLY_LINE_NOTE,
   shortLineActions,
   type HoldOutcome,
@@ -14,6 +14,7 @@ import {
   type ShortLineActions,
 } from '@stockpilot/core';
 
+import type { ReplacementReadinessGate } from '../lib/order-readiness';
 import { extractApiErrorMessage } from '../lib/po-import-approve';
 
 import { addLinesErrorStatus, canAddOrderItems, type AddItemsGateInput } from './add-order-items';
@@ -339,6 +340,9 @@ export function orderLineShortFix(input: {
   totalLines: number;
   /** Before picking: the line's readiness (full panel only), else null. */
   readinessLine: ReadinessLineAssessment | null;
+  /** RX-2 review fix P6: an exchange replacement's return-first gate while it
+   *  holds, so the line is named by core's one chip rule (readinessLineLabel). */
+  gate?: ReplacementReadinessGate | null;
 }): OrderLineShortFix | null {
   const { line } = input;
   const isOnlyLine = input.totalLines <= 1;
@@ -349,8 +353,9 @@ export function orderLineShortFix(input: {
     if (!input.readinessLine || input.readinessLine.lineId !== line.orderRequestLineId) return null;
     result = shortLineActions({ phase: 'to_pick', line: input.readinessLine, isOnlyLine });
     // The line's own state: a line short now may be Short, Waiting on a PO
-    // or Can't confirm (core offers the fix on each), never relabelled.
-    label = READINESS_STATES[input.readinessLine.state].label;
+    // or Can't confirm (core offers the fix on each), never relabelled; in
+    // core's words (the chip's rule, the gate passed as the screen shows it).
+    label = readinessLineLabel(input.readinessLine, input.gate ?? {});
   } else if (phase === 'picked' && line.orderRequestLineId !== null) {
     const picked = assessPickedLine({
       lineId: line.orderRequestLineId,

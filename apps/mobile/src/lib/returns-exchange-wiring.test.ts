@@ -236,11 +236,51 @@ describe('the order screen', () => {
     // Desk check F3: the pick slip and Resume are also blocked once the RMA
     // was cancelled or denied (replacementPickBlocked, the web panel's rule).
     expect(screen).toContain('managerActions.generatePickSlip && !replacementPickBlocked(order.replacement)');
-    expect(screen).toContain('waitingForReturnLine(order.replacement.returnNumber)');
+    // Re-pinned by returns RX-2 review fix P5 (the claim is kept: the gate
+    // line shows in place of the pick slip): its words now carry what the
+    // replacement holds, "Not in stock yet" when nothing is.
+    expect(screen).toContain('{replacementGateLine(order.replacement, replacementHeld)}');
     expect(screen).toContain('<ReleaseReplacementSheet');
     // Desk check F7: the release names this order (the one the screen shows).
     expect(screen).toContain('releaseReturnReplacement(order.replacement.returnId, order.id, reason)');
     expect(screen).toContain('{replacementPickBlocked(order.replacement) ? null : stockGates.resume');
+  });
+
+  // Review fixes P5, P9 and P10: the banner is read by someone. The screen
+  // passes who (the requester or not) and what the replacement holds, draws
+  // the RMA link where core puts it (never a sentence and a link saying the
+  // same), and keeps "Open RMA-…" for a replacement already handed over.
+  it('the banner follows who reads it and what the replacement holds (review fixes P5, P9, P10)', () => {
+    expect(screen).toContain(
+      'const replacementHeld = order?.replacement ? replacementHeldNow(order.replacement, order.readiness) : null;',
+    );
+    expect(screen).toMatch(
+      /orderReplacementLines\(\s*order\.replacement,[^)]*\{\s*isRequester: !!order\.requesterUserId && order\.requesterUserId === userId,\s*held: replacementHeld,\s*\},?\s*\)/,
+    );
+    expect(screen).toContain("t.key === 'rma_link' ? (");
+    expect(screen).toContain('order.replacement.live && order.replacement.handedOver && order.replacement.canOpenReturn ? (');
+    // The old link beside every line is gone (it repeated the change sentence).
+    expect(screen).not.toContain('order.replacement.live && order.replacement.canOpenReturn ? (');
+  });
+
+  // Review fix P6: while the gate holds, the readiness card and each ready
+  // line say the stock is held and picking waits (core's words), only then.
+  it('passes the return-first gate into the readiness words, only while it holds (review fix P6)', () => {
+    expect(screen).toContain(
+      'const readinessGate = React.useMemo(() => replacementReadinessGate(order?.replacement), [order?.replacement]);',
+    );
+    expect(screen.match(/gate=\{readinessGate\}/g)?.length).toBe(2);
+    expect(screen).toContain('gate: readinessGate,');
+    const summary = code(read('src/components/order-readiness-summary.tsx'));
+    const line = code(read('src/components/order-line-readiness.tsx'));
+    expect(summary).toContain('const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };');
+    expect(line).toContain('const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };');
+    expect(line).toContain('const chip = readinessLineChip(line, opts);');
+    expect(line).toContain('readinessLineAccessibilityLabel({ ...line, position }, opts)');
+    expect(line).not.toContain('READINESS_STATES[line.state]');
+    const fix = code(read('src/components/edit-order-line.ts'));
+    expect(fix).toContain('label = readinessLineLabel(input.readinessLine, input.gate ?? {});');
+    expect(fix).not.toContain('READINESS_STATES[');
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {

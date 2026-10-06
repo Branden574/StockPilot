@@ -336,7 +336,10 @@ describe('the readiness components', () => {
   it('word everything through core, never a percentage or a promise', () => {
     const s = codeOnly(summary);
     const l = codeOnly(lineCard);
-    expect(s).toContain('const opts = { timeZone: timeZone ?? undefined };');
+    // Re-pinned by returns RX-2 review fix P6 (the claim is kept: every word
+    // is core's, with the org's zone): the options also carry an exchange
+    // replacement's return-first gate while it holds.
+    expect(s).toContain('const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };');
     expect(s).toContain('describeReadinessRollup(result, opts)');
     // The requester's card is core's too, laid out as the web strip's:
     // the sentence, when it was checked, and Check again / Try again.
@@ -349,7 +352,9 @@ describe('the readiness components', () => {
     expect(l).toContain('describeReadinessLine(line, item, opts)');
     expect(l).toContain('describeReadinessHold(line.hold)');
     expect(l).toContain('describeReadinessWhy(item, opts).parts');
-    expect(l).toContain('readinessLineAccessibilityLabel({ ...line, position })');
+    // Re-pinned by returns RX-2 review fix P6 (claim kept): the label takes
+    // the same options, so a ready line waiting for its return says so.
+    expect(l).toContain('readinessLineAccessibilityLabel({ ...line, position }, opts)');
     for (const src of [s, l]) {
       expect(src).not.toMatch(/%|verified|guarantee|will arrive|\bbook\b/i);
     }

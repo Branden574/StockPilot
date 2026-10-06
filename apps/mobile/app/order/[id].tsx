@@ -92,6 +92,8 @@ import {
 import {
   changeInRmaLabel,
   orderReplacementLines,
+  replacementGateLine,
+  replacementHeldNow,
   replacementPickBlocked,
   type MobileOrderReplacement,
 } from '@/lib/returns-view';
@@ -139,6 +141,7 @@ import {
   recalledOrderView,
   reconcileReadiness,
   rememberOrderView,
+  replacementReadinessGate,
   shouldReadReadiness,
 } from '@/lib/order-readiness';
 import {
@@ -229,7 +232,6 @@ import {
   shortfallSupplierIds,
   type OrgEmailRoutingReadState,
   type Role,
-  waitingForReturnLine,
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -1897,6 +1899,14 @@ export default function OrderDetail() {
     );
   }, [order]);
   const showLineReadiness = readinessShown && readinessAudienceNow === 'full';
+  // RX-2 review fix P6: while a replacement's return-first gate holds (and
+  // only then) the readiness words say the stock is held and picking waits,
+  // never a green "Ready to pick" (core's words, the web strip's too).
+  const readinessGate = React.useMemo(() => replacementReadinessGate(order?.replacement), [order?.replacement]);
+  // RX-2 review fix P5: what the replacement holds now (the server's number,
+  // else this screen's readiness), so its gate never says "Replacement
+  // reserved" over nothing held.
+  const replacementHeld = order?.replacement ? replacementHeldNow(order.replacement, order.readiness) : null;
 
   // F2-3 "Put away" on the full panel: a line with units in this warehouse's
   // Staging, and "Put away N items" on the card (core put-away.ts). The gate
@@ -1969,9 +1979,10 @@ export default function OrderDetail() {
       line: editLine,
       position: order.lines.findIndex((l) => l.orderRequestLineId === lineId) + 1,
       totalLines: order.lines.length,
+      gate: readinessGate,
       readinessLine: showLineReadiness ? (readinessByLine?.get(lineId)?.line ?? null) : null,
     });
-  }, [editLine, order, showLineReadiness, readinessByLine]);
+  }, [editLine, order, showLineReadiness, readinessByLine, readinessGate]);
 
   // Every action needs a connection; this is the reason shown with them.
   const connectionNotice = offline ? (
@@ -2438,20 +2449,43 @@ export default function OrderDetail() {
           </View>
 
           {/* RX-2: an exchange replacement says which RMA it belongs to, the
-              return-first gate while it holds, an early release, the
-              driver's line for a delivery swap, and where it is changed. */}
+              return-first gate while it holds (with what it holds, review fix
+              P5), an early release, the driver's line for an early-released
+              delivery (never to the requester, P10), and where it is changed,
+              for who reads it (P9): the RMA link itself for someone who can
+              open the RMA, who to ask for the requester, who can for anyone
+              else. Once handed over, how the exchange ended and "Open RMA-…". */}
           {order.replacement ? (
             <Card padding={14} style={{ borderLeftWidth: 4, borderLeftColor: c.ink }}>
               <View style={{ gap: 6 }}>
                 {orderReplacementLines(
                   order.replacement,
                   order.fulfillmentType === 'delivery' ? 'delivery' : order.fulfillmentType === 'pickup' ? 'pickup' : null,
-                ).map((t) => (
-                  <Body key={t.key} size={t.key === 'title' ? 14.5 : 13} color={t.key === 'title' ? c.ink : undefined} muted={t.key !== 'title'}>
-                    {t.text}
-                  </Body>
-                ))}
-                {order.replacement.live && order.replacement.canOpenReturn ? (
+                  {
+                    isRequester: !!order.requesterUserId && order.requesterUserId === userId,
+                    held: replacementHeld,
+                  },
+                ).map((t) =>
+                  t.key === 'rma_link' ? (
+                    <Pressable
+                      key={t.key}
+                      onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
+                      accessibilityRole="link"
+                      accessibilityLabel={t.text}
+                      hitSlop={6}
+                      style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
+                    >
+                      <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                        {t.text}
+                      </Body>
+                    </Pressable>
+                  ) : (
+                    <Body key={t.key} size={t.key === 'title' ? 14.5 : 13} color={t.key === 'title' ? c.ink : undefined} muted={t.key !== 'title'}>
+                      {t.text}
+                    </Body>
+                  ),
+                )}
+                {order.replacement.live && order.replacement.handedOver && order.replacement.canOpenReturn ? (
                   <Pressable
                     onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
                     accessibilityRole="link"
@@ -2571,6 +2605,7 @@ export default function OrderDetail() {
               result={order.readiness}
               audience={readinessAudienceNow}
               timeZone={order.orgTimezone}
+              gate={readinessGate}
               offline={offline}
               checking={retrying}
               onCheckAgain={() => void retryLoad()}
@@ -2797,6 +2832,7 @@ export default function OrderDetail() {
                             item={lineReadiness.item}
                             position={i + 1}
                             timeZone={order.orgTimezone}
+                            gate={readinessGate}
                             onOpenItem={(itemId) => router.push(`/item/${itemId}`)}
                             putAway={
                               lineOffer
@@ -2958,7 +2994,7 @@ export default function OrderDetail() {
               (order.status === 'approved' || order.status === 'backordered') ? (
                 <>
                   <Body size={12.5} color={c.ink3} accessibilityRole="text">
-                    {waitingForReturnLine(order.replacement.returnNumber)}
+                    {replacementGateLine(order.replacement, replacementHeld)}
                   </Body>
                   {order.status === 'approved' && order.replacement.canReleaseEarly
                     ? actionBtn(RETURNS_COPY.releaseBeforeReturn, 'release', () => {

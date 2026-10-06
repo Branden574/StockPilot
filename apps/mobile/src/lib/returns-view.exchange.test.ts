@@ -1,6 +1,7 @@
 import { exchangeRail } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
+import { FX_ITEM_A, fxFacts, fxItem, fxLine, fxResult } from './__fixtures__/readiness-facts';
 import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
 import {
   NO_EXCHANGE,
@@ -17,6 +18,8 @@ import {
   orderReplacementLines,
   prepareOutcomeMessage,
   replacementCardLabel,
+  replacementGateLine,
+  replacementHeldNow,
   replacementPickBlocked,
   replacementOrderLines,
   replacementSideLines,
@@ -426,6 +429,95 @@ describe('what each sheet says happens to the replacement (review fix P2)', () =
     for (const mode of ['approve', 'process', 'destination', 'deny', 'release', 'close_as_return_only']) {
       expect(words(mode, live())).toEqual([]);
     }
+  });
+});
+
+// Review fixes P5, P9 and P10 on the order screen: the banner is read by
+// someone (the RMA link for returns staff, who to ask for the requester, who
+// can for anyone else), the driver's line shows only for an early-released
+// delivery and never to the requester, and the gate says "Not in stock yet"
+// when the replacement holds nothing (never "Replacement reserved").
+describe("the replacement order's banner for who reads it, and its gate words (review fixes P5, P9, P10)", () => {
+  const info: MobileOrderReplacement = {
+    returnId: 'rma-1',
+    returnNumber: 'RMA-1',
+    returnStatus: 'approved',
+    originalOrderId: 'orig',
+    originalOrderNumber: 103,
+    live: true,
+    exchangeStatus: 'waiting_for_return',
+    exchangeStatusLabel: 'x',
+    waitingForReturn: true,
+    releasedEarly: false,
+    release: null,
+    returnReceived: false,
+    revision: 1,
+    canOpenReturn: false,
+    canReleaseEarly: false,
+    slipLine: 's',
+    driverLine: 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-1).',
+  };
+  const keys = (lines: { key: string }[]) => lines.map((l) => l.key);
+
+  it('the requester is told to contact the warehouse; anyone else, who can; returns staff get the RMA link', () => {
+    expect(orderReplacementLines(info, 'pickup', { isRequester: true }).map((l) => l.text)).toEqual([
+      'Exchange replacement for RMA-1 · Original order SO-000103',
+      'Replacement reserved. Waiting for returned item (RMA-1)',
+      'To change or cancel this replacement, contact the warehouse.',
+    ]);
+    expect(orderReplacementLines(info, 'pickup', { isRequester: false }).at(-1)).toEqual({
+      key: 'change',
+      text: 'Only someone who manages returns can change or cancel this replacement (RMA-1).',
+    });
+    // Returns staff who also asked for it read it as staff.
+    expect(orderReplacementLines({ ...info, canOpenReturn: true }, 'pickup', { isRequester: true }).at(-1)).toEqual({
+      key: 'rma_link',
+      text: 'Change or cancel in RMA-1',
+    });
+  });
+
+  it("the driver's line once, for an early-released delivery not yet returned, never to the requester", () => {
+    const released: MobileOrderReplacement = {
+      ...info,
+      waitingForReturn: false,
+      releasedEarly: true,
+      release: { byName: 'Dana', reason: null, at: null },
+    };
+    expect(keys(orderReplacementLines(released, 'delivery', { isRequester: false }))).toEqual(['title', 'released', 'driver', 'change']);
+    expect(keys(orderReplacementLines(released, 'delivery', { isRequester: true }))).not.toContain('driver');
+    expect(keys(orderReplacementLines(released, 'pickup', { isRequester: false }))).not.toContain('driver');
+    expect(keys(orderReplacementLines({ ...released, returnReceived: true }, 'delivery', { isRequester: false }))).not.toContain('driver');
+    expect(keys(orderReplacementLines(info, 'delivery', { isRequester: false }))).not.toContain('driver');
+  });
+
+  it('the gate says Not in stock yet when nothing is held, in the banner and beside the release', () => {
+    const notHeld = 'Not in stock yet. Picking also waits for the returned item (RMA-1).';
+    expect(replacementGateLine(info, 0)).toBe(notHeld);
+    expect(replacementGateLine(info, 1)).toBe('Replacement reserved. Waiting for returned item (RMA-1)');
+    // Unknown holds: the exchange status decides (a backorder is unavailable).
+    expect(replacementGateLine({ ...info, exchangeStatus: 'unavailable' }, null)).toBe(notHeld);
+    expect(replacementGateLine(info, null)).toBe('Replacement reserved. Waiting for returned item (RMA-1)');
+    expect(orderReplacementLines(info, 'pickup', { isRequester: false, held: 0 })[1]).toEqual({ key: 'gate', text: notHeld });
+    // The server's number when it sends one.
+    expect(orderReplacementLines({ ...info, held: 0 }, 'pickup', { isRequester: false })[1]!.text).toBe(notHeld);
+  });
+
+  it('what the replacement holds: the server number, else every owed line from readiness, else unknown', () => {
+    const approved = (heldOwn: number, visible = true) =>
+      fxResult(
+        fxFacts({
+          status: 'approved',
+          lines: [fxLine('ol1', FX_ITEM_A, 1)],
+          items: [visible ? fxItem(FX_ITEM_A, { heldOwn }) : { itemId: FX_ITEM_A, visible: false }],
+        }),
+      );
+    expect(replacementHeldNow({ held: 2 }, approved(0))).toBe(2);
+    expect(replacementHeldNow({}, approved(1))).toBe(1);
+    expect(replacementHeldNow({ held: null }, approved(0))).toBe(0);
+    // A line whose hold is unknown (the item hidden) leaves it unknown.
+    expect(replacementHeldNow({}, approved(1, false))).toBeNull();
+    expect(replacementHeldNow({}, { state: 'failed', message: 'x' })).toBeNull();
+    expect(replacementHeldNow({}, null)).toBeNull();
   });
 });
 

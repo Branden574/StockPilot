@@ -47,6 +47,7 @@ import {
   reconcileReadiness,
   REMEMBERED_ORDER_VIEWS_MAX,
   rememberOrderView,
+  replacementReadinessGate,
   shouldReadReadiness,
   type OrgZoneClient,
   type ReadinessRpcClient,
@@ -732,5 +733,46 @@ describe('offline: the last view, in memory for this session', () => {
     expect(orderViewAsOf({ state: 'failed', message: 'x' }, '2026-09-28T18:00:05Z')).toBe(
       '2026-09-28T18:00:05Z',
     );
+  });
+});
+
+// RX-2 review fix P6: a gated replacement's card said a green "Ready to pick"
+// while the same page said it waits for the returned item and offered no
+// pick slip. While the return-first gate holds (and only then), the screen
+// passes the gate into core's words: the stock is held, picking waits (info
+// tone, clock icon, never green), and its ready lines read Waiting for return.
+describe('a replacement waiting for its returned item (RX-2 review fix P6)', () => {
+  const gated = { live: true, waitingForReturn: true, returnNumber: 'RMA-20261006-C27F66' };
+
+  it('passes the gate into the readiness words only while it holds', () => {
+    expect(replacementReadinessGate(gated)).toEqual({ replacementGate: 'waiting', returnNumber: 'RMA-20261006-C27F66' });
+    // Released early or received (the server's waitingForReturn is false),
+    // an earlier replacement, or an ordinary order: the card reads as for any order.
+    expect(replacementReadinessGate({ ...gated, waitingForReturn: false })).toBeNull();
+    expect(replacementReadinessGate({ ...gated, live: false })).toBeNull();
+    expect(replacementReadinessGate(null)).toBeNull();
+    expect(replacementReadinessGate(undefined)).toBeNull();
+  });
+
+  it("the card's words with the gate: held, waiting, and when picking starts; never green", async () => {
+    const client = fakeRpc(() =>
+      ok(
+        factsFor({
+          status: 'approved',
+          lines: [{ lineId: 'line-1', itemId: ITEM_A, requested: 1, fulfilled: 0, picked: null, createdAt: '2026-09-27T10:00:00Z' }],
+          items: [visibleItem(ITEM_A, { heldOwn: 1 })],
+        }),
+      ),
+    );
+    const result = await readOrderReadiness(client, ORDER, () => NOW);
+    const rollup = describeReadinessRollup(result, { ...replacementReadinessGate(gated) });
+    expect(rollup).toMatchObject({
+      headline: 'Stock held (1 of 1 line). Picking waits for the returned item.',
+      tone: 'info',
+      icon: 'clock',
+      detail: 'Picking starts once RMA-20261006-C27F66 is received, or a manager releases it early.',
+    });
+    // Without the gate, the same facts read as for any order.
+    expect(describeReadinessRollup(result, {})?.headline).toBe('Ready to pick (1 of 1 line)');
   });
 });

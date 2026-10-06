@@ -17,9 +17,10 @@ import {
   describeReadinessWhy,
   putAwayLineAccessibilityLabel,
   READINESS_NEEDS_CONNECTION_COPY,
-  READINESS_STATES,
   readinessLineAccessibilityLabel,
+  readinessLineChip,
   type PutAwayOffer,
+  type ReadinessCopyOptions,
   type ReadinessItemAssessment,
   type ReadinessLineAssessment,
   type ReadinessTone,
@@ -28,6 +29,7 @@ import {
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, Mono } from '@/components/ui/text';
+import type { ReplacementReadinessGate } from '@/lib/order-readiness';
 import { ACCENT, TYPE_CEILING, capTo, type ThemeMode } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -46,6 +48,11 @@ import { useTheme } from '@/lib/use-theme';
  * part of "Why" are their own elements (a label on a Pressable would silence
  * the text inside it). Targets are at least 44pt; the chip and "Why" are
  * chrome, capped for Dynamic Type; the sentences are content and grow.
+ *
+ * RX-2 review fix P6: the chip is core's readinessLineChip, so while an
+ * exchange replacement's return-first gate holds (`gate`) a ready line reads
+ * "Waiting for return" (info, clock), on screen and to VoiceOver; its sentence
+ * and hold are unchanged.
  *
  * PUT AWAY (F2-3): a line with units in this warehouse's Staging (core
  * putAwayLineOffer, whatever the line's state) offers "Put away", which opens
@@ -158,6 +165,7 @@ export function OrderLineReadiness({
   timeZone,
   onOpenItem,
   putAway = null,
+  gate = null,
 }: {
   line: ReadinessLineAssessment;
   /** The line's item assessment (null or not visible: nothing more to say). */
@@ -177,18 +185,23 @@ export function OrderLineReadiness({
     offline: boolean;
     onPress: (itemIds: string[]) => void;
   } | null;
+  /** RX-2 review fix P6: an exchange replacement's return-first gate, only
+   *  while it holds: a ready line reads "Waiting for return" (info, clock). */
+  gate?: ReplacementReadinessGate | null;
 }) {
   const { c } = useTheme();
   const [open, setOpen] = React.useState(false);
-  const meta = READINESS_STATES[line.state];
-  const opts = { timeZone: timeZone ?? undefined };
+  const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };
+  // The chip's words, tone and icon are core's (readinessLineChip), the web
+  // pill's rule: "Waiting for return" on a ready line while the gate holds.
+  const chip = readinessLineChip(line, opts);
   const sentence = describeReadinessLine(line, item, opts);
   const hold = describeReadinessHold(line.hold);
   // Nothing more to explain for an item the reader cannot see.
   const why = item && item.visible && item.facts ? describeReadinessWhy(item, opts).parts : null;
-  const label = readinessLineAccessibilityLabel({ ...line, position });
+  const label = readinessLineAccessibilityLabel({ ...line, position }, opts);
 
-  const chip = <ReadinessStateChip icon={meta.icon} label={meta.label} tone={meta.tone} />;
+  const chipView = <ReadinessStateChip icon={chip.icon} label={chip.label} tone={chip.tone} />;
 
   return (
     <View style={{ paddingHorizontal: 14, paddingBottom: 12, gap: 2 }}>
@@ -207,7 +220,7 @@ export function OrderLineReadiness({
             opacity: pressed ? 0.7 : 1,
           })}
         >
-          {chip}
+          {chipView}
           <View style={{ flex: 1 }} />
           <Mono size={CHIP_SIZE} color={c.ink3} maxFontSizeMultiplier={CHIP_CAP}>
             {open ? 'Hide why' : 'Why'}
@@ -220,7 +233,7 @@ export function OrderLineReadiness({
           accessibilityLabel={label}
           style={{ minHeight: MIN_TAP, flexDirection: 'row', alignItems: 'center' }}
         >
-          {chip}
+          {chipView}
         </View>
       )}
       <Body size={13} color={c.ink2}>

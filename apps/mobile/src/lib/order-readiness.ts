@@ -387,6 +387,25 @@ export function orderViewAsOf(readiness: OrderReadinessResult | null, receivedAt
   return readiness?.state === 'ok' ? readiness.assessment.observedAt : receivedAt;
 }
 
+/** The readiness words' replacement gate (core ReadinessCopyOptions). */
+export type ReplacementReadinessGate = Required<Pick<ReadinessCopyOptions, 'replacementGate' | 'returnNumber'>>;
+
+/**
+ * RX-2 review fix P6: while an exchange replacement's return-first gate holds
+ * (its returned item not received, nobody released it early: the server's
+ * waitingForReturn on the live replacement), the readiness card says the
+ * stock is held and picking waits, never a green "Ready to pick", and its
+ * ready lines read "Waiting for return" (core describeReadinessRollup and
+ * readinessLineChip, the web strip's words). Null otherwise: after a release
+ * or the receipt, and for any other order, the card reads as it always has.
+ */
+export function replacementReadinessGate(
+  replacement: { live: boolean; waitingForReturn: boolean; returnNumber: string | null } | null | undefined,
+): ReplacementReadinessGate | null {
+  if (!replacement?.live || !replacement.waitingForReturn) return null;
+  return { replacementGate: 'waiting', returnNumber: replacement.returnNumber };
+}
+
 /**
  * What VoiceOver announces when a readiness check fails (F2-1 phone walk, O2):
  * the card's failed headline, with core's reason when it names one (the line
