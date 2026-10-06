@@ -35,7 +35,7 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
-import { can, dbPermissionRefusedCopy, isManagerOrAbove } from '@stockpilot/core';
+import { can, dbPermissionRefusedCopy, formatCalendarDate, isManagerOrAbove } from '@stockpilot/core';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -315,9 +315,15 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           <CardContent className="space-y-3 text-sm">
             <Row label="Supplier" value={(supplier?.name as string) ?? '—'} />
             <Row label="Destination" value={(location?.name as string) ?? '—'} />
+            {/* A DAY stored as its UTC midnight, read in UTC: in the server's
+                zone it was the day before on any server west of UTC. */}
             <Row
               label="Expected"
-              value={po.expected_at ? new Date(po.expected_at as string).toLocaleDateString() : '—'}
+              value={formatCalendarDate(po.expected_at as string | null, {
+                year: 'numeric',
+                month: 'numeric',
+                day: 'numeric',
+              })}
             />
             <Row label="Subtotal" value={formatCurrency(po.subtotal as number)} />
             <Row label="Total" value={formatCurrency(po.total as number)} bold />

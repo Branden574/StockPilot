@@ -11,7 +11,10 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { requireSession } from '@/lib/auth/session';
+import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { digestScheduleLabel, digestSendAt } from '@/lib/email/es/families/digest';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { loadNotificationPreferences } from '@/server/actions/notification-preferences';
 
@@ -44,6 +47,22 @@ export default async function NotificationsSettingsPage() {
   // notification_preferences row hasn't been written yet (matches the
   // table's column defaults).
   const prefs = await loadNotificationPreferences();
+
+  // When the digest goes out, in the organization's zone: the weekly-digest
+  // cron runs at 14:00 UTC on Mondays for every organization (vercel.json),
+  // which is Monday morning in US zones, 2:00 PM on UTC and Tuesday from
+  // UTC+10 east, so the card says the time instead of "Monday morning". The
+  // words are the email footer's (digestScheduleLabel, for the next run). The
+  // zone is the request-cached org row the dashboard layout has already read;
+  // an unreadable row reads as the documented default zone, as the email's
+  // does, and is reported.
+  const ctx = await requireOrgContext();
+  const digestSchedule = await getOrgRowForRequest(ctx.organizationId)
+    .then((org) => digestScheduleLabel(org?.timezone, digestSendAt(new Date(), 'next')))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'settings.notifications.org_timezone_failed', level: 'warning' });
+      return digestScheduleLabel(null, digestSendAt(new Date(), 'next'));
+    });
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -110,7 +129,11 @@ export default async function NotificationsSettingsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <DigestControls initialOptIn={optIn} initialSections={sections} />
+            <DigestControls
+              initialOptIn={optIn}
+              initialSections={sections}
+              scheduleLabel={digestSchedule}
+            />
           </CardContent>
         </Card>
       </div>

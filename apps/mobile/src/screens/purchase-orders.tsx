@@ -3,7 +3,7 @@ import { ClipboardList, ScanLine, Upload } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
-import { can, type Role } from '@stockpilot/core';
+import { can, formatCalendarDate, type Role } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
@@ -28,6 +28,9 @@ interface PORow {
 
 const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
   draft: { label: 'DRAFT', status: 'default' },
+  // Receive POs says EXPECTED and the web Expected; without this entry the
+  // card printed the raw key, EXPECTED_INBOUND.
+  expected_inbound: { label: 'EXPECTED', status: 'default' },
   ordered: { label: 'ORDERED', status: 'default' },
   partially_received: { label: 'PARTIAL', status: 'warn' },
   received: { label: 'RECEIVED', status: 'ok' },
@@ -177,8 +180,11 @@ function POCard({ po, onPress }: { po: PORow; onPress: () => void }) {
             ${po.total.toFixed(0)}
           </Mono>
           <Mono size={11} tracking={0.04} color={c.ink4}>
+            {/* The expected date is a DAY stored as its UTC midnight, so it is
+                read in UTC (in the phone's zone it was the day before in every
+                US zone); created_at is an instant. */}
             {po.expected_at
-              ? `ETA ${new Date(po.expected_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+              ? `ETA ${formatCalendarDate(po.expected_at)}`
               : `created ${new Date(po.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
           </Mono>
         </View>

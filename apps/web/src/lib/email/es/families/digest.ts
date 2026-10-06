@@ -38,7 +38,7 @@
  * cron/action wiring, byte-identical.
  */
 
-import { formatCycleCountNumber, resolveOrgTimezone } from '@stockpilot/core';
+import { formatCalendarDate, formatCycleCountNumber, resolveOrgTimezone } from '@stockpilot/core';
 
 import type { DigestPayload } from '@/server/services/digest';
 
@@ -95,11 +95,6 @@ export const DIGEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
 const MONTH_DAY_FMT = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
-});
-const MONTH_DAY_YEAR_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
 });
 
 export function weeklyDigestSubject(now: Date = new Date()): string {
@@ -225,8 +220,10 @@ export function renderWeeklyDigestHtml(
   if (payload.openPos.length > 0) {
     const exemplar = overduePos[0] ?? payload.openPos[0]!;
     const supplier = escapeHtml(exemplar.supplierName ?? 'No supplier');
+    // A DAY stored as its UTC midnight, read in UTC whatever the server's
+    // zone (core's formatCalendarDate, the phone's and the PO list's rule).
     const expected = exemplar.expectedAt
-      ? `expected ${MONTH_DAY_YEAR_FMT.format(new Date(exemplar.expectedAt))}`
+      ? `expected ${formatCalendarDate(exemplar.expectedAt, { month: 'short', day: 'numeric', year: 'numeric' })}`
       : 'no expected date';
     actions.push({
       tone: overduePos.length > 0 ? 'err' : 'info',
@@ -458,7 +455,7 @@ export function weeklyDigestText(
     for (const po of payload.openPos) {
       const overdue = po.isOverdue ? ' [OVERDUE]' : '';
       const exp = po.expectedAt
-        ? new Date(po.expectedAt).toLocaleDateString('en-US')
+        ? formatCalendarDate(po.expectedAt, { year: 'numeric', month: 'numeric', day: 'numeric' })
         : 'no date';
       blocks.push(
         `  ${po.poNumber}  ${po.supplierName ?? 'No supplier'}  expected ${exp}${overdue}`,

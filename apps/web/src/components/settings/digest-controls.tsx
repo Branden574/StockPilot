@@ -21,6 +21,10 @@ interface SectionFlags {
 interface DigestControlsProps {
   initialOptIn: boolean;
   initialSections: SectionFlags;
+  /** When the digest is sent, in the organization's zone, as its email
+   *  footer says it: "Mondays at 7:00 AM PDT" (digestScheduleLabel, worked
+   *  out by the page on the server). */
+  scheduleLabel: string;
 }
 
 const SECTION_DEFS: Array<{
@@ -45,7 +49,7 @@ const SECTION_DEFS: Array<{
   },
 ];
 
-export function DigestControls({ initialOptIn, initialSections }: DigestControlsProps) {
+export function DigestControls({ initialOptIn, initialSections, scheduleLabel }: DigestControlsProps) {
   const router = useRouter();
   const [optIn, setOptIn] = React.useState(initialOptIn);
   const [sections, setSections] = React.useState<SectionFlags>(initialSections);
@@ -101,9 +105,10 @@ export function DigestControls({ initialOptIn, initialSections }: DigestControls
         <div className="flex-1">
           <div className="text-sm font-medium">Email me a weekly inventory digest</div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Sent every Monday morning. It covers only the warehouses, items
-            and purchase orders you can see in StockPilot. We skip the email
-            entirely on weeks where every section you've opted into is empty.
+            Sent {scheduleLabel}, in your workspace's time zone. It covers
+            only the warehouses, items and purchase orders you can see in
+            StockPilot. We skip the email entirely on weeks where every section
+            you've opted into is empty.
           </p>
         </div>
         <button

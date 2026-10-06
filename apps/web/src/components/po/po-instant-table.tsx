@@ -19,6 +19,8 @@ import { ClipboardList } from 'lucide-react';
 import { useHydrated } from '@/lib/use-hydrated';
 import { formatCurrency, formatDateShort } from '@/lib/utils';
 
+import { formatCalendarDate } from '@stockpilot/core';
+
 export interface PoInstantRow {
   id: string;
   po_number: string;
@@ -69,9 +71,10 @@ export function PoInstantTable({
   const placedDay = (iso: string | null) => (iso && !hydrated ? null : formatDateShort(iso));
   // Expected is a DAY the buyer picked, stored as that day's UTC midnight
   // (po-form sends new Date('YYYY-MM-DD')). Read in UTC it is the picked day on
-  // the server and in every browser, as on the PO's page and its PDF
-  // (lib/pdf/po.tsx); read in the viewer's zone it was the day before.
-  const expectedDay = (iso: string | null) => formatDateShort(iso, 'en-US', 'UTC');
+  // the server and in every browser, as on the PO's page, its PDF
+  // (lib/pdf/po.tsx) and the phone: core's formatCalendarDate is that one rule.
+  // Read in the viewer's zone it was the day before.
+  const expectedDay = (iso: string | null) => formatCalendarDate(iso);
 
   return (
     <>

@@ -5,17 +5,19 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { ScheduleService } from '@/server/services/schedule';
 
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone, zonedParts } from '@stockpilot/core';
 
 export const metadata = { title: 'Schedule' };
 
 /**
  * Team calendar landing. ?m=YYYY-MM picks which month is shown;
- * defaults to the current month. The calendar itself uses search
- * params to navigate prev/next/today, so this page just resolves
- * the month and hands events to the client component.
+ * defaults to the organization's current month. The calendar itself uses
+ * search params to navigate prev/next/today (Today drops ?m=), so this page
+ * just resolves the month and hands events to the client component.
  */
 export default async function SchedulePage({
   searchParams,
@@ -37,9 +39,26 @@ export default async function SchedulePage({
   }
   const canManage = can(ctx, 'schedule:manage');
   const params = await searchParams;
-  const today = new Date();
-  let year = today.getFullYear();
-  let month = today.getMonth() + 1;
+  // The current month is the ORGANIZATION's, never the server's: Vercel's
+  // clock reads UTC, which on the last day of a month is already the next
+  // month from 5 PM Pacific (4 PM in standard time), so the calendar and its
+  // Today button opened a month whose grid can leave today out entirely. The
+  // zone is the request-cached org row the layout reads (normally already in
+  // hand from the membership bundle); an unreadable row falls back to the
+  // documented default zone, as every org-time surface does, and is reported
+  // instead of taking the calendar down (getOrgRowForRequest throws on a read
+  // error). The browser marks today on the viewer's own day once hydrated
+  // (schedule-calendar.tsx), which for anyone in the organization's zone is
+  // a day of this month.
+  const timeZone = await getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'schedule.calendar.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
+  const today = zonedParts(new Date(), timeZone);
+  let year = today.year;
+  let month = today.month;
   if (params.m) {
     const match = params.m.match(/^(\d{4})-(\d{1,2})$/);
     if (match) {
