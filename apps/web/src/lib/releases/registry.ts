@@ -328,10 +328,10 @@ export const RELEASES: Release[] = [
         area: 'Notifications',
         title: 'The weekly inventory digest email is sent on Mondays',
         whatChanged:
-          "The weekly inventory digest now goes out every Monday to the people who turned it on. Each Monday's run had been stopping before it sent anything, so no digest was ever sent.",
+          "The weekly inventory digest now goes out every Monday to the people who turned it on. Each Monday's run had been stopping before it sent anything, so no weekly digest was ever sent.",
         whyItMatters: 'If you turned the digest on, no weekly digest came, and nothing said so.',
         howItAffectsYou:
-          'If the digest is on for you, it is sent each Monday at 14:00 UTC, Monday morning in US time zones, with low and out-of-stock items, open purchase orders and cycle counts in progress, for the sections you chose. Its footer gives that day and time in your workspace time zone. A week where every section you chose is empty sends nothing.',
+          'If the digest is on for you, it is sent each Monday at 14:00 UTC, Monday morning in the mainland US, Alaska and Hawaii, with low and out-of-stock items, open purchase orders and cycle counts in progress, for the sections you chose. Its footer gives that day and time in your workspace time zone. A week where every section you chose is empty sends nothing.',
         whatToDo:
           'To get it, turn on Email me a weekly inventory digest in your notification settings. Send preview now emails you one right away, with what yours would hold today.',
         link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
@@ -346,7 +346,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Your digest should match what you can open in StockPilot, and its numbers should be the real ones.',
         howItAffectsYou:
-          'If you work in only some warehouses, its low stock is from those warehouses and its purchase orders are the ones you can see. When a list holds more than it shows, the count is the full number, and the plain-text version says how many it shows of how many.',
+          'If you can see only some warehouses, its low stock is from those warehouses and its purchase orders are the ones you can see. When a list holds more than it shows, the count is the full number, and the plain-text version says how many it shows of how many.',
         whatToDo: 'No action needed.',
       },
       {
@@ -355,7 +355,7 @@ export const RELEASES: Release[] = [
         area: 'Warehouses',
         title: "A warehouse's page now opens",
         whatChanged:
-          "Opening a warehouse, from the warehouse list or from search, showed an error instead of its page. The page now opens, with the warehouse's details and the charters it serves.",
+          "Opening a warehouse, from search or from the warehouse list in Admin, showed an error instead of its page. The page now opens, with the warehouse's details and the charters it serves.",
         whyItMatters: "The warehouse's page could not be used at all.",
         howItAffectsYou:
           'When you open a warehouse, its page shows its address and contact, its manager and the charters it serves.',
@@ -393,7 +393,7 @@ export const RELEASES: Release[] = [
         title: 'The purchase orders list on the web shows the expected date that was set',
         whatChanged:
           "On the web, in US time zones, the Expected column of the purchase orders list could show the day before the expected date set on the purchase order. It now shows the date that was set, as the purchase order's page and its PDF do.",
-        whyItMatters: "The list disagreed with the purchase order's own page by a day.",
+        whyItMatters: "The list could disagree with the purchase order's own page by a day.",
         howItAffectsYou:
           "Each purchase order's expected date in the list now matches its page and its PDF.",
         whatToDo: 'No action needed.',

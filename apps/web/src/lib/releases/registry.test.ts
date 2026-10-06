@@ -4963,8 +4963,24 @@ describe('the weekly digest and fixes release', () => {
       crons: Array<{ path: string; schedule: string }>;
     };
     expect(vercel.crons.find((c) => c.path === '/api/cron/weekly-digest')?.schedule).toBe('0 14 * * 1');
+    // Claims review (2026-10-06; was: "Monday morning in US time zones"):
+    // 14:00 UTC is already Tuesday on Guam and the Northern Marianas, so the
+    // places where it is Monday morning are named.
     expect(entry('weekly-digest-sent').howItAffectsYou).toContain(
-      'it is sent each Monday at 14:00 UTC, Monday morning in US time zones,',
+      'it is sent each Monday at 14:00 UTC, Monday morning in the mainland US, Alaska and Hawaii,',
+    );
+    // Claims review (2026-10-06): Send preview worked before #326, so only
+    // the WEEKLY digest was never sent.
+    expect(entry('weekly-digest-sent').whatChanged).toContain('so no weekly digest was ever sent.');
+    // Claims review (2026-10-06): owners, admins and managers read every
+    // warehouse whatever the Team page lists for them, so the scope line
+    // speaks of what a person can see, not where they work.
+    expect(entry('weekly-digest-your-view').howItAffectsYou).toContain('If you can see only some warehouses');
+    expect(entry('weekly-digest-your-view').howItAffectsYou).not.toContain('work in');
+    // Claims review (2026-10-06): the list printed the right day for a list
+    // over 800 orders, so the why says "could", as the what does.
+    expect(entry('po-list-expected-date').whyItMatters).toBe(
+      "The list could disagree with the purchase order's own page by a day.",
     );
     expect(entry('weekly-digest-sent').howItAffectsYou).toContain(
       'Its footer gives that day and time in your workspace time zone.',
