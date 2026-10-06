@@ -475,6 +475,16 @@ describe('returns copy', () => {
     }
   });
 
+  // RX-2 review fixes P18 and P27: the staff words under Get replacement
+  // ready (nothing prints) and the Add-a-replacement card's undo.
+  it('RX-2: Get replacement ready says what it does (nothing prints) and the undo reads as an action (review fixes P18, P27)', () => {
+    expect(RETURNS_COPY.getReplacementReadyHelp).toBe(
+      'Makes the pick slip, records the pick, makes the packing slips and stages it. Take the item from the rack shown first. Stops before the signature.',
+    );
+    expect(RETURNS_COPY.getReplacementReadyHelp).not.toMatch(/print/i);
+    expect(RETURNS_COPY.keepAsReturnOnly).toBe('Keep as return only');
+  });
+
   it('RX-2: words an early release the same on the web and the phone', () => {
     expect(releaseOutcomeLine({ changed: true })).toBe('Released for picking.');
     expect(releaseOutcomeLine({ changed: false, notNeeded: true })).toBe('The return was already received.');

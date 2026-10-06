@@ -64,6 +64,8 @@ export const RETURNS_COPY = {
   changeReplacement: 'Change replacement',
   declineExchange: 'Decline the exchange, return only',
   addReplacement: 'Add a replacement',
+  // Review fix P27: the Add-a-replacement card's undo (an action, not a status).
+  keepAsReturnOnly: 'Keep as return only',
   receive: 'Receive',
   processReturn: 'Process return',
   changeDestination: 'Change destination',
@@ -139,7 +141,10 @@ export const RETURNS_COPY = {
   closeAsReturnOnlyReasonLabel: 'Reason for keeping the return only (required)',
   closedAsReturnOnly: 'Kept as a return only.',
   cancelReturnReasonRequired: 'Reason (required: the exchange was approved)',
-  getReplacementReadyHelp: 'Prints the pick slip, picks, prints the packing slips and stages it. Stops before the signature.',
+  // Review fix P18: nothing prints; shown under the button (and as the
+  // phone's accessibility hint) before it draws stock and stages the order.
+  getReplacementReadyHelp:
+    'Makes the pick slip, records the pick, makes the packing slips and stages it. Take the item from the rack shown first. Stops before the signature.',
   changeOrCancelHere: 'Change or cancel this replacement from its RMA.',
   // RX-2 review fix P9: the replacement's requester, who cannot open the RMA.
   replacementChangeContactWarehouse: 'To change or cancel this replacement, contact the warehouse.',
