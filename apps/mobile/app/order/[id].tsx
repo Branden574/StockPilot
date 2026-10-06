@@ -1,4 +1,4 @@
-import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useNetworkState } from 'expo-network';
 import {
@@ -163,7 +163,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
-import { focusScrollY, orderScreenFocus, shouldOpenSignatureOnArrival } from '@/lib/order-focus';
+import { focusScrollY, initialSignArrival, orderScreenFocus, stepSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
@@ -2125,23 +2125,24 @@ export default function OrderDetail() {
   // screen with ?focus=sign. The paper signature opens once, through the same
   // departure confirm as its button, when the order has loaded, is ready to
   // hand over and this viewer may confirm it, online and idle; a reload or a
-  // cancelled prompt never opens it again.
-  const signOnArrival = React.useRef(false);
+  // cancelled prompt never opens it again. The request belongs to THIS screen
+  // while it is in front and to who tapped Hand over (review fix, simulator
+  // fault 2026-10-06): a screen left mounted under another one, or a session
+  // that changed, never opens it (stepSignatureOnArrival).
+  const screenInFront = useIsFocused();
+  const signArrival = React.useRef(initialSignArrival(userId));
   React.useEffect(() => {
-    if (
-      !shouldOpenSignatureOnArrival({
-        focus,
-        opened: signOnArrival.current,
-        loaded: loadedOrder !== null,
-        offered: managerActions.physicalSignature,
-        online: !offline,
-        busy: acting !== null,
-      })
-    ) {
-      return;
-    }
-    signOnArrival.current = true;
-    confirmDeparture('signature', promptPhysicalSignature);
+    const step = stepSignatureOnArrival(signArrival.current, {
+      focus,
+      focused: screenInFront,
+      loaded: loadedOrder !== null,
+      offered: managerActions.physicalSignature,
+      online: !offline,
+      busy: acting !== null,
+      userId,
+    });
+    signArrival.current = step.state;
+    if (step.open) confirmDeparture('signature', promptPhysicalSignature);
   });
 
   const pickerLabel =

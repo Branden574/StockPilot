@@ -392,12 +392,22 @@ describe('the order screen', () => {
   // Returns RX-2 review (counter taps): ?focus=sign opens the paper
   // signature once, as the tested helper decides (loaded, offered to this
   // viewer, online, idle), through the same departure confirm as the button.
-  it('opens the paper signature on arrival from Hand over, once (counter taps)', () => {
-    expect(screen).toContain('const signOnArrival = React.useRef(false);');
+  // Re-pinned by returns RX-2 review fix (simulator fault 2026-10-06; claim
+  // kept: once, through the departure confirm): the request belongs to the
+  // screen in front and to who tapped Hand over. The screen reads its own
+  // focus (useIsFocused) and the signed-in user, and steps the tested state
+  // machine (order-focus stepSignatureOnArrival) instead of a bare one-shot
+  // ref, which let a hidden order screen open the prompt over Home after
+  // another person signed in.
+  it('opens the paper signature on arrival from Hand over, once, only on the screen in front for who tapped it (counter taps)', () => {
+    expect(screen).toMatch(/import \{[^}]*\buseIsFocused\b[^}]*\} from 'expo-router';/);
+    expect(screen).toContain('const screenInFront = useIsFocused();');
+    expect(screen).toContain('const signArrival = React.useRef(initialSignArrival(userId));');
     expect(screen).toMatch(
-      /shouldOpenSignatureOnArrival\(\{\s*focus,\s*opened: signOnArrival\.current,\s*loaded: loadedOrder !== null,\s*offered: managerActions\.physicalSignature,\s*online: !offline,\s*busy: acting !== null,\s*\}\)/,
+      /stepSignatureOnArrival\(signArrival\.current, \{\s*focus,\s*focused: screenInFront,\s*loaded: loadedOrder !== null,\s*offered: managerActions\.physicalSignature,\s*online: !offline,\s*busy: acting !== null,\s*userId,\s*\}\)/,
     );
-    expect(screen).toMatch(/signOnArrival\.current = true;\s*confirmDeparture\('signature', promptPhysicalSignature\);/);
+    expect(screen).toMatch(/signArrival\.current = step\.state;\s*if \(step\.open\) confirmDeparture\('signature', promptPhysicalSignature\);/);
+    expect(screen).not.toContain('signOnArrival');
   });
 
   it('a replacement has no Add items, line edits or Cancel order (they live in its RMA)', () => {
