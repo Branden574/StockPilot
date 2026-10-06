@@ -9,6 +9,7 @@
  * Plain literals and pure functions only: importing this module runs nothing.
  */
 
+import { isOrderStatusKey, ORDER_STATUS_META } from '../customization/order-status';
 import { formatOrderNumber } from '../orders/order-number';
 
 // ── Headings and labels ─────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ export const RETURNS_COPY = {
   exchangeStatusHeading: 'EXCHANGE',
   returnStatusHeading: 'RETURN',
   replacementOrderHeading: 'Replacement order',
+  earlierReplacements: 'Earlier replacements',
   noReplacementYet: 'No replacement order yet. One is created when the exchange is approved.',
   // RX-2 review fix P4: an exchange that ended before any replacement.
   noReplacementDeclined: 'No replacement order: the exchange was declined.',
@@ -612,6 +614,75 @@ export function slipExchangeLine(returnNumber: string | null, returned: string |
   const state = received ? 'received' : 'not yet received';
   const item = returned ? `returned item: ${returned}, ${state}` : `returned item ${state}`;
   return `Exchange replacement for ${returnNumber ?? 'its RMA'} (${item})`;
+}
+
+const PICKED_REPLACEMENT_STATUSES: readonly string[] = [
+  'picking_complete',
+  'packing_slip_generated',
+  'staged_for_pickup',
+  'staged_for_delivery',
+  'in_transit',
+];
+
+/**
+ * One line of the replacement order block (web and phone; review fix P19):
+ * "Walk Exchange Tee - L ×1 · reserved 1"; once picked or staged nothing is
+ * reserved any more, so "· picked"; with part handed over "Walk Exchange Tee
+ * - XL ×2 · handed over 1 · reserved 0"; all of it handed over, the hand-over
+ * alone.
+ */
+export function replacementLineSummary(line: {
+  label: string;
+  requested: number;
+  fulfilled: number;
+  held: number;
+  /** The replacement order's status. */
+  status: string | null;
+}): string {
+  const parts = [itemQuantityLabel(line.label, line.requested)];
+  if (line.fulfilled > 0) parts.push(`handed over ${line.fulfilled}`);
+  if (line.requested - line.fulfilled > 0) {
+    parts.push(PICKED_REPLACEMENT_STATUSES.includes(line.status ?? '') ? 'picked' : `reserved ${line.held}`);
+  }
+  return parts.join(' · ');
+}
+
+/** An earlier replacement order of the RMA (cancelled by a change or a cancel). */
+export interface EarlierReplacement {
+  orderId: string;
+  orderNumber: number | null;
+  /** Its order status code. */
+  status: string;
+}
+
+/**
+ * Earlier replacements in the order status words (review fix P22, web and
+ * phone): the canonical label in lower case inside the brackets ("cancelled",
+ * "staged (pickup)"), an organization's own label as typed, and nothing for a
+ * status this version does not know (never the raw code). `orderLabel` is the
+ * SO number (the order id's first characters without one), for a link.
+ */
+export function earlierReplacementEntries(
+  history: readonly EarlierReplacement[],
+  opts: { statusLabels?: Partial<Record<string, string>> } = {},
+): Array<{ orderId: string; orderLabel: string; statusWords: string | null; text: string }> {
+  return history.map((h) => {
+    const orderLabel = formatOrderNumber(h.orderNumber) ?? h.orderId.slice(0, 8).toUpperCase();
+    const own = opts.statusLabels?.[h.status]?.trim();
+    const statusWords = own ? own : isOrderStatusKey(h.status) ? ORDER_STATUS_META[h.status].label.toLowerCase() : null;
+    return { orderId: h.orderId, orderLabel, statusWords, text: statusWords ? `${orderLabel} (${statusWords})` : orderLabel };
+  });
+}
+
+/** "Earlier replacements: SO-000012 (cancelled), SO-000015 (cancelled)", or null for none. */
+export function earlierReplacementsLine(
+  history: readonly EarlierReplacement[],
+  opts: { statusLabels?: Partial<Record<string, string>> } = {},
+): string | null {
+  if (history.length === 0) return null;
+  return `${RETURNS_COPY.earlierReplacements}: ${earlierReplacementEntries(history, opts)
+    .map((e) => e.text)
+    .join(', ')}`;
 }
 
 /** The prepare chain's pick hint: "Take Large ×1 from 12-B (3 on hand)". */

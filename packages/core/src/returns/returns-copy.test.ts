@@ -13,6 +13,8 @@ import {
   changeOrCancelInRmaLabel,
   collectReturnedItemLine,
   createdAsReplacementLabel,
+  earlierReplacementEntries,
+  earlierReplacementsLine,
   exchangeReplacementBanner,
   itemQuantityLabel,
   openRmaLabel,
@@ -25,6 +27,7 @@ import {
   replacementBannerViewerKind,
   replacementChangeOthersLine,
   replacementDriverLine,
+  replacementLineSummary,
   replacementRmaLinkLabel,
   replacementShortLine,
   type ReplacementBannerInput,
@@ -107,6 +110,9 @@ function allStrings(): string[] {
     replacementShortLine('Large', 0, 1),
     stillWaitingLine(15),
     replacementChangeOthersLine('RMA-20261005-ABC123'),
+    replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'backordered' }),
+    replacementLineSummary({ label: 'Walk Exchange Tee - L', requested: 1, fulfilled: 0, held: 0, status: 'staged_for_pickup' }),
+    earlierReplacementsLine([{ orderId: 'o1', orderNumber: 12, status: 'cancelled' }]) ?? '',
     cancelReturnReplacementSentence(12),
     cancelReturnReplacementSentence(null, { held: 0 }),
     ...Object.values(EXCHANGE_STATUS_STAFF_LABELS),
@@ -361,6 +367,55 @@ describe('returns copy', () => {
     expect(gate({ exchangeStatus: 'unavailable' })).toBe(notInStock);
     expect(gate({ exchangeStatus: 'waiting_for_return' })).toBe(reserved);
     expect(gate({ exchangeStatus: 'unavailable', held: 1 })).toBe(reserved);
+  });
+
+  // RX-2 review fix P19: a replacement line never reads "reserved 0" once it
+  // was picked (nothing is reserved after the pick) or part was handed over.
+  it('RX-2: the replacement line says picked, handed over or reserved (review fix P19)', () => {
+    const line = { label: 'Walk Exchange Tee - L', requested: 1, fulfilled: 0, held: 1 };
+    expect(replacementLineSummary({ ...line, status: 'approved' })).toBe('Walk Exchange Tee - L ×1 · reserved 1');
+    for (const status of ['picking_complete', 'packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'in_transit']) {
+      expect(replacementLineSummary({ ...line, held: 0, status }), status).toBe('Walk Exchange Tee - L ×1 · picked');
+    }
+    expect(
+      replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'backordered' }),
+    ).toBe('Walk Exchange Tee - XL ×2 · handed over 1 · reserved 0');
+    // Picked again after part was handed over.
+    expect(
+      replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'staged_for_pickup' }),
+    ).toBe('Walk Exchange Tee - XL ×2 · handed over 1 · picked');
+    // All of it handed over: nothing left to reserve or pick.
+    expect(replacementLineSummary({ ...line, fulfilled: 1, held: 0, status: 'completed' })).toBe('Walk Exchange Tee - L ×1 · handed over 1');
+    // Today's words otherwise.
+    expect(replacementLineSummary({ ...line, held: 0, status: 'approved' })).toBe('Walk Exchange Tee - L ×1 · reserved 0');
+    expect(replacementLineSummary({ ...line, status: 'pick_slip_generated' })).toBe('Walk Exchange Tee - L ×1 · reserved 1');
+  });
+
+  // RX-2 review fix P22: earlier replacements in the order status words (web
+  // and phone), never a raw status code.
+  it('RX-2: lists earlier replacements with their order status words (review fix P22)', () => {
+    const history = [
+      { orderId: 'aaaaaaaa-1111', orderNumber: 12, status: 'cancelled' },
+      { orderId: 'bbbbbbbb-2222', orderNumber: 15, status: 'cancelled' },
+    ];
+    expect(earlierReplacementsLine(history)).toBe('Earlier replacements: SO-000012 (cancelled), SO-000015 (cancelled)');
+    expect(earlierReplacementsLine([])).toBeNull();
+    expect(earlierReplacementEntries([{ orderId: 'cccccccc-3333', orderNumber: null, status: 'staged_for_pickup' }])).toEqual([
+      { orderId: 'cccccccc-3333', orderLabel: 'CCCCCCCC', statusWords: 'staged (pickup)', text: 'CCCCCCCC (staged (pickup))' },
+    ]);
+    const words = earlierReplacementEntries(
+      ['pick_slip_generated', 'picking_in_progress', 'staged_for_delivery', 'in_transit', 'completed', 'denied'].map((status, i) => ({
+        orderId: `o${i}`,
+        orderNumber: i + 1,
+        status,
+      })),
+    ).map((e) => e.statusWords);
+    expect(words).toEqual(['pick slip', 'picking', 'ready', 'in transit', 'delivered', 'denied']);
+    expect(words.join(' ')).not.toContain('_');
+    // An organization's own status words, as typed.
+    expect(earlierReplacementsLine(history.slice(0, 1), { statusLabels: { cancelled: 'Voided' } })).toBe('Earlier replacements: SO-000012 (Voided)');
+    // An unknown status: the order alone, never the raw code.
+    expect(earlierReplacementsLine([{ orderId: 'o9', orderNumber: 9, status: 'some_new_status' }])).toBe('Earlier replacements: SO-000009');
   });
 
   it('RX-2: words an early release the same on the web and the phone', () => {
