@@ -46,6 +46,27 @@ describe('the workbench', () => {
     expect(view).toMatch(/case 'open_replacement':\s*case 'hand_over':[\s\S]*?router\.push\(replacementOrderHref\(ex\.replacement\.orderId, a\) as Href\)/);
   });
 
+  // Simulator fault F-B (2026-10-06, sim-RX2/shots-fix iphone-P11-20/21): at
+  // AX5 on the iPhone the 72 pt photo beside each card's words left them so
+  // narrow that the REPLACEMENT card broke words mid-word ("Requested / :",
+  // "Warehous / e will review") and the RETURNING card cut its item's name.
+  // Past the AX threshold both cards put the photo above their words
+  // (shouldStackRow, the picker's and the orders card's rule), and an item's
+  // name is never capped (the app's policy since SIM-3).
+  it('stacks both cards past the AX threshold and never caps the returned item name (simulator fault F-B)', () => {
+    expect(view).toMatch(/import \{[^}]*\buseWindowDimensions\b[^}]*\} from 'react-native';/);
+    expect(view).toContain("import { shouldStackRow } from '@/lib/dynamic-type-layout';");
+    expect(view).toContain('const cardsStacked = shouldStackRow(fontScale);');
+    expect((view.match(/style=\{\{ flexDirection: cardsStacked \? 'column' : 'row', gap: 12 \}\}/g) ?? []).length).toBe(2);
+    // Stacked, the words take the card's whole width (the orders card's rule):
+    // no flex: 1 in a column, which could size them from nothing.
+    expect((view.match(/<View style=\{cardsStacked \? \{ gap: 4 \} : \{ flex: 1, minWidth: 0, gap: 4 \}\}>/g) ?? []).length).toBe(2);
+    // The element that shows the returned item's name carries no line cap.
+    const nameBodies = view.match(/<Body\b[^>]*>\s*\{name\}\s*<\/Body>/g) ?? [];
+    expect(nameBodies.length).toBe(1);
+    for (const b of nameBodies) expect(b).not.toContain('numberOfLines');
+  });
+
   it('shows the REPLACEMENT side beside the returning card (stacked when compact), with a text label', () => {
     expect(view).toContain("pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }");
     expect(view).toContain('<Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>');

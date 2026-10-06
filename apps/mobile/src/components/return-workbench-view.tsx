@@ -1,7 +1,17 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useRouter } from 'expo-router';
 import * as React from 'react';
-import { AccessibilityInfo, ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import {
   exchangeLineStatusLabel,
@@ -20,6 +30,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
 import {
   describeReturnError,
@@ -74,6 +85,11 @@ export function ReturnWorkbenchView({
   onChanged?: () => void;
 }) {
   const { c } = useTheme();
+  // Simulator fault F-B (2026-10-06): at AX5 on the iPhone the 72 pt photo
+  // beside each card's words broke them mid-word. Past the AX threshold both
+  // cards put the photo above their words (the orders card's rule).
+  const { fontScale } = useWindowDimensions();
+  const cardsStacked = shouldStackRow(fontScale);
   const router = useRouter();
   const offline = isOfflineState(useNetworkState());
   const [wb, setWb] = React.useState<MobileReturnWorkbench | null>(null);
@@ -410,7 +426,7 @@ export function ReturnWorkbenchView({
               <View key={l.id} style={compact ? { gap: 10 } : styles.pair}>
               <Card padding={14} style={compact ? undefined : styles.card}>
                 <View
-                  style={{ flexDirection: 'row', gap: 12 }}
+                  style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
                   accessible
                   accessibilityLabel={`${name}${sub ? `, ${sub}` : ''}, ${qtyReturningLabel(l.quantity)}, ${l.inboundState}`}
                 >
@@ -423,8 +439,9 @@ export function ReturnWorkbenchView({
                   ) : (
                     <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
                   )}
-                  <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                    <Body size={15} color={c.ink} numberOfLines={2} style={{ fontFamily: FONT.display }}>
+                  <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
+                    {/* An item's name is never capped (the app's policy). */}
+                    <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
                       {name}
                     </Body>
                     {sub ? (
@@ -446,13 +463,17 @@ export function ReturnWorkbenchView({
                 // returning card on the iPad; a text label and an arrow, never
                 // colour alone.
                 <Card padding={14} style={{ ...(compact ? {} : styles.card), borderLeftWidth: 4, borderLeftColor: c.ink }}>
-                  <View style={{ flexDirection: 'row', gap: 12 }} accessible accessibilityLabel={replacementCardLabel(name, x)}>
+                  <View
+                    style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
+                    accessible
+                    accessibilityLabel={replacementCardLabel(name, x)}
+                  >
                     {photo ? (
                       <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
                     ) : (
                       <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
                     )}
-                    <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                    <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
                       <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
                       {replacementSideLines(x).map((t) => (
                         <Body
