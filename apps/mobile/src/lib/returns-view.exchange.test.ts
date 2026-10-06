@@ -305,21 +305,34 @@ describe('the list and the order screen', () => {
       canOpenReturn: true,
       canReleaseEarly: true,
       slipLine: 's',
-      driverLine: 'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-1)',
+      driverLine: 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-1).',
     };
+    // Re-pinned by returns RX-2 review fix (core fb895ae8, review P9 + P10;
+    // the claim is kept: the banner's lines are core's rule, the web's too).
+    // While the gate holds nothing has left yet, so there is no driver line;
+    // and a reader who can open the RMA gets the RMA link itself, never the
+    // sentence beside it ("Change or cancel this replacement from its RMA.
+    // Change or cancel in RMA-1" read the same thing twice).
     expect(orderReplacementLines(info, 'delivery').map((l) => l.text)).toEqual([
       'Exchange replacement for RMA-1 · Original order SO-000103',
       'Replacement reserved. Waiting for returned item (RMA-1)',
-      'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-1)',
-      'Change or cancel this replacement from its RMA.',
+      'Change or cancel in RMA-1',
     ]);
+    // The driver's line is still there for a delivery released early whose
+    // returned item is not in yet.
+    expect(
+      orderReplacementLines({ ...info, waitingForReturn: false, releasedEarly: true, release: { byName: 'Dana', reason: null, at: null } }, 'delivery').map(
+        (l) => l.key,
+      ),
+    ).toEqual(['title', 'released', 'driver', 'rma_link']);
     expect(orderExchangeChip('rma-1', { replacementOrderId: 'o1', exchangeStatus: 'ready_to_pick' }, 'o1')).toBe('Exchange · Ready to pick');
     expect(orderExchangeChip('rma-1', { replacementOrderId: 'o2', exchangeStatus: 'ready_to_pick' }, 'o1')).toBe('Exchange');
     expect(orderExchangeChip(null, null, 'o1')).toBeNull();
     // Desk check F3: the RMA cancelled while this order is live: it says the
     // replacement is not picked, and the pick slip and Resume are blocked.
     const closed: MobileOrderReplacement = { ...info, waitingForReturn: false, returnClosed: true, returnStatus: 'cancelled' };
-    expect(orderReplacementLines(closed, 'pickup').map((l) => l.key)).toEqual(['title', 'closed', 'change']);
+    // Re-pinned by returns RX-2 review fix (core fb895ae8): the RMA link, as above.
+    expect(orderReplacementLines(closed, 'pickup').map((l) => l.key)).toEqual(['title', 'closed', 'rma_link']);
     expect(orderReplacementLines(closed, 'pickup')[1]!.text).toBe("RMA-1 was cancelled. This replacement isn't picked.");
     expect(replacementPickBlocked(closed)).toBe(true);
     expect(replacementPickBlocked(info)).toBe(true);
