@@ -16,6 +16,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
+import { formatCalendarDate } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { MintWash } from '@/components/ui/mint-wash';
 import { Pill } from '@/components/ui/pill';
@@ -223,9 +225,9 @@ function POCard({ po, onPress }: { po: OpenPo; onPress: () => void }) {
   const { c } = useTheme();
   const meta = statusForPo(po.status);
   const isPartial = po.status === 'partially_received';
-  const etaText = po.expected_at
-    ? new Date(po.expected_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : '—';
+  // A DAY stored as its UTC midnight: read in UTC, or every US zone shows the
+  // day before. A dash when there is none.
+  const etaText = formatCalendarDate(po.expected_at);
 
   return (
     <Pressable

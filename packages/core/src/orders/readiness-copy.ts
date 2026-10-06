@@ -12,6 +12,7 @@
  * readiness-copy.test.ts renders every sentence and checks those rules.
  */
 
+import { formatCalendarDate } from '../time/calendar-date';
 import { formatOrgDate, formatOrgTime, plainSpaces } from '../time/org-timezone';
 
 import {
@@ -58,9 +59,10 @@ function day(iso: string, tz?: string): string {
 /** A PO's expected date, "Oct 3". It is a CALENDAR DATE stored as midnight
  *  UTC of the day typed (the PO form's <input type="date">), so it is read in
  *  UTC: in the org's zone it would print the day before west of UTC (the PO
- *  PDF's rule, lib/pdf/po.tsx). */
+ *  PDF's rule, lib/pdf/po.tsx). The phone's PO screens and the web PO list
+ *  print it through the same helper. */
 function poDay(iso: string): string {
-  return day(iso, 'UTC');
+  return formatCalendarDate(iso);
 }
 
 /** "2:14 PM" in the org's zone. */

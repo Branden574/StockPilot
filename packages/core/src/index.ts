@@ -97,6 +97,7 @@ export * from './orders/order-line-item-name';
 export * from './orders/order-cancel';
 export * from './rentals/borrower';
 export * from './rentals/emails';
+export * from './time/calendar-date';
 export * from './time/org-timezone';
 export * from './time/zoned-wall-clock';
 export * from './b2b/pricing-mode';

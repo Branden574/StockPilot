@@ -43,6 +43,8 @@ import {
   type PoTab,
 } from '@/lib/purchase-orders/tabs';
 
+import { formatCalendarDate } from '@stockpilot/core';
+
 export const metadata = { title: 'Purchase orders' };
 
 /**
@@ -233,7 +235,7 @@ export default async function PurchaseOrdersPage({
           value={stats.inboundCount}
           foot={
             stats.nextEtaPoNumber
-              ? `${stats.nextEtaPoNumber} · ETA ${formatDateShort(stats.nextEtaExpectedAt)}`
+              ? `${stats.nextEtaPoNumber} · ETA ${formatCalendarDate(stats.nextEtaExpectedAt)}`
               : stats.inboundCount > 0
                 ? 'No ETA scheduled'
                 : 'Nothing inbound'
@@ -367,7 +369,9 @@ export default async function PurchaseOrdersPage({
                         {formatDateShort(placed)}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm tabular-nums">
-                        {formatDateShort(po.expected_at)}
+                        {/* A DAY stored as its UTC midnight: read in UTC, not
+                            in the server's zone (the day before west of UTC). */}
+                        {formatCalendarDate(po.expected_at)}
                       </TableCell>
                       <TableCell className="text-right text-sm tabular-nums">
                         {po.line_count}
