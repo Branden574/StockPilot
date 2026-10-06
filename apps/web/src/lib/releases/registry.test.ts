@@ -5006,6 +5006,17 @@ describe('the weekly digest and fixes release', () => {
     expect(entry('make-recurring-works').howItAffectsYou).toContain(
       'Each line names its item, rental and archived items included.',
     );
+    // #334 (claims review, 2026-10-06): a destination the recurring form
+    // cannot offer (a staging area, a deleted location) opens as none, with a
+    // note, never a hidden destination the save would keep.
+    const recurringPage = readFileSync(
+      resolve(__dirname, '../../app/(dashboard)/dashboard/purchase-orders/recurring/page.tsx'),
+      'utf8',
+    );
+    expect(recurringPage).toContain('sitesOnly: true');
+    expect(entry('make-recurring-works').howItAffectsYou).toContain(
+      'such as a staging area or a deleted location, the new one opens with no destination and a note saying where the purchase order went, so you choose one.',
+    );
     // The mobile app's purchase order screens still print the day in the
     // phone's zone, so the Expected date is the web's.
     expect(entry('po-list-expected-date').title).toContain('on the web');

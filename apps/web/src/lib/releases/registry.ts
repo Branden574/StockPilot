@@ -362,9 +362,11 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
       },
       {
-        // Needs all three live: the seed read (#326), the hand-off that opens
+        // Needs all four live: the seed read (#326), the hand-off that opens
         // the form filled in (#331; the form never opened before it, since
-        // 2026-06-18) and the labels of lines the picker does not list (#332).
+        // 2026-06-18), the labels of lines the picker does not list (#332) and
+        // the destination it cannot offer (#334: a staging area or a deleted
+        // location opens as no destination with a note, never a hidden one).
         // Not "again": the seed read failed from its first commit, so Make
         // recurring never worked. The name is left blank and is required, so
         // the words say name, review and save.
@@ -376,7 +378,7 @@ export const RELEASES: Release[] = [
           "Make recurring on a purchase order failed with an error. It now opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
         whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
         howItAffectsYou:
-          'On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Each line names its item, rental and archived items included. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many.',
+          "On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Each line names its item, rental and archived items included. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many. If the purchase order went somewhere this form can't offer, such as a staging area or a deleted location, the new one opens with no destination and a note saying where the purchase order went, so you choose one.",
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
       },
