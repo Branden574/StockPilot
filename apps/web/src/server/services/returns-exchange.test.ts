@@ -232,6 +232,46 @@ describe('approve with an exchange (approve_return + the 0396 hook)', () => {
     expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'exchange_approved_short' }));
   });
 
+  // RX-2 review fix P28: the requester asked for a return only and staff
+  // added the replacement at approval: never "Your exchange was approved".
+  it('a requester return whose every exchange line staff added hears "The warehouse added a replacement for you"', async () => {
+    const staffLines = {
+      'return_exchange_lines.select': {
+        data: [{ return_line_id: RLINE_ID, approved_item_id: ITEM_L, approved_quantity: 1, requested_by_kind: 'staff' }],
+        error: null,
+      },
+    };
+    const reserved = svcFor({
+      ...staffLines,
+      'rpc:approve_return': { data: { changed: true, replay: false, revision: 1, status: 'approved', replacement: SUMMARY }, error: null },
+    });
+    await reserved.svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION });
+    expect(notifyRequester).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'return_approved_replacement_added', linkOrderId: REPL_ID, channel: 'staff' }),
+    );
+    vi.clearAllMocks();
+    const short = svcFor({
+      ...staffLines,
+      'rpc:approve_return': {
+        data: { changed: true, replay: false, revision: 1, status: 'approved', replacement: { ...SUMMARY, short: true } },
+        error: null,
+      },
+    });
+    await short.svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION });
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'return_approved_replacement_added_short' }));
+    vi.clearAllMocks();
+    // The requester's own exchange request keeps the exchange words.
+    const own = svcFor({
+      'return_exchange_lines.select': {
+        data: [{ return_line_id: RLINE_ID, approved_item_id: ITEM_L, approved_quantity: 1, requested_by_kind: 'requester' }],
+        error: null,
+      },
+      'rpc:approve_return': { data: { changed: true, replay: false, revision: 1, status: 'approved', replacement: SUMMARY }, error: null },
+    });
+    await own.svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION });
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'exchange_approved' }));
+  });
+
   it('a replay (changed false) writes and sends nothing', async () => {
     const { svc } = svcFor({
       'rpc:approve_return': {

@@ -930,15 +930,24 @@ export class RMAService {
         });
         await this.recordReplacementIssued(id, facts, result.replacement, result.revision);
       }
+      // Review fix P28: a return the requester asked for, whose every
+      // exchange line staff added at approval, is not "your exchange": the
+      // warehouse added a replacement for them.
+      const staffAdded =
+        result.replacement !== null && facts.source === 'requester' && (await this.everyExchangeLineAddedByStaff(id));
       await notifyRequesterReturnEvent({
         organizationId: this.ctx.organizationId,
         returnId: id,
         returnNumber: facts.returnNumber,
         orderId: facts.orderRequestId,
         event: result.replacement
-          ? result.replacement.short
-            ? 'exchange_approved_short'
-            : 'exchange_approved'
+          ? staffAdded
+            ? result.replacement.short
+              ? 'return_approved_replacement_added_short'
+              : 'return_approved_replacement_added'
+            : result.replacement.short
+              ? 'exchange_approved_short'
+              : 'exchange_approved'
           : 'approved',
         source: facts.source,
         channel,
@@ -946,6 +955,23 @@ export class RMAService {
       });
     }
     return result;
+  }
+
+  /** Every exchange line of the RMA was added by staff (none asked for by the
+   *  requester). False when unread: the exchange words are the fallback. */
+  private async everyExchangeLineAddedByStaff(id: string): Promise<boolean> {
+    try {
+      const { data, error } = await this.ctx.supabase
+        .from('return_exchange_lines')
+        .select('requested_by_kind')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('return_id', id);
+      if (error) return false;
+      const rows = (data as Array<{ requested_by_kind?: string | null }> | null) ?? [];
+      return rows.length > 0 && rows.every((r) => r.requested_by_kind === 'staff');
+    } catch {
+      return false;
+    }
   }
 
   /** requested → denied with a reason (1 to 1,000 characters). */
