@@ -67,7 +67,7 @@ describe('the replacement refusals are mapped by hint (plan 3.6.9)', () => {
     });
   });
 
-  it('cancel by the requester is refused before the call, in the same words', async () => {
+  it('cancel by the requester is refused before the call, in the requester\'s words', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
         data: { status: 'approved', requester_user_id: 'req-1', replacement_for_return_id: RMA },
@@ -75,8 +75,21 @@ describe('the replacement refusals are mapped by hint (plan 3.6.9)', () => {
       },
     });
     const requester = svc(stub, { role: 'staff', userId: 'req-1', permissions: new Set(['orders:request']) });
-    await expect(requester.cancel(ORDER)).rejects.toMatchObject({ details: { reason: 'replacement_cancel_via_return' } });
+    // Re-pinned by returns RX-2 review fix (P9), claim kept (refused before
+    // the call, the same reason key): the requester cannot open the RMA, so
+    // the words say who to ask.
+    await expect(requester.cancel(ORDER)).rejects.toMatchObject({
+      code: 'forbidden',
+      message: 'To change or cancel this replacement, contact the warehouse.',
+      details: { reason: 'replacement_cancel_via_return' },
+    });
     expect(stub.rpcCalls).toEqual([]);
+    // Someone who is not the requester, or a requester who can open the RMA,
+    // reads where it is changed.
+    const other = svc(stub, { role: 'staff', userId: 'someone-else', permissions: new Set(['orders:request']) });
+    await expect(other.cancel(ORDER)).rejects.toMatchObject({ message: 'Change or cancel this replacement from its RMA.' });
+    const reader = svc(stub, { role: 'staff', userId: 'req-1', permissions: new Set(['orders:request', 'returns:read']) });
+    await expect(reader.cancel(ORDER)).rejects.toMatchObject({ message: 'Change or cancel this replacement from its RMA.' });
   });
 
   it('resumeFulfillment of a gated backordered replacement says it waits', async () => {

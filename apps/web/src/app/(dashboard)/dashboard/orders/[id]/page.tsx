@@ -1247,7 +1247,7 @@ export default async function OrderDetailPage({
         </div>
       </div>
 
-      <ReplacementBanner replacement={replacement} fulfillmentType={request.fulfillment_type} />
+      <ReplacementBanner replacement={replacement} fulfillmentType={request.fulfillment_type} isRequester={isOwnRequest} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">

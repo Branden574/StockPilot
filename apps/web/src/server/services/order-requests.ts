@@ -2885,10 +2885,19 @@ export class OrderRequestsService {
       if (rowErr) throw new ServiceError('internal_error', rowErr.message);
       // Returns RX-2: an exchange replacement is cancelled only through its
       // RMA (0396's cancel guard refuses everyone else, the requester too).
+      // The requester who cannot open the RMA is told who to ask (review fix
+      // P9, core's banner rule); anyone else reads where it is changed.
       if (row && (row as { replacement_for_return_id?: string | null }).replacement_for_return_id) {
-        throw new ServiceError('forbidden', RETURN_ERROR_WORDS.replacementCancelViaReturn, {
-          reason: 'replacement_cancel_via_return',
-        });
+        const canOpenRma =
+          this.ctx.enabledModules.has('returns') && (can(this.ctx, 'returns:read') || can(this.ctx, 'returns:manage'));
+        const isRequester = (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId;
+        throw new ServiceError(
+          'forbidden',
+          isRequester && !canOpenRma
+            ? RETURN_ERROR_WORDS.replacementCancelViaReturnRequester
+            : RETURN_ERROR_WORDS.replacementCancelViaReturn,
+          { reason: 'replacement_cancel_via_return' },
+        );
       }
       if (
         row &&

@@ -35,7 +35,8 @@ const INFO = {
   canOpenReturn: true,
   canReleaseEarly: true,
   slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: Walk New Hire Shirt, M ×1, not yet received)',
-  driverLine: 'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+  // Re-pinned by returns RX-2 review fix (P10): core's driver words.
+  driverLine: 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123).',
 };
 
 describe('ReplacementBanner', () => {
@@ -47,9 +48,44 @@ describe('ReplacementBanner', () => {
     expect(screen.getAllByRole('link', { name: 'RMA-20261005-ABC123' })[0]).toHaveAttribute('href', '/dashboard/returns/rma-1');
     expect(screen.getByRole('link', { name: 'SO-000103' })).toHaveAttribute('href', '/dashboard/orders/orig');
     expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Change or cancel in RMA-20261005-ABC123' })).toBeInTheDocument();
+    // Re-pinned by returns RX-2 review fix (P9), claim kept: someone who can
+    // open the RMA gets its link, and only the link (no separate sentence
+    // saying the same).
+    expect(screen.getByRole('link', { name: 'Change or cancel in RMA-20261005-ABC123' })).toHaveAttribute('href', '/dashboard/returns/rma-1');
+    expect(screen.queryByText('Change or cancel this replacement from its RMA.')).toBeNull();
     // A pickup has no driver line.
-    expect(screen.queryByText(/Collect the returned item/)).toBeNull();
+    expect(screen.queryByText(/the driver collects/)).toBeNull();
+  });
+
+  // RX-2 review fix P9: each reader is told what THEY can do about it.
+  it('the requester is told to contact the warehouse; anyone else who can change it, never a dead sentence', () => {
+    const { unmount } = render(<ReplacementBanner replacement={{ ...INFO, canOpenReturn: false }} fulfillmentType="pickup" isRequester />);
+    expect(screen.getByText('To change or cancel this replacement, contact the warehouse.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Change or cancel/ })).toBeNull();
+    unmount();
+    render(<ReplacementBanner replacement={{ ...INFO, canOpenReturn: false }} fulfillmentType="pickup" />);
+    expect(screen.getByText('Only someone who manages returns can change or cancel this replacement (RMA-20261005-ABC123).')).toBeInTheDocument();
+    expect(screen.queryByText('Change or cancel this replacement from its RMA.')).toBeNull();
+  });
+
+  // RX-2 review fix P10: the driver line is for staff and drivers, never an
+  // instruction to the requester, and never while the gate still holds.
+  it('the driver line: an early-released delivery not yet returned, for staff only', () => {
+    const released = {
+      ...INFO,
+      waitingForReturn: false,
+      releasedEarly: true,
+      release: { byName: 'Dana', reason: 'Swap at delivery: the driver collects the returned item.', at: 't' },
+    };
+    const words = 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123).';
+    const { unmount } = render(<ReplacementBanner replacement={{ ...released, canOpenReturn: false }} fulfillmentType="delivery" isRequester />);
+    expect(screen.queryByText(words)).toBeNull();
+    unmount();
+    const gated = render(<ReplacementBanner replacement={INFO} fulfillmentType="delivery" />);
+    expect(screen.queryByText(words)).toBeNull();
+    gated.unmount();
+    render(<ReplacementBanner replacement={released} fulfillmentType="delivery" />);
+    expect(screen.getByText(words)).toBeInTheDocument();
   });
 
   it('released early: who and why; a delivery swap names what the driver collects', () => {
@@ -66,7 +102,7 @@ describe('ReplacementBanner', () => {
     );
     expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
     expect(screen.getByText('Released before the return by Dana: Swap at delivery: the driver collects the returned item.')).toBeInTheDocument();
-    expect(screen.getByText('Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)')).toBeInTheDocument();
+    expect(screen.getByText('On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123).')).toBeInTheDocument();
   });
 
   // Desk check F3: the RMA was cancelled while this order is still live.
@@ -111,7 +147,7 @@ describe('ReplacementBanner', () => {
     expect(screen.queryByTestId('replacement-return-closed')).toBeNull();
     expect(screen.queryByText(/isn't picked/)).toBeNull();
     expect(screen.queryByText(/Waiting for returned item/)).toBeNull();
-    expect(screen.queryByText(/Collect the returned item/)).toBeNull();
+    expect(screen.queryByText(/the driver collects the returned item: /)).toBeNull();
     expect(screen.queryByText(/Change or cancel/)).toBeNull();
     // The RMA is still one click away from the title.
     expect(screen.getByRole('link', { name: 'RMA-20261005-ABC123' })).toHaveAttribute('href', '/dashboard/returns/rma-1');
