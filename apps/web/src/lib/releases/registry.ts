@@ -28,60 +28,6 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'items-list-first-paint-2026-10',
-    revision: 1,
-    // Items first paint (owner bug 2026-10-05, branch fix/items-first-paint).
-    // Held as a DRAFT until the web deploy is live and the browser walk shows
-    // the first page staying as it loads; the follow-up that publishes it sets
-    // the real publishedAt and re-reads these words against what shipped. Web
-    // only: the mobile app's Items list reads the whole filtered set before it
-    // pages (inventory-paging.ts), so it has no second paint to differ from.
-    // At the top (newest first), dated after the weekly digest and small fixes
-    // drafts.
-    //
-    // Who saw the reshuffle: owners, admins and managers on the default Items
-    // view, the only view that streams the whole list behind its first page.
-    // Who is told: everyone who can open the Items page (items:read, with the
-    // Items module), as the page checks; the second entry (Active after
-    // Auto-archived only) reaches every reader of the list, staff included.
-    // The words claim no timing nobody measured and name no organization's
-    // numbers.
-    status: 'draft',
-    title: 'The Items list no longer reshuffles a moment after it loads',
-    summary:
-      'On the web, the first page of the Items list now opens with the rows, page count and totals it keeps, instead of redrawing a moment later. Nothing was ever missing: the rows that seemed to disappear had moved to the next page. Choosing Active after Auto-archived only now shows your active items.',
-    publishedAt: '2026-10-14T17:10:00Z',
-    audience: { anyPermission: ['items:read'], modules: ['inventory'] },
-    entries: [
-      {
-        id: 'items-list-first-paint',
-        category: 'fixed',
-        area: 'Items',
-        title: 'The Items list no longer reshuffles a moment after it loads',
-        whatChanged:
-          'On the web, the first page of the Items list now opens the way it stays: the same rows in the same order, the same page count and the same totals. It used to open with one page and redraw it a moment later: a size run or a group of items sharing a SKU gained its other members, some rows moved to page 2, and the totals changed from items to SKUs and rows.',
-        whyItMatters:
-          'Rows seemed to disappear. Nothing was ever missing: the list keeps every member of a size run, and every item sharing a SKU, together on one page, and the rows that moved were on the next page.',
-        howItAffectsYou:
-          'The first page you see is the page you work with, with each size run and SKU whole. If the rest of the list cannot load, the bottom of the list says Refresh to see more instead of offering pages that would skip or repeat rows.',
-        whatToDo: 'No action needed.',
-      },
-      {
-        id: 'items-active-after-auto-archived',
-        category: 'fixed',
-        area: 'Items',
-        title: 'Active shows your items after Auto-archived only',
-        whatChanged:
-          'On the web, choosing Active while Archived has Auto-archived only switched on now opens your active items, on Items and on Books. When Auto-archived only finds nothing, the list says No items match your filters and keeps Auto-archived only on screen, so you can switch it off.',
-        whyItMatters:
-          'Active kept the Auto-archived only filter, and no active item is auto-archived, so the list came up empty, sometimes after showing its first page for a moment. After a refresh, an Auto-archived only view with nothing in it said No items yet, or No books yet.',
-        howItAffectsYou:
-          'Active opens your active items. A search or another filter you had set stays applied.',
-        whatToDo: 'No action needed.',
-      },
-    ],
-  },
-  {
     id: 'weekly-digest-and-fixes-2026-10',
     revision: 1,
     // The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, no
@@ -375,6 +321,76 @@ export const RELEASES: Release[] = [
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'items-list-first-paint-2026-10',
+    revision: 1,
+    // Items first paint (owner bug 2026-10-05, #328) and the dashboard's open
+    // purchase order count for a picked warehouse (fix/dashboard-open-po-count).
+    // PUBLISHED: #328 went live at 21:39Z on 2026-10-05 and the production
+    // check in Demo Co showed every hard refresh painting one state (5 of 5
+    // loads, audit CONFIRMED); the dashboard fix ships in the same pull request
+    // as this publication. Web only: the mobile app's Items list reads the
+    // whole filtered set before it pages (inventory-paging.ts), and the phone
+    // has no Shift Command card, so there is no phone update to wait for.
+    // Below the drafts, above the newest published release (newest first).
+    //
+    // Who is told, per entry, as each page checks it: the Items entries to
+    // whoever can open the Items page (items:read, with the Items module); the
+    // dashboard entry to whoever can open the purchase orders it links
+    // (purchase_orders:read, with the Purchase orders module). No
+    // release-level audience, so a reader sees the release only when an entry
+    // is theirs. The words claim no timing nobody measured and name no
+    // organization's numbers.
+    status: 'published',
+    title: "The Items list no longer reshuffles as it loads, and the dashboard counts a warehouse's purchase orders",
+    summary:
+      'On the web, the first page of the Items list now opens with the rows, page count and totals it keeps, instead of redrawing a moment later. Nothing was ever missing: the rows that seemed to disappear had moved to the next page. Choosing Active after Auto-archived only now shows your active items, and with a warehouse picked, the dashboard counts its open purchase orders.',
+    publishedAt: '2026-10-06T01:46:00Z',
+    entries: [
+      {
+        id: 'items-list-first-paint',
+        category: 'fixed',
+        area: 'Items',
+        title: 'The Items list no longer reshuffles a moment after it loads',
+        whatChanged:
+          'On the web, the first page of the Items list now opens the way it stays: the same rows in the same order, the same page count and the same totals. It used to open with one page and redraw it a moment later: a size run or a group of items sharing a SKU gained its other members, some rows moved to page 2, and the totals changed from items to SKUs and rows.',
+        whyItMatters:
+          'Rows seemed to disappear. Nothing was ever missing: the list keeps every member of a size run, and every item sharing a SKU, together on one page, and the rows that moved were on the next page.',
+        howItAffectsYou:
+          'The first page you see is the page you work with, with each size run and SKU whole. If the rest of the list cannot load, the bottom of the list says Refresh to see more instead of offering pages that would skip or repeat rows.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'], modules: ['inventory'] },
+      },
+      {
+        id: 'items-active-after-auto-archived',
+        category: 'fixed',
+        area: 'Items',
+        title: 'Active shows your items after Auto-archived only',
+        whatChanged:
+          'On the web, choosing Active while Archived has Auto-archived only switched on now opens your active items, on Items and on Books. When Auto-archived only finds nothing, the list says No items match your filters and keeps Auto-archived only on screen, so you can switch it off.',
+        whyItMatters:
+          'Active kept the Auto-archived only filter, and no active item is auto-archived, so the list came up empty, sometimes after showing its first page for a moment. After a refresh, an Auto-archived only view with nothing in it said No items yet, or No books yet.',
+        howItAffectsYou:
+          'Active opens your active items. A search or another filter you had set stays applied.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'], modules: ['inventory'] },
+      },
+      {
+        id: 'dashboard-open-po-count-warehouse',
+        category: 'fixed',
+        area: 'Dashboard',
+        title: 'The dashboard counts open purchase orders for the warehouse you pick',
+        whatChanged:
+          'On the web, with a warehouse picked at the top of the page, Open purchase orders on the dashboard now shows how many purchase orders going to that warehouse are expected, ordered or partly received.',
+        whyItMatters:
+          'With a warehouse picked, the count did not load, so Open purchase orders showed no number, as if none were open.',
+        howItAffectsYou:
+          'With all warehouses, the number is the same as before. With one warehouse picked, it counts the purchase orders going to a location in that warehouse.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
       },
     ],
   },
