@@ -55,6 +55,19 @@ describe("a purchase order's expected date on the phone", () => {
     expect(screen).not.toMatch(/new Date\(po\.expected_at\)\.toLocale/);
   });
 
+  // Seen in the 2026-10-06 simulator walk: a purchase order whose status is
+  // expected_inbound showed its raw key, EXPECTED_INBOUND, on this screen
+  // only (Receive POs says EXPECTED, the web Expected). Mutation caught: the
+  // entry dropped, so the key prints again.
+  it('the Purchase orders screen labels an expected purchase order EXPECTED, as Receive POs does', () => {
+    const screen = read('src/screens/purchase-orders.tsx');
+    expect(screen).toContain("expected_inbound: { label: 'EXPECTED', status: 'default' },");
+    const receive = read('app/(drawer)/(tabs)/receive.tsx');
+    expect(receive).toContain(
+      "if (s === 'expected_inbound') return { label: 'EXPECTED', status: 'default' };",
+    );
+  });
+
   // The sweep: no phone source prints an expected date through a zone, the
   // device's (toLocale*) or the organization's (formatOrgDate and friends).
   // On main it found the two screens above.

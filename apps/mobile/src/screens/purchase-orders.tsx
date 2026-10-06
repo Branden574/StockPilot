@@ -28,6 +28,9 @@ interface PORow {
 
 const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
   draft: { label: 'DRAFT', status: 'default' },
+  // Receive POs says EXPECTED and the web Expected; without this entry the
+  // card printed the raw key, EXPECTED_INBOUND.
+  expected_inbound: { label: 'EXPECTED', status: 'default' },
   ordered: { label: 'ORDERED', status: 'default' },
   partially_received: { label: 'PARTIAL', status: 'warn' },
   received: { label: 'RECEIVED', status: 'ok' },

@@ -48,7 +48,10 @@ export const RELEASES: Release[] = [
     // day in the server's zone, which on Vercel (UTC) is the day that was set,
     // so production already showed the right day; they now read it in UTC in
     // any zone. The order readiness lines read it in UTC already (now through
-    // the same helper, core's formatCalendarDate).
+    // the same helper, core's formatCalendarDate). Also left out: the phone
+    // Purchase orders screen now labels a purchase order whose status is
+    // expected_inbound EXPECTED (it printed the raw key); no purchase order in
+    // production has that status (2026-10-06).
     //
     // Who is told: each phone line, whoever the phone shows that screen to
     // (Purchase orders: purchase_orders:read with Purchase orders on; Receive
