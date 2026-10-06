@@ -287,6 +287,10 @@ describe('a requested exchange', () => {
     const plain = { kind: 'return', status: 'none', lines: [], rail: [] };
     const { unmount } = render(<ReturnWorkbench workbench={bench('requested', plain)} />);
     expect(screen.getByRole('button', { name: 'Add a replacement' })).toBeInTheDocument();
+    // RX-2 review fix P27: the card's undo reads as the action it is.
+    fireEvent.click(screen.getByRole('button', { name: 'Add a replacement' }));
+    expect(screen.getByRole('button', { name: 'Keep as return only' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Return only' })).toBeNull();
     unmount();
     render(<ReturnWorkbench workbench={bench('requested', { ...plain, createEnabled: false })} />);
     expect(screen.queryByRole('button', { name: 'Add a replacement' })).toBeNull();
@@ -536,6 +540,18 @@ describe('an approved exchange waiting for the returned item', () => {
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Cancel replacement' })).toBeDisabled();
+  });
+
+  // RX-2 review fix P18: "Get replacement ready" draws stock and stages the
+  // order, so what it does is said under the button first (nothing prints).
+  it('Get replacement ready says what it does under the button, and the button points at it', () => {
+    render(<ReturnWorkbench workbench={bench('received', { ...WAITING, status: 'ready_to_pick' })} />);
+    const button = screen.getByRole('button', { name: 'Get replacement ready' });
+    const help = screen.getByText(
+      'Makes the pick slip, records the pick, makes the packing slips and stages it. Take the item from the rack shown first. Stops before the signature.',
+    );
+    expect(button).toHaveAttribute('aria-describedby', help.id);
+    expect(help.id).not.toBe('');
   });
 
   // RX-2 review fix P2: one set of words for what happens to the replacement

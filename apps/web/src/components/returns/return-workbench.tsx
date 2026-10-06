@@ -644,6 +644,11 @@ export function ReturnWorkbench({
     ((a === 'approve' || a === 'approve_and_receive') && exchangeProblems.length > 0);
   const secondaryDisabled = (a: ReturnAction): boolean =>
     busy !== null || (a === 'change_destination' && wb.destinationsUnavailable);
+  // Review fix P18: "Get replacement ready" draws stock and stages the order,
+  // so what it does is said under it first (nothing prints).
+  const readyHelpId = React.useId();
+  const offersReady = actions.primary === 'get_replacement_ready' || actions.secondary.includes('get_replacement_ready');
+  const describedBy = (a: ReturnAction): string | undefined => (a === 'get_replacement_ready' ? readyHelpId : undefined);
 
   return (
     <div className="space-y-6">
@@ -674,16 +679,32 @@ export function ReturnWorkbench({
       {/* Next-step bar */}
       <section className="bg-card flex flex-wrap items-center gap-2 rounded-xl border p-3" aria-label="Next step">
         {actions.primary ? (
-          <Button variant="gradient" onClick={() => onAction(actions.primary!)} disabled={primaryDisabled(actions.primary)}>
+          <Button
+            variant="gradient"
+            onClick={() => onAction(actions.primary!)}
+            disabled={primaryDisabled(actions.primary)}
+            aria-describedby={describedBy(actions.primary)}
+          >
             {busy && busy === stepKey(actions.primary) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {primaryLabel(actions.primary)}
           </Button>
         ) : null}
         {actions.secondary.map((a) => (
-          <Button key={a} variant={a === 'deny' ? 'destructive' : 'outline'} onClick={() => onAction(a)} disabled={secondaryDisabled(a)}>
+          <Button
+            key={a}
+            variant={a === 'deny' ? 'destructive' : 'outline'}
+            onClick={() => onAction(a)}
+            disabled={secondaryDisabled(a)}
+            aria-describedby={describedBy(a)}
+          >
             {a === 'change_destination' && mode === 'change_destination' ? 'Keep destination' : RETURN_ACTION_LABELS[a]}
           </Button>
         ))}
+        {offersReady ? (
+          <p id={readyHelpId} className="text-muted-foreground basis-full text-xs">
+            {RETURNS_COPY.getReplacementReadyHelp}
+          </p>
+        ) : null}
         {r.status === 'requested' && wb.viewer.canManageReturns ? (
           <label className="ml-auto inline-flex items-center gap-2 text-sm">
             <input

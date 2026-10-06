@@ -321,8 +321,9 @@ export function AddReplacement({
       <div className="flex items-center gap-1.5 text-xs font-medium">
         <ArrowRight className="h-3.5 w-3.5" aria-hidden />
         <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
+        {/* Review fix P27: the undo reads as the action it is. */}
         <Button variant="ghost" size="sm" className="ml-auto" onClick={() => onChange(null)} disabled={disabled}>
-          {RETURNS_COPY.returnOnly}
+          {RETURNS_COPY.keepAsReturnOnly}
         </Button>
       </div>
       <ReplacementPicker
