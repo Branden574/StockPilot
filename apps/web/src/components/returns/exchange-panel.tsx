@@ -28,6 +28,7 @@ import {
   availableLabel,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
+  exchangeReviewOptions,
   exchangeReviewProblem,
   formatOrderNumber,
   noReplacementLine,
@@ -133,15 +134,18 @@ export function ReplacementSide({
   onReview,
   load,
   disabled,
+  canApproveOrders = true,
 }: {
   line: ReturnWorkbenchExchangeLine;
   returnedLabel: string;
   returnedQty: number;
-  /** Present while the RMA is requested and the viewer may approve. */
+  /** Present while the RMA is requested and the viewer may manage returns. */
   review?: ExchangeReviewState;
   onReview?: (next: ExchangeReviewState) => void;
   load: CandidateLoader;
   disabled?: boolean;
+  /** Review fix P1: without order approval only the decline is open (core exchangeReviewOptions). */
+  canApproveOrders?: boolean;
 }) {
   const groupId = React.useId();
   const requested = line.requestedItem;
@@ -198,17 +202,12 @@ export function ReplacementSide({
         <fieldset disabled={disabled} className="space-y-2">
           <legend className="sr-only">Decision for the replacement of {returnedLabel}</legend>
           <div role="radiogroup" aria-label={`Decision for the replacement of ${returnedLabel}`} className="space-y-1.5">
-            {(
-              [
-                ['as_requested', RETURNS_COPY.approveAsRequested],
-                ['change', RETURNS_COPY.changeReplacementEllipsis],
-                ['decline', RETURNS_COPY.declineExchange],
-              ] as const
-            ).map(([kind, words]) => (
+            {exchangeReviewOptions(line, { canApproveOrders }).map(({ kind, label: words, disabled: off }) => (
               <label
                 key={kind}
                 className={cn(
-                  'flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
+                  'flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
+                  off ? 'text-muted-foreground cursor-not-allowed' : 'cursor-pointer',
                   review.kind === kind ? 'border-foreground bg-muted' : 'border-border',
                 )}
               >
@@ -217,7 +216,7 @@ export function ReplacementSide({
                   name={`${groupId}-decision`}
                   value={kind}
                   checked={review.kind === kind}
-                  disabled={kind === 'as_requested' && !line.requestedItemId}
+                  disabled={off}
                   onChange={() =>
                     onReview(
                       kind === 'as_requested'

@@ -60,6 +60,7 @@ import {
   availableReturnActions,
   choiceNeededSentence,
   choiceToDecision,
+  defaultExchangeReviewState,
   formatOrderNumber,
   isChoiceOffered,
   liveChoice,
@@ -203,9 +204,15 @@ export function ReturnWorkbench({
   >(null);
   const [changeMode, setChangeMode] = React.useState<'change' | 'issue' | null>(null);
   const [changeShort, setChangeShort] = React.useState<unknown>(null);
-  const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? { kind: 'as_requested' };
+  // Review fix P1: every returns manager reviews a requested exchange; without
+  // order approval only the decline is open, and the review starts there
+  // (core exchangeReviewOptions / defaultExchangeReviewState). Adding a
+  // replacement creates an order, so it needs order approval.
+  const reviewViewer = { canApproveOrders: wb.viewer.canApproveOrders };
+  const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? defaultExchangeReviewState(reviewViewer);
   const exchangeByReturnLine = new Map(ex.lines.map((x) => [x.returnLineId, x]));
-  const canDecideExchange = r.status === 'requested' && wb.viewer.canManageReturns && wb.viewer.canApproveOrders;
+  const canDecideExchange = r.status === 'requested' && wb.viewer.canManageReturns;
+  const canAddReplacement = canDecideExchange && wb.viewer.canApproveOrders;
   const loaderFor = (orderRequestLineId: string) => (q: string) =>
     returnExchangeCandidatesAction({ id: r.id, line: orderRequestLineId, q });
   const itemLabelById = (itemId: string): string => {
@@ -242,7 +249,7 @@ export function ReturnWorkbench({
     ? [
         ...ex.lines
           .filter((x) => x.status === 'requested')
-          .map((x) => reviewProblem(x, reviewFor(x.id)))
+          .map((x) => reviewProblem(x, reviewFor(x.id), reviewViewer))
           .filter((p): p is string => p !== null),
         ...Object.values(adds).flatMap((a) => (a && !a.itemId ? [RETURNS_COPY.chooseReplacement] : [])),
       ]
@@ -740,7 +747,7 @@ export function ReturnWorkbench({
           const name = l.item.name ?? 'Deleted item';
           const x = exchangeByReturnLine.get(l.id) ?? null;
           const add = adds[l.id] ?? null;
-          const offerAdd = !x && canDecideExchange && ex.createEnabled;
+          const offerAdd = !x && canAddReplacement && ex.createEnabled;
           return (
             <div key={l.id} className={cn('grid gap-3', x || add ? 'md:grid-cols-2' : '')}>
             <article className="bg-card grid grid-cols-[64px_1fr] gap-4 rounded-xl border p-4 sm:grid-cols-[96px_1fr]">
@@ -799,6 +806,7 @@ export function ReturnWorkbench({
                 onReview={(next) => setReviews((prev) => ({ ...prev, [x.id]: next }))}
                 load={loaderFor(l.orderRequestLineId)}
                 disabled={busy !== null}
+                canApproveOrders={wb.viewer.canApproveOrders}
               />
             ) : add ? (
               <AddReplacement

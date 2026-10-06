@@ -269,6 +269,41 @@ describe('a requested exchange', () => {
   });
 });
 
+// RX-2 review fix P1: a viewer with Manage returns but not order approval can
+// still approve the RETURN of a requested exchange, declining the exchange
+// (the database asks for order approval only to approve or add one).
+describe('a returns manager without order approval', () => {
+  const NO_ORDERS = { viewer: { canManageReturns: true, canApproveOrders: false, canReadDecisions: true } };
+
+  it('sees the review: only the decline is open, it starts there, says why, and the approval sends exactly it', async () => {
+    runSteps.mockResolvedValue({ ok: true, data: { ran: [{ step: 'approve', outcome: 'done' }], workbench: bench('approved', { status: 'declined' }, NO_ORDERS) } });
+    render(<ReturnWorkbench workbench={bench('requested', {}, NO_ORDERS)} />);
+    const side = screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+    expect(within(side).getByLabelText('Approve as requested. Needs order approval permission.')).toBeDisabled();
+    expect(within(side).getByLabelText('Change replacement. Needs order approval permission.')).toBeDisabled();
+    expect(within(side).getByLabelText('Decline the exchange, return only')).toBeChecked();
+    expect(
+      screen.getByText(
+        'Approving the replacement needs order approval permission. You can still approve the return: choose Decline the exchange, return only.',
+      ),
+    ).toBeInTheDocument();
+    const approveBtn = screen.getByRole('button', { name: 'Approve return & exchange' });
+    expect(approveBtn).toBeDisabled();
+    fireEvent.change(within(side).getByLabelText('Reason for declining the exchange (required)'), { target: { value: 'No order approval here' } });
+    expect(approveBtn).not.toBeDisabled();
+    fireEvent.click(approveBtn);
+    await waitFor(() => expect(runSteps).toHaveBeenCalledTimes(1));
+    expect((runSteps.mock.calls[0]![0] as { body: { approve: { exchange: unknown[] } } }).body.approve.exchange).toEqual([
+      { action: 'decline', exchangeLineId: 'x1', reason: 'No order approval here' },
+    ]);
+  });
+
+  it('is never offered Add a replacement (it creates an order)', () => {
+    render(<ReturnWorkbench workbench={bench('requested', { kind: 'return', status: 'none', lines: [], rail: [] }, NO_ORDERS)} />);
+    expect(screen.queryByRole('button', { name: 'Add a replacement' })).toBeNull();
+  });
+});
+
 // RX-2 review fix P4: after a stop nothing reads "next", and the empty
 // replacement block says why there is no order.
 describe('an exchange that ended before any replacement', () => {
