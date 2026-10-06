@@ -28,146 +28,6 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'weekly-digest-and-fixes-2026-10',
-    revision: 1,
-    // The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, no
-    // migration, web only: the phone code is unchanged, so no OTA). Held as a
-    // DRAFT until the web deploy is live; the follow-up that publishes it
-    // sets the real publishedAt (and moves this release if another is
-    // published first) and re-reads these words against what shipped.
-    // Dated after the small fixes draft and above it (newest first).
-    // Every user-visible change in the branch has a line (owner rule
-    // 2026-09-25). Left out as not visible: the returns workbench's React
-    // #418 (a hydration warning React recovers from by itself), the guard
-    // and snapshot (tests only), and the refusal of a rental whose member
-    // borrower's profile read fails (an outage-only path; the person sees
-    // the usual try-again error). The digest's scope line says what each
-    // email holds, not how the gap looked, since no digest was ever sent.
-    //
-    // Also told here: fix/recurring-seed-and-hydration (no migration, web
-    // only), so hold this release until that deploy is live too. It carries
-    // the Make recurring hand-off (make-recurring-works needs it) and the
-    // React #418 sweep; of the sweep, the lines below are what a person could
-    // see: the Purchase orders list's Expected day (a day early on every
-    // render) and the team calendar's today mark (tomorrow's, after a reload
-    // once the UTC date has turned: 4 or 5 PM Pacific). Left out as not
-    // visible: the other #418 fixes, which React recovered from by itself
-    // (relative times keep the server's words; other dates in the viewer's
-    // zone now appear as the page finishes loading instead of flipping from
-    // the server's day).
-    status: 'draft',
-    title:
-      'The weekly digest email goes out, and fixes for warehouses, purchase orders, rentals and the calendar',
-    summary:
-      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email shows only the warehouses, items and purchase orders you can see. A warehouse's page opens again, Make recurring on a purchase order opens a new recurring order filled in from it, the purchase orders list shows each expected date as it was set, the team calendar marks today on the right day, and a rental for a member records the member's own name.",
-    publishedAt: '2026-10-13T17:20:00Z',
-    entries: [
-      {
-        id: 'weekly-digest-sent',
-        category: 'fixed',
-        area: 'Notifications',
-        title: 'The weekly inventory digest email is sent on Mondays',
-        whatChanged:
-          "The weekly inventory digest now goes out every Monday to the people who turned it on. Each Monday's run had been stopping before it sent anything, so no digest arrived.",
-        whyItMatters: 'If you turned the digest on, you received nothing, and nothing said so.',
-        howItAffectsYou:
-          'If the digest is on for you, it arrives each Monday with low and out-of-stock items, open purchase orders and cycle counts in progress, for the sections you chose. Its footer gives the time in your workspace time zone. A week where every section you chose is empty sends nothing.',
-        whatToDo:
-          'To get it, turn on Email me a weekly inventory digest in your notification settings. Send preview now shows what yours will hold.',
-        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
-      },
-      {
-        id: 'weekly-digest-your-view',
-        category: 'improved',
-        area: 'Notifications',
-        title: 'The weekly digest shows what you can see, with full counts',
-        whatChanged:
-          'Each digest lists only the warehouses, items and purchase orders you can see in StockPilot, the same as Send preview now. Its counts are the full totals, not the number it lists, and an item made from a purchase order that has not arrived yet is not counted as out of stock.',
-        whyItMatters:
-          'Your digest should match what you can open in StockPilot, and its numbers should be the real ones.',
-        howItAffectsYou:
-          'If you work in some warehouses, your digest covers those. When a list holds more than it shows, the count is the full number, and the plain-text version says how many it shows of how many.',
-        whatToDo: 'No action needed.',
-      },
-      {
-        id: 'warehouse-page-opens',
-        category: 'fixed',
-        area: 'Warehouses',
-        title: "A warehouse's page opens again",
-        whatChanged:
-          "Opening a warehouse, from the warehouse list or from search, showed an error instead of its page. The page opens again, with the warehouse's details and the charters it serves.",
-        whyItMatters: "The warehouse's page could not be used at all.",
-        howItAffectsYou: 'Select a warehouse to see its address, contact and charters, as before.',
-        whatToDo: 'No action needed.',
-      },
-      {
-        // Needs BOTH halves live: the seed read (this release's branch) and
-        // the hand-off that opens the form filled in (fix/recurring-seed-and-
-        // hydration; the form never opened before it, since 2026-06-18). Not
-        // "again": the seed read failed from its first commit, so Make
-        // recurring never worked. The name is left blank and is required, so
-        // the words say name, review and save.
-        id: 'make-recurring-works',
-        category: 'fixed',
-        area: 'Purchase orders',
-        title: 'Make recurring works on a purchase order',
-        whatChanged:
-          "Make recurring on a purchase order failed with an error. It now opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
-        whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
-        howItAffectsYou:
-          'On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many.',
-        whatToDo: 'No action needed.',
-        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
-      },
-      {
-        // The picked day is stored as its UTC midnight (the PO form and both
-        // PO imports). The instant list (an organization with up to 800 POs,
-        // PO_INSTANT_CAP) printed it in the viewer's zone, the day before in
-        // every US zone; the server-paged list printed it on Vercel's UTC, the
-        // picked day. Hence "could".
-        id: 'po-list-expected-date',
-        category: 'fixed',
-        area: 'Purchase orders',
-        title: 'The purchase orders list shows the expected date that was set',
-        whatChanged:
-          "In US time zones, the Expected column of the purchase orders list could show the day before the expected date set on the purchase order. It now shows the date that was set, as the purchase order's page and its PDF do.",
-        whyItMatters: "The list disagreed with the purchase order's own page by a day.",
-        howItAffectsYou:
-          "Each purchase order's expected date in the list now matches its page and its PDF.",
-        whatToDo: 'No action needed.',
-        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
-      },
-      {
-        id: 'rental-member-name',
-        category: 'fixed',
-        area: 'Rentals',
-        title: "A rental for a member records the member's name",
-        whatChanged:
-          "When a member is the borrower, the rental now records the name on the member's profile. It was keeping whatever name the form sent.",
-        whyItMatters: "The borrower name on a rental and in its emails should be the member's own.",
-        howItAffectsYou:
-          'New rentals for a member show the name on their profile. Rentals made before keep the name they were saved with.',
-        whatToDo: 'No action needed.',
-        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
-      },
-      {
-        // Only a page load does this (a reload, a bookmark, a link): moving to
-        // the calendar inside StockPilot drew it in the browser all along.
-        id: 'calendar-today',
-        category: 'fixed',
-        area: 'Schedule',
-        title: 'The team calendar marks today on the right day',
-        whatChanged:
-          'Reloading the team calendar late in the day could mark tomorrow as today, and an event late in the day could show on the next day for a moment. Today and each event are now shown on your own day.',
-        whyItMatters: 'The calendar should show today, and each event, on the right day.',
-        howItAffectsYou:
-          "When you open the calendar, its events and today's mark appear as the page finishes loading, each on its own day.",
-        whatToDo: 'No action needed.',
-        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
-      },
-    ],
-  },
-  {
     id: 'order-submit-once-2026-10',
     revision: 1,
     // Phone ordering PO-2 (migration 0391: one create path, place_order_request
@@ -373,6 +233,201 @@ export const RELEASES: Release[] = [
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'weekly-digest-and-fixes-2026-10',
+    revision: 1,
+    // The weekly digest and fixes: #326 (b9887f2a, merged 2026-10-05
+    // 20:46:28Z), #331 (1d37307d, merged 2026-10-06 02:17:33Z) and #332
+    // (01001c54, merged 03:16:04Z); no migration, web only. PUBLISHED: each
+    // went live in a web build and was checked in Demo Co. #326 (web build
+    // af88506969c8): a warehouse's page rendered with its charters, and Send
+    // preview now sent one preview to the Demo account and wrote nothing
+    // (checks C1, C4). #331 (web build 45898d00f193, which also carries #330):
+    // Make recurring opened the form filled in, with no frame of the empty
+    // list (K3); in Los Angeles, with the UTC date a day ahead, the calendar
+    // marked the Los Angeles day once loaded (K5); the deployed list prints
+    // Expected in UTC (K6). #332 (web build 657ffebbc864): every line Make
+    // recurring brought over named its item, the two rental lines K3 saw
+    // unnamed included (K3B). The digest cron has not run since #326: its
+    // first run is Monday 2026-10-12 14:00Z, so the digest lines say what the
+    // code does and what the preview showed, never that anyone has received a
+    // digest. No phone update to wait for: none of the three changes the
+    // mobile app, the digest is an email, and the server now sets a member
+    // borrower's name, for rentals made in the app too. Published after the
+    // Items first-paint release (01:46Z), above it; the PO-2 and
+    // partial-approval drafts sit above this one, newest first.
+    //
+    // Its words were re-read against what shipped. Every user-visible change
+    // in the three has a line (owner rule 2026-09-25). Corrected at publish:
+    // - A warehouse's page never opened: it shipped on 2026-05-10 selecting
+    //   warehouses.charter_id, which 0008 dropped on 2026-05-04. So "again"
+    //   and "as before" came out, and the words name what the page shows
+    //   (address and contact, manager, charters).
+    // - Make recurring: #332 labels every line the picker does not list (it
+    //   never lists rentals), so the words say rental and archived items come
+    //   over named. purchase_orders:manage is held by owners, admins and
+    //   managers, who read every warehouse, so every line is named for each
+    //   reader today.
+    // - The digest: Send preview now worked before #326 (its reads named their
+    //   foreign keys), so the why says no weekly digest came, not that nothing
+    //   came. The cron runs at 14:00 UTC for every organization (vercel.json
+    //   0 14 * * 1): Monday morning in every US zone, and both organizations
+    //   are in America/Los_Angeles. The footer prints that run in the
+    //   organization's zone (a Tuesday at UTC+10 and east of it), so the words
+    //   give 14:00 UTC and say the footer gives the day and time. "Arrives"
+    //   became "is sent". A preview holds the state of the moment, so it shows
+    //   what yours would hold today.
+    // - The digest's scope: an item awaiting its first receipt is named by the
+    //   Items badge (Expected), and it is left out of low stock, not only out
+    //   of stock. Someone who works in some warehouses gets those warehouses'
+    //   low stock, the purchase orders they can see (one with no destination
+    //   too) and every count in progress, as the app shows them, so the words
+    //   no longer say the digest covers only those warehouses.
+    // - The Expected date: the mobile app's Purchase orders and Receive
+    //   screens print it in the phone's zone, unchanged here, so the entry and
+    //   the summary say "on the web". "Could" stays: a list over 800 purchase
+    //   orders (PO_INSTANT_CAP) printed it on the server in UTC, the day as
+    //   set, and Demo Co has no purchase order with an expected date (L4L has
+    //   one on 34 of its 56).
+    // - The calendar: the server placed today's mark and the events by the
+    //   date in UTC, tomorrow late in the day only west of UTC (east of it,
+    //   yesterday early in the day), so the words say "the wrong day" and give
+    //   the US case.
+    // - A rental: a profile can lack a name (the sign-up form for an invite
+    //   leaves Full name optional), and then the rental keeps the name the
+    //   form sent, so the words say so. In production all 17 accepted members
+    //   have a name, and the 4 member rentals were saved with it.
+    //
+    // Left out as not visible: the React #418 fixes React recovered from by
+    // itself (the returns workbench's in #326, and the rest of #331's sweep:
+    // relative times keep the server's words, and other dates in the viewer's
+    // zone now appear as the page finishes loading instead of flipping from
+    // the server's day), the embed guard and snapshot (tests only), and the
+    // refusal of a rental whose member borrower's profile read fails (an
+    // outage-only path; the person sees the usual try-again error).
+    //
+    // Who is told: the digest and warehouse entries every member (anyone may
+    // turn the digest on, the notification settings check only the session,
+    // and a warehouse's page only row-level security); every other entry
+    // whoever can open the page it is about, as that page checks it. Recurring
+    // purchase orders also need a plan that includes them (Pro and up); both
+    // organizations are comped at Enterprise.
+    status: 'published',
+    title:
+      'The weekly digest email goes out, and fixes for warehouses, purchase orders, rentals and the calendar',
+    summary:
+      "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email covers only the warehouses, items and purchase orders you can see. A warehouse's page now opens, Make recurring on a purchase order opens a new recurring purchase order filled in from it, the purchase orders list on the web shows each expected date as it was set, the team calendar marks today on the right day, and a rental for a member records the name on their profile, if it has one.",
+    publishedAt: '2026-10-06T03:54:00Z',
+    entries: [
+      {
+        id: 'weekly-digest-sent',
+        category: 'fixed',
+        area: 'Notifications',
+        title: 'The weekly inventory digest email is sent on Mondays',
+        whatChanged:
+          "The weekly inventory digest now goes out every Monday to the people who turned it on. Each Monday's run had been stopping before it sent anything, so no digest was ever sent.",
+        whyItMatters: 'If you turned the digest on, no weekly digest came, and nothing said so.',
+        howItAffectsYou:
+          'If the digest is on for you, it is sent each Monday at 14:00 UTC, Monday morning in US time zones, with low and out-of-stock items, open purchase orders and cycle counts in progress, for the sections you chose. Its footer gives that day and time in your workspace time zone. A week where every section you chose is empty sends nothing.',
+        whatToDo:
+          'To get it, turn on Email me a weekly inventory digest in your notification settings. Send preview now emails you one right away, with what yours would hold today.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+      },
+      {
+        id: 'weekly-digest-your-view',
+        category: 'improved',
+        area: 'Notifications',
+        title: 'The weekly digest shows what you can see, with full counts',
+        whatChanged:
+          'Each digest covers only the warehouses, items and purchase orders you can see in StockPilot, as Send preview now does. Its counts are full totals, not just the number it lists, and an item marked Expected, still awaiting its first receipt, is not counted as low or out of stock.',
+        whyItMatters:
+          'Your digest should match what you can open in StockPilot, and its numbers should be the real ones.',
+        howItAffectsYou:
+          'If you work in only some warehouses, its low stock is from those warehouses and its purchase orders are the ones you can see. When a list holds more than it shows, the count is the full number, and the plain-text version says how many it shows of how many.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'warehouse-page-opens',
+        category: 'fixed',
+        area: 'Warehouses',
+        title: "A warehouse's page now opens",
+        whatChanged:
+          "Opening a warehouse, from the warehouse list or from search, showed an error instead of its page. The page now opens, with the warehouse's details and the charters it serves.",
+        whyItMatters: "The warehouse's page could not be used at all.",
+        howItAffectsYou:
+          'When you open a warehouse, its page shows its address and contact, its manager and the charters it serves.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // Needs all three live: the seed read (#326), the hand-off that opens
+        // the form filled in (#331; the form never opened before it, since
+        // 2026-06-18) and the labels of lines the picker does not list (#332).
+        // Not "again": the seed read failed from its first commit, so Make
+        // recurring never worked. The name is left blank and is required, so
+        // the words say name, review and save.
+        id: 'make-recurring-works',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'Make recurring works on a purchase order',
+        whatChanged:
+          "Make recurring on a purchase order failed with an error. It now opens Recurring purchase orders with a new one filled in from the purchase order's supplier, destination and lines.",
+        whyItMatters: 'Starting a recurring purchase order from an existing one did not work.',
+        howItAffectsYou:
+          'On a purchase order, Make recurring takes you to Recurring purchase orders with a new one filled in, ready for you to name, review and save. Each line names its item, rental and archived items included. Lines for a deleted item or a pre-assembled kit are left out, and a message says how many.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        // The picked day is stored as its UTC midnight (the PO form and both
+        // PO imports). The instant list (an organization with up to 800 POs,
+        // PO_INSTANT_CAP) printed it in the viewer's zone, the day before in
+        // every US zone; the server-paged list printed it on Vercel's UTC, the
+        // picked day. Hence "could". "On the web": the mobile app's lists
+        // still print it in the phone's zone.
+        id: 'po-list-expected-date',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'The purchase orders list on the web shows the expected date that was set',
+        whatChanged:
+          "On the web, in US time zones, the Expected column of the purchase orders list could show the day before the expected date set on the purchase order. It now shows the date that was set, as the purchase order's page and its PDF do.",
+        whyItMatters: "The list disagreed with the purchase order's own page by a day.",
+        howItAffectsYou:
+          "Each purchase order's expected date in the list now matches its page and its PDF.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        id: 'rental-member-name',
+        category: 'fixed',
+        area: 'Rentals',
+        title: "A rental for a member records the member's name",
+        whatChanged:
+          "When a member is the borrower, the rental now records the name on the member's profile when the rental is saved. It used to keep the name the form sent, and still does when the profile has no name.",
+        whyItMatters: "The borrower name on a rental and in its emails should be the member's own.",
+        howItAffectsYou:
+          'If a member changes the name on their profile, rentals made after that show the new name. Rentals made before keep the name they were saved with.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        // Only a page load does this (a reload, a bookmark, a link): moving to
+        // the calendar inside StockPilot drew it in the browser all along. The
+        // server's day is UTC's: tomorrow late in the day west of UTC,
+        // yesterday early in the day east of it.
+        id: 'calendar-today',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar marks today on the right day',
+        whatChanged:
+          "Reloading the team calendar could mark the wrong day as today, and an event could show on the wrong day for a moment, because both were first placed by the date in UTC. In US time zones that date changes in the afternoon or evening, so late in the day tomorrow could be marked. Today's mark and each event are now placed by your own day.",
+        whyItMatters: 'The calendar should show today, and each event, on the right day.',
+        howItAffectsYou:
+          "When you open the calendar, its events and today's mark appear as the page finishes loading, each on its own day.",
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
       },
     ],
   },
