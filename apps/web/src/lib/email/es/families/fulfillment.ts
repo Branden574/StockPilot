@@ -897,18 +897,21 @@ const RETURN_UPDATE_WORDS: Record<
     sentence: 'Contact the warehouse if you have questions about this request.',
   },
   // RX-2 (plan 3.6.7, 3.6.8; core RETURNS_COPY requester words). No reason,
-  // rack, quantity on record or staff name.
+  // rack, quantity on record or staff name. An approved exchange says to
+  // bring the item back: the replacement waits for it (review P14).
   exchange_approved: {
     summary: 'exchange approved',
     badge: 'Approved',
     lead: 'Your exchange was approved.',
-    sentence: 'Your replacement is reserved.',
+    sentence:
+      'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
   },
   exchange_approved_short: {
     summary: 'exchange approved',
     badge: 'Approved',
     lead: 'Your exchange was approved.',
-    sentence: 'Your replacement is not in stock yet. The warehouse will follow up.',
+    sentence:
+      'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
   },
   replacement_changed: {
     summary: 'replacement changed',

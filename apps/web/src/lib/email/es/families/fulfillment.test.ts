@@ -731,9 +731,21 @@ describe('return-update: the exchange events (returns RX-2)', () => {
 
   // Each row pins the whole sentence (the preheader and the text's line), so
   // a sentence that grows or shrinks is caught, not only one that changes.
+  // Review fix (P14): an approved exchange tells the requester to bring the
+  // item back, since the replacement waits for it.
   it.each([
-    ['exchange_approved', 'exchange approved', 'Your exchange was approved.', 'Your replacement is reserved.'],
-    ['exchange_approved_short', 'exchange approved', 'Your exchange was approved.', 'Your replacement is not in stock yet. The warehouse will follow up.'],
+    [
+      'exchange_approved',
+      'exchange approved',
+      'Your exchange was approved.',
+      'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    ],
+    [
+      'exchange_approved_short',
+      'exchange approved',
+      'Your exchange was approved.',
+      'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+    ],
     ['replacement_changed', 'replacement changed', 'Your replacement was changed.', 'The warehouse will let you know when it is ready.'],
     ['replacement_cancelled', 'replacement cancelled', 'Your replacement was cancelled.', 'The warehouse will follow up.'],
     ['replacement_ready_pickup', 'replacement ready', 'Your replacement is ready.', 'Ready for pickup.'],
@@ -778,14 +790,19 @@ describe('return-update: the exchange events (returns RX-2)', () => {
     expect(() => assertEmailWeight(r.html)).not.toThrow();
   });
 
+  // Re-pinned by returns RX-2 review fix (P14; was: the approval preheader
+  // equals core's in-app words, which began "Your exchange was approved.").
+  // Core's in-app words are now the sentence alone, telling the requester to
+  // bring or send the item back; the email keeps its headline in front. Claim
+  // kept: one vocabulary for the app and the email.
   it('the requester words match core (one vocabulary for the app and the email)', async () => {
     const { RETURNS_COPY } = await import('@stockpilot/core');
     const words = (event: Parameters<typeof renderReturnUpdateEmail>[0]['event']) => {
       const r = renderReturnUpdateEmail({ ...base, event });
       return r.preheader;
     };
-    expect(words('exchange_approved')).toBe(RETURNS_COPY.requesterExchangeApprovedReserved);
-    expect(words('exchange_approved_short')).toBe(RETURNS_COPY.requesterExchangeApprovedShort);
+    expect(words('exchange_approved')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedReserved}`);
+    expect(words('exchange_approved_short')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedShort}`);
     expect(words('replacement_partly_handed_over')).toBe(RETURNS_COPY.requesterPartlyHandedOver);
   });
 
