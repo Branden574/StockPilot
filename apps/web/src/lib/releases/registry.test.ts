@@ -39,6 +39,7 @@ import {
   returnActionLabel,
   returnListFilter,
   RETURNS_COPY,
+  returnToRackButton,
   stagingReturnedSourceLabel,
   VERIFICATION_SESSION_ENDED_COPY,
   type CountConfirmBlock,
@@ -6288,13 +6289,75 @@ describe('exchanges on returns (returns RX-2) is held as a draft', () => {
     }
   });
 
-  it('is told to whoever can open Returns; the replacement order to people who manage returns with Orders on', () => {
+  // Re-pinned by returns RX-2 review fix (P13; was: the release to returns:read
+  // or returns:manage, and the replacement order's entry to returns:manage
+  // with modules ['returns', 'orders'], which is ANY of the two, not "with
+  // Orders on"). Order approvers meet a replacement on its order page (the
+  // waiting line instead of Generate pick slip, the Exchange chip, the
+  // banner), so they are told too. Claim kept: the exchange entry is told to
+  // whoever can open Returns, and nothing reaches an organization without
+  // Returns.
+  it('is told to whoever can open Returns or approves orders, with Returns on; the replacement order to people who manage returns or approve orders', () => {
     const r = release();
-    expect(r.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
+    expect(r.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] });
     expect(r.entries.map((e) => e.id)).toEqual(['returns-exchange', 'returns-exchange-replacement-order']);
     const [exchange, order] = r.entries;
+    expect(exchange!.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
     expect(exchange!.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
-    expect(order!.audience).toEqual({ anyPermission: ['returns:manage'], modules: ['returns', 'orders'] });
+    expect(order!.audience).toEqual({ anyPermission: ['returns:manage', 'orders:approve'], modules: ['returns'] });
+    // Nobody is sent to a page that bounces them: an order approver without
+    // a returns permission cannot open Returns, so this entry links nothing.
+    expect(order!.link).toBeUndefined();
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['returns', 'orders']) =>
+      visibleReleases([published], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(entriesFor(['returns:read'])).toEqual(['returns-exchange']);
+    expect(entriesFor(['returns:manage'])).toEqual(['returns-exchange', 'returns-exchange-replacement-order']);
+    expect(entriesFor(['orders:approve'])).toEqual(['returns-exchange-replacement-order']);
+    expect(entriesFor(['returns:manage', 'orders:approve'], ['orders'])).toEqual([]);
+    expect(entriesFor(['orders:request'])).toEqual([]);
+  });
+
+  // Review fix (P13): the counter steps follow the screens, with this stage's
+  // two shortcuts (the only returnable line starts ticked; Hand over opens
+  // the replacement's order with the Physical signature dialog open).
+  it('walks the counter in screen order, with the real button names', () => {
+    const how = release().entries[0]!.howItAffectsYou;
+    const steps = [
+      RETURNS_COPY.itemIsHere,
+      RETURNS_COPY.approveAndReceive,
+      RETURNS_COPY.getReplacementReady,
+      RETURNS_COPY.processReturn,
+      RETURNS_COPY.handOver,
+    ];
+    const at = steps.map((s) => how.indexOf(s));
+    expect(at.every((i) => i >= 0), JSON.stringify(at)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(how).toContain(returnToRackButton('31-C'));
+    expect(how).toContain('starts ticked');
+    expect(how).toContain('Physical signature');
+    expect(how).toContain('Approving an exchange needs order approval as well as Manage returns.');
+    expect(how).toContain(RETURNS_COPY.declineExchange);
+  });
+
+  // Review fix (P13): the phone needs the update; the gate holds a
+  // replacement until the item is back or a manager releases it, which is
+  // not "nothing goes out twice".
+  it('tells the phone to load the update and says what the gate does', () => {
+    const r = release();
+    const [exchange, order] = r.entries;
+    expect(r.summary).toContain('in the mobile app after the latest update');
+    for (const e of [exchange!, order!]) {
+      expect(e.whatToDo, e.id).toBe(
+        'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+      );
+    }
+    expect(order!.whyItMatters).toBe(
+      'A replacement is not handed out while the item it replaces is still missing, unless a manager decides to, with a reason.',
+    );
+    expect(order!.howItAffectsYou).toContain('instead of offering Generate pick slip');
+    expect(order!.howItAffectsYou).toContain('On a delivery released early, the order shows what the driver collects.');
+    expect(readerText(r).join(' ')).not.toMatch(/nothing goes out twice/i);
   });
 
   it("uses the screens' own words and claims nothing the product does not do", () => {
@@ -6317,6 +6380,7 @@ describe('exchanges on returns (returns RX-2) is held as a draft', () => {
       RETURNS_COPY.itemIsHere,
       RETURNS_COPY.approveAndReceive,
       RETURNS_COPY.processReturn,
+      RETURNS_COPY.handOver,
     ]) {
       expect(all).toContain(label);
     }
