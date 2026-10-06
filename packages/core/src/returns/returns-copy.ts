@@ -685,6 +685,31 @@ export function earlierReplacementsLine(
     .join(', ')}`;
 }
 
+/**
+ * A prepare step refused for a permission (review fix P24): the step in plain
+ * words, never the permission key the service error carries ("Missing
+ * permission: items:update"). Steps as the web's prepareForHandover names
+ * them; a claim is part of picking.
+ */
+export const PREPARE_FORBIDDEN_WORDS: Readonly<Record<'pick_slip' | 'claim' | 'pick' | 'packing_slips' | 'stage', string>> = {
+  pick_slip: "You don't have permission to make its pick slip.",
+  claim: "You don't have permission to pick this replacement.",
+  pick: "You don't have permission to pick this replacement.",
+  packing_slips: "You don't have permission to make its packing slips.",
+  stage: "You don't have permission to stage it.",
+};
+
+/** A refused prepare step's words (for the web server's step result): a
+ *  forbidden refusal in the step's words, anything else in its own words. */
+export function prepareStepRefusalWords(step: string, refusal: { code?: string | null; message?: string | null }): string {
+  if (refusal.code === 'forbidden') {
+    return Object.prototype.hasOwnProperty.call(PREPARE_FORBIDDEN_WORDS, step)
+      ? PREPARE_FORBIDDEN_WORDS[step as keyof typeof PREPARE_FORBIDDEN_WORDS]
+      : "You don't have permission for this step.";
+  }
+  return refusal.message?.trim() ? refusal.message : RETURNS_COPY.prepareStopped;
+}
+
 /** The prepare chain's pick hint: "Take Large ×1 from 12-B (3 on hand)". */
 export function prepareTakeLine(item: string, quantity: number, rack: string | null, onHand: number | null): string {
   const from = rack ? ` from ${rack}` : '';

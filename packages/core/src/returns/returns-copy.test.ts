@@ -21,6 +21,8 @@ import {
   openRmaLabel,
   originalExchangeLine,
   pickingWaitsSentence,
+  PREPARE_FORBIDDEN_WORDS,
+  prepareStepRefusalWords,
   prepareTakeLine,
   releasedBeforeReturnLine,
   releaseOutcomeLine,
@@ -116,6 +118,8 @@ function allStrings(): string[] {
     earlierReplacementsLine([{ orderId: 'o1', orderNumber: 12, status: 'cancelled' }]) ?? '',
     approvalOutcomeLine({ status: 'received', replacement: { orderNumber: 17, lines: [{ held: 1 }] } }),
     approvalOutcomeLine({ replacement: { orderNumber: 16, short: true } }),
+    ...Object.values(PREPARE_FORBIDDEN_WORDS),
+    prepareStepRefusalWords('unknown', { code: 'forbidden' }),
     cancelReturnReplacementSentence(12),
     cancelReturnReplacementSentence(null, { held: 0 }),
     ...Object.values(EXCHANGE_STATUS_STAFF_LABELS),
@@ -440,6 +444,35 @@ describe('returns copy', () => {
     expect(approvalOutcomeLine({ status: 'approved', replacement: null })).toBe('Return approved.');
     expect(approvalOutcomeLine({ status: 'received' }, { receiveNow: true })).toBe('Approved and received.');
     expect(approvalOutcomeLine({ status: 'received' })).toBe('Approved and received.');
+  });
+
+  // RX-2 review fix P24: a prepare step refused for a permission never shows
+  // the permission key ("Missing permission: items:update").
+  it('RX-2: a refused Get replacement ready step says which permission is missing in words (review fix P24)', () => {
+    expect(PREPARE_FORBIDDEN_WORDS).toEqual({
+      pick_slip: "You don't have permission to make its pick slip.",
+      claim: "You don't have permission to pick this replacement.",
+      pick: "You don't have permission to pick this replacement.",
+      packing_slips: "You don't have permission to make its packing slips.",
+      stage: "You don't have permission to stage it.",
+    });
+    expect(prepareStepRefusalWords('pick', { code: 'forbidden', message: 'Missing permission: items:update' })).toBe(
+      "You don't have permission to pick this replacement.",
+    );
+    expect(prepareStepRefusalWords('pick_slip', { code: 'forbidden', message: 'Missing permission: orders:approve' })).toBe(
+      "You don't have permission to make its pick slip.",
+    );
+    expect(prepareStepRefusalWords('stage', { code: 'forbidden', message: 'Missing permission: orders:approve' })).toBe(
+      "You don't have permission to stage it.",
+    );
+    // Any other refusal keeps its own (already plain) words.
+    expect(prepareStepRefusalWords('pick_slip', { code: 'conflict', message: 'Waiting for the returned item.' })).toBe(
+      'Waiting for the returned item.',
+    );
+    expect(prepareStepRefusalWords('pick', { code: 'conflict', message: null })).toBe('Stopped before the next step.');
+    for (const step of Object.keys(PREPARE_FORBIDDEN_WORDS)) {
+      expect(prepareStepRefusalWords(step, { code: 'forbidden', message: 'Missing permission: items:update' })).not.toMatch(/:/);
+    }
   });
 
   it('RX-2: words an early release the same on the web and the phone', () => {
