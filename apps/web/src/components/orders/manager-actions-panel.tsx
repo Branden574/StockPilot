@@ -205,6 +205,13 @@ interface Props {
     exchangeStatus?: string | null;
     held?: number | null;
   } | null;
+  /**
+   * Returns RX-2 review fix (counter taps): the RMA's Hand over arrived
+   * (?sign=physical): open the Physical signature dialog once, when the order
+   * is ready for the hand-over and this viewer may confirm it (and nothing
+   * is short to confirm first); otherwise the panel as today.
+   */
+  openPhysicalSignature?: boolean;
 }
 
 type BusyKey =
@@ -269,6 +276,7 @@ export function ManagerActionsPanel({
   pickers,
   viewerCanPick,
   replacement = null,
+  openPhysicalSignature = false,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
@@ -385,7 +393,24 @@ export function ManagerActionsPanel({
   // can't be styled, and doesn't handle cancel cleanly. The dialog
   // also captures focus so screen readers announce the action.
   const [denyOpen, setDenyOpen] = React.useState(false);
-  const [physicalSigOpen, setPhysicalSigOpen] = React.useState(false);
+  // Opened at once when the RMA's Hand over asked for it and the button would
+  // be offered now with no departure confirm owed (counter taps).
+  const [physicalSigOpen, setPhysicalSigOpen] = React.useState(
+    () =>
+      openPhysicalSignature &&
+      offersPhysicalSignature &&
+      (status === 'staged_for_pickup' || status === 'in_transit') &&
+      (approves || isDriverHere) &&
+      describeDepartureRisk({ lines: departureLines, status, action: 'signature' }) === null,
+  );
+  // Honoured once: the request leaves the address, so a reload is the page as today.
+  React.useEffect(() => {
+    if (!openPhysicalSignature || typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('sign') !== 'physical') return;
+    url.searchParams.delete('sign');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [openPhysicalSignature]);
   const [physicalSignerName, setPhysicalSignerName] = React.useState('');
   const [denyReason, setDenyReason] = React.useState('');
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);

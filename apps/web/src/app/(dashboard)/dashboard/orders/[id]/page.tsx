@@ -157,8 +157,11 @@ export default async function OrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
   /** `return`: the Book Order Totals view this order was opened from (plan
-   *  D17). Accepted only through bookReportReturnPath. */
-  searchParams?: Promise<{ return?: string | string[] }>;
+   *  D17). Accepted only through bookReportReturnPath. `sign=physical`: the
+   *  RMA's Hand over (returns RX-2 review fix): the manager panel opens the
+   *  Physical signature dialog once, when the order is ready and the viewer
+   *  may confirm it. */
+  searchParams?: Promise<{ return?: string | string[]; sign?: string | string[] }>;
 }) {
   // The service context starts now, beside the request context, not after
   // it: the order and attachment reads below go through withContext, which
@@ -1161,6 +1164,8 @@ export default async function OrderDetailPage({
   // view, only when `return` passes safeReturnPath AND is the report's own
   // path (anything else keeps "Back to orders").
   const backToReport = bookReportReturnPath((await searchParams)?.return);
+  const signParam = (await searchParams)?.sign;
+  const openPhysicalSignature = (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical';
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -1754,6 +1759,7 @@ export default async function OrderDetailPage({
               assignedPickerName={assignedPickerName}
               pickers={pickers}
               viewerCanPick={viewerCanPick}
+              openPhysicalSignature={openPhysicalSignature}
               replacement={
                 replacement && replacement.live
                   ? {

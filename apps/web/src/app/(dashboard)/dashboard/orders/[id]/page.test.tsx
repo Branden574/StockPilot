@@ -2731,3 +2731,18 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
     expect(src).toMatch(/shortfallPoView\(readinessAssessment\)/);
   });
 });
+
+// RX-2 review fix (counter taps): the RMA's Hand over arrives with
+// ?sign=physical; the page asks the panel to open the physical signature
+// (the panel opens it only when the order is ready and the viewer may).
+describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
+  it('passes the request to the manager panel; without it the panel opens nothing', async () => {
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
+    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(true);
+    managerActionsProps.mockClear();
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
+    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+  });
+});

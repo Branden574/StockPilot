@@ -675,6 +675,22 @@ describe('an approved exchange waiting for the returned item', () => {
     expect(within(dialog).getByText('The return closes as cancelled. The replacement was already handed over and stays as it is.')).toBeInTheDocument();
   });
 
+  // RX-2 review fix (counter taps): Hand over opens the replacement order
+  // with the Physical signature dialog ready (the order page honours it once,
+  // only when it may); Open replacement opens the page as it is.
+  it('Hand over opens the replacement order asking for the physical signature; Open replacement does not', () => {
+    const ready = { ...WAITING, status: 'ready_for_pickup', replacement: { ...WAITING.replacement, status: 'staged_for_pickup', class: 'drawn' } };
+    const { unmount } = render(<ReturnWorkbench workbench={bench('received', ready)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over' }));
+    expect(push).toHaveBeenCalledWith('/dashboard/orders/repl-1?sign=physical');
+    unmount();
+    push.mockClear();
+    const unavailable = { ...WAITING, status: 'unavailable' };
+    render(<ReturnWorkbench workbench={bench('approved', unavailable)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open replacement' }));
+    expect(push).toHaveBeenCalledWith('/dashboard/orders/repl-1');
+  });
+
   // RX-2 review fix (0396 stock S2): the RMA cancel is refused while the
   // replacement is picked or on its way; the screen was stale, so it says the
   // words, closes the confirm and redraws, as for any changed return.

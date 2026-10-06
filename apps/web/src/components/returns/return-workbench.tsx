@@ -608,10 +608,15 @@ export function ReturnWorkbench({
         void prepareReplacement();
         return;
       case 'open_replacement':
-      case 'hand_over':
         // The replacement's own page: its signature actions are the one
         // signature implementation.
         if (ex.replacement) router.push(`/dashboard/orders/${ex.replacement.orderId}`);
+        return;
+      case 'hand_over':
+        // Review fix (counter taps): the replacement's page with the Physical
+        // signature dialog ready; the page opens it once, only when the order
+        // is ready for the hand-over and the viewer may confirm it.
+        if (ex.replacement) router.push(`/dashboard/orders/${ex.replacement.orderId}?sign=physical`);
         return;
     }
   }

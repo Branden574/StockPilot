@@ -1162,3 +1162,24 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     }
   });
 });
+
+// RX-2 review fix (counter taps): the RMA's Hand over opens the replacement
+// order with the Physical signature dialog already open, once, only when the
+// order is ready for the hand-over and the viewer may confirm it.
+describe('ManagerActionsPanel — Hand over from the RMA opens the physical signature', () => {
+  it('opens the Physical signature dialog when asked and the order is ready to hand over', () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+    expect(screen.getByRole('dialog', { name: 'Record a physical signature' })).toBeInTheDocument();
+  });
+
+  it('not before the hand-over, not for a viewer who may not confirm it, and never unasked', () => {
+    const early = render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    early.unmount();
+    const staff = render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'staff', openPhysicalSignature: true })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    staff.unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager' })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
