@@ -14,6 +14,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 //    hold them; production 2026-10-06, PO-DEMO-002's two rental lines read
 //    "Item not available"), an archived item. The page resolves that
 //    purchase order's items too.
+// 4. Its destination can be one the form does not offer: a staging area (four
+//    Demo Co purchase orders, production 2026-10-06) or a deleted location
+//    (three of Learn4Life's). The form showed it blank and saved it anyway.
+//    The page reads where that purchase order went, in the caller's
+//    organization, so the form can open with no destination and say so.
+// 5. The form offers what the purchase order form offers: sites linked to a
+//    warehouse. The save refuses any other, as a purchase order's does.
 
 const inventoryList = vi.fn(async (_filters: unknown) => ({
   items: [{ id: 'item-listed', name: 'Pencils', sku: 'PEN-1', unit_cost: 1 }],
@@ -46,6 +53,20 @@ const poLines = vi.fn(async (_filters: Record<string, unknown>) => ({
   ] as Array<{ id: string; item_id: string }> | null,
   error: null as { message: string } | null,
 }));
+const STAGING = '00000000-0000-0000-0000-0000000000d1';
+const GONE_LOCATION = '00000000-0000-0000-0000-0000000000d2';
+/** The source purchase order's destination, read with its location. */
+const poDestination = vi.fn(async (_filters: Record<string, unknown>) => ({
+  data: {
+    destination_location_id: STAGING,
+    destination: { name: 'Staging', deleted_at: null },
+  } as {
+    destination_location_id: string | null;
+    destination: { name: string | null; deleted_at: string | null } | null;
+  } | null,
+  error: null as { message: string } | null,
+}));
+const locationsList = vi.fn(async (_opts: unknown) => [] as Array<Record<string, unknown>>);
 const templatesList = vi.fn(async () => [
   {
     id: 'tpl-1',
@@ -90,6 +111,21 @@ vi.mock('@/lib/supabase/server', () => ({
         };
         return q;
       }
+      if (table === 'purchase_orders') {
+        const filters: Record<string, unknown> = {};
+        const q = {
+          select: (columns: string) => {
+            filters.select = columns;
+            return q;
+          },
+          eq: (column: string, value: unknown) => {
+            filters[column] = value;
+            return q;
+          },
+          maybeSingle: () => poDestination(filters),
+        };
+        return q;
+      }
       return {
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { plan: 'pro' }, error: null }) }) }),
       };
@@ -104,7 +140,7 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups: vi.fn(async () => []) })) },
 }));
 vi.mock('@/server/services/locations', () => ({
-  LocationsService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
+  LocationsService: { forCurrentUser: vi.fn(async () => ({ list: locationsList })) },
 }));
 vi.mock('@/server/services/recurring-pos', () => ({
   RecurringPoTemplatesService: class {
@@ -234,5 +270,91 @@ describe('Recurring POs page', () => {
       { itemType: 'all' },
     );
     expect(findProps(tree, RecurringTemplatesSeedLoader)?.lineLabels).toHaveLength(2);
+  });
+
+  it('Make recurring from a purchase order that went to a staging area: reads that destination in the caller\'s organization and names it', async () => {
+    const tree = await page({ from: PO });
+
+    expect(poDestination).toHaveBeenCalledTimes(1);
+    expect(poDestination).toHaveBeenCalledWith(
+      expect.objectContaining({ organization_id: 'org-1', id: PO }),
+    );
+    // The destination and its location, in one read (through RLS).
+    expect(String(poDestination.mock.calls[0]?.[0].select)).toMatch(
+      /^destination_location_id, destination:locations!destination_location_id \(name, deleted_at\)$/,
+    );
+    expect(findProps(tree, RecurringTemplatesSeedLoader)?.seedDestination).toEqual({
+      locationId: STAGING,
+      name: 'Staging',
+      deleted: false,
+    });
+  });
+
+  it('Make recurring from a purchase order that went to a deleted location: says it was deleted', async () => {
+    poDestination.mockResolvedValueOnce({
+      data: {
+        destination_location_id: GONE_LOCATION,
+        destination: { name: 'Old Annex', deleted_at: '2026-06-24T00:00:00Z' },
+      },
+      error: null,
+    });
+    const tree = await page({ from: PO });
+
+    expect(findProps(tree, RecurringTemplatesSeedLoader)?.seedDestination).toEqual({
+      locationId: GONE_LOCATION,
+      name: 'Old Annex',
+      deleted: true,
+    });
+  });
+
+  it('Make recurring from a purchase order with no destination: says it has none', async () => {
+    poDestination.mockResolvedValueOnce({
+      data: { destination_location_id: null, destination: null },
+      error: null,
+    });
+    const tree = await page({ from: PO });
+
+    expect(findProps(tree, RecurringTemplatesSeedLoader)?.seedDestination).toEqual({
+      locationId: null,
+      name: null,
+      deleted: false,
+    });
+  });
+
+  it('a failed read of that destination still renders the page: no destination named, and reported', async () => {
+    poDestination.mockResolvedValueOnce({ data: null, error: { message: 'statement timeout' } });
+    const tree = await page({ from: PO });
+
+    expect(reportDegradedRead).toHaveBeenCalledWith(
+      'recurring_pos.page.seed_destination',
+      expect.anything(),
+      expect.objectContaining({ from: true }),
+    );
+    const props = findProps(tree, RecurringTemplatesSeedLoader);
+    expect(props?.seedDestination).toBeNull();
+    // The rest of the page is unaffected.
+    expect(props?.lineLabels).toHaveLength(2);
+  });
+
+  it('reads no destination without a well-formed ?from', async () => {
+    const plain = await page();
+    const malformed = await page({ from: 'not-a-uuid' });
+
+    expect(poDestination).not.toHaveBeenCalled();
+    expect(findProps(plain, RecurringTemplatesSeedLoader)?.seedDestination).toBeNull();
+    expect(findProps(malformed, RecurringTemplatesSeedLoader)?.seedDestination).toBeNull();
+  });
+
+  it('offers the destinations the purchase order form offers: sites linked to a warehouse', async () => {
+    locationsList.mockResolvedValueOnce([
+      { id: 'loc-main', name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1' },
+      { id: 'loc-office', name: 'District Office', kind: null, type: 'warehouse', warehouse_id: null },
+    ]);
+    const tree = await page();
+
+    expect(locationsList).toHaveBeenCalledWith({ sitesOnly: true });
+    expect(findProps(tree, RecurringTemplatesSeedLoader)?.locations).toEqual([
+      { id: 'loc-main', name: 'Main Warehouse' },
+    ]);
   });
 });

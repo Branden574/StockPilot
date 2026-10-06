@@ -612,8 +612,14 @@ export class PurchaseOrdersService {
    * the detail page silently hides the Receive button AND the "set destination"
    * recovery card (which only fires when destination is null), stranding the PO
    * in a dead-end. Rejecting it at write time keeps that state from ever forming.
+   *
+   * Not checked here: the location's kind (a staging area is linked to its
+   * warehouse, so it passes) and whether it was deleted (deleted locations stay
+   * readable). The recurring-template save calls this too
+   * (RecurringPoTemplatesService), so a template is held to the destination
+   * rule of the purchase orders its daily run saves through create().
    */
-  private async resolveDestinationWarehouseId(
+  async resolveDestinationWarehouseId(
     destinationLocationId: string | null | undefined,
   ): Promise<string | null> {
     if (!destinationLocationId) return null;

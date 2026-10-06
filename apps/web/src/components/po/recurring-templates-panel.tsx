@@ -83,6 +83,32 @@ interface LocationOption {
   name: string;
 }
 
+/**
+ * Where the purchase order Make recurring came from (?from=) went, as the
+ * page read it on the server: that purchase order's destination and the
+ * location's name and deleted state, in the caller's organization. Null when
+ * the page was not opened from a purchase order, or the read failed.
+ */
+export interface RecurringSeedDestination {
+  /** The purchase order's destination; null when it has none. */
+  locationId: string | null;
+  /** The location's name; null when it could not be read. */
+  name: string | null;
+  /** The location was deleted. */
+  deleted: boolean;
+}
+
+/** Why the create form did not keep the destination Make recurring brought over. */
+function unofferedDestinationNote(fromPo: RecurringSeedDestination | null | undefined): string {
+  if (fromPo?.deleted) {
+    return 'This purchase order went to a location that was deleted, so choose a destination.';
+  }
+  if (fromPo?.name) {
+    return `This purchase order went to "${fromPo.name}", which is not a site you can pick here, so choose a destination.`;
+  }
+  return "This purchase order went to a location you can't pick here, so choose a destination.";
+}
+
 interface Line {
   itemId: string;
   quantityOrdered: number;
@@ -116,6 +142,11 @@ interface Props {
    * (RecurringTemplatesSeedLoader does).
    */
   seed?: RecurringPoSeed | null;
+  /**
+   * Where the purchase order `seed` came from went, as the server read it.
+   * It decides the seeded destination (see seededForm); read with `seed`.
+   */
+  seedDestination?: RecurringSeedDestination | null;
 }
 
 // ── Template form ────────────────────────────────────────────────────────────
@@ -130,13 +161,14 @@ interface FormState {
   capDollars: string;
   lines: Line[];
   notes: string;
+  /**
+   * Why the destination Make recurring brought over was not kept; shown under
+   * Destination until the buyer picks one.
+   */
+  destinationNote: string | null;
 }
 
-function defaultForm(
-  seed?: Props['seed'],
-  templates?: RecurringTemplateRow[],
-  editId?: string,
-): FormState {
+function defaultForm(templates?: RecurringTemplateRow[], editId?: string): FormState {
   // If editing an existing template, find it.
   if (editId && templates) {
     const t = templates.find((tpl) => tpl.id === editId);
@@ -152,22 +184,9 @@ function defaultForm(
         capDollars: t.max_auto_send_cents != null ? (t.max_auto_send_cents / 100).toFixed(2) : '',
         lines: rawLines,
         notes: t.notes ?? '',
+        destinationNote: null,
       };
     }
-  }
-  // If a seed was provided (from "Make recurring"), pre-fill supplier + lines.
-  if (seed) {
-    return {
-      name: '',
-      supplierId: seed.supplierId ?? '',
-      locationId: seed.destinationLocationId ?? '',
-      cadence: 'monthly',
-      customDays: 30,
-      sendMode: 'draft',
-      capDollars: '',
-      lines: seed.lineItems,
-      notes: '',
-    };
   }
   return {
     name: '',
@@ -179,6 +198,38 @@ function defaultForm(
     capDollars: '',
     lines: [],
     notes: '',
+    destinationNote: null,
+  };
+}
+
+/**
+ * The create form Make recurring opens: the purchase order's supplier and
+ * lines, and its destination only when this form offers it (`locations`, the
+ * purchase order form's own list: sites linked to a warehouse). A destination
+ * it does not offer (a staging area, a deleted location) was kept out of
+ * sight until 2026-10-06: the select showed blank, which Radix does for a
+ * value no option has, while the save sent it, so every purchase order the
+ * template created would have gone there. Now the form opens with no
+ * destination and a note saying where the purchase order went, so the buyer
+ * picks one.
+ *
+ * The server's read of the purchase order (`fromPo`) decides which destination
+ * that was. The seed sat in the browser's storage, so its destination is used
+ * only when the server could not read one, and even then only if offered.
+ */
+function seededForm(
+  seed: RecurringPoSeed,
+  locations: LocationOption[],
+  fromPo: RecurringSeedDestination | null | undefined,
+): FormState {
+  const destinationId = fromPo ? fromPo.locationId : seed.destinationLocationId;
+  const offered = destinationId !== null && locations.some((l) => l.id === destinationId);
+  return {
+    ...defaultForm(),
+    supplierId: seed.supplierId ?? '',
+    locationId: offered ? destinationId : '',
+    lines: seed.lineItems,
+    destinationNote: destinationId !== null && !offered ? unofferedDestinationNote(fromPo) : null,
   };
 }
 
@@ -191,6 +242,7 @@ export function RecurringTemplatesPanel({
   locations,
   entitled,
   seed,
+  seedDestination,
   lineLabels,
 }: Props) {
   const [templates, setTemplates] = React.useState<RecurringTemplateRow[]>(initial);
@@ -203,7 +255,9 @@ export function RecurringTemplatesPanel({
   const [formMode, setFormMode] = React.useState<null | 'new' | string>(
     seed ? 'new' : null,
   );
-  const [form, setForm] = React.useState<FormState>(() => defaultForm(seed));
+  const [form, setForm] = React.useState<FormState>(() =>
+    seed ? seededForm(seed, locations, seedDestination) : defaultForm(),
+  );
   const [submitting, setSubmitting] = React.useState(false);
   const [toggling, setToggling] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<string | null>(null);
@@ -259,12 +313,12 @@ export function RecurringTemplatesPanel({
   }
 
   function openNew() {
-    setForm(defaultForm(null));
+    setForm(defaultForm());
     setFormMode('new');
   }
 
   function openEdit(tpl: RecurringTemplateRow) {
-    setForm(defaultForm(null, templates, tpl.id));
+    setForm(defaultForm(templates, tpl.id));
     setFormMode(tpl.id);
   }
 
@@ -574,16 +628,21 @@ export function RecurringTemplatesPanel({
 
               {/* Destination */}
               <div className="space-y-1.5">
-                <Label>
+                <Label htmlFor="rpt-destination">
                   Destination location
                   <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
                 </Label>
                 <Select
                   value={form.locationId || '__none'}
-                  onValueChange={(v) => patchForm({ locationId: v === '__none' ? '' : v })}
+                  onValueChange={(v) =>
+                    patchForm({ locationId: v === '__none' ? '' : v, destinationNote: null })
+                  }
                   disabled={submitting}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger
+                    id="rpt-destination"
+                    aria-describedby={form.destinationNote ? 'rpt-destination-note' : undefined}
+                  >
                     <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
@@ -595,6 +654,11 @@ export function RecurringTemplatesPanel({
                     ))}
                   </SelectContent>
                 </Select>
+                {form.destinationNote ? (
+                  <p id="rpt-destination-note" className="text-xs text-amber-700 dark:text-amber-300">
+                    {form.destinationNote}
+                  </p>
+                ) : null}
               </div>
             </div>
 

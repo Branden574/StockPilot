@@ -13,6 +13,7 @@ import {
 import {
   RecurringTemplatesPanel,
   type RecurringLineLabel,
+  type RecurringSeedDestination,
   type RecurringTemplateRow,
 } from './recurring-templates-panel';
 
@@ -41,6 +42,8 @@ interface Props {
   entitled: boolean;
   /** Labels for items saved template lines point at that `items` lacks. */
   lineLabels?: RecurringLineLabel[];
+  /** Where the purchase order ?from= names went, as the server read it. */
+  seedDestination?: RecurringSeedDestination | null;
 }
 
 const SEED_LOST =
