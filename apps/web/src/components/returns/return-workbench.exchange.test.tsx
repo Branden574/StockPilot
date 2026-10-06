@@ -232,6 +232,30 @@ describe('a requested exchange', () => {
     expect((runSteps.mock.calls[1]![0] as { body: { approve: { replacement: unknown } } }).body.approve.replacement).toEqual({ whenShort: 'backorder' });
   });
 
+  // RX-2 review fix P7: "Change replacement" after a short refusal did
+  // nothing visible; it now switches each short line to Change replacement
+  // and moves focus to its picker.
+  it('short: "Change replacement" switches the short line to Change replacement and moves focus to its picker', async () => {
+    runSteps.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        ran: [{ step: 'approve', outcome: 'refused', reason: 'replacement_unavailable', message: 'The replacement is not in stock.', detail: [{ itemId: 'item-l', needed: 1, available: 0 }] }],
+        workbench: bench('requested', {}),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('requested', {})} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve return & exchange' }));
+    expect(await screen.findByText('Walk New Hire Shirt, L: 0 available, 1 needed.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Change replacement' }));
+    const side = screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+    expect(within(side).getByLabelText('Change replacement…')).toBeChecked();
+    const picker = within(side).getByRole('group', { name: 'Choose the replacement for Walk New Hire Shirt, M' });
+    await waitFor(() => expect(document.activeElement).toBe(picker));
+    // The numbers gave way to the choice; approving now needs a new item.
+    expect(screen.queryByText('Walk New Hire Shirt, L: 0 available, 1 needed.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve return & exchange' })).toBeDisabled();
+  });
+
   // Desk check F6: the original delivery site is not one the warehouse serves.
   it('a refused delivery site asks where the replacement goes, then sends the approval again with the choice', async () => {
     runSteps.mockResolvedValueOnce({

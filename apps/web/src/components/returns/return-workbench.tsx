@@ -204,6 +204,9 @@ export function ReturnWorkbench({
     | null
   >(null);
   const [changeMode, setChangeMode] = React.useState<'change' | 'issue' | null>(null);
+  // Review fix P7: the exchange line whose picker takes focus after a short
+  // refusal's "Change replacement", with a token so a second press moves it again.
+  const [focusPicker, setFocusPicker] = React.useState<{ lineId: string; token: number } | null>(null);
   const [changeShort, setChangeShort] = React.useState<unknown>(null);
   // Review fix P1: every returns manager reviews a requested exchange; without
   // order approval only the decline is open, and the review starts there
@@ -320,6 +323,38 @@ export function ReturnWorkbench({
     }
     router.refresh();
     return res.data.ran;
+  }
+
+  /**
+   * Review fix P7: after a short refusal, "Change replacement" switches each
+   * short line's review to Change replacement (its item to choose again) and
+   * moves focus to the first one's picker; a short added replacement is
+   * chosen again too. The numbers give way to the choice.
+   */
+  function changeShortLines() {
+    const short = new Set(shortLines.map((s) => s.itemId));
+    let first: string | null = null;
+    const nextReviews = { ...reviews };
+    for (const x of ex.lines) {
+      if (x.status !== 'requested') continue;
+      const v = reviewFor(x.id);
+      const itemId = v.kind === 'change' ? v.itemId : v.kind === 'as_requested' ? x.requestedItemId : null;
+      if (!itemId || !short.has(itemId)) continue;
+      const rl = wb.lines.find((l) => l.id === x.returnLineId);
+      const quantity = v.kind === 'change' ? v.quantity : Math.min(x.requestedQuantity, rl?.quantity ?? x.requestedQuantity);
+      nextReviews[x.id] = { kind: 'change', itemId: null, label: null, free: null, quantity, reason: v.kind === 'change' ? v.reason : '' };
+      first ??= x.id;
+    }
+    setReviews(nextReviews);
+    setAdds((prev) => {
+      const next = { ...prev };
+      for (const [lineId, a] of Object.entries(prev)) {
+        if (a?.itemId && short.has(a.itemId)) next[lineId] = { ...a, itemId: null, label: null, free: null };
+      }
+      return next;
+    });
+    setShortDetail(null);
+    if (first) setFocusPicker({ lineId: first, token: Date.now() });
   }
 
   async function approve(whenShort: 'refuse' | 'backorder' = 'refuse', site: ReplacementFulfilment | null = null) {
@@ -696,7 +731,7 @@ export function ReturnWorkbench({
               <Button variant="outline" onClick={() => void approve('backorder')} disabled={busy !== null}>
                 {RETURNS_COPY.approveReplacementOnBackorder}
               </Button>
-              <Button variant="outline" onClick={() => setShortDetail(null)} disabled={busy !== null}>
+              <Button variant="outline" onClick={changeShortLines} disabled={busy !== null}>
                 {RETURNS_COPY.changeReplacement}
               </Button>
             </div>
@@ -818,6 +853,7 @@ export function ReturnWorkbench({
                 load={loaderFor(l.orderRequestLineId)}
                 disabled={busy !== null}
                 canApproveOrders={wb.viewer.canApproveOrders}
+                focusPickerToken={focusPicker?.lineId === x.id ? focusPicker.token : null}
               />
             ) : add ? (
               <AddReplacement

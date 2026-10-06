@@ -137,6 +137,7 @@ export function ReplacementSide({
   load,
   disabled,
   canApproveOrders = true,
+  focusPickerToken = null,
 }: {
   line: ReturnWorkbenchExchangeLine;
   returnedLabel: string;
@@ -148,8 +149,14 @@ export function ReplacementSide({
   disabled?: boolean;
   /** Review fix P1: without order approval only the decline is open (core exchangeReviewOptions). */
   canApproveOrders?: boolean;
+  /** Review fix P7: a new value moves focus to this line's picker (after a short refusal's Change replacement). */
+  focusPickerToken?: number | null;
 }) {
   const groupId = React.useId();
+  const pickerBox = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (focusPickerToken !== null) pickerBox.current?.focus();
+  }, [focusPickerToken]);
   const requested = line.requestedItem;
   const requestedLabel = requested ? returnLineLabel(requested.name ?? 'Item', requested.variant) : null;
   const approved = line.approvedItem;
@@ -235,7 +242,13 @@ export function ReplacementSide({
             ))}
           </div>
           {review.kind === 'change' ? (
-            <div className="space-y-2">
+            <div
+              ref={pickerBox}
+              tabIndex={-1}
+              role="group"
+              aria-label={`${RETURNS_COPY.chooseReplacement} for ${returnedLabel}`}
+              className="space-y-2 outline-none"
+            >
               <ReplacementPicker
                 load={load}
                 needed={review.quantity}
