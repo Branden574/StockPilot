@@ -497,6 +497,25 @@ describe('returns copy', () => {
     expect(staffNewRequestBody(null, 'RMA-1', null)).toBe('RMA-1');
   });
 
+  // RX-2 review fixes P14, P15 and P28: the requester's in-app messages say
+  // to bring the item back (the replacement waits for it), what Close as
+  // return only means for them, and that the warehouse added the replacement.
+  it('RX-2: the requester hears to bring the item back, a return-only close, and a replacement the warehouse added (review fixes P14, P15, P28)', () => {
+    expect(RETURNS_COPY.requesterExchangeApprovedReserved).toBe(
+      'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    );
+    expect(RETURNS_COPY.requesterExchangeApprovedShort).toBe(
+      'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+    );
+    expect(RETURNS_COPY.requesterReplacementClosedReturnOnly).toBe('No replacement will be sent. Your return goes on as a return only.');
+    expect(RETURNS_COPY.requesterReturnApprovedReplacementAdded).toBe(
+      'Your return was approved. The warehouse added a replacement for you, and it is reserved.',
+    );
+    expect(RETURNS_COPY.requesterReturnApprovedReplacementAddedShort).toBe(
+      'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+    );
+  });
+
   it('keeps the requester sentences free of racks, Staging, dispositions and staff', () => {
     const requester = [
       ...EXCHANGE_STATUSES.map((s) => exchangeRequesterSentence(s) ?? ''),
@@ -505,6 +524,12 @@ describe('returns copy', () => {
       RETURNS_COPY.requesterItemReceived,
       RETURNS_COPY.requesterReturnDeclined,
       RETURNS_COPY.requesterReturnCancelled,
+      RETURNS_COPY.requesterExchangeApprovedReserved,
+      RETURNS_COPY.requesterExchangeApprovedShort,
+      RETURNS_COPY.requesterReplacementClosedReturnOnly,
+      RETURNS_COPY.requesterReturnApprovedReplacementAdded,
+      RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
+      RETURNS_COPY.replacementChangeContactWarehouse,
     ];
     expect(requester.filter((s) => /rack|staging|scrap|restock|on hand|cost|supplier/i.test(s))).toEqual([]);
   });

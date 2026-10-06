@@ -237,11 +237,21 @@ export const RETURNS_COPY = {
   requesterReceivedReturnRequest: 'We received your return request.',
   requesterReceivedExchangeRequest: 'We received your exchange request.',
   requesterReturnApproved: 'Your return was approved.',
-  requesterExchangeApprovedReserved: 'Your exchange was approved. Your replacement is reserved.',
+  // Review fix P14: the replacement waits for the returned item, so the
+  // requester is told to bring or send it back.
+  requesterExchangeApprovedReserved:
+    'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
   requesterExchangeApprovedShort:
-    'Your exchange was approved. Your replacement is not in stock yet. The warehouse will follow up.',
+    'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+  // Review fix P28: every exchange line was added by staff on a return the
+  // requester asked for (they asked for no exchange).
+  requesterReturnApprovedReplacementAdded: 'Your return was approved. The warehouse added a replacement for you, and it is reserved.',
+  requesterReturnApprovedReplacementAddedShort:
+    'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
   requesterReplacementChanged: 'Your replacement was changed.',
   requesterReplacementCancelled: 'Your replacement was cancelled. The warehouse will follow up.',
+  // Review fix P15: after a replacement cancel, Close as return only.
+  requesterReplacementClosedReturnOnly: 'No replacement will be sent. Your return goes on as a return only.',
   requesterItemReceived: 'We received your returned item.',
   requesterReplacementReady: 'Your replacement is ready',
   requesterReadyForPickup: 'Ready for pickup.',
