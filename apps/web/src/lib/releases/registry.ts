@@ -240,8 +240,9 @@ export const RELEASES: Release[] = [
     id: 'weekly-digest-and-fixes-2026-10',
     revision: 1,
     // The weekly digest and fixes: #326 (b9887f2a, merged 2026-10-05
-    // 20:46:28Z), #331 (1d37307d, merged 2026-10-06 02:17:33Z) and #332
-    // (01001c54, merged 03:16:04Z); no migration, web only. PUBLISHED: each
+    // 20:46:28Z), #331 (1d37307d, merged 2026-10-06 02:17:33Z), #332
+    // (01001c54, merged 03:16:04Z) and #334 (a02bd620, merged 05:11:54Z); no
+    // migration, web only. PUBLISHED: each
     // went live in a web build and was checked in Demo Co. #326 (web build
     // af88506969c8): a warehouse's page rendered with its charters, and Send
     // preview now sent one preview to the Demo account and wrote nothing
@@ -251,13 +252,16 @@ export const RELEASES: Release[] = [
     // marked the Los Angeles day once loaded (K5); the deployed list prints
     // Expected in UTC (K6). #332 (web build 657ffebbc864): every line Make
     // recurring brought over named its item, the two rental lines K3 saw
-    // unnamed included (K3B). The digest cron has not run since #326: its
+    // unnamed included (K3B). #334 (web build d0c53f5ba798): a purchase order
+    // to Staging opened with no destination and the note naming Staging, and
+    // one to a site kept its destination (K3C). The digest cron has not run
+    // since #326: its
     // first run is Monday 2026-10-12 14:00Z, so the digest lines say what the
     // code does and what the preview showed, never that anyone has received a
     // digest. No phone update to wait for: none of the three changes the
     // mobile app, the digest is an email, and the server now sets a member
-    // borrower's name, for rentals made in the app too. Published after the
-    // Items first-paint release (01:46Z), above it; the PO-2 and
+    // borrower's name, for rentals made in the app too. Published at 05:18Z,
+    // after the K3C check, above the Items first-paint release (01:46Z); the PO-2 and
     // partial-approval drafts sit above this one, newest first.
     //
     // Its words were re-read against what shipped. Every user-visible change
@@ -320,7 +324,7 @@ export const RELEASES: Release[] = [
       'The weekly digest email goes out, and fixes for warehouses, purchase orders, rentals and the calendar',
     summary:
       "The weekly inventory digest is sent on Mondays to the people who turned it on, and each email covers only the warehouses, items and purchase orders you can see. A warehouse's page now opens, Make recurring on a purchase order opens a new recurring purchase order filled in from it, the purchase orders list on the web shows each expected date as it was set, the team calendar marks today on the right day, and a rental for a member records the name on their profile, if it has one.",
-    publishedAt: '2026-10-06T03:54:00Z',
+    publishedAt: '2026-10-06T05:18:00Z',
     entries: [
       {
         id: 'weekly-digest-sent',
