@@ -99,15 +99,19 @@ export function ReplacementPicker({
           onChange={() => onSelect(row, rowLabel)}
           className="mt-0.5 h-3.5 w-3.5"
         />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{rowLabel}</span>
-          <span className="text-muted-foreground block text-xs">{row.sku ?? ''}</span>
-        </span>
-        <span className="flex flex-col items-end gap-1 text-right">
-          <span className={cn('text-xs tabular-nums', row.short ? 'text-destructive' : 'text-muted-foreground')}>
-            {row.availability}
+        {/* Review fix P3: the whole name, wrapped, never cut (its size is in
+            it); below sm the availability goes under the name. */}
+        <span data-replacement-row className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+          <span className="min-w-0">
+            <span className="block break-words font-medium">{rowLabel}</span>
+            <span className="text-muted-foreground block text-xs">{row.sku ?? ''}</span>
           </span>
-          {row.isReturnedItem ? <Badge variant="outline">{RETURNS_COPY.replacementSameAsReturned}</Badge> : null}
+          <span className="flex flex-col items-start gap-1 sm:shrink-0 sm:items-end sm:text-right">
+            <span className={cn('text-xs tabular-nums', row.short ? 'text-destructive' : 'text-muted-foreground')}>
+              {row.availability}
+            </span>
+            {row.isReturnedItem ? <Badge variant="outline">{RETURNS_COPY.replacementSameAsReturned}</Badge> : null}
+          </span>
         </span>
       </label>
     );
