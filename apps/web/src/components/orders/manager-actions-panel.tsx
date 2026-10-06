@@ -404,12 +404,15 @@ export function ManagerActionsPanel({
       describeDepartureRisk({ lines: departureLines, status, action: 'signature' }) === null,
   );
   // Honoured once: the request leaves the address, so a reload is the page as today.
+  // `null` state, never window.history.state: Next skips its router sync for
+  // its own state (`__NA`), so the router would keep ?sign=physical and the
+  // next refresh would push it back (lib/updates/safe-reload.ts, the same trap).
   React.useEffect(() => {
     if (!openPhysicalSignature || typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     if (url.searchParams.get('sign') !== 'physical') return;
     url.searchParams.delete('sign');
-    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   }, [openPhysicalSignature]);
   const [physicalSignerName, setPhysicalSignerName] = React.useState('');
   const [denyReason, setDenyReason] = React.useState('');

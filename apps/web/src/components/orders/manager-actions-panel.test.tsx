@@ -1182,4 +1182,26 @@ describe('ManagerActionsPanel — Hand over from the RMA opens the physical sign
     render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager' })} />);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  // Review-fix browser flow G (2026-10-06): the request leaves the address
+  // THROUGH Next's router. Next patches history.replaceState and skips its
+  // router sync when handed its own state (`__NA`, which window.history.state
+  // carries on a Next page): the address bar was cleaned but the router kept
+  // ?sign=physical, the next router refresh (any stock event) pushed it back,
+  // and a reload opened the dialog again. `null` is the documented form
+  // (lib/updates/safe-reload.ts, the same trap).
+  it('takes ?sign=physical out of the address through the router (null state), so a refresh never brings it back', () => {
+    const before = window.location.href;
+    window.history.replaceState({ __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: 'x' }, '', '/dashboard/orders/o-1?sign=physical&tab=lines');
+    const spy = vi.spyOn(window.history, 'replaceState');
+    try {
+      render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]![0]).toBeNull();
+      expect(spy.mock.calls[0]![2]).toBe('/dashboard/orders/o-1?tab=lines');
+    } finally {
+      spy.mockRestore();
+      window.history.replaceState(null, '', before);
+    }
+  });
 });
