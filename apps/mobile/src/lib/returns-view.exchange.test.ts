@@ -1,4 +1,4 @@
-import { exchangeRail } from '@stockpilot/core';
+import { exchangeRail, type ExchangeReviewState } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
 import { FX_ITEM_A, fxFacts, fxItem, fxLine, fxResult } from './__fixtures__/readiness-facts';
@@ -24,6 +24,7 @@ import {
   replacementOrderLines,
   replacementSideLines,
   returnRowExchange,
+  reviewsForShortChange,
   shortSentences,
   workbenchActions,
   type MobileOrderReplacement,
@@ -199,6 +200,39 @@ describe('the approval review', () => {
     ]);
     // An approver still starts at "Approve as requested".
     expect(exchangeReviewStateFor(wb('requested', exchange()), {}, 'x1')).toEqual({ kind: 'as_requested' });
+  });
+
+  // Review fix P7: after a short refusal the sheet offered only "Approve,
+  // replacement on backorder" (the What's New says: that or Change
+  // replacement). "Change replacement" switches each short line approved as
+  // requested to Change replacement, its picker open with nothing chosen,
+  // and names the lines to scroll to and focus, in screen order.
+  it('a short refusal switches each short line to Change replacement (review fix P7)', () => {
+    const XL = { ...L, sku: 'NH-XL', variant: 'Size XL' };
+    const two = wb('requested', exchange({ lines: [xline(), xline({ id: 'x2', returnLineId: 'l2', requestedItemId: 'item-xl', requestedItem: XL })] }));
+    two.lines.push({ ...two.lines[0]!, id: 'l2', orderRequestLineId: 'ol2', quantity: 2 });
+    const detail = [{ itemId: 'item-xl', needed: 1, available: 0 }];
+    expect(reviewsForShortChange(two, {}, detail, {})).toEqual({
+      reviews: { x2: { kind: 'change', itemId: null, label: null, free: null, quantity: 1, reason: '' } },
+      focusIds: ['x2'],
+    });
+    // A change already under way to a short item keeps its choice (its picker
+    // is open) and is still the one to look at; a declined line is not short.
+    const changing: Record<string, ExchangeReviewState> = {
+      x1: { kind: 'decline', reason: 'No' },
+      x2: { kind: 'change', itemId: 'item-xl', label: 'XL', free: 0, quantity: 1, reason: 'Fits' },
+    };
+    expect(reviewsForShortChange(two, changing, detail, {})).toEqual({ reviews: changing, focusIds: ['x2'] });
+    // An added replacement that is short: its line is the one to look at.
+    const plain = wb('requested', exchange({ lines: [] }));
+    expect(reviewsForShortChange(plain, {}, [{ itemId: 'cap-l', needed: 1, available: 0 }], { l1: { itemId: 'cap-l', quantity: 1 } }).focusIds).toEqual([
+      'l1',
+    ]);
+    // Without order approval nothing switches (Change is off for them).
+    const declineOnly = wb('requested', exchange(), { canManageReturns: true, canApproveOrders: false, canReadDecisions: true });
+    expect(reviewsForShortChange(declineOnly, {}, [{ itemId: 'item-l', needed: 1, available: 0 }], {})).toEqual({ reviews: {}, focusIds: [] });
+    // A detail that cannot be read switches nothing.
+    expect(reviewsForShortChange(two, {}, 'nonsense', {})).toEqual({ reviews: {}, focusIds: [] });
   });
 
   it('"What happens when you approve" names the replacement and the wait', () => {

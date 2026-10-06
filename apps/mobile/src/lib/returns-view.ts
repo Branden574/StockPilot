@@ -493,6 +493,46 @@ export function shortSentences(detail: unknown, labelFor: (itemId: string) => st
   return list.map((s) => replacementShortLine(labelFor(s.itemId), s.available, s.needed));
 }
 
+/**
+ * "Change replacement" after a short refusal (review fix P7, the web's rule):
+ * each requested line approved as requested whose item is short switches to
+ * Change replacement, its picker open with nothing chosen; a change already
+ * under way to a short item keeps its choice. `focusIds` are the lines to
+ * look at, in screen order (an exchange line's id, or the returned line's id
+ * for an added replacement), the first scrolled to and focused. Nothing
+ * switches for a viewer without order approval (Change is off for them) or a
+ * detail that cannot be read.
+ */
+export function reviewsForShortChange(
+  wb: Pick<MobileReturnWorkbench, 'lines'> & ReviewWorkbench,
+  reviews: Record<string, ExchangeReviewState>,
+  detail: unknown,
+  adds: Record<string, { itemId: string | null; quantity: number } | null>,
+): { reviews: Record<string, ExchangeReviewState>; focusIds: string[] } {
+  const short = new Set((Array.isArray(detail) ? replacementShortItems(detail as Record<string, unknown>[]) : []).map((s) => s.itemId));
+  if (short.size === 0 || !reviewerOf(wb).canApproveOrders) return { reviews, focusIds: [] };
+  const ex = exchangeOf(wb);
+  const next: Record<string, ExchangeReviewState> = { ...reviews };
+  const focusIds: string[] = [];
+  for (const l of wb.lines) {
+    const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
+    if (!x) {
+      const add = adds[l.id];
+      if (add?.itemId && short.has(add.itemId)) focusIds.push(l.id);
+      continue;
+    }
+    if (x.status !== 'requested') continue;
+    const v = exchangeReviewStateFor(wb, reviews, x.id);
+    if (v.kind === 'as_requested' && x.requestedItemId && short.has(x.requestedItemId)) {
+      next[x.id] = { kind: 'change', itemId: null, label: null, free: null, quantity: Math.min(x.requestedQuantity, l.quantity), reason: '' };
+      focusIds.push(x.id);
+    } else if (v.kind === 'change' && v.itemId && short.has(v.itemId)) {
+      focusIds.push(x.id);
+    }
+  }
+  return { reviews: next, focusIds };
+}
+
 /** The label the short sentences use for an item id (the exchange's own items). */
 export function exchangeItemLabel(wb: { exchange?: MobileReturnExchange | null }, itemId: string): string {
   for (const x of exchangeOf(wb).lines) {

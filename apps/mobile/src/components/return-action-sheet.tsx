@@ -75,6 +75,7 @@ import {
   openLines,
   processButtonLabel,
   processingHint,
+  reviewsForShortChange,
   shortSentences,
   stepOutcomeMessage,
   whatHappensLines,
@@ -207,6 +208,13 @@ function SheetContent({
   const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
   const layout = exceptionSheetLayout({ windowHeight: height, availableHeight, topInset: insets.top });
   const [attachBody, kb] = useSheetKeyboard();
+  // Review fix P7: where the review and each of its cards sit in the body,
+  // and each card's heading, so "Change replacement" after a short refusal
+  // can scroll to the first short line and move VoiceOver there.
+  const bodyNode = React.useRef<ScrollView | null>(null);
+  const reviewTop = React.useRef(0);
+  const reviewCardTop = React.useRef<Record<string, number>>({});
+  const reviewHeading = React.useRef<Record<string, View | null>>({});
 
   React.useEffect(() => {
     busyRef.current = false;
@@ -291,6 +299,23 @@ function SheetContent({
               : null;
   const canSubmit = disabledReason === null && !submitting;
   const shortLines = shortSentences(shortDetail, (id) => exchangeItemLabel(wb, id));
+
+  // Review fix P7: after a short refusal, "Change replacement" switches each
+  // short line's review to Change replacement (its picker opens) and scrolls
+  // to the first, moving VoiceOver to its heading. The lines above the first
+  // do not change, so where it sits now is where it stays.
+  function changeShortLines() {
+    const next = reviewsForShortChange(wb, reviews, shortDetail, adds);
+    setReviews(next.reviews);
+    setShortDetail(null);
+    setError(null);
+    const first = next.focusIds[0];
+    if (!first) return;
+    const y = reviewTop.current + (reviewCardTop.current[first] ?? 0);
+    bodyNode.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
+    const target = reviewHeading.current[first];
+    if (target) AccessibilityInfo.sendAccessibilityEvent(target, 'focus');
+  }
   const loaderFor = (orderRequestLineId: string) => (q: string) => getReturnCandidates(wb.return.id, orderRequestLineId, q);
 
   const hasExchange = ex.kind === 'exchange';
@@ -512,7 +537,10 @@ function SheetContent({
           </View>
 
           <ScrollView
-            ref={attachBody}
+            ref={(node) => {
+              attachBody(node);
+              bodyNode.current = node;
+            }}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             scrollEventThrottle={16}
@@ -594,6 +622,15 @@ function SheetContent({
                     setAdds((prev) => ({ ...prev, [lineId]: next }));
                     setShortDetail(null);
                     setError(null);
+                  }}
+                  onTop={(y) => {
+                    reviewTop.current = y;
+                  }}
+                  onCardTop={(id, y) => {
+                    reviewCardTop.current[id] = y;
+                  }}
+                  onHeading={(id, node) => {
+                    reviewHeading.current[id] = node;
                   }}
                 />
                 {(() => {
@@ -693,15 +730,25 @@ function SheetContent({
               </Body>
             ) : null}
             {shortLines.length > 0 ? (
-              <View style={{ gap: 6 }} accessibilityRole="alert">
-                {shortLines.map((t) => (
-                  <Body key={t} size={13.5} color={ACCENT.crit}>
-                    {t}
-                  </Body>
-                ))}
+              <View style={{ gap: 6 }}>
+                <View style={{ gap: 6 }} accessibilityRole="alert">
+                  {shortLines.map((t) => (
+                    <Body key={t} size={13.5} color={ACCENT.crit}>
+                      {t}
+                    </Body>
+                  ))}
+                </View>
                 <Button variant="outline" disabled={!canSubmit} onPress={() => void submit('backorder')}>
                   {RETURNS_COPY.approveReplacementOnBackorder}
                 </Button>
+                {/* Review fix P7: or change the short lines' replacement (a
+                    local switch: the picker asks the server, which says when
+                    it needs a connection). */}
+                {mode === 'approve' && wb.viewer.canApproveOrders ? (
+                  <Button variant="outline" disabled={submitting} onPress={changeShortLines}>
+                    {RETURNS_COPY.changeReplacement}
+                  </Button>
+                ) : null}
               </View>
             ) : null}
 
@@ -811,6 +858,9 @@ function ExchangeReview({
   loaderFor,
   onReview,
   onAdd,
+  onTop,
+  onCardTop,
+  onHeading,
 }: {
   wb: MobileReturnWorkbench;
   reviews: Record<string, ExchangeReviewState>;
@@ -820,6 +870,11 @@ function ExchangeReview({
   loaderFor: (orderRequestLineId: string) => (q: string) => ReturnType<typeof getReturnCandidates>;
   onReview: (exchangeLineId: string, next: ExchangeReviewState) => void;
   onAdd: (returnLineId: string, next: AddState) => void;
+  /** Review fix P7: where the review, and each card in it, sits (the sheet
+   *  scrolls to a short line), and each card's heading (VoiceOver goes there). */
+  onTop: (y: number) => void;
+  onCardTop: (id: string, y: number) => void;
+  onHeading: (id: string, node: View | null) => void;
 }) {
   const { c } = useTheme();
   const ex = exchangeOf(wb);
@@ -830,10 +885,12 @@ function ExchangeReview({
       if (!ex.createEnabled || l.applied || !wb.viewer.canApproveOrders) return null;
       const add = adds[l.id] ?? null;
       return (
-        <View key={l.id} style={[styles.lineCard, { borderColor: c.hair }]}>
-          <Body size={14} color={c.ink}>
-            {label}
-          </Body>
+        <View key={l.id} onLayout={(e) => onCardTop(l.id, e.nativeEvent.layout.y)} style={[styles.lineCard, { borderColor: c.hair }]}>
+          <View ref={(node) => onHeading(l.id, node)} accessible>
+            <Body size={14} color={c.ink}>
+              {label}
+            </Body>
+          </View>
           {add ? (
             <>
               <ReplacementPickerList
@@ -868,10 +925,12 @@ function ExchangeReview({
       ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant)
       : RETURNS_COPY.replacementWarehouseReview;
     return (
-      <View key={x.id} style={[styles.lineCard, { borderColor: c.hair }]}>
-        <Body size={14} color={c.ink}>
-          {label} → {requested}
-        </Body>
+      <View key={x.id} onLayout={(e) => onCardTop(x.id, e.nativeEvent.layout.y)} style={[styles.lineCard, { borderColor: c.hair }]}>
+        <View ref={(node) => onHeading(x.id, node)} accessible>
+          <Body size={14} color={c.ink}>
+            {label} → {requested}
+          </Body>
+        </View>
         {x.requestNote ? (
           <Body size={12.5} muted>
             {RETURNS_COPY.replacementNoteFromRequester}: {x.requestNote}
@@ -949,7 +1008,7 @@ function ExchangeReview({
   });
   if (!rows.some(Boolean)) return null;
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 10 }} onLayout={(e) => onTop(e.nativeEvent.layout.y)}>
       <FieldLabel>{RETURNS_COPY.replacement}</FieldLabel>
       {rows}
     </View>

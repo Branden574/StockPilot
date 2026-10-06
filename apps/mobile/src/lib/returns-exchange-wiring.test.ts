@@ -191,6 +191,21 @@ describe('online only', () => {
     expect(body.indexOf('{consequences.map(')).toBeLessThan(body.indexOf('{needsDestinations'));
   });
 
+  // Review fix P7: after a short refusal the phone offered only "Approve,
+  // replacement on backorder". The short block now also offers Change
+  // replacement (at approval, with order approval), which switches each short
+  // line's review and scrolls to and focuses the first one's picker.
+  it('after a short refusal, Change replacement switches the short lines and moves to the first (review fix P7)', () => {
+    const block = sheet.slice(sheet.indexOf('{shortLines.length > 0 ? ('), sheet.indexOf("{mode === 'deny' || mode === 'cancel' || reasonRequired"));
+    expect(block).toContain('{RETURNS_COPY.approveReplacementOnBackorder}');
+    expect(block).toContain("{mode === 'approve' && wb.viewer.canApproveOrders ? (");
+    expect(block).toContain('onPress={changeShortLines}');
+    expect(block).toContain('{RETURNS_COPY.changeReplacement}');
+    expect(sheet).toMatch(/function changeShortLines\(\) \{\s*const next = reviewsForShortChange\(wb, reviews, shortDetail, adds\);/);
+    expect(sheet).toContain('bodyNode.current?.scrollTo(');
+    expect(sheet).toContain("AccessibilityInfo.sendAccessibilityEvent(target, 'focus');");
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {
