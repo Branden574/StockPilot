@@ -1066,9 +1066,16 @@ export async function getDashboardActions(
   options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
 ): Promise<DashboardActions> {
   const ctx = options.ctx ?? (await withContext());
+  // purchase_orders has no warehouse_id: a PO belongs to the warehouse of its
+  // destination location, the rule PurchaseOrdersService.list/overdueCount use.
   let posQ = ctx.supabase
     .from('purchase_orders')
-    .select('id', { count: 'estimated', head: true })
+    .select(
+      options.warehouseId
+        ? 'id, destination:locations!destination_location_id!inner (warehouse_id)'
+        : 'id',
+      { count: 'estimated', head: true },
+    )
     .eq('organization_id', ctx.organizationId)
     .in('status', ['expected_inbound', 'ordered', 'partially_received']);
   let ccQ = ctx.supabase
@@ -1077,13 +1084,21 @@ export async function getDashboardActions(
     .eq('organization_id', ctx.organizationId)
     .eq('status', 'in_progress');
   if (options.warehouseId) {
-    posQ = posQ.eq('warehouse_id', options.warehouseId);
+    posQ = posQ.eq('destination.warehouse_id', options.warehouseId);
     ccQ = ccQ.eq('warehouse_id', options.warehouseId);
   }
   const [pos, cc] = await Promise.all([posQ, ccQ]);
+  // Badge counts only (no decision reads them): a failed count shows no badge,
+  // but is reported rather than passed off as zero without a trace.
+  if (pos.error) {
+    reportDegradedRead('dashboard-actions', pos.error, { query: 'open_purchase_orders' });
+  }
+  if (cc.error) {
+    reportDegradedRead('dashboard-actions', cc.error, { query: 'open_cycle_counts' });
+  }
   return {
-    openPoCount: pos.count ?? 0,
-    openCycleCount: cc.count ?? 0,
+    openPoCount: pos.error ? 0 : (pos.count ?? 0),
+    openCycleCount: cc.error ? 0 : (cc.count ?? 0),
     pendingReceipts: 0,
   };
 }
