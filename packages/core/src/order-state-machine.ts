@@ -243,7 +243,11 @@ export interface AvailableActionsInput {
    * (order_requests.replacement_for_return_id). Its items come from its RMA,
    * and it is changed or cancelled only there: `cancel` gives way to
    * `cancel_in_rma` (the database refuses a cancel from the order page,
-   * replacement_cancel_via_return). Optional, default off.
+   * replacement_cancel_via_return). The order header guard refuses a
+   * close-partial and a change of warehouse, delivery site or created date
+   * the same way, so `close_partial` is never offered either (a backordered
+   * replacement ends from its RMA), and no header edit is ever an action
+   * here. Optional, default off.
    */
   isReplacement?: boolean;
   /**
@@ -381,6 +385,10 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
   if (input.isReplacement) {
     const at = actions.indexOf('cancel');
     if (at >= 0) actions.splice(at, 1, 'cancel_in_rma');
+    // RX-2 review fix (0396, security F-1): the header guard refuses a
+    // close-partial on a replacement from anywhere but the RMA functions.
+    const closeAt = actions.indexOf('close_partial');
+    if (closeAt >= 0) actions.splice(closeAt, 1);
   }
   if (input.replacementGate === 'waiting' || input.replacementGate === 'closed') {
     for (const gated of ['generate_pick_slip', 'resume_fulfillment'] as const) {
