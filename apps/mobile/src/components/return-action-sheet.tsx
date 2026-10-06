@@ -67,7 +67,6 @@ import {
   choiceProblems,
   denyHelp,
   exchangeApprovalDecisions,
-  exchangeItemLabel,
   exchangeOf,
   exchangeReviewProblems,
   exchangeReviewStateFor,
@@ -82,6 +81,7 @@ import {
   refusalRefreshesWorkbench,
   replacementQuantityMax,
   reviewsForShortChange,
+  shortItemLabel,
   shortSentences,
   stepOutcomeMessage,
   whatHappensLines,
@@ -313,7 +313,7 @@ function SheetContent({
                 : `At most ${reasonMax} characters.`
               : null;
   const canSubmit = disabledReason === null && !submitting;
-  const shortLines = shortSentences(shortDetail, (id) => exchangeItemLabel(wb, id));
+  const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id));
 
   // Review fix P7: after a short refusal, "Change replacement" switches each
   // short line's review to Change replacement (its picker opens) and scrolls

@@ -32,6 +32,7 @@ import {
   refusalRefreshesWorkbench,
   returnRowExchange,
   reviewsForShortChange,
+  shortItemLabel,
   shortSentences,
   stepOutcomeMessage,
   stepReplacementQuantity,
@@ -278,6 +279,34 @@ describe('the approval review', () => {
     expect(shortSentences([{ itemId: 'item-l', needed: 1, available: 0 }], (id) => exchangeItemLabel(w, id))).toEqual([
       'Walk New Hire Shirt, L: 0 available, 1 needed.',
     ]);
+  });
+
+  // Simulator fault F-C (2026-10-06, sim-RX2/shots-fix iphone-OFF-05,
+  // ipad-P7-20): an item chosen in the review through Change replacement (or
+  // Add a replacement) is not one of the exchange's own items, so a short
+  // refusal named it "Item: 0 available, 1 needed." while the preview above
+  // named it. The label comes from the review's own choice first.
+  it('a short refusal names an item chosen through Change replacement or Add a replacement (simulator fault F-C)', () => {
+    const w = wb('requested', exchange());
+    const reviews = {
+      x1: { kind: 'change' as const, itemId: 'item-xl', label: 'Walk New Hire Shirt, XL', free: 0, quantity: 1, reason: 'Out of L' },
+    };
+    const adds = { l9: { itemId: 'cap-l', label: 'Walk Cap, L', quantity: 1, free: 0 } };
+    expect(
+      shortSentences(
+        [
+          { itemId: 'item-xl', needed: 1, available: 0 },
+          { itemId: 'cap-l', needed: 1, available: 0 },
+          { itemId: 'item-l', needed: 1, available: 0 },
+        ],
+        (id) => shortItemLabel(w, reviews, adds, id),
+      ),
+    ).toEqual([
+      'Walk New Hire Shirt, XL: 0 available, 1 needed.',
+      'Walk Cap, L: 0 available, 1 needed.',
+      'Walk New Hire Shirt, L: 0 available, 1 needed.',
+    ]);
+    expect(shortItemLabel(w, {}, {}, 'unknown')).toBe('Item');
   });
 });
 

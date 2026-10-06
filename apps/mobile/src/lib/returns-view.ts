@@ -596,6 +596,27 @@ export function replacementQuantityStepLabel(delta: number, label: string): stri
   return `${delta > 0 ? 'Increase' : 'Decrease'} the replacement quantity for ${label}`;
 }
 
+/**
+ * The label a short refusal's sentence uses for an item id: an item the review
+ * itself chose (Change replacement, Add a replacement) by the review's label,
+ * else the exchange's own items (simulator fault F-C: an item picked in the
+ * review read "Item: 0 available, 1 needed.").
+ */
+export function shortItemLabel(
+  wb: { exchange?: MobileReturnExchange | null },
+  reviews: Record<string, ExchangeReviewState>,
+  adds: Record<string, { itemId: string | null; label?: string | null } | null>,
+  itemId: string,
+): string {
+  for (const v of Object.values(reviews)) {
+    if (v.kind === 'change' && v.itemId === itemId && v.label) return v.label;
+  }
+  for (const a of Object.values(adds)) {
+    if (a && a.itemId === itemId && a.label) return a.label;
+  }
+  return exchangeItemLabel(wb, itemId);
+}
+
 /** The label the short sentences use for an item id (the exchange's own items). */
 export function exchangeItemLabel(wb: { exchange?: MobileReturnExchange | null }, itemId: string): string {
   for (const x of exchangeOf(wb).lines) {

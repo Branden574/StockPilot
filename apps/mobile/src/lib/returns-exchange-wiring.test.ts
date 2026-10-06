@@ -227,6 +227,9 @@ describe('online only', () => {
     expect(block).toContain('onPress={changeShortLines}');
     expect(block).toContain('{RETURNS_COPY.changeReplacement}');
     expect(sheet).toMatch(/function changeShortLines\(\) \{\s*const next = reviewsForShortChange\(wb, reviews, shortDetail, adds\);/);
+    // Simulator fault F-C: the short sentences name an item the review chose
+    // (Change replacement, Add a replacement) by the review's own label.
+    expect(sheet).toContain('const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id));');
     expect(sheet).toContain('bodyNode.current?.scrollTo(');
     expect(sheet).toContain("AccessibilityInfo.sendAccessibilityEvent(target, 'focus');");
   });
