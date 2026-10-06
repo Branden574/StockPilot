@@ -7,8 +7,8 @@ import {
   describeReadinessWhy,
   PUT_AWAY_LINE_LABEL,
   putAwayLineAccessibilityLabel,
-  READINESS_STATES,
   readinessLineAccessibilityLabel,
+  readinessLineChip,
   type ReadinessItemAssessment,
   type ReadinessLineAssessment,
 } from '@stockpilot/core';
@@ -55,6 +55,7 @@ export function ReadinessLineCell({
   canCountItem,
   position,
   putAwayHref = null,
+  replacementGate = null,
 }: {
   line: ReadinessLineAssessment | null;
   item: ReadinessItemAssessment | null;
@@ -67,6 +68,9 @@ export function ReadinessLineCell({
   /** The line's "Put away" link, or null (nothing in Staging, or the viewer
    *  may not put stock away). */
   putAwayHref?: string | null;
+  /** RX-2 review fix P6: an exchange replacement's return-first gate; while
+   *  'waiting', a ready line reads "Waiting for return" (core readinessLineChip). */
+  replacementGate?: 'waiting' | 'open' | 'closed' | null;
 }) {
   if (!line) {
     return (
@@ -75,7 +79,7 @@ export function ReadinessLineCell({
       </p>
     );
   }
-  const meta = READINESS_STATES[line.state];
+  const meta = readinessLineChip(line, { replacementGate });
   const tone = READINESS_TONE_STYLES[meta.tone];
   const sentence = describeReadinessLine(line, item, { timeZone });
   const hold = describeReadinessHold(line.hold);
@@ -87,7 +91,7 @@ export function ReadinessLineCell({
   return (
     <div className="space-y-1" data-testid="readiness-line" data-state={line.state}>
       <span className="sr-only" data-testid="readiness-sr-label">
-        {readinessLineAccessibilityLabel(position ? { ...line, position } : line)}.
+        {readinessLineAccessibilityLabel(position ? { ...line, position } : line, { replacementGate })}.
       </span>
       {/* The chip leads its sentence on the same line: compact enough to sit
           under the item's name without a column of its own (the order page's

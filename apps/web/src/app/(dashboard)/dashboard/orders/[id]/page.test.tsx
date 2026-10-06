@@ -840,6 +840,61 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
 
+  // RX-2 review fix P6: while an exchange replacement waits for its returned
+  // item the strip never says "Ready to pick" in green: the stock is held and
+  // picking waits, and when it starts; each ready line reads Waiting for return.
+  it('a replacement waiting for its returned item: "Stock held", when picking starts, lines Waiting for return', async () => {
+    asManager();
+    const replacement = {
+      returnId: 'rma-1',
+      returnNumber: 'RMA-20261006-C27F66',
+      returnStatus: 'approved',
+      originalOrderId: 'orig',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      exchangeStatus: 'waiting_for_return',
+      exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
+      waitingForReturn: true,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      returnReceived: false,
+      returnedItems: [],
+      revision: 1,
+      canOpenReturn: true,
+      canReleaseEarly: true,
+      slipLine: 'Exchange replacement for RMA-20261006-C27F66',
+      driverLine: null,
+      held: 1,
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'approved', replacement_for_return_id: 'rma-1' }),
+        lines: [orderLine('LA', 'iA', 1)],
+        replacement,
+      }),
+    );
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 1 }], [
+          visibleItemFacts('iA', { here: { rack: 6 }, heldOwn: 1 }),
+        ]),
+      ),
+    );
+    await renderPage();
+    const strip = screen.getByTestId('readiness-strip');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      'Stock held (1 of 1 line). Picking waits for the returned item.',
+    );
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'Picking starts once RMA-20261006-C27F66 is received, or a manager releases it early.',
+    );
+    expect(within(strip).queryByText(/Ready to pick/)).toBeNull();
+    const cell = screen.getAllByTestId('readiness-line')[0]!;
+    expect(within(cell).getByTestId('readiness-chip')).toHaveTextContent('Waiting for return');
+  });
+
   it('a manager on a pending order: one read of THIS order, the strip, each line under its item, and gates from the same result', async () => {
     asManager();
     orderAt('pending_approval', [LINE_A, LINE_B]);

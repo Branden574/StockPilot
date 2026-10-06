@@ -748,8 +748,15 @@ export default async function OrderDetailPage({
   const orgTimeZone = resolveOrgTimezone(
     factsTimeZone(readinessGate ? readiness : zoneFacts) ?? deliveryRequestTimezone,
   );
+  // Returns RX-2 review fix P6: while this exchange replacement waits for its
+  // returned item, the stock card says the stock is held and picking waits
+  // (only while the gate holds; after a release or the receipt, as before).
+  const replacementReadinessGate =
+    replacement?.live && replacement.waitingForReturn
+      ? { replacementGate: 'waiting' as const, returnNumber: replacement.returnNumber }
+      : null;
   const readinessStrip = readinessNow
-    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone })
+    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone, ...replacementReadinessGate })
     : null;
   // ── F2-4: change the needed-by. "Change" beside the date, for an approver
   // with write access to the order's warehouse, on an open order, once the
@@ -1546,6 +1553,7 @@ export default async function OrderDetailPage({
                               {...readinessCellFor(l.id)}
                               timeZone={orgTimeZone}
                               position={rowIndex + 1}
+                              replacementGate={replacementReadinessGate?.replacementGate ?? null}
                             />
                           </div>
                         )}
