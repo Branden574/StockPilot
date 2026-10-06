@@ -186,7 +186,7 @@ export type OrderAction =
   | 'view_signature'
   | 'view_denial_reason'
   | 'view_final_packing_slip'
-  // RX-2 (0397): an exchange replacement waiting for its return: a manager
+  // RX-2 (0396): an exchange replacement waiting for its return: a manager
   // with returns:manage and orders:approve may release it early, with a reason.
   | 'release_replacement_early'
   // RX-2: a replacement is changed or cancelled only from its RMA.
@@ -239,7 +239,7 @@ export interface AvailableActionsInput {
    */
   canApproveOrders?: boolean;
   /**
-   * RX-2 (0397): this order is an exchange replacement
+   * RX-2 (0396): this order is an exchange replacement
    * (order_requests.replacement_for_return_id). Its items come from its RMA,
    * and it is changed or cancelled only there: `cancel` gives way to
    * `cancel_in_rma` (the database refuses a cancel from the order page,

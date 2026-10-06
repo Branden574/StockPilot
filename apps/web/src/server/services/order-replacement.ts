@@ -22,7 +22,7 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
  * list and the phone read it (returns RX-2, plan 3.6.9).
  *
  * A replacement order is an ordinary order with `replacement_for_return_id`
- * set (migration 0397): it was created and held by the RMA's functions, its
+ * set (migration 0396): it was created and held by the RMA's functions, its
  * lines are fixed, it is cancelled only through its RMA, and while its RMA
  * waits for the returned item it does not go to picking (the return-first
  * gate, unless a manager released it early). Every one of those rules is the
@@ -38,7 +38,7 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 
 // ── Refusals ─────────────────────────────────────────────────────────────────
 
-/** The hints the order paths can meet on a replacement (0397). */
+/** The hints the order paths can meet on a replacement (0396). */
 const REPLACEMENT_HINTS: readonly string[] = [
   'replacement_waiting_for_return',
   'replacement_return_cancelled',

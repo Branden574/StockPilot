@@ -600,15 +600,15 @@ select is(
 select is(
   (select string_agg(a.attname::text, ',' order by a.attnum) from pg_attribute a
     where a.attrelid = 'public.return_overview'::regclass and a.attnum > 0 and not a.attisdropped),
-  -- Re-pinned by 0397 (returns RX-2): the exchange columns are appended
-  -- after deleted_users; RX-1's columns keep their order and types (0397
+  -- Re-pinned by 0396 (returns RX-2): the exchange columns are appended
+  -- after deleted_users; RX-1's columns keep their order and types (0396
   -- suite A7 pins the whole list).
   'id,organization_id,return_number,status,source,reason_code,order_request_id,order_number,warehouse_id,'
   || 'requester_name,requester_email,requester_user_id,created_at,approved_at,received_at,closed_at,'
   || 'line_count,unit_count,lines,waiting_days,requested_by,deleted_users,'
   || 'kind,exchange_revision,exchange_lines,any_requested,all_declined,requested_short,replacement_order_id,'
   || 'replacement_order_number,replacement_status,replacement_owed,replacement_held,released_early,counter,exchange_status',
-  'A6: the view''s column order is pinned; requested_by and deleted_users (0393) name a deleted requester; RX-2 (0397) appended its columns after deleted_users');
+  'A6: the view''s column order is pinned; requested_by and deleted_users (0393) name a deleted requester; RX-2 (0396) appended its columns after deleted_users');
 select is(
   (select string_agg(p.proname || ':' || p.prosecdef::text || ':' || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
                      || ':' || has_function_privilege('anon', p.oid, 'EXECUTE')::text
@@ -893,7 +893,7 @@ select is(
   pg_temp.err(:'jC4'::jsonb) || ':' || (select count(*)::text from public.returns where order_request_id = :oX),
   'P0001:return_exceeds_fulfilled:1',
   'C4: a line over its durable budget is refused (pending demand counted) and nothing is created');
--- Re-pinned by 0397 (returns RX-2): the exchange hook now accepts an
+-- Re-pinned by 0396 (returns RX-2): the exchange hook now accepts an
 -- exchange, so the one-transaction proof uses a refusal it still makes
 -- after the header and line are written: "return 1, exchange for 2"
 -- (brief 4). The marker follows the case (core return-schemas).
@@ -1758,10 +1758,10 @@ select is(
   || 'order_request_lines.trg_zz_order_request_lines_guard=b2f6dad5ca729f93f534cdbc73d8d395,'
   || 'order_requests.order_requests_set_updated_at=f912d1e6de45c8b6c9c8bcacdbc291c3,'
   || 'order_requests.trg_assign_order_request_number=741c34077fbaf5508d979f966affc84d,'
-  -- Re-pinned by 0397 (returns RX-2; was 8c7961ae9a724879f759cb412f283510):
+  -- Re-pinned by 0396 (returns RX-2; was 8c7961ae9a724879f759cb412f283510):
   -- the notify trigger gains WHEN (new.replacement_for_return_id IS NULL);
   -- its function stays byte-identical (L1). The expected definition's md5
-  -- is computed from pg_get_triggerdef's text (0397 suite A8 pins the text).
+  -- is computed from pg_get_triggerdef's text (0396 suite A8 pins the text).
   || 'order_requests.trg_order_requests_notify=c8b21f734dc54f60e20b3dc9da038b2a,'
   || 'order_requests.trg_order_requests_validate_transition=dcf5294e729dc5900c2d7bd1ad4f6412,'
   || 'order_requests.trg_order_requests_workflow_guard=f25d3ae18d19712e1d7d57a34d6c298b,'

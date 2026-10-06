@@ -766,7 +766,7 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {/* RX-2: the return-first gate (0397) holds the pick slip of an
+          {/* RX-2: the return-first gate (0396) holds the pick slip of an
               exchange replacement until the returned item is received. */}
           {(status === 'approved' || status === 'backordered') && gated && (
             <>

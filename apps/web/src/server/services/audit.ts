@@ -388,7 +388,7 @@ export type AuditEvent =
   // revalidation (nothing moved; written after the failure).
   | 'return.disposition_planned'
   | 'return.restock_location_unavailable'
-  // Returns RX-2 (0397): an exchange approved (its linked replacement order
+  // Returns RX-2 (0396): an exchange approved (its linked replacement order
   // created and held), a replacement changed or issued again, cancelled, or
   // released for picking before the returned item arrived.
   | 'return.exchange_approved'

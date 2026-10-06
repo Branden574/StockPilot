@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 /**
  * POST /api/v1/returns/[id]/replacement — change the replacement (a
  * substitution) or issue a new one after a replacement cancel (C-1)
- * (change_return_replacement, migration 0397; returns RX-2).
+ * (change_return_replacement, migration 0396; returns RX-2).
  *
  * body { expectedRevision, lines: [{ exchangeLineId, itemId?, quantity? }],
  *        reason, whenShort?: 'refuse' | 'backorder',

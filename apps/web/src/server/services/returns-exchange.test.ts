@@ -5,7 +5,7 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
 import type { ModuleId } from '@stockpilot/core';
 
 /**
- * RMAService's exchange (returns RX-2, migration 0397): the approval that
+ * RMAService's exchange (returns RX-2, migration 0396): the approval that
  * creates the linked replacement order, changing, cancelling, releasing and
  * preparing it, the candidates search, the kill switch and the requester
  * paths held back until RX-3. Every write is one database function; the
@@ -165,7 +165,7 @@ describe('parseReplacementSummary', () => {
   });
 });
 
-describe('approve with an exchange (approve_return + the 0397 hook)', () => {
+describe('approve with an exchange (approve_return + the 0396 hook)', () => {
   const DECISION = {
     lines: [{ returnLineId: RLINE_ID, disposition: 'restock' as const, restock: { target: 'original' as const } }],
     exchange: [{ action: 'approve' as const, exchangeLineId: XLINE_ID }],

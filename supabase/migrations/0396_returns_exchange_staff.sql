@@ -1,4 +1,4 @@
--- 0397_returns_exchange_staff.sql
+-- 0396_returns_exchange_staff.sql
 --
 -- RETURNS AND EXCHANGES, SLICE RX-2: exchanges for staff and the counter
 -- (owner GO 2026-10-02, "implement it safely and properly"; plan
@@ -102,7 +102,7 @@
 -- and the next attempt starts after 50 to 150 ms holding nothing, up to 40
 -- attempts; then 55P03 and nothing is applied. No later statement locks a
 -- table the prelude did not, so the file never waits while holding a lock
--- (scripts/db-concurrency/0397_migration_lock_footprint.sh). lock_timeout is
+-- (scripts/db-concurrency/0396_migration_lock_footprint.sh). lock_timeout is
 -- 5s for the file and 900ms after the prelude. Push off-peak: order readers
 -- wait for the few milliseconds the file holds order_requests.
 --

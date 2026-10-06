@@ -138,7 +138,7 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   return_decision_incomplete: { code: 'validation_error', status: 400, message: W.decisionIncomplete },
   order_not_returnable: { code: 'validation_error', status: 400, message: W.notReturnable },
   insufficient_stock: { code: 'validation_error', status: 400, message: W.insufficientStock },
-  // RX-2 (0397): the replacement order's own checks and the exchange table's
+  // RX-2 (0396): the replacement order's own checks and the exchange table's
   // defence-in-depth trigger (only the functions write it).
   replacement_requester_unavailable: { code: 'validation_error', status: 400, message: W.replacementNoRequester },
   exchange_line_invalid: { code: 'validation_error', status: 400, message: W.invalid },

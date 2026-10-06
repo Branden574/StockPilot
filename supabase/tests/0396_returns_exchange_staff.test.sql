@@ -1,5 +1,5 @@
--- supabase/tests/0397_returns_exchange_staff.test.sql
--- pgTAP proof for migration 0397 (returns and exchanges, slice RX-2):
+-- supabase/tests/0396_returns_exchange_staff.test.sql
+-- pgTAP proof for migration 0396 (returns and exchanges, slice RX-2):
 -- exchanges for staff and the counter. A returned line may ask for a
 -- replacement; approval creates ONE linked replacement order (its own SO
 -- number), reserved by the unchanged approve_partial; the replacement waits
@@ -59,7 +59,7 @@
 -- Y.  The requester tier (RX-3's predicate, shipped here).
 -- F.  Frozen bodies and triggers; holdings equal on hand; org deletion.
 --
--- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0397.py; each must
+-- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0396.py; each must
 -- fail the named lines):
 --   M1  the gate lets a pick slip through while the RMA is approved      -> E3, R4
 --   M2  the gate takes any value of the flag (not this transaction's id) -> Q1, Q2
@@ -208,24 +208,24 @@ select plan(103);
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,     '0397-own@test.local',    '{}'::jsonb),
-  (:mgr,     '0397-mgr@test.local',    '{}'::jsonb),
-  (:req,     '0397-req@test.local',    '{}'::jsonb),
-  (:stfRm,   '0397-stfrm@test.local',  '{}'::jsonb),
-  (:stfCh,   '0397-stfch@test.local',  '{}'::jsonb),
-  (:vwr,     '0397-vwr@test.local',    '{}'::jsonb),
-  (:gone,    '0397-gone@test.local',   '{}'::jsonb),
-  (:req2,    '0397-req2@test.local',   '{}'::jsonb),
-  (:portalU, '0397-portal@test.local', '{}'::jsonb),
-  (:stfB,    '0397-stfb@test.local',   '{}'::jsonb),
-  (:outZ,    '0397-outz@test.local',   '{}'::jsonb)
+  (:own,     '0396-own@test.local',    '{}'::jsonb),
+  (:mgr,     '0396-mgr@test.local',    '{}'::jsonb),
+  (:req,     '0396-req@test.local',    '{}'::jsonb),
+  (:stfRm,   '0396-stfrm@test.local',  '{}'::jsonb),
+  (:stfCh,   '0396-stfch@test.local',  '{}'::jsonb),
+  (:vwr,     '0396-vwr@test.local',    '{}'::jsonb),
+  (:gone,    '0396-gone@test.local',   '{}'::jsonb),
+  (:req2,    '0396-req2@test.local',   '{}'::jsonb),
+  (:portalU, '0396-portal@test.local', '{}'::jsonb),
+  (:stfB,    '0396-stfb@test.local',   '{}'::jsonb),
+  (:outZ,    '0396-outz@test.local',   '{}'::jsonb)
   on conflict (id) do nothing;
 update public.user_profiles set full_name = 'Gone Person' where id = :gone;
 -- An org insert enables the default modules (orders among them); returns is
 -- off by default and is turned on here.
 insert into public.organizations (id, name, slug) values
-  (:orgA, '0397 Exchanges A', '0397-exchanges-a'),
-  (:orgZ, '0397 Exchanges Z', '0397-exchanges-z');
+  (:orgA, '0396 Exchanges A', '0396-exchanges-a'),
+  (:orgZ, '0396 Exchanges Z', '0396-exchanges-z');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,   'owner',   now()),
   (:orgA, :mgr,   'manager', now()),
@@ -243,14 +243,14 @@ insert into public.organization_modules (organization_id, module_id, enabled, ti
 on conflict (organization_id, module_id) do update set enabled = true;
 -- The 0188 trigger creates Staging and Unplaced per warehouse.
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA, :orgA, '0397 Main',   'WH-0397A', 'active'),
-  (:whB, :orgA, '0397 Second', 'WH-0397B', 'active'),
-  (:whZ, :orgZ, '0397 Zed',    'WH-0397Z', 'active');
+  (:whA, :orgA, '0396 Main',   'WH-0396A', 'active'),
+  (:whB, :orgA, '0396 Second', 'WH-0396B', 'active'),
+  (:whZ, :orgZ, '0396 Zed',    'WH-0396Z', 'active');
 insert into public.charters (id, organization_id, name, code, status) values
-  (:cA1,  :orgA, '0397 Site One',      'S0397-1', 'active'),
-  (:cA2,  :orgA, '0397 Owner Two',     'S0397-2', 'active'),
-  (:cIn,  :orgA, '0397 Closed Site',   'S0397-3', 'inactive'),
-  (:cFar, :orgA, '0397 Far Site',      'S0397-4', 'active');
+  (:cA1,  :orgA, '0396 Site One',      'S0397-1', 'active'),
+  (:cA2,  :orgA, '0396 Owner Two',     'S0397-2', 'active'),
+  (:cIn,  :orgA, '0396 Closed Site',   'S0397-3', 'inactive'),
+  (:cFar, :orgA, '0396 Far Site',      'S0397-4', 'active');
 insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
   (:orgA, :whA, :cA1), (:orgA, :whA, :cA2), (:orgA, :whA, :cIn);
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary, charter_id) values
@@ -278,48 +278,48 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
   (:r12B, :orgA, :whA, '12-B', 'shelf', 'rack', now() - interval '59 minutes');
 
 insert into public.product_groups (id, organization_id, name, group_key, default_counting_unit, status) values
-  (:grp,    :orgA, 'Walk New Hire Shirt', '0397|walk new hire shirt', 'each', 'active'),
-  (:grpOld, :orgA, 'Walk Old Shirt',      '0397|walk old shirt',      'each', 'archived'),
-  (:grpR,   :orgA, 'Walk Requester Polo', '0397|walk requester polo', 'each', 'active');
+  (:grp,    :orgA, 'Walk New Hire Shirt', '0396|walk new hire shirt', 'each', 'active'),
+  (:grpOld, :orgA, 'Walk Old Shirt',      '0396|walk old shirt',      'each', 'archived'),
+  (:grpR,   :orgA, 'Walk Requester Polo', '0396|walk requester polo', 'each', 'active');
 insert into public.product_groups (id, organization_id, name, group_key, default_counting_unit, status)
-values ('03970000-0000-0000-0000-000000000a09', :orgZ, 'Zed Shirt', '0397|zed shirt', 'each', 'active');
+values ('03970000-0000-0000-0000-000000000a09', :orgZ, 'Zed Shirt', '0396|zed shirt', 'each', 'active');
 
 -- Items. Single-rack items seed their holding at primary_location_id (the
 -- seed trigger). No item carries a reorder point (walk safety, C-7).
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type,
    primary_location_id, group_id, variant_size, variant_key) values
-  (:gM,     :orgA, :whA, '0397-M',     'Walk New Hire Shirt',  5, 7, 'active', 'none', :r31C, :grp, 'M',  'M'),
-  (:gL,     :orgA, :whA, '0397-L',     'Walk New Hire Shirt', 60, 7, 'active', 'none', :r12B, :grp, 'L',  'L'),
-  (:gXL,    :orgA, :whA, '0397-XL',    'Walk New Hire Shirt',  0, 7, 'active', 'none', null,  :grp, 'XL', 'XL'),
-  (:gS,     :orgA, :whA, '0397-S',     'Walk New Hire Shirt',  3, 7, 'active', 'none', :r12B, :grp, 'S',  'S'),
-  (:itNavy, :orgA, :whA, '0397-NAVY-L','Walk Navy Shirt L',    3, 9, 'active', 'none', :r12B, null, null, null),
-  (:itDel,  :orgA, :whA, '0397-DEL',   'Walk Deleted Shirt',   2, 7, 'active', 'none', :r12B, null, null, null),
-  (:itRent, :orgA, :whA, '0397-RENT',  'Walk Rental Shirt',    2, 7, 'active', 'none', :r12B, null, null, null),
-  (:itAwait,:orgA, :whA, '0397-AWAIT', 'Walk Awaited Shirt',   0, 7, 'active', 'none', null,  null, null, null),
-  (:itKit,  :orgA, :whA, '0397-KIT',   'Walk Shirt Kit',       2, 7, 'active', 'none', :r12B, null, null, null),
-  (:itArch, :orgA, :whA, '0397-ARCH',  'Walk Archived Shirt',  2, 7, 'archived', 'none', :r12B, null, null, null),
-  (:itWhB,  :orgA, :whB, '0397-WHB',   'Walk Second WH Shirt', 2, 7, 'active', 'none', null,  null, null, null),
-  (:oldM,   :orgA, :whA, '0397-OLD-M', 'Walk Old Shirt',       2, 7, 'active', 'none', :r12B, :grpOld, 'M', 'M'),
-  (:oldL,   :orgA, :whA, '0397-OLD-L', 'Walk Old Shirt',       2, 7, 'active', 'none', :r12B, :grpOld, 'L', 'L'),
-  (:rM,     :orgA, :whA, '0397-R-M',   'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'M',  'M'),
-  (:rL,     :orgA, :whA, '0397-R-L',   'Walk Requester Polo',  3, 5, 'active', 'none', :r12B, :grpR, 'L',  'L'),
-  (:rL2,    :orgA, :whA, '0397-R-L2',  'Walk Requester Polo',  1, 5, 'active', 'none', :r12B, :grpR, 'L',  'L'),
-  (:rXLh,   :orgA, :whA, '0397-R-XLH', 'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'XL', 'XL'),
-  (:rXLb,   :orgA, :whB, '0397-R-XLB', 'Walk Requester Polo',  2, 5, 'active', 'none', null,  :grpR, 'XL', 'XL'),
-  (:rSame,  :orgA, :whA, '0397-R-M2',  'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'M',  'M'),
-  (:r2XL,   :orgA, :whA, '0397-R-2XL', 'Walk Requester Polo',  0, 5, 'active', 'none', null,  :grpR, '2XL','2XL'),
-  (:r3XL,   :orgA, :whA, '0397-R-3XL', 'Walk Requester Polo',  1, 5, 'active', 'none', :r12B, :grpR, '3XL','3XL');
+  (:gM,     :orgA, :whA, '0396-M',     'Walk New Hire Shirt',  5, 7, 'active', 'none', :r31C, :grp, 'M',  'M'),
+  (:gL,     :orgA, :whA, '0396-L',     'Walk New Hire Shirt', 60, 7, 'active', 'none', :r12B, :grp, 'L',  'L'),
+  (:gXL,    :orgA, :whA, '0396-XL',    'Walk New Hire Shirt',  0, 7, 'active', 'none', null,  :grp, 'XL', 'XL'),
+  (:gS,     :orgA, :whA, '0396-S',     'Walk New Hire Shirt',  3, 7, 'active', 'none', :r12B, :grp, 'S',  'S'),
+  (:itNavy, :orgA, :whA, '0396-NAVY-L','Walk Navy Shirt L',    3, 9, 'active', 'none', :r12B, null, null, null),
+  (:itDel,  :orgA, :whA, '0396-DEL',   'Walk Deleted Shirt',   2, 7, 'active', 'none', :r12B, null, null, null),
+  (:itRent, :orgA, :whA, '0396-RENT',  'Walk Rental Shirt',    2, 7, 'active', 'none', :r12B, null, null, null),
+  (:itAwait,:orgA, :whA, '0396-AWAIT', 'Walk Awaited Shirt',   0, 7, 'active', 'none', null,  null, null, null),
+  (:itKit,  :orgA, :whA, '0396-KIT',   'Walk Shirt Kit',       2, 7, 'active', 'none', :r12B, null, null, null),
+  (:itArch, :orgA, :whA, '0396-ARCH',  'Walk Archived Shirt',  2, 7, 'archived', 'none', :r12B, null, null, null),
+  (:itWhB,  :orgA, :whB, '0396-WHB',   'Walk Second WH Shirt', 2, 7, 'active', 'none', null,  null, null, null),
+  (:oldM,   :orgA, :whA, '0396-OLD-M', 'Walk Old Shirt',       2, 7, 'active', 'none', :r12B, :grpOld, 'M', 'M'),
+  (:oldL,   :orgA, :whA, '0396-OLD-L', 'Walk Old Shirt',       2, 7, 'active', 'none', :r12B, :grpOld, 'L', 'L'),
+  (:rM,     :orgA, :whA, '0396-R-M',   'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'M',  'M'),
+  (:rL,     :orgA, :whA, '0396-R-L',   'Walk Requester Polo',  3, 5, 'active', 'none', :r12B, :grpR, 'L',  'L'),
+  (:rL2,    :orgA, :whA, '0396-R-L2',  'Walk Requester Polo',  1, 5, 'active', 'none', :r12B, :grpR, 'L',  'L'),
+  (:rXLh,   :orgA, :whA, '0396-R-XLH', 'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'XL', 'XL'),
+  (:rXLb,   :orgA, :whB, '0396-R-XLB', 'Walk Requester Polo',  2, 5, 'active', 'none', null,  :grpR, 'XL', 'XL'),
+  (:rSame,  :orgA, :whA, '0396-R-M2',  'Walk Requester Polo',  2, 5, 'active', 'none', :r12B, :grpR, 'M',  'M'),
+  (:r2XL,   :orgA, :whA, '0396-R-2XL', 'Walk Requester Polo',  0, 5, 'active', 'none', null,  :grpR, '2XL','2XL'),
+  (:r3XL,   :orgA, :whA, '0396-R-3XL', 'Walk Requester Polo',  1, 5, 'active', 'none', :r12B, :grpR, '3XL','3XL');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, charter_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type,
    primary_location_id, group_id, variant_size, variant_key) values
-  (:itCh2, :orgA, :whA, :cA2, '0397-CH2',   'Walk Owned Shirt',    2, 7, 'active', 'none', :r12B, null,  null, null),
-  (:rXLc,  :orgA, :whA, :cA2, '0397-R-XLC', 'Walk Requester Polo', 2, 5, 'active', 'none', :r12B, :grpR, 'XL', 'XL');
+  (:itCh2, :orgA, :whA, :cA2, '0396-CH2',   'Walk Owned Shirt',    2, 7, 'active', 'none', :r12B, null,  null, null),
+  (:rXLc,  :orgA, :whA, :cA2, '0396-R-XLC', 'Walk Requester Polo', 2, 5, 'active', 'none', :r12B, :grpR, 'XL', 'XL');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type, group_id, variant_size, variant_key) values
-  (:itZ, :orgZ, :whZ, '0397-Z',   'Zed shirt',   2, 7, 'active', 'none', null, null, null),
-  (:zM,  :orgZ, :whZ, '0397-Z-M', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'M', 'M'),
-  (:zL,  :orgZ, :whZ, '0397-Z-L', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'L', 'L');
+  (:itZ, :orgZ, :whZ, '0396-Z',   'Zed shirt',   2, 7, 'active', 'none', null, null, null),
+  (:zM,  :orgZ, :whZ, '0396-Z-M', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'M', 'M'),
+  (:zL,  :orgZ, :whZ, '0396-Z-L', 'Zed Shirt',   2, 7, 'active', 'none', '03970000-0000-0000-0000-000000000a09', 'L', 'L');
 update public.inventory_items set deleted_at = now() where id = :itDel;
 update public.inventory_items set is_rental = true where id = :itRent;
 update public.inventory_items set awaiting_first_receipt = true where id = :itAwait;
@@ -327,8 +327,8 @@ update public.inventory_items set is_bundle = true where id = :itKit;
 update public.inventory_items set public_visibility = 'hidden' where id = :rXLh;
 
 -- The B2B customer, its portal user and its catalog (rM, rL and r3XL).
-insert into public.customers (id, organization_id, name, status) values (:cust, :orgA, '0397 Customer Co', 'active');
-insert into public.customer_users (customer_id, user_id, email, accepted_at) values (:cust, :portalU, '0397-portal@test.local', now());
+insert into public.customers (id, organization_id, name, status) values (:cust, :orgA, '0396 Customer Co', 'active');
+insert into public.customer_users (customer_id, user_id, email, accepted_at) values (:cust, :portalU, '0396-portal@test.local', now());
 insert into public.customer_catalog (customer_id, item_id) values (:cust, :rM), (:cust, :rL), (:cust, :r3XL);
 
 -- Orders at their status, by the superuser (the insert guard holds API roles
@@ -340,16 +340,16 @@ insert into public.order_requests
   (:oE2E,    :orgA, :whA, 'pick_slip_generated', 'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, null),
   (:oG,      :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, 'Front desk'),
   (:oShort,  :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, null),
-  (:oEmail,  :orgA, :whA, 'completed',           'internal', null,  null,     'Email Person', 'email-0397@test.local', null, null, 'pickup', null, null),
-  (:oPortal, :orgA, :whA, 'completed',           'portal',   :cust, :portalU, '0397 Customer Co', '0397-portal@test.local', null, null, 'pickup', null, null),
+  (:oEmail,  :orgA, :whA, 'completed',           'internal', null,  null,     'Email Person', 'email-0396@test.local', null, null, 'pickup', null, null),
+  (:oPortal, :orgA, :whA, 'completed',           'portal',   :cust, :portalU, '0396 Customer Co', '0396-portal@test.local', null, null, 'pickup', null, null),
   (:oGone,   :orgA, :whA, 'completed',           'internal', null,  :gone,    null,           null, null, null, 'pickup', null, null),
-  (:oDel,    :orgA, :whA, 'completed',           'internal', null,  null,     'Deleted Person', 'deleted-0397@test.local', null, now(), 'pickup', null, null),
+  (:oDel,    :orgA, :whA, 'completed',           'internal', null,  null,     'Deleted Person', 'deleted-0396@test.local', null, now(), 'pickup', null, null),
   (:oDlv,    :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'delivery', :cA1, null),
   (:oDlvIn,  :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'delivery', :cIn, null),
   (:oR,      :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, null),
-  (:oPortalR,:orgA, :whA, 'completed',           'portal',   :cust, :portalU, '0397 Customer Co', '0397-portal@test.local', null, null, 'pickup', null, null),
+  (:oPortalR,:orgA, :whA, 'completed',           'portal',   :cust, :portalU, '0396 Customer Co', '0396-portal@test.local', null, null, 'pickup', null, null),
   (:oOld,    :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, null),
-  (:oPar,    :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, '555-0397', null, 'pickup', null, 'Front desk'),
+  (:oPar,    :orgA, :whA, 'completed',           'internal', null,  :req,     'Req Person',   null, '555-0396', null, 'pickup', null, 'Front desk'),
   (:oB,      :orgA, :whB, 'completed',           'internal', null,  :req,     'Req Person',   null, null, null, 'pickup', null, null),
   (:oZ,      :orgZ, :whZ, 'completed',           'internal', null,  :outZ,    null,           null, null, null, 'pickup', null, null),
   (:oMute,   :orgA, :whA, 'completed',           'internal', null,  :req2,    'Muted Person', null, null, null, 'pickup', null, null),
@@ -776,7 +776,7 @@ select is(
   'A9: at most one live replacement per RMA (partial unique index), the link keyed to (RMA, organization) with NO ACTION (G6), the decision log''s exchange line keyed to its RMA, and the new table outside realtime');
 
 -- Desk check F4 (the two-session proof is races 11 and 12 of
--- scripts/db-concurrency/0397_exchange_races.sh): every exchange writer takes
+-- scripts/db-concurrency/0396_exchange_races.sh): every exchange writer takes
 -- the item locks before its first row naming an item, the lock helper takes
 -- the order-number lock and then the items FOR UPDATE in id order, and the
 -- order-number lock is the very one assign_order_request_number (0254) takes.
@@ -1085,7 +1085,7 @@ select is(
           || coalesce(o.public_track_token, 'null') || ':'
           || (select count(*)::text from public.order_request_secrets s where s.order_request_id = o.id)
      from public.order_requests o where o.id = :'oHe'),
-  'none:Email Person:email-0397@test.local:null:0',
+  'none:Email Person:email-0396@test.local:null:0',
   'H2: an email-only requester stays email-only, and no track token is minted for the replacement (A-3, D8)');
 select is(
   (select o.source || ':' || (o.customer_id = :cust)::text || ':' || (o.requester_user_id = :portalU)::text || ':'
@@ -1101,7 +1101,7 @@ select is(
   (select coalesce(o.requester_user_id::text, 'none') || ':' || coalesce(o.requester_name, '-') || ':' || coalesce(o.requester_email, '-') || ':'
           || case when o.requester_deleted_at is null then 'null' else 'stamped' end
      from public.order_requests o where o.id = :'oHd'),
-  'none:Gone Person:0397-gone@test.local:null|none:Deleted Person:deleted-0397@test.local:stamped',
+  'none:Gone Person:0396-gone@test.local:null|none:Deleted Person:deleted-0396@test.local:stamped',
   'H4: a member who left becomes an email-only requester with their profile''s name and email (D7); a requester whose account was deleted stays deleted (0388/0393: the stamp carried, nobody written to)');
 select is(
   (select count(*)::text from jsonb_each(to_jsonb(o)) e
@@ -1369,7 +1369,7 @@ select is(
 -- backorder with 1 of 2 handed over.
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type, primary_location_id)
-values (:pX, :orgA, :whA, '0397-PX', 'Walk Part Shirt', 1, 7, 'active', 'none', :r12B);
+values (:pX, :orgA, :whA, '0396-PX', 'Walk Part Shirt', 1, 7, 'active', 'none', :r12B);
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type)
 values (:oPh, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
@@ -1574,8 +1574,8 @@ select is(
 -- 1 of 2 handed over while the RMA is still approved.
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type, primary_location_id) values
-  (:pY, :orgA, :whA, '0397-PY', 'Walk Part Shirt Y', 1, 7, 'active', 'none', :r12B),
-  (:pZ, :orgA, :whA, '0397-PZ', 'Walk Part Shirt Z', 1, 7, 'active', 'none', :r12B);
+  (:pY, :orgA, :whA, '0396-PY', 'Walk Part Shirt Y', 1, 7, 'active', 'none', :r12B),
+  (:pZ, :orgA, :whA, '0396-PZ', 'Walk Part Shirt Z', 1, 7, 'active', 'none', :r12B);
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type) values
   (:oK5, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup'),
   (:oK7, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
@@ -1813,7 +1813,7 @@ select is(
 -- ══ P. Parity T2-C2 with create_order_request ═════════════════════════════
 select pg_temp.call_as('authenticated', :req, format($q$select (public.create_order_request(%L::jsonb, %L::jsonb)).id::text$q$,
           jsonb_build_object('organization_id', :orgA, 'warehouse_id', :whA, 'requester_user_id', :req, 'requester_name', 'Req Person',
-                             'fulfillment_type', 'pickup', 'requester_phone', '555-0397', 'pickup_location_notes', 'Front desk'),
+                             'fulfillment_type', 'pickup', 'requester_phone', '555-0396', 'pickup_location_notes', 'Front desk'),
           jsonb_build_array(jsonb_build_object('item_id', :gL, 'quantity', 1)))) as "oOrdP" \gset
 select pg_temp.mk(:mgr, :oPar, pg_temp.xbody(:lPar, 1, jsonb_build_object('itemId', :gL))) as "rPar" \gset
 select pg_temp.approve(:mgr, :'rPar', pg_temp.xdec(:'rPar')) as "jPar" \gset

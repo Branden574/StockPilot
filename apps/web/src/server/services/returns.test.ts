@@ -802,7 +802,7 @@ describe('guards over the returns code', () => {
   });
 
   /**
-   * Plan 3.1.4 and desk check F11: 0397 gives returns and order_requests a
+   * Plan 3.1.4 and desk check F11: 0396 gives returns and order_requests a
    * second relationship (the replacement link, order_requests ->
    * returns(id, organization_id)), which the list view return_overview
    * inherits through returns' id and organization_id, and gives

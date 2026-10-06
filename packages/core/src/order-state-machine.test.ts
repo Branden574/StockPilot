@@ -518,12 +518,12 @@ describe('approval-class actions follow canApproveOrders (0390)', () => {
 });
 
 /**
- * RX-2 (0397): an exchange replacement. Its lines come from its RMA and it is
+ * RX-2 (0396): an exchange replacement. Its lines come from its RMA and it is
  * changed or cancelled only there; while the returned item has not arrived
  * (and nobody released it early) the database refuses the pick slip and a
  * resume, so neither is offered.
  */
-describe('exchange replacements (0397)', () => {
+describe('exchange replacements (0396)', () => {
   const mgr = {
     fulfillmentType: 'pickup' as const,
     hasAssignedDelivery: false,

@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/v1/returns/[id]/replacement/cancel — keep the return, cancel the
- * replacement (cancel_return_replacement, migration 0397; X-1, X-2).
+ * replacement (cancel_return_replacement, migration 0396; X-1, X-2).
  *
  * body { expectedRevision, reason }: the RMA revision the caller saw
  * (required; a stale one is 409 return_changed, desk check F7) and a reason

@@ -208,7 +208,7 @@ export interface OrderRequestRow {
    *  (mig 0330; the /r/track `&t=` scope status emails embed) lives in
    *  order_request_secrets (server/lib/order-secrets resolveTrackToken). */
   public_track_token: string | null;
-  /** Returns RX-2 (0397): the RMA this order is the exchange replacement for.
+  /** Returns RX-2 (0396): the RMA this order is the exchange replacement for.
    *  Set only by the RMA's functions, never changed. Absent from a narrow
    *  select. */
   replacement_for_return_id?: string | null;
@@ -1912,7 +1912,7 @@ export class OrderRequestsService {
       replacement_for_return_id?: string | null;
     };
 
-    // Returns RX-2: an exchange replacement's lines are fixed (0397's lines
+    // Returns RX-2: an exchange replacement's lines are fixed (0396's lines
     // guard refuses them for every API role); its items change only through
     // its RMA ("Change or cancel in RMA-..."). Refused here first, in core's
     // words, before any other rule.
@@ -2884,7 +2884,7 @@ export class OrderRequestsService {
       // from under the picker who claimed it. Deny.
       if (rowErr) throw new ServiceError('internal_error', rowErr.message);
       // Returns RX-2: an exchange replacement is cancelled only through its
-      // RMA (0397's cancel guard refuses everyone else, the requester too).
+      // RMA (0396's cancel guard refuses everyone else, the requester too).
       if (row && (row as { replacement_for_return_id?: string | null }).replacement_for_return_id) {
         throw new ServiceError('forbidden', RETURN_ERROR_WORDS.replacementCancelViaReturn, {
           reason: 'replacement_cancel_via_return',
@@ -3644,7 +3644,7 @@ export class OrderRequestsService {
       .select('*')
       .maybeSingle();
     if (updErr) {
-      // Returns RX-2: the return-first gate (0397) holds an exchange
+      // Returns RX-2: the return-first gate (0396) holds an exchange
       // replacement until its RMA has the returned item or a manager
       // released it early; refused by its hint in core's words.
       const refusal = replacementRefusal(updErr);

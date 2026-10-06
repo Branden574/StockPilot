@@ -325,7 +325,7 @@ describe('sendPartialReceiptEmail (partial-receipt)', () => {
 
 /**
  * Returns RX-2: an exchange replacement's hand-over notices. The in-app
- * notice is the notify trigger's reworded ping (0397); a partial hand-over
+ * notice is the notify trigger's reworded ping (0396); a partial hand-over
  * emails "Part of your replacement was handed over" with the RMA's link; the
  * completion is the trigger's ping plus the return prompt's replacement
  * email. So none of the ordinary notices goes out for a replacement.

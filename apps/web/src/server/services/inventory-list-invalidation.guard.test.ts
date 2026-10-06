@@ -93,7 +93,7 @@ const STOCK_RPCS: Record<string, string> = {
   close_return:
     'process_return_disposition (0394: Staging, the original rack through ledger.apply_holding_delta, or scrap; on hand, holdings and movements)',
   cancel_order_request: 'adjust_stock (restocks a drawn batch)',
-  // Returns RX-2 (0397): each can cancel a picked exchange replacement through
+  // Returns RX-2 (0396): each can cancel a picked exchange replacement through
   // cancel_order_request, whose drawn branch restocks the batch to Staging.
   cancel_return: 'cancel_order_request through the exchange hook (a picked replacement back to Staging)',
   cancel_return_replacement: 'cancel_order_request (a picked replacement back to Staging, X-1)',

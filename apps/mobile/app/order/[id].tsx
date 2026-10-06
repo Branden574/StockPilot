@@ -371,7 +371,7 @@ interface OrderHeader {
    *  read there) and when nothing was ever returned. Decisions about what they
    *  mean live in lib/order-returns (shared with web through core). */
   returns: OrderReturnView[];
-  /** Returns RX-2 (0397): the RMA this order is the exchange replacement for. */
+  /** Returns RX-2 (0396): the RMA this order is the exchange replacement for. */
   replacementForReturnId: string | null;
   /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
    *  the driver's line); null for an ordinary order or when unread. */

@@ -49,7 +49,7 @@ export const INTEGRATION_EVENT_TYPES = [
   // Returns RX-1 (0394).
   'return.received',
   'return.cancelled',
-  // Returns RX-2 (0397): an exchange approved with its linked replacement order.
+  // Returns RX-2 (0396): an exchange approved with its linked replacement order.
   'return.exchange_approved',
   'cycle_count.completed',
   // Security feed (cybersecurity monitoring Phase 1, 2026-06-12): forensic-

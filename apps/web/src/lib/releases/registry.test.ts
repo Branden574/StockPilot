@@ -6239,7 +6239,7 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
 });
 
 /**
- * Returns RX-2 (migration 0397: exchanges for staff and the counter): held as
+ * Returns RX-2 (migration 0396: exchanges for staff and the counter): held as
  * a DRAFT until the migration is pushed and verified, the web deploy is
  * READY, the OTA with the phone's exchange screens is published and launched
  * and the Demo Co walk passed (returns plan 10.1). Pinned by id. The

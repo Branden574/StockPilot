@@ -820,7 +820,7 @@ type OverviewRow = {
   line_count: number | null;
   unit_count: number | string | null;
   lines: Array<{ line_id: string; item_id: string; quantity: number | string }> | null;
-  // RX-2 (0397's appended columns).
+  // RX-2 (0396's appended columns).
   kind?: string | null;
   exchange_status?: string | null;
   replacement_order_number?: number | null;

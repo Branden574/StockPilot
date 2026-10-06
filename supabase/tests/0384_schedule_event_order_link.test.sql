@@ -575,7 +575,7 @@ select is(
 -- slice E on assigned_delivery_user_id/by/at and in_transit_at/by
 -- (assign_order_delivery's and mark_order_in_transit's since 0390). The
 -- user-client writes left (KO2, KO3, KO4, KO6) name none of them.
--- Re-pinned by 0397 (returns RX-2): order_requests.replacement_for_return_id
+-- Re-pinned by 0396 (returns RX-2): order_requests.replacement_for_return_id
 -- is server-owned (written only by the exchange functions as postgres; a
 -- link guard refuses any change for every role), so authenticated holds no
 -- UPDATE on it and it joins this list (sorted by name).

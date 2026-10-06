@@ -342,7 +342,7 @@ describe('the scan itself (planted selects)', () => {
   });
 
   it('follows constants across files, templates, joins, spreads and helper parameters', () => {
-    // Since 0397 (returns RX-2) order_requests and returns are joined twice
+    // Since 0396 (returns RX-2) order_requests and returns are joined twice
     // (an RMA's order, and a replacement order's RMA), so the template names
     // the RMA's order key to keep the nested spread the ambiguous part; an
     // unnamed returns embed from order_requests (`four`) is flagged itself.

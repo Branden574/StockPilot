@@ -748,7 +748,7 @@ actually fire.
 
 ### INV-C7 — an exchange's replacement order is written only by its RMA's functions, and waits for the returned item
 
-- **Invariant** (0397, returns RX-2): a replacement order is an ordinary
+- **Invariant** (0396, returns RX-2): a replacement order is an ordinary
   `order_requests` row linked to its RMA by `replacement_for_return_id`, and
   every write that makes, changes or ends one runs inside the RMA's
   functions.
@@ -882,7 +882,7 @@ actually fire.
   replacement, `prepareForHandover` running each order step with its own
   gates and never signing) and the order email choke point (a replacement
   never gets the ordinary order emails).
-- **Tested at**: [`0397_returns_exchange_staff.test.sql`](../../supabase/tests/0397_returns_exchange_staff.test.sql)
+- **Tested at**: [`0396_returns_exchange_staff.test.sql`](../../supabase/tests/0396_returns_exchange_staff.test.sql)
   (acceptance 36 end to end and 41, header inheritance, the staff tier, one
   replacement per revision, the link and lines guards, the cancel guard,
   X-1 and C-1, "Close as return only", a replacement handed over in part
@@ -891,7 +891,7 @@ actually fire.
   split, the status CASE, organization deletion, grants; each break named
   in the file's mutation table is caught by the test it names), re-pinned
   0384 GO1, 0385 Z2, 0387 AL9/AL10, 0388, 0391 and 0394;
-  `scripts/db-concurrency/0397_exchange_races.sh` (two sessions: double
+  `scripts/db-concurrency/0396_exchange_races.sh` (two sessions: double
   approval, substitution against a pick slip, cancel against prepare,
   release against receive; and two RMAs on one item, approval against
   approval and against substitution, a third session forcing the

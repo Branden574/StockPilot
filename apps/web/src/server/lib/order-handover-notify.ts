@@ -107,7 +107,7 @@ async function fetchOrgName(organizationId: string): Promise<string | null> {
 /**
  * Returns RX-2: an exchange replacement's hand-over notices. True when the
  * order is a replacement (the caller then sends nothing of its own): the
- * in-app notice is the notify trigger's reworded ping (0397), a partial
+ * in-app notice is the notify trigger's reworded ping (0396), a partial
  * hand-over emails "Part of your replacement was handed over" (reworded, the
  * RMA's links), and the completion email is the return prompt's replacement
  * branch. Never throws.

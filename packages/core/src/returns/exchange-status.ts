@@ -4,7 +4,7 @@
  * answer the workbench, the lists and the requester tracking show BESIDE it,
  * never merged into it (brief 8).
  *
- * RX-2 (migration 0397) computes it in ONE SQL CASE inside
+ * RX-2 (migration 0396) computes it in ONE SQL CASE inside
  * `return_overview`, between `-- exchange-status:begin` and
  * `-- exchange-status:end` markers, and a vitest deep-equals that CASE's codes
  * against `EXCHANGE_STATUSES` below, in order. The view answers the same for

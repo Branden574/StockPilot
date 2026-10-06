@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 /**
  * POST /api/v1/returns/[id]/replacement/release — release the live
  * replacement for picking before the returned item arrives
- * (release_return_replacement_early, migration 0397; brief 24).
+ * (release_return_replacement_early, migration 0396; brief 24).
  *
  * body { orderId, reason }: the replacement order the caller saw (another
  * live one, after a substitution or a re-issue, is 409 return_changed: a

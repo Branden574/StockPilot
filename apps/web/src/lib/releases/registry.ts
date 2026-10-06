@@ -30,7 +30,7 @@ export const RELEASES: Release[] = [
   {
     id: 'returns-exchange-2026-10',
     revision: 1,
-    // Returns RX-2 (migration 0397: exchanges for staff and the counter, the
+    // Returns RX-2 (migration 0396: exchanges for staff and the counter, the
     // linked replacement order, the return-first gate). Held as a DRAFT until
     // the migration is pushed and verified, the web deploy is READY, the OTA
     // with the phone's exchange screens is published and launched, and the

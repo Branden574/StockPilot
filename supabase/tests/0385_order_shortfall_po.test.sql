@@ -1114,8 +1114,8 @@ select is(
   -- exactly the rows an ungranted schedule_events column carries
   -- (2026-10-04; order_request_id carries the same four); verify on the
   -- stack.
-  -- Re-pinned by 0397 (returns RX-2; was fa3db41769cc505a531cca8d3d61c409|212):
-  -- 0397 adds order_requests.replacement_for_return_id, which authenticated
+  -- Re-pinned by 0396 (returns RX-2; was fa3db41769cc505a531cca8d3d61c409|212):
+  -- 0396 adds order_requests.replacement_for_return_id, which authenticated
   -- holds only through its table-level SELECT (one row more; no column
   -- grant: server-owned). F2-5's function writes no order column. Computed
   -- from production's own column_privileges rows (which reproduce the old

@@ -688,7 +688,7 @@ PGTAP_TESTS=(
   # with its added block removed. The lock footprint is
   # scripts/db-concurrency/0395_migration_lock_footprint.sh.
   supabase/tests/0395_order_stock_guards.test.sql
-  # Returns RX-2 (0397, INV-C7): an exchange's replacement order is written
+  # Returns RX-2 (0396, INV-C7): an exchange's replacement order is written
   # only by its RMA's functions (returns:manage, orders:approve, both
   # modules, warehouse write), held through approve_partial, one per approved
   # revision (keys, the revision and a partial unique index); the link
@@ -697,9 +697,9 @@ PGTAP_TESTS=(
   # THAT order; only the RMA's functions may cancel or deny it; its lines are
   # fixed; return_exchange_lines is read-only to members. The double
   # approval, substitution and cancel against picking, and receive against
-  # early release races are scripts/db-concurrency/0397_exchange_races.sh;
-  # the lock footprint is scripts/db-concurrency/0397_migration_lock_footprint.sh.
-  supabase/tests/0397_returns_exchange_staff.test.sql
+  # early release races are scripts/db-concurrency/0396_exchange_races.sh;
+  # the lock footprint is scripts/db-concurrency/0396_migration_lock_footprint.sh.
+  supabase/tests/0396_returns_exchange_staff.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1098,7 +1098,7 @@ WEB_TESTS=(
   # the caller's warehouses (and a failed read of their own access) reads one
   # sentence, never a warehouse id.
   src/server/services/order-requests.warehouse-words.test.ts
-  # Returns RX-2 (0397): the exchange functions one call each, audit, events
+  # Returns RX-2 (0396): the exchange functions one call each, audit, events
   # and messages only on a real change, every exchange hint mapped, the kill
   # switch and the requester paths refusing an exchange before any call; the
   # order paths map the gate, the cancel guard and the fixed lines by hint
@@ -1204,7 +1204,7 @@ MOBILE_TESTS=(
   # caller's Bearer token to the gated routes only.
   src/lib/returns-api.test.ts
   src/lib/returns-screen-wiring.test.ts
-  # Returns RX-2 (0397): every exchange action is online only (the picker
+  # Returns RX-2 (0396): every exchange action is online only (the picker
   # asks nothing offline, each sheet says it needs a connection, no outbox
   # kind), a replacement order shows the gate instead of its pick slip and
   # has no Add items, line edits or Cancel, and the helpers follow core.
@@ -1245,7 +1245,7 @@ CORE_TESTS=(
   src/returns/return-actions.test.ts
   src/returns/return-schemas.test.ts
   src/returns/return-error-map.test.ts
-  # Returns RX-2 (0397): the exchange rows of the actions table (replacement
+  # Returns RX-2 (0396): the exchange rows of the actions table (replacement
   # actions need orders:approve, the class decides change and cancel), the
   # status CASE pinned code for code against the migration, and the review
   # decisions and candidate rows the web and the phone share.

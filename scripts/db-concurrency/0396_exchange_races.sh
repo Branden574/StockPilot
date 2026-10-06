@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Two-session proof for migration 0397 (returns RX-2: exchanges for staff and
+# Two-session proof for migration 0396 (returns RX-2: exchanges for staff and
 # the counter; the linked replacement order and the return-first gate).
 # pgTAP runs in ONE session, so it cannot show what the exchange functions do
 # while another session holds the RMA row or the replacement order's row
@@ -56,11 +56,11 @@
 #      equals the sum of holdings for every fixture item.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
-# with 0397 applied. Fixtures are committed under the 03971111-... namespace
+# with 0396 applied. Fixtures are committed under the 03971111-... namespace
 # and removed at the start, at the end and by the EXIT trap. Exit status 0 =
 # every check passed.
 #
-# Usage: bash scripts/db-concurrency/0397_exchange_races.sh
+# Usage: bash scripts/db-concurrency/0396_exchange_races.sh
 
 set -uo pipefail
 
@@ -183,7 +183,7 @@ trap 'exit 129' HUP
 cleanup || exit 1
 
 if [ "$(q "select count(*) from pg_proc where proname = 'change_return_replacement' and pronamespace = 'public'::regnamespace")" != "1" ]; then
-  echo "0397 is not applied on this stack (no public.change_return_replacement)"; exit 1
+  echo "0396 is not applied on this stack (no public.change_return_replacement)"; exit 1
 fi
 
 # as_user <application_name|-> <user> <statements> [end]: one transaction as
@@ -203,9 +203,9 @@ as_user() {
 # ═══ Fixture: one picked and handed-over order; replacement stock on a rack ══
 if ! "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
-  ('$MGR',  '0397-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0397-2s-mgr2@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0397 Two Session Org', '0397-two-session');
+  ('$MGR',  '0396-2s-mgr@test.local',  '{}'::jsonb),
+  ('$MGR2', '0396-2s-mgr2@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', '0396 Two Session Org', '0396-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR', 'manager', now()),
   ('$ORG', '$MGR2', 'manager', now());
@@ -213,18 +213,18 @@ insert into public.organization_modules (organization_id, module_id, enabled, ti
   ('$ORG', 'returns', true, 'optional', '{}'::jsonb),
   ('$ORG', 'orders', true, 'optional', '{}'::jsonb)
 on conflict (organization_id, module_id) do update set enabled = true;
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0397 2S Main', 'WH-0397-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0396 2S Main', 'WH-0396-2S', 'active');
 insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at) values
   ('$R1', '$ORG', '$WH', '31-C', 'shelf', 'rack', now() - interval '30 minutes'),
   ('$R2', '$ORG', '$WH', '12-B', 'shelf', 'rack', now() - interval '29 minutes');
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, primary_location_id) values
-  ('$IM',    '$ORG', '$WH', '0397-2S-M',    '2S shirt M',    20, 'active', 'none', '$R1'),
-  ('$IL',    '$ORG', '$WH', '0397-2S-L',    '2S shirt L',    30, 'active', 'none', '$R2'),
-  ('$INAVY', '$ORG', '$WH', '0397-2S-NAVY', '2S shirt navy', 10, 'active', 'none', '$R2'),
-  ('$IK',    '$ORG', '$WH', '0397-2S-K',    '2S shirt K',    10, 'active', 'none', '$R2'),
-  ('$IN',    '$ORG', '$WH', '0397-2S-N',    '2S shirt N',    10, 'active', 'none', '$R2'),
-  ('$IM2',   '$ORG', '$WH', '0397-2S-M2',   '2S shirt M2',    0, 'active', 'none', null);
+  ('$IM',    '$ORG', '$WH', '0396-2S-M',    '2S shirt M',    20, 'active', 'none', '$R1'),
+  ('$IL',    '$ORG', '$WH', '0396-2S-L',    '2S shirt L',    30, 'active', 'none', '$R2'),
+  ('$INAVY', '$ORG', '$WH', '0396-2S-NAVY', '2S shirt navy', 10, 'active', 'none', '$R2'),
+  ('$IK',    '$ORG', '$WH', '0396-2S-K',    '2S shirt K',    10, 'active', 'none', '$R2'),
+  ('$IN',    '$ORG', '$WH', '0396-2S-N',    '2S shirt N',    10, 'active', 'none', '$R2'),
+  ('$IM2',   '$ORG', '$WH', '0396-2S-M2',   '2S shirt M2',    0, 'active', 'none', null);
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
@@ -300,10 +300,10 @@ ready_to_pick() {
 # in pg_sleep, B runs. Records how long B took.
 race() {
   local tag="$1" au="$2" a="$3" aend="$4" bu="$5" b="$6"
-  ( as_user "0397-race-$tag-A" "$au" "$a
+  ( as_user "0396-race-$tag-A" "$au" "$a
 select pg_sleep(3);" "$aend" > "$TMP/$tag.A.out" ) &
   local pid=$!
-  wait_for "0397-race-$tag-A" Timeout PgSleep || bad "$tag: session A never reached its pg_sleep"
+  wait_for "0396-race-$tag-A" Timeout PgSleep || bad "$tag: session A never reached its pg_sleep"
   local t0; t0=$(now_ms)
   as_user - "$bu" "$b" > "$TMP/$tag.B.out"
   local t1; t1=$(now_ms)
@@ -479,17 +479,17 @@ deadlocked() { # deadlocked <tag>: how many of the sessions saw a deadlock or a 
 # and waits on a lock; then K is released and both finish.
 three() {
   local tag="$1"
-  ( printf '%s\n' "set application_name to '0397-race-$tag-C';" "begin;" \
+  ( printf '%s\n' "set application_name to '0396-race-$tag-C';" "begin;" \
       "select 'C=' || count(*) from (select 1 from public.inventory_items where id = '$IK' for update) k;" \
       "select pg_sleep(4);" "commit;" | "${PSQL[@]}" > "$TMP/$tag.C.out" 2>&1 ) &
   local pc=$!
-  wait_for "0397-race-$tag-C" Timeout PgSleep || bad "$tag: the blocker never held K"
-  ( as_user "0397-race-$tag-B" "$2" "$3" commit > "$TMP/$tag.B.out" ) &
+  wait_for "0396-race-$tag-C" Timeout PgSleep || bad "$tag: the blocker never held K"
+  ( as_user "0396-race-$tag-B" "$2" "$3" commit > "$TMP/$tag.B.out" ) &
   local pb=$!
-  wait_for "0397-race-$tag-B" Lock || bad "$tag: B never waited on a lock"
-  ( as_user "0397-race-$tag-A" "$4" "$5" commit > "$TMP/$tag.A.out" ) &
+  wait_for "0396-race-$tag-B" Lock || bad "$tag: B never waited on a lock"
+  ( as_user "0396-race-$tag-A" "$4" "$5" commit > "$TMP/$tag.A.out" ) &
   local pa=$!
-  wait_for "0397-race-$tag-A" Lock || bad "$tag: A never waited on a lock"
+  wait_for "0396-race-$tag-A" Lock || bad "$tag: A never waited on a lock"
   wait "$pc" "$pb" "$pa"
 }
 

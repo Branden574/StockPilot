@@ -2048,7 +2048,7 @@ export async function createPortalReturn(
  * The requester's own exchange (the token page, the B2B portal, a member
  * requester) arrives in RX-3 with its pages, options and messages. Until
  * then a requester body that names an exchange is refused here, in the
- * kill switch's words, before anything runs: 0397's database already
+ * kill switch's words, before anything runs: 0396's database already
  * accepts the requester tier, so the server is what holds it back.
  */
 function refuseRequesterExchange(lines: Array<{ exchange?: unknown }>): void {

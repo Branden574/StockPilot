@@ -777,16 +777,16 @@ select is(
      from fn_scope f
     where f.prosecdef
       and f.prosrc ~* $re$(insert\s+into|merge\s+into(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?order_requests\M$re$),
-  -- Re-pinned by 0397 (returns RX-2; was the cleanup alone): the exchange
+  -- Re-pinned by 0396 (returns RX-2; was the cleanup alone): the exchange
   -- replacement issue inserts the replacement order as postgres on purpose
   -- (critic K11), reviewed for its own gate: no EXECUTE for anyone (only the
   -- RX-2 exchange functions call it, after signed in, member, the returns
   -- and orders modules, returns:manage, orders:approve and warehouse write,
   -- under the RMA row lock); it inserts at pending_approval with the insert
   -- policy's and both guards' rules applied in its body, and hands the
-  -- approval to the unchanged approve_partial (0397 suite H, T, I, P).
+  -- approval to the unchanged approve_partial (0396 suite H, T, I, P).
   'public._return_replacement_issue:postgres,public.cleanup_expired_unconfirmed_order_requests:postgres',
-  'AL9d: the SECURITY DEFINER functions that insert, merge or delete order rows, in every schema and whoever may EXECUTE them, are exactly the expired-confirmation cleanup and the exchange replacement issue (0397), owned by postgres (a DEFINER insert runs as postgres, which the insert guard does not hold, so it could create an order at any status: a new one fails here and is reviewed for its own gate)');
+  'AL9d: the SECURITY DEFINER functions that insert, merge or delete order rows, in every schema and whoever may EXECUTE them, are exactly the expired-confirmation cleanup and the exchange replacement issue (0396), owned by postgres (a DEFINER insert runs as postgres, which the insert guard does not hold, so it could create an order at any status: a new one fails here and is reviewed for its own gate)');
 
 select is(
   (select md5(p.prosrc) || '|' || p.prosecdef::text || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|'
@@ -812,7 +812,7 @@ select is(
   -- Re-pinned by 0388 (was the three without trg_order_requests_requester_deleted):
   -- 0388's marker trigger (UPDATE OF requester_user_id) sorts second; it
   -- only stamps requester_deleted_at and depends on no other trigger.
-  -- Re-pinned by 0397 (returns RX-2): the return-first gate on replacement
+  -- Re-pinned by 0396 (returns RX-2): the return-first gate on replacement
   -- orders (trg_order_requests_zz_replacement_status, WHEN a replacement's
   -- status changes) sorts after the transition trigger and this guard, so an
   -- illegal edge or a forbidden caller is reported first; the link guard
@@ -820,7 +820,7 @@ select is(
   array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_validate_transition',
         'trg_order_requests_workflow_guard', 'trg_order_requests_zz_replacement_status',
         'trg_zz_order_requests_replacement_link_upd'],
-  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0397 gate and link guard after both');
+  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0396 gate and link guard after both');
 select is(
   (select md5(string_agg(t.tgname::text || '|' || t.tgfoid::regproc::text || '|' || t.tgenabled::text || '|' || t.tgtype::text, E'\n' order by t.tgname))
           || '|' || count(*)
@@ -828,7 +828,7 @@ select is(
   -- Re-pinned by 0388 (was dc435bd583fc39db07353311079239b4|6): plus
   -- trg_order_requests_requester_deleted (tgtype 19). Computed on the local
   -- stack after 0388.
-  -- Re-pinned by 0397 (returns RX-2; was f92aca15c9e9f07893e77259e81cb7e9|7):
+  -- Re-pinned by 0396 (returns RX-2; was f92aca15c9e9f07893e77259e81cb7e9|7):
   -- plus trg_order_requests_notify_replacement (AFTER INSERT OR UPDATE, 21),
   -- trg_order_requests_zz_replacement_status (BEFORE UPDATE OF status, 19),
   -- trg_zz_order_requests_replacement_link_ins (BEFORE INSERT, 7) and
@@ -838,7 +838,7 @@ select is(
   -- seven rows (which reproduce f92aca15...|7) with the four rows added
   -- (2026-10-05); verify on the stack.
   '9f4a500a040a0d15a7dd4c32c8aeabda|11',
-  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0397''s four replacement triggers (census e6ea64a2...|5 plus six rows)');
+  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0396''s four replacement triggers (census e6ea64a2...|5 plus six rows)');
 select is(
   coalesce(obj_description('public.tg_order_requests_workflow_guard()'::regprocedure, 'pg_proc') ~ '0387', false)::text || ','
   || coalesce(col_description('public.order_requests'::regclass,

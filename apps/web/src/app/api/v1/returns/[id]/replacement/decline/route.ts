@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/v1/returns/[id]/replacement/decline — "Close as return only"
- * after a replacement cancel (decline_return_replacement, migration 0397;
+ * after a replacement cancel (decline_return_replacement, migration 0396;
  * desk check F9): the exchange lines the cancel left cancelled are declined
  * for good, so the RMA (closed or not) stops inviting a new replacement.
  *
