@@ -28,6 +28,8 @@ import {
 
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import { orderIdForReturnToken } from '@/server/lib/order-secrets';
 
 import { audit, insertAuditRowReported } from './audit';
@@ -1063,6 +1065,19 @@ export class RMAService {
           await this.recordReplacementCancelled(id, facts, liveBefore.id, liveBefore.orderNumber, 'return.cancelled');
           // A picked replacement went back to Staging (holds released either way).
           invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.cancel');
+        } else if (after === 'completed' && liveBefore.status !== 'completed') {
+          // 0396: the cancel closed a part-handed-over replacement as
+          // delivered-partial (its rest is never sent). Its requester gets the
+          // completion email a close-partial sends from the order page ("Your
+          // replacement order was closed", the one-time return prompt):
+          // best-effort and marker-deduped, never failing the cancel.
+          try {
+            await maybeSendReturnPrompt(createAdminClient(), liveBefore.id, {
+              appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+            });
+          } catch {
+            /* best-effort: the return is cancelled regardless */
+          }
         }
       }
       await audit(

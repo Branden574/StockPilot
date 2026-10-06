@@ -37,6 +37,11 @@ vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite
 const broadcastMock = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderChanged: broadcastMock }));
 
+// The completion email when an RMA cancel closes a part-handed-over replacement.
+const returnPromptMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ sent: true })));
+vi.mock('@/server/email/return-prompt', () => ({ maybeSendReturnPrompt: returnPromptMock }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => ({ admin: true }) }));
+
 const prepareMock = vi.hoisted(() =>
   vi.fn(async (_id: string, _opts: unknown) => ({
     ran: [{ step: 'pick_slip', outcome: 'done' }],
@@ -631,6 +636,29 @@ describe('cancel with a live replacement (X-2)', () => {
     });
     await svc.cancel(RET_ID, { reason: 'Customer kept it' });
     expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.cancelled']);
+    // Already completed before the cancel: its email went then.
+    expect(returnPromptMock).not.toHaveBeenCalled();
+  });
+
+  // RX-2 review fix: 0396's cancel closes a part-handed-over replacement as
+  // delivered-partial; an email-only requester then gets "Your replacement
+  // order was closed" through the same one-time return prompt a close-partial
+  // sends from the order page.
+  it('a part-handed-over replacement the cancel closed gets its completion email; one cancelled with it does not', async () => {
+    const closed = svcFor({
+      'order_requests.select': orderReads({ live: { id: REPL_ID, status: 'backordered', order_number: 104 }, after: 'completed' }),
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+    });
+    await closed.svc.cancel(RET_ID, { reason: 'Customer kept it' });
+    expect(returnPromptMock).toHaveBeenCalledTimes(1);
+    expect(returnPromptMock.mock.calls[0]![1]).toBe(REPL_ID);
+    vi.clearAllMocks();
+    const cancelled = svcFor({
+      'order_requests.select': orderReads({ live: { id: REPL_ID, status: 'approved', order_number: 104 }, after: 'cancelled' }),
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+    });
+    await cancelled.svc.cancel(RET_ID, { reason: 'Customer kept it' });
+    expect(returnPromptMock).not.toHaveBeenCalled();
   });
 });
 
