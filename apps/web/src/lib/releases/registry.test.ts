@@ -602,7 +602,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // releases, the two order signature releases, the approval release, the
     // three releases of 2026-10-05 and slice 1's small fixes after it).
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -780,7 +782,9 @@ describe('F2-1 (order readiness) is published', () => {
     // release, the three releases of 2026-10-05 and slice 1's small fixes were
     // published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1043,7 +1047,9 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // signature releases, the approval release, the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1312,7 +1318,9 @@ describe('Book Order Totals is published', () => {
     // signature releases, the approval release, the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1422,7 +1430,9 @@ describe('the report scope release is published', () => {
     // approval release, the three releases of 2026-10-05 and slice 1's small
     // fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
@@ -1488,7 +1498,9 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     // three releases of 2026-10-05 and slice 1's small fixes were published
     // after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the small fixes' and the
     // report scope fix's.
@@ -1611,7 +1623,9 @@ describe('the ended-session fix on exceptions is published', () => {
     // three releases of 2026-10-05 and slice 1's small fixes were published
     // after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the count confirm's and
     // F2-5's.
@@ -1734,7 +1748,9 @@ describe('count differences release 2 (confirm this count) is published', () => 
     // approval release, the three releases of 2026-10-05 and slice 1's small
     // fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-5's and F2-4's.
     const newer = Object.fromEntries(
@@ -1921,7 +1937,9 @@ describe('approval follows the permission is published', () => {
     // The notice offers the newest unread release: the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and slice B's two.
     const newer = Object.fromEntries(
@@ -2149,7 +2167,9 @@ describe('account deletion for people who placed orders is published', () => {
     // releases, the approval release, the three releases of 2026-10-05 and
     // slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the refusal's and the
     // session-ended fix's.
@@ -2307,7 +2327,9 @@ describe('a refused account deletion says why, and is published with the account
     // three releases of 2026-10-05 and slice 1's small fixes were published
     // after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the session-ended fix's and
     // the count confirm's.
@@ -2448,7 +2470,9 @@ describe('F2-5 (draft a PO for what an order is short) is published', () => {
     // signature releases, the approval release, the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, F2-4's and Book Order Totals
     // by charter's.
@@ -2612,7 +2636,9 @@ describe("F2-4 (change an order's needed-by date) is published", () => {
     // signature releases, the approval release, the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, Book Order Totals by
     // charter's and the count difference words'.
@@ -2732,7 +2758,9 @@ describe('the small-fixes release is published', () => {
     // release, the three releases of 2026-10-05 and slice 1's small fixes were
     // published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -2936,7 +2964,9 @@ describe('Book Order Totals by charter and dates is published', () => {
     // releases of 2026-10-05 and slice 1's small fixes were published after
     // this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3067,7 +3097,9 @@ describe('count differences say what clears them (release 1) is published', () =
     // approval release, the three releases of 2026-10-05 and slice 1's small
     // fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3198,7 +3230,9 @@ describe('the Sports required details release is published', () => {
     // signature releases, the approval release, the three releases of
     // 2026-10-05 and slice 1's small fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first;
     // this one comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -3309,7 +3343,9 @@ describe('order secrets slice B (a digital signature on the order timeline) is p
     // three releases of 2026-10-05 and slice 1's small fixes were published
     // after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, the signature image release
     // and the account deletion release.
@@ -3443,7 +3479,9 @@ describe('the signature image in the mobile app is for approvers and the driver,
     // approval release, the three releases of 2026-10-05 and slice 1's small
     // fixes were published after this one.
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one and the two account deletion
     // releases.
@@ -3557,7 +3595,7 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
   });
 
-  it('is a draft above every published release (the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), below only the weekly digest draft, dated after every release but that one', () => {
+  it('is the newest entry, a draft above every published release (the weekly digest release, the Items first-paint release, slice 1\'s small fixes, the three releases of 2026-10-05 and slices B and D are below it), dated after every release', () => {
     // Re-pinned by the publishing of 2026-10-05 (was: PO-4's, A3's and
     // RX-1's drafts sat beside it). It waits for the first order an
     // organization places through the new submit path, so it stays a draft
@@ -3572,18 +3610,23 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
     // (2026-10-06; was: at 2, below the Items and weekly digest drafts): it is
     // published now, below the drafts, so only the weekly digest draft is
     // above this one.
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: at 1, below the weekly digest draft): it is published now, below
+    // the drafts, so this one is the newest entry, at the top.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(1);
-    expect(RELEASES[0]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(at).toBe(0);
     // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: the weekly digest draft, this one and the partial-approval draft).
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
-      'weekly-digest-and-fixes-2026-10',
       ID,
       'order-partial-approval-held-2026-10',
     ]);
     for (const id of [
+      'weekly-digest-and-fixes-2026-10',
+      'items-list-first-paint-2026-10',
       'small-fixes-2026-10',
       'phone-place-order-2026-10',
       'returns-original-rack-2026-10',
@@ -3596,10 +3639,17 @@ describe('one order per submission (phone ordering PO-2) is held as a draft', ()
       expect(RELEASES[i]?.status, id).toBe('published');
     }
     expect(RELEASES[at + 1]?.id).toBe('order-partial-approval-held-2026-10');
-    expect(RELEASES[at + 2]?.id).toBe('items-list-first-paint-2026-10');
-    expect(RELEASES[at + 3]?.id).toBe('small-fixes-2026-10');
-    const above = new Set([ID, 'weekly-digest-and-fixes-2026-10']);
-    for (const r of RELEASES.filter((x) => !above.has(x.id))) {
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: the Items first-paint release, then the small fixes, below the
+    // partial-approval draft): the weekly digest release sits between them.
+    expect(RELEASES[at + 2]?.id).toBe('weekly-digest-and-fixes-2026-10');
+    expect(RELEASES[at + 3]?.id).toBe('items-list-first-paint-2026-10');
+    expect(RELEASES[at + 4]?.id).toBe('small-fixes-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: every release but the weekly digest draft, dated later): it is
+    // published now, dated before this draft, so this one is dated after
+    // every other release.
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -3675,7 +3725,9 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // published after this one. Re-pinned by their publishing (was: this one,
     // the newest).
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     // An old phone build lists at most three unread releases, newest first:
     // once the newer release is read, this one, returns RX-1's and account
     // deletion for every member.
@@ -3711,14 +3763,23 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // Re-pinned by the publishing of the Items first-paint release
     // (2026-10-06; was: a draft at the top): published, below the drafts and
     // above the small fixes.
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: a draft at the top): published, below the drafts and above the
+    // Items first-paint release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
-      'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
+      'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
       'small-fixes-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
+      'draft',
+      'published',
+      'published',
+      'published',
+    ]);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -3880,9 +3941,27 @@ describe('account deletion for every member (slice A3) is published', () => {
     // whose fixes for everyone reach every member, and this one once they are
     // read (re-pinned by the small fixes' publishing; was: this one).
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe('small-fixes-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // small-fixes-2026-10): its digest and warehouse entries reach every member,
+    // so it is this member's notice too; the small fixes come once it is read,
+    // and this one once both are.
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
+      'weekly-digest-and-fixes-2026-10',
+    );
+    const digestRead = [
+      {
+        release_id: 'weekly-digest-and-fixes-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-06T12:00:00Z',
+        read_at: '2026-10-06T12:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, member, digestRead, null).latestUnread?.id).toBe('small-fixes-2026-10');
     const smallFixesRead = [
       {
         release_id: 'small-fixes-2026-10',
@@ -3892,7 +3971,11 @@ describe('account deletion for every member (slice A3) is published', () => {
         read_at: '2026-10-05T20:00:00Z',
       },
     ];
-    expect(buildReleaseList(RELEASES, member, smallFixesRead, null).latestUnread?.id).toBe(ID);
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // the small fixes read alone): the digest release is read too.
+    expect(
+      buildReleaseList(RELEASES, member, [...digestRead, ...smallFixesRead], null).latestUnread?.id,
+    ).toBe(ID);
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, the approval release and
     // slice B's timeline release.
@@ -4062,9 +4145,29 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // fixes, whose fixes for everyone reach every member, and this one once
     // they are read (re-pinned by the small fixes' publishing; was: this one).
     // Re-pinned by the Items first-paint release (2026-10-06): published after the small fixes.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10): published after it, and every reader sees it.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
-    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe('small-fixes-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // small-fixes-2026-10): its digest and warehouse entries reach every member,
+    // so it is this reader's notice too; the small fixes come once it is read,
+    // and this one once both are.
+    expect(buildReleaseList(RELEASES, returnsOnly, [], null).latestUnread?.id).toBe(
+      'weekly-digest-and-fixes-2026-10',
+    );
+    const digestRead = [
+      {
+        release_id: 'weekly-digest-and-fixes-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-06T12:00:00Z',
+        read_at: '2026-10-06T12:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, returnsOnly, digestRead, null).latestUnread?.id).toBe(
+      'small-fixes-2026-10',
+    );
     const smallFixesRead = [
       {
         release_id: 'small-fixes-2026-10',
@@ -4074,7 +4177,11 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
         read_at: '2026-10-05T20:00:00Z',
       },
     ];
-    expect(buildReleaseList(RELEASES, returnsOnly, smallFixesRead, null).latestUnread?.id).toBe(ID);
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // the small fixes read alone): the digest release is read too.
+    expect(
+      buildReleaseList(RELEASES, returnsOnly, [...digestRead, ...smallFixesRead], null).latestUnread?.id,
+    ).toBe(ID);
     // An old phone build lists at most three unread releases, newest first:
     // once the newer releases are read, this one, A3's and the approval
     // release.
@@ -4356,15 +4463,34 @@ describe('the small fixes release (slice 1) is published', () => {
     // is the notice for whoever reads the Items or purchase order pages. A
     // member with no permission at all still gets this one, since the fixes
     // for everyone reach them.
-    expect(list.latestUnread?.id).toBe('items-list-first-paint-2026-10');
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // items-list-first-paint-2026-10, and this one for a member with no
+    // permission): published after both, its digest and warehouse entries
+    // reach every member, so it is the notice for everyone; once it is read, a
+    // member with no permission is offered this one.
+    expect(list.latestUnread?.id).toBe('weekly-digest-and-fixes-2026-10');
     const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
+      'weekly-digest-and-fixes-2026-10',
+    );
+    const digestRead = [
+      {
+        release_id: 'weekly-digest-and-fixes-2026-10',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-10-06T12:00:00Z',
+        read_at: '2026-10-06T12:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, member, digestRead, null).latestUnread?.id).toBe(ID);
     // An old phone build lists at most three unread releases, newest first:
-    // the Items first-paint release, this one and phone ordering's.
+    // the weekly digest release, the Items first-paint release and this one.
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06; was:
+    // the Items first-paint release, this one and phone ordering's).
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toEqual([
+      'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
       ID,
-      'phone-place-order-2026-10',
     ]);
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
@@ -4376,7 +4502,7 @@ describe('the small fixes release (slice 1) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-06T00:00:00Z'));
   });
 
-  it("sits directly below the Items first-paint release, published later, with the weekly digest, PO-2 and partial-approval drafts above both; phone ordering's below it", () => {
+  it("sits directly below the Items first-paint release, published later, with the weekly digest release (published later still) and the PO-2 and partial-approval drafts above both; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -4386,13 +4512,17 @@ describe('the small fixes release (slice 1) is published', () => {
     // Re-pinned by the publishing of the Items first-paint release
     // (2026-10-06; was: the newest published release, under four drafts):
     // published later, directly above this one and below the drafts.
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: the weekly digest draft at the top, then PO-2's, the
+    // partial-approval draft and the Items first-paint release): published
+    // later still, below the two drafts and above the Items first-paint release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
-      'weekly-digest-and-fixes-2026-10',
       'order-submit-once-2026-10',
       'order-partial-approval-held-2026-10',
+      'weekly-digest-and-fixes-2026-10',
       'items-list-first-paint-2026-10',
     ]);
-    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'draft', 'published']);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'published', 'published']);
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
@@ -4713,31 +4843,85 @@ describe('the small fixes release (slice 1) is published', () => {
   });
 });
 
-// The ambiguous-embed fixes (fix/ambiguous-embeds-and-digest, web only, no
-// migration): a DRAFT until the web deploy is live. Each change is told to the
-// people who can see it.
+// The weekly digest and fixes: #326 (b9887f2a), #331 (1d37307d) and #332
+// (01001c54), web only, no migration. PUBLISHED 2026-10-06 after each went
+// live and was checked in Demo Co (#326: a warehouse's page and one preview
+// of the digest; #331: the calendar, the PO list's Expected date and Make
+// recurring's form; #332: every line Make recurring brings over named). The
+// digest cron's first run is Monday 2026-10-12 14:00Z, so the words say what
+// the code does, never that a digest arrived. No phone update: none of the
+// three changes the mobile app. Each change is told to the people who can see
+// it; the digest and warehouse entries reach every member.
 describe('the weekly digest and fixes release', () => {
   const ID = 'weekly-digest-and-fixes-2026-10';
   const release = () => RELEASES.find((r) => r.id === ID)!;
+  const entry = (id: string) => release().entries.find((e) => e.id === id)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
 
-  it('is the newest entry, a draft dated after every release', () => {
-    // Re-pinned by the Items first-paint draft (2026-10-05; was: the newest
-    // entry): it is dated later and sits at the top. Re-pinned by the
-    // publishing of the Items first-paint release (2026-10-06; was: just
-    // below that draft): published, below the drafts, so this one is the
-    // newest entry again.
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(release().status).toBe('draft');
+  it('is published at a real time after its production checks, below the two drafts and directly above the Items first-paint release', () => {
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: the newest entry, a draft dated after every release): published,
+    // it sits below the drafts (PO-2's and the partial-approval one, dated
+    // later) and above the Items first-paint release, dated after it.
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    // A whole minute after the last production check ended (K3B on #332's
+    // build, 2026-10-06 03:20:49Z; #332 merged 03:16:04Z): never the draft's
+    // placeholder date.
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-06T03:20:49Z'));
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-07T00:00:00Z'));
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
+    ]);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    expect(RELEASES[at + 1]?.id).toBe('items-list-first-paint-2026-10');
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
 
+  it('reaches every member, so every feed carries it and it is the notice for everyone', () => {
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: a draft no feed carried): the digest and warehouse entries have no
+    // audience, so a member with no permission and no module is told too.
+    for (const viewer of [everyone, member]) {
+      expect(visibleReleases(RELEASES, viewer).map((r) => r.id)).toContain(ID);
+      expect(buildReleaseList(RELEASES, viewer, [], null).latestUnread?.id).toBe(ID);
+    }
+    expect(visibleReleases(RELEASES, member).find((r) => r.id === ID)!.entries.map((e) => e.id)).toEqual([
+      'weekly-digest-sent',
+      'weekly-digest-your-view',
+      'warehouse-page-opens',
+    ]);
+    expect(visibleReleases(RELEASES, everyone).find((r) => r.id === ID)!.entries).toHaveLength(7);
+    // An old phone build lists it first, with the notification settings link.
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+      id: ID,
+      date: release().publishedAt.slice(0, 10),
+      title: release().title,
+      body: release().summary,
+      cta: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+    });
+    expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+  });
+
   it('tells each change only to the people who can see it, and links the digest to notification settings', () => {
-    const published: Release = { ...release(), status: 'published' };
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: a copy forced to published): the release itself is published now.
     const ids = (role: ReleaseViewer['role'], permissions: ReleaseViewer['permissions'], modules: ModuleId[]) =>
-      visibleReleases([published], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+      visibleReleases([release()], { role, permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
     // Every member may turn the digest on, and every member can open a
     // warehouse's page from search.
     expect(ids('viewer', [], [])).toEqual(['weekly-digest-sent', 'weekly-digest-your-view', 'warehouse-page-opens']);
@@ -4760,6 +4944,92 @@ describe('the weekly digest and fixes release', () => {
     expect(sent.whatToDo).toContain('Email me a weekly inventory digest');
     expect(sent.whatToDo).toContain('Send preview now');
   });
+
+  // Publish re-read (2026-10-06), each correction against the code and the
+  // production checks.
+  it('says only what shipped: never "again", no digest received, the cron time, the web-only Expected date, the calendar in any zone', () => {
+    const r = release();
+    const text = readerText(r).join(' ');
+    // A warehouse's page (0008 dropped the column it selected, before the
+    // page shipped) and Make recurring (its seed read failed from the first
+    // commit) never worked before these fixes.
+    expect(text).not.toMatch(/\bagain\b|as before/i);
+    // The cron has not run since #326: what is sent, never what arrived.
+    expect(text).not.toMatch(/\barriv|\breceived\b/i);
+    expect(entry('weekly-digest-sent').whyItMatters).toContain('no weekly digest came');
+    // The send time is the cron's, for every organization; the footer prints
+    // it in the organization's zone.
+    const vercel = JSON.parse(readFileSync(resolve(__dirname, '../../../vercel.json'), 'utf8')) as {
+      crons: Array<{ path: string; schedule: string }>;
+    };
+    expect(vercel.crons.find((c) => c.path === '/api/cron/weekly-digest')?.schedule).toBe('0 14 * * 1');
+    // Claims review (2026-10-06; was: "Monday morning in US time zones"):
+    // 14:00 UTC is already Tuesday on Guam and the Northern Marianas, so the
+    // places where it is Monday morning are named.
+    expect(entry('weekly-digest-sent').howItAffectsYou).toContain(
+      'it is sent each Monday at 14:00 UTC, Monday morning in the mainland US, Alaska and Hawaii,',
+    );
+    // Claims review (2026-10-06): Send preview worked before #326, so only
+    // the WEEKLY digest was never sent.
+    expect(entry('weekly-digest-sent').whatChanged).toContain('so no weekly digest was ever sent.');
+    // Claims review (2026-10-06): owners, admins and managers read every
+    // warehouse whatever the Team page lists for them, so the scope line
+    // speaks of what a person can see, not where they work.
+    expect(entry('weekly-digest-your-view').howItAffectsYou).toContain('If you can see only some warehouses');
+    expect(entry('weekly-digest-your-view').howItAffectsYou).not.toContain('work in');
+    // Claims review (2026-10-06): the list printed the right day for a list
+    // over 800 orders, so the why says "could", as the what does.
+    expect(entry('po-list-expected-date').whyItMatters).toBe(
+      "The list could disagree with the purchase order's own page by a day.",
+    );
+    expect(entry('weekly-digest-sent').howItAffectsYou).toContain(
+      'Its footer gives that day and time in your workspace time zone.',
+    );
+    // An item awaiting its first receipt, in the Items badge's word.
+    const badge = readFileSync(resolve(__dirname, '../../components/inventory/stock-status-badge.tsx'), 'utf8');
+    expect(badge).toContain("'Expected — awaiting first receipt'");
+    expect(entry('weekly-digest-your-view').whatChanged).toContain(
+      'an item marked Expected, still awaiting its first receipt, is not counted as low or out of stock',
+    );
+    // The page's own sections.
+    const page = readFileSync(
+      resolve(__dirname, '../../app/(dashboard)/dashboard/warehouses/[id]/page.tsx'),
+      'utf8',
+    );
+    for (const heading of ['Address &amp; contact', 'Manager', 'Charters serviced']) {
+      expect(page, heading).toContain(heading);
+    }
+    expect(entry('warehouse-page-opens').howItAffectsYou).toContain(
+      'its address and contact, its manager and the charters it serves',
+    );
+    // #332 names every line Make recurring brings over.
+    expect(entry('make-recurring-works').howItAffectsYou).toContain(
+      'Each line names its item, rental and archived items included.',
+    );
+    // #334 (claims review, 2026-10-06): a destination the recurring form
+    // cannot offer (a staging area, a deleted location) opens as none, with a
+    // note, never a hidden destination the save would keep.
+    const recurringPage = readFileSync(
+      resolve(__dirname, '../../app/(dashboard)/dashboard/purchase-orders/recurring/page.tsx'),
+      'utf8',
+    );
+    expect(recurringPage).toContain('sitesOnly: true');
+    expect(entry('make-recurring-works').howItAffectsYou).toContain(
+      'such as a staging area or a deleted location, the new one opens with no destination and a note saying where the purchase order went, so you choose one.',
+    );
+    // The mobile app's purchase order screens still print the day in the
+    // phone's zone, so the Expected date is the web's.
+    expect(entry('po-list-expected-date').title).toContain('on the web');
+    expect(entry('po-list-expected-date').whatChanged).toMatch(/^On the web, in US time zones, /);
+    expect(r.summary).toContain('the purchase orders list on the web');
+    // The server placed today by UTC's date: tomorrow late in the day west of
+    // UTC, yesterday early in the day east of it.
+    expect(entry('calendar-today').whatChanged).toContain('could mark the wrong day as today');
+    expect(entry('calendar-today').whatChanged).toContain('the date in UTC');
+    // A profile can lack a name, and then the rental keeps the sent one.
+    expect(entry('rental-member-name').whatChanged).toContain('still does when the profile has no name');
+    expect(text).not.toMatch(/\bbook\b/i);
+  });
 });
 
 // Items first paint (owner bug 2026-10-05, #328), with the dashboard's open
@@ -4777,7 +5047,7 @@ describe('the Items first-paint release', () => {
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is published at a real time after its production check, below the drafts and directly above the small fixes', () => {
+  it('is published at a real time after its production check, below the drafts and the weekly digest release, directly above the small fixes', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     // A whole minute after the production check of #328 ended (2026-10-05
@@ -4786,7 +5056,18 @@ describe('the Items first-paint release', () => {
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-05T22:03:00Z'));
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-07T00:00:00Z'));
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    // Re-pinned by the publishing of the weekly digest release (2026-10-06;
+    // was: only drafts above it): published later, it sits directly above this
+    // one, below the drafts, and is dated later.
+    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'order-submit-once-2026-10',
+      'order-partial-approval-held-2026-10',
+      'weekly-digest-and-fixes-2026-10',
+    ]);
+    expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual(['draft', 'draft', 'published']);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
     expect(RELEASES[at + 1]?.id).toBe('small-fixes-2026-10');
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
