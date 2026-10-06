@@ -9,7 +9,7 @@ import {
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { Plus, ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 
 import { SmallAction } from '@/components/order-storefront/controls';
 import { Card } from '@/components/ui/card';
@@ -18,6 +18,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { unsettledSendsOnDevice } from '@/lib/order-storefront/services';
 import { orderStatusPill, ordersListEmpty, ordersListReloadNote, showPlaceOrder } from '@/lib/orders-list';
@@ -275,6 +276,11 @@ function OrderCard({ order }: { order: OrderRow }) {
   const meta = orderStatusPill(order.status);
   const requester = order.requester;
   const when = new Date(order.created_at);
+  // Returns RX-2 simulator finding SIM-4: at the AX text sizes the status pill
+  // and the Exchange chip took the whole header and the order number vanished.
+  // Past the AX threshold the header stacks: number and requester, then pills.
+  const { fontScale } = useWindowDimensions();
+  const stacked = shouldStackRow(fontScale);
 
   return (
     <Pressable
@@ -282,8 +288,8 @@ function OrderCard({ order }: { order: OrderRow }) {
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
       <Card padding={16}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={stacked ? { gap: 8 } : { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <View style={stacked ? undefined : { flex: 1, minWidth: 0 }}>
             <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
               {order.order_number ? `${formatOrderNumber(order.order_number)} — ` : '— '}{order.warehouse?.name ?? 'No warehouse'}
             </Mono>
@@ -296,7 +302,7 @@ function OrderCard({ order }: { order: OrderRow }) {
               </Mono>
             ) : null}
           </View>
-          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+          <View style={{ alignItems: stacked ? 'flex-start' : 'flex-end', gap: 6 }}>
             {meta.status === 'default' ? <Pill>{meta.label}</Pill> : <Pill status={meta.status}>{meta.label}</Pill>}
             {order.exchangeChip ? <Pill dot={false}>{order.exchangeChip}</Pill> : null}
           </View>

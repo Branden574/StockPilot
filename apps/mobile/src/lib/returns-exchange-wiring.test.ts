@@ -236,4 +236,16 @@ describe('the orders list', () => {
     expect(list).toContain('if (replacementReturnIds.length > 0) {');
     expect(list).toContain('orderExchangeChip(');
   });
+
+  // RX-2 simulator finding SIM-4 (iPhone 17 at AX5): the status pill and the
+  // Exchange chip beside it took the whole card header, and the order number
+  // and requester vanished (SO-000036 showed only its two pills). Past the AX
+  // threshold (shouldStackRow) the header stacks: the order number and the
+  // requester on the full width, the pills under them.
+  it('stacks the card header at the largest text sizes, so the chip never hides the order number', () => {
+    const list = code(read('src/screens/orders.tsx'));
+    expect(list).toContain('const stacked = shouldStackRow(fontScale);');
+    expect(list).toContain('<View style={stacked ? undefined : { flex: 1, minWidth: 0 }}>');
+    expect(list).toContain("<View style={{ alignItems: stacked ? 'flex-start' : 'flex-end', gap: 6 }}>");
+  });
 });
