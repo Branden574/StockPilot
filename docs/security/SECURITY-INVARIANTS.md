@@ -750,8 +750,12 @@ actually fire.
 
 - **Invariant** (0396, returns RX-2): a replacement order is an ordinary
   `order_requests` row linked to its RMA by `replacement_for_return_id`, and
-  every write that makes, changes or ends one runs inside the RMA's
-  functions.
+  every write that makes, cancels, links, re-lines, moves (warehouse,
+  delivery site, created_at) or closes as delivered-partial one runs inside
+  the RMA's functions (security review F-1). The order path still picks,
+  packs, stages, hands over and holds stock for a replacement, and edits its
+  needed-by date and internal notes, each under its own gates and the
+  return-first gate below.
   - **The link.** `authenticated` has no INSERT or UPDATE grant on
     `replacement_for_return_id` (0392 left it table-level SELECT and 13
     column INSERT grants; the new column gets none), so an API insert naming
@@ -770,7 +774,10 @@ actually fire.
     holds, the same free-stock rule (on hand minus every active hold). It
     copies the requester from the original order (member, email-only,
     portal customer, or a deleted requester's stamp), never mints a track
-    token, and stamps `unit_cost_at_request` from the item. The exchange
+    token, and stamps `unit_cost_at_request` from the item. It checks
+    `orders:approve` and write access to the original order's warehouse
+    itself (security review F-4, defence in depth: every caller checks both
+    first, so a future caller cannot forget them). The exchange
     functions (`change_return_replacement`, `cancel_return_replacement`,
     `release_return_replacement_early`) gate in this order: signed in, the
     RMA read without a lock (foreign answers like missing), the Returns and
@@ -793,20 +800,54 @@ actually fire.
     replacement cancel and "Close as return only" need the revision the
     caller saw, and the early release names the replacement order the caller
     saw; anything newer is `return_changed` (desk check F7).
-  - **Never more out than returned** (desk check F2). A replacement that
-    handed anything over, whatever its status (a backorder, or one resumed
-    into picking), is handed over: neither cancelled nor changed from its
-    RMA (`replacement_handed_over`). A re-issue sends each exchange line at
-    most its returned quantity minus what this RMA's replacements already
-    handed over for it (`_return_exchange_fulfilled`).
-  - **Lock order** (desk check F4). Every exchange writer takes, before the
-    first row naming an item, the organization's order-number advisory lock
-    when it will insert an order (the one `assign_order_request_number`
-    takes) and then every item it names FOR UPDATE in id order
-    (`_return_lock_items`): two writers never hold key-share locks the
-    other's FOR UPDATE needs. A residual deadlock (the RX-1 create takes
-    key-share locks on the returned items before the requested ones) maps to
-    the plain "Busy. Try again." (40P01, like 55P03 and 57014).
+  - **Never more out than returned, per original unit** (desk check F2;
+    review S1). Every unit of an original order line is exchanged once,
+    whatever RMA asks: an exchange quantity is capped by the RMA's returned
+    quantity and by what the original line has left
+    (`_return_exchange_line_budget`): its handed-over quantity, less the
+    units replacements already handed over for it under cancelled RMAs (the
+    customer kept those units, so a later RMA brings them back as a return
+    only), less what each other RMA on the line claims (the returned
+    quantity of an exchange requested, approved or re-issuable; the units
+    handed over by one declined for good; nothing for denied RMAs and
+    return-only lines). The create, the approval (approve and "Add a
+    replacement"), a change and a re-issue refuse more with
+    `exchange_already_sent` (detail quantity and available), each under the
+    line's budget lock. Without a cancelled RMA's hand-over the budget never
+    binds (RX-1's return budget keeps the returned quantities within the
+    handed-over quantity). A replacement that handed anything over, whatever
+    its status (a backorder, or one resumed into picking), is handed over:
+    neither cancelled nor changed from its RMA (`replacement_handed_over`).
+    A re-issue sends each exchange line at most its returned quantity minus
+    what this RMA's replacements already handed over for it
+    (`_return_exchange_fulfilled`), and at most the line budget.
+  - **Lock order** (desk check F4; review S1, S3). Every exchange writer
+    takes, before the first row naming an item, its item locks in id order
+    (`_return_lock_items`): when it will insert an order, the organization's
+    order-number advisory lock (the one `assign_order_request_number` takes)
+    and then FOR UPDATE, so two issuing writers never hold key-share locks
+    the other's FOR UPDATE needs; when it issues no order (the deny hook,
+    "Close as return only", an approval that only declines), FOR KEY SHARE
+    and no order-number lock (review S3: FOR UPDATE there deadlocked an
+    ordinary order inserting its lines in payload order, race 13). A writer
+    that may raise what an RMA claims on an original line (the create, an
+    approval that approves or adds, a change, a re-issue) then takes that
+    line's budget lock (`_return_lock_exchange_budget`, a transaction-scoped
+    advisory lock per line, in id order) after every item lock, so no writer
+    waits for an item while holding it (race 14). Accepted residual: the
+    frozen RX-1 create takes key-share locks on the returned items before the
+    requested ones, so a create with an exchange can still meet an id-ordered
+    FOR UPDATE item locker on an order holding both items in a 40P01: the
+    exchange writers, and on the order side `approve_partial`,
+    `hold_order_stock`, `resume_fulfillment` and `complete_picking` (review
+    S4; the window is the gap between two rows' foreign-key checks, so it is
+    rare, and nothing is written). The RMA side answers it with the plain
+    "Busy. Try again." (40P01, like 55P03 and 57014); on the order side the
+    victim reads the generic error, because the order service maps errors
+    function by function (`holdStockError` and the inline mappers of the
+    `approve_partial`, `resume_fulfillment` and `complete_picking` calls)
+    and sends 40P01 to `internal_error`: mapping it to "Busy. Try again."
+    there is a recorded follow-up, not a one-place change.
   - **The return-first gate.** `trg_order_requests_zz_replacement_status`
     (SECURITY DEFINER, every role) refuses a replacement's move to
     `pick_slip_generated` (from `approved`, or a resume from `backordered`)
@@ -826,7 +867,29 @@ actually fire.
     `requester_pending_only`), since a replacement is approved in the
     transaction that creates it. A replacement already picked is cancelled through
     `cancel_order_request`'s drawn branch (the batch back to Staging, holds
-    released); one handed over is never cancelled (`replacement_handed_over`).
+    released) by "Cancel replacement" only: cancelling the RMA is refused
+    while its replacement is picked, being packed, staged or in transit
+    (`replacement_in_progress`, review S2), so a stale screen or the API
+    never restocks a unit that is on the truck; one handed over is never
+    cancelled (`replacement_handed_over`).
+  - **The header guard** (security review F-1).
+    `trg_order_requests_zz_replacement_header` (SECURITY INVOKER, every
+    role, `postgres` included) refuses a change of a replacement's
+    `warehouse_id`, `delivery_charter_id` or `created_at`, and its move from
+    `backordered` to `completed` (`close_partial`, the order page's "close
+    as delivered-partial"), unless an RMA function raised the
+    transaction-bound flag (`replacement_cancel_via_return`): the RMA's gates
+    read the original order's warehouse, and `created_at` orders the RMA's
+    replacements (a re-issue inherits the newest one's fulfilment). The RMA
+    cancel raises the flag around its own `close_partial`. A data fix by the
+    owner raises the flag the same way.
+  - **The flag** (security review F-5). `stockpilot.return_exchange` is the
+    only barrier for SECURITY DEFINER callers of `cancel_order_request` and
+    `close_partial` on a replacement, and of the header guard. It counts only
+    when it holds the current transaction's id, and no API role can set it:
+    PostgREST sets only `request.*` and the role, and no API-callable
+    function sets it. Keep it that way: never add an API-callable function
+    that sets this setting, or that takes a setting's name from its input.
   - **Fixed lines.** `trg_zz_order_request_lines_replacement_guard`
     (BEFORE INSERT only) refuses an API-role insert of a replacement's lines
     (`replacement_lines_fixed`); an update is refused by the
@@ -868,10 +931,19 @@ actually fire.
     forward "neutralise" migration kept with the revert kits). Cancelling a
     replacement out for delivery (`in_transit`) restocks the picked batch to
     Staging on record while the unit is still with the driver
-    (`cancel_order_request`'s unchanged drawn branch; the screens say to ask
-    the driver to bring it back). `return_exchange_lines.request_note`, the
-    requester's own words, is readable by every member, the same posture as
-    `returns.notes`.
+    (`cancel_order_request`'s unchanged drawn branch); only "Cancel
+    replacement" does this, and its screens say to ask the driver to bring
+    it back (the RMA cancel is refused there, review S2).
+    `return_exchange_lines.request_note`, the requester's own words, is
+    readable by every member, the same posture as `returns.notes`.
+    `return_exchange_candidates` (SECURITY INVOKER) checks neither the
+    Returns module nor the warehouse (security review F-3): it reads items
+    and holds under the caller's own RLS, so a member sees only what they
+    may read already, and it writes nothing; the app gates the module. A
+    part-handed-over replacement on backorder whose RMA is already received
+    or closed cannot be closed as delivered-partial (the header guard; the
+    RMA cancel needs a requested or approved RMA): it waits on backorder
+    until Resume sends the rest (an RMA-side close is an RX-3 follow-up).
 - **Why it matters**: a replacement is stock promised to someone. Without
   these rules an exchange could be issued twice for one approval, picked and
   handed over before the item it replaces came back, cancelled from the
@@ -891,14 +963,21 @@ actually fire.
   X-1 and C-1, "Close as return only", a replacement handed over in part
   and the re-issue cap, the RMA cancel after a part hand-over, the lock
   order, stale screens, the early release, cancel and deny, the notify
-  split, the status CASE, organization deletion, grants; each break named
-  in the file's mutation table is caught by the test it names), re-pinned
-  0384 GO1, 0385 Z2, 0387 AL9/AL10, 0388, 0391 and 0394;
+  split, the status CASE, organization deletion, grants; the review fixes
+  W1-W9: a second RMA on a line whose unit already got a replacement is a
+  return only, the per-unit budget at the create, the approval, a change
+  and a re-issue, the RMA cancel refused while the replacement is picked or
+  in transit, the header guard and the issuer's own gates, with A10 and A12
+  pinning the lock modes and order; each break named in the file's
+  mutation table is caught by the test it names), re-pinned 0384 GO1, 0385
+  Z2, 0387 AL9/AL10, 0388, 0391 and 0394;
   `scripts/db-concurrency/0396_exchange_races.sh` (two sessions: double
   approval, substitution against a pick slip, cancel against prepare,
-  release against receive; and two RMAs on one item, approval against
-  approval and against substitution, a third session forcing the
-  interleave: a wait, never 40P01). App side:
+  release against receive; two RMAs on one item, approval against approval
+  and against substitution, a third session forcing the interleave: a wait,
+  never 40P01; a denial against an ordinary order's lines, never waiting
+  (race 13); two RMAs taking an original line's last unit, one refused after
+  waiting on the budget lock (race 14)). App side:
   `returns-exchange.test.ts`, `order-requests.replacement.test.ts`,
   `order-replacement.test.ts`, `replacement-update.test.ts`, the exchange
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
