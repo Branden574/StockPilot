@@ -79,13 +79,20 @@ export async function sendDigestPreviewAction() {
     };
   }
   const supabase = await createClient();
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select(
-      'digest_section_low_stock, digest_section_open_pos, digest_section_cycle_counts',
-    )
-    .eq('id', ctx.userId)
-    .maybeSingle();
+  // The zone is read with the profile, before the digest's own reads: the
+  // preview flags OVERDUE in the workspace's zone, as the Monday email does
+  // (services/digest.ts DigestClock), and its footer names the send time in
+  // the same zone.
+  const [{ data: profile }, timeZone] = await Promise.all([
+    supabase
+      .from('user_profiles')
+      .select(
+        'digest_section_low_stock, digest_section_open_pos, digest_section_cycle_counts',
+      )
+      .eq('id', ctx.userId)
+      .maybeSingle(),
+    getCachedOrgTimezone(ctx.organizationId),
+  ]);
   const sections = {
     lowStock: (profile as { digest_section_low_stock?: boolean } | null)
       ?.digest_section_low_stock ?? true,
@@ -94,10 +101,10 @@ export async function sendDigestPreviewAction() {
     cycleCounts: (profile as { digest_section_cycle_counts?: boolean } | null)
       ?.digest_section_cycle_counts ?? true,
   };
-  const [fullPayload, timeZone] = await Promise.all([
-    getDigestData(supabase, ctx.organizationId),
-    getCachedOrgTimezone(ctx.organizationId),
-  ]);
+  const fullPayload = await getDigestData(supabase, ctx.organizationId, {
+    timeZone,
+    now: new Date(),
+  });
   const payload = applySectionOptIns(fullPayload, sections);
   const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
   const settingsUrl = `${appUrl}/dashboard/settings/notifications`;

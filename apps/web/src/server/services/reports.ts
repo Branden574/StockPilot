@@ -8,7 +8,7 @@ import {
   compareWarehouseRollups,
 } from '@/lib/reports/row-order';
 
-import { isUuid } from '@stockpilot/core';
+import { isPastExpectedDay, isUuid } from '@stockpilot/core';
 
 import {
   assertModuleEnabled,
@@ -18,6 +18,7 @@ import {
   type ServiceContext,
 } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { orgTimeZoneFor } from './lib/org-time-zone';
 import { whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
 
@@ -855,8 +856,11 @@ export class ReportsService {
    * purchase_orders + purchase_order_items into:
    *   - PO count (total, received, still open)
    *   - Spend (committed total + open dollar value)
-   *   - On-time rate (received_at <= expected_at, only POs where both
-   *     are set)
+   *   - On-time rate: received on or before the expected DAY, the day it
+   *     was received read in the org's zone (core isPastExpectedDay; owner
+   *     rule 2026-10-06), only POs where both are set. It compared
+   *     received_at <= expected_at, the stored midnight UTC, so a delivery
+   *     received on its expected day counted as late.
    *   - Avg lead time in days (ordered_at → received_at, full receipts)
    *   - Fill rate (sum quantity_received / sum quantity_ordered) across
    *     all PO items, weighted by qty
@@ -885,22 +889,27 @@ export class ReportsService {
         | { name: string }[]
         | null;
     };
-    const poList = await fetchAllRows<ScorecardPoRow>(
-      (from, to) =>
-        this.ctx.supabase
-          .from('purchase_orders')
-          .select(
-            `id, supplier_id, status, ordered_at, expected_at, received_at,
+    // The org's zone decides on which day a delivery was received; read
+    // alongside the purchase orders.
+    const [poList, timeZone] = await Promise.all([
+      fetchAllRows<ScorecardPoRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('purchase_orders')
+            .select(
+              `id, supplier_id, status, ordered_at, expected_at, received_at,
          total, created_at,
          supplier:suppliers!supplier_id (name)`,
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .not('supplier_id', 'is', null)
-          .gte('created_at', since)
-          .order('id', { ascending: true })
-          .range(from, to),
-      { cap: 50_000 },
-    );
+            )
+            .eq('organization_id', this.ctx.organizationId)
+            .not('supplier_id', 'is', null)
+            .gte('created_at', since)
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: 50_000 },
+      ),
+      orgTimeZoneFor(this.ctx, 'reports.supplier_scorecard.org_timezone'),
+    ]);
 
     const poIds = poList.map((p) => p.id);
     let poItems: Array<{
@@ -1002,7 +1011,9 @@ export class ReportsService {
 
       if (po.received_at && po.expected_at) {
         b.onTimeMatched++;
-        if (new Date(po.received_at) <= new Date(po.expected_at)) {
+        // Late only when received on a day after the expected day, in the
+        // org's zone: the expected day itself is on time.
+        if (!isPastExpectedDay(po.expected_at, po.received_at, timeZone)) {
           b.onTimeHits++;
         }
       }

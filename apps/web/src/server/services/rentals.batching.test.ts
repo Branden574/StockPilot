@@ -118,7 +118,10 @@ describe('getDigestData open cycle counts', () => {
         };
       },
     });
-    const out = await getDigestData(stub.client, 'org-1');
+    const out = await getDigestData(stub.client, 'org-1', {
+      timeZone: 'America/Los_Angeles',
+      now: new Date('2026-10-12T14:00:00.000Z'),
+    });
     expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
     expect(orders.every((o) => o === 'id')).toBe(true);
     expect(out.openCycleCounts).toHaveLength(250);

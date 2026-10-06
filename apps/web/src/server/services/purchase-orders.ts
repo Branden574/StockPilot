@@ -23,13 +23,14 @@ import {
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { whereOrderableItem, whereReorderCandidate } from './lib/orderable-items';
+import { orgTimeZoneFor } from './lib/org-time-zone';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
 import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
-import { createItemSchema } from '@stockpilot/core';
+import { createItemSchema, pastExpectedDayCutoff } from '@stockpilot/core';
 
 /** Notifications created at once by one fan-out (maintenance-notify.ts uses
  *  the same number for the same reason). */
@@ -289,16 +290,30 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * Cheap count of receivable POs whose `expected_at` is in the past — used
-   * by the dashboard "needs attention" hero to surface inbound deliveries
-   * that are late. Warehouse-scoped via the destination location's
-   * warehouse, matching the same access rules as `list()`. Returns 0 when
-   * the user has zero readable warehouses.
+   * Cheap count of receivable POs that are OVERDUE — used by the dashboard
+   * "needs attention" hero to surface inbound deliveries that are late, and
+   * by the Insights briefing (page and morning notification). Warehouse-scoped
+   * via the destination location's warehouse, matching the same access rules
+   * as `list()`. Returns 0 when the user has zero readable warehouses.
+   *
+   * OVERDUE (owner rule, 2026-10-06): the organization's current date is AFTER
+   * the expected day. `expected_at` is a DAY stored as its midnight UTC, so the
+   * old `expected_at < now` counted a purchase order expected Oct 10 from 5 PM
+   * Pacific on Oct 9. The filter is the same rule as core isPastExpectedDay,
+   * as an instant: `expected_at <` the organization's today at midnight UTC
+   * (pastExpectedDayCutoff). The zone is read alongside the warehouse access.
    */
   async overdueCount(params: { warehouseId?: string } = {}): Promise<number> {
-    const access = await getWarehouseAccess(this.ctx);
+    const [access, timeZone] = await Promise.all([
+      getWarehouseAccess(this.ctx),
+      orgTimeZoneFor(this.ctx, 'purchase-orders.overdue_count.org_timezone'),
+    ]);
     const needsScope = !access.hasAllAccess || !!params.warehouseId;
     if (!access.hasAllAccess && access.readableIds.length === 0) return 0;
+    // Null only when this runtime cannot name the organization's day: count
+    // nothing rather than guess.
+    const cutoff = pastExpectedDayCutoff(new Date(), timeZone);
+    if (cutoff === null) return 0;
 
     const destEmbed = needsScope
       ? 'destination:locations!destination_location_id!inner (warehouse_id)'
@@ -310,7 +325,7 @@ export class PurchaseOrdersService {
       .eq('organization_id', this.ctx.organizationId)
       .in('status', ['expected_inbound', 'ordered', 'partially_received'])
       .not('expected_at', 'is', null)
-      .lt('expected_at', new Date().toISOString());
+      .lt('expected_at', cutoff);
 
     if (!access.hasAllAccess) {
       // in-list-bound: the caller's readable warehouses (an org's handful of sites)

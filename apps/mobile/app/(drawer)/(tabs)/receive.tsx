@@ -24,6 +24,8 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { readOrgTimeZone } from '@/lib/order-readiness';
+import { receiveOverdueCount } from '@/lib/receive-overdue';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -50,22 +52,32 @@ export default function Receive() {
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const { orgId } = useOrg();
   const [pos, setPos] = React.useState<OpenPo[]>([]);
+  // organizations.timezone, for the OVERDUE count (null: core's default zone).
+  const [timeZone, setTimeZone] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
-    const { data, error } = await supabase
-      .from('purchase_orders')
-      .select(
-        `id, po_number, status, total, expected_at, updated_at,
-         supplier:suppliers!supplier_id (name),
-         destination:locations!destination_location_id (warehouse_id)`,
-      )
-      .eq('organization_id', orgId)
-      .in('status', RECEIVABLE_STATUSES)
-      .order('updated_at', { ascending: false });
+    // The organization's zone is read with the purchase orders, as the order
+    // screen reads it: a purchase order is overdue once the ORGANIZATION's
+    // date is after its expected day (receiveOverdueCount). The read never
+    // throws; unset or refused, it is null.
+    const [{ data, error }, zone] = await Promise.all([
+      supabase
+        .from('purchase_orders')
+        .select(
+          `id, po_number, status, total, expected_at, updated_at,
+           supplier:suppliers!supplier_id (name),
+           destination:locations!destination_location_id (warehouse_id)`,
+        )
+        .eq('organization_id', orgId)
+        .in('status', RECEIVABLE_STATUSES)
+        .order('updated_at', { ascending: false }),
+      readOrgTimeZone(supabase, orgId),
+    ]);
+    setTimeZone(zone);
     if (error) {
       console.warn('po list', error);
       setPos([]);
@@ -116,10 +128,10 @@ export default function Receive() {
     router.push(`/po/${po.id}`);
   }
 
-  const overdueCount = pos.filter((p) => {
-    if (!p.expected_at) return false;
-    return new Date(p.expected_at) < new Date();
-  }).length;
+  // Overdue once the organization's date is after the expected DAY, never the
+  // stored midnight UTC against this clock (in Los Angeles that counted a
+  // purchase order as overdue from 5 PM the evening before its ETA).
+  const overdueCount = receiveOverdueCount(pos, new Date(), timeZone);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>

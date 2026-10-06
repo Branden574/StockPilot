@@ -202,7 +202,8 @@ async function SupplierScorecardBody({ days }: { days: number }) {
       </Card>
 
       <p className="text-muted-foreground mt-4 text-[11px]">
-        On-time = received_at ≤ expected_at across POs where both are set. Lead time =
+        On-time = received on or before the expected date (the day it was received, in your
+        organization&apos;s time zone), across POs where both are set. Lead time =
         average days from ordered_at (or created_at if missing) to received_at, only
         for fully-received POs. Fill rate = sum(qty_received) / sum(qty_ordered) across
         all PO line items in the window.
