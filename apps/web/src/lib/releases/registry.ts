@@ -340,9 +340,9 @@ export const RELEASES: Release[] = [
     // Orders on. The database refusing what the app already refused is not
     // visible to anyone using the app as intended, so it has no entry.
     status: 'published',
-    title: 'Clearer order approvals and refusals, and receiving for those who can',
+    title: 'Clearer order approvals and refusals, and receiving only with the permission it needs',
     summary:
-      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. On the web now, and in the mobile app after the latest update, Approve and other changes to an order in a warehouse you don't work in are refused in plain words, and receiving is offered only to people who can receive stock.",
+      "When only part of your order request can be reserved, or none of it, the notification and the approval email now say so. Approve and other changes to an order in a warehouse you don't work in are now refused in plain words, and receiving is no longer offered without the Adjust on-hand permission. In the mobile app, the receiving change and the words for changing an order's items or needed-by date come with the latest update.",
     publishedAt: '2026-10-06T06:42:00Z',
     entries: [
       {
@@ -400,18 +400,24 @@ export const RELEASES: Release[] = [
         // and 1 staff member without stock:adjust, each refused with "Missing
         // permission". The phone's Transfer also showed for a manager whose
         // stock:transfer was revoked (0 in production). Told to everyone who
-        // reads purchase orders where Receiving is on, since that is where the
-        // note appears; Transfer rides along (managers read purchase orders).
+        // reads purchase orders where Receiving is on, since posting a receipt
+        // needs the Receiving module; Transfer rides along (managers read
+        // purchase orders). Claims review (2026-10-06): posting also needs
+        // manager rank in the database (0349, has_org_role 'manager'), which
+        // these gates do not check, so a staff member with default
+        // permissions is still offered Receive and refused; the words claim
+        // only the Adjust on-hand gate. The receiving checklist slice (F4-1)
+        // gates Receive on that rank too.
         id: 'receiving-follows-permission',
         category: 'fixed',
         area: 'Receiving',
-        title: 'Receiving shows only to people who can receive',
+        title: 'Receiving is no longer offered without Adjust on-hand',
         whatChanged:
           'On a purchase order, Receive items on the web now shows only with the Adjust on-hand permission, which receiving needs, and so do Scan, the quantities and Post receipt in the mobile app after the latest update. Without it, a purchase order ready to receive shows "Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it." instead, and still lists what was ordered and received. On the web, Reverse on a receipt shows only with it too. In the mobile app, after the latest update, Transfer / put away follows the Transfer stock permission for admins and managers too.',
         whyItMatters:
           'Everyone who could open a purchase order was offered receiving, and without Adjust on-hand the receipt was then refused with a message that began "Missing permission". In the mobile app, an admin or manager without Transfer stock was offered Transfer / put away and refused the same way.',
         howItAffectsYou:
-          'Nothing changes in who can receive: only people who could post a receipt see these buttons, on the web now and in the mobile app after the latest update.',
+          'Nothing changes in who can receive. Without Adjust on-hand you no longer see these buttons, on the web now and in the mobile app after the latest update.',
         whatToDo:
           'No action needed. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
@@ -427,7 +433,7 @@ export const RELEASES: Release[] = [
         id: 'app-order-item-refusals',
         category: 'fixed',
         area: 'Orders',
-        title: 'The mobile app says why a change to an order’s items was refused',
+        title: "The mobile app says why a change to an order's items was refused",
         whatChanged:
           'In the mobile app, after the latest update, when you add items to an order or change or remove a line and the change is refused, the app shows the reason, for example that units are already picked or that an item is not stocked at that warehouse. When a different quantity would fix it, the sheet stays open and shows the reason.',
         whyItMatters:

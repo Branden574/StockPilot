@@ -5728,9 +5728,18 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     const ota = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/use-ota-updates.ts'), 'utf8');
     expect(ota).toContain('await Updates.checkForUpdateAsync();');
     expect(ota).toContain('await Updates.reloadAsync();');
+    // Re-pinned by the claims review (2026-10-06; was: "On the web now, and
+    // in the mobile app after the latest update, Approve and other changes
+    // ... and receiving is offered only to people who can receive stock."):
+    // the phone's Approve shows the server's sentence without the update
+    // (runAction, unchanged by #329), and the slice gates receiving on Adjust
+    // on-hand only, while posting a receipt also needs manager rank in the
+    // database (0349), so a staff member with default permissions is still
+    // offered it and refused. The summary says only what the slice changed.
     expect(release().summary).toContain(
-      "On the web now, and in the mobile app after the latest update, Approve and other changes to an order in a warehouse you don't work in are refused in plain words, and receiving is offered only to people who can receive stock.",
+      "Approve and other changes to an order in a warehouse you don't work in are now refused in plain words, and receiving is no longer offered without the Adjust on-hand permission. In the mobile app, the receiving change and the words for changing an order's items or needed-by date come with the latest update.",
     );
+    expect(release().summary).not.toMatch(/offered only to people who can receive/);
     expect(release().summary).not.toMatch(/says so in plain words/);
     const reopen =
       'No action needed. In the mobile app, close the app completely and open it again to load the latest update.';
