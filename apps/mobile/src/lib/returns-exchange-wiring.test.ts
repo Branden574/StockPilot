@@ -60,6 +60,16 @@ describe('the workbench', () => {
     expect(view).not.toContain("' (now)'");
   });
 
+  // Review fix P18: "Get replacement ready" draws stock and stages the order;
+  // what it does is shown under it and is its VoiceOver hint (offline, the
+  // hint is why it is off).
+  it('says what Get replacement ready does, under it and as its hint (review fix P18)', () => {
+    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}');
+    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}');
+    expect(view).toContain('{actionHelp(actions.primary) ? (');
+    expect(view).toContain('const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;');
+  });
+
   it('labels an exchange approval "Approve return & exchange"', () => {
     expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
   });
@@ -222,6 +232,16 @@ describe('online only', () => {
     expect(stepper).toContain('onPress={() => onChange(stepReplacementQuantity(value, delta, max))}');
     expect(stepper).toContain('const stacked = shouldStackRow(fontScale);');
     expect(stepper).toContain('maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}');
+  });
+
+  // Review fix P26: VoiceOver read the review's heading as "Walk Exchange
+  // Tee - M right arrow Walk Exchange Tee - L"; its label is now core's words.
+  // Review fix P27: the Add a replacement card's undo reads as the action it
+  // is, "Keep as return only", never like a status.
+  it("names the review's heading in words and the add card's undo as an action (review fixes P26, P27)", () => {
+    expect(sheet).toContain('accessibilityLabel={exchangeReviewHeaderLabel(label, x.requestedItem ? requested : null)}');
+    expect(sheet).toContain('{RETURNS_COPY.keepAsReturnOnly}');
+    expect(sheet).not.toContain('{RETURNS_COPY.returnOnly}');
   });
 
   // Desk check F9: "Close as return only" sends the revision the sheet shows

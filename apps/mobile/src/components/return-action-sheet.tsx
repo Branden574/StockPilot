@@ -20,6 +20,7 @@ import {
   choiceFromKey,
   choiceKey,
   damagedHint,
+  exchangeReviewHeaderLabel,
   exchangeReviewOptions,
   isChoiceOffered,
   qtyReturningLabel,
@@ -922,8 +923,9 @@ function ExchangeReview({
                 disabled={disabled}
                 onChange={(quantity) => onAdd(l.id, { ...add, quantity })}
               />
+              {/* Review fix P27: the undo reads as the action it is. */}
               <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
-                {RETURNS_COPY.returnOnly}
+                {RETURNS_COPY.keepAsReturnOnly}
               </Button>
             </>
           ) : (
@@ -946,7 +948,13 @@ function ExchangeReview({
       : RETURNS_COPY.replacementWarehouseReview;
     return (
       <View key={x.id} onLayout={(e) => onCardTop(x.id, e.nativeEvent.layout.y)} style={[styles.lineCard, { borderColor: c.hair }]}>
-        <View ref={(node) => onHeading(x.id, node)} accessible>
+        {/* Review fix P26: VoiceOver reads the heading in words, never the
+            arrow ("right arrow"). */}
+        <View
+          ref={(node) => onHeading(x.id, node)}
+          accessible
+          accessibilityLabel={exchangeReviewHeaderLabel(label, x.requestedItem ? requested : null)}
+        >
           <Body size={14} color={c.ink}>
             {label} → {requested}
           </Body>

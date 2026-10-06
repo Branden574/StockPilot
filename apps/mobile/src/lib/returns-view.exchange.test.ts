@@ -5,6 +5,7 @@ import { FX_ITEM_A, fxFacts, fxItem, fxLine, fxResult } from './__fixtures__/rea
 import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
 import {
   NO_EXCHANGE,
+  actionHelp,
   changeInRmaLabel,
   exchangeApprovalDecisions,
   exchangeForLine,
@@ -28,6 +29,7 @@ import {
   returnRowExchange,
   reviewsForShortChange,
   shortSentences,
+  stepOutcomeMessage,
   stepReplacementQuantity,
   workbenchActions,
   type MobileOrderReplacement,
@@ -380,6 +382,54 @@ describe('the REPLACEMENT side and the replacement order', () => {
     expect(block('approved', {}, [{ orderId: '0b000000-0000-0000-0000-000000000096', orderNumber: 96, status: 'some_new_status' }]).at(-1)).toBe(
       'Earlier replacements: SO-000096',
     );
+  });
+
+  // Review fix P23: "Return approved." after approving an exchange said
+  // nothing about the replacement order it created. The words are core's
+  // approvalOutcomeLine, from the workbench the steps route answers.
+  it('the approval outcome names the replacement order and what it reserved (review fix P23)', () => {
+    const live = (over: Partial<MobileReplacement> = {}) =>
+      exchange({
+        status: 'waiting_for_return',
+        lines: [xline({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: L })],
+        replacement: {
+          orderId: 'repl',
+          orderNumber: 104,
+          status: 'approved',
+          fulfillmentType: 'pickup',
+          live: true,
+          class: 'undrawn',
+          owed: 1,
+          held: 1,
+          short: false,
+          lines: [{ orderLineId: 'ol9', itemId: 'item-l', label: 'Walk New Hire Shirt, L', item: L, requested: 1, fulfilled: 0, held: 1, take: null }],
+          ...over,
+        },
+      });
+    const done = { step: 'approve' as const, outcome: 'done' as const };
+    expect(stepOutcomeMessage(done, wb('approved', live()), false)).toBe('Approved. Replacement order SO-000104 created and 1 reserved.');
+    expect(
+      stepOutcomeMessage(
+        done,
+        wb('approved', live({ held: 0, short: true, lines: [{ orderLineId: 'ol9', itemId: 'item-l', label: 'L', item: L, requested: 1, fulfilled: 0, held: 0, take: null }] })),
+        false,
+      ),
+    ).toBe('Approved. Replacement order SO-000104 is on backorder.');
+    expect(stepOutcomeMessage(done, wb('received', live()), true)).toBe('Approved and received. Replacement order SO-000104 created and 1 reserved.');
+    // The exchange declined (no replacement order): the return's own words.
+    expect(stepOutcomeMessage(done, wb('approved', exchange({ status: 'declined' })), false)).toBe('Return approved.');
+    expect(stepOutcomeMessage({ step: 'approve', outcome: 'already' }, wb('approved', live()), false)).toBe('Already approved.');
+  });
+
+  // Review fix P18: "Get replacement ready" draws stock and stages the order
+  // with no word on screen first. Its help (core's, which never says it
+  // prints) is shown under it and is its VoiceOver hint.
+  it('says what Get replacement ready does (review fix P18)', () => {
+    expect(actionHelp('get_replacement_ready')).toBe(
+      'Makes the pick slip, records the pick, makes the packing slips and stages it. Take the item from the rack shown first. Stops before the signature.',
+    );
+    expect(actionHelp('receive')).toBeNull();
+    expect(actionHelp(null)).toBeNull();
   });
 
   it('prepare: staged words, or the refusal', () => {

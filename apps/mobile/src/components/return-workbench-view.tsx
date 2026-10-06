@@ -29,6 +29,7 @@ import {
   type MobileReturnWorkbench,
 } from '@/lib/returns-api';
 import {
+  actionHelp,
   actionLabel,
   exchangeForLine,
   exchangeOf,
@@ -132,6 +133,9 @@ export function ReturnWorkbenchView({
   const hasExchange = ex.kind === 'exchange';
   const actions = workbenchActions(wb, { itemIsHere: wb.createdOnCounter, online: !offline, busy });
   const disabled = actions.disabledReason !== null;
+  // Review fix P18: what "Get replacement ready" does, under it and as its
+  // hint, when it is one of the secondary buttons.
+  const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;
 
   // RX-2: "Get replacement ready" is one tap (the server runs the order's own
   // steps, each with its gates, and stops before the signature).
@@ -286,13 +290,18 @@ export function ReturnWorkbenchView({
               <Button
                 block
                 disabled={disabled}
-                accessibilityHint={actions.disabledReason ?? undefined}
+                accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}
                 onPress={() => onAction(actions.primary!)}
               >
                 {busy && (actions.primary === 'receive' || actions.primary === 'get_replacement_ready')
                   ? 'Saving…'
                   : actionLabel(actions.primary, { hasExchange })}
               </Button>
+            ) : null}
+            {actionHelp(actions.primary) ? (
+              <Body size={12.5} muted>
+                {actionHelp(actions.primary)}
+              </Body>
             ) : null}
             {actions.secondary.length > 0 ? (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -302,13 +311,18 @@ export function ReturnWorkbenchView({
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
                     disabled={disabled}
-                    accessibilityHint={actions.disabledReason ?? undefined}
+                    accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}
                     onPress={() => onAction(a)}
                   >
                     {actionLabel(a, { hasExchange })}
                   </Button>
                 ))}
               </View>
+            ) : null}
+            {secondaryHelp ? (
+              <Body size={12.5} muted>
+                {secondaryHelp}
+              </Body>
             ) : null}
             {actions.disabledReason ? (
               <Body size={12.5} muted>

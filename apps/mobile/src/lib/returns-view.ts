@@ -14,6 +14,7 @@ import {
   addReplacementDecision,
   alreadyClosedSentence,
   alreadyReceivedSentence,
+  approvalOutcomeLine,
   approvalPreviewLines,
   availableLabel,
   availableReturnActions,
@@ -33,6 +34,7 @@ import {
   replacementShortLine,
   returnActionLabel,
   shortLabel,
+  type ApprovalOutcomeAnswer,
   type ExchangeConsequenceAction,
   type ExchangeConsequenceKey,
   type ExchangeReviewState,
@@ -171,6 +173,15 @@ export function actionLabel(action: ReturnAction, opts: { hasExchange?: boolean 
   return opts.hasExchange ? returnActionLabel(action, { hasExchange: true }) : RETURN_ACTION_LABELS[action];
 }
 
+/**
+ * What a workbench button does, shown under it and read as its VoiceOver
+ * hint (review fix P18): "Get replacement ready" draws stock and stages the
+ * order in one tap, so core's words say so first. Null for the others.
+ */
+export function actionHelp(action: ReturnAction | null): string | null {
+  return action === 'get_replacement_ready' ? RETURNS_COPY.getReplacementReadyHelp : null;
+}
+
 // ── Destinations ───────────────────────────────────────────────────────────
 
 /** The lines whose destination can still change (unapplied, with options). */
@@ -284,10 +295,26 @@ export function denyHelp(wb: Pick<MobileReturnWorkbench, 'return'>): string {
 
 // ── Step outcomes ──────────────────────────────────────────────────────────
 
-/** The words for one ran step (refused: the server's own words). */
+/**
+ * The approval's answer as the workbench after it shows it (the steps route
+ * answers the whole workbench): the RMA's status and the live replacement
+ * the approval created, if any (core approvalOutcomeLine, review fix P23).
+ */
+function approvalAnswerOf(wb: Pick<MobileReturnWorkbench, 'return'> & { exchange?: MobileReturnExchange | null }): ApprovalOutcomeAnswer {
+  const shown = exchangeOf(wb).replacement;
+  const live = shown?.live ? shown : null;
+  return {
+    status: wb.return.status,
+    replacement: live ? { orderNumber: live.orderNumber, short: live.short, lines: live.lines.map((l) => ({ held: l.held })) } : null,
+  };
+}
+
+/** The words for one ran step (refused: the server's own words). An
+ *  approval names the replacement order it created and what it reserved, or
+ *  that it went on backorder (review fix P23). */
 export function stepOutcomeMessage(
   r: MobileReturnStepResult,
-  wb: Pick<MobileReturnWorkbench, 'return'>,
+  wb: Pick<MobileReturnWorkbench, 'return'> & { exchange?: MobileReturnExchange | null },
   receiveNow: boolean,
 ): string {
   if (r.outcome === 'refused') return r.message ?? 'This step could not be completed.';
@@ -296,7 +323,7 @@ export function stepOutcomeMessage(
     if (r.step === 'receive') return alreadyReceivedSentence(wb.return.receivedByName, null);
     return 'Already approved.';
   }
-  if (r.step === 'approve') return receiveNow ? 'Approved and received.' : 'Return approved.';
+  if (r.step === 'approve') return approvalOutcomeLine(approvalAnswerOf(wb), { receiveNow });
   if (r.step === 'receive') return 'Return received.';
   return 'Return processed.';
 }
