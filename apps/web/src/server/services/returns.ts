@@ -1420,6 +1420,17 @@ export class RMAService {
         },
         this.ctx,
       );
+      // Review fix P15: after "Your replacement was cancelled", the requester
+      // of a requester-sourced RMA hears that none will be sent (in the app
+      // or by email), never the reason. A staff (counter) RMA tells no one.
+      await notifyRequesterReturnEvent({
+        organizationId: this.ctx.organizationId,
+        returnId: id,
+        returnNumber: facts.returnNumber,
+        orderId: facts.orderRequestId,
+        event: 'replacement_closed_return_only',
+        source: facts.source,
+      });
     }
     return result;
   }

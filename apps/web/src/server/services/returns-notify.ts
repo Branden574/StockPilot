@@ -233,6 +233,12 @@ export type RequesterReturnEvent = Extract<
   | 'exchange_approved_short'
   | 'replacement_changed'
   | 'replacement_cancelled'
+  // RX-2 review fixes P28 and P15: a return the requester asked for, approved
+  // with a replacement staff added, and a return kept as a return only after
+  // its replacement was cancelled (core's words, the emails' too).
+  | 'return_approved_replacement_added'
+  | 'return_approved_replacement_added_short'
+  | 'replacement_closed_return_only'
 >;
 
 const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
@@ -246,6 +252,9 @@ const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
   exchange_approved_short: RETURNS_COPY.requesterExchangeApprovedShort,
   replacement_changed: RETURNS_COPY.requesterReplacementChanged,
   replacement_cancelled: RETURNS_COPY.requesterReplacementCancelled,
+  return_approved_replacement_added: RETURNS_COPY.requesterReturnApprovedReplacementAdded,
+  return_approved_replacement_added_short: RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
+  replacement_closed_return_only: RETURNS_COPY.requesterReplacementClosedReturnOnly,
 };
 
 /** Whether this event reaches the requester at all, given how it happened. */
@@ -254,7 +263,12 @@ export function requesterHearsEvent(event: RequesterReturnEvent, input: { source
   // A counter approval or receipt happened with the requester standing there
   // (G11): the exchange approval too.
   const counterSilent =
-    event === 'approved' || event === 'received' || event === 'exchange_approved' || event === 'exchange_approved_short';
+    event === 'approved' ||
+    event === 'received' ||
+    event === 'exchange_approved' ||
+    event === 'exchange_approved_short' ||
+    event === 'return_approved_replacement_added' ||
+    event === 'return_approved_replacement_added_short';
   if (counterSilent && input.channel === 'counter') return false;
   return true;
 }

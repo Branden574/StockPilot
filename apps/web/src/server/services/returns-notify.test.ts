@@ -239,6 +239,26 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
     );
   });
 
+  // RX-2 review fix P15: Close as return only after a replacement cancel.
+  it('a member hears that no replacement will be sent; only a requester-sourced RMA', async () => {
+    expect(requesterHearsEvent('replacement_closed_return_only', { source: 'requester' })).toBe(true);
+    expect(requesterHearsEvent('replacement_closed_return_only', { source: 'internal' })).toBe(false);
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: 'req-1', requester_email: null, requester_name: 'R', order_number: 103 }],
+        error: null,
+      },
+      'notification_preferences.select': { data: [], error: null },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'replacement_closed_return_only', source: 'requester' });
+    expect(createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'return.replacement_closed_return_only',
+        title: 'No replacement will be sent. Your return goes on as a return only.',
+      }),
+    );
+  });
+
   it('an email-only requester gets the reworded email on their RMA page, never a reason', async () => {
     admin({
       'order_requests.select': {

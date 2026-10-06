@@ -450,11 +450,19 @@ describe('declineReplacement (decline_return_replacement)', () => {
     });
     expect(answer).toEqual({ changed: true, status: 'closed', revision: 2, declined: 1 });
     expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.replacement_declined']);
+    // RX-2 review fix P15: the requester of a requester-sourced RMA hears that
+    // no replacement will be sent (in-app or email), never the reason.
+    expect(notifyRequester).toHaveBeenCalledTimes(1);
+    const told = notifyRequester.mock.calls[0]![0] as Record<string, unknown>;
+    expect(told).toMatchObject({ event: 'replacement_closed_return_only', source: 'requester', returnId: RET_ID, orderId: ORDER_ID });
+    expect(Object.keys(told)).not.toContain('reason');
+    expect(JSON.stringify(told)).not.toContain('Refund instead');
 
     vi.clearAllMocks();
     const none = svcFor({ 'rpc:decline_return_replacement': { data: { changed: false, status: 'closed', revision: 2, declined: 0 }, error: null } });
     expect(await none.svc.declineReplacement(RET_ID, { expectedRevision: 2, reason: 'x' })).toMatchObject({ changed: false, declined: 0 });
     expect(auditMock).not.toHaveBeenCalled();
+    expect(notifyRequester).not.toHaveBeenCalled();
   });
 
   it('the revision and a reason are required before the call; a stale revision is the database\'s return_changed', async () => {
