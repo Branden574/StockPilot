@@ -149,6 +149,22 @@ describe('online only', () => {
     expect(sheet.match(/setSitePrompt\(true\)/g)).toHaveLength(1);
   });
 
+  // Review fix P1: an approver with Manage returns but without order approval
+  // saw no exchange choices and was refused "Choose what happens to every
+  // returned line." (no decision was sent). The review now shows for every
+  // returns manager, its rows are core's (approve and change off, their
+  // labels ending with the reason; the decline open and chosen first), and
+  // the approval always sends the decisions the review holds.
+  it('shows the exchange review to every returns manager and always sends its decisions (review fix P1)', () => {
+    expect(sheet).not.toContain('canDecideExchange');
+    expect(sheet).toContain('exchangeReviewOptions(x, wb.viewer)');
+    expect(sheet).toContain('const v = exchangeReviewStateFor(wb, reviews, x.id);');
+    expect(sheet).toContain("const exchangeProblems = mode === 'approve' ? exchangeReviewProblems(wb, reviews, adds) : [];");
+    expect(sheet).toContain("const exchange = mode === 'approve' ? exchangeApprovalDecisions(wb, reviews, adds) : [];");
+    // An added replacement needs order approval: never offered without it.
+    expect(sheet).toContain('if (!ex.createEnabled || l.applied || !wb.viewer.canApproveOrders) return null;');
+  });
+
   // Desk check F9: "Close as return only" sends the revision the sheet shows
   // and a reason, through its own plain request (never queued).
   it('Close as return only sends the shown revision and a reason', () => {

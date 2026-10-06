@@ -20,6 +20,7 @@ import {
   choiceFromKey,
   choiceKey,
   damagedHint,
+  exchangeReviewOptions,
   isChoiceOffered,
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
@@ -66,6 +67,7 @@ import {
   exchangeItemLabel,
   exchangeOf,
   exchangeReviewProblems,
+  exchangeReviewStateFor,
   exchangeWhatHappens,
   initialChoices,
   lineLabel,
@@ -256,8 +258,10 @@ function SheetContent({
   const choicesValid = !needsDestinations || allChoicesOffered(wb, choices);
   // One sentence per line that needs a destination, naming it.
   const problems = needsDestinations ? choiceProblems(wb, choices) : [];
-  const canDecideExchange = mode === 'approve' && wb.viewer.canApproveOrders;
-  const exchangeProblems = canDecideExchange ? exchangeReviewProblems(wb, reviews, adds) : [];
+  // Review fix P1: the review is every returns manager's (without order
+  // approval it starts at, and allows only, the decline), so its problems
+  // and decisions always count.
+  const exchangeProblems = mode === 'approve' ? exchangeReviewProblems(wb, reviews, adds) : [];
   // The lines a change (approved) or a re-issue (cancelled by a replacement cancel) acts on.
   const changeLines =
     mode === 'change_replacement' || mode === 'issue_replacement'
@@ -396,7 +400,9 @@ function SheetContent({
       }
       if (mode === 'approve' || mode === 'process') {
         const changed = changedDecisions(wb, choices);
-        const exchange = canDecideExchange ? exchangeApprovalDecisions(wb, reviews, adds) : [];
+        // Always the decisions the review holds (review fix P1), so a
+        // refusal reads as it does on the web.
+        const exchange = mode === 'approve' ? exchangeApprovalDecisions(wb, reviews, adds) : [];
         const res = await runReturnSteps(id, {
           steps: [mode === 'approve' ? 'approve' : 'process'],
           expectedRevision: wb.revision,
@@ -554,26 +560,24 @@ function SheetContent({
                     accessibilityHint={RETURNS_COPY.itemIsHereHelp}
                   />
                 </View>
-                {canDecideExchange ? (
-                  <ExchangeReview
-                    wb={wb}
-                    reviews={reviews}
-                    adds={adds}
-                    online={online}
-                    disabled={submitting}
-                    loaderFor={loaderFor}
-                    onReview={(id, next) => {
-                      setReviews((prev) => ({ ...prev, [id]: next }));
-                      setShortDetail(null);
-                      setError(null);
-                    }}
-                    onAdd={(lineId, next) => {
-                      setAdds((prev) => ({ ...prev, [lineId]: next }));
-                      setShortDetail(null);
-                      setError(null);
-                    }}
-                  />
-                ) : null}
+                <ExchangeReview
+                  wb={wb}
+                  reviews={reviews}
+                  adds={adds}
+                  online={online}
+                  disabled={submitting}
+                  loaderFor={loaderFor}
+                  onReview={(id, next) => {
+                    setReviews((prev) => ({ ...prev, [id]: next }));
+                    setShortDetail(null);
+                    setError(null);
+                  }}
+                  onAdd={(lineId, next) => {
+                    setAdds((prev) => ({ ...prev, [lineId]: next }));
+                    setShortDetail(null);
+                    setError(null);
+                  }}
+                />
                 {(() => {
                   const happens =
                     hasExchange || Object.values(adds).some(Boolean)
@@ -783,6 +787,13 @@ function reasonFieldLabel(mode: ReturnSheetMode, hasApprovedExchange: boolean): 
  * as requested, Change replacement… (the picker and a reason when it differs
  * from the request) or Decline the exchange, return only (a reason). A
  * return-only line can get "Add a replacement" while exchanges are on.
+ *
+ * Review fix P1: shown to every returns manager. The rows are core's
+ * (exchangeReviewOptions): without order approval "Approve as requested" and
+ * "Change replacement" are off, each label ending with why, and the review
+ * starts at the decline (exchangeReviewStateFor). "Add a replacement" needs
+ * order approval, so it is not offered without it. Nothing is drawn when no
+ * line has anything to review.
  */
 function ExchangeReview({
   wb,
@@ -805,127 +816,135 @@ function ExchangeReview({
 }) {
   const { c } = useTheme();
   const ex = exchangeOf(wb);
-  return (
-    <View style={{ gap: 10 }}>
-      <FieldLabel>{RETURNS_COPY.replacement}</FieldLabel>
-      {wb.lines.map((l) => {
-        const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
-        const label = lineLabel(l);
-        if (!x) {
-          if (!ex.createEnabled || l.applied) return null;
-          const add = adds[l.id] ?? null;
-          return (
-            <View key={l.id} style={[styles.lineCard, { borderColor: c.hair }]}>
-              <Body size={14} color={c.ink}>
-                {label}
-              </Body>
-              {add ? (
-                <>
-                  <ReplacementPickerList
-                    load={loaderFor(l.orderRequestLineId)}
-                    needed={add.quantity}
-                    selectedItemId={add.itemId}
-                    onSelect={(row, rowLabel) => onAdd(l.id, { ...add, itemId: row.itemId, label: rowLabel, free: row.free })}
-                    label={label}
-                    online={online}
-                    disabled={disabled}
-                  />
-                  <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
-                    {RETURNS_COPY.returnOnly}
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={disabled || !online}
-                  onPress={() => onAdd(l.id, { itemId: null, label: null, quantity: l.quantity, free: null })}
-                >
-                  {RETURNS_COPY.addReplacement}
-                </Button>
-              )}
-            </View>
-          );
-        }
-        if (x.status !== 'requested') return null;
-        const v = reviews[x.id] ?? { kind: 'as_requested' as const };
-        const requested = x.requestedItem
-          ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant)
-          : RETURNS_COPY.replacementWarehouseReview;
-        return (
-          <View key={x.id} style={[styles.lineCard, { borderColor: c.hair }]}>
-            <Body size={14} color={c.ink}>
-              {label} → {requested}
-            </Body>
-            {x.requestNote ? (
-              <Body size={12.5} muted>
-                {RETURNS_COPY.replacementNoteFromRequester}: {x.requestNote}
-              </Body>
-            ) : null}
-            <View accessibilityRole="radiogroup" accessibilityLabel={`Decision for the replacement of ${label}`} style={{ gap: 6 }}>
-              {(
-                [
-                  ['as_requested', RETURNS_COPY.approveAsRequested],
-                  ['change', RETURNS_COPY.changeReplacementEllipsis],
-                  ['decline', RETURNS_COPY.declineExchange],
-                ] as const
-              ).map(([kind, words]) => {
-                const checked = v.kind === kind;
-                const off = disabled || (kind === 'as_requested' && !x.requestedItemId);
-                return (
-                  <Pressable
-                    key={kind}
-                    disabled={off}
-                    onPress={() =>
-                      onReview(
-                        x.id,
-                        kind === 'as_requested'
-                          ? { kind }
-                          : kind === 'decline'
-                            ? { kind, reason: '' }
-                            : { kind, itemId: null, label: null, free: null, quantity: Math.min(x.requestedQuantity, l.quantity), reason: '' },
-                      )
-                    }
-                    accessibilityRole="radio"
-                    accessibilityLabel={words}
-                    accessibilityState={{ checked, disabled: off }}
-                    style={[styles.option, { borderColor: checked ? c.ink : c.hair, backgroundColor: checked ? c.paper2 : 'transparent', minHeight: MIN_TAP }]}
-                  >
-                    <Body size={14} color={c.ink}>
-                      {words}
-                    </Body>
-                  </Pressable>
-                );
-              })}
-            </View>
-            {v.kind === 'change' ? (
+  const rows = wb.lines.map((l) => {
+    const x = ex.lines.find((e) => e.returnLineId === l.id) ?? null;
+    const label = lineLabel(l);
+    if (!x) {
+      if (!ex.createEnabled || l.applied || !wb.viewer.canApproveOrders) return null;
+      const add = adds[l.id] ?? null;
+      return (
+        <View key={l.id} style={[styles.lineCard, { borderColor: c.hair }]}>
+          <Body size={14} color={c.ink}>
+            {label}
+          </Body>
+          {add ? (
+            <>
               <ReplacementPickerList
                 load={loaderFor(l.orderRequestLineId)}
-                needed={v.quantity}
-                selectedItemId={v.itemId}
-                onSelect={(row, rowLabel) => onReview(x.id, { ...v, itemId: row.itemId, label: rowLabel, free: row.free })}
+                needed={add.quantity}
+                selectedItemId={add.itemId}
+                onSelect={(row, rowLabel) => onAdd(l.id, { ...add, itemId: row.itemId, label: rowLabel, free: row.free })}
                 label={label}
                 online={online}
                 disabled={disabled}
               />
-            ) : null}
-            {v.kind === 'change' || v.kind === 'decline' ? (
-              <TextInput
-                value={v.reason}
-                onChangeText={(t) => onReview(x.id, { ...v, reason: t })}
-                editable={!disabled}
-                multiline
-                maxFontSizeMultiplier={NOTE_FONT_CAP}
-                placeholder={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
-                placeholderTextColor={c.ink4}
-                accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
-                accessibilityHint={RETURNS_COPY.replacementReasonHelp}
-                style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink, minHeight: 64 }]}
-              />
-            ) : null}
-          </View>
-        );
-      })}
+              <Button size="sm" variant="outline" disabled={disabled} onPress={() => onAdd(l.id, null)}>
+                {RETURNS_COPY.returnOnly}
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled || !online}
+              onPress={() => onAdd(l.id, { itemId: null, label: null, quantity: l.quantity, free: null })}
+            >
+              {RETURNS_COPY.addReplacement}
+            </Button>
+          )}
+        </View>
+      );
+    }
+    if (x.status !== 'requested') return null;
+    const v = exchangeReviewStateFor(wb, reviews, x.id);
+    const requested = x.requestedItem
+      ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant)
+      : RETURNS_COPY.replacementWarehouseReview;
+    return (
+      <View key={x.id} style={[styles.lineCard, { borderColor: c.hair }]}>
+        <Body size={14} color={c.ink}>
+          {label} → {requested}
+        </Body>
+        {x.requestNote ? (
+          <Body size={12.5} muted>
+            {RETURNS_COPY.replacementNoteFromRequester}: {x.requestNote}
+          </Body>
+        ) : null}
+        <View accessibilityRole="radiogroup" accessibilityLabel={`Decision for the replacement of ${label}`} style={{ gap: 6 }}>
+          {exchangeReviewOptions(x, wb.viewer).map((option) => {
+            const kind = option.kind;
+            const checked = v.kind === kind;
+            // An off choice says why in its label, so VoiceOver reads the
+            // reason with hints off (core's "…. Needs order approval
+            // permission.").
+            const off = disabled || option.disabled;
+            return (
+              <Pressable
+                key={kind}
+                disabled={off}
+                onPress={() =>
+                  onReview(
+                    x.id,
+                    kind === 'as_requested'
+                      ? { kind }
+                      : kind === 'decline'
+                        ? { kind, reason: '' }
+                        : { kind, itemId: null, label: null, free: null, quantity: Math.min(x.requestedQuantity, l.quantity), reason: '' },
+                  )
+                }
+                accessibilityRole="radio"
+                accessibilityLabel={option.label}
+                accessibilityState={{ checked, disabled: off }}
+                style={[
+                  styles.option,
+                  {
+                    borderColor: checked ? c.ink : c.hair,
+                    backgroundColor: checked ? c.paper2 : 'transparent',
+                    opacity: option.disabled ? 0.6 : 1,
+                    minHeight: MIN_TAP,
+                  },
+                ]}
+              >
+                <Body size={14} color={c.ink}>
+                  {option.label}
+                </Body>
+              </Pressable>
+            );
+          })}
+        </View>
+        {v.kind === 'change' ? (
+          <ReplacementPickerList
+            load={loaderFor(l.orderRequestLineId)}
+            needed={v.quantity}
+            selectedItemId={v.itemId}
+            onSelect={(row, rowLabel) => onReview(x.id, { ...v, itemId: row.itemId, label: rowLabel, free: row.free })}
+            label={label}
+            online={online}
+            disabled={disabled}
+          />
+        ) : null}
+        {v.kind === 'change' || v.kind === 'decline' ? (
+          <TextInput
+            value={v.reason}
+            onChangeText={(t) => onReview(x.id, { ...v, reason: t })}
+            editable={!disabled}
+            multiline
+            maxFontSizeMultiplier={NOTE_FONT_CAP}
+            placeholder={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
+            placeholderTextColor={c.ink4}
+            accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
+            accessibilityHint={RETURNS_COPY.replacementReasonHelp}
+            style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink, minHeight: 64 }]}
+          />
+        ) : null}
+      </View>
+    );
+  });
+  if (!rows.some(Boolean)) return null;
+  return (
+    <View style={{ gap: 10 }}>
+      <FieldLabel>{RETURNS_COPY.replacement}</FieldLabel>
+      {rows}
     </View>
   );
 }

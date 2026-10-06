@@ -17,6 +17,7 @@ import {
   approvalPreviewLines,
   availableLabel,
   availableReturnActions,
+  defaultExchangeReviewState,
   exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
@@ -30,6 +31,7 @@ import {
   returnActionLabel,
   shortLabel,
   type ExchangeReviewState,
+  type ExchangeReviewViewer,
   choiceNeededSentence,
   choiceToDecision,
   formatOrderNumber,
@@ -350,29 +352,54 @@ function qtyRequestedText(n: number): string {
   return `Qty requested: ${n}`;
 }
 
-/** Why the approval cannot be sent yet: one sentence per exchange line or add that needs a choice. */
+/** The workbench as the review reads it: its exchange half and who is reviewing. */
+type ReviewWorkbench = { exchange?: MobileReturnExchange | null; viewer?: { canApproveOrders: boolean } | null };
+
+/** Who reviews (server-computed order approval; a workbench without a viewer reads as before). */
+function reviewerOf(wb: ReviewWorkbench): ExchangeReviewViewer {
+  return { canApproveOrders: wb.viewer?.canApproveOrders !== false };
+}
+
+/**
+ * A requested exchange line's review: the person's choice, else where core
+ * starts it for this viewer (review fix P1): "Approve as requested", or the
+ * decline for a returns manager without order approval, who may only decline.
+ */
+export function exchangeReviewStateFor(
+  wb: ReviewWorkbench,
+  reviews: Record<string, ExchangeReviewState>,
+  exchangeLineId: string,
+): ExchangeReviewState {
+  return reviews[exchangeLineId] ?? defaultExchangeReviewState(reviewerOf(wb));
+}
+
+/** Why the approval cannot be sent yet: one sentence per exchange line or add
+ *  that needs a choice; a choice the viewer may not make is refused here,
+ *  before anything is sent (core exchangeReviewProblem with the viewer). */
 export function exchangeReviewProblems(
-  wb: { exchange?: MobileReturnExchange | null },
+  wb: ReviewWorkbench,
   reviews: Record<string, ExchangeReviewState>,
   adds: Record<string, { itemId: string | null; quantity: number } | null>,
 ): string[] {
+  const reviewer = reviewerOf(wb);
   const out = exchangeOf(wb)
     .lines.filter((x) => x.status === 'requested')
-    .map((x) => exchangeReviewProblem(x, reviews[x.id] ?? { kind: 'as_requested' }))
+    .map((x) => exchangeReviewProblem(x, exchangeReviewStateFor(wb, reviews, x.id), reviewer))
     .filter((p): p is string => p !== null);
   for (const a of Object.values(adds)) if (a && !a.itemId) out.push(RETURNS_COPY.chooseReplacement);
   return [...new Set(out)];
 }
 
-/** The approval's exchange decisions (requested lines, then adds). */
+/** The approval's exchange decisions (requested lines, then adds), always the
+ *  ones the review holds (review fix P1: a decline is sent too). */
 export function exchangeApprovalDecisions(
-  wb: { exchange?: MobileReturnExchange | null },
+  wb: ReviewWorkbench,
   reviews: Record<string, ExchangeReviewState>,
   adds: Record<string, { itemId: string | null; quantity: number; reason?: string | null } | null>,
 ): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const x of exchangeOf(wb).lines) {
-    if (x.status === 'requested') out.push(exchangeReviewDecision(x, reviews[x.id] ?? { kind: 'as_requested' }));
+    if (x.status === 'requested') out.push(exchangeReviewDecision(x, exchangeReviewStateFor(wb, reviews, x.id)));
   }
   for (const [lineId, a] of Object.entries(adds)) {
     const d = a ? addReplacementDecision(lineId, a) : null;
@@ -383,7 +410,7 @@ export function exchangeApprovalDecisions(
 
 /** "What happens when you approve" with the exchange (core approvalPreviewLines). */
 export function exchangeWhatHappens(
-  wb: Pick<MobileReturnWorkbench, 'lines'> & { exchange?: MobileReturnExchange | null },
+  wb: Pick<MobileReturnWorkbench, 'lines'> & ReviewWorkbench,
   choices: Record<string, RestockChoice>,
   reviews: Record<string, ExchangeReviewState>,
   adds: Record<string, { itemId: string | null; label: string | null; quantity: number; free: number | null } | null>,
@@ -403,7 +430,7 @@ export function exchangeWhatHappens(
       ...ex.lines
         .filter((x) => x.status === 'requested')
         .map((x) => {
-          const v = reviews[x.id] ?? { kind: 'as_requested' as const };
+          const v = exchangeReviewStateFor(wb, reviews, x.id);
           const change = v.kind === 'change';
           return {
             returnedLabel: labelOf(x.returnLineId),

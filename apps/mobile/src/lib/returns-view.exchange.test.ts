@@ -8,6 +8,7 @@ import {
   exchangeForLine,
   exchangeItemLabel,
   exchangeReviewProblems,
+  exchangeReviewStateFor,
   exchangeWhatHappens,
   orderExchangeChip,
   orderReplacementLines,
@@ -168,6 +169,30 @@ describe('the approval review', () => {
       { action: 'approve', exchangeLineId: 'x1' },
       { action: 'add', returnLineId: 'l2', itemId: 'cap-l', quantity: 1 },
     ]);
+  });
+
+  // Review fix P1: a returns manager without order approval approves the
+  // return with the exchange declined (the database asks for order approval
+  // only to approve or add a replacement). The review starts at the decline,
+  // asks its reason, refuses an approve choice before anything is sent, and
+  // the decisions are always sent, so a refusal reads as it does on the web.
+  it('a returns manager without order approval starts at the decline and sends it (review fix P1)', () => {
+    const w = wb('requested', exchange(), { canManageReturns: true, canApproveOrders: false, canReadDecisions: true });
+    expect(exchangeReviewStateFor(w, {}, 'x1')).toEqual({ kind: 'decline', reason: '' });
+    expect(exchangeReviewProblems(w, {}, {})).toEqual(['Reason for declining the exchange (required)']);
+    expect(exchangeReviewProblems(w, { x1: { kind: 'as_requested' } }, {})).toEqual([
+      'Approving the replacement needs order approval permission.',
+    ]);
+    expect(exchangeApprovalDecisions(w, { x1: { kind: 'decline', reason: ' Out of season ' } }, {})).toEqual([
+      { action: 'decline', exchangeLineId: 'x1', reason: 'Out of season' },
+    ]);
+    // Nothing is promised about a replacement they cannot approve.
+    expect(exchangeWhatHappens(w, {}, {}, {}, false).map((l) => l.text)).toEqual([
+      'Nothing moves now. The returned item stays out until the return is processed.',
+      'When processed, Walk New Hire Shirt, M goes back to 31-C.',
+    ]);
+    // An approver still starts at "Approve as requested".
+    expect(exchangeReviewStateFor(wb('requested', exchange()), {}, 'x1')).toEqual({ kind: 'as_requested' });
   });
 
   it('"What happens when you approve" names the replacement and the wait', () => {
