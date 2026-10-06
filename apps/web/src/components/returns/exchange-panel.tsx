@@ -31,6 +31,7 @@ import {
   exchangeReviewProblem,
   formatOrderNumber,
   qtyRequestedLabel,
+  RAIL_STEP_STATE_WORDS,
   releasedBeforeReturnLine,
   replacementShortItems,
   replacementShortLine,
@@ -59,17 +60,12 @@ import {
 
 // ── The rail ─────────────────────────────────────────────────────────────────
 
-const RAIL_STATE_WORDS: Record<RailStep['state'], string> = {
-  done: 'done',
-  current: 'now',
-  upcoming: 'next',
-  stopped: 'stopped',
-};
-
+// Each step's state in core's words (done, now, next, stopped, not reached,
+// not started), the phone's too: after a stop nothing reads "next".
 export function ExchangeRail({ rail }: { rail: RailStep[] }) {
   if (rail.length === 0) return null;
   return (
-    <ol className="flex flex-wrap items-center gap-1.5 text-xs" aria-label="Replacement progress">
+    <ol className="flex flex-wrap items-center gap-1.5 text-xs" aria-label={RETURNS_COPY.railProgress}>
       {rail.map((s, i) => (
         <li key={s.id} className="inline-flex items-center gap-1.5" aria-current={s.state === 'current' ? 'step' : undefined}>
           <span
@@ -79,10 +75,11 @@ export function ExchangeRail({ rail }: { rail: RailStep[] }) {
               s.state === 'current' && 'border-foreground font-medium',
               s.state === 'stopped' && 'border-destructive text-destructive font-medium',
               s.state === 'upcoming' && 'text-muted-foreground border-dashed',
+              (s.state === 'skipped' || s.state === 'not_started') && 'text-muted-foreground border-dashed opacity-70',
             )}
           >
             {s.label}
-            <span className="text-muted-foreground"> · {RAIL_STATE_WORDS[s.state]}</span>
+            <span className="text-muted-foreground"> · {RAIL_STEP_STATE_WORDS[s.state]}</span>
           </span>
           {i < rail.length - 1 ? <ArrowRight className="text-muted-foreground h-3 w-3" aria-hidden /> : null}
         </li>

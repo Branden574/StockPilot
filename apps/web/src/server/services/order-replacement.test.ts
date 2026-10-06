@@ -92,7 +92,11 @@ describe('loadReplacementInfo', () => {
       canReleaseEarly: true,
       returnedItems: [{ itemId: 'item-m', label: 'Walk New Hire Shirt, M', quantity: 1 }],
       slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: Walk New Hire Shirt, M ×1, not yet received)',
-      driverLine: 'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+      // Re-pinned by returns RX-2 review fix (P10): core's driver words. The
+      // claim stands: the block carries what the driver collects until the
+      // return is received (core's replacementDriverLine decides when the
+      // banner shows it).
+      driverLine: 'On delivery, the driver collects the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123).',
     });
   });
 

@@ -228,7 +228,11 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
     expect(createNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'return.exchange_approved',
-        title: 'Your exchange was approved. Your replacement is reserved.',
+        // Re-pinned by returns RX-2 review fix (P14): core's words now say to
+        // bring or send the returned item back. The claim stands: a member
+        // hears that the replacement is reserved, linked to it.
+        title:
+          'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
         link: '/dashboard/orders/repl-1',
         metadata: expect.objectContaining({ order_request_id: 'repl-1', return_id: 'ret-1' }),
       }),
