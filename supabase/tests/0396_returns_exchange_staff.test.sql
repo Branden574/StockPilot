@@ -57,6 +57,11 @@
 -- V.  The exchange status CASE, one fixture per code, and its precedence.
 -- P.  Parity T2-C2 with create_order_request.
 -- Y.  The requester tier (RX-3's predicate, shipped here).
+-- W.  The review fixes: an original unit is exchanged once whatever RMA asks
+--     (stock S1, probe P1), the RMA cancel refused while its replacement is
+--     picked or on its way (S2, probe P4), the replacement's header and its
+--     close-partial owned by the RMA (security F-1), the issuer's own gates
+--     (F-4). The S3 lock mode is pinned in A10 and raced in race 13.
 -- F.  Frozen bodies and triggers; holdings equal on hand; org deletion.
 --
 -- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0396.py; each must
@@ -95,6 +100,19 @@
 --   M32 the CHECK refuses a replacement on a declined line again         -> X5, X6, X7
 --   M33 a move that is not into approved rewrites the line's decision    -> X7
 --   M34 the issue's short read names its table l again (42702)          -> A11, B6, C3
+--   M35 the line budget forgets units a cancelled RMA handed over        -> W1, W2, W3
+--   M36 the create skips the line budget                                 -> W1, W3
+--   M37 the approval's add skips the line budget                         -> W2
+--   M38 the approval's approve skips the line budget                     -> W4
+--   M39 the change and the re-issue skip the line budget                 -> W5
+--   M40 the RMA cancel cancels a picked or in-transit replacement again  -> W6
+--   M41 the item locks take FOR UPDATE without issuing an order again    -> A10 (and race 13)
+--   M42 the header guard lets every change through                       -> W7, W8
+--   M43 the header guard's WHEN drops the close-partial edge             -> W8
+--   M44 the RMA cancel closes a part-handed-over backorder without the flag -> K5, N9
+--   M45 the issue skips its own orders:approve gate                      -> W9
+--   M46 the issue skips its own warehouse write gate                     -> W9
+--   M47 the create takes the budget lock before its item locks           -> A12
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -105,7 +123,7 @@
 
 begin;
 
-select plan(103);
+select plan(113);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -204,6 +222,8 @@ select plan(103);
 \set lPh     '\'03970000-0000-0000-0000-000000000213\''
 \set lK5     '\'03970000-0000-0000-0000-000000000214\''
 \set lK7     '\'03970000-0000-0000-0000-000000000215\''
+\set oW1     '\'03970000-0000-0000-0000-000000000116\''
+\set lW1     '\'03970000-0000-0000-0000-000000000216\''
 \set nobody  '\'03970000-0000-0000-0000-0000000009ff\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -693,16 +713,18 @@ select is(
                         '_return_exchange_approve', '_return_exchange_on_deny', '_return_exchange_on_cancel',
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
-                        '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested')),
+                        '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested',
+                        '_return_exchange_line_budget', '_return_lock_exchange_budget', 'tg_order_requests_replacement_header')),
   '_notify_replacement_order_changes:true:false,_return_exchange_approve:false:false,_return_exchange_create:false:false,'
-  || '_return_exchange_fulfilled:false:false,_return_exchange_item_ok:false:false,_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,'
-  || '_return_exchange_quantity:false:false,_return_exchange_reason:false:false,_return_exchange_replay:false:false,'
-  || '_return_exchange_requester_options:false:false,_return_lock_items:false:false,_return_replacement_cancel_order:false:false,'
+  || '_return_exchange_fulfilled:false:false,_return_exchange_item_ok:false:false,_return_exchange_line_budget:false:false,'
+  || '_return_exchange_on_cancel:false:false,_return_exchange_on_deny:false:false,_return_exchange_quantity:false:false,'
+  || '_return_exchange_reason:false:false,_return_exchange_replay:false:false,_return_exchange_requester_options:false:false,'
+  || '_return_lock_exchange_budget:false:false,_return_lock_items:false:false,_return_replacement_cancel_order:false:false,'
   || '_return_replacement_class:false:false,_return_replacement_issue:true:false,_return_replacement_summary:false:false,'
-  || 'tg_order_request_lines_replacement_guard:false:false,tg_order_requests_replacement_link:false:false,'
-  || 'tg_order_requests_replacement_status:true:false,tg_return_decisions_exchange_requested:false:false,'
-  || 'tg_return_exchange_lines_validate:false:false,tg_returns_api_guard:false:false',
-  'A4: every helper, hook and guard has no EXECUTE for any API role; SECURITY INVOKER except the replacement issue (DEFINER, it inserts the order as postgres), the gate (DEFINER, C-5) and the replacement notify (DEFINER)');
+  || 'tg_order_request_lines_replacement_guard:false:false,tg_order_requests_replacement_header:false:false,tg_order_requests_replacement_link:false:false,'
+  || 'tg_order_requests_replacement_status:true:false,tg_return_decisions_exchange_requested:false:false,tg_return_exchange_lines_validate:false:false,'
+  || 'tg_returns_api_guard:false:false',
+  'A4: every helper, hook and guard has no EXECUTE for any API role; SECURITY INVOKER except the replacement issue (DEFINER, it inserts the order as postgres), the gate (DEFINER, C-5) and the replacement notify (DEFINER); the review fix''s line budget, budget lock and header guard are INVOKER with no EXECUTE');
 select is(
   (select coalesce(string_agg(p.proname, ',' order by p.proname collate "C"), '')
      from pg_proc p where p.pronamespace = 'public'::regnamespace
@@ -713,6 +735,7 @@ select is(
                         '_return_exchange_replay', 'tg_return_exchange_lines_validate', 'tg_order_requests_replacement_link',
                         'tg_order_request_lines_replacement_guard', 'tg_order_requests_replacement_status',
                         '_notify_replacement_order_changes', 'tg_returns_api_guard', 'tg_return_decisions_exchange_requested',
+                        '_return_exchange_line_budget', '_return_lock_exchange_budget', 'tg_order_requests_replacement_header',
                         'change_return_replacement', 'decline_return_replacement',
                         'cancel_return_replacement', 'release_return_replacement_early', 'return_exchange_candidates',
                         'return_exchange_options', 'return_exchange_flags')
@@ -757,19 +780,21 @@ select is(
   (select string_agg(t.tgname || '=' || pg_get_triggerdef(t.oid), E'\n' order by t.tgname collate "C")
      from pg_trigger t
     where t.tgname in ('trg_order_requests_notify', 'trg_order_requests_notify_replacement', 'trg_order_requests_zz_replacement_status',
+                       'trg_order_requests_zz_replacement_header',
                        'trg_zz_order_requests_replacement_link_ins', 'trg_zz_order_requests_replacement_link_upd',
                        'trg_zz_order_request_lines_replacement_guard', 'trg_return_exchange_lines_validate',
                        'trg_return_decisions_exchange_requested')
       and not t.tgisinternal),
   'trg_order_requests_notify=CREATE TRIGGER trg_order_requests_notify AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NULL)) EXECUTE FUNCTION _notify_order_request_changes()' || E'\n'
   || 'trg_order_requests_notify_replacement=CREATE TRIGGER trg_order_requests_notify_replacement AFTER INSERT OR UPDATE ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION _notify_replacement_order_changes()' || E'\n'
+  || 'trg_order_requests_zz_replacement_header=CREATE TRIGGER trg_order_requests_zz_replacement_header BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND ((old.warehouse_id IS DISTINCT FROM new.warehouse_id) OR (old.delivery_charter_id IS DISTINCT FROM new.delivery_charter_id) OR (old.created_at IS DISTINCT FROM new.created_at) OR ((old.status = ''backordered''::text) AND (new.status = ''completed''::text))))) EXECUTE FUNCTION tg_order_requests_replacement_header()' || E'\n'
   || 'trg_order_requests_zz_replacement_status=CREATE TRIGGER trg_order_requests_zz_replacement_status BEFORE UPDATE OF status ON public.order_requests FOR EACH ROW WHEN (((new.replacement_for_return_id IS NOT NULL) AND (old.status IS DISTINCT FROM new.status))) EXECUTE FUNCTION tg_order_requests_replacement_status()' || E'\n'
   || 'trg_return_decisions_exchange_requested=CREATE TRIGGER trg_return_decisions_exchange_requested AFTER INSERT ON public.return_decisions FOR EACH ROW WHEN ((new.kind = ''created''::text)) EXECUTE FUNCTION tg_return_decisions_exchange_requested()' || E'\n'
   || 'trg_return_exchange_lines_validate=CREATE TRIGGER trg_return_exchange_lines_validate BEFORE INSERT OR UPDATE ON public.return_exchange_lines FOR EACH ROW EXECUTE FUNCTION tg_return_exchange_lines_validate()' || E'\n'
   || 'trg_zz_order_request_lines_replacement_guard=CREATE TRIGGER trg_zz_order_request_lines_replacement_guard BEFORE INSERT ON public.order_request_lines FOR EACH ROW EXECUTE FUNCTION tg_order_request_lines_replacement_guard()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_ins=CREATE TRIGGER trg_zz_order_requests_replacement_link_ins BEFORE INSERT ON public.order_requests FOR EACH ROW WHEN ((new.replacement_for_return_id IS NOT NULL)) EXECUTE FUNCTION tg_order_requests_replacement_link()' || E'\n'
   || 'trg_zz_order_requests_replacement_link_upd=CREATE TRIGGER trg_zz_order_requests_replacement_link_upd BEFORE UPDATE ON public.order_requests FOR EACH ROW WHEN ((old.replacement_for_return_id IS DISTINCT FROM new.replacement_for_return_id)) EXECUTE FUNCTION tg_order_requests_replacement_link()',
-  'A8: the notify split (ordinary orders keep _notify_order_request_changes behind a WHEN; replacements get their own), the gate on status changes of replacements only, the link guards, the lines guard, the exchange-line validation and the exchange requests logged after the creation (desk check F9), each exactly as pinned');
+  'A8: the notify split (ordinary orders keep _notify_order_request_changes behind a WHEN; replacements get their own), the gate on status changes of replacements only, the header guard on a replacement''s warehouse, site, created_at and close-partial only (security review F-1), the link guards, the lines guard, the exchange-line validation and the exchange requests logged after the creation (desk check F9), each exactly as pinned');
 select is(
   (select pg_get_expr(i.indpred, i.indrelid) from pg_index i where i.indexrelid = 'public.order_requests_live_replacement_uniq'::regclass)
   || '|' || (select pg_get_constraintdef(c.oid) from pg_constraint c
@@ -787,8 +812,13 @@ select is(
 -- Desk check F4 (the two-session proof is races 11 and 12 of
 -- scripts/db-concurrency/0396_exchange_races.sh): every exchange writer takes
 -- the item locks before its first row naming an item, the lock helper takes
--- the order-number lock and then the items FOR UPDATE in id order, and the
--- order-number lock is the very one assign_order_request_number (0254) takes.
+-- the order-number lock and then the items FOR UPDATE in id order when it
+-- issues an order, and the order-number lock is the very one
+-- assign_order_request_number (0254) takes. Review S3 (race 13): a writer
+-- that issues no order (the denial, Keep as return only, an approval that
+-- only declines) takes FOR KEY SHARE in id order and no order-number lock:
+-- FOR UPDATE there deadlocked an ordinary order's lines (key-share in payload
+-- order).
 create function pg_temp.first_item_write(p_src text) returns integer language sql immutable as $$
   select min(p) from unnest(array[
            nullif(strpos(p_src, 'insert into public.return_exchange_lines'), 0),
@@ -805,14 +835,19 @@ select is(
      from pg_proc p where p.pronamespace = 'public'::regnamespace
       and p.proname in ('_return_exchange_approve', '_return_replacement_issue', 'change_return_replacement', '_return_exchange_on_deny',
                         'decline_return_replacement'))
-  || '|' || (select (p.prosrc ~ 'pg_advisory_xact_lock\(hashtext\(''order_number:'' \|\| p_org::text\)\)'
-                     and p.prosrc ~ 'order by ii\.id\s+for update')::text
+  || '|' || (select (p.prosrc ~ 'if p_issues_order then\s+perform pg_advisory_xact_lock\(hashtext\(''order_number:'' \|\| p_org::text\)\);'
+                     and p.prosrc ~ 'order by ii\.id\s+for update;\s+else'
+                     and p.prosrc ~ 'else\s+perform 1\s+from public\.inventory_items ii[^;]*order by ii\.id\s+for key share;'
+                     and (select count(*) from regexp_matches(p.prosrc, 'for update', 'g')) = 1)::text
                from pg_proc p where p.oid = 'public._return_lock_items(uuid,uuid[],boolean)'::regprocedure)
+  || '|' || (select string_agg(p.proname || '=' || (p.prosrc ~ '_return_lock_items\([^;]*,\s*false\);')::text, ',' order by p.proname collate "C")
+               from pg_proc p where p.pronamespace = 'public'::regnamespace
+                and p.proname in ('_return_exchange_on_deny', 'decline_return_replacement'))
   || '|' || (select (strpos(p.prosrc, 'pg_advisory_xact_lock(hashtext(''order_number:'' || new.organization_id::text))') > 0)::text
                from pg_proc p where p.oid = 'public.assign_order_request_number()'::regprocedure),
   '_return_exchange_approve=true,_return_exchange_on_deny=true,_return_replacement_issue=true,change_return_replacement=true,'
-  || 'decline_return_replacement=true|true|true',
-  'A10: every exchange writer (the approval, the issue, the change, the denial and "Keep as return only") takes the order-number lock when it issues an order and then its items FOR UPDATE in id order before the first row naming an item (desk check F4: never two writers each holding a key-share lock the other''s FOR UPDATE needs), the same order-number lock 0254 takes');
+  || 'decline_return_replacement=true|true|_return_exchange_on_deny=true,decline_return_replacement=true|true',
+  'A10: every exchange writer (the approval, the issue, the change, the denial and "Keep as return only") takes its item locks in id order before the first row naming an item: the order-number lock and FOR UPDATE when it issues an order (desk check F4), FOR KEY SHARE and no order-number lock when it only appends decisions (review S3: the denial and Keep as return only), the same order-number lock 0254 takes');
 -- A11 (test stage 2026-10-05): plpgsql_check, bundled with the local stack,
 -- reads every statement of every function this file creates against the
 -- catalog. Its first run found _return_replacement_issue's short read naming
@@ -840,10 +875,33 @@ select is(
                         'decline_return_replacement', 'release_return_replacement_early', 'return_exchange_candidates',
                         'return_exchange_flags', 'return_exchange_options', 'tg_order_request_lines_replacement_guard',
                         'tg_order_requests_replacement_link', 'tg_order_requests_replacement_status',
-                        'tg_return_decisions_exchange_requested', 'tg_return_exchange_lines_validate', 'tg_returns_api_guard')
+                        'tg_return_decisions_exchange_requested', 'tg_return_exchange_lines_validate', 'tg_returns_api_guard',
+                        '_return_exchange_line_budget', '_return_lock_exchange_budget', 'tg_order_requests_replacement_header')
       and c.level = 'error'),
   'none',
-  'A11: plpgsql_check finds no error in any of the 29 functions this file creates (an ambiguous name, a missing column or a type a statement cannot take fails here, even on a path no other test runs)');
+  'A11: plpgsql_check finds no error in any of the 32 functions this file creates (an ambiguous name, a missing column or a type a statement cannot take fails here, even on a path no other test runs)');
+
+-- Review S1: every writer that may raise what an RMA claims on an original
+-- line takes its item locks first (the create key-shares its requested items
+-- in id order; an approval or a change takes _return_lock_items), then the
+-- line's exchange budget lock, and only then reads the budget. No writer
+-- waits for an item while it holds the budget lock, so the lock closes the
+-- race between two RMAs on one line without opening a deadlock.
+select is(
+  (select string_agg(p.proname || '=' || (
+            coalesce(nullif(strpos(p.prosrc, case when p.proname = '_return_exchange_create' then 'for key share'
+                                                  else 'public._return_lock_items(' end), 0), 2147483647)
+              < coalesce(nullif(strpos(p.prosrc, 'public._return_lock_exchange_budget('), 0), 0)
+            and strpos(p.prosrc, 'public._return_lock_exchange_budget(')
+              < coalesce(nullif(strpos(p.prosrc, 'public._return_exchange_line_budget('), 0), 0))::text,
+          ',' order by p.proname collate "C")
+     from pg_proc p where p.pronamespace = 'public'::regnamespace
+      and p.proname in ('_return_exchange_create', '_return_exchange_approve', 'change_return_replacement'))
+  || '|' || (select (p.prosrc ~ 'pg_advisory_xact_lock\(hashtext\(''return_exchange_line:'' \|\| v_line::text\)\)'
+                     and p.prosrc ~ 'order by x')::text
+               from pg_proc p where p.oid = to_regprocedure('public._return_lock_exchange_budget(uuid[])')),
+  '_return_exchange_approve=true,_return_exchange_create=true,change_return_replacement=true|true',
+  'A12: the create, the approval and the change take their item locks, then the original line''s exchange budget lock (one advisory lock per line, in id order), and only then read the budget (review S1)');
 
 -- ══ B. Gates ══════════════════════════════════════════════════════════════
 -- rBq: an exchange still requested; rB0: an exchange approved and waiting.
@@ -1910,6 +1968,169 @@ select is(
                   :'rI', pg_temp.rev(:'rI')))),
   'P0001:reason_required,22023:return_invalid,P0001:reason_required,P0001:reason_required',
   'M1: declining an exchange, changing or cancelling a replacement needs a reason; an unknown exchange action is refused');
+
+-- ══ W. The review fixes (2026-10-06) ═══════════════════════════════════════
+-- Stock S1 (probe P1): every unit of an original order line is exchanged once,
+-- whatever RMA asks. oW1: a completed order of one Medium. rW1a exchanges it
+-- for a Large released early, the Large is handed over, then the RMA is
+-- cancelled (the driver could not collect the Medium; F3 lets it). A second
+-- RMA on the same line may bring the Medium back as a return only, never get
+-- a second Large.
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type)
+values (:oW1, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
+values (:lW1, :oW1, :gM, 1, 1);
+select pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1, jsonb_build_object('itemId', :gL))) as "rW1a" \gset
+select pg_temp.approve(:mgr, :'rW1a', pg_temp.xdec(:'rW1a')) as "jW1a" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rW1a', pg_temp.live(:'rW1a'))) as "jW1r" \gset
+select coalesce(pg_temp.live(:'rW1a'), '00000000-0000-0000-0000-000000000000'::uuid) as "oW1R" \gset
+select pg_temp.pick(:mgr, :'oW1R') as "w1Pick" \gset
+select pg_temp.stage(:mgr, :'oW1R') as "w1Stage" \gset
+select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oW1R')) as "w1Sign" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'The driver could not collect the Medium')$q$, :'rW1a', pg_temp.rev(:'rW1a'))) as "jW1c" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW1,
+         pg_temp.xbody(:lW1, 1, jsonb_build_object('itemId', :gL))::text)) as "jW1x" \gset
+select pg_temp.mk(:mgr, :oW1, pg_temp.xbody(:lW1, 1)) as "rW1b" \gset
+select is(
+  :'w1Pick' || ':' || :'w1Stage' || ':' || :'w1Sign' || ':' || ((:'jW1c'::jsonb)->>'status') || ':' || pg_temp.xs(:'rW1a', :mgr)
+  || '|' || pg_temp.err(:'jW1x'::jsonb) || ':' || pg_temp.detail(:'jW1x'::jsonb)::text
+  || '|' || (select status from public.returns where id = :'rW1b'::uuid)
+  || ':' || (select count(*)::text from public.return_exchange_lines where return_id = :'rW1b'::uuid)
+  || ':' || (select count(*)::text from public.returns where order_request_id = :oW1),
+  'picking_complete:ok:1:completed:cancelled:handed_over_return_cancelled'
+  || '|P0001:exchange_already_sent:{"quantity": 1, "available": 0}'
+  || '|requested:0:2',
+  'W1: after a cancelled RMA handed a replacement over for the only unit of a line, a second RMA asking to exchange it again is refused exchange_already_sent (nothing created), and the same RMA as a return only is accepted (review S1, probe P1)');
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rW1b',
+         jsonb_build_object(
+           'lines', (select jsonb_agg(jsonb_build_object('returnLineId', rl.id, 'disposition', 'restock', 'restock', jsonb_build_object('target', 'staging')))
+                       from public.return_lines rl where rl.return_id = :'rW1b'::uuid),
+           'exchange', (select jsonb_agg(jsonb_build_object('returnLineId', rl.id, 'action', 'add', 'itemId', :gL))
+                          from public.return_lines rl where rl.return_id = :'rW1b'::uuid))::text)) as "jW2add" \gset
+select pg_temp.approve(:mgr, :'rW1b', pg_temp.xdec(:'rW1b', null)) as "jW2" \gset
+select is(
+  pg_temp.err(:'jW2add'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW2add'::jsonb)->>'available', '-')
+  || '|' || ((:'jW2'::jsonb)->>'status') || ':' || coalesce((:'jW2'::jsonb)->>'replacement', 'none')
+  || '|' || (select trim_scale(coalesce(sum(l.quantity_fulfilled), 0))::text
+               from public.order_requests o join public.order_request_lines l on l.order_request_id = o.id
+              where o.replacement_for_return_id in (select r.id from public.returns r where r.order_request_id = :oW1))
+  || ':' || (select count(*)::text from public.order_requests o
+              where o.replacement_for_return_id in (select r.id from public.returns r where r.order_request_id = :oW1)),
+  'P0001:exchange_already_sent:0|approved:none|1:1',
+  'W2: "Add a replacement" on that second RMA is refused the same way, the return-only approval goes through, and the line has had exactly one replacement unit handed over across both RMAs (review S1)');
+
+-- The budget counts units, not RMAs (review S1 on a line of four): oK5's line
+-- of 4 Mediums had 1 replacement unit handed over under rK5, cancelled (K5).
+-- A new RMA returning all 4 may exchange 3 at most: at the create, at the
+-- approval, on a change and on a re-issue.
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oK5,
+         pg_temp.xbody(:lK5, 4, jsonb_build_object('itemId', :gL, 'quantity', 4))::text)) as "jW3x" \gset
+select pg_temp.mk(:mgr, :oK5, pg_temp.xbody(:lK5, 4, jsonb_build_object('itemId', :gL, 'quantity', 3))) as "rW3" \gset
+select is(
+  pg_temp.err(:'jW3x'::jsonb) || ':' || pg_temp.detail(:'jW3x'::jsonb)::text
+  || '|' || (select xl.status || ':' || trim_scale(xl.requested_quantity)::text from public.return_exchange_lines xl where xl.return_id = :'rW3'::uuid),
+  'P0001:exchange_already_sent:{"quantity": 4, "available": 3}|requested:3',
+  'W3: on a line of 4 with 1 unit already exchanged under a cancelled RMA, a new RMA returning all 4 may ask to exchange 3, not 4 (review S1: per unit, not per RMA)');
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.approve_return(%L, 0, %L::jsonb)', :'rW3',
+         pg_temp.xdec(:'rW3', 'approve', '{"quantity": 4}'::jsonb)::text)) as "jW4x" \gset
+select pg_temp.approve(:mgr, :'rW3', pg_temp.xdec(:'rW3')) as "jW4" \gset
+select is(
+  pg_temp.err(:'jW4x'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW4x'::jsonb)->>'available', '-')
+  || '|' || ((:'jW4'::jsonb)->>'status') || ':' || coalesce((:'jW4'::jsonb)->'replacement'->'lines'->0->>'requested', 'none')
+  || ':' || pg_temp.holds(pg_temp.live(:'rW3'))::text,
+  'P0001:exchange_already_sent:3|approved:3:3',
+  'W4: the approval cannot raise it to 4 either; approved as asked, the replacement carries and holds 3 (review S1)');
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'All four', 'refuse')$q$,
+         :'rW3', pg_temp.rev(:'rW3'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rW3'), 'quantity', 4))::text)) as "jW5c" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Wrong colour')$q$, :'rW3', pg_temp.rev(:'rW3'))) as "jW5k" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, %L::jsonb, 'All four', 'refuse')$q$,
+         :'rW3', pg_temp.rev(:'rW3'), jsonb_build_array(jsonb_build_object('exchangeLineId', pg_temp.xl(:'rW3'), 'quantity', 4))::text)) as "jW5r" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.change_return_replacement(%L, %s, '[]'::jsonb, 'Issue it again', 'refuse')$q$,
+         :'rW3', pg_temp.rev(:'rW3'))) as "jW5n" \gset
+select is(
+  pg_temp.err(:'jW5c'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW5c'::jsonb)->>'available', '-')
+  || '|' || ((:'jW5k'::jsonb)->>'changed')
+  || '|' || pg_temp.err(:'jW5r'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW5r'::jsonb)->>'available', '-')
+  || '|' || ((:'jW5n'::jsonb)->>'mode') || ':' || coalesce((:'jW5n'::jsonb)->'replacement'->'lines'->0->>'requested', 'none')
+  || ':' || pg_temp.holds(pg_temp.live(:'rW3'))::text || ':' || pg_temp.balanced(:gL)::text,
+  'P0001:exchange_already_sent:3|true|P0001:exchange_already_sent:3|reissue:3:3:true',
+  'W5: a change to 4 is refused, and after a replacement cancel a re-issue of 4 is refused too; the re-issue as it was carries and holds 3 (review S1)');
+
+-- Stock S2 (probe P4): cancelling the RMA is refused while its replacement
+-- is picked, being packed, staged or on its way; before the pick it still
+-- cancels it (undone here), and Cancel replacement stays the path, after
+-- which the RMA cancel works. Nothing moves on a refusal.
+select pg_temp.mk(:mgr, :oG, pg_temp.xbody(:lG, 1, jsonb_build_object('itemId', :gL))) as "rW6" \gset
+select pg_temp.approve(:mgr, :'rW6', pg_temp.xdec(:'rW6', 'approve', '{}'::jsonb,
+         jsonb_build_object('fulfillmentType', 'delivery', 'deliveryCharterId', :cA1))) as "jW6a" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rW6', pg_temp.live(:'rW6'))) as "jW6r" \gset
+select coalesce(pg_temp.live(:'rW6'), '00000000-0000-0000-0000-000000000000'::uuid) as "oW6" \gset
+select pg_temp.write_as('authenticated', :mgr,
+         format($q$update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_by = %L where id = %L$q$, :mgr, :'oW6')) as "w6Slip" \gset
+select coalesce(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6')))->>'status', 'error') as "w6Early" \gset
+select pg_temp.call_as('authenticated', :mgr, format('select (public.complete_picking(%L)).status', :'oW6')) as "w6Pick" \gset
+select pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6')))) as "w6Picked" \gset
+select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oW6')) as "w6Slips" \gset
+update public.order_requests set status = 'staged_for_delivery' where id = :'oW6';
+update public.order_requests set status = 'in_transit' where id = :'oW6';
+select pg_temp.snap(:gL) as "w6Snap" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6t" \gset
+select is(
+  :'w6Slip' || ':' || :'w6Early' || ':' || :'w6Pick' || ':' || :'w6Picked' || ':' || :'w6Slips'
+  || '|' || pg_temp.err(:'jW6t'::jsonb) || ':' || coalesce(:'jW6t'::jsonb->>'detail', '-')
+  || ':' || (select status from public.order_requests where id = :'oW6') || ':' || (select status from public.returns where id = :'rW6'::uuid)
+  || ':' || (pg_temp.snap(:gL) = :'w6Snap')::text,
+  'ok:1:cancelled:picking_complete:P0001:replacement_in_progress:packing_slip_generated'
+  || '|P0001:replacement_in_progress:in_transit:in_transit:approved:true',
+  'W6: the RMA cancel still cancels a replacement on its pick slip, but is refused replacement_in_progress once it is picked and while it is on its way (the order, the RMA and stock unchanged), so a stale screen never restocks a unit on the truck (review S2, probe P4)');
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Delivery refused at the door')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6k" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6z" \gset
+
+-- Security F-1: a replacement's warehouse, delivery site and created_at, and
+-- its close as delivered-partial, change only inside an RMA function (the
+-- transaction-bound exchange flag), whatever the role; internal notes and
+-- the needed-by date stay editable. Each attempt is undone.
+select is(
+  ((:'jW6k'::jsonb)->>'changed') || ':' || ((:'jW6k'::jsonb)->>'inTransit') || ':' || ((:'jW6z'::jsonb)->>'status')
+  || '|' || pg_temp.attempt('authenticated', :mgr, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format('update public.order_requests set delivery_charter_id = %L where id = %L', :cA1, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format($q$update public.order_requests set created_at = created_at - interval '1 day' where id = %L$q$, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.attempt('service_role', null, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.attempt('postgres', null, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.attempt('postgres', null, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, pg_temp.live(:'rB0')),
+                              $q$select set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true)$q$)
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format($q$update public.order_requests set internal_notes = 'Gate code 7' where id = %L$q$, pg_temp.live(:'rB0')))
+  || ' | ' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.revise_order_needed_by(%L, now() + interval '5 days', null, 'The requester asked', null)$q$, pg_temp.live(:'rB0'))))
+  || ' | ' || pg_temp.attempt('authenticated', :mgr, format('update public.order_requests set warehouse_id = %L where id = %L', :whB, :oR)),
+  'true:true:cancelled'
+  || '|42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | ok:1 | ok:1 | ok | ok:1',
+  'W7: Cancel replacement then cancels the RMA; on a replacement the warehouse, the delivery site and created_at are refused replacement_cancel_via_return for the manager, the service role and the owner alike unless an RMA function holds the flag, while internal notes and the needed-by date change, and an ordinary order is untouched (security review F-1)');
+select is(
+  pg_temp.attempt('authenticated', :mgr, format('select (public.close_partial(%L)).status', :'oBo'))
+  || ' | ' || pg_temp.attempt('postgres', null, format($q$update public.order_requests set status = 'completed' where id = %L$q$, :'oBo'))
+  || ' | ' || (select status from public.order_requests where id = :'oBo')
+  || ' | ' || ((:'jK5'::jsonb)->>'status') || ':' || (select status from public.order_requests where id = :'oK5R'),
+  '42501:replacement_cancel_via_return:replacement_cancel_via_return | 42501:replacement_cancel_via_return:replacement_cancel_via_return'
+  || ' | backordered | cancelled:completed',
+  'W8: a part-handed-over replacement is never closed as delivered-partial from its order (close_partial or a raw update), only by its RMA''s cancel (K5, under the flag) (security review F-1)');
+
+-- Security F-4: the issuer checks orders:approve and write access to the
+-- original order's warehouse itself (defence in depth: every caller does
+-- first). Called directly as its owner with each caller's claims; undone.
+select is(
+  pg_temp.attempt('postgres', :stfRm, format($q$select public._return_replacement_issue(%L, %L::jsonb, 99, null)$q$, :'rNone',
+                  jsonb_build_array(jsonb_build_object('itemId', :gL, 'quantity', 1))::text))
+  || ' | ' || pg_temp.attempt('postgres', :stfB, format($q$select public._return_replacement_issue(%L, %L::jsonb, 99, null)$q$, :'rNone',
+                  jsonb_build_array(jsonb_build_object('itemId', :gL, 'quantity', 1))::text))
+  || ' | ' || pg_temp.attempt('postgres', :mgr, format($q$select public._return_replacement_issue(%L, %L::jsonb, 99, null)$q$, :'rNone',
+                  jsonb_build_array(jsonb_build_object('itemId', :gL, 'quantity', 1))::text)),
+  '42501:orders_approve:orders_approve | 42501:warehouse_write:warehouse_write | ok:1',
+  'W9: the replacement issuer refuses a caller without order approval or without write access to the original order''s warehouse on its own, and issues for a manager (security review F-4)');
 
 -- ══ F. Frozen bodies, stock, the organization delete ══════════════════════
 -- Re-derived on 0395 (small fixes slice 2, production head since

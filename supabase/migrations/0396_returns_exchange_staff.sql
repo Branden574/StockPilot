@@ -40,7 +40,11 @@
 --      RMA is received or closed, or a manager released it early with a
 --      reason; into cancelled or denied only from an RMA function (the
 --      transaction-bound stockpilot.return_exchange flag). It reads the RMA
---      and the release by key and takes no row lock.
+--      and the release by key and takes no row lock. Beside it the header
+--      guard (trg_order_requests_zz_replacement_header, security review
+--      F-1): outside an RMA function a replacement's warehouse, delivery
+--      site and created_at never change, and it is never closed as
+--      delivered-partial (the RMA cancel does that under the flag).
 --   5. A replacement's lines are fixed (an API-role line insert is refused).
 --   6. The notify split: trg_order_requests_notify fires only for ordinary
 --      orders (WHEN replacement_for_return_id is null; the function is
@@ -74,14 +78,31 @@
 -- batch to Staging (0348). complete_picking draws the replacement with its
 -- provenance. The returned unit still moves only at the RX-1 close.
 --
+-- Never more out than returned, per original unit (review S1): every unit
+-- of an original order line may be exchanged once, whatever RMA asks. An
+-- exchange quantity is capped by the RMA's returned quantity and by what the
+-- original line has left (_return_exchange_line_budget): its handed-over
+-- quantity less the units replacements already handed over for it under
+-- cancelled RMAs (the customer kept those units, so a later RMA brings them
+-- back as a return only) and less what the other RMAs on the line claim.
+-- The RMA cancel is refused while its replacement is picked, being packed,
+-- staged or on its way (review S2: Cancel replacement is the path there, with
+-- its Staging and driver warnings).
+--
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- Lock order of every exchange function: (1) the RMA row FOR UPDATE, (2)
 -- the live replacement order FOR UPDATE, classified only under that lock
 -- (plan X-2), (3) when it will insert an order, the organization's
 -- order-number advisory lock (assign_order_request_number's), (4) every item
--- it will name, FOR UPDATE in id order, BEFORE the first row naming one
+-- it will name, in id order, BEFORE the first row naming one
 -- (_return_lock_items, desk check F4: key-share locks from foreign-key checks
--- taken before approve_partial's FOR UPDATE would deadlock two writers), and
+-- taken before approve_partial's FOR UPDATE would deadlock two writers): FOR
+-- UPDATE when it will issue an order, FOR KEY SHARE when it only appends
+-- decisions (the deny hook, Keep as return only, an approval that only
+-- declines; review S3: FOR UPDATE there met an ordinary order's key-share
+-- locks taken in payload order), (5) when it may raise what the RMA claims
+-- on an original line, that line's exchange budget lock
+-- (_return_lock_exchange_budget, review S1), after every item lock, and
 -- items in id order again inside approve_partial or cancel_order_request
 -- (already held). The gate trigger reads the RMA without a lock
 -- (generatePickSlip holds the order while an RMA cancel takes the RMA and
@@ -108,7 +129,8 @@
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- 42501, P0001, P0002, 22023 and 55P03 only, each with a stable hint the app
--- maps (packages/core/src/returns/return-error-map.ts). No function here
+-- maps (packages/core/src/returns/return-error-map.ts; the review fix added
+-- exchange_already_sent and replacement_in_progress). No function here
 -- raises the two retryable classes PostgREST would re-run forever (0367).
 
 set lock_timeout = '5s';
@@ -536,8 +558,14 @@ $$;
 -- item before either asked for FOR UPDATE would deadlock (40P01). Taking
 -- the order-number lock first keeps create_order_request (which takes it,
 -- then key-share on its items) and every exchange issuer in one order per
--- organization, as order numbers already are. Items of another
--- organization are never locked (the caller refuses them afterwards).
+-- organization, as order numbers already are. A writer that issues no order
+-- (the deny hook, Keep as return only, an approval that only declines) only
+-- appends decisions: it takes FOR KEY SHARE in id order and no order-number
+-- lock (review S3). Its FOR UPDATE met an ordinary order whose lines take
+-- key-share in payload order (40P01); key share in id order never conflicts
+-- with another key share, and against an issuer's FOR UPDATE both go in id
+-- order. Items of another organization are never locked (the caller
+-- refuses them afterwards).
 create function public._return_lock_items(p_org uuid, p_items uuid[], p_issues_order boolean)
 returns void
 language plpgsql
@@ -547,12 +575,80 @@ as $$
 begin
   if p_issues_order then
     perform pg_advisory_xact_lock(hashtext('order_number:' || p_org::text));
+    perform 1
+       from public.inventory_items ii
+      where ii.id = any (coalesce(p_items, '{}'::uuid[])) and ii.organization_id = p_org
+      order by ii.id
+        for update;
+  else
+    perform 1
+       from public.inventory_items ii
+      where ii.id = any (coalesce(p_items, '{}'::uuid[])) and ii.organization_id = p_org
+      order by ii.id
+        for key share;
   end if;
-  perform 1
-     from public.inventory_items ii
-    where ii.id = any (coalesce(p_items, '{}'::uuid[])) and ii.organization_id = p_org
-    order by ii.id
-      for update;
+end;
+$$;
+
+-- The exchange budget of an original order line (review S1): every unit of
+-- the line may be exchanged once, whatever RMA asks. The most an exchange of
+-- RMA p_return_id on that line may send in total (its own sends included) is
+-- the line's handed-over quantity, less the units replacements already
+-- handed over for it under cancelled RMAs (the customer kept those units: a
+-- later RMA brings them back as a return only), less what each other RMA on
+-- the line claims: the returned quantity of an exchange still requested,
+-- approved or re-issuable, or the units handed over by one declined for
+-- good. Denied RMAs and return-only lines claim nothing. The caller takes
+-- least(its returned quantity, this) less what its own replacements handed
+-- over, and reads it under _return_lock_exchange_budget's lock. May be
+-- negative (the caller floors it at 0).
+create function public._return_exchange_line_budget(p_return_id uuid, p_order_line_id uuid)
+returns numeric
+language plpgsql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_fulfilled numeric;
+  v_taken     numeric;
+begin
+  select coalesce(orl.quantity_fulfilled, 0) into v_fulfilled
+    from public.order_request_lines orl where orl.id = p_order_line_id;
+  select coalesce(sum(case when r.status = 'cancelled' or xl.status = 'declined' then coalesce(f.fulfilled, 0)
+                           else rl.quantity end), 0)
+    into v_taken
+    from public.return_lines rl
+    join public.returns r on r.id = rl.return_id
+    join public.return_exchange_lines xl on xl.return_line_id = rl.id
+    left join lateral (select ff.fulfilled from public._return_exchange_fulfilled(r.id) ff
+                        where ff.exchange_line_id = xl.id) f on true
+   where rl.order_request_line_id = p_order_line_id
+     and rl.return_id <> p_return_id
+     and r.status <> 'denied';
+  return coalesce(v_fulfilled, 0) - v_taken;
+end;
+$$;
+
+-- The exchange budget lock (review S1): one transaction-scoped advisory lock
+-- per original order line, in id order, for every writer that may raise
+-- what an RMA claims on a line (the create's exchange rows, an approval that
+-- approves or adds, a change or a re-issue), so two RMAs on one line never
+-- both take its last unit. Taken AFTER the writer's item locks (the create
+-- key-shares its requested items first; the others hold _return_lock_items'),
+-- so no writer waits for an item while holding it, and nothing else takes it.
+create function public._return_lock_exchange_budget(p_order_lines uuid[])
+returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_line uuid;
+begin
+  for v_line in select distinct x from unnest(coalesce(p_order_lines, '{}'::uuid[])) as x where x is not null order by x loop
+    perform pg_advisory_xact_lock(hashtext('return_exchange_line:' || v_line::text));
+  end loop;
 end;
 $$;
 
@@ -620,6 +716,14 @@ begin
    where r.id = p_return_id;
   if v_org is null or v_orig.id is null then
     raise exception 'return_not_found' using errcode = 'P0002', hint = 'return_not_found';
+  end if;
+  -- Its own gates (security review F-4, defence in depth): every caller
+  -- checks both first, and a future caller cannot forget them.
+  if not public.has_permission(v_org, 'orders:approve') then
+    raise exception 'orders_approve' using errcode = '42501', hint = 'orders_approve';
+  end if;
+  if not public.user_can_access_inventory(v_user, v_orig.warehouse_id, null, 'write') then
+    raise exception 'warehouse_write' using errcode = '42501', hint = 'warehouse_write';
   end if;
 
   -- Options.
@@ -782,7 +886,10 @@ $$;
 -- token, portal or member create, where any miss answers the same
 -- exchange_item_not_eligible whatever the cause (no oracle). No item means
 -- "the warehouse will review" and needs a note. The quantity defaults to,
--- and is capped by, the line's return quantity.
+-- and is capped by, the line's return quantity, and by what its original
+-- line has left to exchange (review S1: P0001 exchange_already_sent, detail
+-- {quantity, available}), read under the line's budget lock, taken after
+-- the requested items are key-shared in id order.
 create or replace function public._return_exchange_create(
   p_return_id uuid, p_order_id uuid, p_request jsonb, p_actor jsonb)
 returns void
@@ -799,6 +906,7 @@ declare
   v_rl    record;
   v_item  uuid;
   v_qty   numeric;
+  v_room  numeric;
   v_note  text;
   v_xl    uuid;
   l       jsonb;
@@ -808,6 +916,26 @@ begin
     v_actor := (p_actor->>'userId')::uuid;
   end if;
   select r.organization_id into v_org from public.returns r where r.id = p_return_id;
+
+  -- Review S1: when any line asks for an exchange, the requested items
+  -- key-shared in id order (the lock the exchange rows' foreign keys take
+  -- anyway, taken first so no writer waits for an item while holding a
+  -- budget lock), then the budget lock of every original line of this RMA.
+  if exists (select 1 from jsonb_array_elements(coalesce(p_request->'lines', '[]'::jsonb)) as y
+              where jsonb_typeof(y) = 'object' and coalesce(y->'exchange', 'null'::jsonb) <> 'null'::jsonb) then
+    perform 1
+       from public.inventory_items ii
+      where ii.organization_id = v_org
+        and ii.id = any (array(
+              select (y->'exchange'->>'itemId')::uuid
+                from jsonb_array_elements(coalesce(p_request->'lines', '[]'::jsonb)) as y
+               where jsonb_typeof(y) = 'object' and jsonb_typeof(y->'exchange') = 'object'
+                 and jsonb_typeof(y->'exchange'->'itemId') = 'string' and (y->'exchange'->>'itemId') ~ c_uuid))
+      order by ii.id
+        for key share;
+    perform public._return_lock_exchange_budget(
+      array(select rl.order_request_line_id from public.return_lines rl where rl.return_id = p_return_id));
+  end if;
 
   for l in select y from jsonb_array_elements(coalesce(p_request->'lines', '[]'::jsonb)) as y
             where jsonb_typeof(y) = 'object' and coalesce(y->'exchange', 'null'::jsonb) <> 'null'::jsonb
@@ -845,6 +973,12 @@ begin
       raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'exchange.note';
     end if;
     v_qty := public._return_exchange_quantity(x->'quantity', v_rl.quantity, v_rl.quantity);
+    -- Review S1: never more than the original line has left to exchange.
+    v_room := least(v_rl.quantity, greatest(public._return_exchange_line_budget(p_return_id, v_rl.order_request_line_id), 0));
+    if v_qty > v_room then
+      raise exception 'exchange_already_sent' using errcode = 'P0001', hint = 'exchange_already_sent',
+        detail = jsonb_build_object('quantity', trim_scale(v_qty), 'available', trim_scale(v_room))::text;
+    end if;
     if v_item is not null and not public._return_exchange_item_ok(p_order_id, v_item, v_tier, v_rl.order_request_line_id) then
       raise exception 'exchange_item_not_eligible' using errcode = 'P0001', hint = 'exchange_item_not_eligible';
     end if;
@@ -868,6 +1002,9 @@ $$;
 -- is whole, from 1 to the returned quantity. When anything is approved, ONE
 -- replacement order carries every approved line (_return_replacement_issue:
 -- created, held by approve_partial, short checked) at revision p_revision + 1.
+-- An approved or added quantity is also capped by what its original line has
+-- left to exchange (review S1: P0001 exchange_already_sent), read under the
+-- lines' budget lock, taken after the item locks.
 -- The caller (approve_return) checked orders:approve before locking.
 create or replace function public._return_exchange_approve(
   p_return_id uuid, p_decision jsonb, p_user uuid, p_revision integer)
@@ -893,6 +1030,7 @@ declare
   v_rl      record;
   v_new_xl  uuid;
   v_lock    uuid[];
+  v_room    numeric;
   e         jsonb;
   a         jsonb;
 begin
@@ -952,6 +1090,12 @@ begin
            where xl.return_id = p_return_id and xl.status = 'requested' and xl.requested_item_id is not null) t;
   perform public._return_lock_items(
     v_org, v_lock, exists (select 1 from jsonb_array_elements(v_entries) as x where x->>'action' in ('approve', 'add')));
+  -- Review S1: an approve or an add may raise what this RMA claims on its
+  -- original lines: their budget lock, after the item locks.
+  if exists (select 1 from jsonb_array_elements(v_entries) as x where x->>'action' in ('approve', 'add')) then
+    perform public._return_lock_exchange_budget(
+      array(select rl.order_request_line_id from public.return_lines rl where rl.return_id = p_return_id));
+  end if;
 
   for e in select x from jsonb_array_elements(v_entries) as x
             order by coalesce(x->>'exchangeLineId', x->>'returnLineId'), x::text loop
@@ -967,12 +1111,17 @@ begin
               v_xl.requested_item_id, v_xl.requested_quantity, v_reason, p_user, 'staff');
 
     elsif e->>'action' = 'add' then
-      select rl.id, rl.quantity into v_rl from public.return_lines rl where rl.id = (e->>'returnLineId')::uuid;
+      select rl.id, rl.quantity, rl.order_request_line_id into v_rl from public.return_lines rl where rl.id = (e->>'returnLineId')::uuid;
       if jsonb_typeof(e->'itemId') is distinct from 'string' or (e->>'itemId') !~ c_uuid then
         raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'itemId';
       end if;
       v_item := (e->>'itemId')::uuid;
       v_qty := public._return_exchange_quantity(e->'quantity', v_rl.quantity, v_rl.quantity);
+      v_room := least(v_rl.quantity, greatest(public._return_exchange_line_budget(p_return_id, v_rl.order_request_line_id), 0));
+      if v_qty > v_room then
+        raise exception 'exchange_already_sent' using errcode = 'P0001', hint = 'exchange_already_sent',
+          detail = jsonb_build_object('quantity', trim_scale(v_qty), 'available', trim_scale(v_room))::text;
+      end if;
       if not public._return_exchange_item_ok(v_order, v_item, 'staff') then
         raise exception 'exchange_item_not_eligible' using errcode = 'P0001', hint = 'exchange_item_not_eligible';
       end if;
@@ -990,7 +1139,8 @@ begin
         'previousItemId', null, 'reason', v_reason));
 
     else
-      select xl.id, xl.return_line_id, xl.requested_item_id, xl.requested_quantity, rl.quantity as returned
+      select xl.id, xl.return_line_id, xl.requested_item_id, xl.requested_quantity, rl.quantity as returned,
+             rl.order_request_line_id
         into v_xl
         from public.return_exchange_lines xl
         join public.return_lines rl on rl.id = xl.return_line_id
@@ -1008,6 +1158,11 @@ begin
         raise exception 'return_invalid' using errcode = '22023', hint = 'return_invalid', detail = 'itemId';
       end if;
       v_qty := public._return_exchange_quantity(e->'quantity', v_xl.requested_quantity, v_xl.returned);
+      v_room := least(v_xl.returned, greatest(public._return_exchange_line_budget(p_return_id, v_xl.order_request_line_id), 0));
+      if v_qty > v_room then
+        raise exception 'exchange_already_sent' using errcode = 'P0001', hint = 'exchange_already_sent',
+          detail = jsonb_build_object('quantity', trim_scale(v_qty), 'available', trim_scale(v_room))::text;
+      end if;
       v_prev := null;
       if v_xl.requested_item_id is not null and v_item <> v_xl.requested_item_id then
         -- A substitution (brief 22): a reason, and both items are kept.
@@ -1100,15 +1255,21 @@ $$;
 -- cancel_return after its RMA row lock, status and revision checks. Once an
 -- exchange was approved: orders:approve (42501 orders_approve) and a reason
 -- (P0001 reason_required); the live replacement is locked FOR UPDATE and
--- classified under that lock: not handed over (undrawn, or picked and not
--- handed over, which cancel_order_request restocks to Staging) is cancelled
--- in this transaction. Handed over in full keeps its history and nothing
--- moves (brief 34, D11). Handed over in part (desk check F3): a backorder is
--- closed as delivered-partial (close_partial, unchanged: the record kept,
--- every hold released, nothing moves), and a remainder already resumed into
--- picking is cancelled (cancel_order_request keeps quantity_fulfilled as the
--- record and restocks only a picked batch, to Staging), so nothing more ships
--- for a cancelled return. Requested lines are cancelled with the RMA.
+-- classified under that lock. While units left the shelf for it (picked,
+-- being packed, staged or on its way, whatever was handed over before) the
+-- cancel is refused (P0001 replacement_in_progress, detail its status;
+-- review S2): Cancel replacement is the path there, with its Staging and
+-- driver warnings, and a stale screen or the API never restocks a unit on
+-- the truck. Not handed over and not picked (approved, on its pick slip,
+-- being picked, or a backorder that handed nothing over) is cancelled in
+-- this transaction. Handed over in full keeps its history and nothing moves
+-- (brief 34, D11). Handed over in part (desk check F3): a backorder is
+-- closed as delivered-partial (close_partial, unchanged, under the exchange
+-- flag the header guard asks for: the record kept, every hold released,
+-- nothing moves), and a remainder already resumed into picking and not yet
+-- picked is cancelled (cancel_order_request keeps quantity_fulfilled as the
+-- record), so nothing more ships for a cancelled return. Requested lines are
+-- cancelled with the RMA.
 create or replace function public._return_exchange_on_cancel(p_return_id uuid, p_user uuid, p_reason text)
 returns void
 language plpgsql
@@ -1121,6 +1282,7 @@ declare
   v_live    uuid;
   v_class   text;
   v_ostatus text;
+  v_prev    text := current_setting('stockpilot.return_exchange', true);
 begin
   if not exists (select 1 from public.return_exchange_lines xl where xl.return_id = p_return_id) then
     return;
@@ -1148,14 +1310,22 @@ begin
     if v_live is not null then
       v_class := public._return_replacement_class(v_live);
       select o.status into v_ostatus from public.order_requests o where o.id = v_live;
+      if v_ostatus in ('picking_complete', 'packing_slip_generated', 'staged_for_pickup',
+                       'staged_for_delivery', 'in_transit') then
+        raise exception 'replacement_in_progress' using errcode = 'P0001', hint = 'replacement_in_progress',
+          detail = v_ostatus;
+      end if;
       if v_class in ('undrawn', 'drawn') then
         perform public._return_replacement_cancel_order(v_live, v_no, 'return_cancelled');
         update public.return_exchange_lines
            set status = 'cancelled'
          where return_id = p_return_id and status = 'approved';
       elsif v_ostatus = 'backordered' then
-        -- Handed over in part, the rest on backorder: closed as delivered-partial.
+        -- Handed over in part, the rest on backorder: closed as delivered-partial,
+        -- under the exchange flag (the header guard refuses it anywhere else).
+        perform set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
         perform public.close_partial(v_live);
+        perform set_config('stockpilot.return_exchange', coalesce(v_prev, ''), true);
       elsif v_ostatus <> 'completed' then
         -- Handed over in part, the rest resumed into picking: the rest is cancelled.
         perform public._return_replacement_cancel_order(v_live, v_no, 'return_cancelled');
@@ -1214,7 +1384,10 @@ $$;
 --   No live replacement, lines cancelled by a replacement cancel, RMA
 --   approved, received or closed: a new replacement (the re-issue).
 -- Every line sends at most what is left of its returned quantity after what
--- this RMA's replacements already handed over for it (desk check F2).
+-- this RMA's replacements already handed over for it (desk check F2), and at
+-- most what its original line has left to exchange (review S1: P0001
+-- exchange_already_sent, the re-issue's default quantity included), read
+-- under the lines' budget lock after the item locks.
 -- Idempotent on (RMA, expected revision) in scope return_replacement_change;
 -- a different change at the same revision P0001 return_changed.
 create function public.change_return_replacement(
@@ -1256,6 +1429,7 @@ declare
   v_qty     numeric;
   v_repl    jsonb;
   v_opts    jsonb;
+  v_room    numeric;
   x         record;
   e         jsonb;
   a         jsonb;
@@ -1382,7 +1556,8 @@ begin
   -- send those units again); a line with nothing left is not re-issued.
   for x in
     select xl.id, xl.return_line_id, xl.approved_item_id, xl.approved_quantity,
-           rl.quantity - coalesce(f.fulfilled, 0) as room
+           rl.quantity - coalesce(f.fulfilled, 0) as room, rl.quantity as qty, coalesce(f.fulfilled, 0) as sent,
+           rl.order_request_line_id as order_line
       from public.return_exchange_lines xl
       join public.return_lines rl on rl.id = xl.return_line_id
       left join public._return_exchange_fulfilled(p_return_id) f on f.exchange_line_id = xl.id
@@ -1400,7 +1575,8 @@ begin
     end if;
     v_set := v_set || jsonb_build_array(jsonb_build_object(
       'exchangeLineId', x.id, 'returnLineId', x.return_line_id, 'itemId', x.approved_item_id,
-      'quantity', least(x.approved_quantity, x.room), 'returned', x.room, 'previousItemId', null));
+      'quantity', least(x.approved_quantity, x.room), 'returned', x.room, 'previousItemId', null,
+      'qty', x.qty, 'sent', x.sent, 'orderLine', x.order_line));
   end loop;
   if jsonb_array_length(v_set) = 0 then
     if v_spent > 0 then
@@ -1483,6 +1659,21 @@ begin
           select xl.approved_item_id from public.return_exchange_lines xl
            where xl.return_id = p_return_id and xl.approved_item_id is not null),
     true);
+  -- Review S1: under the budget lock of every original line in the change,
+  -- no line sends more than its original line has left to exchange, less
+  -- what this RMA's replacements already handed over for it.
+  perform public._return_lock_exchange_budget(
+    array(select (y->>'orderLine')::uuid from jsonb_array_elements(v_set) as y));
+  for a in select y from jsonb_array_elements(v_set) as y loop
+    v_room := least((a->>'qty')::numeric,
+                    greatest(public._return_exchange_line_budget(p_return_id, (a->>'orderLine')::uuid), 0))
+              - (a->>'sent')::numeric;
+    if (a->>'quantity')::numeric > v_room then
+      raise exception 'exchange_already_sent' using errcode = 'P0001', hint = 'exchange_already_sent',
+        detail = jsonb_build_object('quantity', trim_scale((a->>'quantity')::numeric),
+                                    'available', trim_scale(greatest(v_room, 0)))::text;
+    end if;
+  end loop;
 
   -- Never both reservations: the old order is cancelled first (every hold
   -- released, nothing restocked: it was not picked), then the new one is
@@ -2206,6 +2397,37 @@ begin
 end;
 $$;
 
+-- The replacement's header (security review F-1), for replacement orders
+-- only (the trigger's WHEN clause names exactly what it guards): its
+-- warehouse, delivery site and created_at, and its close as
+-- delivered-partial (backordered -> completed, close_partial), change only
+-- inside an RMA function (the transaction-bound stockpilot.return_exchange
+-- flag: the RMA cancel closes a part-handed-over backorder that way, desk
+-- check F3); anywhere else, whatever the role (the owner's data fixes
+-- included: they raise the flag), 42501 replacement_cancel_via_return
+-- ("Change or cancel this replacement from its RMA."). The RMA's gates read
+-- the original order's warehouse, and created_at orders the RMA's
+-- replacements (a re-issue inherits the newest one's fulfilment), so
+-- neither may drift from the RMA. Internal notes, the needed-by date, the
+-- pick slip, picking, staging and the hand-over are not guarded.
+create function public.tg_order_requests_replacement_header()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_no text;
+begin
+  if coalesce(current_setting('stockpilot.return_exchange', true), '') = pg_current_xact_id()::text then
+    return new;
+  end if;
+  select r.return_number into v_no from public.returns r where r.id = new.replacement_for_return_id;
+  raise exception 'replacement_cancel_via_return' using errcode = '42501', hint = 'replacement_cancel_via_return',
+    detail = coalesce(v_no, '');
+end;
+$$;
+
 -- The requester pings of a replacement order (plan 3.6.7; G11, D24): the
 -- same type strings, link and preference gates as
 -- _notify_order_request_changes (0265), reworded, with the RMA in the
@@ -2451,6 +2673,9 @@ revoke all on function public.tg_return_decisions_exchange_requested() from publ
 revoke all on function public.tg_order_requests_replacement_link() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_request_lines_replacement_guard() from public, anon, authenticated, service_role;
 revoke all on function public.tg_order_requests_replacement_status() from public, anon, authenticated, service_role;
+revoke all on function public.tg_order_requests_replacement_header() from public, anon, authenticated, service_role;
+revoke all on function public._return_exchange_line_budget(uuid, uuid) from public, anon, authenticated, service_role;
+revoke all on function public._return_lock_exchange_budget(uuid[]) from public, anon, authenticated, service_role;
 revoke all on function public._notify_replacement_order_changes() from public, anon, authenticated, service_role;
 revoke all on function public.tg_returns_api_guard() from public, anon, authenticated, service_role;
 
@@ -2478,7 +2703,13 @@ comment on function public._return_replacement_summary(uuid) is
 comment on function public._return_replacement_class(uuid) is
   'RX-2 (plan 3.3.5): a live replacement''s class, read under the caller''s row lock: undrawn (approved, pick slip, picking, or a backorder, with nothing handed over), drawn (picking_complete through in_transit, nothing handed over: cancel_order_request restocks the picked batch to Staging), handed_over (completed, or any status once anything was handed over, a resumed backorder included: desk check F2, never cancelled or changed from the RMA). SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public._return_lock_items(uuid, uuid[], boolean) is
-  'RX-2 (desk check F4): the lock order of every exchange writer, before the first row naming an item: the organization''s order-number advisory lock when an order will be issued (the one assign_order_request_number takes, 0254), then the items of the organization FOR UPDATE in id order. Two writers that both took key-share locks on one item (foreign-key checks) before approve_partial''s FOR UPDATE would deadlock; this order also matches create_order_request (order-number lock, then its items). SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 (desk check F4; review S3): the lock order of every exchange writer, before the first row naming an item: when an order will be issued, the organization''s order-number advisory lock (the one assign_order_request_number takes, 0254) and then the items of the organization FOR UPDATE in id order (two writers that both took key-share locks on one item before approve_partial''s FOR UPDATE would deadlock; this order also matches create_order_request: order-number lock, then its items); when none will be (the deny hook, Keep as return only, an approval that only declines), the items FOR KEY SHARE in id order and no order-number lock (FOR UPDATE there deadlocked an ordinary order''s lines). SECURITY INVOKER, no API EXECUTE.';
+comment on function public._return_exchange_line_budget(uuid, uuid) is
+  'RX-2 (review S1): the most an exchange of this RMA on that original order line may send in total: the line''s handed-over quantity, less the units replacements already handed over for it under cancelled RMAs, less what each other RMA on the line claims (the returned quantity of an exchange requested, approved or re-issuable; the units handed over by one declined for good; nothing for denied RMAs and return-only lines). Every unit of a line is exchanged once, whatever RMA asks. Callers take least(returned quantity, this) less their own handed-over units, under _return_lock_exchange_budget. SECURITY INVOKER, STABLE, no API EXECUTE.';
+comment on function public._return_lock_exchange_budget(uuid[]) is
+  'RX-2 (review S1): one transaction-scoped advisory lock per original order line (hashtext of return_exchange_line: and the line id), in id order, taken after the caller''s item locks by every writer that may raise what an RMA claims on a line (the create, an approval that approves or adds, a change or re-issue), so two RMAs never both take a line''s last unit. Nothing else takes it. SECURITY INVOKER, no API EXECUTE.';
+comment on function public.tg_order_requests_replacement_header() is
+  'RX-2 (security review F-1), BEFORE UPDATE on order_requests WHEN a replacement''s warehouse_id, delivery_charter_id or created_at changes or it goes from backordered to completed (close_partial): allowed only under the transaction-bound stockpilot.return_exchange flag an RMA function raises (the RMA cancel closes a part-handed-over backorder that way); otherwise, for every role, 42501 replacement_cancel_via_return, detail the RMA number. Internal notes, needed-by, the pick slip, picking, staging and the hand-over are not guarded. SECURITY INVOKER, no EXECUTE.';
 comment on function public._return_exchange_fulfilled(uuid) is
   'RX-2 (desk check F2): per exchange line, the units this RMA''s replacements (live or cancelled) already handed over for it: each replacement line''s quantity_fulfilled shared out among the exchange lines that order carried for that item (exchange_approved decisions), in exchange-line id order, each up to its approved quantity there. change_return_replacement caps every line at its returned quantity minus these units. SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public._return_replacement_cancel_order(uuid, text, text) is
@@ -2488,19 +2719,19 @@ comment on function public._return_exchange_reason(text, integer) is
 comment on function public._return_exchange_quantity(jsonb, numeric, numeric) is
   'RX-2: a replacement quantity: a JSON number, whole, at least 1 (22023 return_invalid, detail quantity), at most the returned quantity (P0001 exchange_quantity_exceeds_return; brief 4, no privileged exception). Null takes the default. SECURITY INVOKER, IMMUTABLE, no API EXECUTE.';
 comment on function public._return_replacement_issue(uuid, jsonb, integer, jsonb) is
-  'RX-2 (plan 3.6.1-3.6.3): creates the replacement order for an RMA as postgres, applying the order insert policy''s and both order guards'' rules itself: the original''s organization, warehouse, requester context and fulfilment (or the approver''s override; a delivery needs an active site the warehouse serves, P0001 replacement_site_not_available), a portal original''s active customer and portal user, a departed member as an email-only requester (D7), a deleted requester''s stamp carried; never notes, needed-by, workflow, token or signature columns; lines merged per item through the staff tier (P0001 exchange_item_not_eligible), cost stamped from the item, price 0 for a portal order (D9). Then the unchanged approve_partial in the same transaction (holds once), and under whenShort refuse a short line raises P0001 replacement_unavailable (detail [{itemId, needed, available}]) and the caller''s transaction rolls back. A second live replacement for the RMA gives P0001 return_changed. On the 0387 AL9d census of DEFINER order inserters on purpose. SECURITY DEFINER, lock_timeout 5s, EXECUTE for nobody.';
+  'RX-2 (plan 3.6.1-3.6.3): creates the replacement order for an RMA as postgres, applying the order insert policy''s and both order guards'' rules itself: the original''s organization, warehouse, requester context and fulfilment (or the approver''s override; a delivery needs an active site the warehouse serves, P0001 replacement_site_not_available), a portal original''s active customer and portal user, a departed member as an email-only requester (D7), a deleted requester''s stamp carried; never notes, needed-by, workflow, token or signature columns; lines merged per item through the staff tier (P0001 exchange_item_not_eligible), cost stamped from the item, price 0 for a portal order (D9). Its own gates first (security review F-4, defence in depth): orders:approve (42501 orders_approve) and write access to the original order''s warehouse (42501 warehouse_write). Then the unchanged approve_partial in the same transaction (holds once), and under whenShort refuse a short line raises P0001 replacement_unavailable (detail [{itemId, needed, available}]) and the caller''s transaction rolls back. A second live replacement for the RMA gives P0001 return_changed. On the 0387 AL9d census of DEFINER order inserters on purpose. SECURITY DEFINER, lock_timeout 5s, EXECUTE for nobody.';
 comment on function public._return_exchange_create(uuid, uuid, jsonb, jsonb) is
-  'RX-2 hook body (plan 3.3.6): a create line carrying exchange {itemId?, quantity?, note?} gets its return_exchange_lines row in the create''s transaction; its exchange_requested decision follows the created decision (tg_return_decisions_exchange_requested, desk check F9). Staff tier for a staff create; the requester tier for a token, portal or member create, where any miss is P0001 exchange_item_not_eligible whatever the cause. No item is "the warehouse will review" and needs a note (1 to 500 characters). Quantity defaults to, and is capped by, the line''s return quantity. SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 hook body (plan 3.3.6): a create line carrying exchange {itemId?, quantity?, note?} gets its return_exchange_lines row in the create''s transaction; its exchange_requested decision follows the created decision (tg_return_decisions_exchange_requested, desk check F9). Staff tier for a staff create; the requester tier for a token, portal or member create, where any miss is P0001 exchange_item_not_eligible whatever the cause. No item is "the warehouse will review" and needs a note (1 to 500 characters). Quantity defaults to, and is capped by, the line''s return quantity, and by what the original line has left to exchange (review S1: P0001 exchange_already_sent, detail {quantity, available}; _return_exchange_line_budget under the lines'' budget lock, taken after the requested items are key-shared in id order). SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_approve(uuid, jsonb, uuid, integer) is
-  'RX-2 hook body (plan 3.3.3 step 6): every requested exchange line gets one decision (P0001 return_decision_incomplete): approve (the requested item or a staff choice; a choice differing from a requested item is a substitution and needs a reason, kept with the previous item), decline (reason required), or add (G9: a staff exchange on a return-only line). Every approved item passes the staff tier; every quantity is whole, 1 to the returned quantity. When anything is approved, one replacement order carries every approved line at revision p_revision + 1 (_return_replacement_issue: created, held by approve_partial, short checked), and exchange_approved and replacement_issued decisions are appended. approve_return checked the orders module and orders:approve before its row lock. SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 hook body (plan 3.3.3 step 6): every requested exchange line gets one decision (P0001 return_decision_incomplete): approve (the requested item or a staff choice; a choice differing from a requested item is a substitution and needs a reason, kept with the previous item), decline (reason required), or add (G9: a staff exchange on a return-only line). Every approved item passes the staff tier; every quantity is whole, 1 to the returned quantity, and at most what the original line has left to exchange (review S1: P0001 exchange_already_sent, under the lines'' budget lock after the item locks). When anything is approved, one replacement order carries every approved line at revision p_revision + 1 (_return_replacement_issue: created, held by approve_partial, short checked), and exchange_approved and replacement_issued decisions are appended. approve_return checked the orders module and orders:approve before its row lock. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_on_deny(uuid, uuid) is
   'RX-2 hook body: a denied RMA declines every requested exchange line (exchange_declined decisions; the denial''s reason is on the denied decision). No replacement exists before approval. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_on_cancel(uuid, uuid, text) is
-  'RX-2 hook body (plan 3.3.5, cancel_return row; X-1, X-2): once an exchange was approved, cancelling the RMA needs the orders module (P0001 module_disabled), orders:approve (42501 orders_approve) and a reason (P0001 reason_required); the live replacement is locked FOR UPDATE after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled in this transaction (every hold released; a picked batch back to Staging through cancel_order_request''s own branch); handed over in full keeps its history and nothing moves (brief 34, D11); handed over in part is closed as delivered-partial when on backorder (close_partial) and its remainder cancelled when resumed into picking (desk check F3), so nothing more ships for a cancelled return. Requested lines are cancelled with the RMA. SECURITY INVOKER, no API EXECUTE.';
+  'RX-2 hook body (plan 3.3.5, cancel_return row; X-1, X-2): once an exchange was approved, cancelling the RMA needs the orders module (P0001 module_disabled), orders:approve (42501 orders_approve) and a reason (P0001 reason_required); the live replacement is locked FOR UPDATE after the RMA and classified under that lock: picked, being packed, staged or in transit refuses the cancel (review S2: P0001 replacement_in_progress, detail its status; Cancel replacement is the path there); otherwise not handed over is cancelled in this transaction (every hold released, nothing restocked); handed over in full keeps its history and nothing moves (brief 34, D11); handed over in part is closed as delivered-partial when on backorder (close_partial under the exchange flag the header guard asks for) and its remainder cancelled when resumed into picking and not yet picked (desk check F3), so nothing more ships for a cancelled return. Requested lines are cancelled with the RMA. SECURITY INVOKER, no API EXECUTE.';
 comment on function public._return_exchange_replay(uuid, integer) is
   'RX-2 hook body: a replay''s replacement answer is the order the replacement_issued decision of that revision names, read now; never the stored key response (managers can edit it). SECURITY INVOKER, STABLE, no API EXECUTE.';
 comment on function public.change_return_replacement(uuid, integer, jsonb, text, text, jsonb) is
-  'RX-2 (plan 3.3.5; brief 22; C-1): substitution, or a new replacement after a replacement cancel. p_lines [{exchangeLineId, itemId?, quantity?}] changes approved lines (the others keep theirs); p_reason 1 to 1,000 characters (P0001 reason_required); p_when_short refuse or backorder; p_replacement {fulfillmentType?, deliveryCharterId?} overrides the fulfilment. RMA approved, received or closed (P0001 invalid_status_transition); revision current (P0001 return_changed). The live replacement is locked after the RMA and classified: undrawn is cancelled (holds released, nothing restocked) and a new order created and held in one transaction; drawn gives P0001 replacement_already_drawn; handed over (anything handed over, a resumed backorder included) P0001 replacement_handed_over; none, with lines cancelled by a replacement cancel, issues a new one. Every line sends at most its returned quantity minus what this RMA''s replacements already handed over for it (_return_exchange_fulfilled; desk check F2): the default quantity is capped there, a larger one is P0001 exchange_quantity_exceeds_return, a line with nothing left is not re-issued, and when nothing is left at all P0001 replacement_handed_over. Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), returns and orders modules (P0001 module_disabled), returns:manage (42501 returns_manage), orders:approve (42501 orders_approve), write access to the original order''s warehouse (42501 warehouse_write). Idempotent on (RMA, expected revision), scope return_replacement_change: the same change replays, another P0001 return_changed. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
+  'RX-2 (plan 3.3.5; brief 22; C-1): substitution, or a new replacement after a replacement cancel. p_lines [{exchangeLineId, itemId?, quantity?}] changes approved lines (the others keep theirs); p_reason 1 to 1,000 characters (P0001 reason_required); p_when_short refuse or backorder; p_replacement {fulfillmentType?, deliveryCharterId?} overrides the fulfilment. RMA approved, received or closed (P0001 invalid_status_transition); revision current (P0001 return_changed). The live replacement is locked after the RMA and classified: undrawn is cancelled (holds released, nothing restocked) and a new order created and held in one transaction; drawn gives P0001 replacement_already_drawn; handed over (anything handed over, a resumed backorder included) P0001 replacement_handed_over; none, with lines cancelled by a replacement cancel, issues a new one. Every line sends at most its returned quantity minus what this RMA''s replacements already handed over for it (_return_exchange_fulfilled; desk check F2): the default quantity is capped there, a larger one is P0001 exchange_quantity_exceeds_return, a line with nothing left is not re-issued, and when nothing is left at all P0001 replacement_handed_over; and at most what the original line has left to exchange (review S1: P0001 exchange_already_sent, under the lines'' budget lock after the item locks). Gates: signed in (42501 unauthenticated), member (P0002 return_not_found), returns and orders modules (P0001 module_disabled), returns:manage (42501 returns_manage), orders:approve (42501 orders_approve), write access to the original order''s warehouse (42501 warehouse_write). Idempotent on (RMA, expected revision), scope return_replacement_change: the same change replays, another P0001 return_changed. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.cancel_return_replacement(uuid, integer, text) is
   'RX-2 (plan 3.3.5; X-1, X-2): keep the return, cancel the live replacement, reason 1 to 1,000 characters (P0001 reason_required). Locked after the RMA and classified under that lock: undrawn or picked-not-handed-over is cancelled through cancel_order_request under the exchange flag (every hold released; a picked batch goes back to Staging on record); handed over, in full or in part (a resumed backorder included), gives P0001 replacement_handed_over; none answers changed false. The expected revision is required (22023 return_invalid without it); a stale one gives P0001 return_changed (desk check F7). The lines read cancelled; the RMA itself does not change. Gates as change_return_replacement. Never raises a retryable class (0367). SECURITY DEFINER, lock_timeout 5s, EXECUTE to authenticated only.';
 comment on function public.decline_return_replacement(uuid, integer, text) is
@@ -2678,7 +2909,7 @@ create unique index order_requests_live_replacement_uniq on public.order_request
 create index order_requests_replacement_idx on public.order_requests (replacement_for_return_id)
   where replacement_for_return_id is not null;
 comment on column public.order_requests.replacement_for_return_id is
-  'RX-2: the RMA this order replaces items for (an exchange replacement). Written only by the exchange functions, as postgres. authenticated holds no INSERT or UPDATE on it (column grants since 0388 and 0384); trg_zz_order_requests_replacement_link_ins refuses it on an API-role insert and trg_zz_order_requests_replacement_link_upd refuses any change for every role. At most one live (not cancelled or denied) replacement per RMA (order_requests_live_replacement_uniq).';
+  'RX-2: the RMA this order replaces items for (an exchange replacement). Written only by the exchange functions, as postgres. authenticated holds no INSERT or UPDATE on it (column grants since 0388 and 0384); trg_zz_order_requests_replacement_link_ins refuses it on an API-role insert and trg_zz_order_requests_replacement_link_upd refuses any change for every role. At most one live (not cancelled or denied) replacement per RMA (order_requests_live_replacement_uniq). A replacement''s warehouse, delivery site, created_at and close-partial change only inside an RMA function (trg_order_requests_zz_replacement_header, security review F-1).';
 
 -- ═══ 5. Triggers (plan 3.6.4-3.6.7) ════════════════════════════════════════
 create trigger trg_zz_order_requests_replacement_link_ins
@@ -2700,6 +2931,17 @@ create trigger trg_order_requests_zz_replacement_status
   for each row
   when (new.replacement_for_return_id is not null and old.status is distinct from new.status)
   execute function public.tg_order_requests_replacement_status();
+-- The header guard (security review F-1) sorts with the gate, after the
+-- transition trigger and the workflow guard. Ordinary orders never call it.
+create trigger trg_order_requests_zz_replacement_header
+  before update on public.order_requests
+  for each row
+  when (new.replacement_for_return_id is not null
+        and (old.warehouse_id is distinct from new.warehouse_id
+             or old.delivery_charter_id is distinct from new.delivery_charter_id
+             or old.created_at is distinct from new.created_at
+             or (old.status = 'backordered' and new.status = 'completed')))
+  execute function public.tg_order_requests_replacement_header();
 
 create trigger trg_zz_order_request_lines_replacement_guard
   before insert on public.order_request_lines

@@ -52,6 +52,22 @@
 #      added L (it waits on B); both finish. 12b: A's substitution to L
 #      commits after a pause; B's approval with an added L waits, then
 #      finishes.
+#  13. The denial against an ordinary order's lines (review S3, probe P2).
+#      An ordinary order inserts its line for N, pauses holding that
+#      key-share lock, then its line for K (create_order_request's one INSERT
+#      takes them row by row in payload order; split at the row boundary so
+#      the interleave is fixed); meanwhile a manager denies an RMA whose
+#      exchange lines ask for K and N. The denial issues no order, so it
+#      takes FOR KEY SHARE in id order: it never waits on the order and the
+#      order never waits on it (with FOR UPDATE it held K and waited on N
+#      while the order waited on K: 40P01).
+#  14. Two RMAs on one original line, its last unit (review S1). The line of
+#      2 had 1 unit exchanged under a cancelled RMA, so one more exchange fits.
+#      14a: A approves a return-only RMA with "Add a replacement" (N) and
+#      pauses; B creates another RMA asking to exchange the same line (navy):
+#      B waits on the line's budget lock, then is refused
+#      exchange_already_sent. 14b: the same the other way round: B's create
+#      holds, A's add waits, then is refused. Never both, never 40P01.
 #  10. No session ever sees 40001 or 40P01, nothing deadlocks, and on hand
 #      equals the sum of holdings for every fixture item.
 #
@@ -84,6 +100,9 @@ IN='03971111-0000-0000-0000-0000000000e4'
 IM2='03971111-0000-0000-0000-0000000000e5'
 ORDER='03971111-0000-0000-0000-000000000101'
 ORDER2='03971111-0000-0000-0000-000000000102'
+ORDER3='03971111-0000-0000-0000-000000000103'
+ORDER13='03971111-0000-0000-0000-000000000113'
+L3='03971111-0000-0000-0000-000000000204'
 L='03971111-0000-0000-0000-000000000201'
 L2A='03971111-0000-0000-0000-000000000202'
 L2B='03971111-0000-0000-0000-000000000203'
@@ -228,11 +247,13 @@ insert into public.inventory_items
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
-  ('$ORDER2', '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup');
+  ('$ORDER2', '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup'),
+  ('$ORDER3', '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup');
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled) values
   ('$L', '$ORDER', '$IM', 12, 0),
   ('$L2A', '$ORDER2', '$IM', 40, 40),
-  ('$L2B', '$ORDER2', '$IM2', 40, 40);
+  ('$L2B', '$ORDER2', '$IM2', 40, 40),
+  ('$L3', '$ORDER3', '$IM', 2, 2);
 SQL
 then
   echo "fixture setup failed"; exit 1
@@ -530,6 +551,73 @@ check "12b: A substituted N for L" "$(ans r12b A | jget changed mode)" "true/sub
 check "12b: B approved with the added L after A" "$(ans r12b B | jget changed status)" "true/approved"
 waited r12b "12b"
 check "12b: no session deadlocked (never 40P01); one live replacement each" "$(deadlocked r12b)/$(live_count "$RS")/$(live_count "$RA")" "0/1/1"
+
+# ═══ 13. The denial against an ordinary order's lines (review S3) ═════════
+echo "== 13. a denial (key share) against an ordinary order inserting its lines N then K"
+RD="$(new2 21 "$IK" "$IN")"
+check "13: set up (an RMA asking for K and N, still requested)" "$(status_of "$RD")/$(q "select count(*) from public.return_exchange_lines where return_id = '$RD'")" "requested/2"
+( printf '%s\n' "set application_name to '0396-race-r13-B';" "begin;" \
+    "insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type) values ('$ORDER13', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'Race order', 'pickup');" \
+    "insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values ('$ORDER13', '$IN', 1);" \
+    "select pg_sleep(3);" \
+    "insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values ('$ORDER13', '$IK', 1);" \
+    "select 'B=' || count(*) from public.order_request_lines where order_request_id = '$ORDER13';" \
+    "commit;" | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/r13.B.out" 2>&1 ) &
+P13=$!
+wait_for "0396-race-r13-B" Timeout PgSleep || bad "13: the order never paused holding its line for N"
+T0=$(now_ms)
+as_user "0396-race-r13-A" "$MGR2" "select 'R=' || public.deny_return('$RD', 'Race deny')::text;" commit > "$TMP/r13.A.out"
+T1=$(now_ms)
+wait "$P13"
+check "13: no session deadlocked or saw a retryable class (never 40P01)" "$(deadlocked r13)" "0"
+check "13: the denial went through without waiting on the order" "$(ans r13 A | jget status)/$([ $((T1 - T0)) -lt 1500 ] && echo quick || echo "waited $((T1 - T0)) ms")" "denied/quick"
+check "13: both exchange lines declined; the order kept both its lines" \
+  "$(q "select string_agg(status, ',') from public.return_exchange_lines where return_id = '$RD'")/$(sed -n 's/^B=//p' "$TMP/r13.B.out")" "declined,declined/2"
+
+# ═══ 14. Two RMAs, one original line, its last unit (review S1) ═══════════
+# L3 (2 Mediums) gets 1 unit exchanged under an RMA that is then cancelled:
+# released early, picked, staged and handed over through the real paths.
+body3() { # body3 <exchange json or empty>: one unit of L3
+  if [ -n "$1" ]; then
+    printf '{"reasonCode":"other","lines":[{"orderRequestLineId":"%s","quantity":1,"disposition":"restock","exchange":%s}]}' "$L3" "$1"
+  else
+    printf '{"reasonCode":"other","lines":[{"orderRequestLineId":"%s","quantity":1,"disposition":"restock"}]}' "$L3"
+  fi
+}
+create3_sql() { printf "select 'R=' || public.create_return_request('%s', '%s'::jsonb, '%s')::text;" "$ORDER3" "$(body3 "$2")" "$1"; }
+debt_line() { # one cancelled RMA on L3 whose replacement (L) was handed over
+  local r o
+  r="$(member_now "$(create3_sql "$(key 30)" "{\"itemId\":\"$IL\"}")" | jget returnId)"
+  check "14: set up the earlier exchange (approved, released, on a pick slip)" \
+    "$(approve_ex_now "$r")/$(release_now "$r")/$(slip_now "$(repl_of "$r")")" "approved/true/1"
+  o="$(repl_of "$r")"
+  N=$((N + 1)); as_user - "$MGR" "$(pick_sql "$o")" > "$TMP/d.$N.out"
+  q "update public.order_requests set status = 'packing_slip_generated' where id = '$o'" >/dev/null
+  q "update public.order_requests set status = 'staged_for_pickup' where id = '$o'" >/dev/null
+  N=$((N + 1)); as_user - "$MGR" "select 'R=' || (public.confirm_physical_signature('$o', 'Race tester')).status;" > "$TMP/d.$N.out"
+  check "14: set up the hand-over, then the RMA cancel (the customer kept both)" \
+    "$(order_status "$o")/$(member_now "$(cancel_sql "$r" 1)" | jget status)" "completed/cancelled"
+}
+debt_line
+
+echo "== 14a. an approval adding an exchange on L3 holds; a create asking for one on L3 waits"
+RB3="$(member_now "$(create3_sql "$(key 31)" "")" | jget returnId)"
+race r14a "$MGR" "$(add_sql "$RB3" "$IN")" commit "$MGR2" "$(create3_sql "$(key 32)" "{\"itemId\":\"$INAVY\"}")"
+check "14a: A approved with the added replacement (the line's last unit)" "$(ans r14a A | jget changed status)/$(holds_rma "$RB3")" "true/approved/1"
+check "14a: B is refused exchange_already_sent, nothing created" "$(refused r14a B P0001 exchange_already_sent)/$(q "select count(*) from public.returns where order_request_id = '$ORDER3' and status <> 'cancelled'")" "1/1/1"
+waited r14a "14a"
+check "14a: no session deadlocked (never 40P01)" "$(deadlocked r14a)" "0"
+
+echo "== 14b. a create asking for an exchange on L3 holds; an approval adding one waits"
+q "update public.order_request_lines set quantity_fulfilled = 3, quantity_requested = 3 where id = '$L3'" >/dev/null
+RB4="$(member_now "$(create3_sql "$(key 33)" "")" | jget returnId)"
+race r14b "$MGR" "$(create3_sql "$(key 34)" "{\"itemId\":\"$INAVY\"}")" commit "$MGR2" "$(add_sql "$RB4" "$IN")"
+check "14b: A created its RMA with the exchange (the line's last unit)" "$(ans r14b A | jget returnId | grep -c -- -)" "1"
+check "14b: B is refused exchange_already_sent, its RMA still requested" "$(refused r14b B P0001 exchange_already_sent)/$(status_of "$RB4")" "1/1/requested"
+waited r14b "14b"
+check "14b: no session deadlocked (never 40P01)" "$(deadlocked r14b)" "0"
+check "14: L3 never had more exchange claims than units (1 handed over under the cancelled RMA + one claim per later line)" \
+  "$(q "select count(*) from public.return_exchange_lines xl join public.return_lines rl on rl.id = xl.return_line_id join public.returns r on r.id = rl.return_id where rl.order_request_line_id = '$L3' and r.status <> 'cancelled' and xl.status in ('requested', 'approved', 'cancelled')")" "2"
 
 # ═══ 10. No retryable SQLSTATE; holdings equal on hand ════════════════════
 echo "== 10. no 40001 / 40P01, no deadlock; on hand = the sum of holdings"

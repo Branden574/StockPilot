@@ -817,10 +817,15 @@ select is(
   -- status changes) sorts after the transition trigger and this guard, so an
   -- illegal edge or a forbidden caller is reported first; the link guard
   -- (WHEN the link changes) sorts last. Neither fires for an ordinary order.
+  -- Re-pinned by 0396's review fix (security F-1): the replacement header
+  -- guard (trg_order_requests_zz_replacement_header, WHEN a replacement's
+  -- warehouse, site, created_at or close-partial changes) sorts beside the
+  -- gate, after the transition trigger and this guard; it never fires for
+  -- an ordinary order either.
   array['order_requests_set_updated_at', 'trg_order_requests_requester_deleted', 'trg_order_requests_validate_transition',
-        'trg_order_requests_workflow_guard', 'trg_order_requests_zz_replacement_status',
+        'trg_order_requests_workflow_guard', 'trg_order_requests_zz_replacement_header', 'trg_order_requests_zz_replacement_status',
         'trg_zz_order_requests_replacement_link_upd'],
-  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0396 gate and link guard after both');
+  'AL10c: the BEFORE UPDATE row triggers fire in this order (by name): the transition trigger before the guard, the 0396 header guard, gate and link guard after both');
 select is(
   (select md5(string_agg(t.tgname::text || '|' || t.tgfoid::regproc::text || '|' || t.tgenabled::text || '|' || t.tgtype::text, E'\n' order by t.tgname))
           || '|' || count(*)
@@ -837,8 +842,12 @@ select is(
   -- row (a WHEN clause does not change tgtype). Computed from production's own
   -- seven rows (which reproduce f92aca15...|7) with the four rows added
   -- (2026-10-05); verify on the stack.
-  '9f4a500a040a0d15a7dd4c32c8aeabda|11',
-  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0396''s four replacement triggers (census e6ea64a2...|5 plus six rows)');
+  -- Re-pinned by 0396's review fix (was 9f4a500a040a0d15a7dd4c32c8aeabda|11):
+  -- plus trg_order_requests_zz_replacement_header (BEFORE UPDATE, 19, WHEN a
+  -- replacement's warehouse, site, created_at or close-partial changes;
+  -- security review F-1). Computed on the local stack, 2026-10-06.
+  '5523a443798c313b845dede0ad83448f|12',
+  'AL10d: order_requests carries exactly its five earlier triggers, the guard, 0388''s marker trigger and 0396''s five replacement triggers (census e6ea64a2...|5 plus seven rows)');
 select is(
   coalesce(obj_description('public.tg_order_requests_workflow_guard()'::regprocedure, 'pg_proc') ~ '0387', false)::text || ','
   || coalesce(col_description('public.order_requests'::regclass,

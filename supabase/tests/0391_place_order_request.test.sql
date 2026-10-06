@@ -977,16 +977,18 @@ select is(
   -- Re-pinned by 0396 (returns RX-2): plus the replacement guard on
   -- order_request_lines and the four replacement triggers on order_requests
   -- (each WHEN-gated or returning at once for an ordinary order; the 0391
-  -- writers create ordinary orders only).
+  -- writers create ordinary orders only). Re-pinned by 0396's review fix:
+  -- plus the replacement header guard (security F-1), WHEN-gated the same way.
   'notifications:trg_notifications_dispatch_push,order_request_lines:trg_zz_order_request_lines_guard,'
   'order_request_lines:trg_zz_order_request_lines_replacement_guard,'
   'order_requests:order_requests_set_updated_at,order_requests:trg_assign_order_request_number,order_requests:trg_order_requests_notify,'
   'order_requests:trg_order_requests_notify_replacement,'
   'order_requests:trg_order_requests_requester_deleted,order_requests:trg_order_requests_validate_transition,'
-  'order_requests:trg_order_requests_workflow_guard,order_requests:trg_order_requests_zz_replacement_status,'
+  'order_requests:trg_order_requests_workflow_guard,order_requests:trg_order_requests_zz_replacement_header,'
+  'order_requests:trg_order_requests_zz_replacement_status,'
   'order_requests:trg_zz_order_requests_insert_guard,'
   'order_requests:trg_zz_order_requests_replacement_link_ins,order_requests:trg_zz_order_requests_replacement_link_upd',
-  'Z4: the triggers on order_requests (7, plus 0396''s four for replacements), order_request_lines (1, plus 0396''s replacement guard) and notifications (1) are as pinned, and order_submissions has none');
+  'Z4: the triggers on order_requests (7, plus 0396''s five for replacements), order_request_lines (1, plus 0396''s replacement guard) and notifications (1) are as pinned, and order_submissions has none');
 
 select * from finish();
 rollback;
