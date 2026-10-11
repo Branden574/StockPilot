@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -212,6 +212,20 @@ vi.mock('@/server/services/warehouses', () => ({
       return [];
     }
   },
+}));
+
+// Ungroup (0399): the shared-SKU note and Make this its own item. The count
+// of other records the viewer can see with this SKU is 0 unless a test sets it.
+const skuSiblings = vi.hoisted(() => ({ count: 0 as number | null }));
+vi.mock('@/server/services/item-grouping', () => ({
+  ItemGroupingService: class {
+    async countSkuSiblings() {
+      return skuSiblings.count;
+    }
+  },
+}));
+vi.mock('@/components/inventory/make-own-item-button', () => ({
+  MakeOwnItemButton: ({ itemId }: { itemId: string }) => <button type="button">make-own:{itemId}</button>,
 }));
 
 import { ItemDetail } from './item-detail';
@@ -432,5 +446,49 @@ describe('ItemDetail host — Count this item (F1-2)', () => {
       await renderItemDetail();
     }
     expect(countThisItem.props).not.toHaveBeenCalled();
+  });
+});
+
+describe('ItemDetail: a SKU other records share (Ungroup, 0399)', () => {
+  beforeEach(() => {
+    skuSiblings.count = 0;
+  });
+
+  it('says how many other records the viewer can see share the SKU, and offers Make this its own item to an editor', async () => {
+    skuSiblings.count = 1;
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
+    await renderItemDetail();
+    expect(
+      screen.getByText(
+        'SKU HVAC-WALL-204 is also used by 1 other record you can see. Editing the name, SKU, cost, price or category changes all of them.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: `make-own:${ITEM_ID}` })).toBeTruthy();
+  });
+
+  it('a viewer who cannot edit items reads the note but gets no button', async () => {
+    skuSiblings.count = 2;
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set<string>() };
+    await renderItemDetail();
+    expect(screen.getByText(/is also used by 2 other records you can see/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /make-own:/ })).toBeNull();
+  });
+
+  it('a kit or a product-family member says why it keeps its SKU instead of offering the button', async () => {
+    skuSiblings.count = 1;
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
+    inventoryGet.mockResolvedValue(itemFixture({ is_bundle: true }));
+    await renderItemDetail();
+    expect(screen.getByText("Kits keep their SKU and can't be ungrouped.")).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /make-own:/ })).toBeNull();
+  });
+
+  it('no note when no other record the viewer can see shares the SKU, or when the count could not be read', async () => {
+    skuSiblings.count = 0;
+    await renderItemDetail();
+    expect(screen.queryByText(/is also used by/)).toBeNull();
+    skuSiblings.count = null;
+    await renderItemDetail();
+    expect(screen.queryByText(/is also used by/)).toBeNull();
   });
 });

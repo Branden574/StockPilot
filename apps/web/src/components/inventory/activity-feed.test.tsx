@@ -536,3 +536,29 @@ describe('ActivityFeed', () => {
     expect(container.textContent).toContain(absolute);
   });
 });
+
+describe('ActivityFeed: Ungroup (0399)', () => {
+  it('labels inventory.item.ungrouped plainly and shows the SKU it left and the one it got', () => {
+    render(
+      <ActivityFeed
+        events={[
+          makeEvent({
+            id: 'u1',
+            kind: 'audit',
+            type: 'inventory.item.ungrouped',
+            metadata: {
+              entity_type: 'inventory_item',
+              before: { sku: 'SP-IIHH8-AZCSKHS' },
+              after: { sku: 'SP-JAMFW-6XMMS9J' },
+              left_sku: 'SP-IIHH8-AZCSKHS',
+              anchor_item_id: null,
+              barcode_kept: false,
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText('Made its own item')).toBeInTheDocument();
+    expect(screen.getAllByText(/SP-JAMFW-6XMMS9J/).length).toBeGreaterThan(0);
+  });
+});

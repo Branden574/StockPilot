@@ -300,3 +300,59 @@ describe('ItemGroupingService.previewSplit', () => {
     await expect(svc.previewSplit([])).resolves.toEqual({ candidates: [] });
   });
 });
+
+describe('ItemGroupingService.countSkuSiblings', () => {
+  it('counts the OTHER live records with the same raw SKU that the caller can read (head count, RLS client)', async () => {
+    const calls: Array<{ cols: string; opts: unknown; filters: Array<[string, string, unknown]> }> =
+      [];
+    const supabase = {
+      from: () => {
+        const call = {
+          cols: '',
+          opts: undefined as unknown,
+          filters: [] as Array<[string, string, unknown]>,
+        };
+        calls.push(call);
+        const q: Record<string, unknown> = {};
+        q.select = (cols: string, opts: unknown) => ((call.cols = cols), (call.opts = opts), q);
+        for (const op of ['eq', 'is', 'neq'] as const) {
+          q[op] = (c: string, v: unknown) => (call.filters.push([op, c, v]), q);
+        }
+        (q as { then: unknown }).then = (res: (v: unknown) => unknown) =>
+          res({ count: 2, error: null });
+        return q;
+      },
+    };
+    const svc = new ItemGroupingService({ organizationId: ORG, userId: ME, supabase } as never);
+    expect(await svc.countSkuSiblings(A, 'SP-PAIR')).toBe(2);
+    expect(calls[0]).toEqual({
+      cols: 'id',
+      opts: { count: 'exact', head: true },
+      filters: [
+        ['eq', 'organization_id', ORG],
+        ['eq', 'sku', 'SP-PAIR'],
+        ['is', 'deleted_at', null],
+        ['neq', 'id', A],
+      ],
+    });
+  });
+
+  it('a blank SKU never groups (0 without a read); a failed read is null, never a guess', async () => {
+    const failing = {
+      from: () => {
+        const q: Record<string, unknown> = {};
+        for (const m of ['select', 'eq', 'is', 'neq']) q[m] = () => q;
+        (q as { then: unknown }).then = (res: (v: unknown) => unknown) =>
+          res({ count: null, error: { message: 'boom' } });
+        return q;
+      },
+    };
+    const svc = new ItemGroupingService({
+      organizationId: ORG,
+      userId: ME,
+      supabase: failing,
+    } as never);
+    expect(await svc.countSkuSiblings(A, '   ')).toBe(0);
+    expect(await svc.countSkuSiblings(A, 'SP-PAIR')).toBeNull();
+  });
+});

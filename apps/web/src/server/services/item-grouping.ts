@@ -172,6 +172,26 @@ export class ItemGroupingService {
   }
 
   /**
+   * How many OTHER live records with this record's raw SKU the caller can
+   * read (their own RLS: hidden records are never counted, design 5). For the
+   * item page's shared-SKU note and the edit form's banner. 0 for a blank SKU
+   * (it never groups); null when the read failed (say nothing, never guess).
+   */
+  async countSkuSiblings(itemId: string, sku: string | null | undefined): Promise<number | null> {
+    const key = sharedSkuKey(sku);
+    if (!key) return 0;
+    const { count, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('sku', key)
+      .is('deleted_at', null)
+      .neq('id', itemId);
+    if (error) return null;
+    return count ?? 0;
+  }
+
+  /**
    * Ungroup: split_item_sku with the body the screen built (core
    * SplitSkuBody). The organization and the account must be the ones this
    * request runs as (a pending retry from another workspace or account on a

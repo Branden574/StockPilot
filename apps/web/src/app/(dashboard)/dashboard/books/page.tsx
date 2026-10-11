@@ -293,6 +293,8 @@ async function booksTableSection({
   // Public-catalog visibility (P3): spec requires books get the identical
   // bulk "Set public visibility" action; the server action re-asserts.
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
+  // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
+  const canUngroup = can(sessionCtx, 'items:update');
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -373,6 +375,7 @@ async function booksTableSection({
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
+        canUngroup={canUngroup}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -604,6 +607,7 @@ async function booksTableSection({
       lookups={lookups}
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
+      canUngroup={canUngroup}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

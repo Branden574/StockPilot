@@ -3,6 +3,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { Controller, useForm, type FieldErrors, type Resolver } from 'react-hook-form';
@@ -78,6 +79,7 @@ import {
   normalizeRackFields,
   requiredAttributeProblems,
   resolveSubcategoryProfile,
+  sharedSkuBannerCopy,
   sizePlaceholder,
   type ActionError,
   type ApparelAlphaSize,
@@ -281,6 +283,16 @@ interface ItemFormProps {
   initialPublicDisplayName?: string | null;
   /** The item's stored public_description (edit mode). */
   initialPublicDescription?: string | null;
+  /**
+   * Edit mode (Ungroup, 0399): how many OTHER live records the editor can see
+   * carry this record's SKU. When one or more do, the form says plainly that
+   * saving a shared field (the SKU among them) changes all of them, and points
+   * to Make this its own item on the item page. Records the editor cannot see
+   * are never counted. Default 0: the generic notes, as before.
+   */
+  sharedSkuOthers?: number;
+  /** The item page (where Make this its own item is), for the banner's link. */
+  itemPageHref?: string;
 }
 
 export function ItemForm({
@@ -310,6 +322,8 @@ export function ItemForm({
   initialPublicVisibility = 'internal_only',
   initialPublicDisplayName = null,
   initialPublicDescription = null,
+  sharedSkuOthers = 0,
+  itemPageHref,
 }: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
@@ -478,6 +492,7 @@ export function ItemForm({
   }, [isEdit, defaults?.quantityOnHand, setValue]);
 
   const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
+  const sharedSkuBanner = isEdit ? sharedSkuBannerCopy(sharedSkuOthers) : null;
   const cfDefault = (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
   const [author, setAuthor] = React.useState<string>(isBook ? String(cfDefault.author ?? '') : '');
   // Rack number / row inputs. Books write to custom_fields.book_rack_*
@@ -798,6 +813,15 @@ export function ItemForm({
     const field = error.details?.field;
     if (sportsFieldsShown && isRequiredAttributeField(field)) {
       setError(field, { type: 'server', message: error.message }, { shouldFocus: true });
+    }
+    // A SKU already used in the same charter and rack: the server names the
+    // record holding it when the editor can read it; offer to open it.
+    const openHref = skuTakenOpenHref(error, isBook);
+    if (openHref) {
+      toast.error(error.message, {
+        action: { label: 'Open it', onClick: () => router.push(openHref) },
+      });
+      return;
     }
     toast.error(error.message);
   }
@@ -1546,6 +1570,20 @@ export function ItemForm({
       className="space-y-6"
       noValidate
     >
+      {isEdit && sharedSkuBanner ? (
+        <div
+          role="note"
+          className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-[12px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <p>{sharedSkuBanner}</p>
+          {itemPageHref ? (
+            <Link href={itemPageHref} className="mt-1 inline-block font-medium underline">
+              Open the item page
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
       {!isEdit && (
         <Section title="Photos">
           <p className="text-muted-foreground text-xs">
@@ -1624,7 +1662,7 @@ export function ItemForm({
       )}
 
       <Section title="Basics">
-        <SharedFieldsNote />
+        <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
         <Field label="Name" error={errors.name?.message}>
           <Input placeholder="Wireless mouse" autoFocus {...register('name')} />
         </Field>
@@ -1721,7 +1759,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Classification">
-        <SharedFieldsNote />
+        <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Item type</Label>
@@ -2155,7 +2193,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Pricing & stock">
-        <SharedFieldsNote />
+        <SharedFieldsNote others={isEdit ? sharedSkuOthers : 0} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Unit cost" error={errors.unitCost?.message}>
             <Controller
@@ -2553,13 +2591,36 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * These two notes just label which group a field belongs to; they don't
  * change any submit/propagation behavior.
  */
-function SharedFieldsNote() {
+function SharedFieldsNote({ others = 0 }: { others?: number }) {
+  // With other records sharing the SKU (the editor can see them), say how
+  // many and that saving changes all of them (Ungroup's wording item).
+  if (others > 0) {
+    return (
+      <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
+        <span className="text-foreground font-medium">
+          {`Shared with ${others} other record${others === 1 ? ' that uses' : 's that use'} this SKU`}
+        </span>
+        {' — saving these fields changes all of them.'}
+      </p>
+    );
+  }
   return (
     <p className="border-border bg-muted/30 text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[11.5px]">
       <span className="text-foreground font-medium">Shared across all placements of this SKU</span>
       {' — editing here updates every rack/charter this item lives in.'}
     </p>
   );
+}
+
+/**
+ * Where "Open it" goes after a refused save: the record that already holds
+ * the SKU in the same charter and rack (InventoryService's sku_taken refusal
+ * carries its id only when the editor can read it). Null otherwise.
+ */
+export function skuTakenOpenHref(error: ActionError, isBook: boolean): string | null {
+  const id = error.details?.conflictItemId;
+  if (error.details?.reason !== 'sku_taken' || typeof id !== 'string' || !id) return null;
+  return `${isBook ? '/dashboard/books' : '/dashboard/inventory'}/${id}`;
 }
 
 function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {

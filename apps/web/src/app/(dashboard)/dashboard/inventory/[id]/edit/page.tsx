@@ -13,6 +13,7 @@ import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
+import { ItemGroupingService } from '@/server/services/item-grouping';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
@@ -78,6 +79,13 @@ export default async function EditItemPage({
     throw e;
   }
 
+  // Ungroup (0399): how many OTHER records the editor can see share this
+  // record's SKU, for the form's banner (saving a shared field changes them
+  // all). Its own read, off the critical path; a failed read says nothing.
+  const skuSiblingsRead = ItemGroupingService.forCurrentUser()
+    .then((svc) => svc.countSkuSiblings(id, (item.sku as string | null) ?? null))
+    .catch(() => null);
+
   const [
     categories,
     locations,
@@ -101,6 +109,7 @@ export default async function EditItemPage({
   ]);
 
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  const skuSiblings = await skuSiblingsRead;
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -213,6 +222,8 @@ export default async function EditItemPage({
             customFieldDefs={customFieldDefs}
             lotSerialEnabled={lotSerialEnabled}
             canManagePublicVisibility={can(ctx, 'public_links:manage')}
+            sharedSkuOthers={skuSiblings ?? 0}
+            itemPageHref={`/dashboard/inventory/${id}`}
             initialPublicVisibility={
               ((item as { public_visibility?: string | null }).public_visibility ??
                 'internal_only') as 'internal_only' | 'public' | 'hidden'

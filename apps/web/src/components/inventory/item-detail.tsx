@@ -14,6 +14,7 @@ import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown
 import { StockAvailabilityLine } from '@/components/inventory/stock-availability-line';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
+import { MakeOwnItemButton } from '@/components/inventory/make-own-item-button';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
 // ImageLightbox) and only renders on the Photos tab — lazy-load
 // the chunk so it stays out of the initial item-detail bundle.
@@ -52,6 +53,7 @@ import { ActivityService, auditLimitFor, type ActivityEvent } from '@/server/ser
 import { isModuleEnabled, ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
+import { ItemGroupingService } from '@/server/services/item-grouping';
 import { ItemImagesService } from '@/server/services/item-images';
 import {
   toDestinationOption,
@@ -71,10 +73,12 @@ import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 import {
   can,
+  GROUPING_ERROR_WORDS,
   holdingsContradictRack,
   isCountableItem,
   isLikelyIsbn,
   isManagerOrAbove,
+  sharedSkuNoteCopy,
   type CustomFieldDefinition,
   type ItemElsewhere,
   type Role,
@@ -333,6 +337,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     serialWarehouses,
     marketPriceObs,
     writableWarehouseIds,
+    skuSiblings,
   ] = await Promise.all([
     categoryIdForFetch
       ? ctx.supabase
@@ -386,6 +391,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           .catch(() => null)
       : Promise.resolve(null),
     destinationScopeRead,
+    // Ungroup (0399): how many OTHER records the viewer can see carry this SKU,
+    // for the note under the SKU and Make this its own item. Needs the row's
+    // SKU, so it starts with the other row-keyed reads; the header shows it on
+    // every tab. A failed read says nothing (null), never fails the page.
+    new ItemGroupingService(ctx)
+      .countSkuSiblings(id, (item.sku as string | null) ?? null)
+      .catch(() => null),
   ]);
 
   // ── Stock in warehouses the caller cannot see (0371) ────────────────
@@ -604,6 +616,29 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
             <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
               {item.sku as string}
             </p>
+            {(() => {
+              // Ungroup (0399): an honest note when other records the viewer
+              // can see share this SKU (edits of the shared fields change them
+              // all), and the way to change this record alone.
+              const note = skuSiblings ? sharedSkuNoteCopy(skuSiblings, item.sku as string) : null;
+              if (!note) return null;
+              const isKit = (item as { is_bundle?: boolean | null }).is_bundle === true;
+              const inFamily = (item as { group_id?: string | null }).group_id != null;
+              return (
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <p className="text-muted-foreground text-xs">{note}</p>
+                  {canEditItem ? (
+                    isKit ? (
+                      <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.kit}</p>
+                    ) : inFamily ? (
+                      <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.family}</p>
+                    ) : (
+                      <MakeOwnItemButton itemId={id} />
+                    )
+                  ) : null}
+                </div>
+              );
+            })()}
           </div>
           {/*
             Action buttons: on small screens, scroll horizontally as a
