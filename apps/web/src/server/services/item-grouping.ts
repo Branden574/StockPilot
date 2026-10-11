@@ -123,6 +123,7 @@ export class ItemGroupingService {
       .from('inventory_items')
       .select('id, sku')
       .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: at most GROUPING_MAX_ITEMS (100) ids, refused above
       .in('id', ids)
       .is('deleted_at', null);
     if (selErr) throw new ServiceError('internal_error', selErr.message);
@@ -143,6 +144,7 @@ export class ItemGroupingService {
          warehouse:warehouses!warehouse_id (name)`,
       )
       .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: one SKU per selected record at most, so 100 or fewer
       .in('sku', skus)
       .is('deleted_at', null)
       .order('created_at', { ascending: true })
