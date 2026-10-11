@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Pressable, useWindowDimensions, View } from 'react-native';
 
 import { RETURNS_COPY } from '@stockpilot/core';
 
@@ -20,7 +20,9 @@ import { useTheme } from '@/lib/use-theme';
  * A local choice, like the review's radios: it works offline (sending needs a
  * connection). Each button is a 44 pt target with its own name ("Increase the
  * replacement quantity for Walk Exchange Tee - M"), the number is announced
- * as it changes, and past the AX threshold (shouldStackRow) the label sits
+ * after each step (announceForAccessibility: iOS VoiceOver ignores
+ * accessibilityLiveRegion, which only Android reads; fix round 1,
+ * verification L10), and past the AX threshold (shouldStackRow) the label sits
  * above the stepper so the row never runs out of width. The glyphs are
  * control labels, capped at the control ceiling.
  */
@@ -45,7 +47,11 @@ export function ReplacementQuantityStepper({
 
   const stepButton = (glyph: string, delta: number, off: boolean) => (
     <Pressable
-      onPress={() => onChange(stepReplacementQuantity(value, delta, max))}
+      onPress={() => {
+        const next = stepReplacementQuantity(value, delta, max);
+        onChange(next);
+        if (next !== value) AccessibilityInfo.announceForAccessibility(`${RETURNS_COPY.replacementQuantity}: ${next}`);
+      }}
       disabled={off}
       accessibilityRole="button"
       accessibilityLabel={replacementQuantityStepLabel(delta, label)}

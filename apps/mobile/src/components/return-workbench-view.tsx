@@ -325,7 +325,7 @@ export function ReturnWorkbenchView({
               >
                 {busy && (actions.primary === 'receive' || actions.primary === 'get_replacement_ready')
                   ? 'Saving…'
-                  : actionLabel(actions.primary, { hasExchange })}
+                  : actionLabel(actions.primary, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}
               </Button>
             ) : null}
             {actionHelp(actions.primary) ? (
@@ -344,7 +344,7 @@ export function ReturnWorkbenchView({
                     accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}
                     onPress={() => onAction(a)}
                   >
-                    {actionLabel(a, { hasExchange })}
+                    {actionLabel(a, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}
                   </Button>
                 ))}
               </View>
@@ -379,7 +379,7 @@ export function ReturnWorkbenchView({
 
         {hasExchange ? (
           <>
-            <Eyebrow>{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
             <Card padding={14}>
               <View style={{ gap: 6 }}>
                 {ex.rail.length > 0 ? (
@@ -414,7 +414,7 @@ export function ReturnWorkbenchView({
           </>
         ) : null}
 
-        <Eyebrow>{RETURNS_COPY.returning}</Eyebrow>
+        <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
         <View style={compact ? { gap: 10 } : styles.cards}>
           {wb.lines.map((l) => {
             const name = l.item.name ?? 'Deleted item';
@@ -506,7 +506,7 @@ export function ReturnWorkbenchView({
           </Card>
         ) : null}
 
-        <Eyebrow>HISTORY</Eyebrow>
+        <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
         <Card padding={14}>
           <View style={{ gap: 10 }}>
             {wb.chain.length === 0 ? (

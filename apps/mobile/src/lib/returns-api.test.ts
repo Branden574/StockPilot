@@ -131,7 +131,11 @@ describe('the exchange refusals 0396 adds (review fixes S1 and S2)', () => {
 
   it('replacement_in_progress says to hand it over or cancel the replacement first', () => {
     const e = new apiMock.ApiError('x', 409, 'conflict', { reason: 'replacement_in_progress', detail: 'picking_complete' });
-    expect(describeReturnError(e)).toBe('The replacement is already picked or on its way. Hand it over, or cancel the replacement first.');
+    // Re-pinned by fix round 1 (verification V5; claim kept): the cancel is
+    // offered only when none of the replacement was handed over.
+    expect(describeReturnError(e)).toBe(
+      'The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',
+    );
     expect(returnErrorReason(e)).toBe('replacement_in_progress');
   });
 });

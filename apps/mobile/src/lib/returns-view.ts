@@ -31,6 +31,7 @@ import {
   replacementLineSummary,
   replacementRmaLinkLabel,
   replacementShortItems,
+  replacementCancelledLines,
   replacementShortLine,
   returnActionLabel,
   shortLabel,
@@ -169,8 +170,34 @@ export function workbenchActions(
   };
 }
 
-export function actionLabel(action: ReturnAction, opts: { hasExchange?: boolean } = {}): string {
-  return opts.hasExchange ? returnActionLabel(action, { hasExchange: true }) : RETURN_ACTION_LABELS[action];
+/** The button words; a viewer who can only decline the exchange approves the
+ *  return (fix round 1, verification L3: core's returnActionLabel). */
+export function actionLabel(action: ReturnAction, opts: { hasExchange?: boolean; canApproveOrders?: boolean } = {}): string {
+  return opts.hasExchange
+    ? returnActionLabel(action, { hasExchange: true, canApproveOrders: opts.canApproveOrders })
+    : RETURN_ACTION_LABELS[action];
+}
+
+/** The live replacement's status as the sheet shows it, sent with Cancel
+ *  replacement: the server refuses (return_changed) one picked or sent since
+ *  (fix round 1, verification V1). Null when none is shown. */
+export function shownReplacementStatus(wb: { exchange?: MobileReturnExchange | null }): string | null {
+  const shown = exchangeOf(wb).replacement;
+  return shown?.live ? shown.status : null;
+}
+
+/** The notice after Cancel replacement, from the answer: what to do with what
+ *  was picked or sent (core's words; the notice is an announced alert). */
+export function cancelReplacementMessage(answer: { changed: boolean; drawn?: boolean; inTransit?: boolean }): string {
+  return replacementCancelledLines(answer).join(' ');
+}
+
+/** The short block's backorder button for the sheet's mode (fix round 1,
+ *  verification L1): nothing is approved in a change or a re-issue. */
+export function shortBackorderLabel(mode: string): string {
+  if (mode === 'change_replacement') return RETURNS_COPY.changeReplacementOnBackorder;
+  if (mode === 'issue_replacement') return RETURNS_COPY.issueReplacementOnBackorder;
+  return RETURNS_COPY.approveReplacementOnBackorder;
 }
 
 /**
@@ -607,12 +634,18 @@ export function shortItemLabel(
   reviews: Record<string, ExchangeReviewState>,
   adds: Record<string, { itemId: string | null; label?: string | null } | null>,
   itemId: string,
+  // Fix round 1 (verification L1): Change replacement's and Issue a new
+  // replacement's own picks, with the picked row's label.
+  picks: Record<string, { itemId: string | null; label?: string | null }> = {},
 ): string {
   for (const v of Object.values(reviews)) {
     if (v.kind === 'change' && v.itemId === itemId && v.label) return v.label;
   }
   for (const a of Object.values(adds)) {
     if (a && a.itemId === itemId && a.label) return a.label;
+  }
+  for (const p of Object.values(picks)) {
+    if (p.itemId === itemId && p.label) return p.label;
   }
   return exchangeItemLabel(wb, itemId);
 }
@@ -733,6 +766,10 @@ export interface MobileOrderReplacement {
   revision: number | null;
   canOpenReturn: boolean;
   canReleaseEarly: boolean;
+  /** The viewer may change and cancel it (returns:manage and orders:approve):
+   *  the RMA link reads "Change or cancel in RMA-…" only then (fix round 1,
+   *  verification L5). Absent from an older server. */
+  canChangeReplacement?: boolean;
   slipLine: string;
   driverLine: string | null;
   /** What this order holds now (its active holds), from a server with review
@@ -805,7 +842,9 @@ export function replacementPickBlocked(info: Pick<MobileOrderReplacement, 'waiti
  * The link that opens the RMA: "Change or cancel in RMA-…" while the
  * replacement is still to be handed over, "Open RMA-…" once it was.
  */
-export function changeInRmaLabel(info: Pick<MobileOrderReplacement, 'returnNumber' | 'live' | 'handedOver'>): string {
+export function changeInRmaLabel(
+  info: Pick<MobileOrderReplacement, 'returnNumber' | 'live' | 'handedOver' | 'canChangeReplacement'>,
+): string {
   return replacementRmaLinkLabel(info);
 }
 

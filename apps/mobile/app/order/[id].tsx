@@ -163,7 +163,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
-import { focusScrollY, initialSignArrival, orderScreenFocus, stepSignatureOnArrival } from '@/lib/order-focus';
+import { focusScrollY, initialSignArrival, orderScreenFocus, physicalSignatureTitle, stepSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
@@ -1842,7 +1842,8 @@ export default function OrderDetail() {
 
   function promptPhysicalSignature() {
     Alert.prompt(
-      'Physical signature',
+      // Fix round 1 (verification V-2): the prompt names the order it records.
+      physicalSignatureTitle(order?.orderNumber),
       "Customer signed on paper? Enter the signer's name — this completes the hand-over exactly like the digital sign page (backordering any still-owed items).",
       [
         { text: 'Cancel', style: 'cancel' },
@@ -2136,6 +2137,8 @@ export default function OrderDetail() {
       focus,
       focused: screenInFront,
       loaded: loadedOrder !== null,
+      // Fix round 1 (verification V-2): only a live exchange replacement.
+      replacement: loadedOrder?.replacement?.live === true,
       offered: managerActions.physicalSignature,
       online: !offline,
       busy: acting !== null,
@@ -4124,7 +4127,10 @@ export default function OrderDetail() {
             </ScrollView>
 
             {returnError ? (
-              <Mono size={11} color="#b42318">{returnError}</Mono>
+              // Verification L7 (pattern 20): announced to VoiceOver.
+              <Mono size={11} color="#b42318" accessibilityRole="alert">
+                {returnError}
+              </Mono>
             ) : null}
             {offline ? (
               <Body size={12} color={c.ink3}>

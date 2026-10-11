@@ -5,6 +5,7 @@ import {
   focusScrollY,
   initialSignArrival,
   orderScreenFocus,
+  physicalSignatureTitle,
   stepSignatureOnArrival,
 } from './order-focus';
 
@@ -35,7 +36,9 @@ describe('?focus=sign: the paper signature on arrival (returns RX-2 counter taps
   // kept): the focus-blind shouldOpenSignatureOnArrival is retired for
   // stepSignatureOnArrival, which also needs the screen in front and the
   // person who tapped Hand over (below).
-  const ready = { focus: 'sign', focused: true, loaded: true, offered: true, online: true, busy: false, userId: 'mgr' };
+  // Re-pinned by fix round 1 (verification V-2; claims kept): the loaded
+  // order must be a live exchange replacement, the only order Hand over opens.
+  const ready = { focus: 'sign', focused: true, loaded: true, offered: true, online: true, busy: false, userId: 'mgr', replacement: true };
   const opens = (input: typeof ready | Record<string, unknown>) =>
     stepSignatureOnArrival(initialSignArrival('mgr'), { ...ready, ...input } as typeof ready).open;
 
@@ -71,7 +74,7 @@ describe('?focus=sign: the paper signature on arrival (returns RX-2 counter taps
 // front for the same person, and is spent for good once they leave it or
 // someone else is signed in.
 describe('?focus=sign belongs to the screen in front and to who tapped Hand over (simulator fault)', () => {
-  const on = { focus: 'sign', focused: true, loaded: true, offered: true, online: true, busy: false, userId: 'mgr' };
+  const on = { focus: 'sign', focused: true, loaded: true, offered: true, online: true, busy: false, userId: 'mgr', replacement: true };
 
   it('replays the fault: staff arrives (not offered), leaves the screen, a manager signs in: never opens', () => {
     let s = initialSignArrival('staff');
@@ -127,5 +130,29 @@ describe('?focus=sign belongs to the screen in front and to who tapped Hand over
     for (const focus of ['approve', 'actions', undefined, 'SIGN', 1]) {
       expect(stepSignatureOnArrival(initialSignArrival('mgr'), { ...on, focus }).open, String(focus)).toBe(false);
     }
+  });
+});
+
+// Fix round 1 (verification V-2): ?focus=sign comes only from an RMA's Hand
+// over, so it is honoured only on a live exchange replacement; a link to any
+// other order never opens the paper signature, and the prompt names the order.
+describe('?focus=sign only on an exchange replacement, naming the order (verification V-2)', () => {
+  const on = { focus: 'sign', focused: true, loaded: true, offered: true, online: true, busy: false, userId: 'mgr', replacement: true };
+
+  it('another order never opens it, and the request is spent once it loaded', () => {
+    let r = stepSignatureOnArrival(initialSignArrival('mgr'), { ...on, replacement: false });
+    expect(r.open).toBe(false);
+    r = stepSignatureOnArrival(r.state, { ...on, replacement: false });
+    expect(r.open).toBe(false);
+    expect(r.state.phase).toBe('done');
+    // Still loading: not decided yet.
+    const loading = stepSignatureOnArrival(initialSignArrival('mgr'), { ...on, loaded: false, replacement: false });
+    expect(loading.state.phase).toBe('pending');
+    expect(stepSignatureOnArrival(loading.state, on).open).toBe(true);
+  });
+
+  it('the prompt names the order', () => {
+    expect(physicalSignatureTitle(123)).toBe('Physical signature for SO-000123');
+    expect(physicalSignatureTitle(null)).toBe('Physical signature');
   });
 });

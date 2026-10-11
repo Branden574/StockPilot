@@ -62,6 +62,7 @@ import {
 import {
   allChoicesOffered,
   approvalDecision,
+  cancelReplacementMessage,
   changedDecisions,
   choiceFor,
   choiceProblems,
@@ -81,8 +82,10 @@ import {
   refusalRefreshesWorkbench,
   replacementQuantityMax,
   reviewsForShortChange,
+  shortBackorderLabel,
   shortItemLabel,
   shortSentences,
+  shownReplacementStatus,
   stepOutcomeMessage,
   whatHappensLines,
 } from '@/lib/returns-view';
@@ -208,7 +211,7 @@ function SheetContent({
   const [reviews, setReviews] = React.useState<Record<string, ExchangeReviewState>>({});
   const [adds, setAdds] = React.useState<Record<string, AddState>>({});
   const [shortDetail, setShortDetail] = React.useState<unknown>(null);
-  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number }>>({});
+  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number; label?: string }>>({});
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
@@ -313,7 +316,7 @@ function SheetContent({
                 : `At most ${reasonMax} characters.`
               : null;
   const canSubmit = disabledReason === null && !submitting;
-  const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id));
+  const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id, picks));
 
   // Review fix P7: after a short refusal, "Change replacement" switches each
   // short line's review to Change replacement (its picker opens) and scrolls
@@ -334,9 +337,11 @@ function SheetContent({
   const loaderFor = (orderRequestLineId: string) => (q: string) => getReturnCandidates(wb.return.id, orderRequestLineId, q);
 
   const hasExchange = ex.kind === 'exchange';
+  // Verification L3: a viewer who can only decline the exchange approves the return.
+  const approvesExchange = hasExchange && wb.viewer.canApproveOrders;
   const title =
     mode === 'approve'
-      ? hasExchange
+      ? approvesExchange
         ? RETURNS_COPY.approveReturnAndExchange
         : RETURNS_COPY.approveReturn
       : mode === 'process'
@@ -360,7 +365,7 @@ function SheetContent({
     mode === 'approve'
       ? itemIsHere
         ? RETURNS_COPY.approveAndReceive
-        : hasExchange
+        : approvesExchange
           ? RETURNS_COPY.approveReturnAndExchange
           : RETURNS_COPY.approveReturn
       : mode === 'process'
@@ -413,8 +418,10 @@ function SheetContent({
         return;
       }
       if (mode === 'cancel_replacement') {
-        const res = await cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText });
-        onDone({ message: res.answer.changed ? 'Replacement cancelled.' : 'Nothing to cancel.', workbench: res.workbench });
+        // Verification V1: the status this sheet's warnings came from; the
+        // notice says what to do with what was picked or sent.
+        const res = await cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText, shownStatus: shownReplacementStatus(wb) });
+        onDone({ message: cancelReplacementMessage(res.answer), workbench: res.workbench });
         return;
       }
       if (mode === 'change_replacement' || mode === 'issue_replacement') {
@@ -683,8 +690,8 @@ function SheetContent({
                         load={loaderFor(rl?.orderRequestLineId ?? '')}
                         needed={pick.quantity}
                         selectedItemId={pick.itemId}
-                        onSelect={(row) => {
-                          setPicks((prev) => ({ ...prev, [x.id]: { ...pick, itemId: row.itemId } }));
+                        onSelect={(row, rowLabel) => {
+                          setPicks((prev) => ({ ...prev, [x.id]: { ...pick, itemId: row.itemId, label: rowLabel } }));
                           setShortDetail(null);
                         }}
                         label={label}
@@ -767,7 +774,7 @@ function SheetContent({
                   ))}
                 </View>
                 <Button variant="outline" disabled={!canSubmit} onPress={() => void submit('backorder')}>
-                  {RETURNS_COPY.approveReplacementOnBackorder}
+                  {shortBackorderLabel(mode)}
                 </Button>
                 {/* Review fix P7: or change the short lines' replacement (a
                     local switch: the picker asks the server, which says when

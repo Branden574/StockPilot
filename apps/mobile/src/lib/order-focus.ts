@@ -12,6 +12,8 @@
  * (stepSignatureOnArrival: only on the screen in front, for who tapped it).
  */
 
+import { formatOrderNumber } from '@stockpilot/core';
+
 export type OrderScreenFocus = 'actions' | null;
 
 function focusValue(param: unknown): unknown {
@@ -63,12 +65,19 @@ export function stepSignatureOnArrival(
     busy: boolean;
     /** Who is signed in now. */
     userId: string | null;
+    /**
+     * The loaded order is a live exchange replacement (fix round 1,
+     * verification V-2): ?focus=sign comes only from an RMA's Hand over, so a
+     * link to any other order never opens the paper signature.
+     */
+    replacement: boolean;
   },
 ): { state: SignArrival; open: boolean } {
   if (state.phase === 'done' || focusValue(input.focus) !== 'sign') return { state, open: false };
   if (state.requestedBy === null || input.userId !== state.requestedBy) {
     return { state: { ...state, phase: 'done' }, open: false };
   }
+  if (input.loaded && !input.replacement) return { state: { ...state, phase: 'done' }, open: false };
   let phase: SignArrival['phase'] = state.phase;
   if (phase === 'pending') {
     if (!(input.focused && input.loaded)) return { state, open: false };
@@ -87,3 +96,10 @@ export function focusScrollY(y: number): number | null {
 }
 
 export const FOCUS_SCROLL_INSET = 12;
+
+/** The paper signature prompt's title, naming the order it records (fix
+ *  round 1, verification V-2): "Physical signature for SO-000123". */
+export function physicalSignatureTitle(orderNumber: number | null | undefined): string {
+  const so = formatOrderNumber(orderNumber ?? null);
+  return so ? `Physical signature for ${so}` : 'Physical signature';
+}

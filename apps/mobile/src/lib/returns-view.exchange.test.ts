@@ -6,6 +6,10 @@ import type { MobileExchangeLine, MobileReplacement, MobileReturnExchange, Mobil
 import {
   NO_EXCHANGE,
   actionHelp,
+  actionLabel,
+  cancelReplacementMessage,
+  shortBackorderLabel,
+  shownReplacementStatus,
   itemPhotoUrl,
   changeInRmaLabel,
   exchangeApprovalDecisions,
@@ -167,7 +171,11 @@ describe('the workbench actions with an exchange (core rows)', () => {
       busy: false,
     });
     expect(a.secondary).not.toContain('release_early');
-    expect(a.readOnlyReason).toBe('Approving the replacement needs order approval permission.');
+    // Re-pinned by fix round 1 (verification L3): after the approval the words
+    // say what needs order approval, the return cancel included.
+    expect(a.readOnlyReason).toBe(
+      'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.',
+    );
   });
 
   it('a server before RX-2 (no exchange half) reads as a plain return', () => {
@@ -835,5 +843,76 @@ describe('the list and the order screen', () => {
       { key: 'handed_over', text: 'Part of the replacement handed over, the rest not sent; return cancelled' },
     ]);
     expect(changeInRmaLabel(handed)).toBe('Open RMA-1');
+  });
+});
+
+// RX-2 fix round 1 (independent verification 2026-10-11).
+describe('fix round 1 on the phone', () => {
+  const live = exchange({
+    status: 'waiting_for_return',
+    lines: [xline({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: L })],
+    hasApprovedExchange: true,
+    replacement: { orderId: 'repl', orderNumber: 104, status: 'approved', fulfillmentType: 'pickup', live: true, class: 'undrawn', owed: 1, held: 1, short: false, lines: [] },
+  });
+
+  // Verification V1: the cancel sends the status the sheet showed, and the
+  // notice (an alert, announced) says what to do with what was picked or sent.
+  it('Cancel replacement names the status it showed and says what happened', () => {
+    expect(shownReplacementStatus(wb('approved', live))).toBe('approved');
+    expect(shownReplacementStatus(wb('approved', exchange({ replacement: null })))).toBeNull();
+    expect(shownReplacementStatus(wb('approved', undefined))).toBeNull();
+    expect(cancelReplacementMessage({ changed: true, drawn: false, inTransit: false })).toBe('Replacement cancelled.');
+    expect(cancelReplacementMessage({ changed: true, drawn: true, inTransit: true })).toBe(
+      'Replacement cancelled. The picked items go back to Staging on record. Put them in the staging area. Ask the driver to bring it back.',
+    );
+    expect(cancelReplacementMessage({ changed: false, drawn: false, inTransit: false })).toBe('There is no replacement to cancel any more.');
+  });
+
+  // Verification L1: in Change replacement and Issue a new replacement a short
+  // pick is named by its own row label, and the backorder button says what it does.
+  it('names a short pick by its row label, and words the backorder button for the mode', () => {
+    expect(shortItemLabel(wb('approved', live), {}, {}, 'item-2xl')).toBe('Item');
+    expect(shortItemLabel(wb('approved', live), {}, {}, 'item-2xl', { x1: { itemId: 'item-2xl', label: 'Walk New Hire Shirt, 2XL' } })).toBe(
+      'Walk New Hire Shirt, 2XL',
+    );
+    expect(shortBackorderLabel('approve')).toBe('Approve, replacement on backorder');
+    expect(shortBackorderLabel('change_replacement')).toBe('Change, replacement on backorder');
+    expect(shortBackorderLabel('issue_replacement')).toBe('Issue, replacement on backorder');
+  });
+
+  // Verification L3: a viewer who can only decline approves the return.
+  it('a decline-only viewer reads "Approve return"', () => {
+    expect(actionLabel('approve', { hasExchange: true, canApproveOrders: false })).toBe('Approve return');
+    expect(actionLabel('approve', { hasExchange: true, canApproveOrders: true })).toBe('Approve return & exchange');
+  });
+
+  // Verification L5: the RMA link promises a change or cancel only to a
+  // viewer who may make it (the server says so; an older one does not).
+  it('the order banner\'s RMA link reads "Open RMA-…" for a viewer who cannot change or cancel', () => {
+    const info = {
+      returnId: 'r1',
+      returnNumber: 'RMA-1',
+      returnStatus: 'approved',
+      originalOrderId: 'o1',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      exchangeStatus: 'ready_to_pick',
+      exchangeStatusLabel: 'Ready to pick',
+      waitingForReturn: false,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      returnReceived: true,
+      revision: 1,
+      canOpenReturn: true,
+      canReleaseEarly: false,
+      canChangeReplacement: false,
+      slipLine: '',
+      driverLine: null,
+    };
+    expect(orderReplacementLines(info, 'pickup').find((l) => l.key === 'rma_link')?.text).toBe('Open RMA-1');
+    expect(changeInRmaLabel(info)).toBe('Open RMA-1');
+    expect(changeInRmaLabel({ ...info, canChangeReplacement: true })).toBe('Change or cancel in RMA-1');
   });
 });

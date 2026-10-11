@@ -107,7 +107,9 @@ describe('the workbench', () => {
   });
 
   it('labels an exchange approval "Approve return & exchange"', () => {
-    expect(view).toContain('actionLabel(actions.primary, { hasExchange })');
+    // Re-pinned by fix round 1 (verification L3; claim kept): the viewer's
+    // order approval decides the "& exchange".
+    expect(view).toContain('actionLabel(actions.primary, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })');
   });
 
   // RX-2 simulator finding SIM-1: VoiceOver reads the REPLACEMENT card's one
@@ -164,10 +166,12 @@ describe('online only', () => {
   it('the release names the shown replacement and the cancel the shown revision', () => {
     const client = code(read('src/lib/returns-api.ts'));
     expect(client).toContain("return replacementCall(id, '/release', { orderId, reason });");
-    expect(client).toContain('body: { expectedRevision: number; reason: string },');
+    // Re-pinned by fix round 1 (verification V1; claim kept): the cancel also
+    // names the status the sheet showed.
+    expect(client).toContain('body: { expectedRevision: number; reason: string; shownStatus?: string | null },');
     expect(sheet).toContain('const shownOrderId = shown?.live ? shown.orderId : null;');
     expect(sheet).toContain('releaseReturnReplacement(id, shownOrderId, reasonText)');
-    expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
+    expect(sheet).toContain('cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText, shownStatus: shownReplacementStatus(wb) })');
   });
 
   // When the sheet shows no live replacement (its read failed, or it changed)
@@ -243,14 +247,18 @@ describe('online only', () => {
   // line's review and scrolls to and focuses the first one's picker.
   it('after a short refusal, Change replacement switches the short lines and moves to the first (review fix P7)', () => {
     const block = sheet.slice(sheet.indexOf('{shortLines.length > 0 ? ('), sheet.indexOf("{mode === 'deny' || mode === 'cancel' || reasonRequired"));
-    expect(block).toContain('{RETURNS_COPY.approveReplacementOnBackorder}');
+    // Re-pinned by fix round 1 (verification L1; claim kept): the button's
+    // words follow the mode (approve, change, issue).
+    expect(block).toContain('{shortBackorderLabel(mode)}');
     expect(block).toContain("{mode === 'approve' && wb.viewer.canApproveOrders ? (");
     expect(block).toContain('onPress={changeShortLines}');
     expect(block).toContain('{RETURNS_COPY.changeReplacement}');
     expect(sheet).toMatch(/function changeShortLines\(\) \{\s*const next = reviewsForShortChange\(wb, reviews, shortDetail, adds\);/);
     // Simulator fault F-C: the short sentences name an item the review chose
     // (Change replacement, Add a replacement) by the review's own label.
-    expect(sheet).toContain('const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id));');
+    // Re-pinned by fix round 1 (verification L1; claim kept): Change and
+    // Issue's own picks name their items too.
+    expect(sheet).toContain('const shortLines = shortSentences(shortDetail, (id) => shortItemLabel(wb, reviews, adds, id, picks));');
     expect(sheet).toContain('bodyNode.current?.scrollTo(');
     expect(sheet).toContain("AccessibilityInfo.sendAccessibilityEvent(target, 'focus');");
   });
@@ -268,7 +276,10 @@ describe('online only', () => {
     // 44 pt targets with a role and a name; the row stacks at the AX sizes.
     expect(stepper.match(/minWidth: MIN_TAP,\s*minHeight: MIN_TAP,/g)?.length).toBe(1);
     expect(stepper).toContain('accessibilityLabel={replacementQuantityStepLabel(delta, label)}');
-    expect(stepper).toContain('onPress={() => onChange(stepReplacementQuantity(value, delta, max))}');
+    // Re-pinned by fix round 1 (verification L10; claim kept): the step also
+    // announces the new number, which iOS VoiceOver needs (it ignores
+    // accessibilityLiveRegion).
+    expect(stepper).toMatch(/onPress=\{\(\) => \{\s*const next = stepReplacementQuantity\(value, delta, max\);\s*onChange\(next\);/);
     expect(stepper).toContain('const stacked = shouldStackRow(fontScale);');
     expect(stepper).toContain('maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}');
   });
@@ -427,9 +438,12 @@ describe('the order screen', () => {
     expect(screen).toMatch(/import \{[^}]*\buseIsFocused\b[^}]*\} from 'expo-router';/);
     expect(screen).toContain('const screenInFront = useIsFocused();');
     expect(screen).toContain('const signArrival = React.useRef(initialSignArrival(userId));');
+    // Re-pinned by fix round 1 (verification V-2; claim kept): the loaded
+    // order must also be a live exchange replacement, and the prompt names it.
     expect(screen).toMatch(
-      /stepSignatureOnArrival\(signArrival\.current, \{\s*focus,\s*focused: screenInFront,\s*loaded: loadedOrder !== null,\s*offered: managerActions\.physicalSignature,\s*online: !offline,\s*busy: acting !== null,\s*userId,\s*\}\)/,
+      /stepSignatureOnArrival\(signArrival\.current, \{\s*focus,\s*focused: screenInFront,\s*loaded: loadedOrder !== null,\s*(\/\/[^\n]*\n\s*)?replacement: loadedOrder\?\.replacement\?\.live === true,\s*offered: managerActions\.physicalSignature,\s*online: !offline,\s*busy: acting !== null,\s*userId,\s*\}\)/,
     );
+    expect(screen).toMatch(/function promptPhysicalSignature\(\) \{\s*Alert\.prompt\(\s*(\/\/[^\n]*\n\s*)?physicalSignatureTitle\(order\?\.orderNumber\),/);
     expect(screen).toMatch(/signArrival\.current = step\.state;\s*if \(step\.open\) confirmDeparture\('signature', promptPhysicalSignature\);/);
     expect(screen).not.toContain('signOnArrival');
   });
@@ -495,5 +509,59 @@ describe('the orders list', () => {
     expect(list).toContain('const stacked = shouldStackRow(fontScale);');
     expect(list).toContain('<View style={stacked ? undefined : { flex: 1, minWidth: 0 }}>');
     expect(list).toContain("<View style={{ alignItems: stacked ? 'flex-start' : 'flex-end', gap: 6 }}>");
+  });
+});
+
+// RX-2 fix round 1 (independent verification 2026-10-11).
+describe('fix round 1 on the phone screens', () => {
+  const sheet = code(read('src/components/return-action-sheet.tsx'));
+  const view = code(read('src/components/return-workbench-view.tsx'));
+  const client = code(read('src/lib/returns-api.ts'));
+  const screen = code(read('app/order/[id].tsx'));
+  const stepper = code(read('src/components/replacement-quantity-stepper.tsx'));
+
+  // Verification V1: Cancel replacement sends the status the sheet showed,
+  // and the notice says what to do with what was picked or sent.
+  it('Cancel replacement names the shown status and its notice comes from the answer', () => {
+    expect(client).toContain('body: { expectedRevision: number; reason: string; shownStatus?: string | null },');
+    expect(sheet).toContain(
+      'cancelReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText, shownStatus: shownReplacementStatus(wb) })',
+    );
+    expect(sheet).toContain('onDone({ message: cancelReplacementMessage(res.answer), workbench: res.workbench });');
+    expect(sheet).not.toContain("'Replacement cancelled.'");
+  });
+
+  // Verification L1: Change and Issue keep the picked row's label for the
+  // short sentences, and the backorder button says what it does.
+  it('Change and Issue name a short pick by its row and word the backorder button for the mode', () => {
+    expect(sheet).toMatch(/onSelect=\{\(row, rowLabel\) => \{\s*setPicks\(\(prev\) => \(\{ \.\.\.prev, \[x\.id\]: \{ \.\.\.pick, itemId: row\.itemId, label: rowLabel \} \}\)\);/);
+    expect(sheet).toContain('(id) => shortItemLabel(wb, reviews, adds, id, picks)');
+    expect(sheet).toContain('{shortBackorderLabel(mode)}');
+    expect(sheet).not.toContain('{RETURNS_COPY.approveReplacementOnBackorder}');
+  });
+
+  // Verification L3: a viewer who can only decline approves the return.
+  it('the approve button, sheet title and CTA say "& exchange" only with order approval', () => {
+    expect(view.match(/actionLabel\([^)]*\{ hasExchange, canApproveOrders: wb\.viewer\.canApproveOrders \}\)/g)?.length).toBe(2);
+    expect(sheet).toContain('const approvesExchange = hasExchange && wb.viewer.canApproveOrders;');
+    expect(sheet.match(/approvesExchange\s*\?\s*RETURNS_COPY\.approveReturnAndExchange/g)?.length).toBe(2);
+  });
+
+  // Verification L7: the create sheet's refusal line is announced.
+  it("the create sheet's refusal is an alert", () => {
+    expect(screen).toMatch(/\{returnError \? \(\s*<Mono size=\{11\} color="#b42318" accessibilityRole="alert">\s*\{returnError\}/);
+  });
+
+  // Verification L10: iOS VoiceOver hears the new number after each step.
+  it('the stepper announces the number after each step', () => {
+    expect(stepper).toContain('AccessibilityInfo.announceForAccessibility(`${RETURNS_COPY.replacementQuantity}: ${next}`);');
+  });
+
+  // Verification L11: the workbench's section eyebrows are VoiceOver headings
+  // (the web's h2s).
+  it('the workbench section eyebrows are headings', () => {
+    for (const eyebrow of ['{RETURNS_COPY.exchangeStatusHeading}', '{RETURNS_COPY.returning}', 'HISTORY']) {
+      expect(view, eyebrow).toContain(`<Eyebrow accessibilityRole="header">${eyebrow}</Eyebrow>`);
+    }
   });
 });

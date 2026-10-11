@@ -354,7 +354,9 @@ export function changeReturnReplacement(
 /** The revision the screen shows is required (desk check F7): a stale one is return_changed. */
 export function cancelReturnReplacement(
   id: string,
-  body: { expectedRevision: number; reason: string },
+  // Fix round 1 (verification V1): shownStatus is the replacement's status as
+  // the sheet showed it; picked or sent since, the server answers return_changed.
+  body: { expectedRevision: number; reason: string; shownStatus?: string | null },
 ): Promise<ReplacementAnswer<{ changed: boolean; drawn: boolean; inTransit: boolean }>> {
   return replacementCall(id, '/cancel', body);
 }
