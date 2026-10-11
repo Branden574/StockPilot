@@ -153,6 +153,13 @@ export const RETURNS_COPY = {
   closeAsReturnOnlyHelp: 'No new replacement is issued. The return goes on as a return only.',
   closeAsReturnOnlyReasonLabel: 'Reason for keeping the return only (required)',
   closedAsReturnOnly: 'Kept as a return only.',
+  // RX-4 (RX-2 verification V3): "Close the rest" of a replacement handed
+  // over in part whose rest is on backorder.
+  closeReplacementRest: 'Close the rest',
+  closeReplacementRestHelp: 'The rest of the replacement is never sent. What was already handed over stays handed over.',
+  closeReplacementRestReasonLabel: 'Reason for closing the rest (required)',
+  closedReplacementRest: 'The rest of the replacement was closed.',
+  closedReplacementRestAlready: 'The rest of the replacement was already closed.',
   cancelReturnReasonRequired: 'Reason (required: the exchange was approved)',
   // Review fix P18: nothing prints; shown under the button (and as the
   // phone's accessibility hint) before it draws stock and stages the order.

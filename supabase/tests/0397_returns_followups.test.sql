@@ -514,6 +514,7 @@ select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :stfB, pg_temp.rest_sql(:'rK1', pg_temp.rev(:'rK1'), 'No longer needed'))),
   '42501:warehouse_write',
   'B5: staff with both permissions for another warehouse only are refused (Mutation M2)');
+-- case: close_rest_reason_blank
 select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, pg_temp.rest_sql(:'rK1', pg_temp.rev(:'rK1'), '   ')))
   || ',' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, pg_temp.rest_sql(:'rK1', null, 'No longer needed')))

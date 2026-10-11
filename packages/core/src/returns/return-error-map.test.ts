@@ -35,6 +35,12 @@ describe('the returns error map', () => {
     expect(status('restock_location_not_offered')).toBe(400);
     expect(status('exchange_not_available')).toBe(400);
     expect(status('return_close_through_rpc')).toBe(403);
+    // RX-4: "Close the rest" when nothing is on backorder any more.
+    expect(mapReturnError({ hint: 'replacement_not_backordered' })).toMatchObject({
+      code: 'conflict',
+      status: 409,
+      message: 'There is nothing on backorder to close.',
+    });
     expect(mapReturnError({ hint: 'return_number_unavailable' }).retryable).toBe(true);
   });
 

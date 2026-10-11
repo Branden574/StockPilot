@@ -303,6 +303,18 @@ function buildSchemas() {
     reason,
   });
 
+  // RX-4 (0397): "Close the rest" names the revision the caller saw and,
+  // like the replacement cancel, the replacement's status its screen showed.
+  const closeReplacementRest = z.object({
+    expectedRevision: z.number().int().min(0),
+    reason,
+    shownStatus: z
+      .string()
+      .regex(/^[a-z_]{1,40}$/)
+      .optional()
+      .nullable(),
+  });
+
   const candidates = z.object({
     line: uuid,
     q: z
@@ -368,6 +380,7 @@ function buildSchemas() {
     cancelReplacement,
     releaseEarly,
     declineReplacement,
+    closeReplacementRest,
     candidates,
     prepare,
     exchangeDecision,
@@ -396,6 +409,7 @@ export type ReturnChangeReplacementRequest = z.output<ReturnSchemas['changeRepla
 export type ReturnCancelReplacementRequest = z.output<ReturnSchemas['cancelReplacement']>;
 export type ReturnReleaseEarlyRequest = z.output<ReturnSchemas['releaseEarly']>;
 export type ReturnDeclineReplacementRequest = z.output<ReturnSchemas['declineReplacement']>;
+export type ReturnCloseReplacementRestRequest = z.output<ReturnSchemas['closeReplacementRest']>;
 export type ReturnCandidatesQuery = z.output<ReturnSchemas['candidates']>;
 export type ReturnPrepareRequest = z.output<ReturnSchemas['prepare']>;
 
@@ -516,5 +530,6 @@ export function returnSchemaCases(): ReturnSchemaCase[] {
     },
     { name: 'release_reason_too_long', schema: 'releaseEarly', input: { reason: 'x'.repeat(501) }, coreAccepts: false },
     { name: 'cancel_replacement_reason_blank', schema: 'cancelReplacement', input: { reason: '' }, coreAccepts: false },
+    { name: 'close_rest_reason_blank', schema: 'closeReplacementRest', input: { expectedRevision: 1, reason: '   ' }, coreAccepts: false },
   ];
 }

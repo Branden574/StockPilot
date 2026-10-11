@@ -12,13 +12,16 @@ const L2 = '00000000-0000-4000-8000-000000000002';
 
 describe('the case table shared with pgTAP', () => {
   const files = readdirSync(TESTS).filter(
-    (f) => f.endsWith('_returns_lifecycle_original_rack.test.sql') || f.endsWith('_returns_exchange_staff.test.sql'),
+    (f) =>
+      f.endsWith('_returns_lifecycle_original_rack.test.sql') ||
+      f.endsWith('_returns_exchange_staff.test.sql') ||
+      f.endsWith('_returns_followups.test.sql'),
   );
   const sql = files.map((f) => readFileSync(join(TESTS, f), 'utf8')).join('\n');
   const markers = new Set([...sql.matchAll(/^-- case: ([a-z0-9_]+)\s*$/gm)].map((m) => m[1]));
 
-  it('finds the RX-1 and RX-2 suites', () => {
-    expect(files).toHaveLength(2);
+  it('finds the RX-1, RX-2 and RX-4 suites', () => {
+    expect(files).toHaveLength(3);
   });
 
   it.each(returnSchemaCases().map((c) => [c.name, c] as const))('%s has a pgTAP marker and core agrees', (name, c) => {
@@ -29,6 +32,19 @@ describe('the case table shared with pgTAP', () => {
   it('has no marker without a core case', () => {
     const names = new Set(returnSchemaCases().map((c) => c.name));
     expect([...markers].filter((m) => !names.has(m!))).toEqual([]);
+  });
+});
+
+describe('Close the rest (RX-4)', () => {
+  it('needs the revision the screen saw and a reason of 1 to 1,000 characters; the shown status is optional and bounded', () => {
+    const ok = parseReturnBody('closeReplacementRest', { expectedRevision: 1, reason: '  Rest no longer needed  ', shownStatus: 'backordered' });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.value).toEqual({ expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered' });
+    expect(parseReturnBody('closeReplacementRest', { expectedRevision: 1, reason: 'x' }).ok).toBe(true);
+    expect(parseReturnBody('closeReplacementRest', { reason: 'Rest no longer needed' }).ok).toBe(false);
+    expect(parseReturnBody('closeReplacementRest', { expectedRevision: 1, reason: '   ' }).ok).toBe(false);
+    expect(parseReturnBody('closeReplacementRest', { expectedRevision: 1, reason: 'x'.repeat(1001) }).ok).toBe(false);
+    expect(parseReturnBody('closeReplacementRest', { expectedRevision: 1, reason: 'x', shownStatus: 'Backordered; drop' }).ok).toBe(false);
   });
 });
 
