@@ -88,6 +88,21 @@ export const RELEASES: Release[] = [
     // - A Cancel replacement for a replacement picked or sent after the
     //   page was opened is refused (return_changed) before the reload, so
     //   the line says nothing is cancelled.
+    // Corrected by the claims review of #345 (2026-10-11): the order entry's
+    // How it affects you said Cancel return "also cancels a replacement not
+    // picked yet". At an approved RMA the screens (core
+    // availableReturnActions, on the web and the phone) offer Cancel return
+    // while the replacement waits for the returned item, is unavailable, is
+    // handed over (in full or in part) or was cancelled, and not once it is
+    // released early (Ready to pick, or a pick slip and picking: at an
+    // approved RMA the gate lets a pick slip through only after a release),
+    // picked, staged or sent; there Cancel replacement is the path, and
+    // Cancel return comes back after it (0396 _return_exchange_on_cancel
+    // would cancel an undrawn one, but no screen offers that step). The
+    // line now says so. Left as is: a replacement released early from its
+    // order page while not in stock still reads unavailable, where Cancel
+    // return is offered and cancels it; the line's two paths (hand it over,
+    // or Cancel replacement) are offered there too.
     // The words name the screens' own labels, claim no number nobody
     // measured and never say "book" for a recorded quantity. The counter
     // steps follow the screens in order, with the two shortcuts (the only
@@ -141,7 +156,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A replacement is not handed out while the item it replaces is still missing, unless someone with order approval and Manage returns decides to, with a reason.',
         howItAffectsYou:
-          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent since you opened the return, nothing is cancelled and the page reloads to show it. Cancelling the return also cancels a replacement not picked yet; once it is picked or on its way, hand it over first, or cancel the replacement if none of it was handed over.',
+          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent since you opened the return, nothing is cancelled and the page reloads to show it. Cancelling the return also cancels a waiting replacement; once it is released early, picked or sent, hand it over first, or cancel the replacement if none was handed over.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['returns:manage', 'orders:approve'], modules: ['returns'] },
