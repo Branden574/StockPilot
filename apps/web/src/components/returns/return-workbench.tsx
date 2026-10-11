@@ -227,7 +227,18 @@ export function ReturnWorkbench({
   // (core exchangeReviewOptions / defaultExchangeReviewState). Adding a
   // replacement creates an order, so it needs order approval.
   const reviewViewer = { canApproveOrders: wb.viewer.canApproveOrders };
-  const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? defaultExchangeReviewState(reviewViewer);
+  // RX-3 fix round 1 (M3): a note-only request starts at Change replacement…,
+  // never at "Approve as requested" (off for it); core decides from the line.
+  const reviewFor = (lineId: string): ExchangeReviewState => {
+    const chosen = reviews[lineId];
+    if (chosen) return chosen;
+    const x = ex.lines.find((l) => l.id === lineId);
+    const returned = x ? wb.lines.find((l) => l.id === x.returnLineId)?.quantity ?? null : null;
+    return defaultExchangeReviewState(
+      reviewViewer,
+      x ? { requestedItemId: x.requestedItemId, requestedQuantity: x.requestedQuantity, returnedQuantity: returned } : undefined,
+    );
+  };
   const exchangeByReturnLine = new Map(ex.lines.map((x) => [x.returnLineId, x]));
   const canDecideExchange = r.status === 'requested' && wb.viewer.canManageReturns;
   const canAddReplacement = canDecideExchange && wb.viewer.canApproveOrders;

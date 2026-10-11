@@ -418,9 +418,30 @@ export function exchangeReviewOptions(
   ];
 }
 
-/** Where the review starts: as requested, or the decline for a viewer who can only decline. */
-export function defaultExchangeReviewState(viewer: ExchangeReviewViewer): ExchangeReviewState {
-  return viewer.canApproveOrders ? { kind: 'as_requested' } : { kind: 'decline', reason: '' };
+/** The fields of an exchange line where the review starts reads. */
+export interface ExchangeReviewStartLine {
+  requestedItemId: string | null;
+  /** The replacement quantity asked for. */
+  requestedQuantity: number;
+  /** How many of the returned item come back (the return line's quantity). */
+  returnedQuantity?: number | null;
+}
+
+/**
+ * Where the review starts: the decline for a viewer who can only decline;
+ * else "Approve as requested", except for a request made with a note
+ * ("warehouse will review"), which has nothing to approve as requested and
+ * opens at "Change replacement…" with nothing chosen yet, at the quantity
+ * coming back (RX-3 fix round 1, desk check M3; RX-2 verify C-4). Without the
+ * line (an older caller) it starts as requested.
+ */
+export function defaultExchangeReviewState(viewer: ExchangeReviewViewer, line?: ExchangeReviewStartLine): ExchangeReviewState {
+  if (!viewer.canApproveOrders) return { kind: 'decline', reason: '' };
+  if (line && !line.requestedItemId) {
+    const returned = typeof line.returnedQuantity === 'number' && line.returnedQuantity > 0 ? line.returnedQuantity : line.requestedQuantity;
+    return { kind: 'change', itemId: null, label: null, free: null, quantity: Math.max(1, Math.min(line.requestedQuantity, returned)), reason: '' };
+  }
+  return { kind: 'as_requested' };
 }
 
 /** Why the approval cannot be sent yet for this line, or null. With the

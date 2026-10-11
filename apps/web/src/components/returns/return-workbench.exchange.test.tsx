@@ -299,6 +299,20 @@ describe('a requested exchange', () => {
     });
   });
 
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // (warehouse will review, the common case at launch) opened at "Approve as
+  // requested", which is off for it, and Approve then said "Choose the
+  // replacement". It opens at Change replacement… with its picker.
+  it('a note-only request opens at Change replacement with its picker, never at the choice that is off', () => {
+    const noteOnly = { lines: [exchangeLine({ requestedItemId: null, requestedItem: null, requestedFree: null, requestNote: 'A bigger one', requestedByKind: 'requester' })] };
+    render(<ReturnWorkbench workbench={bench('requested', noteOnly)} />);
+    const side = screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+    expect(within(side).getByLabelText('Approve as requested')).not.toBeChecked();
+    expect(within(side).getByLabelText('Change replacement…')).toBeChecked();
+    expect(within(side).getByRole('group', { name: 'Choose the replacement for Walk New Hire Shirt, M' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve return & exchange' })).toBeDisabled();
+  });
+
   it('a return-only line can get "Add a replacement" while exchanges are on; not while the switch is off', () => {
     const plain = { kind: 'return', status: 'none', lines: [], rail: [] };
     const { unmount } = render(<ReturnWorkbench workbench={bench('requested', plain)} />);

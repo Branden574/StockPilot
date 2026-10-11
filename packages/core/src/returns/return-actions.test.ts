@@ -213,6 +213,27 @@ describe('availableReturnActions (exchange rows, plan 3.9)', () => {
     expect(availableReturnActions({ status: 'requested', viewerCanManageReturns: true, viewerCanApproveOrders: false }).readOnlyReason).toBeNull();
   });
 
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // ("warehouse will review", the common case at launch) opened at "Approve as
+  // requested", a choice that is off for it, and Approve then answered
+  // "Choose the replacement". It opens at Change replacement… with nothing
+  // chosen yet, at the quantity coming back; a decline-only viewer still
+  // starts at the decline.
+  it('a note-only request opens at Change replacement, never at the choice that is off', () => {
+    const noteOnly = { requestedItemId: null, requestedQuantity: 2, returnedQuantity: 3 };
+    const start = defaultExchangeReviewState({ canApproveOrders: true }, noteOnly);
+    expect(start).toEqual({ kind: 'change', itemId: null, label: null, free: null, quantity: 2, reason: '' });
+    const options = exchangeReviewOptions(noteOnly, { canApproveOrders: true });
+    expect(options.find((o) => o.kind === start.kind)?.disabled).toBe(false);
+    expect(exchangeReviewProblem({ id: 'x1', requestedItemId: null, requestNote: 'Needs a bigger one' }, start)).toBe('Choose the replacement');
+    // Fewer coming back than asked: the quantity follows what comes back.
+    expect(defaultExchangeReviewState({ canApproveOrders: true }, { ...noteOnly, returnedQuantity: 1 })).toMatchObject({ kind: 'change', quantity: 1 });
+    // A decline-only viewer starts at the decline, as for any request.
+    expect(defaultExchangeReviewState({ canApproveOrders: false }, noteOnly)).toEqual({ kind: 'decline', reason: '' });
+    // A request for a size still starts as requested.
+    expect(defaultExchangeReviewState({ canApproveOrders: true }, { ...noteOnly, requestedItemId: 'item-l' })).toEqual({ kind: 'as_requested' });
+  });
+
   it('a viewer who cannot manage returns sees the exchange read-only', () => {
     expect(
       availableReturnActions({ status: 'approved', exchangeStatus: 'waiting_for_return', viewerCanManageReturns: false, viewerCanApproveOrders: true }),

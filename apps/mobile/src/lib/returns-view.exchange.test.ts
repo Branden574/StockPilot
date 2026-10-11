@@ -220,6 +220,25 @@ describe('the approval review', () => {
     expect(exchangeReviewStateFor(wb('requested', exchange()), {}, 'x1')).toEqual({ kind: 'as_requested' });
   });
 
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // opened at "Approve as requested", which is off for it, and the pinned line
+  // then read "Choose the replacement". It opens at Change replacement with
+  // nothing chosen, at the quantity coming back.
+  it('a note-only request opens at Change replacement for an approver, at the decline for a decline-only viewer', () => {
+    const noteOnly = exchange({ lines: [xline({ requestedItemId: null, requestedItem: null, requestedFree: null, requestNote: 'A bigger one', requestedByKind: 'requester' })] });
+    expect(exchangeReviewStateFor(wb('requested', noteOnly), {}, 'x1')).toEqual({
+      kind: 'change',
+      itemId: null,
+      label: null,
+      free: null,
+      quantity: 1,
+      reason: '',
+    });
+    expect(
+      exchangeReviewStateFor(wb('requested', noteOnly, { canManageReturns: true, canApproveOrders: false, canReadDecisions: true }), {}, 'x1'),
+    ).toEqual({ kind: 'decline', reason: '' });
+  });
+
   // Review fix P7: after a short refusal the sheet offered only "Approve,
   // replacement on backorder" (the What's New says: that or Change
   // replacement). "Change replacement" switches each short line approved as

@@ -458,7 +458,12 @@ function qtyRequestedText(n: number): string {
 }
 
 /** The workbench as the review reads it: its exchange half and who is reviewing. */
-type ReviewWorkbench = { exchange?: MobileReturnExchange | null; viewer?: { canApproveOrders: boolean } | null };
+type ReviewWorkbench = {
+  exchange?: MobileReturnExchange | null;
+  viewer?: { canApproveOrders: boolean } | null;
+  /** The return lines (how many come back), for where a note-only review starts. */
+  lines?: readonly { id: string; quantity: number }[];
+};
 
 /** Who reviews (server-computed order approval; a workbench without a viewer reads as before). */
 function reviewerOf(wb: ReviewWorkbench): ExchangeReviewViewer {
@@ -475,7 +480,16 @@ export function exchangeReviewStateFor(
   reviews: Record<string, ExchangeReviewState>,
   exchangeLineId: string,
 ): ExchangeReviewState {
-  return reviews[exchangeLineId] ?? defaultExchangeReviewState(reviewerOf(wb));
+  const chosen = reviews[exchangeLineId];
+  if (chosen) return chosen;
+  // RX-3 fix round 1 (M3): a note-only request starts at Change replacement,
+  // never at "Approve as requested" (off for it); core decides from the line.
+  const x = exchangeOf(wb).lines.find((l) => l.id === exchangeLineId);
+  const returned = x ? (wb.lines ?? []).find((l) => l.id === x.returnLineId)?.quantity ?? null : null;
+  return defaultExchangeReviewState(
+    reviewerOf(wb),
+    x ? { requestedItemId: x.requestedItemId, requestedQuantity: x.requestedQuantity, returnedQuantity: returned } : undefined,
+  );
 }
 
 /** Why the approval cannot be sent yet: one sentence per exchange line or add
