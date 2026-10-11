@@ -345,4 +345,3 @@ describe("the requester's exchange messages (returns RX-3)", () => {
     expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({ title: 'New exchange request', type: 'return.requested' }));
   });
 });
-
