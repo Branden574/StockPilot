@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { isSiteLocation } from '@stockpilot/core';
 
 import {
+  isOfferedDestination,
   unofferedDestinationFrom,
   type UnofferedDestination,
   type UnofferedSupplier,
@@ -35,19 +36,27 @@ interface LocationRow {
 }
 
 /**
- * Each of `ids` as a destination the forms cannot offer: deleted, not a site
- * (a staging area, a rack), a site with no warehouse, or unknown (not found,
- * or the read failed). `tag` names the caller in the report of a failed read.
+ * What the forms should do with destinations their select does not list
+ * (`ids`): one deleted, not a site (a staging area, a rack), a site with no
+ * warehouse, or unknown (not found, or every one when the read failed) is
+ * named and not kept (`unoffered`). A live site linked to a warehouse is one
+ * the forms DO offer, which the list lacked (LocationsService.list read only
+ * its first 1000 rows of every kind until the slice 8 review): it is offered
+ * after all (`fold`, in the order of `ids`), so the form shows it and keeps
+ * it, as readUnofferedSuppliers does for a supplier. Before, such a
+ * destination was named as one "you can't pick here" and the save cleared it.
+ * `tag` names the caller in the report of a failed read.
  */
 export async function readUnofferedDestinations(
   client: SupabaseClient,
   organizationId: string,
   ids: readonly string[],
   tag: string,
-): Promise<Map<string, UnofferedDestination>> {
+): Promise<{ unoffered: Map<string, UnofferedDestination>; fold: Array<{ id: string; name: string }> }> {
   const wanted = [...new Set(ids.filter(Boolean))];
-  const out = new Map<string, UnofferedDestination>();
-  if (wanted.length === 0) return out;
+  const unoffered = new Map<string, UnofferedDestination>();
+  const fold: Array<{ id: string; name: string }> = [];
+  if (wanted.length === 0) return { unoffered, fold };
   let rows: LocationRow[] = [];
   try {
     rows = await fetchAllRowsByIds<LocationRow>(wanted, (batch) => (from, to) =>
@@ -65,9 +74,12 @@ export async function readUnofferedDestinations(
   const byId = new Map(rows.map((r) => [r.id, r]));
   for (const id of wanted) {
     const row = byId.get(id);
-    out.set(id, row ? unofferedDestinationFrom(row, isSiteLocation(row)) : { name: null, why: 'unknown' });
+    if (!row) unoffered.set(id, { name: null, why: 'unknown' });
+    else if (isOfferedDestination(row, isSiteLocation(row))) {
+      fold.push({ id, name: (row.name ?? '').trim() || 'Unnamed location' });
+    } else unoffered.set(id, unofferedDestinationFrom(row, isSiteLocation(row)));
   }
-  return out;
+  return { unoffered, fold };
 }
 
 /**

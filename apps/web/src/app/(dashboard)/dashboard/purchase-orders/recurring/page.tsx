@@ -202,10 +202,10 @@ export default async function RecurringPosPage({
   // suppliers. Every purchase order a template creates is saved like a
   // hand-made one, and that save refuses a location linked to no warehouse
   // (so does the template save).
-  const locationOptions = locations
+  const listedLocations = locations
     .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
     .map((l) => ({ id: l.id as string, name: l.name as string }));
-  const offeredLocationIds = new Set(locationOptions.map((l) => l.id));
+  const offeredLocationIds = new Set(listedLocations.map((l) => l.id));
   const offeredSupplierIds = new Set(suppliers.map((s) => s.id as string));
 
   // Templates can hold a destination or supplier the form does not offer: a
@@ -216,10 +216,14 @@ export default async function RecurringPosPage({
   // fixes slice 8, items B and D), so read what they are, in this
   // organization through RLS. Labels only: a failed read names nothing,
   // never an error page.
-  const unofferedDestinationIds = templates
-    .map((t) => t.destination_location_id)
-    .filter((id): id is string => Boolean(id) && !offeredLocationIds.has(id as string));
+  // The purchase order Make recurring starts from is read with them: a live
+  // site the list did not return is offered after all (the fold below), so
+  // the seeded form keeps it.
   const seedDestination = fromPo.destination;
+  const unofferedDestinationIds = [
+    ...templates.map((t) => t.destination_location_id),
+    seedDestination?.locationId ?? null,
+  ].filter((id): id is string => Boolean(id) && !offeredLocationIds.has(id as string));
   const unofferedSupplierIds = [...templates.map((t) => t.supplier_id), fromPo.supplierId].filter(
     (id): id is string => Boolean(id) && !offeredSupplierIds.has(id as string),
   );
@@ -236,6 +240,10 @@ export default async function RecurringPosPage({
       'recurring_pos.page.unoffered_suppliers',
     ),
   ]);
+
+  // A live site linked to a warehouse that the list did not return is one the
+  // form offers: appended, so a template or the seed keeps it.
+  const locationOptions = [...listedLocations, ...unofferedDestinations.fold];
 
   let lineLabels: RecurringLineLabel[] = [];
   if (unlistedIds.length > 0) {
@@ -283,7 +291,7 @@ export default async function RecurringPosPage({
         entitled={entitled}
         lineLabels={lineLabels}
         seedDestination={seedDestination}
-        unofferedDestinations={Object.fromEntries(unofferedDestinations)}
+        unofferedDestinations={Object.fromEntries(unofferedDestinations.unoffered)}
         unofferedSuppliers={Object.fromEntries(unofferedSuppliers.unoffered)}
       />
     </div>

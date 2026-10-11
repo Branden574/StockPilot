@@ -29,6 +29,15 @@ export interface UnofferedDestination {
    * warehouse (the save refuses it); or not known (the read failed).
    */
   why: 'deleted' | 'not_a_site' | 'no_warehouse' | 'unknown';
+  /**
+   * Set when the purchase order save refuses this destination, so a recurring
+   * template holding it creates no purchase order: the run's own rule
+   * (PurchaseOrdersService.resolveDestinationWarehouseId), read from the row,
+   * whatever `why` says first. A staging area or a rack linked to no
+   * warehouse is `why: 'not_a_site'` and refused all the same. Absent when
+   * the save accepts it, or when it could not be read (never guessed).
+   */
+  saveRefuses?: 'deleted' | 'no_warehouse';
 }
 
 /** A supplier its form does not offer, as the page read it. */
@@ -111,8 +120,21 @@ export function unofferedDestinationFrom(
 ): UnofferedDestination {
   if (!row) return { name: null, why: 'unknown' };
   const name = (row.name ?? '').trim() || null;
-  if (row.deleted_at) return { name, why: 'deleted' };
-  if (!isSite) return { name, why: 'not_a_site' };
-  if (!row.warehouse_id) return { name, why: 'no_warehouse' };
+  if (row.deleted_at) return { name, why: 'deleted', saveRefuses: 'deleted' };
+  const noWarehouse = !row.warehouse_id;
+  if (!isSite) return noWarehouse ? { name, why: 'not_a_site', saveRefuses: 'no_warehouse' } : { name, why: 'not_a_site' };
+  if (noWarehouse) return { name, why: 'no_warehouse', saveRefuses: 'no_warehouse' };
   return { name, why: 'unknown' };
+}
+
+/**
+ * Whether the destination forms offer a location row: a live site linked to
+ * a warehouse (the purchase order and recurring forms' own filter on
+ * LocationsService.list({ sitesOnly })). `isSite` is core's isSiteLocation.
+ */
+export function isOfferedDestination(
+  row: { deleted_at?: string | null; warehouse_id?: string | null },
+  isSite: boolean,
+): boolean {
+  return !row.deleted_at && isSite && Boolean(row.warehouse_id);
 }

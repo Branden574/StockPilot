@@ -439,7 +439,9 @@ describe('Recurring POs page: what templates hold that the form does not offer',
 
     expect(locationRows).toHaveBeenCalledWith([GONE]);
     expect(namesByIds).toHaveBeenCalledWith([SUP_ARCHIVED]);
-    expect(props?.unofferedDestinations).toEqual({ [GONE]: { name: 'Old Annex', why: 'deleted' } });
+    expect(props?.unofferedDestinations).toEqual({
+      [GONE]: { name: 'Old Annex', why: 'deleted', saveRefuses: 'deleted' },
+    });
     expect(props?.unofferedSuppliers).toEqual({ [SUP_ARCHIVED]: { name: 'Acme Paper', why: 'archived' } });
     expect(props?.suppliers).toEqual([{ id: SUP_ACTIVE, name: 'TechSource Distributors' }]);
   });
@@ -468,6 +470,39 @@ describe('Recurring POs page: what templates hold that the form does not offer',
 
     expect(props?.suppliers).toEqual([{ id: SUP_ACTIVE, name: 'TechSource Distributors' }]);
     expect(props?.unofferedSuppliers).toEqual({ [SUP_ARCHIVED]: { name: 'Acme Paper', why: 'archived' } });
+  });
+
+  // The select's list can lack a destination the form does offer: a live site
+  // linked to a warehouse that the list did not return (LocationsService.list
+  // was one unpaged read, capped at 1000 rows of every kind). Before the fold
+  // the form named it as one "you can't pick here" and the save cleared it.
+  it('an offered site the list did not return is offered after all, for a template and for Make recurring', async () => {
+    const FROM_PO_SITE = '00000000-0000-0000-0000-0000000000e4';
+    // The list returned neither the template's site nor the purchase order's.
+    locationsList.mockResolvedValueOnce([]);
+    locationRows.mockImplementation((ids: string[]) => ({
+      data: [
+        { id: SITE, name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: null },
+        { id: GONE, name: 'Old Annex', kind: null, type: 'warehouse', warehouse_id: 'wh-1', deleted_at: '2026-10-05T00:00:00Z' },
+        { id: FROM_PO_SITE, name: 'Yard', kind: null, type: 'warehouse', warehouse_id: 'wh-2', deleted_at: null },
+      ].filter((r) => ids.includes(r.id)),
+      error: null,
+    }));
+    poDestination.mockResolvedValueOnce({
+      data: { destination_location_id: FROM_PO_SITE, destination: { name: 'Yard', deleted_at: null } },
+      error: null,
+    });
+    const props = findProps(await page({ from: PO }), RecurringTemplatesSeedLoader);
+
+    expect(locationRows).toHaveBeenCalledWith([SITE, GONE, FROM_PO_SITE]);
+    expect(props?.locations).toEqual([
+      { id: SITE, name: 'Main Warehouse' },
+      { id: FROM_PO_SITE, name: 'Yard' },
+    ]);
+    // The deleted one is still named, and still not offered.
+    expect(props?.unofferedDestinations).toEqual({
+      [GONE]: { name: 'Old Annex', why: 'deleted', saveRefuses: 'deleted' },
+    });
   });
 
   it('failed reads name nothing, are reported, and the page still renders', async () => {

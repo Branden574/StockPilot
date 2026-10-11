@@ -94,7 +94,9 @@ describe('Edit a template whose destination was deleted after it was saved (B)',
   const props = {
     ...PROPS,
     initial: [{ ...TEMPLATE, destination_location_id: 'loc-gone' }],
-    unofferedDestinations: { 'loc-gone': { name: 'Old Annex', why: 'deleted' as const } },
+    unofferedDestinations: {
+      'loc-gone': { name: 'Old Annex', why: 'deleted' as const, saveRefuses: 'deleted' as const },
+    },
   };
 
   it('the list says it creates no purchase order until its destination is changed', () => {
@@ -139,6 +141,40 @@ describe('Edit a template whose destination was deleted after it was saved (B)',
   });
 });
 
+// The list's flag follows the run's own rule (the purchase order save refuses
+// a deleted destination or one linked to no warehouse), not which `why` was
+// found first: a rack linked to no warehouse is "not a site" for the form and
+// refused by the run all the same, so the list says so (slice 8 review).
+describe("The list's flag is the run's rule", () => {
+  it('a rack linked to no warehouse: the list says it creates no purchase order', () => {
+    render(
+      <RecurringTemplatesPanel
+        {...PROPS}
+        initial={[{ ...TEMPLATE, destination_location_id: 'loc-rack' }]}
+        unofferedDestinations={{
+          'loc-rack': { name: 'Rack 4', why: 'not_a_site', saveRefuses: 'no_warehouse' },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Its destination, "Rack 4", isn\'t linked to a warehouse, so it creates no purchase order. Edit it to choose another destination.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('a staging area linked to its warehouse is accepted by the run: no flag in the list', () => {
+    render(
+      <RecurringTemplatesPanel
+        {...PROPS}
+        initial={[{ ...TEMPLATE, destination_location_id: 'loc-staging' }]}
+        unofferedDestinations={{ 'loc-staging': { name: 'Staging', why: 'not_a_site' } }}
+      />,
+    );
+    expect(screen.queryByText(/creates no purchase order/)).toBeNull();
+  });
+});
+
 describe('An archived supplier (D)', () => {
   const props = {
     ...PROPS,
@@ -150,6 +186,12 @@ describe('An archived supplier (D)', () => {
     render(<RecurringTemplatesPanel {...props} />);
     expect(screen.getByText(/Acme Paper \(archived\)/)).toBeInTheDocument();
     expect(screen.queryByText(/No supplier/)).toBeNull();
+  });
+
+  it('a supplier the page could not read is "Supplier unknown" in the list, never "not available"', () => {
+    render(<RecurringTemplatesPanel {...PROPS} initial={[{ ...TEMPLATE, supplier_id: 'sup-unread' }]} />);
+    expect(screen.getByText(/Supplier unknown/)).toBeInTheDocument();
+    expect(screen.queryByText(/not available/)).toBeNull();
   });
 
   it('Edit names it and opens on No supplier; saving sends none', async () => {

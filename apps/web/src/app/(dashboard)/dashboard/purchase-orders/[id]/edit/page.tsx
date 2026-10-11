@@ -95,7 +95,7 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   // The destinations and suppliers the form offers: sites linked to a
   // warehouse (a warehouse-less location makes the PO impossible to receive
   // against), and the active suppliers.
-  const locationOptions = locations
+  let locationOptions = locations
     .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
     .map((l) => ({ id: l.id as string, name: l.name as string }));
   let supplierOptions = suppliers.map((s) => ({ id: s.id as string, name: s.name as string }));
@@ -139,11 +139,14 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
       : null,
   ]);
   // A supplier still active that the select lacks only because the
-  // Suppliers module is off is offered after all, so the draft keeps it.
+  // Suppliers module is off is offered after all, so the draft keeps it. So
+  // is a live site linked to a warehouse that the list did not return, so
+  // the draft keeps its destination.
   if (unofferedSuppliers) supplierOptions = [...supplierOptions, ...unofferedSuppliers.fold];
+  if (unofferedDestinations) locationOptions = [...locationOptions, ...unofferedDestinations.fold];
   const unoffered = {
     destination: unofferedDestinationId
-      ? (unofferedDestinations?.get(unofferedDestinationId) ?? null)
+      ? (unofferedDestinations?.unoffered.get(unofferedDestinationId) ?? null)
       : null,
     supplier: unofferedSupplierId ? (unofferedSuppliers?.unoffered.get(unofferedSupplierId) ?? null) : null,
   };

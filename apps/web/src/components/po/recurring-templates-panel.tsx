@@ -209,16 +209,19 @@ function templateChoices(
 
 /**
  * The list's word for a template whose destination stops its purchase
- * orders: deleted after the template was saved, or no longer linked to a
+ * orders: deleted after the template was saved, or not linked to a
  * warehouse. The daily run skips such a template and says why
  * (RecurringPoTemplatesService.runDueTemplates); this says it before the run
- * does. Null for any other template (a staging area is accepted, and an
- * unread destination is not guessed at).
+ * does. It follows the run's own rule (`saveRefuses`, read from the row), not
+ * which `why` the form's note found first, so a rack linked to no warehouse
+ * is flagged too. Null for any other template (a staging area linked to its
+ * warehouse is accepted, and an unread destination is not guessed at).
  */
 function destinationBlocksRuns(destination: UnofferedDestination | undefined): string | null {
-  if (!destination || (destination.why !== 'deleted' && destination.why !== 'no_warehouse')) return null;
+  const refused = destination?.saveRefuses;
+  if (!destination || !refused) return null;
   const subject = destination.name ? `Its destination, "${destination.name}",` : 'Its destination';
-  return destination.why === 'deleted'
+  return refused === 'deleted'
     ? `${subject} was deleted, so it creates no purchase order. Edit it to choose another destination.`
     : `${subject} isn't linked to a warehouse, so it creates no purchase order. Edit it to choose another destination.`;
 }
@@ -233,7 +236,7 @@ function supplierLabel(
   if (offered) return offered.name;
   const unoffered = choices.unofferedSuppliers[supplierId];
   if (unoffered?.why === 'archived' && unoffered.name) return `${unoffered.name} (archived)`;
-  return unoffered?.why === 'archived' ? 'Archived supplier' : 'Supplier not available';
+  return unoffered?.why === 'archived' ? 'Archived supplier' : 'Supplier unknown';
 }
 
 // ── Template form ────────────────────────────────────────────────────────────

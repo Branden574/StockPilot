@@ -75,11 +75,12 @@ vi.mock('@/server/services/inventory', () => ({
 vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups, namesByIds })) },
 }));
+const listLocations = vi.fn(async (_opts: unknown): Promise<Array<Record<string, unknown>>> => [
+  { id: DEST.site, name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1' },
+]);
 vi.mock('@/server/services/locations', () => ({
   LocationsService: {
-    forCurrentUser: vi.fn(async () => ({
-      list: vi.fn(async () => [{ id: DEST.site, name: 'Main Warehouse', kind: null, type: 'warehouse', warehouse_id: 'wh-1' }]),
-    })),
+    forCurrentUser: vi.fn(async () => ({ list: listLocations })),
   },
 }));
 vi.mock('@/server/services/charters', () => ({
@@ -145,7 +146,7 @@ describe('Edit purchase order: what the page tells the form the selects do not o
   it('a deleted location: named as deleted', async () => {
     draft.mockReturnValueOnce({ ...draft(), destination_location_id: DEST.gone });
     expect((await formProps()).unoffered).toEqual({
-      destination: { name: 'Old Annex', why: 'deleted' },
+      destination: { name: 'Old Annex', why: 'deleted', saveRefuses: 'deleted' },
       supplier: null,
     });
   });
@@ -162,6 +163,20 @@ describe('Edit purchase order: what the page tells the form the selects do not o
     const props = await formProps();
     expect(props.suppliers).toEqual([{ id: SUP.active, name: 'TechSource Distributors' }]);
     expect(props.unoffered).toEqual({ destination: null, supplier: null });
+  });
+
+  // The select's list can lack a destination the form does offer: a live site
+  // linked to a warehouse that the list did not return (LocationsService.list
+  // was one unpaged read, capped at 1000 rows of every kind, ordered by name).
+  // Before the fold, such a destination was named as one "you can't pick
+  // here" and the save cleared it.
+  it('an offered site the list did not return is offered after all, so the draft keeps it', async () => {
+    listLocations.mockResolvedValueOnce([]);
+    const props = await formProps();
+    expect(props.locations).toEqual([{ id: DEST.site, name: 'Main Warehouse' }]);
+    expect(props.initial).toMatchObject({ locationId: DEST.site });
+    expect(props.unoffered).toEqual({ destination: null, supplier: null });
+    expect(locationsRead).toHaveBeenCalledTimes(1);
   });
 
   it('failed reads name nothing, are reported, and never take the page down', async () => {

@@ -29,6 +29,7 @@ describe('unofferedDestinationFrom: why a destination is not offered', () => {
     expect(judge(row({ kind: 'staging', deleted_at: '2026-10-01T00:00:00Z' }))).toEqual({
       name: 'Somewhere',
       why: 'deleted',
+      saveRefuses: 'deleted',
     });
   });
 
@@ -39,13 +40,36 @@ describe('unofferedDestinationFrom: why a destination is not offered', () => {
     expect(judge(row({ type: 'shelf' })).why).toBe('not_a_site');
   });
 
+  // The recurring list's "creates no purchase order" follows the run's rule
+  // (the purchase order save refuses a deleted destination or one linked to
+  // no warehouse), read from the row, never from which `why` came first: a
+  // rack with no warehouse is not a site AND refused (slice 8 review).
+  it('saveRefuses is the save\'s own rule, whatever the why', () => {
+    expect(judge(row({ kind: 'rack', warehouse_id: null }))).toEqual({
+      name: 'Somewhere',
+      why: 'not_a_site',
+      saveRefuses: 'no_warehouse',
+    });
+    // A staging area linked to its warehouse is accepted by the save.
+    expect(judge(row({ kind: 'staging' }))).toEqual({ name: 'Somewhere', why: 'not_a_site' });
+    expect(judge(row({}))).toEqual({ name: 'Somewhere', why: 'unknown' });
+  });
+
   it('a site linked to no warehouse', () => {
-    expect(judge(row({ warehouse_id: null }))).toEqual({ name: 'Somewhere', why: 'no_warehouse' });
+    expect(judge(row({ warehouse_id: null }))).toEqual({
+      name: 'Somewhere',
+      why: 'no_warehouse',
+      saveRefuses: 'no_warehouse',
+    });
   });
 
   it('no row, or a blank name, is not guessed at', () => {
     expect(unofferedDestinationFrom(null, false)).toEqual({ name: null, why: 'unknown' });
-    expect(judge(row({ name: '   ', deleted_at: '2026-10-01T00:00:00Z' }))).toEqual({ name: null, why: 'deleted' });
+    expect(judge(row({ name: '   ', deleted_at: '2026-10-01T00:00:00Z' }))).toEqual({
+      name: null,
+      why: 'deleted',
+      saveRefuses: 'deleted',
+    });
   });
 });
 
