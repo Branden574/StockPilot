@@ -1,6 +1,6 @@
 'use client';
 
-import { ExternalLink, FileDown, Loader2, Truck } from 'lucide-react';
+import { Clock, ExternalLink, FileDown, Loader2, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/use-hydrated';
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import {
   buyReturnLabelAction,
@@ -74,6 +75,7 @@ import {
   replacementCancelledLines,
   returnActionLabel,
   returnLineLabel,
+  returnWaitingDays,
   replacementShortItems,
   replacementShortLine,
   RETURN_ACTION_LABELS,
@@ -82,6 +84,7 @@ import {
   RETURNS_COPY,
   returnReasonLabel,
   sameChoice,
+  stillWaitingPrompt,
   unreadDestinationChoice,
   whenProcessedSentence,
   type ReplacementFulfilment,
@@ -711,7 +714,29 @@ export function ReturnWorkbench({
   // so what it does is said under it first (nothing prints).
   const readyHelpId = React.useId();
   const offersReady = actions.primary === 'get_replacement_ready' || actions.secondary.includes('get_replacement_ready');
-  const describedBy = (a: ReturnAction): string | undefined => (a === 'get_replacement_ready' ? readyHelpId : undefined);
+  // RX-2 review fix P17 (built in RX-3; plan 3.10, D28): from 14 days after
+  // approval, while the returned item is still out and the replacement waits
+  // for it, a viewer offered Cancel replacement is told how long it has waited
+  // and what the two buttons that end the wait do (core stillWaitingPrompt:
+  // nothing expires on its own). The days come from this browser's clock once
+  // hydrated, so the server's render never disagrees with it (React #418).
+  const hydrated = useHydrated();
+  const stillWaitingId = React.useId();
+  const stillWaiting = hydrated
+    ? stillWaitingPrompt({
+        status: r.status,
+        exchangeStatus: ex.status,
+        waitingDays: returnWaitingDays(r.status, r.approvedAt),
+        offered: [actions.primary, ...actions.secondary],
+        held: liveReplacement ? liveReplacement.held : null,
+      })
+    : null;
+  const describedBy = (a: ReturnAction): string | undefined =>
+    a === 'get_replacement_ready'
+      ? readyHelpId
+      : stillWaiting && (a === 'cancel_replacement' || a === 'cancel')
+        ? stillWaitingId
+        : undefined;
 
   return (
     <div className="space-y-6">
@@ -766,6 +791,12 @@ export function ReturnWorkbench({
         {offersReady ? (
           <p id={readyHelpId} className="text-muted-foreground basis-full text-xs">
             {RETURNS_COPY.getReplacementReadyHelp}
+          </p>
+        ) : null}
+        {stillWaiting ? (
+          <p id={stillWaitingId} className="flex basis-full items-start gap-1.5 text-sm" data-testid="still-waiting">
+            <Clock className="text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>{stillWaiting}</span>
           </p>
         ) : null}
         {r.status === 'requested' && wb.viewer.canManageReturns ? (

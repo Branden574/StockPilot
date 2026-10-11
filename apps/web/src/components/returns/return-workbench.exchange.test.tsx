@@ -884,3 +884,62 @@ describe('fix round 1: Change replacement short refusal', () => {
     expect(within(change).queryByRole('button', { name: 'Change, replacement on backorder' })).toBeNull();
   });
 });
+
+// RX-2 review fix P17, built in RX-3 (plan 3.10, D28): the 14-day prompt.
+describe('the 14-day prompt while the replacement waits for the returned item', () => {
+  const DAY = 86_400_000;
+  /** Approved `days` whole days ago (and a minute), from this test's clock. */
+  const approvedDaysAgo = (days: number) => new Date(Date.now() - days * DAY - 60_000).toISOString();
+  const waitingBench = (days: number, exchange: Record<string, unknown> = WAITING, viewer?: Record<string, boolean>) => {
+    const b = bench('approved', exchange) as unknown as { return: Record<string, unknown>; viewer: Record<string, boolean> };
+    b.return.approvedAt = approvedDaysAgo(days);
+    if (viewer) b.viewer = { ...b.viewer, ...viewer };
+    return b as never;
+  };
+
+  it('from 14 days says how long it has waited and what Cancel replacement and Cancel return do, under the next-step bar, and describes both buttons', () => {
+    render(<ReturnWorkbench workbench={waitingBench(15)} />);
+    const prompt = screen.getByTestId('still-waiting');
+    expect(prompt).toHaveTextContent(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+    );
+    const bar = screen.getByRole('region', { name: 'Next step' });
+    expect(bar).toContainElement(prompt);
+    for (const name of ['Cancel replacement', 'Cancel return']) {
+      expect(within(bar).getByRole('button', { name })).toHaveAttribute('aria-describedby', prompt.id);
+    }
+    // The other buttons are not described by it.
+    expect(within(bar).getByRole('button', { name: 'Receive' })).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('says nothing before 14 days', () => {
+    render(<ReturnWorkbench workbench={waitingBench(13)} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel replacement' })).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('when the replacement holds nothing (not in stock), says Cancel replacement cancels the order, not that it frees anything', () => {
+    const short = {
+      ...WAITING,
+      status: 'unavailable',
+      statusLabel: 'Replacement unavailable (backordered)',
+      replacement: { ...WAITING.replacement, held: 0, short: true, lines: [{ ...WAITING.replacement.lines[0]!, held: 0 }] },
+    };
+    render(<ReturnWorkbench workbench={waitingBench(20, short)} />);
+    expect(screen.getByTestId('still-waiting')).toHaveTextContent(
+      'Waiting 20 days. Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+    );
+  });
+
+  it('is not shown to someone who cannot cancel the replacement (no order approval)', () => {
+    render(<ReturnWorkbench workbench={waitingBench(30, WAITING, { canApproveOrders: false })} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+  });
+
+  it('is gone once the returned item is received', () => {
+    const b = bench('received', { ...WAITING, status: 'ready_to_pick' }) as unknown as { return: Record<string, unknown> };
+    b.return.approvedAt = approvedDaysAgo(30);
+    render(<ReturnWorkbench workbench={b as never} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+  });
+});
