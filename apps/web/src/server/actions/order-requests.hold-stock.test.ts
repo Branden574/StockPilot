@@ -93,9 +93,11 @@ describe('holdOrderStockAction (F2-2)', () => {
 
   it("a refusal comes back in the service's words, and nothing is refreshed", async () => {
     arrange({ data: null, error: { message: 'hold_not_applicable', code: 'P0001' } });
+    // With its reason since returns RX-3 fix round 2: the order actions pass
+    // a refusal's details through (actions/returns.ts already did).
     await expect(holdOrderStockAction({ id: ORDER })).resolves.toEqual({
       ok: false,
-      error: { code: 'conflict', message: HOLD_NOT_APPLICABLE_COPY },
+      error: { code: 'conflict', message: HOLD_NOT_APPLICABLE_COPY, details: { reason: 'not_applicable' } },
     });
     expect(revalidateTag).not.toHaveBeenCalled();
     expect(reportError).not.toHaveBeenCalled();

@@ -6,6 +6,7 @@ import { HOLD_BUSY_COPY } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { ServiceError } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import { DELETE, PATCH, POST } from './route';
@@ -58,6 +59,31 @@ describe('POST /api/v1/orders/[id]/lines returns the hold outcome', () => {
     expect(await res.json()).toEqual({ ok: true, added: 1, merged: 0, pickSlipStale: false, hold });
     expect(addLines).toHaveBeenCalledWith(ORDER, [{ itemId: ITEM, quantity: 3 }]);
     expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+  });
+});
+
+// Returns RX-3 fix round 2: the web dialog and the phone read the same reason
+// for a refused add. Busy wrote nothing (the same request is safe again); a
+// partial answer saved the top-ups (the client must reload, never resend).
+// An internal error carries no details.
+describe('POST /api/v1/orders/[id]/lines answers a refusal with its reason', () => {
+  const PARTIAL = 'Part of this change was saved. Reload the order to see it before adding again.';
+
+  it.each([
+    ['partial', new ServiceError('conflict', PARTIAL, { reason: 'partial', retryable: false }), 409,
+      { error: 'conflict', message: PARTIAL, details: { reason: 'partial', retryable: false } }],
+    ['busy', new ServiceError('conflict', 'Busy. Try again.', { reason: 'busy', retryable: true }), 409,
+      { error: 'conflict', message: 'Busy. Try again.', details: { reason: 'busy', retryable: true } }],
+    ['no details', new ServiceError('validation_error', 'Pick at least one item to add.'), 400,
+      { error: 'validation_error', message: 'Pick at least one item to add.' }],
+    ['internal, never its details', new ServiceError('internal_error', 'relation secret', { table: 'secret' }), 500,
+      { error: 'internal_error', message: 'An internal error occurred. Please try again.' }],
+  ])('%s', async (_name, refusal, status, body) => {
+    addLines.mockRejectedValueOnce(refusal);
+    const res = await POST(req('POST', { lines: [{ itemId: ITEM, quantity: 3 }] }), { params });
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual(body);
+    expect(revalidateTag).not.toHaveBeenCalled();
   });
 });
 

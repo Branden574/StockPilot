@@ -44,6 +44,9 @@ const bodySchema = z.object({
  *
  * Body: { lines: [{ itemId: uuid, quantity: number > 0 }] }
  * → 200 { ok: true, added, merged, pickSlipStale, hold }
+ * → 4xx { error, message, details? } a refusal; 409 with `details.reason`
+ *   'busy' (nothing written, safe to send again) or 'partial' (the top-ups
+ *   were saved: reload the order, never resend).
  *
  * `hold` (F2-2) is the automatic top-up's outcome: null when none was tried
  * (the caller may not approve orders, or the order is not approved or being
@@ -85,8 +88,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // The refusal's reason as the web action gives it (returns RX-3 fix
+      // round 2): `details.reason` 'busy' wrote nothing and is safe to send
+      // again; 'partial' saved the top-ups and must never be resent, only
+      // reloaded. Never on an internal error (its details are the server's).
+      const details = e.code !== 'internal_error' && e.details ? { details: e.details } : {};
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        { error: e.code, message: e.message, ...details },
         { status: serviceErrorStatus(e.code) },
       );
     }
