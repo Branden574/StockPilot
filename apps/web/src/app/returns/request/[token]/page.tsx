@@ -7,7 +7,7 @@ import { RETURN_PAGE_VIEWS_PER_IP_PER_HOUR, returnPageIpBucketKey } from '@/lib/
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadRequesterReturnSheet } from '@/server/services/returns-requester';
 
-import { RETURNS_COPY } from '@stockpilot/core';
+import { requesterEntryLabel, RETURNS_COPY } from '@stockpilot/core';
 
 import { RequesterReturnForm } from './requester-return-form';
 
@@ -41,7 +41,7 @@ export const dynamic = 'force-dynamic';
 
 export async function generateMetadata() {
   return {
-    title: exchangeCreateEnabled() ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return',
+    title: requesterEntryLabel(exchangeCreateEnabled()),
     robots: { index: false, follow: false },
   };
 }
@@ -85,7 +85,7 @@ export default async function RequesterReturnPage({
             Return request{sheet.orderNumber ? ` · Order ${sheet.orderNumber}` : ''}
           </div>
           <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
-            {exchanges ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return'}
+            {requesterEntryLabel(exchanges)}
           </h1>
           <p className="text-muted-foreground mt-4 max-w-[56ch] text-sm leading-relaxed">
             {exchanges ? (

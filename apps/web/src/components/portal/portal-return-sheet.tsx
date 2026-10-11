@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { readActionOptions, readActionSubmit } from '@/lib/returns/requester-sheet';
 import { portalReturnOptionsAction, portalReturnSheetAction, requestPortalReturnAction } from '@/server/actions/portal';
 
-import { RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
+import { requesterEntryLabel, RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
 
 type SheetState =
   | { status: 'loading' }
@@ -101,7 +101,7 @@ export function PortalReturnSheet({
   }
 
   const { sheet } = state;
-  const heading = sheet.exchangesEnabled ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return';
+  const heading = requesterEntryLabel(sheet.exchangesEnabled);
   const headingId = `${id ?? `portal-return-${orderId}`}-heading`;
   return (
     <section id={id} className={shell} aria-labelledby={headingId}>
@@ -110,7 +110,7 @@ export function PortalReturnSheet({
       </h3>
       {sheet.lines.length === 0 ? (
         <>
-          <p className="text-muted-foreground text-sm">Nothing on this order can be returned now.</p>
+          <p className="text-muted-foreground text-sm">{RETURNS_COPY.requesterNothingLeft}</p>
           <Button size="sm" variant="ghost" onClick={onCancel}>
             Close
           </Button>

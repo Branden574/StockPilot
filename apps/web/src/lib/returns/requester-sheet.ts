@@ -159,12 +159,12 @@ export function requesterLinesFromDrafts(
     const label = returnLineLabel(l.name, l.sizeLabel);
     if (options.length > 0) {
       if (!d.itemId || !options.some((o) => o.itemId === d.itemId)) {
-        return { ok: false, message: `Choose a size for ${label}.`, lineId: id };
+        return { ok: false, message: RETURNS_COPY.requesterChooseSize(label), lineId: id };
       }
       out.push({ orderRequestLineId: id, quantity: d.quantity, exchange: { itemId: d.itemId, quantity } });
     } else {
       const note = d.note.trim();
-      if (!note) return { ok: false, message: `Tell the warehouse what you need for ${label}.`, lineId: id };
+      if (!note) return { ok: false, message: RETURNS_COPY.requesterNoteRequired(label), lineId: id };
       if (note.length > RETURN_EXCHANGE_NOTE_MAX) {
         return { ok: false, message: `At most ${RETURN_EXCHANGE_NOTE_MAX} characters.`, lineId: id };
       }
@@ -172,7 +172,7 @@ export function requesterLinesFromDrafts(
     }
     hasExchange = true;
   }
-  if (out.length === 0) return { ok: false, message: 'Pick at least one item to return.', lineId: null };
+  if (out.length === 0) return { ok: false, message: RETURNS_COPY.requesterPickAtLeastOne, lineId: null };
   return { ok: true, lines: out, hasExchange };
 }
 

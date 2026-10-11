@@ -34,6 +34,7 @@ import {
   replacementRmaLinkLabel,
   replacementShortLine,
   replacementCancelledLines,
+  requesterEntryLabel,
   type ReplacementBannerInput,
   slipExchangeLine,
   stillWaitingLine,
@@ -194,6 +195,26 @@ describe('returns copy', () => {
     expect(returnLineLabel("Women's Polo S", 'Size S')).toBe("Women's Polo S");
     expect(returnLineLabel("Women's Polo - S", 'Size S')).toBe("Women's Polo - S");
     expect(returnLineLabel("Women's Polo (M)", 'Size M')).toBe("Women's Polo (M)");
+  });
+
+  // RX-3 merge: the requester sheet's words, one set for the token page, the
+  // B2B portal and the phone (the web and phone stages had each written
+  // their own: "Send request" / "Submit return request", "Select at least" /
+  // "Pick at least", "Choose the replacement: X" / "Choose a size for X.").
+  it('RX-3: one set of requester sheet words for the web and the phone', () => {
+    expect(RETURNS_COPY.requesterRequestReturn).toBe('Request a return');
+    expect(requesterEntryLabel(true)).toBe('Return or exchange');
+    expect(requesterEntryLabel(false)).toBe('Request a return');
+    expect(RETURNS_COPY.requesterSubmit).toBe('Submit return request');
+    expect(RETURNS_COPY.requesterSending).toBe('Sending…');
+    expect(RETURNS_COPY.requesterNothingLeft).toBe('Nothing left to return on this order.');
+    expect(RETURNS_COPY.requesterPickAtLeastOne).toBe('Pick at least one item to return.');
+    expect(RETURNS_COPY.requesterChooseSize("Women's Polo, S")).toBe("Choose a size for Women's Polo, S.");
+    expect(RETURNS_COPY.requesterNoteRequired('Composition Notebook')).toBe('Tell the warehouse what you need for Composition Notebook.');
+    expect(RETURNS_COPY.requesterNotesLabel).toBe('Notes for the warehouse');
+    expect(RETURNS_COPY.requesterNotesPlaceholder).toBe('Anything the warehouse should know about this return.');
+    expect(RETURNS_COPY.requesterRequestTitle).toBe('Return request');
+    expect(RETURNS_COPY.requesterReference('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123.');
   });
 
   it('RX-2: prints the plan section 6 replacement sentences', () => {
@@ -567,6 +588,17 @@ describe('returns copy', () => {
       RETURNS_COPY.requesterReturnOrExchange,
       RETURNS_COPY.requesterYourRequests,
       RETURNS_COPY.requesterOptionsUnavailable,
+      RETURNS_COPY.requesterRequestReturn,
+      RETURNS_COPY.requesterSubmit,
+      RETURNS_COPY.requesterSending,
+      RETURNS_COPY.requesterNothingLeft,
+      RETURNS_COPY.requesterPickAtLeastOne,
+      RETURNS_COPY.requesterChooseSize('Walk Exchange Tee, M'),
+      RETURNS_COPY.requesterNoteRequired('Walk Cap'),
+      RETURNS_COPY.requesterNotesLabel,
+      RETURNS_COPY.requesterNotesPlaceholder,
+      RETURNS_COPY.requesterRequestTitle,
+      RETURNS_COPY.requesterReference('RMA-20261011-ABC123'),
       RETURNS_COPY.available,
       RETURNS_COPY.notInStock,
       RETURNS_COPY.warehouseReview,

@@ -108,6 +108,14 @@ describe('RequesterTracking', () => {
     expect(numbers).toEqual(['RMA-20261011-CCC333', 'RMA-20261011-BBB222', 'RMA-20261011-AAA111']);
   });
 
+  // RX-3 merge: the phone's card says "Return request" for a request with no
+  // RMA number; the web said "Request". Core's one title now.
+  it('titles a request that has no RMA number "Return request", as the phone does', () => {
+    render(<RequesterTracking requests={[{ ...REVIEW, returnNumber: null }]} />);
+    expect(screen.getByText(RETURNS_COPY.requesterRequestTitle)).toBeInTheDocument();
+    expect(screen.getByText('Return request')).toBeInTheDocument();
+  });
+
   it('shows nothing a requester may not see: no rack, Staging, disposition, cost, supplier, note, reason or staff member (brief 28)', () => {
     const all = [SUBSTITUTED, REVIEW, DECLINED];
     expect(forbiddenRequesterKeys(all)).toEqual([]);

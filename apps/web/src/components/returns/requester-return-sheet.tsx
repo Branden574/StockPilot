@@ -92,7 +92,7 @@ export function RequesterReturnSheetForm({
   honeypot,
   idPrefix = 'requester-return',
   density = 'page',
-  submitLabel = 'Submit return request',
+  submitLabel = RETURNS_COPY.requesterSubmit,
 }: RequesterReturnSheetFormProps) {
   const p = idPrefix;
   const [drafts, setDrafts] = React.useState<Record<string, RequesterLineDraft>>(() => initialRequesterDrafts(lines));
@@ -352,7 +352,7 @@ export function RequesterReturnSheetForm({
             value={notes}
             disabled={busy}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Anything the warehouse should know about this return."
+            placeholder={RETURNS_COPY.requesterNotesPlaceholder}
             rows={3}
             maxLength={2000}
             className="resize-none text-sm"
@@ -369,7 +369,7 @@ export function RequesterReturnSheetForm({
       <div className={cn('flex gap-2', page ? 'flex-col' : 'flex-wrap items-center')}>
         <Button type="submit" disabled={busy || options.status === 'loading'} className={page ? 'w-full' : undefined} size={page ? 'default' : 'sm'}>
           {busy ? <Loader2 className="animate-spin" aria-hidden /> : null}
-          {busy ? 'Sending…' : submitLabel}
+          {busy ? RETURNS_COPY.requesterSending : submitLabel}
         </Button>
         {onCancel ? (
           <Button type="button" variant="ghost" size={page ? 'default' : 'sm'} onClick={onCancel} disabled={busy}>

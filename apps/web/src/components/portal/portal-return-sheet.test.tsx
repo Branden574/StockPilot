@@ -74,7 +74,8 @@ describe('PortalReturnSheet (returns RX-3)', () => {
     actions.portalReturnSheetAction.mockResolvedValueOnce({ ok: true, data: { ...SHEET, lines: [] } });
     const onCancel = vi.fn();
     render(<PortalReturnSheet orderId={ORDER_ID} onDone={vi.fn()} onCancel={onCancel} />);
-    expect(await screen.findByText('Nothing on this order can be returned now.')).toBeInTheDocument();
+    // RX-3 merge: core's one sentence, the phone's too.
+    expect(await screen.findByText('Nothing left to return on this order.')).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
     expect(onCancel).toHaveBeenCalled();
   });

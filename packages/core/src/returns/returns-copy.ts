@@ -298,7 +298,31 @@ export const RETURNS_COPY = {
   requesterReturnOrExchange: 'Return or exchange',
   requesterYourRequests: 'Your requests on this order',
   requesterOptionsUnavailable: "Couldn't load the other sizes. Try again.",
+  // RX-3 merge: the sheet's own words, one set for the token page, the B2B
+  // portal and the phone (requesterEntryLabel picks the entry's words).
+  requesterRequestReturn: 'Request a return',
+  requesterSubmit: 'Submit return request',
+  requesterSending: 'Sending…',
+  requesterNothingLeft: 'Nothing left to return on this order.',
+  requesterPickAtLeastOne: 'Pick at least one item to return.',
+  requesterChooseSize: (line: string): string => `Choose a size for ${line}.`,
+  requesterNoteRequired: (line: string): string => `Tell the warehouse what you need for ${line}.`,
+  requesterNotesLabel: 'Notes for the warehouse',
+  requesterNotesPlaceholder: 'Anything the warehouse should know about this return.',
+  /** The title of a request that has no RMA number yet. */
+  requesterRequestTitle: 'Return request',
+  requesterReference: (returnNumber: string): string => `Your reference is ${returnNumber}.`,
 } as const;
+
+/**
+ * The words on the requester's way in (the order's link or button, the token
+ * page's heading and title, the portal's button and sheet): "Return or
+ * exchange" while exchanges are on, "Request a return" while the kill switch
+ * holds them back, so no page promises an exchange it then refuses.
+ */
+export function requesterEntryLabel(exchangesEnabled: boolean): string {
+  return exchangesEnabled ? RETURNS_COPY.requesterReturnOrExchange : RETURNS_COPY.requesterRequestReturn;
+}
 
 // ── Sentences with values ───────────────────────────────────────────────────
 

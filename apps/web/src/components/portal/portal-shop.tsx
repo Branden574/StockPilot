@@ -23,6 +23,7 @@ import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
 import {
   ORDER_STATUS_META,
   isOrderStatusKey,
+  requesterEntryLabel,
   RETURNS_COPY,
   type PortalPricingMode,
   type RequesterTrackingReturn,
@@ -91,7 +92,7 @@ export function PortalShop({
   // got a request (drives the in-portal confirmation banner).
   const [returnFormOrderId, setReturnFormOrderId] = React.useState<string | null>(null);
   const [returnPlaced, setReturnPlaced] = React.useState<({ orderId: string } & RequesterSubmitted) | null>(null);
-  const returnButtonWords = exchangesEnabled ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return';
+  const returnButtonWords = requesterEntryLabel(exchangesEnabled);
   // Order and return days are the viewer's; the server's zone (UTC) would
   // print the next day for an evening order (React error #418). Printed once
   // hydrated.
@@ -308,7 +309,7 @@ export function PortalShop({
                         {returnPlaced.hasExchange
                           ? RETURNS_COPY.requesterReceivedExchangeRequest
                           : RETURNS_COPY.requesterReceivedReturnRequest}{' '}
-                        {returnPlaced.returnNumber ? `Your reference is ${returnPlaced.returnNumber}. ` : ''}
+                        {returnPlaced.returnNumber ? `${RETURNS_COPY.requesterReference(returnPlaced.returnNumber)} ` : ''}
                         Your supplier will review it and follow up.
                       </span>
                     </div>

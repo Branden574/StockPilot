@@ -77,9 +77,9 @@ import {
   readinessAudience,
   readinessStockFlags,
   reconcileReadiness,
+  requesterEntryLabel,
   resolveOrgTimezone,
   returnedFragment,
-  RETURNS_COPY,
   returnHandle,
   returnRefsByLine,
   shortfallPoView,
@@ -1236,7 +1236,7 @@ export default async function OrderDetailPage({
                     item can be a return only or an exchange for another size
                     (the words follow the exchange kill switch). */}
                 <a href={requesterReturnPath}>
-                  {exchangeCreateEnabled() ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return'}
+                  {requesterEntryLabel(exchangeCreateEnabled())}
                 </a>
               </Button>
             )}

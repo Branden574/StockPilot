@@ -62,7 +62,7 @@ export function RequesterTracking({
             className={cn('bg-card space-y-2', compact ? 'rounded-lg border p-3' : 'rounded-2xl border p-4')}
           >
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              <span className="font-mono text-sm font-medium tabular-nums">{r.returnNumber ?? 'Request'}</span>
+              <span className="font-mono text-sm font-medium tabular-nums">{r.returnNumber ?? RETURNS_COPY.requesterRequestTitle}</span>
               {hydrated ? (
                 <time dateTime={r.createdAt} className="text-muted-foreground text-xs">
                   {new Date(r.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
