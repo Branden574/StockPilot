@@ -28,8 +28,12 @@ export const dynamic = 'force-dynamic';
  *                         photo }] }] }
  *
  * Defenses on this surface (brief 32; plan RX-3 API):
- *   • POST ONLY, the token in the body: never in a URL, a log line or a CDN
- *     key. `Cache-Control: no-store` on every answer.
+ *   • POST ONLY, the token in the body: never in this API's URL, a CDN key
+ *     or the app's own logs (reportError redacts). `Cache-Control: no-store`
+ *     on every answer. Accepted residual until a migration (SECURITY-
+ *     INVARIANTS, RX-3): the token lookup in server/lib/order-secrets.ts is a
+ *     PostgREST GET, so the token reaches the Supabase API gateway's
+ *     query-string log; the fix is a lookup by POST or by sha256 (RX-4).
  *   • NO INPUT BUT THE TOKEN: no item, group, warehouse or quantity is read
  *     from the body (anything else in it is ignored), so the answer is the
  *     token's own order's eligible sizes and nothing else; a token never
