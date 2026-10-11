@@ -1100,7 +1100,8 @@ WEB_TESTS=(
   src/server/services/order-requests.warehouse-words.test.ts
   # Returns RX-2 (0396): the exchange functions one call each, audit, events
   # and messages only on a real change, every exchange hint mapped, the kill
-  # switch and the requester paths refusing an exchange before any call; the
+  # switch refusing a new exchange before any call (RX-3: on every requester
+  # path too, which otherwise pass the exchange to the database); the
   # order paths map the gate, the cancel guard and the fixed lines by hint
   # and refuse a replacement's line edits before any write; the prepare chain
   # skips what is done, stops at the first refusal and never signs; a
@@ -1114,6 +1115,23 @@ WEB_TESTS=(
   src/lib/email/order-requests.replacement.test.ts
   src/app/api/v1/returns/exchange-routes.test.ts
   src/components/returns/return-workbench.exchange.test.tsx
+  # Returns RX-3 (no migration): the requester's own exchange. The token
+  # page's sizes are POST only (the token never in a URL), never cached, one
+  # 404 for every closed door, rate-limited per IP and per sha256(token),
+  # reading nothing but the token; the submit and the member routes strip
+  # every forged field (and refuse one inside the exchange), refuse a zero,
+  # fractional or over-returned quantity, answer an unknown item and another
+  # group's item with the same words; a member reaches only their own order
+  # (a disabled account 401); the kill switch alone holds a requester
+  # exchange back; every payload carries core's requester keys only (no SKU,
+  # free count, rack, disposition, note, reason or person) and photos are
+  # signed for the order's own items and sizes only; no requester path reads
+  # the decision log, the restock options or the order row's token column.
+  src/server/services/returns-requester.test.ts
+  src/server/services/returns-requester.guard.test.ts
+  src/app/api/v1/public/returns/options/route.test.ts
+  'src/app/api/v1/orders/[id]/return-request/route.test.ts'
+  src/server/actions/portal.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1251,6 +1269,10 @@ CORE_TESTS=(
   # decisions and candidate rows the web and the phone share.
   src/returns/exchange-status.test.ts
   src/returns/exchange-view.test.ts
+  # Returns RX-3: the requester's contract: the key lists every server
+  # payload is pinned against, the words no key may carry, two-state
+  # availability, and the tracking sentences.
+  src/returns/requester-exchange-types.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { returnTokenBucketKey } from '@/lib/returns/public-limits';
+import { publicRequestIp, returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { createRequesterReturn } from '@/server/services/returns';
@@ -22,7 +22,17 @@ export const dynamic = 'force-dynamic';
  * demand, the cap trigger), the item is stamped from the source line, the
  * disposition is always restock, and the requester's name and email come
  * from the order. zod strips everything else a client might send
- * (disposition, status, warehouse, organization, location, item).
+ * (disposition, status, warehouse, organization, location, item, an
+ * approved item, a replacement order id).
+ *
+ * Returns RX-3: a line may carry `exchange` { itemId?, quantity?, note? }
+ * ("Exchange for another size", or "warehouse will review" with a note).
+ * The service validates it with core's requester schema (strict: any other
+ * key inside it is refused, whole units at most the line's return quantity,
+ * a note up to 500 characters), and the database re-checks it in the same
+ * transaction against the line's own eligible sizes: any other item, known
+ * or not, answers the same generic 400 (no oracle). With
+ * RETURNS_EXCHANGE_CREATE=off an exchange is refused; a return goes through.
  *
  * Defenses on this surface:
  *   • HONEYPOT: a non-empty `hp` answers a fake success and writes nothing.
@@ -42,6 +52,8 @@ export const dynamic = 'force-dynamic';
 const lineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().int().positive().max(10_000),
+  // Shape-checked by core's requester schema in the service (strict).
+  exchange: z.unknown().optional(),
 });
 
 const bodySchema = z.object({
@@ -93,10 +105,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Only trust x-forwarded-for on Vercel (elsewhere a client could rotate it).
-  const onVercel = process.env.VERCEL === '1';
-  const xff = onVercel ? req.headers.get('x-forwarded-for') : null;
-  const ip = xff?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
+  // Only trusts x-forwarded-for on Vercel (elsewhere a client could rotate it).
+  const ip = publicRequestIp(req.headers);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-return-request:${ip}`, RATE_LIMIT_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
     checkRateLimit(returnTokenBucketKey(body.token), RATE_LIMIT_PER_TOKEN_PER_HOUR, ONE_HOUR_MS, 'closed'),
@@ -133,7 +143,11 @@ export async function POST(req: NextRequest) {
       {
         reasonCode: body.reasonCode,
         notes: body.notes ?? undefined,
-        lines: body.lines.map((l) => ({ orderRequestLineId: l.orderRequestLineId, quantity: l.quantity })),
+        lines: body.lines.map((l) => ({
+          orderRequestLineId: l.orderRequestLineId,
+          quantity: l.quantity,
+          ...(l.exchange !== undefined && l.exchange !== null ? { exchange: l.exchange } : {}),
+        })),
       },
       { idempotencyKey: body.idempotencyKey ?? null },
     );
