@@ -99,10 +99,11 @@
 --      A row someone else holds is 55P03 busy at once: the function never
 --      waits on an inventory_items row lock, so it cannot sit in a deadlock
 --      cycle with update()'s separate fan-out statement (design 3.2, critique
---      D2). Then, under the lock: a SKU that is not the one the caller saw (or
---      a record deleted since) is P0001 item_changed; a kit is P0001
---      not_groupable (detail reason kit); a product-family member (group_id
---      set) is P0001 family_member_sku.
+--      D2). Then, under the lock: a SKU that is not the one the caller saw, a
+--      record deleted since, or one that has left the caller's read or write
+--      scope since step 8 (another session moved it) is P0001 item_changed;
+--      a kit is P0001 not_groupable (detail reason kit); a product-family
+--      member (group_id set) is P0001 family_member_sku.
 --  10. Visible siblings decide (caller_can_read_item over the live rows of
 --      each selected SKU, one statement): a SKU no other readable live record
 --      carries is P0001 not_shared. When every readable record of a SKU is
@@ -561,10 +562,19 @@ begin
   end;
 
   -- Under the lock (a new statement: it sees what committed before it).
+  -- The scope is checked AGAIN here: the two checks above ran before the lock,
+  -- each in its own snapshot, so another session's committed move of a
+  -- selected record (its warehouse, charter or category) between them and the
+  -- lock would otherwise be written anyway (fix round 1, SEC-1).
+  -- caller_can_write_item includes caller_can_read_item. The lock covers only
+  -- ids already proven readable, so this answers nothing new about any other
+  -- record.
   select jsonb_agg(i.id order by i.id) into v_bad
     from public.inventory_items i
    where i.id = any (v_ids)
-     and (i.deleted_at is not null or i.sku is distinct from (v_expected ->> i.id::text));
+     and (i.deleted_at is not null
+          or i.sku is distinct from (v_expected ->> i.id::text)
+          or not public.caller_can_write_item(i.id));
   if v_bad is not null then
     raise exception 'item_changed' using errcode = 'P0001', hint = 'item_changed',
       detail = jsonb_build_object('itemIds', v_bad)::text;
@@ -697,7 +707,8 @@ revoke all on function public._item_grouping_split_apply(uuid, uuid, jsonb, uuid
 
 comment on function public._item_grouping_split_apply(uuid, uuid, jsonb, uuid, text, text) is
   'The split''s steps 8 to 12 (0399): records (P0002 item_not_found, 42501 item_not_writable), the selected '
-  'rows locked in one id-ordered FOR UPDATE NOWAIT (55P03 busy), item_changed, not_groupable (kit), '
+  'rows locked in one id-ordered FOR UPDATE NOWAIT (55P03 busy), item_changed (the SKU, deleted, or the '
+  'read/write scope rechecked under the lock), not_groupable (kit), '
   'family_member_sku, then visible siblings decide (caller_can_read_item): not_shared, sku_siblings_changed, '
   'the anchor (the caller''s, else the oldest) keeps a fully selected SKU; one UPDATE of sku and updated_by on '
   'the changing rows; one inventory.item.ungrouped audit row per changed record. Answers {action, items}. No '

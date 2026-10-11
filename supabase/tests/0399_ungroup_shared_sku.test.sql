@@ -47,20 +47,24 @@
 -- K.  caller_can_write_item keeps step with a real RLS update for each
 --     persona (the revoked staff member is the documented difference, V5).
 -- F.  Failure injection: a planted raise on the audit insert, on the request
---     insert and on the 2nd SKU update each leaves nothing changed.
+--     insert and on the 2nd SKU update each leaves nothing changed; a record
+--     that leaves the caller's write scope after the first checks and before
+--     the row lock is refused item_changed under the lock (fix round 1,
+--     SEC-1), and applies once the scope is back.
 -- Z.  The fresh-SKU helper (shape, distinct, unused, bounded count); 0234
 --     holds; no stock movement and no holding changed; nothing outside the
 --     split rows changed; the other organization is untouched.
 --
--- NOWAIT busy (55P03) needs two sessions: scripts/db-concurrency/
--- 0399_split_sku_race.sh.
+-- NOWAIT busy (55P03), and a real move by another session between the first
+-- checks and the lock, need two sessions: scripts/db-concurrency/
+-- 0399_split_sku_races.sh.
 --
 -- Roles: fixtures as the test superuser (RLS bypassed, the API-role guards
 -- exempt). begin/rollback: nothing leaks. Namespace 03990000.
 
 begin;
 
-select plan(49);
+select plan(51);
 
 \set orgA   '\'03990000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03990000-0000-0000-0000-00000000000b\''
@@ -126,6 +130,9 @@ select plan(49);
 -- Charter pair (same charter chA, two racks) for charter staff.
 \set h1     '\'03990000-0000-0000-0000-000000000191\''
 \set h2     '\'03990000-0000-0000-0000-000000000192\''
+-- Scope recheck under the lock (F5/F6): a pair, w2 the record that "moves".
+\set w1     '\'03990000-0000-0000-0000-0000000001c1\''
+\set w2     '\'03990000-0000-0000-0000-0000000001c2\''
 -- Another organization: one row with the owner's-case SKU, one with x1's.
 \set bp     '\'03990000-0000-0000-0000-0000000001b1\''
 \set bx     '\'03990000-0000-0000-0000-0000000001b2\''
@@ -221,6 +228,8 @@ insert into public.inventory_items
   (:j7,   :orgA, :whA, null, :catA, 'X0399-INJ3',  'Inject three',    null,            '3-Q',  1, 'active', false, null, '2026-01-03T00:00:00Z', null),
   (:h1,   :orgA, :whA, :chA, :catA, 'X0399-CHART', 'Charter pair',    null,            '1-R',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:h2,   :orgA, :whA, :chA, :catA, 'X0399-CHART', 'Charter pair',    null,            '2-R',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
+  (:w1,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '1-S',  1, 'active', false, null, '2026-01-01T00:00:00Z', null),
+  (:w2,   :orgA, :whA, null, :catA, 'X0399-SCOPE', 'Scope moved',     null,            '2-S',  1, 'active', false, null, '2026-01-02T00:00:00Z', null),
   (:bp,   :orgB, :whB, null, null,  'X0399-PAIR',  'Org B mouse pad', null,            '22-A', 5, 'active', false, null, '2026-01-01T00:00:00Z', null),
   (:bx,   :orgB, :whB, null, null,  'X0399-CROSS', 'Org B cross',     null,            '1-M',  5, 'active', false, null, '2026-01-01T00:00:00Z', null);
 
@@ -317,7 +326,7 @@ grant all on ans to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 39 then
+  if (select count(*) from public.inventory_items where id::text like '03990000-%') <> 41 then
     raise exception 'fixture: items (%)', (select count(*) from public.inventory_items where id::text like '03990000-%');
   end if;
   if (select count(*) from public.user_profiles where id::text like '03990000-%' and disabled_at is not null) <> 1 then
@@ -666,6 +675,49 @@ select is(
   '186=false,187=false/false',
   'F4: with the probe gone the same key applies (a rolled-back call recorded nothing under it)');
 
+-- The scope is rechecked under the row lock (fix round 1, SEC-1). The checks
+-- of step 8 run before the lock, each in its own snapshot; another session's
+-- committed move of a selected record out of the caller's warehouse, charter
+-- or category between them and the lock must be refused, not written. One
+-- session cannot interleave another's commit, so the move is simulated: the
+-- FIRST caller_can_write_item answer for w2 in a call is the real one (step 8
+-- passes), and every later answer for w2 in that call is false, as the moved
+-- record would answer. Without the recheck the split writes w2 (its sibling
+-- w1 is still readable, so not_shared does not fire). A refused call's
+-- subtransaction rolls the setting back, so each call starts fresh. The real
+-- two-session move is race 7 of scripts/db-concurrency/0399_split_sku_races.sh.
+alter function public.caller_can_write_item(uuid) rename to _zz0399_cciw_real;
+create function public.caller_can_write_item(p_item_id uuid) returns boolean
+language plpgsql volatile security definer set search_path = public as $$
+declare v_seen boolean := coalesce(current_setting('zz0399.cciw_seen', true), '') = 'yes';
+begin
+  if p_item_id <> '03990000-0000-0000-0000-0000000001c2'::uuid then
+    return public._zz0399_cciw_real(p_item_id);
+  end if;
+  perform set_config('zz0399.cciw_seen', 'yes', true);
+  if v_seen then
+    return false;
+  end if;
+  return public._zz0399_cciw_real(p_item_id);
+end $$;
+grant execute on function public.caller_can_write_item(uuid) to authenticated;
+select is(
+  (select pg_temp.brief(a.r) || '|' || coalesce(pg_temp.ids_of(a.r), '-')
+     from (select pg_temp.split(:mgr, pg_temp.req(:mgr, array[:w2]::uuid[]), pg_temp.k(63)) as r) a)
+  || '|' || (select string_agg(sku, ',' order by id) from public.inventory_items where id in (:w1, :w2))
+  || '|' || (select count(*) from public.audit_logs where event = 'inventory.item.ungrouped' and metadata->>'entity_id' = :w2::text)::text
+  || '|' || (select count(*) from public.item_grouping_requests where key = pg_temp.k(63)::uuid)::text,
+  'P0001:item_changed|1c2|X0399-SCOPE,X0399-SCOPE|0|0',
+  'F5: a record that leaves the caller''s write scope after the first checks is refused item_changed under the lock (not item_not_writable: step 8 passed), and nothing is written');
+drop function public.caller_can_write_item(uuid);
+alter function public._zz0399_cciw_real(uuid) rename to caller_can_write_item;
+select is(
+  pg_temp.brief(pg_temp.split(:mgr, pg_temp.req(:mgr, array[:w2]::uuid[]), pg_temp.k(63)))
+  || '|' || (select (has_function_privilege('authenticated', 'public.caller_can_write_item(uuid)', 'EXECUTE')
+                     and not has_function_privilege('anon', 'public.caller_can_write_item(uuid)', 'EXECUTE'))::text),
+  '1c2=false/false|true',
+  'F6: with the real scope check back, the same key applies (the refusal recorded nothing), and the real function kept its grants');
+
 -- ═══ Z. The helper, 0234, stock, and everything else ══════════════════════
 select is(
   (select (cardinality(s) = 100)::text || '/' || (select count(distinct x) = 100 from unnest(s) x)::text || '/'
@@ -715,13 +767,13 @@ select is(
 select is(
   (select string_agg(right(a.id::text, 3), ',' order by a.id)
      from pg_temp.fp_full(:orgA) a join before_items b on b.id = a.id where (a.j->>'sku') <> (b.j->>'sku')),
-  '102,122,132,141,142,151,186,187,192',
+  '102,122,132,141,142,151,186,187,192,1c2',
   'Z7: exactly the records split above have a new SKU');
 select is(
   (select count(*)::text from public.audit_logs where organization_id = :orgA and event = 'inventory.item.ungrouped')
   || '/' || (select count(*)::text from public.audit_logs where organization_id = :orgB),
-  '9/0',
-  'Z8: one audit row per changed record (nine), none for a kept record, none in the other organization');
+  '10/0',
+  'Z8: one audit row per changed record (ten), none for a kept record, none in the other organization');
 select is(
   (select string_agg(a.j::text, ',' order by a.id) from pg_temp.fp_full(:orgB) a)
   = (select string_agg(b.j::text, ',' order by b.id) from before_items b where b.id in (:bp, :bx)),

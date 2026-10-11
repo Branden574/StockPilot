@@ -29,7 +29,18 @@
 #   6. update()'s TARGET-row write (the RLS client, as the member) against the
 #      split, both orders: the split waits for nobody; the target write waits
 #      for the split and then applies to the split row with its new SKU.
-#   7. No session ever sees 40001 or 40P01, and 0234 holds at the end.
+#   7. A record leaves the caller's scope between the first checks and the
+#      row lock (fix round 1, SEC-1). A staff member who reads only the
+#      warehouse's no-charter records splits one record of a three-record
+#      SKU; the split pauses right after its first scope check (a planted
+#      pause in caller_can_write_item, this race only); another session
+#      commits a move of that record into a charter the staff member cannot
+#      read; the split then takes its lock and is refused item_changed,
+#      because the scope is checked again under the lock. Without that
+#      recheck the split would write the moved record: its two siblings are
+#      still readable, so not_shared does not fire. The plant is removed
+#      right after, by cleanup at the start and end, and by the EXIT trap.
+#   8. No session ever sees 40001 or 40P01, and 0234 holds at the end.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0399 applied. Fixtures are committed under the 03991111-... namespace
@@ -50,6 +61,8 @@ TMP="$(mktemp -d)"
 ORG='03991111-0000-0000-0000-00000000000a'
 MGR='03991111-0000-0000-0000-0000000000a1'
 MGR2='03991111-0000-0000-0000-0000000000a2'
+STF='03991111-0000-0000-0000-0000000000a3'
+CHA='03991111-0000-0000-0000-0000000000c1'
 WH='03991111-0000-0000-0000-0000000000b1'
 # One pair per race, so each starts from a known state.
 P1A='03991111-0000-0000-0000-000000000101'; P1B='03991111-0000-0000-0000-000000000102'
@@ -59,6 +72,7 @@ P4A='03991111-0000-0000-0000-000000000401'; P4B='03991111-0000-0000-0000-0000000
 P5A='03991111-0000-0000-0000-000000000501'; P5B='03991111-0000-0000-0000-000000000502'; P5C='03991111-0000-0000-0000-000000000503'
 P6A='03991111-0000-0000-0000-000000000601'; P6B='03991111-0000-0000-0000-000000000602'
 P7A='03991111-0000-0000-0000-000000000701'; P7B='03991111-0000-0000-0000-000000000702'
+P8A='03991111-0000-0000-0000-000000000801'; P8B='03991111-0000-0000-0000-000000000802'; P8C='03991111-0000-0000-0000-000000000803'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -91,11 +105,53 @@ wait_for() { # wait_for <application_name> <wait_event_type> [wait_event]
   return 1
 }
 
+# Race 7's planted pause: caller_can_write_item renamed aside and wrapped.
+# unplant puts the real function back (its grants and comment travel with it)
+# and is safe to run when nothing is planted.
+unplant() {
+  "${PSQL[@]}" >/dev/null <<'SQL'
+do $u$
+begin
+  if to_regprocedure('public._zz0399_cciw_real(uuid)') is not null then
+    drop function if exists public.caller_can_write_item(uuid);
+    alter function public._zz0399_cciw_real(uuid) rename to caller_can_write_item;
+  end if;
+end
+$u$;
+SQL
+}
+plant() {
+  "${PSQL[@]}" >/dev/null <<'SQL'
+begin;
+alter function public.caller_can_write_item(uuid) rename to _zz0399_cciw_real;
+create function public.caller_can_write_item(p_item_id uuid) returns boolean
+language plpgsql volatile security definer set search_path = public as $p$
+declare v boolean := public._zz0399_cciw_real(p_item_id);
+begin
+  -- Race 7 only: pause once per transaction, AFTER the first (step 8) answer,
+  -- so another session can commit a move before the split takes its row lock.
+  if current_setting('application_name') = 'rscope'
+     and coalesce(current_setting('zz0399.paused', true), '') = '' then
+    perform set_config('zz0399.paused', 'yes', true);
+    perform pg_sleep(1.5);
+  end if;
+  return v;
+end
+$p$;
+revoke all on function public.caller_can_write_item(uuid) from public, anon, service_role;
+grant execute on function public.caller_can_write_item(uuid) to authenticated;
+commit;
+SQL
+}
+
 cleanup() {
+  if ! unplant 2>"$TMP/unplant.err"; then
+    echo "unplant failed (caller_can_write_item may still be wrapped):"; cat "$TMP/unplant.err"; return 1
+  fi
   if ! "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
 delete from public.audit_logs where organization_id = '$ORG';
 delete from public.organizations where id = '$ORG';
-delete from auth.users where id in ('$MGR', '$MGR2');
+delete from auth.users where id in ('$MGR', '$MGR2', '$STF');
 SQL
   then
     echo "cleanup failed:"; cat "$TMP/cleanup.err"; return 1
@@ -151,12 +207,20 @@ fanout_sql() { # fanout_sql <original sku> <target id> <set clause>
 if ! "${PSQL[@]}" >/dev/null <<SQL
 insert into auth.users (id, email, raw_user_meta_data) values
   ('$MGR',  '0399-2s-mgr@test.local',  '{}'::jsonb),
-  ('$MGR2', '0399-2s-mgr2@test.local', '{}'::jsonb);
+  ('$MGR2', '0399-2s-mgr2@test.local', '{}'::jsonb),
+  ('$STF',  '0399-2s-stf@test.local',  '{}'::jsonb);
 insert into public.organizations (id, name, slug) values ('$ORG', '0399 Two Session Org', '0399-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   ('$ORG', '$MGR', 'manager', now()),
-  ('$ORG', '$MGR2', 'manager', now());
+  ('$ORG', '$MGR2', 'manager', now()),
+  ('$ORG', '$STF', 'staff', now());
 insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0399 2S Main', 'WH-0399-2S', 'active');
+-- Race 7: staff of the warehouse with no charter reads only its no-charter
+-- records; CHA is the charter a record is moved into.
+insert into public.charters (id, organization_id, name, code, status) values ('$CHA', '$ORG', '0399 2S North', 'C0399-2S', 'active');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values ('$ORG', '$WH', '$CHA');
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
+  ('$ORG', '$STF', '$WH', null, true);
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, unit_cost, quantity_on_hand, status, bin_location, created_at) values
   ('$P1A', '$ORG', '$WH', 'X0399-R1', 'Race one',   1, 3, 'active', '1-A', now() - interval '2 days'),
@@ -175,7 +239,10 @@ insert into public.inventory_items
   ('$P6A', '$ORG', '$WH', 'X0399-R6', 'Race six',   1, 3, 'active', '6-A', now() - interval '2 days'),
   ('$P6B', '$ORG', '$WH', 'X0399-R6', 'Race six',   1, 3, 'active', '6-B', now() - interval '1 day'),
   ('$P7A', '$ORG', '$WH', 'X0399-R7', 'Race seven', 1, 3, 'active', '7-A', now() - interval '2 days'),
-  ('$P7B', '$ORG', '$WH', 'X0399-R7', 'Race seven', 1, 3, 'active', '7-B', now() - interval '1 day');
+  ('$P7B', '$ORG', '$WH', 'X0399-R7', 'Race seven', 1, 3, 'active', '7-B', now() - interval '1 day'),
+  ('$P8A', '$ORG', '$WH', 'X0399-R8', 'Race eight', 1, 3, 'active', '8-A', now() - interval '3 days'),
+  ('$P8B', '$ORG', '$WH', 'X0399-R8', 'Race eight', 1, 3, 'active', '8-B', now() - interval '2 days'),
+  ('$P8C', '$ORG', '$WH', 'X0399-R8', 'Race eight', 1, 3, 'active', '8-C', now() - interval '1 day');
 SQL
 then
   echo "fixture setup failed"; exit 1
@@ -275,13 +342,40 @@ check "6b: the target write then applies to the split row, with its new SKU" \
   "$(sed -n 's/^T=//p' "$TMP/r7t.out")/$(q "select name from public.inventory_items where id = '$P7B'")" \
   "$(ans r7s | jget items.0.after_sku)/Race seven renamed"
 
-# ═══ 7. Never 40001 or 40P01; 0234 holds ══════════════════════════════════
-if grep -l -E 'ERROR:  (40001|40P01)' "$TMP"/*.out >/dev/null 2>&1; then
-  bad "7: a session saw 40001 or 40P01: $(grep -l -E 'ERROR:  (40001|40P01)' "$TMP"/*.out | xargs -n1 basename | tr '\n' ' ')"
+# ═══ 7. A record leaves the caller's scope between the checks and the lock ═
+if plant 2>"$TMP/plant.err"; then
+  ( as_user rscope "$STF" "$(split_sql "$STF" "$P8B" X0399-R8 "$(key 9)")" > "$TMP/rscope.out" ) &
+  if wait_for rscope Timeout PgSleep; then
+    ok "7: the split paused after its first scope check (step 8 passed)"
+  else
+    bad "7: the split never reached its planted pause"
+  fi
+  # Another session (the superuser: no lock to wait on, the split holds no row
+  # yet) commits a move of P8B into a charter the staff member cannot read.
+  T0=$(now_ms)
+  q "update public.inventory_items set charter_id = '$CHA' where id = '$P8B'" >/dev/null
+  T1=$(now_ms)
+  if [ $((T1 - T0)) -lt 1000 ]; then ok "7: the move committed at once ($((T1 - T0)) ms)"; else bad "7: the move waited $((T1 - T0)) ms"; fi
+  wait
+  unplant || bad "7: unplant failed"
+  check "7: the split is refused item_changed under the lock (the scope is checked again)" "$(refused rscope P0001 item_changed)" "1/1"
+  check "7: nothing written: P8B keeps its SKU, no audit row, no request row; the siblings are untouched" \
+    "$(sku_of "$P8B")/$(audits_of "$P8B")/$(q "select count(*) from public.item_grouping_requests where organization_id = '$ORG' and key = '$(key 9)'")/$(sku_of "$P8A")/$(sku_of "$P8C")" \
+    "X0399-R8/0/0/X0399-R8/X0399-R8"
+  check "7: the real caller_can_write_item is back" \
+    "$(q "select (to_regprocedure('public._zz0399_cciw_real(uuid)') is null and has_function_privilege('authenticated', 'public.caller_can_write_item(uuid)', 'EXECUTE') and not has_function_privilege('anon', 'public.caller_can_write_item(uuid)', 'EXECUTE'))::text")" \
+    "true"
 else
-  ok "7: no session saw 40001 or 40P01"
+  bad "7: could not plant the pause: $(cat "$TMP/plant.err")"
 fi
-check "7: 0234 holds" "$(q "select count(*) from (select sku, charter_id, bin_location from public.inventory_items where organization_id = '$ORG' and deleted_at is null group by 1, 2, 3 having count(*) > 1) d")" "0"
+
+# ═══ 8. Never 40001 or 40P01; 0234 holds ══════════════════════════════════
+if grep -l -E 'ERROR:  (40001|40P01)' "$TMP"/*.out >/dev/null 2>&1; then
+  bad "8: a session saw 40001 or 40P01: $(grep -l -E 'ERROR:  (40001|40P01)' "$TMP"/*.out | xargs -n1 basename | tr '\n' ' ')"
+else
+  ok "8: no session saw 40001 or 40P01"
+fi
+check "8: 0234 holds" "$(q "select count(*) from (select sku, charter_id, bin_location from public.inventory_items where organization_id = '$ORG' and deleted_at is null group by 1, 2, 3 having count(*) > 1) d")" "0"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "all checks passed"; else echo "$FAILS check(s) failed"; fi
