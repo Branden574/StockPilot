@@ -96,6 +96,35 @@ describe('exchangeRail (plan RX-2: the outbound rail)', () => {
     );
   });
 
+  // RX-2 verification L12, carried to RX-3 and confirmed on the local stack in
+  // the RX-3 test stage: after an approval reserved the replacement, Cancel
+  // return leaves the view carrying the CANCELLED replacement (exchange
+  // cancelled, replacement_status cancelled, its hold released but on record).
+  // The replacement did reach Reserved and waited, so the rail keeps Reserved
+  // done and stops at the gate. A cancel before any hold (cancelled before
+  // approval, or a replacement that never held stock) keeps the stop at
+  // Reserved; a declined exchange and a replacement cancel are unchanged.
+  it('keeps Reserved done and stops at the gate when the RMA was cancelled after its replacement was reserved (L12)', () => {
+    const cancelled = { ...base, returnStatus: 'cancelled', exchangeStatus: 'cancelled' as const, replacementStatus: 'cancelled', replacementOwed: 1 };
+    expect(states(exchangeRail({ ...cancelled, replacementWasReserved: true }))).toBe(
+      'Requested:done > Reserved:done > Cancelled:stopped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(exchangeRailAccessibilityLabel(exchangeRail({ ...cancelled, replacementWasReserved: true }))).toBe(
+      'Replacement progress: Requested, done; Reserved, done; Cancelled, stopped; Picking, not reached; Ready for pickup, not reached; Handed over, not reached',
+    );
+    const atReserved =
+      'Requested:done > Cancelled:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped';
+    expect(states(exchangeRail({ ...cancelled, replacementWasReserved: false }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...cancelled }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...base, returnStatus: 'cancelled', exchangeStatus: 'cancelled', replacementWasReserved: null }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...base, exchangeStatus: 'declined', replacementWasReserved: true }))).toBe(
+      'Requested:done > Declined:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(states(exchangeRail({ ...base, exchangeStatus: 'replacement_cancelled', replacementWasReserved: true }))).toBe(
+      'Requested:done > Cancelled:stopped > Waiting for return:not_started > Picking:not_started > Ready for pickup:not_started > Handed over:not_started',
+    );
+  });
+
   it('words every step state, and the rail as one accessible label (web and phone, review fix P4)', () => {
     expect(RAIL_STEP_STATE_WORDS).toEqual({
       done: 'done',

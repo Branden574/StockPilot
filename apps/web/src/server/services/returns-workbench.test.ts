@@ -304,6 +304,62 @@ describe('buildReturnWorkbench', () => {
     expect(reads.filter((ids) => ids.includes(S))).toEqual([[S]]);
   });
 
+  // RX-3 test stage, item 2 (RX-2 verification L12), as seen on the local
+  // stack: Cancel return after the approval reserved the replacement. The
+  // view carries the cancelled replacement; ONE read of that replacement's
+  // holds (released, still on record) tells the rail it was reserved.
+  it('a cancelled RMA whose cancelled replacement had held stock: one holds read of that order, Reserved done, the stop at the gate (item 2)', async () => {
+    const L = itemId(8);
+    const REPL = '66666666-6666-4666-8666-666666666666';
+    const exchangeLine = {
+      id: 'x1',
+      return_line_id: lineId(1),
+      status: 'cancelled',
+      requested_item_id: L,
+      requested_quantity: 1,
+      request_note: null,
+      requested_by_kind: 'requester',
+      approved_item_id: L,
+      approved_quantity: 1,
+      replacement_order_request_id: REPL,
+      revision: 1,
+      created_at: '2026-10-02T00:00:00Z',
+    };
+    const results = (held: unknown[]) => ({
+      'returns.select': { data: [header([LINE], { status: 'cancelled', exchange_lines: [exchangeLine] })], error: null },
+      'rpc:return_restock_options': { data: { ...OPTIONS, status: 'cancelled' }, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'stock_movements.select': { data: [], error: null },
+      'return_overview.select': {
+        data: { kind: 'exchange', exchange_status: 'cancelled', replacement_order_id: REPL, released_early: false, counter: false, replacement_status: 'cancelled', replacement_owed: 1 },
+        error: null,
+      },
+      'order_requests.select': {
+        data: [{ id: REPL, order_number: 31, status: 'cancelled', fulfillment_type: 'pickup', warehouse_id: WH, completed_at: null, created_at: '2026-10-02T00:00:00Z' }],
+        error: null,
+      },
+      'stock_reservations.select': (call: MockCall) =>
+        call.methods.includes('gt') ? { data: held, error: null } : { data: [], error: null },
+    });
+    const { ctx, stub } = ctxFor(results([{ id: 'r1' }]));
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.exchange.rail.map((s) => `${s.label}:${s.state}`)).toEqual([
+      'Requested:done',
+      'Reserved:done',
+      'Cancelled:stopped',
+      'Picking:skipped',
+      'Ready for pickup:skipped',
+      'Handed over:skipped',
+    ]);
+    const holdsReads = (stub.chainArgsAll.get('stock_reservations.select') ?? []).filter((args) => args.some((a) => a[0] === 'order_request_id'));
+    expect(holdsReads).toHaveLength(1);
+    expect(holdsReads[0]).toContainEqual(['order_request_id', REPL]);
+    // Never held: the stop stays at Reserved.
+    const never = await buildReturnWorkbench(ctxFor(results([])).ctx as never, RET);
+    expect(never.exchange.rail.slice(0, 3).map((s) => `${s.label}:${s.state}`)).toEqual(['Requested:done', 'Cancelled:stopped', 'Waiting for return:skipped']);
+  });
+
   // Fix round 1 (verification L2): a decision naming the RETURNED item (staff
   // approved "Same as returned", then changed it) is named too, never "an item".
   it('the history names the returned item when an exchange decision names it', async () => {

@@ -33,6 +33,7 @@ import {
   exchangeItemIds,
   readDeliverySites,
   readExchangeTier2,
+  readReplacementEverHeld,
   readFreeStock,
   readReplacementDetail,
   type RawExchangeLine,
@@ -580,7 +581,12 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         ),
       ]
     : [];
-  const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems] = await Promise.all([
+  // Item 2 (RX-2 verification L12): an exchange cancelled with its RMA shows
+  // the cancelled replacement; whether it had held stock decides the rail's
+  // stop (one read, beside the others, only for a cancelled exchange).
+  const cancelledShown =
+    !liveReplacement && exchangeTier2.overview?.exchange_status === 'cancelled' ? (exchangeTier2.replacements[0] ?? null) : null;
+  const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems, shownReplacementEverHeld] = await Promise.all([
     readImages(ctx, allItemIds, 'returns.workbench.images'),
     readNames(ctx, [
       h.requested_by,
@@ -620,6 +626,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         )
       : Promise.resolve([]),
     readItems(ctx, decisionItemIds, 'returns.workbench.decision_items'),
+    cancelledShown ? readReplacementEverHeld(ctx, cancelledShown.id) : Promise.resolve(null),
   ]);
   for (const [iid, row] of decisionItems) exchangeLabels.set(iid, returnLineLabel(row.name, variantOf(row)));
   const locationName = new Map<string, string>(sourceNames);
@@ -764,6 +771,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       orderRequestId: d.orderRequestId,
     })),
     deliverySites,
+    shownReplacementEverHeld,
   });
 
   const warehouse = (warehouseRes as { data: { name?: string } | null }).data;

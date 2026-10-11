@@ -84,6 +84,14 @@ export interface ExchangeRailInput {
   replacementStatus?: string | null;
   /** What that replacement still owes (requested minus handed over). */
   replacementOwed?: number | null;
+  /**
+   * The replacement shown held stock at some point (its holds, released or
+   * not). Read for a cancelled exchange only: after Cancel return following an
+   * approval the replacement had reached Reserved and waited, so the rail
+   * keeps Reserved done and stops at the gate (RX-2 verification L12). Null
+   * or false: unknown or never held, the stop stays at Reserved.
+   */
+  replacementWasReserved?: boolean | null;
 }
 
 const RAIL_ORDER: readonly RailStepId[] = ['requested', 'reserved', 'gate', 'picking', 'ready', 'handed_over'];
@@ -128,9 +136,16 @@ export function exchangeRail(input: ExchangeRailInput): RailStep[] {
     case 'declined':
     case 'cancelled':
     case 'replacement_cancelled':
-      current = 1;
       stopped = true;
       after = ex === 'replacement_cancelled' ? 'not_started' : 'skipped';
+      if (ex === 'cancelled' && input.returnStatus !== 'denied' && input.replacementWasReserved === true) {
+        // L12: the RMA was cancelled after its replacement was reserved and
+        // waited for the return: Reserved stays done, the stop is the gate.
+        current = 2;
+        labels.gate = RETURNS_COPY.railCancelled;
+        break;
+      }
+      current = 1;
       labels.reserved = ex === 'declined' || input.returnStatus === 'denied' ? RETURNS_COPY.railDeclined : RETURNS_COPY.railCancelled;
       // The replacement never reached the gate: its plain name, never
       // "Return received" or "Released early".
