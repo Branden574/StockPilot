@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RETURN_STATUS_LABELS, type ReturnStatus } from '../orders/order-returns-view';
-import { EXCHANGE_STATUSES, type ExchangeStatus } from './exchange-status';
+import { EXCHANGE_STATUSES, returnWaitingDays, type ExchangeStatus } from './exchange-status';
 import { defaultExchangeReviewState, exchangeReviewDecision, exchangeReviewOptions, exchangeReviewProblem } from './exchange-view';
 import {
   availableReturnActions,
@@ -484,3 +484,20 @@ describe('the still-waiting prompt (review fix P17)', () => {
     expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 30, offered: noOrders })).toBeNull();
   });
 });
+
+describe('returnWaitingDays: the view rule for a screen holding approvedAt (P17)', () => {
+  const approvedAt = '2026-10-01T12:00:00.000Z';
+  const at = (iso: string) => Date.parse(iso);
+  it('whole days since approval while approved', () => {
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-01T12:00:00.000Z'))).toBe(0);
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-15T11:59:59.000Z'))).toBe(13);
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-15T12:00:00.000Z'))).toBe(14);
+  });
+  it('null when not approved, or with no readable approval time; never negative', () => {
+    expect(returnWaitingDays('received', approvedAt, at('2026-10-20T00:00:00Z'))).toBeNull();
+    expect(returnWaitingDays('approved', null)).toBeNull();
+    expect(returnWaitingDays('approved', 'not a date')).toBeNull();
+    expect(returnWaitingDays('approved', approvedAt, at('2026-09-30T00:00:00Z'))).toBe(0);
+  });
+});
+

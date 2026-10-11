@@ -337,5 +337,22 @@ export function returnListFilter(id: ReturnListFilterId): ReturnListFilter {
 /** From this many days waiting the workbench prompts (no auto-expiry, D28). */
 export const RETURN_WAITING_PROMPT_DAYS = 14;
 
+/**
+ * Whole days since approval while the RMA is approved: the rule of
+ * return_overview's waiting_days (floor of the elapsed seconds over 86,400),
+ * for a screen that holds the RMA's approvedAt (the workbench, web and
+ * phone). Null when not approved, or with no readable approval time.
+ */
+export function returnWaitingDays(
+  status: ReturnStatus | string | null | undefined,
+  approvedAt: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (status !== 'approved' || !approvedAt) return null;
+  const at = Date.parse(approvedAt);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.floor((now - at) / 86_400_000));
+}
+
 /** Rows per page on the list (web, phone and API). */
 export const RETURN_LIST_PAGE_SIZE = 25;

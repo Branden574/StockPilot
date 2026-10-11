@@ -146,15 +146,18 @@ export interface RequesterTrackingReturn {
   lines: RequesterTrackingLine[];
 }
 
-/** The requester sheet: GET .../return-request (a member), the token page
- *  and the B2B portal's order. */
+/**
+ * The requester sheet: GET .../return-request (a member), the token page and
+ * the B2B portal's order. Served only for an order that was handed over, in
+ * an organization with the returns module on: every other order is a closed
+ * door (the public surfaces answer one 404 for all of them).
+ */
 export interface RequesterReturnSheet {
   /** "SO-000103", or null for an order with no number. */
   orderNumber: string | null;
   /** The name on the order (the requester's own). */
   requesterName: string | null;
-  /** The order was handed over and the returns module is on. */
-  returnable: boolean;
+  /** The kill switch (RETURNS_EXCHANGE_CREATE=off): false hides "Exchange". */
   exchangesEnabled: boolean;
   lines: RequesterReturnableLine[];
   /** The requester's own requests, newest first (requester-made RMAs only: a
@@ -188,14 +191,7 @@ export const REQUESTER_TRACKING_RETURN_KEYS = [
   'replacementOrderNumber',
   'lines',
 ] as const;
-export const REQUESTER_RETURN_SHEET_KEYS = [
-  'orderNumber',
-  'requesterName',
-  'returnable',
-  'exchangesEnabled',
-  'lines',
-  'tracking',
-] as const;
+export const REQUESTER_RETURN_SHEET_KEYS = ['orderNumber', 'requesterName', 'exchangesEnabled', 'lines', 'tracking'] as const;
 
 /** Words no requester payload key may contain (brief 28, 32; plan 3.9). */
 const FORBIDDEN_KEY_WORDS: Readonly<Record<string, true>> = {

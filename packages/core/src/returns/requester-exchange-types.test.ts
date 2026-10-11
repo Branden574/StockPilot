@@ -57,7 +57,7 @@ describe('the requester payload keys', () => {
     expect(exact<RequesterTrackingExchange>()(REQUESTER_TRACKING_EXCHANGE_KEYS)).toHaveLength(3);
     expect(exact<RequesterTrackingLine>()(REQUESTER_TRACKING_LINE_KEYS)).toHaveLength(2);
     expect(exact<RequesterTrackingReturn>()(REQUESTER_TRACKING_RETURN_KEYS)).toHaveLength(7);
-    expect(exact<RequesterReturnSheet>()(REQUESTER_RETURN_SHEET_KEYS)).toHaveLength(6);
+    expect(exact<RequesterReturnSheet>()(REQUESTER_RETURN_SHEET_KEYS)).toHaveLength(5);
   });
 
   it('no key can carry a SKU, a cost, a location, a warehouse, a group, a stock count, a note, a reason or a person', () => {
