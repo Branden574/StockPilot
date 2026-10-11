@@ -69,19 +69,43 @@ function isPoNumberTaken(e: unknown): boolean {
   return e instanceof ServiceError && e.code === 'conflict' && e.details?.reason === PO_NUMBER_TAKEN;
 }
 
-/** resolveDestinationWarehouseId's refusal of a deleted destination. */
+/** resolveDestinationWarehouseId's refusals of a destination, by reason. */
 const DESTINATION_DELETED = 'destination_deleted';
+const DESTINATION_NO_WAREHOUSE = 'destination_no_warehouse';
 
 /**
- * The deleted destination a save refused (resolveDestinationWarehouseId), with
- * the location's name as it read it (null when it has none), or null when `e`
- * is any other error. The recurring run says a template's deleted destination
- * in the template's words with this.
+ * The destination a save refused (resolveDestinationWarehouseId): deleted, or
+ * linked to no warehouse, with the location's name as it read it (null when
+ * it has none); null when `e` is any other error. The recurring run says a
+ * template's refused destination in the template's words with this.
  */
+export function refusedDestination(
+  e: unknown,
+): { why: 'deleted' | 'no_warehouse'; locationName: string | null } | null {
+  if (!(e instanceof ServiceError)) return null;
+  const reason = e.details?.reason;
+  if (reason !== DESTINATION_DELETED && reason !== DESTINATION_NO_WAREHOUSE) return null;
+  const name = e.details?.locationName;
+  return {
+    why: reason === DESTINATION_DELETED ? 'deleted' : 'no_warehouse',
+    locationName: typeof name === 'string' && name.trim() ? name.trim() : null,
+  };
+}
+
+/** The refusal of a deleted destination, by name: the save's and the order's. */
+function deletedDestinationError(rawName: string | null | undefined): ServiceError {
+  const locationName = (rawName ?? '').trim() || null;
+  return new ServiceError(
+    'validation_error',
+    `${locationName ? `"${locationName}"` : 'The destination location'} was deleted, so a purchase order can't go there. Choose another destination.`,
+    { reason: DESTINATION_DELETED, locationName },
+  );
+}
+
+/** refusedDestination, for a deleted destination only. */
 export function refusedDeletedDestination(e: unknown): { locationName: string | null } | null {
-  if (!(e instanceof ServiceError) || e.details?.reason !== DESTINATION_DELETED) return null;
-  const name = e.details.locationName;
-  return { locationName: typeof name === 'string' && name.trim() ? name.trim() : null };
+  const refused = refusedDestination(e);
+  return refused?.why === 'deleted' ? { locationName: refused.locationName } : null;
 }
 
 /**
@@ -772,23 +796,39 @@ export class PurchaseOrdersService {
       throw new ServiceError('validation_error', 'The selected destination location was not found.');
     }
     const location = loc as { warehouse_id?: string | null; name?: string | null; deleted_at?: string | null };
-    if (location.deleted_at) {
-      const locationName = (location.name ?? '').trim() || null;
-      throw new ServiceError(
-        'validation_error',
-        `${locationName ? `"${locationName}"` : 'The destination location'} was deleted, so a purchase order can't go there. Choose another destination.`,
-        { reason: DESTINATION_DELETED, locationName },
-      );
-    }
+    if (location.deleted_at) throw deletedDestinationError(location.name);
     const wh = location.warehouse_id ?? null;
     if (!wh) {
+      // Tagged (and named) like a deleted one, so the recurring run can say it
+      // in the template's words; the form shows this message as it is.
       throw new ServiceError(
         'validation_error',
         "That destination location isn't linked to a warehouse, so received stock would have nowhere to go. Pick a warehouse-backed location.",
+        { reason: DESTINATION_NO_WAREHOUSE, locationName: (location.name ?? '').trim() || null },
       );
     }
     await assertWarehouseAccess(wh, 'write', this.ctx);
     return wh;
+  }
+
+  /**
+   * Refuses a deleted destination by name, as resolveDestinationWarehouseId
+   * does (same words, same `details.reason`), for an order that is not being
+   * saved: updateStatus committing a draft. Only the deleted rule: the
+   * warehouse rule and its write check stay with the save. A failed read
+   * refuses as an error.
+   */
+  private async assertDestinationNotDeleted(destinationLocationId: string | null): Promise<void> {
+    if (!destinationLocationId) return;
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .select('name, deleted_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', destinationLocationId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const location = data as { name?: string | null; deleted_at?: string | null } | null;
+    if (location?.deleted_at) throw deletedDestinationError(location.name);
   }
 
   /**
@@ -1483,6 +1523,13 @@ export class PurchaseOrdersService {
       // zod-rejects those states so the UI's real set (draft/ordered/cancelled)
       // is the only thing a client can send; this is the defense-in-depth twin.
       await this.assertApprovalThreshold(Number((po as { total?: unknown }).total ?? 0));
+      // A draft whose destination was deleted (saved before the save refused
+      // one, or deleted since) is not ordered there: it would become a
+      // receivable purchase order to a place that no longer exists, with
+      // nobody editing it (slice 8 review). Edit it to choose another.
+      await this.assertDestinationNotDeleted(
+        (po as { destination_location_id?: string | null }).destination_location_id ?? null,
+      );
     }
     const { data: row, error } = await this.ctx.supabase
       .from('purchase_orders')

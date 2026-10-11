@@ -25,7 +25,7 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({ audit: vi.fn(async () => {}), insertAuditRowReported: vi.fn(async () => true) }));
 
 const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
@@ -1052,6 +1052,7 @@ describe('recurringRunNotice — what the admins are told', () => {
     templatesWithLinesLeftOff: [],
     templatesWithNothingOrderable: [],
     templatesSkipped: [],
+    templatesSendFailed: [],
   };
 
   it('nothing created and nothing left off: no notification (as before)', () => {

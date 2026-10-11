@@ -7,7 +7,11 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createNotification } from '@/server/services/notifications';
 import { fetchAllRows } from '@/server/services/lib/paginate';
-import { RecurringPoTemplatesService, recurringRunNotice } from '@/server/services/recurring-pos';
+import {
+  RecurringPoTemplatesService,
+  recurringRunNotice,
+  type RecurringRunSummary,
+} from '@/server/services/recurring-pos';
 import type { ServiceContext } from '@/server/services/context';
 
 import { planAllowsRecurringPos, type ModuleId, type OrgBillingState } from '@stockpilot/core';
@@ -96,14 +100,8 @@ export async function GET(req: Request) {
         // make (its destination deleted after it was saved, ...), with why.
         // A skipped template's creator is told too: whoever set the template
         // up is the one who fixes it, and may be a manager.
-        const notice = recurringRunNotice(summary);
-        if (notice) {
-          await notifyAdmins(
-            admin,
-            orgId,
-            notice,
-            summary.templatesSkipped.map((s) => s.createdBy),
-          );
+        if (recurringRunNotice(summary)) {
+          await notifyAdmins(admin, orgId, summary);
         }
       } catch (e) {
         void reportError(e, { tag: 'cron.recurring-pos.org', extra: { orgId } });
@@ -177,16 +175,18 @@ async function buildSystemContext(
 }
 
 /**
- * Notify the org's owners/admins about a recurring-PO run, and `creators`
- * (the creators of the templates the run skipped) who are still accepted
- * members of the org. Each person once. Best-effort.
+ * Notify the org's owners/admins about a recurring-PO run, and the creators
+ * of the templates the run skipped who are still accepted members of the
+ * org. Each person once, with the notice for them (recurringRunNotice with
+ * `recipientId`: the templates they created named first, every one).
+ * Best-effort.
  */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,
   orgId: string,
-  notice: { title: string; body: string },
-  creators: ReadonlyArray<string | null> = [],
+  summary: RecurringRunSummary,
 ): Promise<void> {
+  const creators = summary.templatesSkipped.map((s) => s.createdBy);
   const { data: admins } = await admin
     .from('organization_members')
     .select('user_id')
@@ -212,6 +212,8 @@ async function notifyAdmins(
   }
 
   for (const userId of recipients) {
+    const notice = recurringRunNotice(summary, { recipientId: userId });
+    if (!notice) continue;
     await createNotification({
       organizationId: orgId,
       userId,

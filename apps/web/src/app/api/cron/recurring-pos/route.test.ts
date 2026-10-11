@@ -54,6 +54,7 @@ const EMPTY: RecurringRunSummary = {
   templatesWithLinesLeftOff: [],
   templatesWithNothingOrderable: [],
   templatesSkipped: [],
+  templatesSendFailed: [],
 };
 
 function run(summary: RecurringRunSummary) {
@@ -190,6 +191,28 @@ describe('GET /api/cron/recurring-pos — a skipped template is told to its crea
         }),
       );
     }
+  });
+
+  // The notice names three skipped templates and counts the rest, so the
+  // creator of the fourth was told "1 more template" without its name. Each
+  // creator's notice names every template of theirs first (slice 8 review).
+  it("a creator is told their own template's name, even past the first three", async () => {
+    await runWith({
+      ...EMPTY,
+      failures: 4,
+      templatesSkipped: ['A', 'B', 'C', 'D'].map((name) => ({
+        templateId: `tpl-${name}`,
+        name,
+        reason: 'An unexpected error stopped it. It runs again on its next date.',
+        createdBy: name === 'D' ? 'manager-1' : 'admin-1',
+      })),
+    });
+    const bodyFor = (userId: string) =>
+      (createNotification.mock.calls.find(([a]) => (a as { userId: string }).userId === userId)?.[0] as { body: string })
+        .body;
+    expect(bodyFor('manager-1')).toMatch(/^"D" created no purchase order\./);
+    expect(bodyFor('admin-1')).not.toContain('"D"');
+    expect(bodyFor('admin-1')).toContain('1 more template created no purchase order.');
   });
 
   it('a creator who is also an owner or admin is told once', async () => {

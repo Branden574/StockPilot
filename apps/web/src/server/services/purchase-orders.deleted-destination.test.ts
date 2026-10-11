@@ -63,7 +63,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 import { ServiceError } from './context';
-import { PurchaseOrdersService, refusedDeletedDestination } from './purchase-orders';
+import { PurchaseOrdersService, refusedDeletedDestination, refusedDestination } from './purchase-orders';
 
 const DEST = {
   site: 'dddddddd-0000-4000-8000-000000000001',
@@ -139,6 +139,7 @@ describe('PurchaseOrdersService: a deleted destination is refused by name, and n
     // The run tells a deleted destination apart from other refusals by this,
     // not by the words.
     expect(refusedDeletedDestination(error)).toEqual({ locationName: 'Old Annex' });
+    expect(refusedDestination(error)).toEqual({ why: 'deleted', locationName: 'Old Annex' });
   });
 
   it('a deleted location with no name is refused without one', async () => {
@@ -154,9 +155,12 @@ describe('PurchaseOrdersService: a deleted destination is refused by name, and n
       "That destination location isn't linked to a warehouse, so received stock would have nowhere to go. Pick a warehouse-backed location.",
     );
     expect(written).toBe(false);
-    // Not a deleted destination: the run says it in the save's own words.
+    // Not a deleted destination; tagged with its own reason and name, so the
+    // recurring run says it in the template's words (slice 8 review).
     expect(refusedDeletedDestination(error)).toBeNull();
+    expect(refusedDestination(error)).toEqual({ why: 'no_warehouse', locationName: 'District Office' });
     expect(refusedDeletedDestination(new Error('x'))).toBeNull();
+    expect(refusedDestination(new Error('x'))).toBeNull();
   });
 
   it.each(['create', 'update'] as const)('%s still saves to a site, and to a staging area (linked to its warehouse)', async (op) => {
@@ -175,5 +179,52 @@ describe('PurchaseOrdersService: a deleted destination is refused by name, and n
     expect(error).toBeInstanceOf(ServiceError);
     expect((error as ServiceError).code).toBe('internal_error');
     expect(s.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);
+  });
+});
+
+/**
+ * Ordering a draft whose destination was deleted (saved before slice 8, or
+ * deleted afterwards) made it a receivable purchase order to a place that no
+ * longer exists, with nobody editing it: updateStatus checked no destination
+ * (slice 8 review). Committing the order is refused the same way the save is;
+ * cancelling it, or keeping it a draft, is not.
+ */
+describe('PurchaseOrdersService.updateStatus: a draft to a deleted destination is not ordered', () => {
+  function statusStub(draft: Record<string, unknown>) {
+    return makeSupabaseStub({
+      'locations.select': servedLikePostgrest(LOCATIONS),
+      'purchase_orders.select': { data: draft, error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'purchase_orders.update': { data: { id: 'po-1' }, error: null },
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'rpc:publish_outbox': { data: null, error: null },
+      'inventory_items.select': { data: [], error: null },
+    });
+  }
+
+  it('refuses to order it, naming the location, and changes nothing', async () => {
+    const s = statusStub(DRAFT);
+    const svc = new PurchaseOrdersService(makeServiceContext(s.client) as never);
+    const error = await svc.updateStatus('po-1', 'ordered').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServiceError);
+    expect((error as ServiceError).message).toBe(
+      '"Old Annex" was deleted, so a purchase order can\'t go there. Choose another destination.',
+    );
+    expect(refusedDeletedDestination(error)).toEqual({ locationName: 'Old Annex' });
+    expect(s.chainsAll.get('purchase_orders.update')).toBeUndefined();
+  });
+
+  it('still cancels it', async () => {
+    const s = statusStub(DRAFT);
+    const svc = new PurchaseOrdersService(makeServiceContext(s.client) as never);
+    await svc.updateStatus('po-1', 'cancelled');
+    expect(s.chainsAll.get('purchase_orders.update')).toHaveLength(1);
+  });
+
+  it('orders a draft to a site as before', async () => {
+    const s = statusStub({ ...DRAFT, destination_location_id: DEST.site });
+    const svc = new PurchaseOrdersService(makeServiceContext(s.client) as never);
+    await svc.updateStatus('po-1', 'ordered');
+    expect(s.chainsAll.get('purchase_orders.update')).toHaveLength(1);
   });
 });
