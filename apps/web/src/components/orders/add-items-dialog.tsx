@@ -118,6 +118,24 @@ export function summarizeAddLines(added: number, merged: number): string {
 }
 
 /**
+ * Whether a refused add must close the dialog, drop the picks and reload the
+ * order (returns RX-3 fix round 2). Every 409 conflict except busy: busy
+ * (`details.retryable: true`) wrote nothing, so the same picks are safe to
+ * send again. A partial answer (`details.reason: 'partial'`, not retryable)
+ * saved the top-ups, and a resend would add them twice; any other conflict
+ * means the order no longer takes items. A refusal that is not a conflict
+ * (an item that cannot be ordered here, a missing permission) wrote nothing
+ * and keeps the picks. Read from `details`, never from the message
+ * (pattern 28).
+ */
+export function addLinesRefusalIsTerminal(error: {
+  code: string;
+  details?: Record<string, unknown>;
+}): boolean {
+  return error.code === 'conflict' && error.details?.retryable !== true;
+}
+
+/**
  * Add items to an EXISTING order (the "customer called back and wants more"
  * case). Backed by OrderRequestsService.addLines, which tops up an item that
  * is already on the order instead of creating a duplicate line — so the tray
@@ -355,10 +373,24 @@ function AddItemsBody({
     });
     setPending(false);
     if (!res.ok) {
-      // Keep the dialog open with the staged picks intact: a conflict (the
-      // order shipped in another tab) or a forbidden is worth reading with the
-      // work still on screen, and re-staging ten items is punitive.
       toast.error(res.error.message);
+      if (addLinesRefusalIsTerminal(res.error)) {
+        // The order changed under the picks (returns RX-3 fix round 2, F1 on
+        // the web). A partial answer means the top-ups of items already on
+        // the order were SAVED: the same picks sent again would add them a
+        // second time, and the holds and the pick would follow. Any other
+        // conflict (the order went out or was cancelled in another tab) can
+        // never take these picks. So drop them, close, and reload the order,
+        // as the phone does for every 409.
+        setPicks({});
+        onClose();
+        router.refresh();
+        return;
+      }
+      // Nothing was written (busy, or a sentence to act on such as an item
+      // that cannot be ordered here): keep the dialog open with the staged
+      // picks intact. The same Add is safe, and re-staging ten items is
+      // punitive.
       return;
     }
     const { added, merged, pickSlipStale, hold } = res.data;
