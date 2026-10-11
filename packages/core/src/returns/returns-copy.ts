@@ -61,6 +61,9 @@ export const RETURNS_COPY = {
   approveReturn: 'Approve return',
   approveAndReceive: 'Approve and receive',
   approveReplacementOnBackorder: 'Approve, replacement on backorder',
+  // Fix round 1 (verification L1): in a change or a re-issue nothing is approved.
+  changeReplacementOnBackorder: 'Change, replacement on backorder',
+  issueReplacementOnBackorder: 'Issue, replacement on backorder',
   changeReplacement: 'Change replacement',
   declineExchange: 'Decline the exchange, return only',
   addReplacement: 'Add a replacement',
@@ -183,6 +186,9 @@ export const RETURNS_COPY = {
   releasePresetDeliverySwap: 'Swap at delivery: the driver collects the returned item.',
   cancelDrawnReplacement: 'The picked items go back to Staging on record. Put them in the staging area.',
   cancelInTransit: 'Ask the driver to bring it back.',
+  // Fix round 1 (verification V1): after the call, from the answer.
+  replacementCancelledDone: 'Replacement cancelled.',
+  replacementNothingToCancel: 'There is no replacement to cancel any more.',
   // RX-2 review fix P2: what happens to the replacement (web dialogs and phone
   // sheets; return-actions.ts exchangeActionConsequences picks the sentence).
   cancelReturnPartHandedOver:
@@ -217,6 +223,11 @@ export const RETURNS_COPY = {
   // Read-only reasons
   noManagePermission: "You don't have permission to manage returns.",
   noOrdersApprovePermission: 'Approving the replacement needs order approval permission.',
+  // Fix round 1 (verification L3): once the exchange was approved nothing is
+  // being approved; these say what needs order approval.
+  noOrdersApproveReplacement: 'Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.',
+  noOrdersApproveReplacementAndCancel:
+    'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.',
   // RX-2 review fix P1: a requested exchange, for a viewer with Manage
   // returns but not order approval (the review offers only the decline).
   noOrdersApproveDeclineOnly:
@@ -245,9 +256,12 @@ export const RETURNS_COPY = {
     'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
   // Review fix P28: every exchange line was added by staff on a return the
   // requester asked for (they asked for no exchange).
-  requesterReturnApprovedReplacementAdded: 'Your return was approved. The warehouse added a replacement for you, and it is reserved.',
+  // Fix round 1 (verification M2): that replacement waits for the returned
+  // item too, so it says to bring or send it back, as P14's words do.
+  requesterReturnApprovedReplacementAdded:
+    'Your return was approved. The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
   requesterReturnApprovedReplacementAddedShort:
-    'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+    'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
   requesterReplacementChanged: 'Your replacement was changed.',
   requesterReplacementCancelled: 'Your replacement was cancelled. The warehouse will follow up.',
   // Review fix P15: after a replacement cancel, Close as return only.
@@ -426,16 +440,22 @@ export interface WaitingForReturnFacts {
 
 /**
  * The gated order's line: "Replacement reserved. Waiting for returned item
- * (RMA-…)" only when something is held; for a replacement not in stock (on
- * backorder, nothing held) "Not in stock yet. Picking also waits for the
- * returned item (RMA-…)." (review fix P5). Without facts, the reserved words
- * (an older server).
+ * (RMA-…)" only when everything owed is held; for a replacement not in stock
+ * (on backorder, nothing held) "Not in stock yet. Picking also waits for the
+ * returned item (RMA-…)." (review fix P5); for one held in part (the view
+ * reads it unavailable while something is held) "Partly reserved; the rest
+ * is not in stock yet. …" (fix round 1, verification L9). Without facts, the
+ * reserved words (an older server).
  */
 export function waitingForReturnLine(returnNumber: string | null, facts: WaitingForReturnFacts = {}): string {
-  const notHeld =
-    typeof facts.held === 'number' && Number.isFinite(facts.held) ? facts.held <= 0 : facts.exchangeStatus === 'unavailable';
-  if (notHeld) return `Not in stock yet. Picking also waits for the returned item${returnNumber ? ` (${returnNumber})` : ''}.`;
-  return `Replacement reserved. Waiting for returned item${returnNumber ? ` (${returnNumber})` : ''}`;
+  const knowsHeld = typeof facts.held === 'number' && Number.isFinite(facts.held);
+  const notHeld = knowsHeld ? (facts.held as number) <= 0 : facts.exchangeStatus === 'unavailable';
+  const rma = returnNumber ? ` (${returnNumber})` : '';
+  if (notHeld) return `Not in stock yet. Picking also waits for the returned item${rma}.`;
+  if (facts.exchangeStatus === 'unavailable') {
+    return `Partly reserved; the rest is not in stock yet. Picking also waits for the returned item${rma}.`;
+  }
+  return `Replacement reserved. Waiting for returned item${rma}`;
 }
 
 /**
@@ -508,6 +528,12 @@ export interface ReplacementBannerInput {
   returnReceived?: boolean;
   /** The viewer may open the RMA; the viewer's kind when none is passed. */
   canOpenReturn?: boolean;
+  /**
+   * The viewer may change and cancel the replacement (returns:manage and
+   * orders:approve, server-computed). False: the RMA link reads "Open RMA-…"
+   * (fix round 1, verification L5). Absent from an older server.
+   */
+  canChangeReplacement?: boolean;
 }
 
 /**
@@ -598,16 +624,20 @@ export function replacementBannerLines(
   if (driver) out.push({ key: 'driver', text: driver });
   if (inFlight) {
     const kind = replacementBannerViewerKind(who);
-    if (kind === 'returns') out.push({ key: 'rma_link', text: changeOrCancelInRmaLabel(info.returnNumber) });
+    if (kind === 'returns') out.push({ key: 'rma_link', text: replacementRmaLinkLabel(info) });
     else if (kind === 'requester') out.push({ key: 'change', text: RETURNS_COPY.replacementChangeContactWarehouse });
     else out.push({ key: 'change', text: replacementChangeOthersLine(info.returnNumber) });
   }
   return out;
 }
 
-/** The banner's link to the RMA: where it is changed while in flight, else the RMA itself. */
-export function replacementRmaLinkLabel(info: Pick<ReplacementBannerInput, 'returnNumber' | 'live' | 'handedOver'>): string {
-  return info.live && info.handedOver === true ? openRmaLabel(info.returnNumber) : changeOrCancelInRmaLabel(info.returnNumber);
+/** The banner's link to the RMA: where it is changed while in flight, for a
+ *  viewer who may change and cancel it; else the RMA itself. */
+export function replacementRmaLinkLabel(
+  info: Pick<ReplacementBannerInput, 'returnNumber' | 'live' | 'handedOver' | 'canChangeReplacement'>,
+): string {
+  const handedOver = info.live && info.handedOver === true;
+  return handedOver || info.canChangeReplacement === false ? openRmaLabel(info.returnNumber) : changeOrCancelInRmaLabel(info.returnNumber);
 }
 
 /** The original order's returns section: "Exchange: Large ×1 → SO-000103 (Waiting for returned item)". */
@@ -732,10 +762,23 @@ export function prepareTakeLine(item: string, quantity: number, rack: string | n
   return `Take ${item} ×${quantity}${from}${left}`;
 }
 
-/** The replacement's timeline: "Created as exchange replacement for RMA-… (revision 2)". */
+/** The replacement's timeline: "Created as exchange replacement for RMA-… (after a change)"
+ *  for a changed or re-issued one; never the internal revision number (fix round 1, verification L6). */
 export function createdAsReplacementLabel(returnNumber: string | null, revision: number | null): string {
-  const rev = revision && revision > 1 ? ` (revision ${revision})` : '';
-  return `Created as exchange replacement for ${returnNumber ?? 'its RMA'}${rev}`;
+  const after = revision && revision > 1 ? ' (after a change)' : '';
+  return `Created as exchange replacement for ${returnNumber ?? 'its RMA'}${after}`;
+}
+
+/** What the screen says after Cancel replacement, from the database's answer
+ *  (fix round 1, verification V1): what to do with what was picked or sent,
+ *  whatever the screen showed before the call. */
+export function replacementCancelledLines(answer: { changed: boolean; drawn?: boolean; inTransit?: boolean }): string[] {
+  if (!answer.changed) return [RETURNS_COPY.replacementNothingToCancel];
+  return [
+    RETURNS_COPY.replacementCancelledDone,
+    ...(answer.drawn === true ? [RETURNS_COPY.cancelDrawnReplacement] : []),
+    ...(answer.inTransit === true ? [RETURNS_COPY.cancelInTransit] : []),
+  ];
 }
 
 /**

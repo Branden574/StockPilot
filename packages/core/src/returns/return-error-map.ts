@@ -89,7 +89,8 @@ export const RETURN_ERROR_WORDS = {
   // RX-2 review fix (0396): cancel_return under a replacement already picked,
   // being packed, staged or in transit. The workbenches treat it as a stale
   // screen (its own reason key) and refresh.
-  replacementInProgress: 'The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+  replacementInProgress:
+    'The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',
   // RX-2 review fix (0396): more than the original order line has left to
   // exchange (replacement units were already handed over for it under another
   // RMA, or other RMAs claim it). The words with what is left come from the

@@ -61,11 +61,15 @@
  * becomes the primary action of a closed RMA.
  *
  * Every replacement action needs order approval (viewerCanApproveOrders);
- * without it the exchange is read-only with "Approving the replacement needs
- * order approval permission." and only the return actions stay. Cancelling
- * an RMA whose exchange was approved needs it too (the database asks for
- * orders:approve and a reason). Change replacement needs a replacement that
- * was not picked; Cancel replacement one that was not handed over.
+ * without it the exchange is read-only with "Changing, cancelling, releasing,
+ * preparing or issuing the replacement needs order approval permission."
+ * (with ", and cancelling this return," when that was dropped too) and only
+ * the return actions stay; "Hand over" becomes "Open replacement", since the
+ * order's own hand-over needs order approval (fix round 1, verification L3
+ * and L4). Cancelling an RMA whose exchange was approved needs it too (the
+ * database asks for orders:approve and a reason). Change replacement needs a
+ * replacement that was not picked; Cancel replacement one that was not
+ * handed over.
  *
  * A requested exchange is still approved by a viewer without order approval
  * (review fix P1): the database asks for it only to approve or add a
@@ -274,6 +278,7 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
   const cls = input.replacementClass;
   const canOrders = input.viewerCanApproveOrders === true;
   let dropped = false;
+  let droppedCancel = false;
   const allowed = (a: ReturnAction): boolean => {
     // The class rules (the database refuses the rest with its own words).
     if (cls !== undefined) {
@@ -284,6 +289,7 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
     const needsOrders = REPLACEMENT_ACTIONS.includes(a) || (a === 'cancel' && input.hasApprovedExchange === true);
     if (needsOrders && !canOrders) {
       dropped = true;
+      if (a === 'cancel') droppedCancel = true;
       return false;
     }
     return true;
@@ -299,13 +305,26 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
       secondary.splice(secondary.indexOf(promoted), 1);
     }
   }
+  // Fix round 1 (verification L4): "Hand over" leads to the order's own
+  // hand-over, which needs order approval (or the assigned driver); without
+  // it the button opens the replacement.
+  if (!canOrders) {
+    if (primary === 'hand_over') primary = 'open_replacement';
+    const at = secondary.indexOf('hand_over');
+    if (at >= 0) secondary.splice(at, 1, 'open_replacement');
+  }
   // Review fix P1: at requested such a viewer still approves the return,
-  // with the exchange declined (the review offers only that).
+  // with the exchange declined (the review offers only that). After the
+  // approval nothing is approved any more: the words say what needs order
+  // approval, and that cancelling the return does when it was dropped (fix
+  // round 1, verification L3).
   const readOnlyReason =
     input.status === 'requested' && !canOrders
       ? RETURNS_COPY.noOrdersApproveDeclineOnly
       : dropped
-        ? RETURNS_COPY.noOrdersApprovePermission
+        ? droppedCancel
+          ? RETURNS_COPY.noOrdersApproveReplacementAndCancel
+          : RETURNS_COPY.noOrdersApproveReplacement
         : null;
   return { primary, secondary, readOnlyReason };
 }
@@ -329,9 +348,10 @@ export const RETURN_ACTION_LABELS: Record<ReturnAction, string> = {
   close_as_return_only: RETURNS_COPY.closeAsReturnOnly,
 };
 
-/** The label in context: an exchange's approval reads "Approve return & exchange". */
-export function returnActionLabel(action: ReturnAction, opts: { hasExchange?: boolean } = {}): string {
-  if (action === 'approve' && opts.hasExchange) return RETURNS_COPY.approveReturnAndExchange;
+/** The label in context: an exchange's approval reads "Approve return & exchange",
+ *  except for a viewer who can only decline the exchange (fix round 1, verification L3). */
+export function returnActionLabel(action: ReturnAction, opts: { hasExchange?: boolean; canApproveOrders?: boolean } = {}): string {
+  if (action === 'approve' && opts.hasExchange && opts.canApproveOrders !== false) return RETURNS_COPY.approveReturnAndExchange;
   return RETURN_ACTION_LABELS[action];
 }
 

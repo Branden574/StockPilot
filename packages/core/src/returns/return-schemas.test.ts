@@ -174,6 +174,12 @@ describe('RX-2: the exchange bodies', () => {
     expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'Changed mind' }).ok).toBe(true);
     expect(parseReturnBody('cancelReplacement', { reason: 'Changed mind' }).ok).toBe(false);
     expect(parseReturnBody('cancelReplacement', { expectedRevision: null, reason: 'Changed mind' }).ok).toBe(false);
+    // Fix round 1 (verification V1): the replacement status the screen showed.
+    const shown = parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'picking_complete' });
+    expect(shown.ok && shown.value.shownStatus).toBe('picking_complete');
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: null }).ok).toBe(true);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'Picked!' }).ok).toBe(false);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'a'.repeat(41) }).ok).toBe(false);
     expect(parseReturnBody('releaseEarly', { orderId: L3, reason: 'x'.repeat(500) }).ok).toBe(true);
     expect(parseReturnBody('releaseEarly', { reason: 'x'.repeat(500) }).ok).toBe(false);
     expect(parseReturnBody('releaseEarly', { orderId: 'not-an-order', reason: 'x' }).ok).toBe(false);

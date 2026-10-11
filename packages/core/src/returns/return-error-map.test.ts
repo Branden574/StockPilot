@@ -150,7 +150,11 @@ describe('RX-2 review: cancelling a return under a replacement on its way, and a
   it('replacement_in_progress is its own conflict (the workbenches treat it as a stale screen), never another refusal', () => {
     const m = mapReturnError({ code: 'P0001', hint: 'replacement_in_progress', message: 'replacement_in_progress', details: 'staged_for_pickup' });
     expect(m).toMatchObject({ reason: 'replacement_in_progress', code: 'conflict', status: 409 });
-    expect(m.message).toBe('The replacement is already picked or on its way. Hand it over, or cancel the replacement first.');
+    // Fix round 1 (verification V5): a replacement handed over in part cannot
+    // be cancelled, so the words offer the cancel only when none was handed over.
+    expect(m.message).toBe(
+      'The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',
+    );
     expect(RETURN_ERROR_WORDS.replacementInProgress).toBe(m.message);
     // Distinguishable from the other stale-screen refusals and from the drawn
     // cancel's words.

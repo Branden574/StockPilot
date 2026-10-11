@@ -33,6 +33,7 @@ import {
   replacementLineSummary,
   replacementRmaLinkLabel,
   replacementShortLine,
+  replacementCancelledLines,
   type ReplacementBannerInput,
   slipExchangeLine,
   stillWaitingLine,
@@ -195,7 +196,8 @@ describe('returns copy', () => {
     );
     expect(prepareTakeLine('Large', 1, '12-B', 3)).toBe('Take Large ×1 from 12-B (3 on hand)');
     expect(changeOrCancelInRmaLabel('RMA-1')).toBe('Change or cancel in RMA-1');
-    expect(createdAsReplacementLabel('RMA-1', 2)).toBe('Created as exchange replacement for RMA-1 (revision 2)');
+    // Fix round 1 (verification L6): never the internal revision number.
+    expect(createdAsReplacementLabel('RMA-1', 2)).toBe('Created as exchange replacement for RMA-1 (after a change)');
     expect(createdAsReplacementLabel('RMA-1', 1)).toBe('Created as exchange replacement for RMA-1');
     expect(replacementShortLine('Large', 0, 1)).toBe('Large: 0 available, 1 needed.');
   });
@@ -352,8 +354,11 @@ describe('returns copy', () => {
     expect(waitingForReturnLine('RMA-1', { exchangeStatus: 'unavailable' })).toBe(notInStock);
     expect(waitingForReturnLine(null, { exchangeStatus: 'unavailable' })).toBe('Not in stock yet. Picking also waits for the returned item.');
     expect(waitingForReturnLine('RMA-1', { held: 0 })).toBe(notInStock);
-    // "Replacement reserved" only when something is held.
-    expect(waitingForReturnLine('RMA-1', { held: 1, exchangeStatus: 'unavailable' })).toBe(reserved);
+    // "Replacement reserved" only when everything owed is held; part of it
+    // held says so (re-pinned by fix round 1, verification L9).
+    expect(waitingForReturnLine('RMA-1', { held: 1, exchangeStatus: 'unavailable' })).toBe(
+      'Partly reserved; the rest is not in stock yet. Picking also waits for the returned item (RMA-1).',
+    );
     expect(waitingForReturnLine('RMA-1', { exchangeStatus: 'waiting_for_return' })).toBe(reserved);
     expect(waitingForReturnLine('RMA-1')).toBe(reserved);
     // The banner's gate line follows the same rule.
@@ -373,7 +378,10 @@ describe('returns copy', () => {
       replacementBannerLines({ ...info, ...over }, 'pickup').find((l) => l.key === 'gate')?.text;
     expect(gate({ exchangeStatus: 'unavailable' })).toBe(notInStock);
     expect(gate({ exchangeStatus: 'waiting_for_return' })).toBe(reserved);
-    expect(gate({ exchangeStatus: 'unavailable', held: 1 })).toBe(reserved);
+    // Re-pinned by fix round 1 (verification L9): held in part says so.
+    expect(gate({ exchangeStatus: 'unavailable', held: 1 })).toBe(
+      'Partly reserved; the rest is not in stock yet. Picking also waits for the returned item (RMA-1).',
+    );
   });
 
   // RX-2 review fix P19: a replacement line never reads "reserved 0" once it
@@ -508,11 +516,13 @@ describe('returns copy', () => {
       'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
     );
     expect(RETURNS_COPY.requesterReplacementClosedReturnOnly).toBe('No replacement will be sent. Your return goes on as a return only.');
+    // Fix round 1 (verification M2): the added replacement waits for the
+    // returned item too, so the requester is told to bring or send it back.
     expect(RETURNS_COPY.requesterReturnApprovedReplacementAdded).toBe(
-      'Your return was approved. The warehouse added a replacement for you, and it is reserved.',
+      'Your return was approved. The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
     );
     expect(RETURNS_COPY.requesterReturnApprovedReplacementAddedShort).toBe(
-      'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+      'Your return was approved. The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
     );
   });
 
@@ -532,5 +542,45 @@ describe('returns copy', () => {
       RETURNS_COPY.replacementChangeContactWarehouse,
     ];
     expect(requester.filter((s) => /rack|staging|scrap|restock|on hand|cost|supplier/i.test(s))).toEqual([]);
+  });
+});
+
+// RX-2 fix round 1 (independent verification 2026-10-11).
+describe('RX-2 fix round 1 words', () => {
+  it('after Cancel replacement, says what to do with what was picked or sent (verification V1)', () => {
+    expect(replacementCancelledLines({ changed: true, drawn: false, inTransit: false })).toEqual(['Replacement cancelled.']);
+    expect(replacementCancelledLines({ changed: true, drawn: true, inTransit: false })).toEqual([
+      'Replacement cancelled.',
+      RETURNS_COPY.cancelDrawnReplacement,
+    ]);
+    expect(replacementCancelledLines({ changed: true, drawn: true, inTransit: true })).toEqual([
+      'Replacement cancelled.',
+      RETURNS_COPY.cancelDrawnReplacement,
+      RETURNS_COPY.cancelInTransit,
+    ]);
+    // Nothing was live: nothing was cancelled.
+    expect(replacementCancelledLines({ changed: false, drawn: false, inTransit: false })).toEqual([RETURNS_COPY.replacementNothingToCancel]);
+  });
+
+  it('the banner offers change or cancel only to a viewer who may do both (verification L5)', () => {
+    const info: ReplacementBannerInput = {
+      returnNumber: 'RMA-1',
+      originalOrderNumber: 3,
+      live: true,
+      handedOver: false,
+      waitingForReturn: false,
+      releasedEarly: false,
+      release: null,
+      exchangeStatusLabel: 'Ready to pick',
+      driverLine: null,
+      canOpenReturn: true,
+    };
+    const link = (i: ReplacementBannerInput) => replacementBannerLines(i, 'pickup').find((l) => l.key === 'rma_link')?.text;
+    expect(link({ ...info, canChangeReplacement: true })).toBe('Change or cancel in RMA-1');
+    expect(link({ ...info, canChangeReplacement: false })).toBe('Open RMA-1');
+    // An older server says nothing: the words stay as they were.
+    expect(link(info)).toBe('Change or cancel in RMA-1');
+    expect(replacementRmaLinkLabel({ ...info, canChangeReplacement: false })).toBe('Open RMA-1');
+    expect(replacementRmaLinkLabel({ ...info, canChangeReplacement: true })).toBe('Change or cancel in RMA-1');
   });
 });

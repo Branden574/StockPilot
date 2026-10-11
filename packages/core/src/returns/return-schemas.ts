@@ -286,6 +286,13 @@ function buildSchemas() {
   const cancelReplacement = z.object({
     expectedRevision: z.number().int().min(0),
     reason,
+    // Fix round 1 (verification V1): the replacement's status as the screen
+    // showed it; picked or sent since then, the database answers return_changed.
+    shownStatus: z
+      .string()
+      .regex(/^[a-z_]{1,40}$/)
+      .optional()
+      .nullable(),
   });
 
   const releaseEarly = z.object({ orderId: uuid, reason: requiredReason(RETURN_RELEASE_REASON_MAX) });

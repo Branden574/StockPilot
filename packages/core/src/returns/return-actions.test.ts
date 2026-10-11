@@ -19,6 +19,11 @@ import {
 const STATUSES = Object.keys(RETURN_STATUS_LABELS) as ReturnStatus[];
 const NO_MANAGE = "You don't have permission to manage returns.";
 const NO_ORDERS = 'Approving the replacement needs order approval permission.';
+// Fix round 1 (verification L3): once the exchange was approved nothing is
+// being approved; the words say what the viewer cannot do.
+const NO_ORDERS_AFTER = 'Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.';
+const NO_ORDERS_AFTER_CANCEL =
+  'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.';
 
 /** The plan 3.9 return-only rows, written out once. */
 function expected(status: ReturnStatus, canManage: boolean, itemIsHere: boolean): ReturnActions {
@@ -147,7 +152,7 @@ describe('availableReturnActions (exchange rows, plan 3.9)', () => {
         viewerCanManageReturns: true,
         viewerCanApproveOrders: false,
       }),
-    ).toEqual({ primary: 'process', secondary: [], readOnlyReason: NO_ORDERS });
+    ).toEqual({ primary: 'process', secondary: [], readOnlyReason: NO_ORDERS_AFTER });
   });
 
   // RX-2 review fix P1: a viewer with Manage returns but not order approval
@@ -297,7 +302,7 @@ describe('replacementClassOf (the SQL _return_replacement_class)', () => {
     expect(availableReturnActions({ ...base, status: 'closed', viewerCanApproveOrders: false })).toEqual({
       primary: 'close_as_return_only',
       secondary: [],
-      readOnlyReason: NO_ORDERS,
+      readOnlyReason: NO_ORDERS_AFTER,
     });
     expect(RETURN_ACTION_LABELS.close_as_return_only).toBe('Close as return only');
     // Once closed as return only the exchange reads declined: nothing more is offered on a closed RMA.
@@ -353,7 +358,7 @@ describe('exchangeActionConsequences (web dialogs and phone sheets)', () => {
     expect(exchangeActionConsequences('cancel', { replacementStatus: 'cancelled' })).toEqual([]);
     // Picked or on its way: the database refuses the cancel (replacement_in_progress).
     expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'staged_for_pickup', replacementOrderNumber: 12 }))).toEqual([
-      'effect: The replacement is already picked or on its way. Hand it over, or cancel the replacement first.',
+      'effect: The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',
     ]);
   });
 
@@ -394,5 +399,47 @@ describe('exchangeActionConsequences (web dialogs and phone sheets)', () => {
             const lines = exchangeActionConsequences(action, { replacementStatus, anythingHandedOver, held, replacementOrderNumber: 12 });
             for (const l of lines) expect(l.text, `${action} ${String(replacementStatus)}`).not.toMatch(/stays open/i);
           }
+  });
+});
+
+// RX-2 fix round 1 (independent verification 2026-10-11).
+describe('RX-2 fix round 1: what a viewer without order approval is offered and told', () => {
+  it('a decline-only viewer approves the return, never "& exchange" (verification L3)', () => {
+    expect(returnActionLabel('approve', { hasExchange: true, canApproveOrders: true })).toBe('Approve return & exchange');
+    expect(returnActionLabel('approve', { hasExchange: true, canApproveOrders: false })).toBe('Approve return');
+    // An older caller that does not say keeps the exchange words.
+    expect(returnActionLabel('approve', { hasExchange: true })).toBe('Approve return & exchange');
+  });
+
+  it('after approval the reason says what needs order approval, naming the return cancel when it was dropped (verification L3)', () => {
+    const approved = {
+      status: 'approved' as const,
+      exchangeStatus: 'waiting_for_return' as const,
+      hasExchange: true,
+      replacementClass: 'undrawn' as const,
+      viewerCanManageReturns: true,
+      viewerCanApproveOrders: false,
+    };
+    expect(availableReturnActions({ ...approved, hasApprovedExchange: true })).toEqual({
+      primary: 'receive',
+      secondary: [],
+      readOnlyReason: NO_ORDERS_AFTER_CANCEL,
+    });
+    expect(availableReturnActions({ ...approved, status: 'received', exchangeStatus: 'ready_to_pick' }).readOnlyReason).toBe(NO_ORDERS_AFTER);
+  });
+
+  it('"Hand over" is offered only with order approval; without it the replacement is opened (verification L4)', () => {
+    const base = { hasExchange: true, replacementClass: 'drawn' as const, hasApprovedExchange: true, viewerCanManageReturns: true };
+    for (const ex of ['ready_for_pickup', 'out_for_delivery'] as const) {
+      const closedWith = availableReturnActions({ ...base, status: 'closed', exchangeStatus: ex, viewerCanApproveOrders: true });
+      expect(closedWith.primary).toBe('hand_over');
+      const closedWithout = availableReturnActions({ ...base, status: 'closed', exchangeStatus: ex, viewerCanApproveOrders: false });
+      expect(closedWithout.primary).toBe('open_replacement');
+      const approvedWithout = availableReturnActions({ ...base, status: 'approved', exchangeStatus: ex, viewerCanApproveOrders: false });
+      expect(approvedWithout.secondary).toContain('open_replacement');
+      expect([approvedWithout.primary, ...approvedWithout.secondary]).not.toContain('hand_over');
+      const receivedWithout = availableReturnActions({ ...base, status: 'received', exchangeStatus: ex, viewerCanApproveOrders: false });
+      expect([receivedWithout.primary, ...receivedWithout.secondary]).not.toContain('hand_over');
+    }
   });
 });
