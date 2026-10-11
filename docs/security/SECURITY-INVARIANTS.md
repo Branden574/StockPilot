@@ -639,9 +639,11 @@ actually fire.
     table are refused by privilege (42501) for every member, a manager with
     `returns:manage` and warehouse write included (0398 K2). No product
     code writes either table through a client
-    (`returns-raw-writes.guard.test.ts`; RX-1 deleted the last two,
-    `RMAService.applyTransition` and the requester create's compensating
-    delete).
+    (`returns-raw-writes.guard.test.ts`, a source scan: a literal or bound
+    table name, `as const`, a chain bound to a variable, and any raw
+    `/rest/v1/returns` or `/rest/v1/return_lines` URL; RX-1 deleted the last
+    two writers, `RMAService.applyTransition` and the requester create's
+    compensating delete).
   - **Accepted residuals after RX-4** (recorded 2026-10-11, RX4-NOTES B2 and
     B3). (1) The frozen 0359 wrapper `public.process_return_disposition`
     keeps EXECUTE for `authenticated` (plan 1.5, P30; five suites prove the
@@ -769,7 +771,12 @@ actually fire.
   function path, K5 the guards behind a restored grant, K6 the guards and
   policies installed, K7 the wrapper residual); the 0394 and 0396 suites put
   0394's grants back inside their own transactions so the guards stay
-  proven. App side: `returns-raw-writes.guard.test.ts`,
+  proven, and the 0158 suite writes its requested RMAs and line attempts as
+  the owner (its caps fire for every role).
+  `returns-rx4-migrations.guard.test.ts` fails any other pgTAP suite that
+  writes the return tables as an API role without putting the grant back.
+  RX-1's races 9a and 9b (the old tab's raw line insert) are skipped on a
+  stack at or past the contract. App side: `returns-raw-writes.guard.test.ts`,
   `returns.test.ts`, `returns.requester.test.ts`, `returns.portal.test.ts`,
   the `/api/v1/returns` route tests and core `return-actions.test.ts`,
   `return-error-map.test.ts` and `restock-view.test.ts`.
@@ -969,8 +976,15 @@ actually fire.
     decision `replacement_closed` (reason and order
     required, no revision: `return_decisions_replacement_closed_chk`), so no
     revision read changes. Nothing moves in stock; every hold on the rest is
-    released. Races against itself, `resume_fulfillment` and `close_return`
-    are `scripts/db-concurrency/0397_returns_followups_races.sh` R1 to R3.
+    released. Races against itself, `resume_fulfillment`, `close_return`
+    and Cancel replacement are
+    `scripts/db-concurrency/0397_returns_followups_races.sh` R1 to R3 and R6.
+    Its preflight pins, besides the gates and `close_partial`,
+    `is_org_member`, `module_enabled` and the four `order_requests` trigger
+    bodies the close relies on (the replacement ping, the replacement status
+    rule, the transition table and the workflow guard), so a slice that
+    restates one of them first stops this push (fix round 1, desk check
+    stock S2).
   - **The flag** (security review F-5). `stockpilot.return_exchange` is the
     only barrier for SECURITY DEFINER callers of `cancel_order_request` and
     `close_partial` on a replacement, and of the header guard. It counts only
@@ -1028,8 +1042,12 @@ actually fire.
     before the budget lock, so a body naming any other id locks nothing of
     it (race R5a; R5b proves an option is still locked first). Since 0397
     `return_exchange_options` also leaves out a line whose exchange budget
-    is used up (a unit replaced under a cancelled RMA; RX-3 stock desk check
-    F5), so its sizes are never offered. The
+    is used up (every unit of it already got a replacement, a cancelled RMA's
+    included; RX-3 stock desk check F5), so its sizes are never offered. The
+    screens still offer the warehouse-review note on such a line, as on any
+    line without sizes, and the create refuses it after sending
+    (`exchange_already_sent`); showing Return only there is a deferred UI
+    follow-up (fix round 1, desk checks people M1 and complete C9). The
     `RETURNS_EXCHANGE_CREATE=off` switch refuses a new exchange on every
     create surface (and "Add a replacement") with `exchange_not_available`;
     a return still goes through.
@@ -1103,7 +1121,10 @@ actually fire.
     may read already, and it writes nothing; the app gates the module. A
     part-handed-over replacement on backorder whose RMA is already received
     or closed is closed as delivered-partial only by "Close the rest" (RX-4,
-    above); a rest already resumed into picking is ended from its order.
+    above); a rest already resumed into picking goes on through picking and
+    hand-over on its order (the order page offers no cancel or close for a
+    replacement). Whether such a rest can come back to backorder (a short
+    pick) and then be closed is checked at the test stage.
 - **Why it matters**: a replacement is stock promised to someone. Without
   these rules an exchange could be issued twice for one approval, picked and
   handed over before the item it replaces came back, cancelled from the
