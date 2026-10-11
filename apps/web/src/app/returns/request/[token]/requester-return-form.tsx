@@ -62,7 +62,7 @@ export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterN
               Your reference is <span className="text-foreground font-mono">{submitted.returnNumber}</span>.{' '}
             </>
           ) : null}
-          The warehouse will review it. This page shows where it stands.
+          {RETURNS_COPY.requesterWarehouseWillReview} This page shows where it stands.
         </p>
       </div>
     );

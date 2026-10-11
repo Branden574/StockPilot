@@ -762,8 +762,10 @@ describe('the request (POST .../return-request)', () => {
     expect(requesterSentTitle(true)).toBe('We received your exchange request.');
     expect(requesterSentTitle(false)).toBe('We received your return request.');
     // RX-3 merge: the web's "Your reference is RMA-…." (the phone showed the bare number).
-    expect(requesterSentMessage('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123.');
-    expect(requesterSentMessage(null)).toBeUndefined();
+    // Re-pinned on purpose (RX-3 fix round 1, L4): the web's confirmation also
+    // says the warehouse reviews it (core requesterSentWords).
+    expect(requesterSentMessage('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123. The warehouse will review it.');
+    expect(requesterSentMessage(null)).toBe('The warehouse will review it.');
   });
 });
 
@@ -842,7 +844,9 @@ describe("the sheet's line words", () => {
     expect(requesterLineLabel(sheet.lines[0]!)).toBe('Walk Exchange Tee, M');
     expect(requesterLineLabel(sheet.lines[1]!)).toBe('Walk Cap');
     expect(requesterLineAvailability(sheet.lines[0]!)).toBe('2 of 2 returnable');
-    expect(requesterReplacementQuantity(2)).toBe('Qty requested: 2');
+    // Re-pinned on purpose (RX-3 fix round 1, L4): the web's words for a
+    // requester ("Quantity: 2"), core requesterReplacementQuantityLabel.
+    expect(requesterReplacementQuantity(2)).toBe('Quantity: 2');
   });
 });
 

@@ -37,7 +37,7 @@ import {
   type RequesterTrackingLine,
   type RequesterTrackingReturn,
 } from './requester-exchange-types';
-import { RETURNS_COPY } from './returns-copy';
+import { requesterReplacementQuantityLabel, requesterSentWords, RETURNS_COPY } from './returns-copy';
 
 /**
  * The requester's contract (returns RX-3, plan 3.9 and 3.10): the key lists
@@ -404,5 +404,19 @@ describe('a requester refusal: read the sheet again, or start over', () => {
     for (const reason of [null, undefined, 'busy', 'return_invalid', 'module_disabled', 'unknown_reason']) {
       expect(requesterRefusalRecovery(reason), String(reason)).toBeNull();
     }
+  });
+});
+
+// RX-3 fix round 1 (desk check L4): one set of words for the web form and
+// the phone sheet where they had drifted.
+describe('the requester sheet words both screens share', () => {
+  it('the replacement quantity without a stepper reads "Quantity: N" (the phone said "Qty requested: N")', () => {
+    expect(requesterReplacementQuantityLabel(1)).toBe('Quantity: 1');
+    expect(requesterReplacementQuantityLabel(3)).toBe('Quantity: 3');
+  });
+
+  it('after a request: the reference, then that the warehouse reviews it', () => {
+    expect(requesterSentWords('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123. The warehouse will review it.');
+    expect(requesterSentWords(null)).toBe('The warehouse will review it.');
   });
 });

@@ -365,7 +365,8 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
           <View style={styles.pair}>
             {/* RETURNING: what goes back (a text label, never colour alone). */}
             <View style={[styles.side, { borderColor: c.hair }]}>
-              <Eyebrow>{RETURNS_COPY.returning}</Eyebrow>
+              {/* RETURNING only on a line that comes back, as on the web (RX-3 fix round 1, L4). */}
+              {d.quantity > 0 ? <Eyebrow>{RETURNS_COPY.returning}</Eyebrow> : null}
               <View style={{ flexDirection: stacked ? 'column' : 'row', gap: 12 }}>
                 {photo ? (
                   <CachedImage uri={photo} style={[styles.photo, { backgroundColor: c.paper2 }]} />

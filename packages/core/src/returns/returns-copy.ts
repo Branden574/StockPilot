@@ -327,7 +327,27 @@ export const RETURNS_COPY = {
   requesterLoadingSizes: 'Loading the other sizes…',
   /** The sheet itself loading (the portal's words; the phone's spinner name). */
   requesterLoadingForm: 'Loading the return form…',
+  requesterWarehouseWillReview: 'The warehouse will review it.',
 } as const;
+
+/**
+ * The replacement's quantity on a requester sheet when there is no stepper
+ * (one comes back): "Quantity: 1", the web form's and the phone's words
+ * (RX-3 fix round 1, L4; the phone said "Qty requested: 1", staff words).
+ */
+export function requesterReplacementQuantityLabel(quantity: number): string {
+  return `${RETURNS_COPY.replacementQuantity}: ${quantity}`;
+}
+
+/**
+ * After a requester's request is in: the reference, then that the warehouse
+ * reviews it (the token page's confirmation, the phone's alert; RX-3 fix
+ * round 1, L4).
+ */
+export function requesterSentWords(returnNumber: string | null): string {
+  const review = RETURNS_COPY.requesterWarehouseWillReview;
+  return returnNumber ? `${RETURNS_COPY.requesterReference(returnNumber)} ${review}` : review;
+}
 
 /**
  * The words on the requester's way in (the order's link or button, the token

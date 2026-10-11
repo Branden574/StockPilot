@@ -29,6 +29,7 @@ import {
   randomRequestUuid,
   REQUESTER_AVAILABILITY_WORDS,
   requesterRefusalRecovery,
+  requesterReplacementQuantityLabel,
   RETURN_EXCHANGE_NOTE_MAX,
   RETURNS_COPY,
   returnLineLabel,
@@ -545,7 +546,7 @@ function ReplacementCard({
           />
         ) : (
           <p className="text-sm tabular-nums">
-            {RETURNS_COPY.replacementQuantity}: {quantity}
+            {requesterReplacementQuantityLabel(quantity)}
           </p>
         )
       ) : null}

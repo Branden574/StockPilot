@@ -43,11 +43,12 @@
 import {
   parseExchangeStatus,
   parseReturnBody,
-  qtyRequestedLabel,
   randomRequestUuid,
   REQUESTER_AVAILABILITY_WORDS,
   requesterEntryLabel,
+  requesterReplacementQuantityLabel,
   requesterReturnsView,
+  requesterSentWords,
   requesterTrackingLineWords,
   RETURN_EXCHANGE_NOTE_MAX,
   RETURN_NOTES_MAX,
@@ -756,8 +757,8 @@ export function requesterSentTitle(exchange: boolean): string {
 }
 
 /** Its message: "Your reference is RMA-….", the web's words, when there is a number. */
-export function requesterSentMessage(returnNumber: string | null): string | undefined {
-  return returnNumber ? RETURNS_COPY.requesterReference(returnNumber) : undefined;
+export function requesterSentMessage(returnNumber: string | null): string {
+  return requesterSentWords(returnNumber);
 }
 
 // ── The requester's own requests ────────────────────────────────────────────
@@ -851,5 +852,5 @@ export function requesterLineAvailability(line: Pick<RequesterReturnableLine, 'q
 
 /** "Qty requested: 2": the replacement's quantity, the line's own (brief 4: it defaults to and is capped by it). */
 export function requesterReplacementQuantity(quantity: number): string {
-  return qtyRequestedLabel(quantity);
+  return requesterReplacementQuantityLabel(quantity);
 }

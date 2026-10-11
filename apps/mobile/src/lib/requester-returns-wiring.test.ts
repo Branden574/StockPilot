@@ -226,7 +226,8 @@ describe('the sheet: Dynamic Type, the keyboard and the iPad', () => {
     expect(sheet).toContain("pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }");
     expect(sheet).toContain('side: { flexGrow: 1, flexBasis: 300');
     // Text labels and an arrow, never colour alone.
-    expect(sheet).toContain('<Eyebrow>{RETURNS_COPY.returning}</Eyebrow>');
+    // RX-3 fix round 1 (L4): RETURNING only on a line that comes back, as on the web.
+    expect(sheet).toContain('{d.quantity > 0 ? <Eyebrow>{RETURNS_COPY.returning}</Eyebrow> : null}');
     expect(sheet).toContain('<Eyebrow accessibilityLabel={RETURNS_COPY.replacement}>→ {RETURNS_COPY.replacement}</Eyebrow>');
   });
 });
