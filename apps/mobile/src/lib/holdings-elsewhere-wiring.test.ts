@@ -176,8 +176,9 @@ describe('item screen (app/item/[id].tsx)', () => {
   it('stores the AWAITED answer on the item, not a literal', () => {
     // Review finding: `elsewhere: { status: 'none' }` here made the ELSEWHERE
     // row and the failed-read note unreachable, and nothing failed.
+    // Ungroup (0399) appended the SKU-sibling count to the same round trip.
     expect(load).toContain(
-      'const [whResp, chResp, serialResp, holdingResp, elsewhere] = await Promise.all([',
+      'const [whResp, chResp, serialResp, holdingResp, elsewhere, skuSiblingCount] = await Promise.all([',
     );
     const stored = between(load, 'setItem({', '});');
     expect(stored).toMatch(/^\s*elsewhere,\s*$/m);
