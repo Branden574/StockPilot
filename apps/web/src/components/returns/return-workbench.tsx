@@ -705,6 +705,9 @@ export function ReturnWorkbench({
   const cancelReturnWords = exchangeActionConsequences('cancel', replacementFacts).map((c) => c.text);
 
   const showPickers = r.status === 'requested' || r.status === 'received' || mode === 'change_destination';
+  // "When processed, … goes back to 31-C." only while the return can still be
+  // processed (RX-3 fix round 1, L8): never on a cancelled or denied RMA.
+  const planCanHappen = r.status === 'requested' || r.status === 'approved' || r.status === 'received';
   const editable = wb.viewer.canManageReturns && busy === null;
   const processLabel =
     r.status === 'received' && openLines.length === 1 && openLines[0]!.restock
@@ -965,7 +968,7 @@ export function ReturnWorkbench({
                     reasonCode={r.reasonCode}
                     itemLabel={name}
                   />
-                ) : l.restock ? (
+                ) : l.restock && planCanHappen ? (
                   <p className="text-muted-foreground text-sm">{plannedSentence(l.restock, lineLabel(l))}</p>
                 ) : null}
                 {r.status === 'received' && l.restock ? (

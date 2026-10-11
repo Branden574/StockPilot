@@ -270,6 +270,19 @@ describe('ReturnWorkbench states', () => {
     expect(screen.queryByText(/goes into Staging/)).not.toBeInTheDocument();
   });
 
+  // RX-3 fix round 1 (desk check L8; RX-2 verify people, line 118): a
+  // cancelled or denied RMA still said "When processed, … goes back to 31-C."
+  // Nothing will be processed; the plan shows only while it can still happen.
+  it('a cancelled or denied RMA says nothing about where the item would have gone', () => {
+    for (const status of ['cancelled', 'denied']) {
+      const { unmount } = render(<ReturnWorkbench workbench={bench(status, {})} />);
+      expect(screen.queryByText(/When processed/), status).not.toBeInTheDocument();
+      unmount();
+    }
+    render(<ReturnWorkbench workbench={bench('approved', {})} />);
+    expect(screen.getAllByText(/When processed/).length).toBeGreaterThan(0);
+  });
+
   it('requested: "What happens" names each line, so two lines never read the same (review)', () => {
     const wb = bench('requested', {}, {
       lines: [
