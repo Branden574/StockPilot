@@ -13,6 +13,7 @@ import { OrderLineActions, ShortLineFixes } from '@/components/orders/order-line
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
+import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
@@ -78,6 +79,7 @@ import {
   reconcileReadiness,
   resolveOrgTimezone,
   returnedFragment,
+  RETURNS_COPY,
   returnHandle,
   returnRefsByLine,
   shortfallPoView,
@@ -90,6 +92,7 @@ import {
   type OrderStockCheck,
   type OrgEmailRoutingReadState,
   type PartialPreview,
+  type RequesterTrackingReturn,
   type Role,
   type ShortLineActions,
 } from '@stockpilot/core';
@@ -127,6 +130,7 @@ import {
   type ReturnableLine,
   type ReturnStatus,
 } from '@/server/services/returns';
+import { trackingForOrder } from '@/server/services/returns-requester';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { neededByChangeView } from '@/lib/orders/needed-by-change';
 import type { ShortfallPoOffer } from '@/lib/orders/shortfall-po';
@@ -1057,6 +1061,16 @@ export default async function OrderDetailPage({
     orderIsReturnable &&
     returnsModuleEnabled &&
     totalFulfilledForReturns > 0;
+  // Returns RX-3: the requester's own requests on this order, in their words
+  // ("Your requests on this order": core's sentences, what comes back and
+  // what replaces it, the replacement's SO; requester-made RMAs only, D15).
+  // The same viewer as the link above, also when nothing is left to return
+  // (every unit already asked for). Read with the service role, scoped to
+  // this order and organization (trackingForOrder), beside the link's own
+  // read below, so it adds no round trip of its own; a failed read shows no
+  // section (it fails closed, pattern 1).
+  const requesterTrackingEligible =
+    isOwnRequest && !can(ctx, 'returns:manage') && orderIsReturnable && returnsModuleEnabled;
 
   // ORDER SECRETS (migrations 0389 and 0392). The raw tokens live in
   // order_request_secrets, which only the admin client reads; the order row
@@ -1097,20 +1111,23 @@ export default async function OrderDetailPage({
   // Without a service-role key (a misconfigured preview) the page renders
   // with no return link and no hand-over link rather than failing.
   let secretsAdmin: ReturnType<typeof createAdminClient> | null = null;
-  if (requesterReturnEligible || wantsHandOverLink) {
+  if (requesterReturnEligible || requesterTrackingEligible || wantsHandOverLink) {
     try {
       secretsAdmin = createAdminClient();
     } catch {
       secretsAdmin = null;
     }
   }
-  const [requesterReturnToken, handOverLink] = await Promise.all([
+  const [requesterReturnToken, handOverLink, requesterTracking] = await Promise.all([
     requesterReturnEligible && secretsAdmin
       ? resolveReturnToken(secretsAdmin, id)
       : Promise.resolve(null),
     wantsHandOverLink && secretsAdmin
       ? signatureLinkToken(secretsAdmin, id, request.signature_token)
       : Promise.resolve(null),
+    requesterTrackingEligible && secretsAdmin
+      ? trackingForOrder(secretsAdmin, ctx.organizationId, id)
+      : Promise.resolve<RequesterTrackingReturn[]>([]),
   ]);
   const requesterReturnPath = requesterReturnToken ? `/returns/request/${requesterReturnToken}` : null;
 
@@ -1215,7 +1232,12 @@ export default async function OrderDetailPage({
             )}
             {requesterReturnPath && (
               <Button asChild variant="outline">
-                <a href={requesterReturnPath}>Request a return</a>
+                {/* Returns RX-3: the link opens the requester's sheet, where each
+                    item can be a return only or an exchange for another size
+                    (the words follow the exchange kill switch). */}
+                <a href={requesterReturnPath}>
+                  {exchangeCreateEnabled() ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return'}
+                </a>
               </Button>
             )}
             {showDeliveryRequest && deliveryRequestRecipientsDto && (
@@ -1642,6 +1664,14 @@ export default async function OrderDetailPage({
               Rendered for every viewer (RLS decided what came back); the RMA
               number is a link only when the returns page would open for this
               viewer. Nothing renders when the order has no returns. */}
+          {/* Returns RX-3: the requester's own requests, in their words. */}
+          <RequesterTracking
+            requests={requesterTracking}
+            id="your-requests"
+            density="compact"
+            className="bg-card rounded-xl border p-4"
+          />
+
           {orderReturns.length > 0 && (
             <section id="order-returns" className="bg-card rounded-xl border" data-testid="order-returns">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">

@@ -129,6 +129,29 @@ vi.mock('@/server/services/returns', () => ({
   loadOrderReturns: (...args: unknown[]) => loadOrderReturnsMock(...args),
 }));
 
+// Returns RX-3 (section h): the requester's own order reads its return link
+// and its requests' progress through the admin client. With no admin client
+// configured (createAdminClient throws: the default) the page renders with
+// neither, as before.
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    if (!adminHolder.client) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    return adminHolder.client;
+  },
+}));
+const resolveReturnTokenMock = vi.fn(async (..._args: unknown[]): Promise<string | null> => null);
+vi.mock('@/server/lib/order-secrets', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/order-secrets')>()),
+  resolveReturnToken: (...args: unknown[]) => resolveReturnTokenMock(...args),
+}));
+const trackingForOrderMock = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []);
+vi.mock('@/server/services/returns-requester', () => ({
+  trackingForOrder: (...args: unknown[]) => trackingForOrderMock(...args),
+}));
+const exchangeSwitch = vi.hoisted(() => ({ on: true }));
+vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => exchangeSwitch.on }));
+
 import OrderDetailPage from './page';
 
 const ORDER_ID = '11111111-1111-1111-1111-111111111111';
@@ -295,6 +318,10 @@ beforeEach(() => {
   loadOrderReturnsMock.mockResolvedValue([]);
   checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
   setViewer([]);
+  adminHolder.client = null;
+  resolveReturnTokenMock.mockResolvedValue(null);
+  trackingForOrderMock.mockResolvedValue([]);
+  exchangeSwitch.on = true;
 });
 
 describe('(c) golden — an order with no returns renders exactly as before', () => {
@@ -764,5 +791,95 @@ describe('(e) the phone says what the web page renders — pinned against the MO
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/[^\n]*/g, '');
     expect(code).not.toMatch(/(?<![.\w])returned(?![\w])(?!\s*[:,}])/);
+  });
+});
+
+describe("(h) the requester's own order: Return or exchange, and their requests in their words (returns RX-3)", () => {
+  const ADMIN = { tag: 'service-role' };
+  const TOKEN = '7d0f3c1a-2b4e-4c5d-8e6f-9a0b1c2d3e4f';
+  const REQUEST = {
+    returnNumber: 'RMA-20261011-ABC123',
+    createdAt: '2026-10-11T17:00:00.000Z',
+    returnStatus: 'approved',
+    exchangeStatus: 'waiting_for_return',
+    sentences: ['Replacement reserved. Waiting for your return.'],
+    replacementOrderNumber: 'SO-000104',
+    lines: [
+      {
+        returning: { name: "Women's Polo", sizeLabel: 'Size S', quantity: 1 },
+        exchange: { state: 'approved', replacement: { name: "Women's Polo", sizeLabel: 'Size M', quantity: 1 }, substituted: false },
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    adminHolder.client = ADMIN;
+    // The requester's own completed order, in an organization with Returns on.
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'u1' }) }));
+    checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
+    resolveReturnTokenMock.mockResolvedValue(TOKEN);
+    trackingForOrderMock.mockResolvedValue([REQUEST]);
+  });
+
+  it('labels the link Return or exchange, and lists their requests with the sentences, the items and the replacement SO', async () => {
+    const { container } = await renderPage();
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${TOKEN}`);
+    expect(link?.textContent).toBe('Return or exchange');
+    expect(resolveReturnTokenMock).toHaveBeenCalledWith(ADMIN, ORDER_ID);
+    expect(trackingForOrderMock).toHaveBeenCalledTimes(1);
+    expect(trackingForOrderMock).toHaveBeenCalledWith(ADMIN, 'org-1', ORDER_ID);
+    const section = container.querySelector('#your-requests') as HTMLElement;
+    expect(section).not.toBeNull();
+    expect(section.querySelector('h2')?.textContent).toBe('Your requests on this order');
+    expect(section.textContent).toContain('RMA-20261011-ABC123');
+    expect(section.textContent).toContain('Replacement reserved. Waiting for your return.');
+    expect(section.textContent).toContain("Women's Polo, S ×1");
+    expect(section.textContent).toContain("Women's Polo, M ×1");
+    expect(section.textContent).toContain('SO-000104');
+  });
+
+  it('says Request a return while exchanges are switched off', async () => {
+    exchangeSwitch.on = false;
+    const { container } = await renderPage();
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${TOKEN}`);
+    expect(link?.textContent).toBe('Request a return');
+  });
+
+  it('shows no section when the requester has no requests on the order', async () => {
+    trackingForOrderMock.mockResolvedValue([]);
+    const { container } = await renderPage();
+    expect(container.querySelector('#your-requests')).toBeNull();
+    expect(container.textContent).not.toContain('Your requests on this order');
+  });
+
+  it("never reads another member's requests: someone else's order pays no read and shows no section", async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'other-user' }) }));
+    const { container } = await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(container.querySelector('#your-requests')).toBeNull();
+  });
+
+  it('a viewer who manages returns gets the staff dialog instead, and pays no requester read', async () => {
+    setViewer(['returns:manage']);
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(resolveReturnTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing while Returns is switched off, or before the order is handed over', async () => {
+    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'u1', status: 'approved' }) }));
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('renders without the section when no admin client is configured', async () => {
+    adminHolder.client = null;
+    const { container } = await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(container.querySelector('#your-requests')).toBeNull();
   });
 });
