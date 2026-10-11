@@ -498,7 +498,9 @@ describe('the REPLACEMENT side and the replacement order', () => {
   // screen is behind the server, like return_changed. The workbench reloads
   // and says why instead of leaving the old actions up.
   it('a refusal that means the screen is behind reloads the workbench (review fix S2)', () => {
-    for (const reason of ['return_changed', 'invalid_status_transition', 'replacement_in_progress']) {
+    // Returns RX-4 (0397): Close the rest finds nothing on backorder any more
+    // (the rest was resumed or closed meanwhile): the screen is behind too.
+    for (const reason of ['return_changed', 'invalid_status_transition', 'replacement_in_progress', 'replacement_not_backordered']) {
       expect(refusalRefreshesWorkbench(reason), reason).toBe(true);
     }
     for (const reason of ['reason_required', 'replacement_unavailable', 'replacement_site_not_available', 'exchange_already_sent', 'busy', null]) {

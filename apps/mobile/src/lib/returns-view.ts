@@ -785,9 +785,16 @@ export function replacementOrderLines(
  * another person changed the return (return_changed), its status moved on
  * (invalid_status_transition, whose words say it now shows the latest), or
  * its replacement was picked or left meanwhile (replacement_in_progress, 0396:
- * the RMA cancel is refused then). The workbench reloads and says why.
+ * the RMA cancel is refused then), or (returns RX-4, 0397) Close the rest
+ * found nothing on backorder any more (replacement_not_backordered: the rest
+ * was resumed or closed meanwhile). The workbench reloads and says why.
  */
-const STALE_REFUSALS: readonly string[] = ['return_changed', 'invalid_status_transition', 'replacement_in_progress'];
+const STALE_REFUSALS: readonly string[] = [
+  'return_changed',
+  'invalid_status_transition',
+  'replacement_in_progress',
+  'replacement_not_backordered',
+];
 
 export function refusalRefreshesWorkbench(reason: string | null | undefined): boolean {
   return typeof reason === 'string' && STALE_REFUSALS.includes(reason);

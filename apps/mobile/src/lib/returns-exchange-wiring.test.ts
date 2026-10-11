@@ -36,6 +36,8 @@ describe('the workbench', () => {
       ['issue_replacement', "setSheet('issue_replacement')"],
       // Desk check F9: the exchange ends for good after a replacement cancel.
       ['close_as_return_only', "setSheet('close_as_return_only')"],
+      // Returns RX-4 (0397): the rest of a part-handed-over replacement.
+      ['close_replacement_rest', "setSheet('close_replacement_rest')"],
       ['get_replacement_ready', 'void prepare()'],
     ] as const) {
       expect(view).toMatch(new RegExp(`case '${action}':\\s*${effect.replace(/[()]/g, '\\$&')};`));
@@ -167,7 +169,7 @@ describe('online only', () => {
 
   it('the exchange calls are plain requests, never queued', () => {
     const client = code(read('src/lib/returns-api.ts'));
-    for (const fn of ['changeReturnReplacement', 'cancelReturnReplacement', 'releaseReturnReplacement', 'prepareReturnReplacement']) {
+    for (const fn of ['changeReturnReplacement', 'cancelReturnReplacement', 'releaseReturnReplacement', 'prepareReturnReplacement', 'closeReturnReplacementRest']) {
       expect(client).toContain(`export function ${fn}(`);
     }
     expect(client).not.toMatch(/from '\.\/(queue|outbox|db|sync)'/);
@@ -330,6 +332,35 @@ describe('online only', () => {
     expect(client).toContain("return replacementCall(id, '/decline', body);");
     expect(sheet).toContain('declineReturnReplacement(id, { expectedRevision: wb.revision, reason: reasonText })');
     expect(sheet).toMatch(/mode === 'close_as_return_only' \|\|/);
+  });
+});
+
+// Returns RX-4 (0397; RX-2 verification V3): "Close the rest" of a
+// part-handed-over replacement on backorder, from the RMA, once the returned
+// item is in: a sheet with core's words and a required reason that sends the
+// shown revision and the status the sheet showed, online only.
+describe('Close the rest (RX-4)', () => {
+  const sheet = code(read('src/components/return-action-sheet.tsx'));
+  const client = code(read('src/lib/returns-api.ts'));
+
+  it('the client posts to its own route with the shown status', () => {
+    expect(client).toContain('export function closeReturnReplacementRest(');
+    expect(client).toContain("return replacementCall(id, '/close-rest', body);");
+  });
+
+  it('the sheet asks a reason, says what happens, and sends the shown revision and status', () => {
+    expect(sheet).toMatch(/\| 'close_replacement_rest'/);
+    expect(sheet).toMatch(/mode === 'close_replacement_rest' \|\|/);
+    expect(sheet).toContain('RETURNS_COPY.closeReplacementRestHelp');
+    expect(sheet).toMatch(/case 'close_replacement_rest':\s*return RETURNS_COPY\.closeReplacementRestReasonLabel;/);
+    expect(sheet).toContain(
+      'closeReturnReplacementRest(id, { expectedRevision: wb.revision, reason: reasonText, shownStatus: shownReplacementStatus(wb) })',
+    );
+    expect(sheet).toMatch(/RETURNS_COPY\.closedReplacementRest\b/);
+    expect(sheet).toMatch(/RETURNS_COPY\.closedReplacementRestAlready/);
+    // Title and button are core's words.
+    expect(sheet).toMatch(/mode === 'close_replacement_rest'\s*\?\s*`\$\{RETURNS_COPY\.closeReplacementRest\}\?`/);
+    expect(sheet).toMatch(/mode === 'close_replacement_rest'\s*\?\s*RETURNS_COPY\.closeReplacementRest\s*:/);
   });
 });
 

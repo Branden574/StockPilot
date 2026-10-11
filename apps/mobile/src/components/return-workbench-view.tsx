@@ -244,6 +244,9 @@ export function ReturnWorkbenchView({
       case 'close_as_return_only':
         setSheet('close_as_return_only');
         return;
+      case 'close_replacement_rest':
+        setSheet('close_replacement_rest');
+        return;
       case 'get_replacement_ready':
         void prepare();
         return;
