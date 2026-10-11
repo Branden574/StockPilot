@@ -55,10 +55,16 @@ export const RELEASES: Release[] = [
     //   request (returns-notify.ts, requester-sourced only); and the 14-day
     //   prompt on the workbench (RX-2 review fix P17), shown only to someone
     //   offered Cancel replacement, so the words say so.
-    // - Order actions (deferred item b, 1c4aac16): a lock wait, a timeout or
-    //   a deadlock now answers Busy. Try again. where a general error was
-    //   said; actions that had busy words keep them. Server side, so no
-    //   update is needed for it.
+    // - Order actions (deferred item b, 1c4aac16; fix round 1 F1/F2): a lock
+    //   wait, a timeout or a deadlock now answers Busy. Try again. where a
+    //   general error was said, on every order function call and every
+    //   single-statement order write (stage, deny, internal notes, a line's
+    //   quantity, removing a line, the pick slip); actions that had busy words
+    //   keep them. Busy is said only when nothing was written. Add items,
+    //   whose top-ups commit before its insert, says busy only before its
+    //   first top-up; after one it answers the non-retryable partial refusal
+    //   ("Part of this change was saved. Reload the order ..."). Server side,
+    //   so no update is needed for it.
     // - A label fix found on the way: core returnLineLabel read the s of
     //   Women's as the size S, so return and exchange sentences dropped the
     //   size S for names with an apostrophe (staff workbench, order pages,
@@ -112,7 +118,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Order actions say Busy. Try again. when another change is under way',
         whatChanged:
-          'When an order action meets another change to the same order at the same moment, or the database is briefly busy, it now says Busy. Try again. instead of a general error. Nothing was changed, so pressing the same button again is safe. Actions that already said they were busy keep their own words.',
+          'When an order action meets another change to the same order at the same moment, or the database is briefly busy, it now says Busy. Try again. instead of a general error. When it says this, nothing was changed, so pressing the same button again is safe. Actions that already said they were busy keep their own words. If Add items saved only part of a change, it says so and asks you to reload the order before adding again.',
         whyItMatters: 'A general error left people unsure whether the order had changed.',
         howItAffectsYou: 'If an order says Busy. Try again., wait a moment and press the same button again.',
         whatToDo: 'No action needed.',

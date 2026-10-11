@@ -528,6 +528,24 @@ function orderGuardRefusal(err: { message?: string | null }): ServiceError | nul
   return ORDER_GUARD_SENTENCES.has(message) ? new ServiceError('validation_error', message) : null;
 }
 
+/**
+ * Add items wrote part of the change before it failed (returns RX-3 fix round
+ * 1, desk check F1): the top-ups of items already on the order are saved, the
+ * rest is not. Non-retryable on purpose: sending the same request again would
+ * add the saved quantities twice. A guard refusal's own sentence (which item
+ * cannot be ordered) comes first.
+ */
+const ADD_LINES_PARTIAL_COPY =
+  'Part of this change was saved. Reload the order to see it before adding again.';
+
+function addLinesPartialRefusal(guardSentence: string | null): ServiceError {
+  return new ServiceError(
+    'conflict',
+    guardSentence ? `${guardSentence} ${ADD_LINES_PARTIAL_COPY}` : ADD_LINES_PARTIAL_COPY,
+    { reason: 'partial', retryable: false },
+  );
+}
+
 /** What started a hold (F2-2), recorded on its audit entry. */
 export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
 
@@ -2053,6 +2071,34 @@ export class OrderRequestsService {
     // Service role: see the note on the merge branch below.
     const admin = createAdminClient();
     const toInsert: Array<Record<string, unknown>> = [];
+    const mergedItems: Array<[string, number]> = [];
+    // The top-ups below are separate, COMMITTED statements, and the insert of
+    // the new lines comes after them (returns RX-3 fix round 1, desk check
+    // F1). A failure after a top-up must never be "Busy. Try again." (which
+    // promises nothing was written): a resend would add the merged quantities
+    // a second time, and the holds and the pick would follow. So busy is said
+    // only while nothing has been written; after that the answer is the
+    // non-retryable partial conflict, the audit records what was saved, and
+    // the person reloads the order. A single function for Add items (one
+    // transaction) is the later fix (a follow-up for a migration slice).
+    const failAfterWrite = async (
+      err: { message?: string | null; code?: string | null },
+      stage: 'merge' | 'insert',
+    ): Promise<never> => {
+      const guard = stage === 'insert' ? orderGuardRefusal(err) : null;
+      if (merged === 0) {
+        throw guard ?? orderBusyRefusal(err) ?? new ServiceError('internal_error', err.message ?? 'add lines failed');
+      }
+      if (!guard) {
+        void reportSrvError(new Error(err.message ?? 'add lines failed'), {
+          tag: 'orders.add_lines_partial',
+          organizationId: this.ctx.organizationId,
+          extra: { orderId: h.id, stage, code: err.code ?? null, merged },
+        });
+      }
+      await this.auditLinesAdded(h, itemMap, mergedItems, { added: 0, merged, partial: true });
+      throw addLinesPartialRefusal(guard?.message ?? null);
+    };
     for (const [itemId, qty] of wanted) {
       const prior = existingByItem.get(itemId);
       if (prior) {
@@ -2077,15 +2123,17 @@ export class OrderRequestsService {
           .eq('order_request_id', h.id)
           .select('id')
           .maybeSingle();
-        if (uErr) throw new ServiceError('internal_error', uErr.message);
+        if (uErr) await failAfterWrite(uErr, 'merge');
         // Fail CLOSED: no row back means nothing changed, so never report success.
         if (!mergedRow) {
+          if (merged > 0) await failAfterWrite({ message: 'merge matched no row' }, 'merge');
           throw new ServiceError(
             'internal_error',
             'Could not update the existing line. Nothing was changed.',
           );
         }
         merged += 1;
+        mergedItems.push([itemId, qty]);
       } else {
         toInsert.push({
           order_request_id: h.id,
@@ -2100,39 +2148,50 @@ export class OrderRequestsService {
       const { error: insErr } = await this.ctx.supabase
         .from('order_request_lines')
         .insert(toInsert);
-      if (insErr) {
-        // The line guard's refusal (0365) is a sentence for the user, not a fault.
-        throw orderGuardRefusal(insErr) ?? orderBusyRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
-      }
+      // The line guard's refusal (0365) is a sentence for the user, not a
+      // fault; busy only while no top-up was written (failAfterWrite).
+      if (insErr) await failAfterWrite(insErr, 'insert');
     }
 
     // A slip printed BEFORE this change no longer matches the order.
     const pickSlipStale = h.pick_slip_generated_at != null;
 
+    await this.auditLinesAdded(h, itemMap, [...wanted.entries()], { added, merged, partial: false });
+
+    // After the lines are written (and audited): hold them, when an approver
+    // added them at a hold status. Never undoes the add.
+    const hold = await this.topUpHolds(h, 'lines_added');
+    return { added, merged, pickSlipStale, hold };
+  }
+
+  /** The order's history row for Add items: what was added and topped up. */
+  private async auditLinesAdded(
+    h: { id: string; status: OrderRequestStatus; pick_slip_generated_at: string | null },
+    itemMap: Map<string, { name: string }>,
+    items: Array<[string, number]>,
+    counts: { added: number; merged: number; partial: boolean },
+  ): Promise<void> {
     await audit(
       {
         event: 'order_request.lines_added',
         entityType: 'order_request',
         entityId: h.id,
         after: {
-          added,
-          merged,
-          items: [...wanted.entries()].map(([itemId, qty]) => ({
+          added: counts.added,
+          merged: counts.merged,
+          // Only on a partial add: the top-ups were saved, the rest was not.
+          ...(counts.partial ? { partial: true } : {}),
+          items: items.map(([itemId, qty]) => ({
             itemId,
             name: itemMap.get(itemId)?.name ?? null,
             quantity: qty,
           })),
           statusWhenAdded: h.status,
-          pickSlipStale,
+          pickSlipStale: h.pick_slip_generated_at != null,
         },
       },
       this.ctx,
     );
-
-    // After the lines are written (and audited): hold them, when an approver
-    // added them at a hold status. Never undoes the add.
-    const hold = await this.topUpHolds(h, 'lines_added');
-    return { added, merged, pickSlipStale, hold };
   }
 
   /**
@@ -2612,7 +2671,8 @@ export class OrderRequestsService {
       .eq('order_request_id', h.id)
       .select('id')
       .maybeSingle();
-    if (uErr) throw new ServiceError('internal_error', uErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (uErr) throw orderBusyRefusal(uErr) ?? new ServiceError('internal_error', uErr.message);
     if (!changed) {
       throw new ServiceError(
         'conflict',
@@ -2777,7 +2837,8 @@ export class OrderRequestsService {
       .eq('order_request_id', h.id)
       .select('id')
       .maybeSingle();
-    if (dErr) throw new ServiceError('internal_error', dErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (dErr) throw orderBusyRefusal(dErr) ?? new ServiceError('internal_error', dErr.message);
     if (!deleted) {
       throw new ServiceError(
         'conflict',
@@ -4524,7 +4585,8 @@ export class OrderRequestsService {
       .eq('status', 'packing_slip_generated')
       .select('*')
       .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (updErr) throw orderBusyRefusal(updErr) ?? new ServiceError('internal_error', updErr.message);
     if (!updated)
       throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     await audit(
@@ -4731,7 +4793,8 @@ export class OrderRequestsService {
       .eq('status', 'pending_approval')
       .select('*')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
     if (!data)
       throw new ServiceError(
         'validation_error',
@@ -4806,7 +4869,8 @@ export class OrderRequestsService {
       .eq('id', id)
       .select('id')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
     if (!updated) throw new ServiceError('not_found', 'Order request not found');
   }
 

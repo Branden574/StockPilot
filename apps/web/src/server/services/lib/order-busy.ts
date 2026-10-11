@@ -19,9 +19,16 @@ import { ServiceError } from '../context';
  * RMA create with an exchange (key-share on the requested items) beside an
  * order function that locks the same items for update in id order
  * (approve_partial, hold_order_stock, resume_fulfillment, complete_picking;
- * RX-2 review S3 and S4), or an ordinary multi-line insert. In every case the
- * whole call rolled back (an idempotency key's row with it), so the same
- * request is safe to send again.
+ * RX-2 review S3 and S4), or an ordinary multi-line insert.
+ *
+ * ONLY for a write that is one statement or one function call with nothing
+ * written before it in the same request: then the whole write rolled back
+ * (an idempotency key's row with it), so the same request is safe to send
+ * again, which is what "Busy. Try again." tells the person. A request that
+ * already COMMITTED an earlier write (Add items tops up the lines already on
+ * the order before it inserts the new ones) must not use it: a resend would
+ * repeat what was saved. It answers its own non-retryable refusal instead
+ * (order-requests.ts addLinesPartialRefusal; returns RX-3 fix round 1, F1).
  */
 export function isOrderBusyError(error: { code?: string | null } | null | undefined): boolean {
   const code = (error?.code ?? '').toUpperCase();

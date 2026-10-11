@@ -250,3 +250,131 @@ describe('addLines passes the line guard refusal through as a validation_error',
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Returns RX-3 fix round 1 (desk check F1): addLines writes in more than one
+// statement. It first tops up the lines already on the order (one committed
+// UPDATE each, through the service role), then inserts the new lines. When
+// the insert (or a later top-up) fails, the earlier top-ups are ALREADY SAVED,
+// so "Busy. Try again." (which promises nothing was changed) would invite a
+// resend that adds the merged quantities a second time, and the holds and the
+// pick would follow the inflated quantity. Busy is said only when nothing was
+// written; after a top-up it is a non-retryable conflict telling the person
+// to reload the order, and the audit still records what was saved.
+// ---------------------------------------------------------------------------
+describe('addLines never says busy after a top-up was saved', () => {
+  const ITEM_2 = { ...ITEM, id: 'item-2', name: 'Gadget' };
+  const ITEM_3 = { ...ITEM, id: 'item-3', name: 'Gizmo' };
+
+  function mixedStub(opts: {
+    existing: Array<Record<string, unknown>>;
+    insertError?: { message: string; code: string } | null;
+    updateErrorOnCall?: { n: number; error: { message: string; code: string } };
+  }) {
+    let updates = 0;
+    return makeSupabaseStub({
+      'order_requests.select': { data: OPEN_HEADER, error: null },
+      'inventory_items.select': { data: [ITEM, ITEM_2, ITEM_3], error: null },
+      'order_request_lines.select': { data: opts.existing, error: null },
+      'order_request_lines.insert': { data: null, error: opts.insertError ?? null },
+      'order_request_lines.update': () => {
+        updates += 1;
+        if (opts.updateErrorOnCall && opts.updateErrorOnCall.n === updates) {
+          return { data: null, error: opts.updateErrorOnCall.error };
+        }
+        return { data: { id: `line-${updates}` }, error: null };
+      },
+    });
+  }
+
+  it.each([
+    ['55P03', 'canceling statement due to lock timeout'],
+    ['57014', 'canceling statement due to statement timeout'],
+    ['40P01', 'deadlock detected'],
+    ['XX000', 'relation secret'],
+  ])(
+    'an existing item topped up, then the new item insert fails (%s): part saved, never retryable',
+    async (code, message) => {
+      const { audit } = await import('./audit');
+      vi.mocked(audit).mockClear();
+      const stub = mixedStub({
+        existing: [{ id: 'line-1', item_id: 'item-1', quantity_requested: 4 }],
+        insertError: { message, code },
+      });
+      const err = await svc(stub)
+        .addLines('order-1', [
+          { itemId: 'item-1', quantity: 2 },
+          { itemId: 'item-2', quantity: 1 },
+        ])
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({
+        code: 'conflict',
+        message: 'Part of this change was saved. Reload the order to see it before adding again.',
+        details: { reason: 'partial', retryable: false },
+      });
+      expect((err as { message: string }).message).not.toContain('Busy');
+      expect((err as { message: string }).message).not.toContain(message);
+      // Exactly one top-up was written, and none twice.
+      expect(stub.chainsAll.get('order_request_lines.update')?.length).toBe(1);
+      // What was saved is still on the order's history.
+      expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(audit).mock.calls[0]?.[0]).toMatchObject({
+        event: 'order_request.lines_added',
+        entityId: 'order-1',
+        after: { added: 0, merged: 1, partial: true, items: [{ itemId: 'item-1', quantity: 2 }] },
+      });
+    },
+  );
+
+  it('a guard refusal on the insert after a top-up keeps its sentence and still says part was saved', async () => {
+    const guard = 'That item cannot be ordered: it is deleted, a rental item, or not received yet.';
+    const stub = mixedStub({
+      existing: [{ id: 'line-1', item_id: 'item-1', quantity_requested: 4 }],
+      insertError: { message: guard, code: '42501' },
+    });
+    await expect(
+      svc(stub).addLines('order-1', [
+        { itemId: 'item-1', quantity: 2 },
+        { itemId: 'item-2', quantity: 1 },
+      ]),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      message: `${guard} Part of this change was saved. Reload the order to see it before adding again.`,
+      details: { reason: 'partial', retryable: false },
+    });
+  });
+
+  it('the second top-up fails busy after the first was saved: part saved, never retryable', async () => {
+    const stub = mixedStub({
+      existing: [
+        { id: 'line-1', item_id: 'item-1', quantity_requested: 4 },
+        { id: 'line-3', item_id: 'item-3', quantity_requested: 1 },
+      ],
+      updateErrorOnCall: { n: 2, error: { message: 'deadlock detected', code: '40P01' } },
+    });
+    await expect(
+      svc(stub).addLines('order-1', [
+        { itemId: 'item-1', quantity: 2 },
+        { itemId: 'item-3', quantity: 1 },
+      ]),
+    ).rejects.toMatchObject({ code: 'conflict', details: { reason: 'partial', retryable: false } });
+  });
+
+  it('the FIRST top-up fails busy: nothing was written, so busy (send again) is true', async () => {
+    const stub = mixedStub({
+      existing: [{ id: 'line-1', item_id: 'item-1', quantity_requested: 4 }],
+      updateErrorOnCall: { n: 1, error: { message: 'canceling statement due to lock timeout', code: '55P03' } },
+    });
+    await expect(
+      svc(stub).addLines('order-1', [
+        { itemId: 'item-1', quantity: 2 },
+        { itemId: 'item-2', quantity: 1 },
+      ]),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Busy. Try again.',
+      details: { reason: 'busy', retryable: true },
+    });
+    expect(stub.chainsAll.get('order_request_lines.insert')).toBeUndefined();
+  });
+});
