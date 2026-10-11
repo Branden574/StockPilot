@@ -858,12 +858,13 @@ actually fire.
     `hold_order_stock`, `resume_fulfillment` and `complete_picking` (review
     S4; the window is the gap between two rows' foreign-key checks, so it is
     rare, and nothing is written). The RMA side answers it with the plain
-    "Busy. Try again." (40P01, like 55P03 and 57014); on the order side the
-    victim reads the generic error, because the order service maps errors
-    function by function (`holdStockError` and the inline mappers of the
-    `approve_partial`, `resume_fulfillment` and `complete_picking` calls)
-    and sends 40P01 to `internal_error`: mapping it to "Busy. Try again."
-    there is a recorded follow-up, not a one-place change.
+    "Busy. Try again." (40P01, like 55P03 and 57014), and since returns RX-3
+    so does the order side: every mapping place of the order service
+    (`lib/order-busy.ts` `isOrderBusyError` / `orderBusyRefusal`: the named
+    mappers keep their own busy words, the inline mappers of every order
+    function, the gated pick-slip write, the line insert, the placement and
+    the shortfall PO draft) answers 55P03, 57014 and 40P01 as a retryable
+    409 instead of an internal error (`order-requests.busy.test.ts`).
   - **The return-first gate.** `trg_order_requests_zz_replacement_status`
     (SECURITY DEFINER, every role) refuses a replacement's move to
     `pick_slip_generated` (from `approved`, or a resume from `backordered`)

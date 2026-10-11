@@ -105,6 +105,7 @@ import {
   submissionStatusFromRpc,
 } from './order-submission';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { isOrderBusyError, orderBusyRefusal } from './lib/order-busy';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import {
   loadOrderExchangeChips,
@@ -535,10 +536,12 @@ export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
  * platforms show (core HOLD_* copy). `details.reason` is the HoldFailureReason
  * a line edit reports when its automatic top-up fails. Matched on the
  * function's own messages and codes only: any other error (a revoked grant's
- * "permission denied for function", a 40P01 deadlock with a writer that locks
- * items out of id order, a network fault) is internal_error, whose public
- * message is the generic sentence; the Postgres code and text stay on
+ * "permission denied for function", a network fault) is internal_error, whose
+ * public message is the generic sentence; the Postgres code and text stay on
  * `internalDetail` for the error report (holdFailureCause), never on screen.
+ * A lock wait, a timeout and a deadlock the database resolved (40P01: a
+ * writer that locks the same items in another order, an RMA create with an
+ * exchange among them, RX-2 review S4) are busy (isOrderBusyError).
  */
 function holdStockError(error: {
   message?: string | null;
@@ -568,10 +571,11 @@ function holdStockError(error: {
   }
   // lock_timeout (5 s) on the order or one of its items: someone else is
   // changing it. The authenticated role's statement_timeout (8 s) can end a
-  // call that waited on the order row and then an item first (57014): the
-  // same situation, so the same answer. Never 40001/40P01 from the function
-  // (0367): PostgREST would retry 40001 forever.
-  if (error.code === '55P03' || error.code === '57014') {
+  // call that waited on the order row and then an item first (57014), and the
+  // database can resolve a deadlock by rolling this call back (40P01, RX-2
+  // review S4): the same situation, so the same answer. Never 40001/40P01
+  // RAISED by the function (0367): PostgREST would retry 40001 forever.
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', HOLD_BUSY_COPY, reason('busy'));
   }
   return new ServiceError(
@@ -656,7 +660,7 @@ function deliveryWriteError(
   if (msg === 'order_status_changed') {
     return new ServiceError('conflict', 'Order status changed — refresh and try again.');
   }
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', DELIVERY_BUSY_COPY);
   }
   return new ServiceError('internal_error', `${error.code ?? 'no code'}: ${msg || 'no message'}`);
@@ -800,7 +804,7 @@ function packingSlipMintError(error: {
   }
   // lock_timeout (5 s) on the order row, or the role's statement_timeout:
   // someone else is changing the order. Never 40001/40P01 from the function.
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', NEEDED_BY_BUSY_COPY, { reason: 'busy', retryable: true });
   }
   return new ServiceError(
@@ -869,7 +873,7 @@ function neededByRevisionError(
       current,
     });
   }
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return neededByRefusal('conflict', NEEDED_BY_BUSY_COPY, 'busy', { retryable: true });
   }
   return neededByRefusal(
@@ -2098,7 +2102,7 @@ export class OrderRequestsService {
         .insert(toInsert);
       if (insErr) {
         // The line guard's refusal (0365) is a sentence for the user, not a fault.
-        throw orderGuardRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
+        throw orderGuardRefusal(insErr) ?? orderBusyRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
       }
     }
 
@@ -2974,6 +2978,8 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'You can only cancel your own requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request can no longer be cancelled');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     // cancel_order_request restocks a picked-but-undelivered batch through
@@ -3075,6 +3081,8 @@ export class OrderRequestsService {
           'validation_error',
           'A line references an item from a different warehouse than the request.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
@@ -3602,6 +3610,8 @@ export class OrderRequestsService {
           'validation_error',
           'A line references an item from a different warehouse than the request.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
@@ -3662,6 +3672,9 @@ export class OrderRequestsService {
       // released it early; refused by its hint in core's words.
       const refusal = replacementRefusal(updErr);
       if (refusal) throw refusal;
+      // RX-2 review S4: a lock wait, a timeout or a deadlock is busy, not a fault.
+      const busy = orderBusyRefusal(updErr);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', updErr.message);
     }
     if (!updated)
@@ -3715,6 +3728,8 @@ export class OrderRequestsService {
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'Order is not in a pickable status.');
       // Don't leak the raw Postgres/RPC text to a Bearer caller.
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not record the pick.');
     }
   }
@@ -3782,6 +3797,8 @@ export class OrderRequestsService {
         );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Not allowed to complete picking on this order.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not complete picking.');
     }
     // complete_picking draws the picked batch off the shelf (adjust_stock).
@@ -3825,6 +3842,8 @@ export class OrderRequestsService {
       // them when the order moves on under the preview).
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', partialActionMovedOnCopy('resume'));
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not resume fulfillment.');
     }
     const row = data as OrderRequestRow;
@@ -3885,6 +3904,8 @@ export class OrderRequestsService {
         );
       // Covers the RPC's defensive unplaced_location_not_found (P0002) too —
       // an internal-configuration failure, not something the caller can fix.
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not reopen picking.');
     }
     // reopen_picking gives complete_picking's draw back to the shelf through
@@ -3933,6 +3954,8 @@ export class OrderRequestsService {
           'validation_error',
           'Only a backordered order can be closed as delivered-partial.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not close the order.');
     }
     const row = data as OrderRequestRow;
@@ -4016,6 +4039,8 @@ export class OrderRequestsService {
         );
       if (msg.includes('signer_name_required'))
         throw new ServiceError('validation_error', 'Signer name is required.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not record the signature.');
     }
     const row = data as OrderRequestRow;
@@ -4157,6 +4182,8 @@ export class OrderRequestsService {
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'You do not have access to this order.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not claim picking.');
     }
     await audit(
@@ -4202,6 +4229,8 @@ export class OrderRequestsService {
         // 0390: orders:approve (has_permission alone) plus write access to the
         // order's warehouse, which requireWarehouseAccess checked above.
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not assign the picker.');
     }
     const row = data as OrderRequestRow;
@@ -4241,6 +4270,8 @@ export class OrderRequestsService {
           'forbidden',
           'Only the assigned picker or a manager can release this claim.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not release the claim.');
     }
     await audit(

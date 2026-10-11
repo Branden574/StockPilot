@@ -189,7 +189,8 @@ function parseRefusals(detail: string | null | undefined): Record<string, string
  *   idempotency_conflict 409 (the key was used for another request);
  *   readiness_not_applicable 409 (past picking or closed; capped);
  *   item_not_draftable, line_not_on_order, line_invalid, key errors: 400;
- *   55P03 (a lock wait past 5 s) and 23505 (a PO number taken meanwhile by a
+ *   55P03 (a lock wait past 5 s), 40P01 (a deadlock the database resolved,
+ *   RX-2 review S4) and 23505 (a PO number taken meanwhile by a
  *   PO written outside the reorder lock; 0385 steps past numbers live POs
  *   already carry): 409 busy, "being changed at the same time";
  *   57014 (the statement timeout): 409 busy, "took too long, so nothing was
@@ -268,7 +269,9 @@ export function shortfallPoRpcError(error: {
   if (code === '57014') {
     return shortfallRefusal('conflict', SHORTFALL_PO_TIMEOUT_COPY, 'busy', { retryable: true });
   }
-  if (code === '55P03' || code === '23505') {
+  // RX-2 review S4: a deadlock the database resolved rolled the whole call
+  // back, key included, like a lock wait: busy, safe to send again.
+  if (code === '55P03' || code === '40P01' || code === '23505') {
     return shortfallRefusal('conflict', SHORTFALL_PO_BUSY_COPY, 'busy', { retryable: true });
   }
   return shortfallRefusal(

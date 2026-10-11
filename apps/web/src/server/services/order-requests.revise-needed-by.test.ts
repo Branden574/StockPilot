@@ -488,6 +488,8 @@ describe('every refusal of the function, in core\'s words (pattern #28: each rai
     ],
     ['lock timeout', { message: 'canceling statement due to lock timeout', code: '55P03' }, { code: 'conflict', message: NEEDED_BY_BUSY_COPY }, { reason: 'busy', retryable: true }],
     ['statement timeout', { message: 'canceling statement due to statement timeout', code: '57014' }, { code: 'conflict', message: NEEDED_BY_BUSY_COPY }, { reason: 'busy', retryable: true }],
+    // Returns RX-3 (RX-2 review S4): a deadlock the server resolved is busy too.
+    ['deadlock', { message: 'deadlock detected', code: '40P01' }, { code: 'conflict', message: NEEDED_BY_BUSY_COPY }, { reason: 'busy', retryable: true }],
   ];
 
   it.each(cases)('%s', async (_label, error, want, details) => {

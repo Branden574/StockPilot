@@ -228,10 +228,25 @@ describe('addLines passes the line guard refusal through as a validation_error',
     ).rejects.toMatchObject({ code: 'validation_error', message });
   });
 
+  // Re-pinned by returns RX-3 (RX-2 review S4): the example fault was a
+  // deadlock, which is now busy (below); the claim stands for any other.
   it('keeps any other insert failure as internal_error', async () => {
-    const stub = stubWithInsertError({ message: 'deadlock detected', code: '40P01' });
+    const stub = stubWithInsertError({ message: 'relation secret', code: 'XX000' });
     await expect(
       svc(stub).addLines('order-1', [{ itemId: 'item-1', quantity: 2 }]),
     ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
+  it.each([
+    ['55P03', 'canceling statement due to lock timeout'],
+    ['57014', 'canceling statement due to statement timeout'],
+    ['40P01', 'deadlock detected'],
+  ])('an insert that waited too long or lost a deadlock (%s) is busy: try again', async (code, message) => {
+    const stub = stubWithInsertError({ message, code });
+    await expect(svc(stub).addLines('order-1', [{ itemId: 'item-1', quantity: 2 }])).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Busy. Try again.',
+      details: { reason: 'busy', retryable: true },
+    });
   });
 });

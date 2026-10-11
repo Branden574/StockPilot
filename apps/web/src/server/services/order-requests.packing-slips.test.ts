@@ -86,6 +86,8 @@ describe('generatePackingSlips (0389)', () => {
     [{ message: 'forbidden', code: '42501', hint: 'warehouse_write' }, 'forbidden', "You do not have write access to this order's warehouse."],
     [{ message: 'unauthenticated', code: '42501' }, 'unauthenticated', 'Sign in again to generate packing slips.'],
     [{ message: 'canceling statement due to lock timeout', code: '55P03' }, 'conflict', NEEDED_BY_BUSY_COPY],
+    // Returns RX-3 (RX-2 review S4): a deadlock the server resolved is busy too.
+    [{ message: 'deadlock detected', code: '40P01' }, 'conflict', NEEDED_BY_BUSY_COPY],
   ])('maps %o to %s', async (error, code, message) => {
     const stub = stubWith({ data: null, error });
     await expect(svc(stub).generatePackingSlips(ORDER)).rejects.toMatchObject({ code, message });
