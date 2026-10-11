@@ -49,14 +49,38 @@ function submit(dialog: HTMLElement) {
 
 const keyOf = (call: unknown[]) => (call[0] as { idempotencyKey: string }).idempotencyKey;
 
+// The dialog is busy while a request is in flight (Create return and Cancel
+// disabled), so a step taken before the refusal has rendered is ignored. With
+// answers that resolved at once these tests passed or failed on scheduling
+// alone: under load in security:test (2026-10-11) "mints a new key when the
+// dialog is opened again" clicked Cancel before the refusal rendered and timed
+// out waiting for the dialog to close (returns RX-2 review fix, test race).
+// The first answer is now held until the test releases it, and every next step
+// waits until the dialog takes input again.
+const REFUSAL = { ok: false, error: { message: 'Busy. Try again.' } };
+
+function heldAnswer() {
+  let release: (value: unknown) => void = () => {};
+  const promise = new Promise<unknown>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release: (value: unknown) => release(value) };
+}
+
+/** Wait until the refusal has rendered and the dialog takes input again. */
+async function settled(dialog: HTMLElement) {
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled());
+}
+
 beforeEach(() => {
   createAction.mockReset();
 });
 
 describe('CreateReturnDialog request key', () => {
   it('keeps one key for the whole open, even when the body changes after a refusal', async () => {
+    const answer = heldAnswer();
     createAction
-      .mockResolvedValueOnce({ ok: false, error: { message: 'Busy. Try again.' } })
+      .mockImplementationOnce(() => answer.promise)
       .mockResolvedValueOnce({ ok: true, data: { id: 'r1', replay: false } });
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     const dialog = openDialog();
@@ -64,6 +88,8 @@ describe('CreateReturnDialog request key', () => {
     fireEvent.change(within(dialog).getByLabelText('Return quantity'), { target: { value: '2' } });
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    answer.release(REFUSAL);
+    await settled(dialog);
     // The answer was a refusal; the user edits the quantity and sends again.
     fireEvent.change(within(dialog).getByLabelText('Return quantity'), { target: { value: '1' } });
     submit(dialog);
@@ -76,12 +102,17 @@ describe('CreateReturnDialog request key', () => {
   });
 
   it('mints a new key when the dialog is opened again', async () => {
-    createAction.mockResolvedValue({ ok: false, error: { message: 'Busy. Try again.' } });
+    const answer = heldAnswer();
+    createAction.mockImplementationOnce(() => answer.promise).mockResolvedValue(REFUSAL);
     render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
     let dialog = openDialog();
     expect(within(dialog).getByRole('checkbox')).toBeChecked();
     submit(dialog);
     await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    // While the request is in flight the dialog cannot be closed.
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    answer.release(REFUSAL);
+    await settled(dialog);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     dialog = openDialog();
