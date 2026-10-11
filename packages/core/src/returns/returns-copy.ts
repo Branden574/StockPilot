@@ -103,6 +103,14 @@ export const RETURNS_COPY = {
   replacementApproved: 'Approved',
   replacementDeclined: 'Declined',
   replacementCancelled: 'Cancelled',
+  /**
+   * RX-3 PR stage, polish (a): the REPLACEMENT card once its replacement
+   * order's line was handed over (all of it, part of it, or closed with none
+   * of it sent). The stored line status stays 'approved' after the hand-over.
+   */
+  replacementHandedOver: 'Handed over',
+  replacementPartlyHandedOver: 'Partly handed over',
+  replacementNotSent: 'Not sent',
   replacementWarehouseReview: 'Warehouse will review',
   /** RX-3 fix round 1 (M3): a replacement asked for with a note, once declined or cancelled. */
   replacementAskedByNote: 'A different replacement',
@@ -369,6 +377,11 @@ export function qtyReturningLabel(quantity: number): string {
 /** "Qty requested: 1". */
 export function qtyRequestedLabel(quantity: number): string {
   return `Qty requested: ${quantity}`;
+}
+
+/** "Qty handed over: 1" (the REPLACEMENT card once all of it was handed over). */
+export function qtyHandedOverLabel(quantity: number): string {
+  return `Qty handed over: ${quantity}`;
 }
 
 /** "Available: 14". */

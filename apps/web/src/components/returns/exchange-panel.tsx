@@ -28,15 +28,15 @@ import {
   availableLabel,
   earlierReplacementEntries,
   exchangeActionConsequences,
-  exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewOptions,
   exchangeReviewProblem,
   formatOrderNumber,
   noReplacementLine,
-  qtyRequestedLabel,
   RAIL_STEP_STATE_WORDS,
   releasedBeforeReturnLine,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
   replacementLineSummary,
   replacementShortItems,
   replacementShortLine,
@@ -128,10 +128,13 @@ function ItemThumb({ url, alt }: { url: string | null; alt: string }) {
 /**
  * The REPLACEMENT side of one returned line: what was asked, what was
  * approved (and "Changed by the warehouse" when it differs), availability,
- * and, while the RMA waits for approval, the review choices.
+ * and, while the RMA waits for approval, the review choices. Once the
+ * replacement was handed over, its pill and quantity say so (core's rule,
+ * read from the replacement block; returns RX-3 PR stage, polish (a)).
  */
 export function ReplacementSide({
   line,
+  replacement = null,
   returnedLabel,
   returnedQty,
   review,
@@ -142,6 +145,8 @@ export function ReplacementSide({
   focusPickerToken = null,
 }: {
   line: ReturnWorkbenchExchangeLine;
+  /** The replacement shown on the RMA (the workbench's block): what was handed over. */
+  replacement?: ReturnWorkbenchExchange['replacement'];
   returnedLabel: string;
   returnedQty: number;
   /** Present while the RMA is requested and the viewer may manage returns. */
@@ -163,7 +168,7 @@ export function ReplacementSide({
   const requestedLabel = requested ? returnLineLabel(requested.name ?? 'Item', requested.variant) : null;
   const approved = line.approvedItem;
   const approvedLabel = approved ? returnLineLabel(approved.name ?? 'Item', approved.variant) : null;
-  const status = exchangeLineStatusLabel(line.status);
+  const status = replacementCardStatusLabel(line, replacement);
 
   return (
     <article
@@ -198,7 +203,7 @@ export function ReplacementSide({
               {approvedLabel} <span className="text-muted-foreground text-xs">({RETURNS_COPY.replacementChangedByWarehouse})</span>
             </p>
           ) : null}
-          <p className="tabular-nums">{qtyRequestedLabel(line.approvedQuantity ?? line.requestedQuantity)}</p>
+          <p className="tabular-nums">{replacementCardQuantityLabel(line, replacement)}</p>
           {line.status === 'requested' && line.requestedFree !== null ? (
             <p className={cn('text-xs tabular-nums', line.requestedFree < line.requestedQuantity ? 'text-destructive' : 'text-muted-foreground')}>
               {line.requestedFree < line.requestedQuantity

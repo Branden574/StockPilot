@@ -957,3 +957,54 @@ describe('the 14-day prompt while the replacement waits for the returned item', 
     expect(screen.queryByTestId('still-waiting')).toBeNull();
   });
 });
+
+// Returns RX-3 PR stage, polish (a), from the RX-2 Demo Co walk: after the
+// exchange completed, the REPLACEMENT card still read "Approved" and "Qty
+// requested: 1" (return_exchange_lines.status stays 'approved'; the
+// replacement's own order lines carry what was handed over). The card now
+// says the replacement's outcome from the replacement block the workbench
+// already loads.
+describe('the REPLACEMENT card once its replacement was handed over', () => {
+  const approvedLine = (qty: number) => exchangeLine({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: qty, approvedItem: ITEM_L });
+  const withReplacement = (status: string, requested: number, fulfilled: number, over: Record<string, unknown> = {}) => ({
+    ...WAITING,
+    lines: [approvedLine(requested)],
+    replacement: {
+      ...WAITING.replacement,
+      status,
+      class: fulfilled > 0 ? 'handed_over' : 'undrawn',
+      owed: requested - fulfilled,
+      held: 0,
+      lines: [{ ...WAITING.replacement.lines[0]!, requested, fulfilled, held: 0, take: null }],
+    },
+    ...over,
+  });
+  const card = () => screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+
+  it('says Handed over and how many, never Approved or Qty requested, once all of it was handed over', () => {
+    render(<ReturnWorkbench workbench={bench('closed', withReplacement('completed', 1, 1, { status: 'completed', statusLabel: 'Exchange completed' }))} />);
+    expect(within(card()).getByText('Handed over')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty handed over: 1')).toBeInTheDocument();
+    expect(within(card()).queryByText('Approved')).toBeNull();
+    expect(card().textContent).not.toContain('Qty requested');
+  });
+
+  it('says Partly handed over while the rest is on backorder, keeping the quantity asked for', () => {
+    render(<ReturnWorkbench workbench={bench('approved', withReplacement('backordered', 2, 1, { status: 'partly_handed_over' }))} />);
+    expect(within(card()).getByText('Partly handed over')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 2')).toBeInTheDocument();
+    expect(within(card()).queryByText('Approved')).toBeNull();
+  });
+
+  it('says Not sent when the replacement was closed with none of this item handed over', () => {
+    render(<ReturnWorkbench workbench={bench('cancelled', withReplacement('completed', 1, 0, { status: 'completed' }))} />);
+    expect(within(card()).getByText('Not sent')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 1')).toBeInTheDocument();
+  });
+
+  it('keeps Approved and Qty requested while the replacement is still to be handed over', () => {
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    expect(within(card()).getByText('Approved')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 1')).toBeInTheDocument();
+  });
+});

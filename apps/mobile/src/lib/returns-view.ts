@@ -21,12 +21,13 @@ import {
   defaultExchangeReviewState,
   earlierReplacementsLine,
   exchangeActionConsequences,
-  exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber as formatSo,
   releasedBeforeReturnLine,
   replacementBannerLines,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
   replacementChipState,
   replacementLineSummary,
   replacementRmaLinkLabel,
@@ -72,6 +73,7 @@ import {
 import type {
   MobileExchangeLine,
   MobilePrepareAnswer,
+  MobileReplacement,
   MobileReturnExchange,
   MobileReturnListRow,
   MobileReturnStepResult,
@@ -419,8 +421,16 @@ export function replacementLabel(x: MobileExchangeLine): string {
   return it ? returnLineLabel(it.name, it.variant) : RETURNS_COPY.replacementWarehouseReview;
 }
 
-/** The REPLACEMENT side's lines: what was asked, what the warehouse chose, how many, availability. */
-export function replacementSideLines(x: MobileExchangeLine): { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] {
+/**
+ * The REPLACEMENT side's lines: what was asked, what the warehouse chose, how
+ * many, availability. `replacement` is the workbench's replacement block:
+ * once it was handed over the quantity says so (core's rule, the web card's
+ * too; returns RX-3 PR stage, polish (a)).
+ */
+export function replacementSideLines(
+  x: MobileExchangeLine,
+  replacement: MobileReplacement | null = null,
+): { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] {
   const out: { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] = [];
   const requested = x.requestedItem ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant) : RETURNS_COPY.replacementWarehouseReview;
   out.push({ key: 'requested', text: `${RETURNS_COPY.replacementRequested}: ${requested}`, tone: 'ink' });
@@ -432,7 +442,7 @@ export function replacementSideLines(x: MobileExchangeLine): { key: string; text
       tone: 'ink',
     });
   }
-  out.push({ key: 'qty', text: qtyRequestedText(x.approvedQuantity ?? x.requestedQuantity), tone: 'muted' });
+  out.push({ key: 'qty', text: replacementCardQuantityLabel(x, replacement), tone: 'muted' });
   if (x.status === 'requested' && x.requestedFree !== null) {
     const short = x.requestedFree < x.requestedQuantity;
     out.push({
@@ -462,15 +472,20 @@ export function replacementPhotoUrl(x: MobileExchangeLine): string | null {
  * pill. RX-2 simulator finding SIM-1: a declined line read like a pending
  * request because the status was missing.
  */
-export function replacementCardLabel(returnedName: string, x: MobileExchangeLine): string {
-  const lines = replacementSideLines(x)
+export function replacementCardLabel(returnedName: string, x: MobileExchangeLine, replacement: MobileReplacement | null = null): string {
+  const lines = replacementSideLines(x, replacement)
     .map((t) => t.text)
     .join(', ');
-  return `${RETURNS_COPY.replacement} for ${returnedName}: ${lines}, ${exchangeLineStatusLabel(x.status)}`;
+  return `${RETURNS_COPY.replacement} for ${returnedName}: ${lines}, ${replacementCardStatus(x, replacement)}`;
 }
 
-function qtyRequestedText(n: number): string {
-  return `Qty requested: ${n}`;
+/**
+ * The REPLACEMENT card's pill: Handed over, Partly handed over or Not sent
+ * once the replacement was handed over or closed, else the line's stored
+ * status (core replacementCardStatusLabel, the web pill's rule).
+ */
+export function replacementCardStatus(x: MobileExchangeLine, replacement: MobileReplacement | null = null): string {
+  return replacementCardStatusLabel(x, replacement);
 }
 
 /** The workbench as the review reads it: its exchange half and who is reviewing. */

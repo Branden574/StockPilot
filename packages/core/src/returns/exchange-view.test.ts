@@ -14,6 +14,9 @@ import {
   noReplacementLine,
   parseExchangeCandidates,
   RAIL_STEP_STATE_WORDS,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
+  replacementLineHandOver,
   replacementSiteOptions,
   type ExchangeCandidate,
   type RailStep,
@@ -393,5 +396,53 @@ describe('exchangeLineStatusLabel (the REPLACEMENT card, web and phone)', () => 
       'Declined',
       'Cancelled',
     ]);
+  });
+});
+
+// Returns RX-3 PR stage, polish (a): the stored line status stays 'approved'
+// after the hand-over (0396 has no later line status), so the card reads the
+// outcome from the replacement order's own lines, which the workbench already
+// sends. One rule for the web card and the phone card.
+describe('the REPLACEMENT card after the hand-over (replacementLineHandOver and the card words)', () => {
+  const line = (over: Partial<{ status: 'requested' | 'approved' | 'declined' | 'cancelled'; approvedItemId: string | null; approvedQuantity: number | null; requestedQuantity: number }> = {}) => ({
+    status: 'approved' as const,
+    approvedItemId: 'L',
+    approvedQuantity: 1,
+    requestedQuantity: 1,
+    ...over,
+  });
+  const repl = (status: string, lines: Array<{ itemId: string; requested: number; fulfilled: number }>, live = true) => ({ live, status, lines });
+
+  it('reads all, part or none sent from the replacement line of the approved item', () => {
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }]))).toBe('all');
+    expect(replacementLineHandOver(line(), repl('backordered', [{ itemId: 'L', requested: 2, fulfilled: 1 }]))).toBe('part');
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 0 }, { itemId: 'XL', requested: 1, fulfilled: 1 }]))).toBe('none_sent');
+    // Still to be handed over, or nothing to read: no outcome.
+    expect(replacementLineHandOver(line(), repl('staged_for_pickup', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBeNull();
+    expect(replacementLineHandOver(line(), repl('cancelled', [{ itemId: 'L', requested: 1, fulfilled: 0 }], false))).toBeNull();
+    // A replacement that is not live (cancelled or denied) is never read as handed over.
+    expect(replacementLineHandOver(line(), repl('cancelled', [{ itemId: 'L', requested: 1, fulfilled: 1 }], false))).toBeNull();
+    expect(replacementLineHandOver(line(), null)).toBeNull();
+    expect(replacementLineHandOver(line({ approvedItemId: null }), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }]))).toBeNull();
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'XL', requested: 1, fulfilled: 1 }]))).toBeNull();
+    // Only an approved line has a replacement to read.
+    for (const status of ['requested', 'declined', 'cancelled'] as const) {
+      expect(replacementLineHandOver(line({ status }), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }])), status).toBeNull();
+    }
+  });
+
+  it('says Handed over with the quantity handed over, Partly handed over, Not sent, or the stored status', () => {
+    const all = repl('completed', [{ itemId: 'L', requested: 2, fulfilled: 2 }]);
+    expect(replacementCardStatusLabel(line({ approvedQuantity: 2 }), all)).toBe('Handed over');
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: 2 }), all)).toBe('Qty handed over: 2');
+    const part = repl('backordered', [{ itemId: 'L', requested: 2, fulfilled: 1 }]);
+    expect(replacementCardStatusLabel(line({ approvedQuantity: 2 }), part)).toBe('Partly handed over');
+    // Two lines asking for the same item share one order line: the count per
+    // line is not known, so the quantity asked for stays.
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: 2 }), part)).toBe('Qty requested: 2');
+    expect(replacementCardStatusLabel(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBe('Not sent');
+    expect(replacementCardStatusLabel(line(), repl('approved', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBe('Approved');
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: null, requestedQuantity: 3 }), null)).toBe('Qty requested: 3');
+    expect(replacementCardStatusLabel(line({ status: 'declined' }), all)).toBe('Declined');
   });
 });

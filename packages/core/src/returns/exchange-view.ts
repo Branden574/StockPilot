@@ -20,6 +20,8 @@ import {
   availableLabel,
   deliverToSiteLabel,
   pickingWaitsSentence,
+  qtyHandedOverLabel,
+  qtyRequestedLabel,
   RETURNS_COPY,
   shortLabel,
   whenProcessedSentence,
@@ -42,6 +44,93 @@ export function exchangeLineStatusLabel(status: ExchangeLineStatus): string {
   if (status === 'approved') return RETURNS_COPY.replacementApproved;
   if (status === 'declined') return RETURNS_COPY.replacementDeclined;
   return RETURNS_COPY.replacementCancelled;
+}
+
+/**
+ * The replacement shown on the RMA, as far as the REPLACEMENT card reads it:
+ * the workbench's own replacement block (the live replacement, else the
+ * newest cancelled one), on the web and in the phone's API answer alike.
+ */
+export interface ReplacementCardReplacement {
+  /** Not cancelled or denied. */
+  live: boolean;
+  /** Its order status. */
+  status: string;
+  /** Its order lines: the item, how many were asked and how many were handed over. */
+  lines: ReadonlyArray<{ itemId: string; requested: number; fulfilled: number }>;
+}
+
+/** All of the line's replacement handed over, part of it, or the order closed with none of it sent. */
+export type ReplacementLineHandOver = 'all' | 'part' | 'none_sent';
+
+const n0 = (v: unknown): number => {
+  const x = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(x) ? x : 0;
+};
+
+/**
+ * What became of an APPROVED exchange line's replacement (returns RX-3 PR
+ * stage, polish (a), from the RX-2 Demo Co walk). return_exchange_lines.status
+ * stays 'approved' after the hand-over (0396 has no later line status), so the
+ * outcome is read from the live replacement order's line for the approved
+ * item: quantity_fulfilled is what was handed over. Two exchange lines asking
+ * for the same item share one order line (the replacement merges them), so
+ * the reading is per item.
+ *
+ * Null (show the stored status) for a line that is not approved, without an
+ * approved item, without a live replacement, or whose replacement is still
+ * to be handed over.
+ */
+export function replacementLineHandOver(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null },
+  replacement: ReplacementCardReplacement | null | undefined,
+): ReplacementLineHandOver | null {
+  if (line.status !== 'approved' || !line.approvedItemId || !replacement || !replacement.live) return null;
+  const rows = replacement.lines.filter((l) => l.itemId === line.approvedItemId);
+  if (rows.length === 0) return null;
+  const requested = rows.reduce((t, l) => t + n0(l.requested), 0);
+  const fulfilled = rows.reduce((t, l) => t + n0(l.fulfilled), 0);
+  if (requested > 0 && fulfilled >= requested) return 'all';
+  if (fulfilled > 0) return 'part';
+  // Closed (completed) with nothing of this item handed over: the rest of a
+  // part-sent replacement closed by a cancel or as delivered-partial.
+  if (replacement.status === 'completed') return 'none_sent';
+  return null;
+}
+
+/**
+ * The REPLACEMENT card's pill, web and phone: the outcome once the
+ * replacement was handed over (Handed over, Partly handed over, Not sent),
+ * else the stored status (Requested, Approved, Declined, Cancelled).
+ */
+export function replacementCardStatusLabel(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null },
+  replacement: ReplacementCardReplacement | null | undefined,
+): string {
+  switch (replacementLineHandOver(line, replacement)) {
+    case 'all':
+      return RETURNS_COPY.replacementHandedOver;
+    case 'part':
+      return RETURNS_COPY.replacementPartlyHandedOver;
+    case 'none_sent':
+      return RETURNS_COPY.replacementNotSent;
+    default:
+      return exchangeLineStatusLabel(line.status);
+  }
+}
+
+/**
+ * The REPLACEMENT card's quantity: "Qty handed over: 2" once all of it was
+ * handed over, else "Qty requested: 2" (the approved quantity, else the one
+ * asked for). Part handed over keeps the quantity asked for: lines that ask
+ * for the same item share one order line, so a per-line count is not known.
+ */
+export function replacementCardQuantityLabel(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null; approvedQuantity: number | null; requestedQuantity: number },
+  replacement: ReplacementCardReplacement | null | undefined,
+): string {
+  const qty = line.approvedQuantity ?? line.requestedQuantity;
+  return replacementLineHandOver(line, replacement) === 'all' ? qtyHandedOverLabel(qty) : qtyRequestedLabel(qty);
 }
 
 // ── The outbound rail ──────────────────────────────────────────────────────

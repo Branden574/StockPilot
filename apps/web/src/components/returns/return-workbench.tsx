@@ -989,6 +989,7 @@ export function ReturnWorkbench({
             {x ? (
               <ReplacementSide
                 line={x}
+                replacement={ex.replacement}
                 returnedLabel={lineLabel(l)}
                 returnedQty={l.quantity}
                 review={canDecideExchange && x.status === 'requested' ? reviewFor(x.id) : undefined}

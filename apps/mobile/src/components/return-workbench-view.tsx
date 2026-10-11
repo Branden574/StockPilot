@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 
 import {
-  exchangeLineStatusLabel,
   exchangeRailAccessibilityLabel,
   formatOrderNumber,
   qtyReturningLabel,
@@ -49,6 +48,7 @@ import {
   prepareOutcomeMessage,
   refusalRefreshesWorkbench,
   replacementCardLabel,
+  replacementCardStatus,
   replacementOrderHref,
   replacementPhotoUrl,
   replacementOrderLines,
@@ -476,7 +476,7 @@ export function ReturnWorkbenchView({
                   <View
                     style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
                     accessible
-                    accessibilityLabel={replacementCardLabel(name, x)}
+                    accessibilityLabel={replacementCardLabel(name, x, ex.replacement)}
                   >
                     {photo ? (
                       <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
@@ -485,7 +485,7 @@ export function ReturnWorkbenchView({
                     )}
                     <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
                       <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
-                      {replacementSideLines(x).map((t) => (
+                      {replacementSideLines(x, ex.replacement).map((t) => (
                         <Body
                           key={t.key}
                           size={t.tone === 'ink' ? 14.5 : 13}
@@ -496,7 +496,7 @@ export function ReturnWorkbenchView({
                         </Body>
                       ))}
                       <View style={{ alignSelf: 'flex-start' }}>
-                        <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
+                        <Pill dot={false}>{replacementCardStatus(x, ex.replacement)}</Pill>
                       </View>
                     </View>
                   </View>
