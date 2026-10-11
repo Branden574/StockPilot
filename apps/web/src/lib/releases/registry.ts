@@ -46,8 +46,11 @@ export const RELEASES: Release[] = [
     // - Members who place orders, where Returns is on: their own handed-over
     //   order's link now reads Return or exchange (web; Request a return while
     //   the kill switch is off) and opens the requester sheet (the token
-    //   page); the phone gets its own sheet on the order (phone stage); the
-    //   order lists Your requests on this order. The customer portal and the
+    //   page; an order with no return token opens the same form over the
+    //   member routes, fix round 1 L6); the phone gets its own sheet on the
+    //   order (phone stage); the order lists Your requests on this order. A
+    //   returns manager keeps Create return on their own orders (no tracking
+    //   for them), and the entry says so (fix round 1 L9). The customer portal and the
     //   emailed link get the same sheet, but their people never read What's
     //   New, so the entry speaks to members and the summary names all three.
     // - People who can open Returns: requests now arrive with an exchange
@@ -91,7 +94,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Ask for another size on your own order',
         whatChanged:
-          "On an order you placed that was handed over, Return or exchange now lets you choose Return only or Exchange for another size for each item. Exchange shows the item's other sizes, each with its photo when it has one and Available or Not in stock right now. An item with no other sizes offers Request a different replacement: warehouse will review, with a note. The order then lists Your requests on this order, with where each one stands.",
+          "On an order you placed that was handed over, Return or exchange now lets you choose Return only or Exchange for another size for each item. Exchange shows the item's other sizes, each with its photo when it has one and Available or Not in stock right now. An item with no other sizes offers Request a different replacement: warehouse will review, with a note. The order then lists Your requests on this order, with where each one stands. If you manage returns, your own orders keep Create return instead.",
         whyItMatters: 'A wrong size used to take a return and a separate request for the right one, with nothing tying the two together.',
         howItAffectsYou:
           'The warehouse reviews every request, and nothing is sent until it is approved. The replacement is usually prepared once your item is back. You hear when the request arrives, when it is approved, when the replacement is ready and when the exchange is complete, unless you turned off Order status changes.',

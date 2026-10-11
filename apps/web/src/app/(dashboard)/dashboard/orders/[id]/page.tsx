@@ -13,6 +13,7 @@ import { OrderLineActions, ShortLineFixes } from '@/components/orders/order-line
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
+import { MemberReturnDialog } from '@/components/returns/member-return-dialog';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
@@ -1255,6 +1256,12 @@ export default async function OrderDetailPage({
                   {requesterEntryLabel(exchangeCreateEnabled())}
                 </a>
               </Button>
+            )}
+            {/* RX-3 fix round 1 (L6): no return token on this order (it was
+                handed over before one was minted): the same form over the
+                member routes, as the phone, never a token. */}
+            {requesterReturnEligible && secretsAdmin && !requesterReturnPath && (
+              <MemberReturnDialog orderId={id} exchangesEnabled={exchangeCreateEnabled()} />
             )}
             {showDeliveryRequest && deliveryRequestRecipientsDto && (
               <SendDeliveryRequestButton

@@ -57,6 +57,8 @@ const REQUESTER_FILES = [
   'components/returns/requester-tracking.tsx',
   'components/portal/portal-return-sheet.tsx',
   'lib/returns/requester-sheet.ts',
+  // RX-3 fix round 1 (L6): the member's form over the member routes.
+  'components/returns/member-return-dialog.tsx',
 ];
 
 /** The phone's requester files (returns RX-3 phone stage), from apps/web/src. */
@@ -75,6 +77,7 @@ const REQUESTER_SCREENS = [
   'components/returns/requester-tracking.tsx',
   'components/portal/portal-return-sheet.tsx',
   'lib/returns/requester-sheet.ts',
+  'components/returns/member-return-dialog.tsx',
 ];
 
 describe('the requester code paths (returns RX-3)', () => {

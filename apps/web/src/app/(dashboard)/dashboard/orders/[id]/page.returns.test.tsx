@@ -838,6 +838,20 @@ describe("(h) the requester's own order: Return or exchange, and their requests 
     expect(section.textContent).toContain('SO-000104');
   });
 
+  // RX-3 fix round 1 (desk checks L6): a handed-over member order with no
+  // return token (9 in production at 0395) had no web entry while the phone's
+  // member routes served it. The page opens the requester form over the
+  // member routes instead of a link.
+  it('an order with no return token opens the form over the member routes: a button, never a token link', async () => {
+    resolveReturnTokenMock.mockResolvedValue(null);
+    const { container } = await renderPage();
+    expect(Array.from(container.querySelectorAll('a')).some((a) => (a.getAttribute('href') ?? '').startsWith('/returns/request/'))).toBe(false);
+    const button = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Return or exchange');
+    expect(button).toBeDefined();
+    // The requests still show.
+    expect(container.querySelector('#your-requests')).not.toBeNull();
+  });
+
   it('says Request a return while exchanges are switched off', async () => {
     exchangeSwitch.on = false;
     const { container } = await renderPage();

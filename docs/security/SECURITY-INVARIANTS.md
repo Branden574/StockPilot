@@ -1008,10 +1008,11 @@ actually fire.
     answers the member routes 404 rather than 403 (two module checks; fails
     closed). Off Vercel, `publicRequestIp` falls back to a client-settable
     `x-real-ip` (production runs on Vercel, where the platform sets
-    `x-forwarded-for`). A member's web request goes through the token page
-    and is recorded as the token channel with no user (RX-1's design, D16);
-    the phone's member routes record the member; changing the web is an
-    owner decision.
+    `x-forwarded-for`). A member's web request on an order WITH a return
+    token goes through the token page and is recorded as the token channel
+    with no user (RX-1's design, D16); one without a token, and the phone,
+    go through the member routes and record the member; moving the web's
+    token path to the member routes is an owner decision.
   - **Accepted limits** (desk check F10, recorded). The kill switch is
     app-only: a `returns:manage` holder calling `create_return_request` with
     an exchange line, or `approve_return` with "add", straight through the
