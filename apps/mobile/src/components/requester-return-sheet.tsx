@@ -55,17 +55,14 @@ import {
   setRequesterReplacementQuantity,
   stepRequesterQuantity,
   toggleRequesterReason,
-  withNewRequesterKey,
   type RequesterDraft,
   type RequesterDraftScope,
   type RequesterOptionsState,
   type RequesterSheetLoad,
 } from '@/lib/requester-returns';
 import {
-  describeRequesterReturnError,
   getRequesterExchangeOptions,
-  requesterRefusalNeedsNewKey,
-  requesterRefusalRefreshes,
+  requesterDraftAfterRefusal,
   sendRequesterReturn,
 } from '@/lib/requester-returns-api';
 import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
@@ -220,12 +217,15 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
       forgetRequesterDraft(scope, orderId);
       onSent({ returnNumber: answer.returnNumber, exchange: built.exchange });
     } catch (e) {
-      setError(describeRequesterReturnError(e));
-      // The key was used with other details: the next send is a new request.
-      if (requesterRefusalNeedsNewKey(e)) setDraft((d) => (d ? withNewRequesterKey(d) : d));
-      // The sheet on screen is behind (what can come back, the sizes): read
-      // it and the sizes again; the draft is checked against both.
-      if (requesterRefusalRefreshes(e)) {
+      // One rule with the web form (core requesterRefusalRecovery; RX-3 fix
+      // round 1, F3): a key used with other details means the earlier send
+      // went through, so the draft starts over with nothing chosen and a new
+      // key; a sheet that is behind is read again with the sizes, and the
+      // draft (its key kept) is checked against both.
+      const after = requesterDraftAfterRefusal(draft, e);
+      setError(after.message);
+      if (after.draft !== draft) setDraft(after.draft);
+      if (after.reload) {
         setOptions({ state: 'idle' });
         onReloadSheet();
       }
@@ -284,7 +284,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
           </View>
         </View>
       ) : (
-        <ActivityIndicator key="loading" color={c.ink4} style={{ marginVertical: 24 }} />
+        <ActivityIndicator
+          key="loading"
+          color={c.ink4}
+          style={{ marginVertical: 24 }}
+          accessible
+          accessibilityLabel={RETURNS_COPY.requesterLoadingForm}
+        />
       ),
     );
   } else if (sheet.lines.length === 0) {
@@ -326,7 +332,13 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
       const replacementQuantity = requesterReplacementQuantityOf(d);
       const stepButton = (glyph: string, delta: number, off: boolean) => (
         <Pressable
-          onPress={() => change(stepRequesterQuantity(draft, l, delta))}
+          onPress={() => {
+            const next = stepRequesterQuantity(draft, l, delta);
+            change(next);
+            // iOS ignores accessibilityLiveRegion (Android only): the new count
+            // is announced (RX-3 fix round 1, L4).
+            AccessibilityInfo.announceForAccessibility(`${next.lines[lineId]?.quantity ?? 0} ${label} returning`);
+          }}
           disabled={off}
           accessibilityRole="button"
           accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${label}`}
@@ -424,7 +436,8 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               // REPLACEMENT: what comes instead (an arrow and a text label, and
               // an ink edge, never colour alone).
               <View style={[styles.side, { borderColor: c.hair, borderLeftWidth: 4, borderLeftColor: c.ink }]}>
-                <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
+                {/* Read as the word alone, never "right arrow" (RX-3 fix round 1, L4). */}
+                <Eyebrow accessibilityLabel={RETURNS_COPY.replacement}>→ {RETURNS_COPY.replacement}</Eyebrow>
                 {(view.kind === 'options' || view.kind === 'review') && d.quantity > 1 ? (
                   <ReplacementQuantityStepper
                     value={replacementQuantity}
@@ -438,7 +451,9 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                     {requesterReplacementQuantity(replacementQuantity)}
                   </Body>
                 )}
-                {view.kind === 'loading' ? <ActivityIndicator color={c.ink4} /> : null}
+                {view.kind === 'loading' ? (
+                  <ActivityIndicator color={c.ink4} accessible accessibilityLabel={RETURNS_COPY.requesterLoadingSizes} />
+                ) : null}
                 {view.kind === 'offline' ? (
                   <Body size={13} muted>
                     {RETURNS_COPY.needsConnection}

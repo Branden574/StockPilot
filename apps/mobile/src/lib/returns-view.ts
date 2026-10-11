@@ -212,6 +212,22 @@ export function actionHelp(action: ReturnAction | null): string | null {
 }
 
 /**
+ * A workbench button's VoiceOver hint: why it is off, else its own help,
+ * else, for Cancel replacement and Cancel return, the 14-day prompt (the
+ * web's aria-describedby on both; RX-3 fix round 1, desk check L3).
+ */
+export function workbenchActionHint(
+  action: ReturnAction | null,
+  ctx: { disabledReason: string | null | undefined; stillWaiting: string | null },
+): string | undefined {
+  if (ctx.disabledReason) return ctx.disabledReason;
+  const help = actionHelp(action);
+  if (help) return help;
+  if (ctx.stillWaiting && (action === 'cancel_replacement' || action === 'cancel')) return ctx.stillWaiting;
+  return undefined;
+}
+
+/**
  * The 14-day prompt under the next-step bar (RX-2 review fix P17, built in
  * RX-3; plan 3.10, D28): from 14 whole days after approval, while the
  * returned item is still out and the replacement waits for it (reserved, or

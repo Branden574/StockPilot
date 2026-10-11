@@ -49,7 +49,7 @@ import {
   setRequesterReplacementQuantity,
   stepRequesterQuantity,
   toggleRequesterReason,
-  withNewRequesterKey,
+  restartRequesterDraft,
   type RequesterOptionsState,
 } from './requester-returns';
 import { rewriteWebPath } from './web-path-rewrite';
@@ -502,16 +502,21 @@ describe('the draft', () => {
     expect(draftWantsSizes(stepRequesterQuantity(d, m, -1))).toBe(false);
   });
 
-  it('the reason toggles (optional), the notes are kept as typed, a conflict mints a new key', () => {
+  // Re-pinned on purpose (RX-3 fix round 1, F3): a conflict starts the draft
+  // over (nothing chosen, a new key), never a new key on the same choices.
+  it('the reason toggles (optional), the notes are kept as typed, a conflict starts over with a new key and nothing chosen', () => {
     let d = newRequesterDraft(sheet.lines, KEY);
     d = toggleRequesterReason(d, 'damaged');
     expect(d.reasonCode).toBe('damaged');
     expect(toggleRequesterReason(d, 'damaged').reasonCode).toBeNull();
     expect(toggleRequesterReason(d, 'other').reasonCode).toBe('other');
     expect(setRequesterNotes(d, ' hi ').notes).toBe(' hi ');
-    const fresh = withNewRequesterKey(d);
+    d = stepRequesterQuantity(d, m, 1);
+    const fresh = restartRequesterDraft(setRequesterNotes(d, 'kept'));
     expect(fresh.key).not.toBe(KEY);
-    expect(fresh.lines).toBe(d.lines);
+    expect(Object.values(fresh.lines).every((l) => l.quantity === 0 && l.mode === 'return' && l.itemId === null)).toBe(true);
+    expect(fresh.reasonCode).toBe('damaged');
+    expect(fresh.notes).toBe('kept');
   });
 
   it('checked against the sheet as it is now: lines gone are dropped, quantities fit, the key is kept', () => {

@@ -1,10 +1,17 @@
-import { type RequesterExchangeOptionsAnswer, type RequesterReturnSheet } from '@stockpilot/core';
+import {
+  requesterRefusalRecovery,
+  RETURNS_COPY,
+  type RequesterExchangeOptionsAnswer,
+  type RequesterReturnSheet,
+} from '@stockpilot/core';
 
 import { api, ApiError } from './api';
 import {
   parseRequesterExchangeOptions,
   parseRequesterReturnCreated,
   parseRequesterReturnSheet,
+  restartRequesterDraft,
+  type RequesterDraft,
   type RequesterReturnBody,
 } from './requester-returns';
 import { describeReturnError, returnErrorReason } from './returns-api';
@@ -93,23 +100,40 @@ export function requesterDoorClosed(e: unknown): boolean {
 
 /**
  * A refusal that means the sheet on screen is behind the server (what can
- * come back, the sizes, an earlier request): read the sheet again. The
- * draft stays; it is checked against the new sheet.
+ * come back, the sizes, an earlier request): read the sheet again (core
+ * requesterRefusalRecovery, the web form's rule; and the one 404). The draft
+ * is checked against the new sheet.
  */
 export function requesterRefusalRefreshes(e: unknown): boolean {
   if (!(e instanceof ApiError)) return false;
-  const reason = returnErrorReason(e);
-  return (
-    reason === 'return_exceeds_fulfilled' ||
-    reason === 'exchange_already_sent' ||
-    reason === 'exchange_item_not_eligible' ||
-    reason === 'exchange_not_available' ||
-    reason === 'idempotency_conflict' ||
-    e.status === 404
-  );
+  return requesterRefusalRecovery(returnErrorReason(e)) !== null || e.status === 404;
 }
 
-/** The key was already used with other details: the next send needs a new one. */
-export function requesterRefusalNeedsNewKey(e: unknown): boolean {
-  return e instanceof ApiError && returnErrorReason(e) === 'idempotency_conflict';
+/**
+ * What the sheet does after a refused send (RX-3 fix round 1, desk check F3;
+ * core requesterRefusalRecovery, one rule with the web form):
+ *   - idempotency_conflict: the earlier send with this key went through with
+ *     other details, so the draft starts over with nothing chosen and a new
+ *     key, the words say so, and the sheet is read again (it then shows the
+ *     earlier request among "Your requests on this order");
+ *   - a refusal that means the sheet is behind: the draft and its key stay
+ *     (the refused transaction rolled its key row back), the sheet and the
+ *     sizes are read again;
+ *   - anything else (busy, a fault): nothing changes; the same send under the
+ *     same key is safe.
+ */
+export function requesterDraftAfterRefusal(
+  draft: RequesterDraft,
+  e: unknown,
+  mintKey?: () => string,
+): { draft: RequesterDraft; message: string; reload: boolean } {
+  const recovery = e instanceof ApiError ? requesterRefusalRecovery(returnErrorReason(e)) : null;
+  if (recovery === 'restart') {
+    return {
+      draft: restartRequesterDraft(draft, mintKey ? mintKey() : undefined),
+      message: RETURNS_COPY.requesterEarlierRequestSent,
+      reload: true,
+    };
+  }
+  return { draft, message: describeRequesterReturnError(e), reload: requesterRefusalRefreshes(e) };
 }

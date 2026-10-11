@@ -83,14 +83,20 @@ describe('the sheet: one request key per draft', () => {
     expect(sheet).not.toMatch(/randomRequestUuid|mintReturnKey|newRequesterDraft/);
   });
 
-  it('kept in memory as it changes; forgotten once the server answered; renewed after a conflict', () => {
+  // Re-pinned on purpose (RX-3 fix round 1, F3): after a refusal the sheet
+  // follows requesterDraftAfterRefusal (core requesterRefusalRecovery, one
+  // rule with the web form): a conflict starts the draft over with nothing
+  // chosen and a new key, never only a new key on the same choices.
+  it('kept in memory as it changes; forgotten once the server answered; started over after a conflict', () => {
     expect(sheet).toMatch(/React\.useEffect\(\(\) => \{\s*if \(draft\) rememberRequesterDraft\(scope, orderId, draft\);\s*\}, \[draft, scope, orderId\]\);/);
     expect(sheet).toMatch(/const answer = await sendRequesterReturn\(orderId, built\.body\);\s*forgetRequesterDraft\(scope, orderId\);\s*onSent\(/);
-    expect(sheet).toContain('if (requesterRefusalNeedsNewKey(e)) setDraft((d) => (d ? withNewRequesterKey(d) : d));');
+    expect(sheet).toContain('const after = requesterDraftAfterRefusal(draft, e);');
+    expect(sheet).toContain('if (after.draft !== draft) setDraft(after.draft);');
+    expect(sheet).not.toMatch(/withNewRequesterKey/);
   });
 
   it('a refusal that means the sheet is behind reads it, and the sizes, again', () => {
-    expect(sheet).toMatch(/if \(requesterRefusalRefreshes\(e\)\) \{\s*setOptions\(\{ state: 'idle' \}\);\s*onReloadSheet\(\);\s*\}/);
+    expect(sheet).toMatch(/if \(after\.reload\) \{\s*setOptions\(\{ state: 'idle' \}\);\s*onReloadSheet\(\);\s*\}/);
   });
 });
 
@@ -136,6 +142,22 @@ describe('the sheet: VoiceOver', () => {
   it('the steppers are named for their line and the count is announced', () => {
     expect(sheet).toContain("accessibilityLabel={`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${label}`}");
     expect(sheet).toContain('accessibilityLiveRegion="polite"');
+  });
+
+  // RX-3 fix round 1 (desk check L4): iOS ignores accessibilityLiveRegion
+  // (Android only), so each step is announced; the arrow glyph is not read as
+  // "right arrow"; and the spinners say what is loading (core's words, the web's).
+  it('each step of the return quantity is announced on iOS too', () => {
+    expect(sheet).toMatch(/const next = stepRequesterQuantity\(draft, l, delta\);\s*change\(next\);\s*AccessibilityInfo\.announceForAccessibility\(`\$\{next\.lines\[lineId\]\?\.quantity \?\? 0\} \$\{label\} returning`\);/);
+  });
+
+  it('the REPLACEMENT eyebrow is read without its arrow glyph, and every spinner says what is loading', () => {
+    const eyebrows = t.nodes.filter((n) => tagOf(n.el, t.sf) === 'Eyebrow' && n.el.getText(t.sf).includes('→'));
+    expect(eyebrows).toHaveLength(1);
+    expect(a(eyebrows[0]!.el, 'accessibilityLabel')).toBe('RETURNS_COPY.replacement');
+    const spinners = t.nodes.filter((n) => tagOf(n.el, t.sf) === 'ActivityIndicator');
+    expect(spinners.length).toBeGreaterThanOrEqual(2);
+    for (const n of spinners) expect(a(n.el, 'accessibilityLabel'), n.el.getText(t.sf)).toMatch(/^RETURNS_COPY\.requesterLoading(Sizes|Form)$/);
   });
 
   it('a refusal, and a failed read of the sheet, are announced when they appear (iOS does not announce role alert)', () => {
@@ -205,7 +227,7 @@ describe('the sheet: Dynamic Type, the keyboard and the iPad', () => {
     expect(sheet).toContain('side: { flexGrow: 1, flexBasis: 300');
     // Text labels and an arrow, never colour alone.
     expect(sheet).toContain('<Eyebrow>{RETURNS_COPY.returning}</Eyebrow>');
-    expect(sheet).toContain('<Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>');
+    expect(sheet).toContain('<Eyebrow accessibilityLabel={RETURNS_COPY.replacement}>→ {RETURNS_COPY.replacement}</Eyebrow>');
   });
 });
 
@@ -255,8 +277,10 @@ describe('the order screen', () => {
     expect(screen).toContain('{requesterOpen && requesterGate && order ? (');
   });
 
+  // Re-pinned on purpose (RX-3 fix round 1, H1 and M2): core's one rule with
+  // the web order page (requesterOrderReturns -> core requesterReturnsView).
   it("shows the requester's own requests in the server's sentences, each once, and staff's returns as before", () => {
-    expect(screen).toContain('requesterView: requesterGate && !canReadReturns,');
+    expect(screen).toMatch(/const returnsShown = requesterOrderReturns\(\{[\s\S]*?requesterGate,[\s\S]*?canReadReturns: canReadReturns === true,\s*\}\);/);
     expect(screen).toContain('<Eyebrow>{RETURNS_COPY.requesterYourRequests}</Eyebrow>');
     expect(screen).toMatch(/returnsShown\.tracking\.map\(\(t, i\) => \(\s*<RequesterTrackingCard/);
     expect(screen).toContain('returnsShown.orderReturns.map((r) => (');

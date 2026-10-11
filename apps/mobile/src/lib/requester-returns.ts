@@ -497,8 +497,16 @@ export function setRequesterNotes(draft: RequesterDraft, notes: string): Request
 }
 
 /** A new request key (after a conflict: the old one was used with other details). */
-export function withNewRequesterKey(draft: RequesterDraft, key: string = randomRequestUuid()): RequesterDraft {
-  return { ...draft, key };
+/**
+ * Start over after idempotency_conflict (core requesterRefusalRecovery
+ * 'restart'; RX-3 fix round 1, desk check F3): a new key and NOTHING chosen
+ * on any line (not the only-line rule), so a press alone never sends a second
+ * request; the reason and the notes are kept, as the web form keeps them.
+ */
+export function restartRequesterDraft(draft: RequesterDraft, key: string = randomRequestUuid()): RequesterDraft {
+  const lines: Record<string, RequesterDraftLine> = {};
+  for (const lineId of Object.keys(draft.lines)) lines[lineId] = { ...EMPTY_LINE };
+  return { ...draft, key, lines };
 }
 
 /** Some line asks for an exchange (the sizes are then needed). */

@@ -88,8 +88,11 @@ describe('the workbench', () => {
   // what it does is shown under it and is its VoiceOver hint (offline, the
   // hint is why it is off).
   it('says what Get replacement ready does, under it and as its hint (review fix P18)', () => {
-    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}');
-    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}');
+    // Re-pinned on purpose (RX-3 fix round 1, L3): the hint goes through
+    // workbenchActionHint (why it is off, its help, then the 14-day prompt on
+    // the two cancel buttons); actionHelp stays its help.
+    expect(view).toContain('accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}');
+    expect(view).toContain('accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}');
     expect(view).toContain('{actionHelp(actions.primary) ? (');
     expect(view).toContain('const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;');
   });

@@ -55,6 +55,7 @@ import {
   replacementSideLines,
   returnStatusTone,
   stepOutcomeMessage,
+  workbenchActionHint,
   workbenchActions,
   workbenchStillWaiting,
 } from '@/lib/returns-view';
@@ -324,7 +325,7 @@ export function ReturnWorkbenchView({
               <Button
                 block
                 disabled={disabled}
-                accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}
+                accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}
                 onPress={() => onAction(actions.primary!)}
               >
                 {busy && (actions.primary === 'receive' || actions.primary === 'get_replacement_ready')
@@ -345,7 +346,7 @@ export function ReturnWorkbenchView({
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
                     disabled={disabled}
-                    accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}
+                    accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}
                     onPress={() => onAction(a)}
                   >
                     {actionLabel(a, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}

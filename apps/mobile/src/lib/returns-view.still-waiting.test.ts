@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { MobileReplacement, MobileReturnExchange, MobileReturnWorkbench } from './returns-api';
-import { NO_EXCHANGE, workbenchActions, workbenchStillWaiting } from './returns-view';
+import { NO_EXCHANGE, workbenchActionHint, workbenchActions, workbenchStillWaiting } from './returns-view';
 
 /**
  * RX-2 review fix P17, built in RX-3: the workbench's 14-day prompt on the
@@ -84,5 +84,29 @@ describe("the workbench's 14-day prompt (P17)", () => {
     // Inside the next-step bar's card: after its buttons, before the disabled reason.
     const bar = code.slice(code.indexOf('{actions.primary ? ('), code.indexOf('{actions.disabledReason ? ('));
     expect(bar).toContain('{stillWaiting ? (');
+  });
+});
+
+// RX-3 fix round 1 (desk check L3): the web ties the prompt to Cancel
+// replacement and Cancel return (aria-describedby); the phone showed it as
+// text only. It is now the VoiceOver hint of both buttons, after any reason
+// the button is off and its own help.
+describe("the prompt is the cancel buttons' VoiceOver hint (P17, L3)", () => {
+  const WAITING = 'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items.';
+  it('Cancel replacement and Cancel return carry it; other buttons do not', () => {
+    expect(workbenchActionHint('cancel_replacement', { disabledReason: null, stillWaiting: WAITING })).toBe(WAITING);
+    expect(workbenchActionHint('cancel', { disabledReason: null, stillWaiting: WAITING })).toBe(WAITING);
+    expect(workbenchActionHint('receive', { disabledReason: null, stillWaiting: WAITING })).toBeUndefined();
+    expect(workbenchActionHint('cancel', { disabledReason: null, stillWaiting: null })).toBeUndefined();
+  });
+
+  it('why a button is off comes first', () => {
+    expect(workbenchActionHint('cancel', { disabledReason: 'Needs a connection.', stillWaiting: WAITING })).toBe('Needs a connection.');
+  });
+
+  it('the screen uses it for the primary and every secondary button', () => {
+    const src = readFileSync(path.resolve(__dirname, '../components/return-workbench-view.tsx'), 'utf8');
+    expect(src).toContain('accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}');
+    expect(src).toContain('accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}');
   });
 });
