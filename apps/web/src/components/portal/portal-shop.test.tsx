@@ -96,7 +96,19 @@ describe('PortalShop hydrates with the server in UTC and the browser in Los Ange
           quantityPendingReturn: 0,
         },
       ],
-      returns: [{ id: 'ret-1', status: 'requested', created_at: '2026-10-06T03:00:00.000Z' }],
+      returns: [
+        {
+          id: 'ret-1',
+          status: 'requested',
+          created_at: '2026-10-06T03:00:00.000Z',
+          // Returns RX-3: the requester's tracking rides on each request.
+          returnNumber: 'RMA-20261006-ABC123',
+          exchangeStatus: 'none' as const,
+          sentences: ['Return requested. The warehouse will review it.'],
+          replacementOrderNumber: null,
+          lines: [],
+        },
+      ],
     };
     const run = await hydrateAcrossClockShift(
       () => (

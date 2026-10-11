@@ -5,8 +5,10 @@ import { z } from 'zod';
 import {
   planAllowsB2bPortal,
   resolvePortalPricingMode,
+  type ExchangeStatus,
   type OrgBillingState,
   type PortalPricingMode,
+  type RequesterTrackingLine,
 } from '@stockpilot/core';
 
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -16,6 +18,7 @@ import { reportError } from '@/lib/error-reporter';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
+import { trackingRowsForOrders } from '@/server/services/returns-requester';
 
 /**
  * Paginate an admin-client select to exhaustion in 1000-row windows. Portal
@@ -111,10 +114,23 @@ export interface PortalOrder {
     quantityPendingReturn: number;
   }>;
   /**
-   * The customer's OWN return requests on this order — status + date ONLY
-   * (portal-safe projection; never staff fields like approver/denial reason).
+   * The customer's OWN return requests on this order: status, date, and
+   * (returns RX-3) the requester's tracking (core requester-exchange-types):
+   * the RMA number, the sentences, the replacement order once it exists, and
+   * per line what is coming back and what replaces it. A portal-safe
+   * projection: never staff fields like the approver, a reason, a rack or a
+   * disposition.
    */
-  returns: Array<{ id: string; status: string; created_at: string }>;
+  returns: Array<{
+    id: string;
+    status: string;
+    created_at: string;
+    returnNumber: string | null;
+    exchangeStatus: ExchangeStatus;
+    sentences: string[];
+    replacementOrderNumber: string | null;
+    lines: RequesterTrackingLine[];
+  }>;
 }
 
 /**
@@ -503,32 +519,28 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
 
-  // The customer's own return requests on these orders — SAFE projection only
-  // (status + date; the id keys React rows). Never approver/denial/staff data.
-  // source='requester' only: staff-created internal returns (including
-  // denied/cancelled ones) are org-internal workflow and must never surface
-  // on the customer's portal card.
+  // The customer's own return requests on these orders: SAFE projection only
+  // (status, date, and the requester's tracking; the id keys React rows).
+  // Never approver/denial/staff data. source='requester' only: staff-created
+  // internal returns (including denied/cancelled ones) are org-internal
+  // workflow and must never surface on the customer's portal card. Returns
+  // RX-3: one batched return_overview read for the page (trackingRowsForOrders),
+  // which fails closed to "no requests shown".
   const orderIds = rows.map((r) => r.id as string);
   const returnsByOrder = new Map<string, PortalOrder['returns']>();
-  if (orderIds.length > 0) {
-    const { data: returnRows } = await admin
-      .from('returns')
-      .select('id, order_request_id, status, created_at')
-      .eq('organization_id', ctx.organizationId)
-      .eq('source', 'requester')
-      // in-list-bound: portalOrders reads at most 50 orders (.limit(50) above)
-      .in('order_request_id', orderIds)
-      .order('created_at', { ascending: false });
-    for (const ret of (returnRows ?? []) as Array<Record<string, unknown>>) {
-      const key = ret.order_request_id as string;
-      const list = returnsByOrder.get(key) ?? [];
-      list.push({
-        id: ret.id as string,
-        status: ret.status as string,
-        created_at: ret.created_at as string,
-      });
-      returnsByOrder.set(key, list);
-    }
+  for (const row of await trackingRowsForOrders(admin, ctx.organizationId, orderIds)) {
+    const list = returnsByOrder.get(row.orderId) ?? [];
+    list.push({
+      id: row.returnId,
+      status: row.tracking.returnStatus,
+      created_at: row.tracking.createdAt,
+      returnNumber: row.tracking.returnNumber,
+      exchangeStatus: row.tracking.exchangeStatus,
+      sentences: row.tracking.sentences,
+      replacementOrderNumber: row.tracking.replacementOrderNumber,
+      lines: row.tracking.lines,
+    });
+    returnsByOrder.set(row.orderId, list);
   }
 
   // Live pending return demand per line (unapplied lines on not-cancelled/

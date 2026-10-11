@@ -31,7 +31,10 @@ import { createNotification } from './notifications';
  *   • The requester, for a requester-sourced RMA: "We received your return
  *     request", "Your return was approved", "We received your returned item",
  *     "Your return request was declined", "Your return request was
- *     cancelled". No reason text ever reaches a requester. A counter approval
+ *     cancelled". RX-3: "We received your exchange request" for a request
+ *     that asks for an exchange, and "Exchange declined. Your return was
+ *     approved." when the approval declined every exchange line the requester
+ *     asked for. No reason text ever reaches a requester. A counter approval
  *     (the item handed over in person) sends no approval or receipt message.
  *     Member requesters get an in-app notification (push rides the
  *     notifications trigger) gated by their order-status preference
@@ -239,6 +242,10 @@ export type RequesterReturnEvent = Extract<
   | 'return_approved_replacement_added'
   | 'return_approved_replacement_added_short'
   | 'replacement_closed_return_only'
+  // RX-3: the requester's own exchange request, received; and an approval
+  // that declined every exchange line the requester asked for.
+  | 'exchange_request_received'
+  | 'exchange_declined'
 >;
 
 const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
@@ -255,6 +262,8 @@ const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
   return_approved_replacement_added: RETURNS_COPY.requesterReturnApprovedReplacementAdded,
   return_approved_replacement_added_short: RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
   replacement_closed_return_only: RETURNS_COPY.requesterReplacementClosedReturnOnly,
+  exchange_request_received: RETURNS_COPY.requesterReceivedExchangeRequest,
+  exchange_declined: RETURNS_COPY.requesterExchangeDeclined,
 };
 
 /** Whether this event reaches the requester at all, given how it happened. */
@@ -269,6 +278,8 @@ export function requesterHearsEvent(event: RequesterReturnEvent, input: { source
   // counter's approval too (the line above stays as RX-1 published it).
   const addedAtCounter = event === 'return_approved_replacement_added' || event === 'return_approved_replacement_added_short';
   if (addedAtCounter && input.channel === 'counter') return false;
+  // RX-3: an exchange declined at a counter approval is the counter's too.
+  if (event === 'exchange_declined' && input.channel === 'counter') return false;
   return true;
 }
 

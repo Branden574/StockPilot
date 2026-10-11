@@ -687,8 +687,22 @@ describe('return-update (returns RX-1)', () => {
     expect(() => assertEmailWeight(r.html)).not.toThrow();
   });
 
+  // Returns RX-3: the requester's own exchange request, and an approval that
+  // declined every exchange line they asked for.
+  it.each([
+    ['exchange_request_received', 'Return RMA-20261005-ABC123: exchange request received', 'We received your exchange request.'],
+    ['exchange_declined', 'Return RMA-20261005-ABC123: exchange declined', 'Exchange declined. Your return was approved.'],
+  ] as const)('RX-3 %s: subject, headline and its one sentence', (event, subject, lead) => {
+    const r = renderReturnUpdateEmail({ ...base, event });
+    expect(r.subject).toBe(subject);
+    expect(r.preheader.startsWith(lead)).toBe(true);
+    expect(r.html).toContain('View your return');
+    expect(r.text).toContain(lead);
+    expect(() => assertEmailWeight(r.html)).not.toThrow();
+  });
+
   it('never names a rack, Staging, a disposition, a reason or a staff member', () => {
-    for (const event of ['request_received', 'approved', 'received', 'denied', 'cancelled'] as const) {
+    for (const event of ['request_received', 'approved', 'received', 'denied', 'cancelled', 'exchange_request_received', 'exchange_declined'] as const) {
       const r = renderReturnUpdateEmail({ ...base, event });
       for (const out of [r.html, r.text, r.subject, r.preheader]) {
         expect(out).not.toMatch(/\brack\b|staging|scrap|restock|disposition/i);
@@ -857,6 +871,9 @@ describe('return-update: the exchange events (returns RX-2)', () => {
     'return_approved_replacement_added',
     'return_approved_replacement_added_short',
     'replacement_closed_return_only',
+    // Returns RX-3.
+    'exchange_request_received',
+    'exchange_declined',
   ] as const)('%s without a link points at no button', (event) => {
     const r = renderReturnUpdateEmail({ ...base, event, viewUrl: null });
     for (const out of [r.html, r.text, r.preheader]) {
