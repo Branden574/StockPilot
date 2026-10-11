@@ -209,6 +209,28 @@ describe('the sheet: Dynamic Type, the keyboard and the iPad', () => {
   });
 });
 
+// RX-3 merge: one set of words with the web token page and the portal
+// (core RETURNS_COPY), and the web's replacement quantity (brief 4).
+describe('the sheet: the same words and choices as the web form', () => {
+  it("says core's words: the title, Submit return request, Sending…, nothing left, and the notes field", () => {
+    expect(sheet).toContain('{requesterEntryWords(load)}');
+    expect(sheet).toContain('{sending ? RETURNS_COPY.requesterSending : RETURNS_COPY.requesterSubmit}');
+    expect(sheet).toContain('{RETURNS_COPY.requesterNothingLeft}');
+    expect(sheet).toContain('placeholder={RETURNS_COPY.requesterNotesPlaceholder}');
+    expect(sheet).toContain('accessibilityLabel={RETURNS_COPY.requesterNotesLabel}');
+    expect(sheet).not.toMatch(/Send request|Nothing left to return on this order\.|Notes for the warehouse|Anything the warehouse/);
+  });
+
+  it('the replacement quantity: a named stepper from 1 to what goes back once there is more than one, else the words', () => {
+    expect(sheet).toContain("import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';");
+    expect(sheet).toMatch(
+      /<ReplacementQuantityStepper\s+value=\{replacementQuantity\}\s+max=\{d\.quantity\}\s+label=\{label\}\s+disabled=\{sending\}\s+onChange=\{\(n\) => change\(setRequesterReplacementQuantity\(draft, lineId, n\)\)\}\s*\/>/,
+    );
+    expect(sheet).toContain("const replacementQuantity = requesterReplacementQuantityOf(d);");
+    expect(sheet).toContain('{requesterReplacementQuantity(replacementQuantity)}');
+  });
+});
+
 describe('the order screen', () => {
   it("offers it to the order's own requester who does not manage returns, with Returns on (the web's rule)", () => {
     expect(screen).toMatch(
@@ -227,7 +249,8 @@ describe('the order screen', () => {
   });
 
   it('the button goes through actionBtn (disabled offline, with the reason as its hint), the sheet gets the live state', () => {
-    expect(screen).toContain("actionBtn(RETURNS_COPY.requesterReturnOrExchange, 'requester-return', openRequesterSheet)");
+    // RX-3 merge: "Request a return" while the server says exchanges are off (the web's rule).
+    expect(screen).toContain("actionBtn(requesterEntryWords(requester.load), 'requester-return', openRequesterSheet)");
     expect(screen).toMatch(/<RequesterReturnSheet[\s\S]*?online=\{!offline\}[\s\S]*?\/>/);
     expect(screen).toContain('{requesterOpen && requesterGate && order ? (');
   });
@@ -242,7 +265,7 @@ describe('the order screen', () => {
 
   it('after the answer: closes, says so in core\'s words, and reads the order (and so the requests) again', () => {
     expect(screen).toMatch(
-      /onSent=\{\(sent\) => \{\s*setRequesterOpen\(false\);\s*Alert\.alert\(requesterSentTitle\(sent\.exchange\), sent\.returnNumber \?\? undefined\);\s*void load\(\);\s*\}\}/,
+      /onSent=\{\(sent\) => \{\s*setRequesterOpen\(false\);\s*Alert\.alert\(requesterSentTitle\(sent\.exchange\), requesterSentMessage\(sent\.returnNumber\)\);\s*void load\(\);\s*\}\}/,
     );
   });
 });

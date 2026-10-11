@@ -103,9 +103,11 @@ import { RequesterReturnSheet } from '@/components/requester-return-sheet';
 import { RequesterTrackingCard } from '@/components/requester-tracking-card';
 import {
   requesterButtonShown,
+  requesterEntryWords,
   requesterLoadedSheet,
   requesterReturnGate,
   requesterReturnsView,
+  requesterSentMessage,
   requesterSentTitle,
 } from '@/lib/requester-returns';
 import { useRequesterReturn } from '@/lib/use-requester-return';
@@ -3421,7 +3423,7 @@ export default function OrderDetail() {
               ) : null}
               {showRequesterReturn ? (
                 <>
-                  {actionBtn(RETURNS_COPY.requesterReturnOrExchange, 'requester-return', openRequesterSheet)}
+                  {actionBtn(requesterEntryWords(requester.load), 'requester-return', openRequesterSheet)}
                   {connectionNotice}
                 </>
               ) : null}
@@ -4249,7 +4251,7 @@ export default function OrderDetail() {
           onClose={() => setRequesterOpen(false)}
           onSent={(sent) => {
             setRequesterOpen(false);
-            Alert.alert(requesterSentTitle(sent.exchange), sent.returnNumber ?? undefined);
+            Alert.alert(requesterSentTitle(sent.exchange), requesterSentMessage(sent.returnNumber));
             void load();
           }}
         />

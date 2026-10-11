@@ -24,6 +24,7 @@ import {
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Body, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
@@ -39,6 +40,7 @@ import {
   reconcileDraftWithOptions,
   reconcileRequesterDraft,
   rememberRequesterDraft,
+  requesterEntryWords,
   requesterExchangesOn,
   requesterLineAvailability,
   requesterLineExchangeView,
@@ -46,9 +48,11 @@ import {
   requesterLoadedSheet,
   requesterPhotoUrl,
   requesterReplacementQuantity,
+  requesterReplacementQuantityOf,
   setRequesterMode,
   setRequesterNote,
   setRequesterNotes,
+  setRequesterReplacementQuantity,
   stepRequesterQuantity,
   toggleRequesterReason,
   withNewRequesterKey,
@@ -102,8 +106,10 @@ interface RequesterSheetProps {
  *     first Exchange (photo, size, "Available" or "Not in stock right now",
  *     never a count), as radio buttons; a line with no other size offers
  *     "Request a different replacement: warehouse will review." and a note.
- *     The replacement's quantity is the line's own (brief 4);
- *   - an optional reason and notes, then Send request.
+ *     The replacement's quantity follows the line's (brief 4) and, when more
+ *     than one comes back, has its own stepper from 1 to that (the web's);
+ *   - an optional reason and notes, then Submit return request (core's
+ *     words, the token page's and the portal's).
  *
  * The server decides everything again (brief 6): what is eligible, every
  * quantity, the item. ONLINE ONLY: offline the sizes are not asked for and
@@ -284,7 +290,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
   } else if (sheet.lines.length === 0) {
     body.push(
       <Body key="nothing" size={14} color={c.ink}>
-        Nothing left to return on this order.
+        {RETURNS_COPY.requesterNothingLeft}
       </Body>,
     );
   } else {
@@ -312,11 +318,12 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
     }
     for (const l of sheet.lines) {
       const lineId = l.orderRequestLineId;
-      const d = draft.lines[lineId] ?? { quantity: 0, mode: 'return' as const, itemId: null, note: '' };
+      const d = draft.lines[lineId] ?? { quantity: 0, mode: 'return' as const, itemId: null, note: '', replacementQuantity: null };
       const label = requesterLineLabel(l);
       const photo = requesterPhotoUrl(l.photo);
       const exchanging = exchangesOn && d.quantity > 0 && d.mode === 'exchange';
       const view = exchanging ? requesterLineExchangeView(options, lineId, online) : null;
+      const replacementQuantity = requesterReplacementQuantityOf(d);
       const stepButton = (glyph: string, delta: number, off: boolean) => (
         <Pressable
           onPress={() => change(stepRequesterQuantity(draft, l, delta))}
@@ -418,9 +425,19 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               // an ink edge, never colour alone).
               <View style={[styles.side, { borderColor: c.hair, borderLeftWidth: 4, borderLeftColor: c.ink }]}>
                 <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
-                <Body size={13} muted>
-                  {requesterReplacementQuantity(d.quantity)}
-                </Body>
+                {(view.kind === 'options' || view.kind === 'review') && d.quantity > 1 ? (
+                  <ReplacementQuantityStepper
+                    value={replacementQuantity}
+                    max={d.quantity}
+                    label={label}
+                    disabled={sending}
+                    onChange={(n) => change(setRequesterReplacementQuantity(draft, lineId, n))}
+                  />
+                ) : (
+                  <Body size={13} muted>
+                    {requesterReplacementQuantity(replacementQuantity)}
+                  </Body>
+                )}
                 {view.kind === 'loading' ? <ActivityIndicator color={c.ink4} /> : null}
                 {view.kind === 'offline' ? (
                   <Body size={13} muted>
@@ -566,9 +583,9 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
           multiline
           maxLength={RETURN_NOTES_MAX}
           maxFontSizeMultiplier={INPUT_CAP}
-          placeholder="Anything the warehouse should know about this return."
+          placeholder={RETURNS_COPY.requesterNotesPlaceholder}
           placeholderTextColor={c.ink4}
-          accessibilityLabel="Notes for the warehouse"
+          accessibilityLabel={RETURNS_COPY.requesterNotesLabel}
           style={[styles.input, { borderColor: c.hair, backgroundColor: c.paper2, color: c.ink }]}
         />
       </View>,
@@ -605,7 +622,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
                   maxFontSizeMultiplier={TITLE_CAP}
                   style={{ fontFamily: FONT.display }}
                 >
-                  {RETURNS_COPY.requesterReturnOrExchange}
+                  {requesterEntryWords(load)}
                 </Body>
                 {sheet?.orderNumber ? (
                   <Mono size={11} color={c.ink4}>
@@ -657,7 +674,7 @@ export function RequesterReturnSheet(props: RequesterSheetProps) {
               accessibilityHint={disabledReason ?? undefined}
               onPress={() => void send()}
             >
-              {sending ? 'Sending…' : 'Send request'}
+              {sending ? RETURNS_COPY.requesterSending : RETURNS_COPY.requesterSubmit}
             </Button>
           </View>
         </View>

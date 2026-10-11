@@ -48,6 +48,7 @@ import {
   qtyRequestedLabel,
   randomRequestUuid,
   REQUESTER_AVAILABILITY_WORDS,
+  requesterEntryLabel,
   RETURN_EXCHANGE_NOTE_MAX,
   RETURN_NOTES_MAX,
   RETURN_REASON_CODES,
@@ -271,6 +272,16 @@ export function requesterLoadedSheet(load: RequesterSheetLoad): RequesterReturnS
   return load.state === 'ready' || load.state === 'loading' || load.state === 'failed' ? load.sheet : null;
 }
 
+/**
+ * The order screen's button and the sheet's title (core requesterEntryLabel,
+ * the web's link, token page and portal): "Request a return" once the server
+ * says exchanges are held back, else "Return or exchange" (also before the
+ * server answered).
+ */
+export function requesterEntryWords(load: RequesterSheetLoad): string {
+  return requesterEntryLabel(requesterLoadedSheet(load)?.exchangesEnabled ?? true);
+}
+
 // ── Who is offered it ──────────────────────────────────────────────────────
 
 /**
@@ -354,6 +365,11 @@ export interface RequesterDraftLine {
   itemId: string | null;
   /** What the warehouse should know (a line with no other size). */
   note: string;
+  /**
+   * The replacement's quantity, 1 to the return quantity (brief 4); null
+   * follows the return quantity (the web form's rule).
+   */
+  replacementQuantity: number | null;
 }
 
 export interface RequesterDraft {
@@ -364,14 +380,23 @@ export interface RequesterDraft {
   notes: string;
 }
 
-const EMPTY_LINE: RequesterDraftLine = { quantity: 0, mode: 'return', itemId: null, note: '' };
+const EMPTY_LINE: RequesterDraftLine = { quantity: 0, mode: 'return', itemId: null, note: '', replacementQuantity: null };
 
+/**
+ * A new draft: nothing coming back and every line a return only, except that
+ * an order with ONE line that can still come back starts it at what is left
+ * (the web form's and the staff create sheet's rule, web and phone).
+ */
 export function newRequesterDraft(
-  lines: readonly Pick<RequesterReturnableLine, 'orderRequestLineId'>[],
+  lines: readonly Pick<RequesterReturnableLine, 'orderRequestLineId' | 'quantityRemaining'>[],
   key: string = randomRequestUuid(),
 ): RequesterDraft {
+  const returnable = lines.filter((l) => Math.floor(l.quantityRemaining) > 0);
+  const only = returnable.length === 1 ? returnable[0]! : null;
   const out: Record<string, RequesterDraftLine> = {};
-  for (const l of lines) out[l.orderRequestLineId] = { ...EMPTY_LINE };
+  for (const l of lines) {
+    out[l.orderRequestLineId] = { ...EMPTY_LINE, quantity: l === only ? Math.floor(l.quantityRemaining) : 0 };
+  }
   return { key, lines: out, reasonCode: null, notes: '' };
 }
 
@@ -437,6 +462,22 @@ export function setRequesterMode(draft: RequesterDraft, lineId: string, mode: Re
 
 export function chooseRequesterOption(draft: RequesterDraft, lineId: string, itemId: string): RequesterDraft {
   return withLine(draft, lineId, { ...lineOf(draft, lineId), mode: 'exchange', itemId });
+}
+
+/** The replacement's quantity as it is sent: the chosen one, never above the return quantity, never below 1. */
+export function requesterReplacementQuantityOf(line: Pick<RequesterDraftLine, 'quantity' | 'replacementQuantity'>): number {
+  const back = Math.floor(line.quantity) || 0;
+  const wanted = line.replacementQuantity ?? back;
+  return Math.max(1, Math.min(Math.floor(wanted) || 1, back));
+}
+
+/** The replacement quantity's stepper: a whole number from 1 to the line's return quantity. */
+export function setRequesterReplacementQuantity(draft: RequesterDraft, lineId: string, quantity: number): RequesterDraft {
+  const d = lineOf(draft, lineId);
+  const max = Math.max(1, Math.floor(d.quantity) || 0);
+  const n = Math.floor(Number(quantity));
+  const replacementQuantity = Math.max(1, Math.min(Number.isFinite(n) ? n : 1, max));
+  return withLine(draft, lineId, { ...d, replacementQuantity });
 }
 
 export function setRequesterNote(draft: RequesterDraft, lineId: string, note: string): RequesterDraft {
@@ -657,21 +698,29 @@ export function buildRequesterReturnBody(input: {
     const view = requesterLineExchangeView(input.options, l.orderRequestLineId, true);
     if (view.kind === 'options') {
       if (!d.itemId || !view.rows.some((r) => r.itemId === d.itemId)) {
-        return { ok: false, error: `${RETURNS_COPY.chooseReplacement}: ${label}` };
+        return { ok: false, error: RETURNS_COPY.requesterChooseSize(label) };
       }
-      lines.push({ orderRequestLineId: l.orderRequestLineId, quantity: qty, exchange: { itemId: d.itemId, quantity: qty } });
+      lines.push({
+        orderRequestLineId: l.orderRequestLineId,
+        quantity: qty,
+        exchange: { itemId: d.itemId, quantity: requesterReplacementQuantityOf(d) },
+      });
     } else if (view.kind === 'review') {
       const note = d.note.trim();
-      if (!note) return { ok: false, error: `Tell the warehouse what you need: ${label}` };
+      if (!note) return { ok: false, error: RETURNS_COPY.requesterNoteRequired(label) };
       if (chars(note) > RETURN_EXCHANGE_NOTE_MAX) return { ok: false, error: `At most ${RETURN_EXCHANGE_NOTE_MAX} characters.` };
-      lines.push({ orderRequestLineId: l.orderRequestLineId, quantity: qty, exchange: { note, quantity: qty } });
+      lines.push({
+        orderRequestLineId: l.orderRequestLineId,
+        quantity: qty,
+        exchange: { note, quantity: requesterReplacementQuantityOf(d) },
+      });
     } else {
       // The sizes never arrived: nothing about the exchange can be sent.
       return { ok: false, error: RETURNS_COPY.requesterOptionsUnavailable };
     }
     exchange = true;
   }
-  if (lines.length === 0) return { ok: false, error: 'Select at least one item to return.' };
+  if (lines.length === 0) return { ok: false, error: RETURNS_COPY.requesterPickAtLeastOne };
   const notes = input.draft.notes.trim();
   if (chars(notes) > RETURN_NOTES_MAX) return { ok: false, error: `At most ${RETURN_NOTES_MAX} characters.` };
   const reasonCode =
@@ -693,6 +742,11 @@ export function buildRequesterReturnBody(input: {
 /** The title of the alert after a request is answered (core's words). */
 export function requesterSentTitle(exchange: boolean): string {
   return exchange ? RETURNS_COPY.requesterReceivedExchangeRequest : RETURNS_COPY.requesterReceivedReturnRequest;
+}
+
+/** Its message: "Your reference is RMA-….", the web's words, when there is a number. */
+export function requesterSentMessage(returnNumber: string | null): string | undefined {
+  return returnNumber ? RETURNS_COPY.requesterReference(returnNumber) : undefined;
 }
 
 // ── The requester's own requests ────────────────────────────────────────────
@@ -718,7 +772,7 @@ export interface RequesterTrackingCardView {
   /** The server's one or two sentences, as they came. */
   sentences: string[];
   lines: RequesterTrackingLineView[];
-  /** "Replacement order SO-000104" once one exists. */
+  /** "Replacement order: SO-000104" once one exists. */
   replacementOrder: string | null;
   /** The card's one VoiceOver label. */
   accessibilityLabel: string;
@@ -748,7 +802,7 @@ export function requesterRequestDate(iso: string, opts: { timeZone?: string } = 
  * reason or a staff member (the tracking carries none of them).
  */
 export function requesterTrackingCard(t: RequesterTrackingReturn, opts: { timeZone?: string } = {}): RequesterTrackingCardView {
-  const title = t.returnNumber ?? 'Return request';
+  const title = t.returnNumber ?? RETURNS_COPY.requesterRequestTitle;
   const date = requesterRequestDate(t.createdAt, opts);
   const lines: RequesterTrackingLineView[] = t.lines.map((l, i) => ({
     key: `${i}`,
@@ -757,7 +811,7 @@ export function requesterTrackingCard(t: RequesterTrackingReturn, opts: { timeZo
     state: l.exchange ? exchangeLineStatusLabel(l.exchange.state) : null,
     changed: l.exchange?.substituted ? RETURNS_COPY.replacementChangedByWarehouse : null,
   }));
-  const replacementOrder = t.replacementOrderNumber ? `${RETURNS_COPY.replacementOrderHeading} ${t.replacementOrderNumber}` : null;
+  const replacementOrder = t.replacementOrderNumber ? `${RETURNS_COPY.replacementOrderHeading}: ${t.replacementOrderNumber}` : null;
   const spoken: string[] = [`${title}, ${date}.`];
   for (const l of lines) {
     spoken.push(`Returning: ${l.returning}.`);

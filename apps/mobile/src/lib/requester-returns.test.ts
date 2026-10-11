@@ -36,13 +36,17 @@ import {
   requesterPhotoUrl,
   requesterReplacementQuantity,
   requesterRequestDate,
+  requesterEntryWords,
+  requesterReplacementQuantityOf,
   requesterReturnGate,
   requesterReturnsView,
+  requesterSentMessage,
   requesterSentTitle,
   requesterTrackingCard,
   setRequesterMode,
   setRequesterNote,
   setRequesterNotes,
+  setRequesterReplacementQuantity,
   stepRequesterQuantity,
   toggleRequesterReason,
   withNewRequesterKey,
@@ -337,6 +341,20 @@ describe('who is offered "Return or exchange" (the web order page\'s rule)', () 
     expect(requesterButtonShown({ gate: false, load: { state: 'ready', sheet }, phoneReturnable: 1 })).toBe(false);
   });
 
+  // RX-3 merge: the web's link, token page and portal say "Request a return"
+  // while the exchange kill switch holds exchanges back; the phone's button
+  // and sheet title always said "Return or exchange".
+  it('the button and the sheet title: Return or exchange, or Request a return while the server says exchanges are off', () => {
+    const sheet = sheetOf();
+    const off = sheetOf({ exchangesEnabled: false });
+    expect(requesterEntryWords({ state: 'ready', sheet })).toBe('Return or exchange');
+    expect(requesterEntryWords({ state: 'ready', sheet: off })).toBe('Request a return');
+    expect(requesterEntryWords({ state: 'failed', sheet: off, message: 'x' })).toBe('Request a return');
+    // Before the server answered: the words the button offers today.
+    expect(requesterEntryWords({ state: 'off' })).toBe('Return or exchange');
+    expect(requesterEntryWords({ state: 'loading', sheet: null })).toBe('Return or exchange');
+  });
+
   it('never once the server said the order is a closed door, whatever the phone counts', () => {
     expect(requesterButtonShown({ gate: true, load: { state: 'closed' }, phoneReturnable: 2 })).toBe(false);
   });
@@ -404,8 +422,8 @@ describe('the draft', () => {
     expect(d).toEqual({
       key: KEY,
       lines: {
-        [L1]: { quantity: 0, mode: 'return', itemId: null, note: '' },
-        [L2]: { quantity: 0, mode: 'return', itemId: null, note: '' },
+        [L1]: { quantity: 0, mode: 'return', itemId: null, note: '', replacementQuantity: null },
+        [L2]: { quantity: 0, mode: 'return', itemId: null, note: '', replacementQuantity: null },
       },
       reasonCode: null,
       notes: '',
@@ -413,6 +431,35 @@ describe('the draft', () => {
     expect(draftHasSelection(d)).toBe(false);
     expect(draftWantsSizes(d)).toBe(false);
     expect(newRequesterDraft(sheet.lines).key).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  // RX-3 merge: the web form starts the ONLY returnable line at what can come
+  // back (the RX-2 staff create sheet's rule, web and phone); the phone's
+  // requester sheet started every line at 0.
+  it('an order with ONE line that can come back starts it at what is left; with several, nothing is chosen', () => {
+    const one = sheetOf({
+      lines: [
+        { orderRequestLineId: L1, name: 'Walk Exchange Tee', sizeLabel: 'Size M', quantityFulfilled: 3, quantityRemaining: 2 },
+        { orderRequestLineId: L2, name: 'Nothing left', quantityFulfilled: 1, quantityRemaining: 0 },
+      ],
+    });
+    // (The sheet's parser drops a line with nothing left; the rule counts only lines that can come back.)
+    expect(one.lines.map((l) => l.orderRequestLineId)).toEqual([L1]);
+    const d = newRequesterDraft(one.lines, KEY);
+    expect(d.lines[L1]).toEqual({ quantity: 2, mode: 'return', itemId: null, note: '', replacementQuantity: null });
+    expect(draftHasSelection(d)).toBe(true);
+    const withSpent = newRequesterDraft(
+      [
+        { orderRequestLineId: L1, quantityRemaining: 2 },
+        { orderRequestLineId: L2, quantityRemaining: 0 },
+      ],
+      KEY,
+    );
+    expect(withSpent.lines[L1]!.quantity).toBe(2);
+    expect(withSpent.lines[L2]!.quantity).toBe(0);
+    // A new draft opened on the sheet follows the same rule.
+    expect(openRequesterDraft({ scope: null, orderId: ORDER, sheet: one, mintKey: () => KEY }).lines[L1]!.quantity).toBe(2);
+    expect(draftHasSelection(newRequesterDraft(sheet.lines, KEY))).toBe(false);
   });
 
   it('steps a whole number from 0 to what can come back', () => {
@@ -430,7 +477,7 @@ describe('the draft', () => {
     expect(draftWantsSizes(d)).toBe(true);
     d = chooseRequesterOption(d, L1, ITEM_L);
     d = setRequesterMode(d, L1, 'return');
-    expect(d.lines[L1]).toEqual({ quantity: 1, mode: 'return', itemId: ITEM_L, note: '' });
+    expect(d.lines[L1]).toEqual({ quantity: 1, mode: 'return', itemId: ITEM_L, note: '', replacementQuantity: null });
     expect(draftWantsSizes(d)).toBe(false);
     d = setRequesterMode(d, L1, 'exchange');
     expect(d.lines[L1]!.itemId).toBe(ITEM_L);
@@ -466,8 +513,8 @@ describe('the draft', () => {
     const r = reconcileRequesterDraft(d, now);
     expect(r.key).toBe(KEY);
     expect(r.lines).toEqual({
-      [L1]: { quantity: 1, mode: 'exchange', itemId: ITEM_L, note: '' },
-      [L3]: { quantity: 0, mode: 'return', itemId: null, note: '' },
+      [L1]: { quantity: 1, mode: 'exchange', itemId: ITEM_L, note: '', replacementQuantity: null },
+      [L3]: { quantity: 0, mode: 'return', itemId: null, note: '', replacementQuantity: null },
     });
     // Exchanges off: every line a return only (what the sheet then shows).
     expect(reconcileRequesterDraft(d, { ...now, exchangesEnabled: false }).lines[L1]!.mode).toBe('return');
@@ -476,7 +523,7 @@ describe('the draft', () => {
   it('checked against the sizes: a size no longer offered is unchosen; exchanges turned off, a return only', () => {
     let d = stepRequesterQuantity(newRequesterDraft(sheet.lines, KEY), m, 1);
     d = chooseRequesterOption(d, L1, ITEM_M);
-    expect(reconcileDraftWithOptions(d, OPTIONS).lines[L1]).toEqual({ quantity: 1, mode: 'exchange', itemId: null, note: '' });
+    expect(reconcileDraftWithOptions(d, OPTIONS).lines[L1]).toEqual({ quantity: 1, mode: 'exchange', itemId: null, note: '', replacementQuantity: null });
     const kept = chooseRequesterOption(d, L1, ITEM_L);
     expect(reconcileDraftWithOptions(kept, OPTIONS).lines[L1]!.itemId).toBe(ITEM_L);
     expect(reconcileDraftWithOptions(kept, { exchangesEnabled: false, lines: [] }).lines[L1]!.mode).toBe('return');
@@ -591,7 +638,7 @@ describe('the request (POST .../return-request)', () => {
     buildRequesterReturnBody({ sheet, draft, options, exchangesOn });
 
   it('asks for at least one line', () => {
-    expect(build()).toEqual({ ok: false, error: 'Select at least one item to return.' });
+    expect(build()).toEqual({ ok: false, error: 'Pick at least one item to return.' });
   });
 
   it('a return only: the line and its quantity, the key the sheet opened with, nothing else', () => {
@@ -614,15 +661,39 @@ describe('the request (POST .../return-request)', () => {
     });
   });
 
+  // RX-3 merge: the web lets the requester ask for fewer replacements than
+  // they send back (brief 4: never more); the phone always sent the return
+  // quantity.
+  it('the replacement quantity follows the return quantity until chosen, from 1 to the return quantity (brief 4)', () => {
+    let d = chooseRequesterOption(stepRequesterQuantity(stepRequesterQuantity(base(), m, 1), m, 1), L1, ITEM_L);
+    expect(requesterReplacementQuantityOf(d.lines[L1]!)).toBe(2);
+    d = setRequesterReplacementQuantity(d, L1, 1);
+    expect(requesterReplacementQuantityOf(d.lines[L1]!)).toBe(1);
+    expect(build(d)).toEqual({
+      ok: true,
+      exchange: true,
+      body: { lines: [{ orderRequestLineId: L1, quantity: 2, exchange: { itemId: ITEM_L, quantity: 1 } }], idempotencyKey: KEY },
+    });
+    // Never above what goes back, never below 1, whole numbers only.
+    expect(setRequesterReplacementQuantity(d, L1, 5).lines[L1]!.replacementQuantity).toBe(2);
+    expect(setRequesterReplacementQuantity(d, L1, 0).lines[L1]!.replacementQuantity).toBe(1);
+    expect(setRequesterReplacementQuantity(d, L1, 1.7).lines[L1]!.replacementQuantity).toBe(1);
+    // Sending fewer back lowers the replacement with it.
+    const fewer = stepRequesterQuantity(setRequesterReplacementQuantity(d, L1, 2), m, -1);
+    expect(requesterReplacementQuantityOf(fewer.lines[L1]!)).toBe(1);
+    const sent = build(fewer);
+    expect(sent.ok && sent.body.lines[0]!.exchange).toEqual({ itemId: ITEM_L, quantity: 1 });
+  });
+
   it('an exchange asks for one of the line\'s own sizes (never anything else: brief 6, 32)', () => {
     const d = setRequesterMode(stepRequesterQuantity(base(), m, 1), L1, 'exchange');
-    expect(build(d)).toEqual({ ok: false, error: 'Choose the replacement: Walk Exchange Tee, M' });
-    expect(build(chooseRequesterOption(d, L1, ITEM_M))).toEqual({ ok: false, error: 'Choose the replacement: Walk Exchange Tee, M' });
+    expect(build(d)).toEqual({ ok: false, error: 'Choose a size for Walk Exchange Tee, M.' });
+    expect(build(chooseRequesterOption(d, L1, ITEM_M))).toEqual({ ok: false, error: 'Choose a size for Walk Exchange Tee, M.' });
   });
 
   it('a line with no other size: the warehouse reviews it, with a note of up to 500 characters', () => {
     const d = setRequesterMode(stepRequesterQuantity(base(), cap, 1), L2, 'exchange');
-    expect(build(d)).toEqual({ ok: false, error: 'Tell the warehouse what you need: Walk Cap' });
+    expect(build(d)).toEqual({ ok: false, error: 'Tell the warehouse what you need for Walk Cap.' });
     expect(build(setRequesterNote(d, L2, ' A navy one '))).toEqual({
       ok: true,
       exchange: true,
@@ -648,7 +719,7 @@ describe('the request (POST .../return-request)', () => {
   });
 
   it('never more than can come back, and the notes within 2,000 characters', () => {
-    const over = { ...base(), lines: { ...base().lines, [L1]: { quantity: 3, mode: 'return' as const, itemId: null, note: '' } } };
+    const over = { ...base(), lines: { ...base().lines, [L1]: { quantity: 3, mode: 'return' as const, itemId: null, note: '', replacementQuantity: null } } };
     expect(build(over)).toEqual({ ok: false, error: 'Only 2 of "Walk Exchange Tee, M" can still be returned.' });
     expect(build(setRequesterNotes(stepRequesterQuantity(base(), m, 1), 'x'.repeat(2001)))).toEqual({ ok: false, error: 'At most 2000 characters.' });
   });
@@ -670,6 +741,9 @@ describe('the request (POST .../return-request)', () => {
   it("the alert after the server answered, in core's words", () => {
     expect(requesterSentTitle(true)).toBe('We received your exchange request.');
     expect(requesterSentTitle(false)).toBe('We received your return request.');
+    // RX-3 merge: the web's "Your reference is RMA-…." (the phone showed the bare number).
+    expect(requesterSentMessage('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123.');
+    expect(requesterSentMessage(null)).toBeUndefined();
   });
 });
 
@@ -704,12 +778,12 @@ describe("the requester's own requests (brief 28)", () => {
       { key: '1', returning: 'Walk Cap ×2', replacement: 'Warehouse will review', state: 'Requested', changed: null },
       { key: '2', returning: 'Walk Sock ×1', replacement: null, state: null, changed: null },
     ]);
-    expect(v.replacementOrder).toBe('Replacement order SO-000104');
+    expect(v.replacementOrder).toBe('Replacement order: SO-000104');
   });
 
   it('is one VoiceOver label with the same words in reading order', () => {
     expect(requesterTrackingCard(request, { timeZone: 'UTC' }).accessibilityLabel).toBe(
-      'RMA-20261011-ABC123, Oct 11, 2026. Returning: Walk Exchange Tee, M ×1. Replacement: Walk Exchange Tee, XL ×1, Approved, Changed by the warehouse. Returning: Walk Cap ×2. Replacement: Warehouse will review, Requested. Returning: Walk Sock ×1. Return approved. Bring or send the item back as arranged with the warehouse. Replacement reserved. Waiting for your return. Replacement order SO-000104.',
+      'RMA-20261011-ABC123, Oct 11, 2026. Returning: Walk Exchange Tee, M ×1. Replacement: Walk Exchange Tee, XL ×1, Approved, Changed by the warehouse. Returning: Walk Cap ×2. Replacement: Warehouse will review, Requested. Returning: Walk Sock ×1. Return approved. Bring or send the item back as arranged with the warehouse. Replacement reserved. Waiting for your return. Replacement order: SO-000104.',
     );
   });
 
