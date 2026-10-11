@@ -61,6 +61,8 @@ export async function GET(req: Request) {
     let posSent = 0;
     let posHeld = 0;
     let linesLeftOff = 0;
+    let failures = 0;
+    let templatesSkipped = 0;
 
     for (const { organization_id: orgId } of modRows) {
       try {
@@ -84,13 +86,24 @@ export async function GET(req: Request) {
         posSent += summary.sent;
         posHeld += summary.heldForReview;
         linesLeftOff += summary.linesLeftOff;
+        failures += summary.failures;
+        templatesSkipped += summary.templatesSkipped.length;
 
-        // Admins hear about every run that created a PO, and about every run
+        // Admins hear about every run that created a PO, about every run
         // that left template lines off (a deleted item, a kit), including one
-        // that created nothing because no line could be ordered.
+        // that created nothing because no line could be ordered, and about
+        // every template whose purchase order the save refused or could not
+        // make (its destination deleted after it was saved, ...), with why.
+        // A skipped template's creator is told too: whoever set the template
+        // up is the one who fixes it, and may be a manager.
         const notice = recurringRunNotice(summary);
         if (notice) {
-          await notifyAdmins(admin, orgId, notice);
+          await notifyAdmins(
+            admin,
+            orgId,
+            notice,
+            summary.templatesSkipped.map((s) => s.createdBy),
+          );
         }
       } catch (e) {
         void reportError(e, { tag: 'cron.recurring-pos.org', extra: { orgId } });
@@ -103,6 +116,8 @@ export async function GET(req: Request) {
       posSent,
       posHeld,
       linesLeftOff,
+      failures,
+      templatesSkipped,
       candidates: modRows.length,
     });
   } catch (e) {
@@ -161,11 +176,16 @@ async function buildSystemContext(
   };
 }
 
-/** Notify the org's owners/admins about a recurring-PO run. Best-effort. */
+/**
+ * Notify the org's owners/admins about a recurring-PO run, and `creators`
+ * (the creators of the templates the run skipped) who are still accepted
+ * members of the org. Each person once. Best-effort.
+ */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,
   orgId: string,
   notice: { title: string; body: string },
+  creators: ReadonlyArray<string | null> = [],
 ): Promise<void> {
   const { data: admins } = await admin
     .from('organization_members')
@@ -174,11 +194,27 @@ async function notifyAdmins(
     .in('role', ['owner', 'admin'])
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null);
+  const recipients = new Set(((admins ?? []) as Array<{ user_id: string }>).map((m) => m.user_id));
 
-  for (const m of (admins ?? []) as Array<{ user_id: string }>) {
+  const creatorIds = [...new Set(creators.filter((id): id is string => Boolean(id)))].filter(
+    (id) => !recipients.has(id),
+  );
+  if (creatorIds.length > 0) {
+    const { data: members } = await admin
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', orgId)
+      // in-list-bound: the distinct creators of this run's skipped templates, at most the org's members
+      .in('user_id', creatorIds)
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null);
+    for (const m of (members ?? []) as Array<{ user_id: string }>) recipients.add(m.user_id);
+  }
+
+  for (const userId of recipients) {
     await createNotification({
       organizationId: orgId,
-      userId: m.user_id,
+      userId,
       type: 'purchase_order.auto_reorder',
       title: notice.title,
       body: notice.body,

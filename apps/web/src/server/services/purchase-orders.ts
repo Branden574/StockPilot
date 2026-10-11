@@ -68,6 +68,21 @@ function isPoNumberTaken(e: unknown): boolean {
   return e instanceof ServiceError && e.code === 'conflict' && e.details?.reason === PO_NUMBER_TAKEN;
 }
 
+/** resolveDestinationWarehouseId's refusal of a deleted destination. */
+const DESTINATION_DELETED = 'destination_deleted';
+
+/**
+ * The deleted destination a save refused (resolveDestinationWarehouseId), with
+ * the location's name as it read it (null when it has none), or null when `e`
+ * is any other error. The recurring run says a template's deleted destination
+ * in the template's words with this.
+ */
+export function refusedDeletedDestination(e: unknown): { locationName: string | null } | null {
+  if (!(e instanceof ServiceError) || e.details?.reason !== DESTINATION_DELETED) return null;
+  const name = e.details.locationName;
+  return { locationName: typeof name === 'string' && name.trim() ? name.trim() : null };
+}
+
 /**
  * Map a save_purchase_order_draft error onto a ServiceError. The function
  * marks its own refusals with a hint (0366 header); a PO number taken by
@@ -628,26 +643,53 @@ export class PurchaseOrdersService {
    * recovery card (which only fires when destination is null), stranding the PO
    * in a dead-end. Rejecting it at write time keeps that state from ever forming.
    *
+   * A DELETED location is refused too, by name (small fixes slice 8). Deleted
+   * locations stay readable and the database checks only the organization
+   * (save_purchase_order_draft, location_in_org), so until 2026-10-11 a
+   * purchase order could be saved to one, and a recurring template whose
+   * destination was deleted after it was saved created purchase orders to a
+   * place that no longer exists, every period. The refusal carries
+   * `details.reason = 'destination_deleted'` (and the name), which is how the
+   * recurring run tells it apart from other refusals and says it in the
+   * template's words (refusedDeletedDestination; RecurringPoTemplatesService.
+   * runDueTemplates). Every
+   * caller: create (the New purchase order form, the recurring run; the
+   * reorder and AI drafts pass no destination), update (Edit purchase order)
+   * and the recurring-template save, which refuses a deleted destination
+   * itself first, in its own words.
+   *
    * Not checked here: the location's kind (a staging area is linked to its
-   * warehouse, so it passes) and whether it was deleted (deleted locations stay
-   * readable). The recurring-template save calls this too
+   * warehouse, so it passes). The recurring-template save calls this too
    * (RecurringPoTemplatesService), so a template is held to the destination
    * rule of the purchase orders its daily run saves through create().
+   *
+   * A failed read refuses the save as an error: "could not read" is neither
+   * "not found" nor a pass.
    */
   async resolveDestinationWarehouseId(
     destinationLocationId: string | null | undefined,
   ): Promise<string | null> {
     if (!destinationLocationId) return null;
-    const { data: loc } = await this.ctx.supabase
+    const { data: loc, error } = await this.ctx.supabase
       .from('locations')
-      .select('warehouse_id')
+      .select('warehouse_id, name, deleted_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', destinationLocationId)
       .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
     if (!loc) {
       throw new ServiceError('validation_error', 'The selected destination location was not found.');
     }
-    const wh = (loc as { warehouse_id?: string | null }).warehouse_id ?? null;
+    const location = loc as { warehouse_id?: string | null; name?: string | null; deleted_at?: string | null };
+    if (location.deleted_at) {
+      const locationName = (location.name ?? '').trim() || null;
+      throw new ServiceError(
+        'validation_error',
+        `${locationName ? `"${locationName}"` : 'The destination location'} was deleted, so a purchase order can't go there. Choose another destination.`,
+        { reason: DESTINATION_DELETED, locationName },
+      );
+    }
+    const wh = location.warehouse_id ?? null;
     if (!wh) {
       throw new ServiceError(
         'validation_error',

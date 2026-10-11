@@ -1051,6 +1051,7 @@ describe('recurringRunNotice — what the admins are told', () => {
     linesLeftOff: 0,
     templatesWithLinesLeftOff: [],
     templatesWithNothingOrderable: [],
+    templatesSkipped: [],
   };
 
   it('nothing created and nothing left off: no notification (as before)', () => {
