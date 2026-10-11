@@ -49,6 +49,18 @@ describe('the Orders list (phone ordering PO-4; audit D4, D6)', () => {
     expect(orderHeaderEyebrow(null, 'completed')).toBe('ORDER · DELIVERED');
   });
 
+  // Returns RX-3 PR stage, polish (c), from the RX-2 Demo Co walk: a
+  // completed PICKUP order's header read "DELIVERED". It now says HANDED OVER
+  // (core orderStatusLabelForFulfillment, the web badge's rule), in the list
+  // and in the header alike; a delivery keeps DELIVERED.
+  it('a completed pickup reads HANDED OVER in the list and the header; a delivery keeps DELIVERED', () => {
+    expect(orderStatusPill('completed', 'pickup')).toEqual({ label: 'HANDED OVER', status: 'ok' });
+    expect(orderStatusPill('completed', 'delivery')).toEqual({ label: 'DELIVERED', status: 'ok' });
+    expect(orderStatusPill('staged_for_pickup', 'pickup')).toEqual(orderStatusPill('staged_for_pickup'));
+    expect(orderHeaderEyebrow(27, 'completed', 'pickup')).toBe('ORDER SO-000027 · HANDED OVER');
+    expect(orderHeaderEyebrow(28, 'completed', 'delivery')).toBe('ORDER SO-000028 · DELIVERED');
+  });
+
   it('a failed read is said, never "No orders yet." (D4)', () => {
     expect(ordersListEmpty(true, true)).toEqual({ title: ORDERS_LIST_LOAD_FAILED_TITLE_COPY, body: ORDERS_LIST_LOAD_FAILED_BODY_COPY });
     expect(ordersListEmpty(false, true).title).toBe('No orders yet.');

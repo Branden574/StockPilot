@@ -273,7 +273,7 @@ export default async function OrdersPage({
                       {formatNumber(r.totalQuantity)}
                     </TableCell>
                     <TableCell>
-                      <OrderStatusBadge status={r.status} />
+                      <OrderStatusBadge status={r.status} fulfillmentType={r.fulfillmentType} />
                       {/* Returns RX-2: the Exchange chip from the order's own
                           column; the gate's words from the page's one batched
                           return_overview read (no read per row). */}

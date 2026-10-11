@@ -126,6 +126,33 @@ export const ORDER_STATUS_META: ResolvedOrderStatusMeta = {
   cancelled: { label: 'Cancelled', color: 'outline', sortOrder: 13 },
 };
 
+/**
+ * The word for a completed PICKUP order (returns RX-3 PR stage, polish (c),
+ * from the RX-2 Demo Co walk): 'completed' is one status for both fulfilments
+ * and its canonical word, "Delivered", reads wrong for an order handed over
+ * at the counter. "Handed over" is the word the order's returns and
+ * replacements already use for that moment.
+ */
+export const PICKUP_COMPLETED_STATUS_LABEL = 'Handed over';
+
+/**
+ * A status's words for one order, given its fulfilment: a completed pickup
+ * reads PICKUP_COMPLETED_STATUS_LABEL while `label` is still the canonical
+ * "Delivered"; an organization's own word for the status is kept as typed,
+ * and every other status keeps `label`. The web badge and the phone's pill
+ * and header share this rule.
+ */
+export function orderStatusLabelForFulfillment(
+  status: string,
+  label: string,
+  fulfillmentType: string | null | undefined,
+): string {
+  if (status === 'completed' && fulfillmentType === 'pickup' && label === ORDER_STATUS_META.completed.label) {
+    return PICKUP_COMPLETED_STATUS_LABEL;
+  }
+  return label;
+}
+
 /** Max label length the resolver accepts before falling back to the default. */
 export const ORDER_STATUS_LABEL_MAX = 60;
 

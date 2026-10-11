@@ -43,6 +43,8 @@ interface OrderRow {
   approved_at: string | null;
   delivered_at: string | null;
   created_at: string;
+  /** 'pickup' or 'delivery': a completed pickup's pill reads HANDED OVER (polish (c)). */
+  fulfillment_type: string | null;
   warehouse: { name: string | null } | null;
   lineCount: number;
   /** Returns RX-2: "Exchange" (and the gate's words) for a replacement order. */
@@ -104,7 +106,7 @@ export default function OrdersScreen() {
         // name that internal orders DON'T denormalize onto the row (else they
         // showed "Unknown requester"). RLS lets org members read each other.
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
-         approved_at, delivered_at, created_at, replacement_for_return_id,
+         approved_at, delivered_at, created_at, replacement_for_return_id, fulfillment_type,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          lines:order_request_lines (id)`,
@@ -170,6 +172,7 @@ export default function OrdersScreen() {
           approved_at: (r.approved_at as string | null) ?? null,
           delivered_at: (r.delivered_at as string | null) ?? null,
           created_at: r.created_at as string,
+          fulfillment_type: (r.fulfillment_type as string | null) ?? null,
           warehouse: whObj ?? null,
           lineCount: lines.length,
           exchangeChip: orderExchangeChip(
@@ -273,7 +276,7 @@ export default function OrdersScreen() {
 function OrderCard({ order }: { order: OrderRow }) {
   const { c } = useTheme();
   const router = useRouter();
-  const meta = orderStatusPill(order.status);
+  const meta = orderStatusPill(order.status, order.fulfillment_type);
   const requester = order.requester;
   const when = new Date(order.created_at);
   // Returns RX-2 simulator finding SIM-4: at the AX text sizes the status pill

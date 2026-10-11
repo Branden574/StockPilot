@@ -8,6 +8,7 @@ import {
   ORDER_STATUS_META,
   formatOrderNumber,
   isOrderStatusKey,
+  orderStatusLabelForFulfillment,
   type OrderStatusColor,
   type Permission,
   type Role,
@@ -37,19 +38,23 @@ const PILL_FOR_COLOR: Record<OrderStatusColor, PillStatus> = {
  * Every status's pill from core's status defaults (customization/
  * order-status.ts ORDER_STATUS_META), the web badge's words. Only four of the
  * thirteen statuses had a pill before; the rest showed their raw key (D6).
+ * With the order's fulfilment a completed pickup reads HANDED OVER, never
+ * DELIVERED (core orderStatusLabelForFulfillment, the web badge's rule;
+ * returns RX-3 PR stage, polish (c)).
  */
-export function orderStatusPill(status: string): { label: string; status: PillStatus } {
+export function orderStatusPill(status: string, fulfillmentType?: string | null): { label: string; status: PillStatus } {
   if (!isOrderStatusKey(status)) return { label: status.replace(/_/g, ' ').toUpperCase(), status: 'default' };
   const meta = ORDER_STATUS_META[status];
-  return { label: meta.label.toUpperCase(), status: PILL_FOR_COLOR[meta.color] };
+  return { label: orderStatusLabelForFulfillment(status, meta.label, fulfillmentType).toUpperCase(), status: PILL_FOR_COLOR[meta.color] };
 }
 
 /** The order screen's header line, "ORDER SO-000049 · PICKING": the status
  *  in the same words as the list's pill, never its raw key (L83a). The org's
- *  renamed statuses come in a later slice. */
-export function orderHeaderEyebrow(orderNumber: number | null, status: string): string {
+ *  renamed statuses come in a later slice. A completed pickup reads HANDED
+ *  OVER (polish (c)). */
+export function orderHeaderEyebrow(orderNumber: number | null, status: string, fulfillmentType?: string | null): string {
   const number = orderNumber ? formatOrderNumber(orderNumber) : null;
-  return `ORDER${number ? ` ${number}` : ''} · ${orderStatusPill(status).label}`;
+  return `ORDER${number ? ` ${number}` : ''} · ${orderStatusPill(status, fulfillmentType).label}`;
 }
 
 /** "+" and the empty state's "Place an order": the Orders module is on and

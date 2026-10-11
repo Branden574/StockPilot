@@ -1232,7 +1232,7 @@ export default async function OrderDetailPage({
                   </span>
                 ) : null}
               </h1>
-              <OrderStatusBadge status={request.status} />
+              <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
               <PageTour tour={ORDER_DETAIL_TOUR} />
               {request.source === 'public_link' && (
                 <Badge variant="outline">Public</Badge>

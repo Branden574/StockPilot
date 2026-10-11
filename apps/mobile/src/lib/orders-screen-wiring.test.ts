@@ -35,7 +35,9 @@ describe('the order screen header (L83a)', () => {
   const screen = codeOnly(readFileSync(path.join(ROOT, 'app/order/[id].tsx'), 'utf8'));
   // Mutation caught: the raw key printed again ("PICKING IN PROGRESS").
   it('names the status through the tested helper, never its raw key', () => {
-    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>');
+    // Re-pinned by returns RX-3 PR stage, polish (c) (was: without the
+    // fulfilment): a completed pickup's header says HANDED OVER.
+    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>');
     expect(screen).not.toContain("order.status.replace(/_/g, ' ')");
   });
 });

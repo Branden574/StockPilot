@@ -2535,7 +2535,7 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>
+            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>
