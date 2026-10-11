@@ -16,6 +16,7 @@ import {
   type ReturnAction,
   type ReturnActions,
 } from './return-actions';
+import { RETURNS_COPY } from './returns-copy';
 
 const STATUSES = Object.keys(RETURN_STATUS_LABELS) as ReturnStatus[];
 const NO_MANAGE = "You don't have permission to manage returns.";
@@ -23,6 +24,9 @@ const NO_ORDERS = 'Approving the replacement needs order approval permission.';
 // Fix round 1 (verification L3): once the exchange was approved nothing is
 // being approved; the words say what the viewer cannot do.
 const NO_ORDERS_AFTER = 'Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.';
+// RX-4 fix round 1 (desk check people L1): when Close the rest is the only
+// action order approval takes away, the words name it.
+const NO_ORDERS_CLOSE_REST = 'Closing the rest of the replacement needs order approval permission.';
 const NO_ORDERS_AFTER_CANCEL =
   'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.';
 
@@ -387,17 +391,21 @@ describe('Close the rest (RX-4)', () => {
     });
   });
 
-  it('needs order approval: without it the rest stays as it is and the screen says why', () => {
+  it('needs order approval: without it the rest stays as it is and the screen says why, naming Close the rest', () => {
+    // Re-pinned by fix round 1 (desk check people L1; was the generic list,
+    // which names five actions the viewer could not take here anyway and
+    // not the one they lack).
     expect(availableReturnActions({ ...base, status: 'received', viewerCanApproveOrders: false })).toEqual({
       primary: 'process',
       secondary: ['change_destination', 'open_replacement'],
-      readOnlyReason: NO_ORDERS_AFTER,
+      readOnlyReason: NO_ORDERS_CLOSE_REST,
     });
     expect(availableReturnActions({ ...base, status: 'closed', viewerCanApproveOrders: false })).toEqual({
       primary: 'open_replacement',
       secondary: [],
-      readOnlyReason: NO_ORDERS_AFTER,
+      readOnlyReason: NO_ORDERS_CLOSE_REST,
     });
+    expect(RETURNS_COPY.noOrdersApproveCloseRest).toBe(NO_ORDERS_CLOSE_REST);
   });
 
   it('only for a backorder that handed something over: one that handed nothing over is cancelled instead', () => {

@@ -302,6 +302,7 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
   const canOrders = input.viewerCanApproveOrders === true;
   let dropped = false;
   let droppedCancel = false;
+  let droppedOtherThanCloseRest = false;
   const allowed = (a: ReturnAction): boolean => {
     // The class rules (the database refuses the rest with its own words).
     if (cls !== undefined) {
@@ -315,6 +316,7 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
     if (needsOrders && !canOrders) {
       dropped = true;
       if (a === 'cancel') droppedCancel = true;
+      if (a !== 'close_replacement_rest') droppedOtherThanCloseRest = true;
       return false;
     }
     return true;
@@ -342,14 +344,17 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
   // with the exchange declined (the review offers only that). After the
   // approval nothing is approved any more: the words say what needs order
   // approval, and that cancelling the return does when it was dropped (fix
-  // round 1, verification L3).
+  // round 1, verification L3). RX-4 fix round 1 (desk check people L1): when
+  // Close the rest was the only action dropped, the words name it.
   const readOnlyReason =
     input.status === 'requested' && !canOrders
       ? RETURNS_COPY.noOrdersApproveDeclineOnly
       : dropped
         ? droppedCancel
           ? RETURNS_COPY.noOrdersApproveReplacementAndCancel
-          : RETURNS_COPY.noOrdersApproveReplacement
+          : droppedOtherThanCloseRest
+            ? RETURNS_COPY.noOrdersApproveReplacement
+            : RETURNS_COPY.noOrdersApproveCloseRest
         : null;
   return { primary, secondary, readOnlyReason };
 }

@@ -254,6 +254,11 @@ export const RETURNS_COPY = {
   noOrdersApproveReplacement: 'Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.',
   noOrdersApproveReplacementAndCancel:
     'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.',
+  // RX-4 fix round 1 (desk check people L1): Close the rest was the only
+  // action order approval took away (a replacement handed over in part on
+  // backorder), so the words name it rather than five actions the screen
+  // never offered there.
+  noOrdersApproveCloseRest: 'Closing the rest of the replacement needs order approval permission.',
   // RX-2 review fix P1: a requested exchange, for a viewer with Manage
   // returns but not order approval (the review offers only the decline).
   noOrdersApproveDeclineOnly:
