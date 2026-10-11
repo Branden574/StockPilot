@@ -504,6 +504,64 @@ describe('buildReturnWorkbench', () => {
     expect(wb.actions.primary).toBeNull();
   });
 
+  // Returns RX-3 PR stage, polish (b), from the RX-2 Demo Co walk: the
+  // counter RMA's history read "Destination for Walk Exchange Tee M: Return
+  // to original rack" with no rack, while an RMA still open named it. Once a
+  // line is processed the destination read has no sources for it, so the
+  // rack comes from the line's own legs, but only when the line's last plan
+  // was the original rack (an earlier plan replaced by another never takes
+  // the later destination's rack).
+  const R32 = '66666666-6666-4666-8666-666666666666';
+  const plan = (seq: number, target: string, at: string) => ({
+    seq,
+    kind: 'disposition_planned',
+    channel: 'staff',
+    revision: null,
+    return_line_id: lineId(1),
+    disposition: 'restock',
+    restock_target: target,
+    location_id: target === 'source' ? R32 : null,
+    basis: target === 'original' ? 'single_source' : null,
+    reason: null,
+    actor_user_id: null,
+    actor_kind: 'staff',
+    created_at: at,
+  });
+  const closedWith = (decisions: unknown[], legs: unknown[]) =>
+    ctxFor({
+      'returns.select': { data: [header([{ ...LINE, applied: true }], { status: 'closed' })], error: null },
+      'rpc:return_restock_options': { data: { ...OPTIONS, status: 'closed', lines: [{ ...OPTIONS.lines[0], applied: true, case: null, sources: [] }] }, error: null },
+      'return_decisions.select': { data: decisions, error: null },
+      'inventory_items.select': { data: [{ id: itemId(1), name: 'Shirt', sku: null, deleted_at: null, variant_size: 'M' }], error: null },
+      'stock_movements.select': { data: legs, error: null },
+      'locations.select': { data: [{ id: R31, name: '31-C' }, { id: R32, name: '32-A' }], error: null },
+    });
+
+  it('a processed line names its original rack in the history, from its own leg, as an open line does', async () => {
+    const { ctx } = closedWith(
+      [plan(7, 'original', '2026-10-02T00:00:00Z')],
+      [{ item_id: itemId(1), movement_type: 'return', quantity_change: 1, to_location_id: R31, created_at: '2026-10-03T00:00:00Z' }],
+    );
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.find((e) => e.kind === 'disposition_planned')!.label).toBe(
+      'Destination for Shirt, M: Return to original rack 31-C',
+    );
+  });
+
+  it('a processed line whose last plan was not the original rack never names the later rack on the earlier plan', async () => {
+    // Planned to the original rack, then to another proven rack (32-A), and
+    // processed there: the earlier plan must not read "original rack 32-A".
+    const { ctx } = closedWith(
+      [plan(7, 'original', '2026-10-02T00:00:00Z'), plan(8, 'source', '2026-10-02T01:00:00Z')],
+      [{ item_id: itemId(1), movement_type: 'return', quantity_change: 1, to_location_id: R32, created_at: '2026-10-03T00:00:00Z' }],
+    );
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.filter((e) => e.kind === 'disposition_planned').map((e) => e.label)).toEqual([
+      'Destination for Shirt, M: Return to original rack',
+      'Destination for Shirt, M: Return to 32-A',
+    ]);
+  });
+
   it('a missing (or foreign) RMA is not_found; a bad id never queries', async () => {
     const { ctx, stub } = ctxFor({ 'returns.select': { data: [], error: null } });
     await expect(buildReturnWorkbench(ctx as never, RET)).rejects.toMatchObject({ code: 'not_found' });
