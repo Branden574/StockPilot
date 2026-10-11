@@ -398,6 +398,9 @@ export type AuditEvent =
   | 'return.replacement_released'
   // ... and closed as a return only after a replacement cancel (desk check F9).
   | 'return.replacement_declined'
+  // ... and the rest of a replacement handed over in part closed from its RMA
+  // ("Close the rest", returns RX-4, 0397).
+  | 'return.replacement_closed'
   // ... and on the replacement order's own trail (its timeline): released
   // before the return, and the returned item received (the gate opened).
   | 'order_request.released_early'

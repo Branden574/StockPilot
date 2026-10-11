@@ -110,7 +110,9 @@ const OPTIONS_RPC = [
 
 function stubFor(overrides: Record<string, unknown> = {}) {
   return makeSupabaseStub({
-    'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+    // Returns RX-4 (0397, RX-3 security finding 1): the token is looked up by
+    // POST (order_id_for_return_token), never a PostgREST query string.
+    'rpc:order_id_for_return_token': { data: ORDER_ID, error: null },
     'order_requests.select': servedLikePostgrest([ORDER]),
     'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
     'order_request_lines.select': {
@@ -253,24 +255,29 @@ describe('exchange options (plan 3.6.10 through return_exchange_options)', () =>
 });
 
 describe('who may ask: the token, the portal principal, the member', () => {
-  it('the token resolves its one order through the side table and is never handed to the database function', async () => {
+  // Re-pinned by returns RX-4 (0397, RX-3 security finding 1; was: read with a
+  // PostgREST GET filtered on return_token): the token reaches only the lookup
+  // function, in a POST body, and never the options or create functions.
+  it('the token resolves its one order through the lookup function (a POST) and is never handed to the options function', async () => {
     const stub = stubFor();
     const answer = await exchangeOptionsForToken(stub.client, TOKEN);
     expect(answer?.lines).toHaveLength(1);
-    expect(stub.chainArgsAll.get('order_request_secrets.select')?.[0]).toContainEqual(['return_token', TOKEN]);
-    expect(JSON.stringify(stub.rpcCalls)).not.toContain(TOKEN);
+    expect(stub.rpcCalls[0]).toEqual({ name: 'order_id_for_return_token', args: { p_token: TOKEN } });
+    expect(stub.fromCalls).not.toContain('order_request_secrets');
+    expect(JSON.stringify(stub.rpcCalls.filter((c) => c.name !== 'order_id_for_return_token'))).not.toContain(TOKEN);
     // The order row's own token column is never asked.
     expect(JSON.stringify(stub.chainArgsAll.get('order_requests.select'))).not.toContain('return_token');
   });
 
   it.each([
-    ['an unknown token', { 'order_request_secrets.select': { data: [], error: null } }],
+    ['an unknown token', { 'rpc:order_id_for_return_token': { data: null, error: null } }],
     ['an order not handed over', { 'order_requests.select': servedLikePostgrest([{ ...ORDER, status: 'in_transit' }]) }],
     ['the returns module off', { 'organization_modules.select': { data: [], error: null } }],
   ])('%s is the closed door (null) and the predicate never runs', async (_label, overrides) => {
     const stub = stubFor(overrides);
     expect(await exchangeOptionsForToken(stub.client, TOKEN)).toBeNull();
-    expect(stub.rpcCalls).toEqual([]);
+    // Only the token lookup ran (RX-4): the predicate never did.
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['order_id_for_return_token']);
   });
 
   it('a malformed token never reaches the database', async () => {
@@ -492,7 +499,7 @@ describe('the sheet (token page, member, portal)', () => {
   it('the kill switch reaches the sheet; a closed door is null', async () => {
     vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
     expect((await loadRequesterReturnSheet(stubFor().client, TOKEN))?.exchangesEnabled).toBe(false);
-    expect(await loadRequesterReturnSheet(stubFor({ 'order_request_secrets.select': { data: [], error: null } }).client, TOKEN)).toBeNull();
+    expect(await loadRequesterReturnSheet(stubFor({ 'rpc:order_id_for_return_token': { data: null, error: null } }).client, TOKEN)).toBeNull();
   });
 
   it("a member's own order's sheet; another member's order is null", async () => {

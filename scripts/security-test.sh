@@ -1098,6 +1098,9 @@ WEB_TESTS=(
   # Returns RX-4: 0397 restates two 0396 bodies by adding lines only and
   # touches no policy; 0398 only revokes the old tabs' INSERT and UPDATE.
   src/server/services/returns-rx4-migrations.guard.test.ts
+  # Returns RX-4 (0398, the contract): no product code writes returns or
+  # return_lines through a client, or calls the frozen disposition wrapper.
+  src/server/services/returns-raw-writes.guard.test.ts
   src/server/services/returns-workbench.test.ts
   src/app/api/v1/returns/routes.test.ts
   'src/app/api/v1/orders/[id]/returns/route.test.ts'

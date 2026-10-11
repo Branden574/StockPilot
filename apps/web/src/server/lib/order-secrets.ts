@@ -45,6 +45,14 @@ interface SelectChain {
   maybeSingle(): PromiseLike<{ data: unknown; error: unknown }>;
 }
 
+/** The admin client's rpc(), for the one lookup that must POST (RX-4). */
+interface RpcClient {
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }>;
+}
+
+/** A canonical uuid: the shape of every return token (order_request_secrets.return_token is uuid). */
+const RETURN_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Hand-overs one signed-in member may record per hour through the sign
  * route's member path (R4: 60; the busiest organization recorded at most 3 in
@@ -370,22 +378,23 @@ export async function resolveTrackToken(admin: SecretsClient, orderId: string): 
 }
 
 /**
- * The order a requester return token opens, from the side table (every
- * return token lives there since 0392). Null when none matches or the read
- * failed.
+ * The order a requester return token opens (every return token lives in the
+ * service-only order_request_secrets since 0392). Returns RX-4 (0397; RX-3
+ * security review, finding 1): asked through the service-role function
+ * order_id_for_return_token with .rpc(), a POST, so the raw token travels in
+ * the request body and never in a PostgREST query string the API gateway
+ * logs. Null when none matches, the token is not a uuid (nothing is asked),
+ * or the call failed.
  */
 export async function orderIdForReturnToken(
   admin: SecretsClient,
   token: string,
 ): Promise<string | null> {
+  if (!RETURN_TOKEN_RE.test(token)) return null;
   try {
-    const side = await (admin.from('order_request_secrets') as SelectChain)
-      .select('order_request_id')
-      .eq('return_token', token)
-      .maybeSingle();
-    if (side.error || !side.data) return null;
-    const id = (side.data as { order_request_id?: unknown }).order_request_id;
-    return typeof id === 'string' ? id : null;
+    const { data, error } = await (admin as unknown as RpcClient).rpc('order_id_for_return_token', { p_token: token });
+    if (error || typeof data !== 'string') return null;
+    return data;
   } catch {
     return null;
   }

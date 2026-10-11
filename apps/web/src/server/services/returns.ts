@@ -510,6 +510,17 @@ export interface ReturnDeclineReplacementAnswer {
   declined: number;
 }
 
+/** RX-4: close_return_replacement_rest's answer ("Close the rest", 0397). */
+export interface ReturnCloseReplacementRestAnswer {
+  changed: boolean;
+  /** An earlier "Close the rest" already closed it: nothing was written. */
+  replay: boolean;
+  status: ReturnStatus;
+  /** The RMA's revision, unchanged by the close (a non-head decision). */
+  revision: number | null;
+  closedOrderId: string | null;
+}
+
 /** RX-2: release_return_replacement_early's answer. */
 export interface ReturnReleaseEarlyAnswer {
   changed: boolean;
@@ -1101,36 +1112,8 @@ export class RMAService {
           // 0396: the cancel closed a part-handed-over replacement as
           // delivered-partial (its rest is never sent). The order's own trail
           // is the order service's closePartial's for the same edge (RX-3 fix
-          // round 1, F7): order.closed_partial, order.completed { closedPartial }
-          // (accounting exports and webhooks otherwise show it open or
-          // backordered forever) and the order broadcast.
-          await audit(
-            {
-              event: 'order.closed_partial',
-              entityType: 'order_request',
-              entityId: liveBefore.id,
-              warehouseId: facts.warehouseId,
-              extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, via: 'return.cancelled' },
-            },
-            this.ctx,
-          );
-          void dispatchEvent(this.ctx.organizationId, 'order.completed', {
-            id: liveBefore.id,
-            orderNumber: formatOrderNumber(liveBefore.orderNumber) ?? liveBefore.id.slice(0, 8).toUpperCase(),
-            closedPartial: true,
-          });
-          void broadcastOrderChanged(this.ctx.organizationId, liveBefore.id);
-          // Its requester gets the completion email a close-partial sends from
-          // the order page ("Your replacement order was closed", the one-time
-          // return prompt): best-effort and marker-deduped, never failing the
-          // cancel.
-          try {
-            await maybeSendReturnPrompt(createAdminClient(), liveBefore.id, {
-              appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
-            });
-          } catch {
-            /* best-effort: the return is cancelled regardless */
-          }
+          // round 1, F7), shared with "Close the rest" (RX-4).
+          await this.recordClosedPartial(id, facts, liveBefore.id, liveBefore.orderNumber, 'return.cancelled');
         }
       }
       await audit(
@@ -1538,6 +1521,57 @@ export class RMAService {
   }
 
   /**
+   * "Close the rest" (returns RX-4, migration 0397; RX-2 verification V3): a
+   * replacement handed over in part whose rest is on backorder, under an RMA
+   * already received or closed, is closed as delivered-partial from the RMA
+   * (close_return_replacement_rest: the rest is never sent, what was handed
+   * over stays, every hold on the rest is released, nothing moves). Needs a
+   * reason, the revision the caller saw and, from a screen, the status it
+   * showed. The replacement gets the order service's close-partial trail
+   * (recordClosedPartial, shared with the RMA cancel's close); the RMA gets
+   * return.replacement_closed. A replay (an earlier close of the same rest)
+   * writes and sends nothing.
+   */
+  async closeReplacementRest(id: string, raw: unknown): Promise<ReturnCloseReplacementRestAnswer> {
+    this.gate();
+    const parsed = parseReturnBody('closeReplacementRest', raw);
+    if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'reason_required' });
+    const facts = await this.factsInActiveOrg(id);
+    const { data, error } = await this.ctx.supabase.rpc('close_return_replacement_rest', {
+      p_return_id: id,
+      p_expected_revision: parsed.value.expectedRevision,
+      p_reason: parsed.value.reason,
+      p_shown_status: parsed.value.shownStatus ?? null,
+    });
+    if (error) throw returnRpcError(error);
+    const answer = asObject(data);
+    const result: ReturnCloseReplacementRestAnswer = {
+      changed: answer.changed === true,
+      replay: answer.replay === true,
+      status: (str(answer.status) ?? 'received') as ReturnStatus,
+      revision: num(answer.revision),
+      closedOrderId: str(answer.closedOrderId),
+    };
+    if (result.changed && result.closedOrderId) {
+      await this.recordClosedPartial(id, facts, result.closedOrderId, num(answer.orderNumber), 'return.replacement_closed');
+      // The rest's holds were released (what the lists show as reserved).
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.replacement_close_rest');
+      await audit(
+        {
+          event: 'return.replacement_closed',
+          entityType: 'return',
+          entityId: id,
+          warehouseId: facts.warehouseId,
+          reason: parsed.value.reason,
+          extra: { closedOrderId: result.closedOrderId },
+        },
+        this.ctx,
+      );
+    }
+    return result;
+  }
+
+  /**
    * Release the live replacement for picking before the returned item
    * arrives (brief 24), with a reason (1 to 500 characters). Opens the gate
    * for that order only; idempotent; a received RMA answers not needed.
@@ -1735,6 +1769,49 @@ export class RMAService {
   }
 
   /** A replacement cancelled by its RMA: the order's own trail and event. */
+  /**
+   * A replacement an RMA function closed as delivered-partial (its rest never
+   * sent): the order's own trail, exactly what OrderRequestsService.closePartial
+   * writes for the same database edge (RX-3 fix round 1, desk check F7):
+   * order.closed_partial on the replacement, order.completed { closedPartial }
+   * (accounting exports and webhooks otherwise show it open or backordered
+   * forever), the order broadcast, and the completion email a close-partial
+   * sends from the order page ("Your replacement order was closed", the
+   * one-time return prompt: best-effort and marker-deduped, never failing the
+   * call). Used by the RMA cancel's close and by "Close the rest" (RX-4).
+   */
+  private async recordClosedPartial(
+    id: string,
+    facts: ReturnFacts,
+    orderId: string,
+    orderNumber: number | null,
+    via: 'return.cancelled' | 'return.replacement_closed',
+  ): Promise<void> {
+    await audit(
+      {
+        event: 'order.closed_partial',
+        entityType: 'order_request',
+        entityId: orderId,
+        warehouseId: facts.warehouseId,
+        extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, via },
+      },
+      this.ctx,
+    );
+    void dispatchEvent(this.ctx.organizationId, 'order.completed', {
+      id: orderId,
+      orderNumber: formatOrderNumber(orderNumber) ?? orderId.slice(0, 8).toUpperCase(),
+      closedPartial: true,
+    });
+    void broadcastOrderChanged(this.ctx.organizationId, orderId);
+    try {
+      await maybeSendReturnPrompt(createAdminClient(), orderId, {
+        appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+      });
+    } catch {
+      /* best-effort: the close stands regardless */
+    }
+  }
+
   private async recordReplacementCancelled(
     id: string,
     facts: ReturnFacts,

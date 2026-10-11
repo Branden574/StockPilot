@@ -469,6 +469,40 @@ describe('buildReturnWorkbench', () => {
     expect(events.map((e) => e.label).join(' | ')).not.toMatch(/reserved/);
   });
 
+  // RX-4 (0397): "Close the rest" appends replacement_closed (its reason and
+  // the order; no revision). The history names the order and the reason.
+  it('the history names a closed rest: its order and its reason', () => {
+    const events = buildReturnChainEvents({
+      orderNumber: 3,
+      completedAt: null,
+      picks: [],
+      decisions: [
+        {
+          seq: 7,
+          kind: 'replacement_closed',
+          channel: 'staff',
+          revision: null,
+          disposition: null,
+          restockTarget: null,
+          locationName: null,
+          reason: 'Customer no longer needs the rest',
+          actorName: 'Dana',
+          actorKind: 'staff',
+          createdAt: '2026-10-11T00:00:00Z',
+          orderRequestId: 'o-19',
+        },
+      ],
+      movements: [],
+      itemNames: new Map(),
+      exchangeNames: { items: new Map(), orders: new Map([['o-19', 19]]) },
+    });
+    const closed = events.find((e) => e.kind === 'replacement_closed');
+    expect(closed).toMatchObject({
+      label: 'Rest of replacement SO-000019 closed: Customer no longer needs the rest',
+      actorName: 'Dana',
+    });
+  });
+
   it('a destination read that fails leaves the destinations out and is reported (actions are refused in the database anyway)', async () => {
     const { ctx } = ctxFor({
       'returns.select': { data: [header([LINE])], error: null },

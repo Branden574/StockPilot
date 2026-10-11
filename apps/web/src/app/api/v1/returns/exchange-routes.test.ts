@@ -10,6 +10,7 @@ import { RMAService } from '@/server/services/returns';
 import { GET as orderCandidatesGET } from '../orders/[id]/exchange-candidates/route';
 import { GET as candidatesGET } from './[id]/candidates/route';
 import { POST as cancelReplacementPOST } from './[id]/replacement/cancel/route';
+import { POST as closeRestPOST } from './[id]/replacement/close-rest/route';
 import { POST as declinePOST } from './[id]/replacement/decline/route';
 import { GET as exchangeSwitchGET } from './exchange-switch/route';
 import { POST as preparePOST } from './[id]/replacement/prepare/route';
@@ -200,6 +201,66 @@ describe('POST /replacement/cancel, /release, /prepare', () => {
     );
     expect(noReason.status).toBe(400);
     expect(declineReplacement).toHaveBeenCalledTimes(1);
+  });
+
+  // RX-4 (0397, verification V3): "Close the rest" of a part-handed-over
+  // replacement on backorder, from the RMA.
+  it('close-rest takes the revision, a reason and the shown status; either of the first two missing is refused before the service', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const closeReplacementRest = vi.fn(async () => ({ changed: true, replay: false, status: 'received', revision: 1, closedOrderId: ORDER }));
+    service({ closeReplacementRest, workbench });
+    const ok = await closeRestPOST(
+      req(`/api/v1/returns/${RET}/replacement/close-rest`, {
+        method: 'POST',
+        bearer: true,
+        json: { expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered', extra: 'dropped' },
+      }),
+      params(),
+    );
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('cache-control')).toBe('private, no-store');
+    const body = await ok.json();
+    expect(body).toEqual({
+      organizationId: 'org-1',
+      answer: { changed: true, replay: false, status: 'received', revision: 1, closedOrderId: ORDER },
+      workbench: { marker: 'workbench' },
+    });
+    expect(closeReplacementRest).toHaveBeenCalledWith(RET, { expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered' });
+    for (const json of [{ reason: 'Rest no longer needed' }, { expectedRevision: 1, reason: '  ' }]) {
+      vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+      const bad = await closeRestPOST(req(`/api/v1/returns/${RET}/replacement/close-rest`, { method: 'POST', json }), params());
+      expect(bad.status).toBe(400);
+    }
+    expect(closeReplacementRest).toHaveBeenCalledTimes(1);
+  });
+
+  it('close-rest: nothing on backorder is a 409 with its reason; 401 without a context; 400 for a bad id before auth', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    const closeReplacementRest = vi.fn(async () => {
+      throw new ServiceError('conflict', 'There is nothing on backorder to close.', { reason: 'replacement_not_backordered' });
+    });
+    service({ closeReplacementRest, workbench });
+    const refused = await closeRestPOST(
+      req(`/api/v1/returns/${RET}/replacement/close-rest`, { method: 'POST', json: { expectedRevision: 1, reason: 'x' } }),
+      params(),
+    );
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: 'conflict',
+      message: 'There is nothing on backorder to close.',
+      details: { reason: 'replacement_not_backordered' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+    const anon = await closeRestPOST(
+      req(`/api/v1/returns/${RET}/replacement/close-rest`, { method: 'POST', json: { expectedRevision: 1, reason: 'x' } }),
+      params(),
+    );
+    expect(anon.status).toBe(401);
+    const badId = await closeRestPOST(
+      req('/api/v1/returns/not-a-uuid/replacement/close-rest', { method: 'POST', json: { expectedRevision: 1, reason: 'x' } }),
+      params('not-a-uuid'),
+    );
+    expect(badId.status).toBe(400);
   });
 
   it('prepare takes an empty body and answers the steps; an unknown field is refused', async () => {
