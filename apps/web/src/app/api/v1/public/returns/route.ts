@@ -77,16 +77,25 @@ const CLOSED_DOOR = {
   message: 'This return link is invalid or has expired.',
 };
 
+/**
+ * Every answer of this public route is no-store (RX-3 fix round 1, security
+ * review low): the 200 had it alone. Headers given (the 429's retry-after)
+ * are kept beside it.
+ */
+function answer(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}): NextResponse {
+  return NextResponse.json(body, { status: init.status, headers: { ...init.headers, 'Cache-Control': 'no-store' } });
+}
+
 export async function POST(req: NextRequest) {
   let raw: unknown;
   try {
     raw = await req.json();
   } catch {
-    return NextResponse.json({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
+    return answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
   }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
-    return NextResponse.json(
+    return answer(
       { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
       { status: 400 },
     );
@@ -94,12 +103,12 @@ export async function POST(req: NextRequest) {
   const body: Body = parsed.data;
 
   if (typeof body.hp === 'string' && body.hp.trim().length > 0) {
-    return NextResponse.json({ id: 'ok' });
+    return answer({ id: 'ok' });
   }
 
   const totalQty = body.lines.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
   if (totalQty > MAX_TOTAL_QTY) {
-    return NextResponse.json(
+    return answer(
       { error: 'too_many_units', message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.` },
       { status: 400 },
     );
@@ -120,7 +129,7 @@ export async function POST(req: NextRequest) {
       level: 'warning',
       extra: { bucket: trippedBucket, count: denied.count, retryAfterSeconds: retryAfter },
     });
-    return NextResponse.json(
+    return answer(
       {
         error: 'rate_limited',
         message: "You've hit the request limit. Please wait an hour and try again, or contact the warehouse directly.",
@@ -133,7 +142,7 @@ export async function POST(req: NextRequest) {
   try {
     admin = createAdminClient();
   } catch {
-    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+    return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 
   try {
@@ -151,26 +160,23 @@ export async function POST(req: NextRequest) {
       },
       { idempotencyKey: body.idempotencyKey ?? null },
     );
-    return NextResponse.json(
-      { id: result.id, returnNumber: result.returnNumber, replay: result.replay },
-      { headers: { 'Cache-Control': 'no-store' } },
-    );
+    return answer({ id: result.id, returnNumber: result.returnNumber, replay: result.replay });
   } catch (e) {
     if (e instanceof ServiceError) {
       if (e.code === 'not_found' || e.code === 'module_disabled' || e.code === 'forbidden') {
-        return NextResponse.json(CLOSED_DOOR, { status: 404 });
+        return answer(CLOSED_DOOR, { status: 404 });
       }
       if (e.code === 'internal_error') {
         await reportError(e, { tag: 'public.returns.create' });
-        return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+        return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
       }
       const reason = typeof e.details?.reason === 'string' ? e.details.reason : undefined;
-      return NextResponse.json(
+      return answer(
         { error: e.code, message: e.message, ...(reason ? { details: { reason } } : {}) },
         { status: serviceErrorStatus(e.code) },
       );
     }
     await reportError(e, { tag: 'public.returns.create.unknown' });
-    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+    return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 }

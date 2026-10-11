@@ -54,6 +54,18 @@ beforeEach(() => {
 });
 
 describe('GET /api/v1/returns', () => {
+  // RX-3 fix round 1 (security review low): an account whose status cannot
+  // be read makes withApiContext throw; the route answers its own 500 shape,
+  // no-store, instead of a framework 500.
+  it("the context throws: the route's own 500, no-store, never touching the service", async () => {
+    vi.mocked(withApiContext).mockRejectedValueOnce(new Error('account status unreadable'));
+    const res = await listGET(req('/api/v1/returns'));
+    expect(res.status).toBe(500);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({ error: 'internal_error', message: 'Something went wrong. Try again.', details: { reason: 'failed' } });
+    expect(RMAService.forApiContext).not.toHaveBeenCalled();
+  });
+
   it('401 without a context, never touching the service', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(null);
     const res = await listGET(req('/api/v1/returns'));

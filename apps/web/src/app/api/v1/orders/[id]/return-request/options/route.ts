@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
  * (no item, group, warehouse or quantity input, so no oracle), the order id
  * in the path is the caller's own order or the one 404.
  *
- * POST -> 200 { organizationId, orderId, exchangesEnabled,
+ * POST -> 200 { orderId, exchangesEnabled,
  *               lines: [{ orderRequestLineId, options: [{ itemId, name,
  *               sizeLabel, availability, photo }] }] }
  */
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       orderRequestId: orderId,
     });
     if (!answer) return orderNotAvailable();
-    return NextResponse.json({ organizationId: ctx.organizationId, orderId, ...answer }, { headers: NO_STORE });
+    return NextResponse.json({ orderId, ...answer }, { headers: NO_STORE });
   } catch (e) {
     return returnsErrorResponse(e, 'api.v1.orders.return_request.options', ctx);
   }

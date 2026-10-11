@@ -6,7 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { isModuleEnabled, type ServiceContext } from '@/server/services/context';
 
-import { NO_STORE, RATE_LIMITED_MESSAGE } from '../../../returns/http';
+import { contextFailedResponse, NO_STORE, RATE_LIMITED_MESSAGE } from '../../../returns/http';
 
 /**
  * The member requester routes' shared gate (returns RX-3): a member asking
@@ -46,7 +46,14 @@ export async function memberRequesterGate(
   params: Promise<{ id: string }>,
   kind: 'read' | 'write',
 ): Promise<{ ctx: ServiceContext; orderId: string } | { response: NextResponse }> {
-  const ctx = await withApiContext(req);
+  // An account whose status cannot be read makes withApiContext throw (it
+  // fails closed): the route's own 500 shape, no-store (RX-3 fix round 1).
+  let ctx: ServiceContext | null;
+  try {
+    ctx = await withApiContext(req);
+  } catch (e) {
+    return { response: contextFailedResponse(e, 'returns.member.context') };
+  }
   if (!ctx) {
     return {
       response: NextResponse.json(

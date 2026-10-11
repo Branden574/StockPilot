@@ -22,7 +22,8 @@ export const dynamic = 'force-dynamic';
  * (requester_user_id = the caller, in their organization, not a portal
  * order, returnable): anything else is the one 404.
  *
- * GET  -> 200 { organizationId, orderId, ...RequesterReturnSheet }
+ * GET  -> 200 { orderId, ...RequesterReturnSheet } (no organizationId: core's
+ *   forbiddenRequesterKeys refuses it on any requester payload; RX-3 fix round 1)
  *         { orderNumber, requesterName, exchangesEnabled,
  *           lines: [{ orderRequestLineId, name, sizeLabel, photo,
  *                     quantityFulfilled, quantityRemaining }],
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       orderRequestId: orderId,
     });
     if (!sheet) return orderNotAvailable();
-    return NextResponse.json({ organizationId: ctx.organizationId, orderId, ...sheet }, { headers: NO_STORE });
+    return NextResponse.json({ orderId, ...sheet }, { headers: NO_STORE });
   } catch (e) {
     return returnsErrorResponse(e, 'api.v1.orders.return_request.get', ctx);
   }

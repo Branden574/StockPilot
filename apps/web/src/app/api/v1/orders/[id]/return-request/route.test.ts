@@ -73,16 +73,31 @@ beforeEach(() => {
 });
 
 describe('GET /api/v1/orders/[id]/return-request (the sheet)', () => {
-  it('answers the sheet of the caller own order, no-store, the organization and order echoed', async () => {
+  // Re-pinned on purpose (RX-3 fix round 1, security review low): the answer
+  // carried organizationId, a key core's forbiddenRequesterKeys refuses on a
+  // requester payload; the phone never read it. The WHOLE answer now passes.
+  it('answers the sheet of the caller own order, no-store, the order echoed, nothing a requester may not see', async () => {
     const res = await GET(req('GET'), params());
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     const body = await res.json();
-    expect(body).toEqual({ organizationId: 'org-1', orderId: ORDER, ...SHEET });
+    expect(body).toEqual({ orderId: ORDER, ...SHEET });
     // The scope comes from the server context alone.
     expect(loadMemberReturnSheet).toHaveBeenCalledWith({ admin: true }, { organizationId: 'org-1', userId: 'member-1', orderRequestId: ORDER });
-    const { organizationId: _org, orderId: _order, ...sheet } = body;
-    expect(forbiddenRequesterKeys(sheet)).toEqual([]);
+    expect(forbiddenRequesterKeys(body)).toEqual([]);
+  });
+
+  // RX-3 fix round 1 (security review low): withApiContext throws when the
+  // account's status cannot be read (it fails closed). That escaped as a
+  // framework 500 with neither the route's error shape nor no-store.
+  it("an account whose status can't be read: the route's own 500, no-store, and nothing read", async () => {
+    withApiContext.mockRejectedValueOnce(new Error('account status unreadable'));
+    const res = await GET(req('GET'), params());
+    expect(res.status).toBe(500);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({ error: 'internal_error', message: 'Something went wrong. Try again.', details: { reason: 'failed' } });
+    expect(loadMemberReturnSheet).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
   it('signed out, or a disabled account (withApiContext answers null): 401 before anything', async () => {
@@ -221,7 +236,9 @@ describe('POST /api/v1/orders/[id]/return-request/options (the sizes)', () => {
     const res = await POST_OPTIONS(req('POST', { itemId: ITEM, groupId: 'g', warehouseId: 'w', quantity: 9 }), params());
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
-    expect(await res.json()).toEqual({ organizationId: 'org-1', orderId: ORDER, exchangesEnabled: true, lines: [] });
+    const answer = await res.json();
+    expect(answer).toEqual({ orderId: ORDER, exchangesEnabled: true, lines: [] });
+    expect(forbiddenRequesterKeys(answer)).toEqual([]);
     expect(exchangeOptionsForMember).toHaveBeenCalledWith({ admin: true }, { organizationId: 'org-1', userId: 'member-1', orderRequestId: ORDER });
   });
 

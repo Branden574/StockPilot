@@ -198,3 +198,44 @@ describe('POST /api/v1/public/returns', () => {
     expect(await res.json()).toMatchObject({ details: { reason: 'exchange_not_available' } });
   });
 });
+
+// RX-3 fix round 1 (security review low; handoff L8): only the 200 carried
+// Cache-Control: no-store. Every answer of this public route now does,
+// the 429 with its retry-after too, as the options route does.
+describe('POST /api/v1/public/returns: no-store on every answer', () => {
+  const noStore = (res: Response) => expect(res.headers.get('cache-control')).toBe('no-store');
+
+  it('the bad JSON, the malformed body and the unit cap', async () => {
+    const badJson = new Request('https://test.local/api/v1/public/returns', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{not json',
+    }) as unknown as Parameters<typeof POST>[0];
+    noStore(await POST(badJson));
+    noStore(await POST(req({ token: 'nope' })));
+    noStore(await POST(req({ ...good, lines: [{ orderRequestLineId: LINE, quantity: 6000 }, { orderRequestLineId: KEY, quantity: 6000 }] })));
+  });
+
+  it('the honeypot', async () => {
+    noStore(await POST(req({ ...good, hp: 'x' })));
+  });
+
+  it('the 429 keeps its retry-after', async () => {
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 11, resetAt: Date.now() + 60_000 });
+    const res = await POST(req(good));
+    expect(res.status).toBe(429);
+    noStore(res);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('the one 404, a refusal with its reason, and the generic 500s', async () => {
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('not_found', 'x'));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('validation_error', 'Too many.', { reason: 'return_exceeds_fulfilled' }));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('internal_error', 'boom'));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new Error('unknown'));
+    noStore(await POST(req(good)));
+  });
+});

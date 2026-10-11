@@ -23,11 +23,29 @@ const WRITE_LIMIT = 60;
 
 export const RATE_LIMITED_MESSAGE = 'Too many requests. Wait a moment and try again.';
 
+/**
+ * withApiContext threw: an account whose status could not be read (it fails
+ * closed, never as a signed-in member). The route's own 500 shape, no-store,
+ * reported (RX-3 fix round 1, security review low); never a framework 500.
+ */
+export function contextFailedResponse(e: unknown, tag: string): NextResponse {
+  void reportError(e, { tag });
+  return NextResponse.json(
+    { error: 'internal_error', message: 'Something went wrong. Try again.', details: { reason: 'failed' } },
+    { status: 500, headers: NO_STORE },
+  );
+}
+
 export async function returnsContext(
   req: NextRequest,
   kind: 'read' | 'write',
 ): Promise<{ ctx: ServiceContext } | { response: NextResponse }> {
-  const ctx = await withApiContext(req);
+  let ctx: ServiceContext | null;
+  try {
+    ctx = await withApiContext(req);
+  } catch (e) {
+    return { response: contextFailedResponse(e, 'returns.context') };
+  }
   if (!ctx) {
     return {
       response: NextResponse.json(
