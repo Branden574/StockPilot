@@ -105,8 +105,8 @@ import {
   requesterButtonShown,
   requesterEntryWords,
   requesterLoadedSheet,
+  requesterOrderReturns,
   requesterReturnGate,
-  requesterReturnsView,
   requesterSentMessage,
   requesterSentTitle,
 } from '@/lib/requester-returns';
@@ -711,12 +711,17 @@ export default function OrderDetail() {
     load: requester.load,
     phoneReturnable: orderReturnable.length,
   });
-  // The requester (who cannot open the RMA) reads each of their own requests
-  // once, in the server's sentences; returns staff made keep the order's card.
-  const returnsShown = requesterReturnsView({
+  // The requester reads their own requests in the server's sentences (with
+  // returns:read too, as on the web); one who cannot open the RMA reads each
+  // once, in place of the order's card; returns staff made keep the order's
+  // card (core requesterReturnsView, RX-3 fix round 1, H1 and M2).
+  const returnsShown = requesterOrderReturns({
     returns: order?.returns ?? [],
     tracking: requesterSheet?.tracking ?? null,
-    requesterView: requesterGate && !canReadReturns,
+    requesterGate,
+    // A derived boolean: handing the variable itself to a function makes the
+    // React compiler treat it, and load() that reads it, as possibly changed.
+    canReadReturns: canReadReturns === true,
   });
   const requesterScope = React.useMemo(() => (userId && orgId ? { userId, orgId } : null), [userId, orgId]);
 

@@ -41,14 +41,14 @@
  */
 
 import {
-  exchangeLineStatusLabel,
-  itemQuantityLabel,
   parseExchangeStatus,
   parseReturnBody,
   qtyRequestedLabel,
   randomRequestUuid,
   REQUESTER_AVAILABILITY_WORDS,
   requesterEntryLabel,
+  requesterReturnsView,
+  requesterTrackingLineWords,
   RETURN_EXCHANGE_NOTE_MAX,
   RETURN_NOTES_MAX,
   RETURN_REASON_CODES,
@@ -331,26 +331,29 @@ export function requesterButtonShown(input: {
 }
 
 /**
- * The order screen's returns, as the requester reads them. With the server's
- * tracking in hand, each of the requester's own requests shows once, as the
- * requester's card (the token page's words: no disposition, rack, note,
- * reason or staff name), and only the returns staff made on their order keep
- * the order's own card (the server does not track those for the requester,
- * D15). Matched by RMA number, the one key both reads carry. Without the
- * tracking (a staff viewer, or the read failed) every return keeps the
- * order's own card, as before.
+ * The order screen's returns, as the requester reads them: core's one rule
+ * with the web order page (requesterReturnsView; RX-3 fix round 1, desk
+ * checks H1 and M2). The tracking ("Your requests on this order") shows for
+ * the requester gate (their own handed-over order, Returns on, not a returns
+ * manager), with returns:read too; the order's own card for an RMA the
+ * tracking lists is dropped only for a viewer who cannot read returns (it
+ * names the reason, the disposition and the staff notes, and would list the
+ * same request twice). Returns staff made on their order keep the order's
+ * card (the server does not track those for the requester, D15). Without
+ * the tracking (the read failed) every return keeps the order's card.
  */
-export function requesterReturnsView(input: {
+export function requesterOrderReturns(input: {
   returns: readonly OrderReturnView[];
   tracking: readonly RequesterTrackingReturn[] | null;
-  requesterView: boolean;
+  requesterGate: boolean;
+  canReadReturns: boolean;
 }): { orderReturns: OrderReturnView[]; tracking: RequesterTrackingReturn[] } {
-  if (!input.requesterView || !input.tracking) return { orderReturns: [...input.returns], tracking: [] };
-  const tracked = new Set(input.tracking.map((t) => t.returnNumber).filter(present));
-  return {
-    orderReturns: input.returns.filter((r) => !r.returnNumber || !tracked.has(r.returnNumber)),
-    tracking: [...input.tracking],
-  };
+  return requesterReturnsView({
+    returns: input.returns,
+    tracking: input.tracking,
+    showTracking: input.requesterGate,
+    viewerCanReadReturns: input.canReadReturns,
+  });
 }
 
 // ── The draft (memory only) ─────────────────────────────────────────────────
@@ -755,7 +758,7 @@ export interface RequesterTrackingLineView {
   key: string;
   /** "Walk Exchange Tee, M ×1". */
   returning: string;
-  /** "Walk Exchange Tee, L ×1", "Warehouse will review", or null for a return only. */
+  /** "Walk Exchange Tee, L ×1", "Warehouse will review", "A different replacement", or null for a return only. */
   replacement: string | null;
   /** "Requested", "Approved", "Declined" or "Cancelled" (core's words for the line). */
   state: string | null;
@@ -776,10 +779,6 @@ export interface RequesterTrackingCardView {
   replacementOrder: string | null;
   /** The card's one VoiceOver label. */
   accessibilityLabel: string;
-}
-
-function itemWords(item: RequesterTrackingItem): string {
-  return itemQuantityLabel(returnLineLabel(item.name, item.sizeLabel), item.quantity);
 }
 
 /** "Oct 11, 2026" in the device's zone (or the zone given), the date passed through when unreadable. */
@@ -804,22 +803,20 @@ export function requesterRequestDate(iso: string, opts: { timeZone?: string } = 
 export function requesterTrackingCard(t: RequesterTrackingReturn, opts: { timeZone?: string } = {}): RequesterTrackingCardView {
   const title = t.returnNumber ?? RETURNS_COPY.requesterRequestTitle;
   const date = requesterRequestDate(t.createdAt, opts);
-  const lines: RequesterTrackingLineView[] = t.lines.map((l, i) => ({
-    key: `${i}`,
-    returning: itemWords(l.returning),
-    replacement: l.exchange ? (l.exchange.replacement ? itemWords(l.exchange.replacement) : RETURNS_COPY.replacementWarehouseReview) : null,
-    state: l.exchange ? exchangeLineStatusLabel(l.exchange.state) : null,
-    changed: l.exchange?.substituted ? RETURNS_COPY.replacementChangedByWarehouse : null,
-  }));
+  // Core's line words, the web's too (RX-3 fix round 1, M3 and L4): a
+  // note-only request reads "A different replacement" once declined or
+  // cancelled, never "Warehouse will review".
+  const lines: RequesterTrackingLineView[] = t.lines.map((l, i) => ({ key: `${i}`, ...requesterTrackingLineWords(l) }));
   const replacementOrder = t.replacementOrderNumber ? `${RETURNS_COPY.replacementOrderHeading}: ${t.replacementOrderNumber}` : null;
-  const spoken: string[] = [`${title}, ${date}.`];
+  // VoiceOver reads in the screen's order (desk check L2): the title and
+  // date, the sentences, the lines, then the replacement order.
+  const spoken: string[] = [`${title}, ${date}.`, ...t.sentences];
   for (const l of lines) {
     spoken.push(`Returning: ${l.returning}.`);
     if (l.replacement) {
       spoken.push(`Replacement: ${[l.replacement, l.state, l.changed].filter(present).join(', ')}.`);
     }
   }
-  spoken.push(...t.sentences);
   if (replacementOrder) spoken.push(`${replacementOrder}.`);
   return {
     key: t.returnNumber ?? `${t.createdAt}-${t.lines.length}`,

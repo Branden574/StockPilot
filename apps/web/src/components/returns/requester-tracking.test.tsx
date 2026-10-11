@@ -101,6 +101,36 @@ describe('RequesterTracking', () => {
     expect(screen.getByText(RETURNS_COPY.replacementDeclined)).toBeInTheDocument();
   });
 
+  // RX-3 fix round 1 (desk checks M3 and L4): core's line words, the phone's
+  // too. A note-only request the warehouse declined read "Warehouse will
+  // review" beside "Declined"; and every line state is named, as on the phone.
+  it('a declined or cancelled note-only request reads "A different replacement", never "Warehouse will review"', () => {
+    for (const state of ['declined', 'cancelled'] as const) {
+      const { container, unmount } = render(
+        <RequesterTracking
+          requests={[
+            {
+              ...REVIEW,
+              returnStatus: 'approved',
+              exchangeStatus: state === 'declined' ? 'declined' : 'cancelled',
+              sentences: requesterTrackingSentences({ returnStatus: 'approved', exchangeStatus: state === 'declined' ? 'declined' : 'cancelled' }),
+              lines: [{ returning: { name: 'Composition Notebook', sizeLabel: null, quantity: 2 }, exchange: { state, replacement: null, substituted: false } }],
+            },
+          ]}
+        />,
+      );
+      expect(within(container).getByText('A different replacement')).toBeInTheDocument();
+      expect(container.textContent, state).not.toContain(RETURNS_COPY.replacementWarehouseReview);
+      unmount();
+    }
+  });
+
+  it('names every line state, as the phone does: Requested and Approved too', () => {
+    render(<RequesterTracking requests={[REVIEW, SUBSTITUTED]} />);
+    expect(screen.getByText(RETURNS_COPY.replacementRequested)).toBeInTheDocument();
+    expect(screen.getByText(RETURNS_COPY.replacementApproved)).toBeInTheDocument();
+  });
+
   it('keeps the newest first, as the server sent them, under a level-3 heading when asked', () => {
     render(<RequesterTracking requests={[DECLINED, REVIEW, SUBSTITUTED]} headingLevel={3} density="compact" />);
     expect(screen.getByRole('heading', { level: 3, name: RETURNS_COPY.requesterYourRequests })).toBeInTheDocument();

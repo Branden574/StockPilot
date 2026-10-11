@@ -104,6 +104,8 @@ export const RETURNS_COPY = {
   replacementDeclined: 'Declined',
   replacementCancelled: 'Cancelled',
   replacementWarehouseReview: 'Warehouse will review',
+  /** RX-3 fix round 1 (M3): a replacement asked for with a note, once declined or cancelled. */
+  replacementAskedByNote: 'A different replacement',
   replacementNoteFromRequester: 'Note from the requester',
   replacementChangedByWarehouse: 'Changed by the warehouse',
   approveAsRequested: 'Approve as requested',
@@ -294,6 +296,8 @@ export const RETURNS_COPY = {
   requesterTrackClosed: 'Return complete.',
   requesterTrackDenied: 'Return request declined.',
   requesterTrackCancelled: 'Return request cancelled.',
+  /** RX-3 fix round 1 (L7): the exchange declined, said after the return's own sentence. */
+  requesterExchangeDeclinedShort: 'Exchange declined.',
   // RX-3: the requester sheet (token page, portal, member).
   requesterReturnOrExchange: 'Return or exchange',
   requesterYourRequests: 'Your requests on this order',

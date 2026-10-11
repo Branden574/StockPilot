@@ -78,6 +78,7 @@ import {
   readinessStockFlags,
   reconcileReadiness,
   requesterEntryLabel,
+  requesterReturnsView,
   resolveOrgTimezone,
   returnedFragment,
   returnHandle,
@@ -1130,6 +1131,21 @@ export default async function OrderDetailPage({
       : Promise.resolve<RequesterTrackingReturn[]>([]),
   ]);
   const requesterReturnPath = requesterReturnToken ? `/returns/request/${requesterReturnToken}` : null;
+  // RX-3 fix round 1 (desk checks H1, M1, M2): the staff "Returns (N)" panel
+  // below renders for every member (RLS), so a requester's own request showed
+  // twice, the second time in staff words (the reason, the disposition, the
+  // staff notes). One rule with the phone (core requesterReturnsView): the
+  // tracking for the requester gate; the order's card for a tracked RMA only
+  // for a viewer who can read returns (theirs opens the RMA). The per-line
+  // returned figures still name every RMA (numbers only).
+  const returnsShown = requesterReturnsView({
+    returns: orderReturns,
+    tracking: requesterTracking,
+    showTracking: requesterTrackingEligible,
+    viewerCanReadReturns: returnsLinkable,
+  });
+  const returnsAnchor =
+    returnsShown.orderReturns.length > 0 ? '#order-returns' : returnsShown.tracking.length > 0 ? '#your-requests' : null;
 
   // Item-level summary for the add-items picker: it labels a pick that would
   // TOP UP an existing line instead of creating one. Summed PER ITEM because an
@@ -1436,10 +1452,10 @@ export default async function OrderDetailPage({
                     aria-label={`${formatOrderReturnSummary(returnSummary)}. ${ORDER_RETURN_SUMMARY_NOTE}`}
                   >
                     {formatOrderReturnSummary(returnSummary)}
-                    {orderReturns.length > 0 && (
+                    {returnsAnchor && (
                       <>
                         {' · '}
-                        <a href="#order-returns" className="underline-offset-2 hover:underline">
+                        <a href={returnsAnchor} className="underline-offset-2 hover:underline">
                           See returns
                         </a>
                       </>
@@ -1666,22 +1682,22 @@ export default async function OrderDetailPage({
               viewer. Nothing renders when the order has no returns. */}
           {/* Returns RX-3: the requester's own requests, in their words. */}
           <RequesterTracking
-            requests={requesterTracking}
+            requests={returnsShown.tracking}
             id="your-requests"
             density="compact"
             className="bg-card rounded-xl border p-4"
           />
 
-          {orderReturns.length > 0 && (
+          {returnsShown.orderReturns.length > 0 && (
             <section id="order-returns" className="bg-card rounded-xl border" data-testid="order-returns">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <h2 className="text-sm font-medium">Returns ({orderReturns.length})</h2>
+                <h2 className="text-sm font-medium">Returns ({returnsShown.orderReturns.length})</h2>
                 <p className="text-muted-foreground text-xs">
                   A return is a later event — the shipped count above is never rewritten.
                 </p>
               </div>
               <ul className="divide-y divide-border">
-                {orderReturns.map((r) => (
+                {returnsShown.orderReturns.map((r) => (
                   <li key={r.id} className="px-4 py-3" data-testid="order-return">
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       {returnsLinkable ? (

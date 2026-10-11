@@ -7,10 +7,8 @@ import { useHydrated } from '@/lib/use-hydrated';
 import { cn } from '@/lib/utils';
 
 import {
-  itemQuantityLabel,
   RETURNS_COPY,
-  returnLineLabel,
-  type RequesterTrackingItem,
+  requesterTrackingLineWords,
   type RequesterTrackingLine,
   type RequesterTrackingReturn,
 } from '@stockpilot/core';
@@ -98,36 +96,33 @@ export function RequesterTracking({
   );
 }
 
-function itemWords(item: RequesterTrackingItem): string {
-  return itemQuantityLabel(returnLineLabel(item.name, item.sizeLabel), item.quantity);
-}
-
-/** One returned line: RETURNING, and its REPLACEMENT when it asked for one. */
+/**
+ * One returned line: RETURNING, and its REPLACEMENT when it asked for one.
+ * Core's words, the phone's too (requesterTrackingLineWords; RX-3 fix round
+ * 1, M3 and L4): every line state named, and a note-only request reads "A
+ * different replacement" once declined or cancelled.
+ */
 function TrackingLine({ line, compact }: { line: RequesterTrackingLine; compact: boolean }) {
-  const x = line.exchange;
+  const words = requesterTrackingLineWords(line);
   const box = compact ? 'rounded-md border p-2 text-sm' : 'rounded-xl border p-3 text-sm';
   return (
-    <li className={cn('grid gap-2', x && 'sm:grid-cols-2')}>
+    <li className={cn('grid gap-2', words.replacement && 'sm:grid-cols-2')}>
       <div className={box}>
         <p className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium">
           <Undo2 className="h-3 w-3" aria-hidden />
           <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.returning}</span>
         </p>
-        <p className="mt-1">{itemWords(line.returning)}</p>
+        <p className="mt-1">{words.returning}</p>
       </div>
-      {x ? (
+      {words.replacement ? (
         <div className={cn(box, 'border-l-primary border-l-4')}>
           <p className="flex items-center gap-1.5 text-[11px] font-medium">
             <ArrowRight className="h-3 w-3" aria-hidden />
             <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
           </p>
-          <p className="mt-1">{x.replacement ? itemWords(x.replacement) : RETURNS_COPY.replacementWarehouseReview}</p>
-          {x.substituted ? <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementChangedByWarehouse}</p> : null}
-          {x.state === 'declined' ? (
-            <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementDeclined}</p>
-          ) : x.state === 'cancelled' ? (
-            <p className="text-muted-foreground text-xs">{RETURNS_COPY.replacementCancelled}</p>
-          ) : null}
+          <p className="mt-1">{words.replacement}</p>
+          {words.changed ? <p className="text-muted-foreground text-xs">{words.changed}</p> : null}
+          {words.state ? <p className="text-muted-foreground text-xs">{words.state}</p> : null}
         </div>
       ) : null}
     </li>

@@ -39,7 +39,7 @@ import {
   requesterEntryWords,
   requesterReplacementQuantityOf,
   requesterReturnGate,
-  requesterReturnsView,
+  requesterOrderReturns,
   requesterSentMessage,
   requesterSentTitle,
   requesterTrackingCard,
@@ -391,23 +391,38 @@ describe("the order screen's returns, as the requester reads them", () => {
   });
 
   it('each own request once, as its tracking card; a return staff made on the order keeps its card (D15)', () => {
-    const view = requesterReturnsView({
+    const view = requesterOrderReturns({
       returns: [rma('RMA-1', 'r1'), rma('RMA-STAFF', 'r2')],
       tracking: [tracked('RMA-1')],
-      requesterView: true,
+      requesterGate: true,
+      canReadReturns: false,
     });
     expect(view.tracking.map((t) => t.returnNumber)).toEqual(['RMA-1']);
     expect(view.orderReturns.map((r) => r.id)).toEqual(['r2']);
   });
 
-  it("without the tracking, or for a viewer who opens the RMA, every return keeps the order's card", () => {
+  // Re-pinned on purpose (RX-3 fix round 1, desk check M2): a requester who
+  // can read returns (not manage) got no tracking on the phone while the web
+  // showed it. One core rule now: the tracking for the requester gate, and
+  // the order's card (which opens the RMA for them) kept.
+  it("a requester with returns:read gets the tracking and keeps the order's card, as on the web", () => {
     const returns = [rma('RMA-1', 'r1')];
-    expect(requesterReturnsView({ returns, tracking: null, requesterView: true })).toEqual({ orderReturns: returns, tracking: [] });
-    expect(requesterReturnsView({ returns, tracking: [tracked('RMA-1')], requesterView: false })).toEqual({ orderReturns: returns, tracking: [] });
+    const view = requesterOrderReturns({ returns, tracking: [tracked('RMA-1')], requesterGate: true, canReadReturns: true });
+    expect(view.tracking.map((t) => t.returnNumber)).toEqual(['RMA-1']);
+    expect(view.orderReturns).toEqual(returns);
+  });
+
+  it("without the tracking, or outside the requester gate, every return keeps the order's card", () => {
+    const returns = [rma('RMA-1', 'r1')];
+    expect(requesterOrderReturns({ returns, tracking: null, requesterGate: true, canReadReturns: false })).toEqual({ orderReturns: returns, tracking: [] });
+    expect(requesterOrderReturns({ returns, tracking: [tracked('RMA-1')], requesterGate: false, canReadReturns: false })).toEqual({
+      orderReturns: returns,
+      tracking: [],
+    });
   });
 
   it('a return with no number is never hidden (it cannot be matched)', () => {
-    const view = requesterReturnsView({ returns: [rma(null, 'r1')], tracking: [tracked(null)], requesterView: true });
+    const view = requesterOrderReturns({ returns: [rma(null, 'r1')], tracking: [tracked(null)], requesterGate: true, canReadReturns: false });
     expect(view.orderReturns.map((r) => r.id)).toEqual(['r1']);
     expect(view.tracking).toHaveLength(1);
   });
@@ -781,10 +796,26 @@ describe("the requester's own requests (brief 28)", () => {
     expect(v.replacementOrder).toBe('Replacement order: SO-000104');
   });
 
-  it('is one VoiceOver label with the same words in reading order', () => {
+  // Re-pinned on purpose (RX-3 fix round 1, desk check L2): the screen shows
+  // the title, the sentences, the lines, then the SO (requester-tracking-card
+  // .tsx), and VoiceOver read the sentences last.
+  it('is one VoiceOver label with the same words in the order the screen shows them', () => {
     expect(requesterTrackingCard(request, { timeZone: 'UTC' }).accessibilityLabel).toBe(
-      'RMA-20261011-ABC123, Oct 11, 2026. Returning: Walk Exchange Tee, M ×1. Replacement: Walk Exchange Tee, XL ×1, Approved, Changed by the warehouse. Returning: Walk Cap ×2. Replacement: Warehouse will review, Requested. Returning: Walk Sock ×1. Return approved. Bring or send the item back as arranged with the warehouse. Replacement reserved. Waiting for your return. Replacement order: SO-000104.',
+      'RMA-20261011-ABC123, Oct 11, 2026. Return approved. Bring or send the item back as arranged with the warehouse. Replacement reserved. Waiting for your return. Returning: Walk Exchange Tee, M ×1. Replacement: Walk Exchange Tee, XL ×1, Approved, Changed by the warehouse. Returning: Walk Cap ×2. Replacement: Warehouse will review, Requested. Returning: Walk Sock ×1. Replacement order: SO-000104.',
     );
+  });
+
+  // RX-3 fix round 1 (desk check M3): a note-only request the warehouse
+  // declined read "Warehouse will review · Declined".
+  it('a declined or cancelled note-only request reads "A different replacement", never "Warehouse will review"', () => {
+    for (const state of ['declined', 'cancelled'] as const) {
+      const v = requesterTrackingCard({
+        ...request,
+        lines: [{ returning: { name: 'Walk Cap', sizeLabel: null, quantity: 1 }, exchange: { state, replacement: null, substituted: false } }],
+      });
+      expect(v.lines[0]?.replacement, state).toBe('A different replacement');
+      expect(v.accessibilityLabel, state).not.toContain('Warehouse will review');
+    }
   });
 
   it('never names a rack, Staging, a disposition, a cost, a note, a reason or a staff member', () => {

@@ -27,7 +27,8 @@ import type { ReturnStatus } from '../orders/order-returns-view';
 import { sortBySizeOrder } from '../sports/size-order';
 
 import type { ExchangeStatus } from './exchange-status';
-import { RETURNS_COPY } from './returns-copy';
+import { exchangeLineStatusLabel } from './exchange-view';
+import { itemQuantityLabel, returnLineLabel, RETURNS_COPY } from './returns-copy';
 
 // ── Availability (two states, D6) ───────────────────────────────────────────
 
@@ -287,4 +288,83 @@ export function orderRequesterOptions<T extends { name: string }>(
 ): T[] {
   const byName = [...options].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return sortBySizeOrder(byName, sizeOf);
+}
+
+// ── The order screen: tracking beside the order's own return cards ──────────
+
+/**
+ * The order screen's returns as the order's own requester reads them: the web
+ * order page and the phone's order screen, one rule (returns RX-3 fix round
+ * 1, desk check H1 and M2).
+ *
+ *   - "Your requests on this order" (the tracking) shows for every viewer the
+ *     requester gate admits (their own handed-over order, Returns on, not a
+ *     returns manager): `showTracking`. The server tracks only requests the
+ *     requester made (D15).
+ *   - The order's own card for an RMA the tracking already lists is dropped
+ *     only for a viewer who cannot read returns: that card names the reason,
+ *     the disposition (Restock, pending) and the staff notes, which the
+ *     requester's words never do (plan section 6, brief 28), and it would
+ *     list the same request twice. A viewer with returns:read keeps it, since
+ *     their card opens the RMA.
+ *
+ * Matched by RMA number, the one key both reads carry; a return with no
+ * number is never dropped. Without tracking (a returns manager, someone
+ * else's order, or the read failed) every return keeps the order's card.
+ */
+export function requesterReturnsView<R extends { returnNumber: string | null }>(input: {
+  returns: readonly R[];
+  tracking: readonly RequesterTrackingReturn[] | null;
+  showTracking: boolean;
+  viewerCanReadReturns: boolean;
+}): { orderReturns: R[]; tracking: RequesterTrackingReturn[] } {
+  if (!input.showTracking || !input.tracking) return { orderReturns: [...input.returns], tracking: [] };
+  if (input.viewerCanReadReturns) return { orderReturns: [...input.returns], tracking: [...input.tracking] };
+  const tracked = new Set(
+    input.tracking.map((t) => t.returnNumber).filter((n): n is string => typeof n === 'string' && n.length > 0),
+  );
+  return {
+    orderReturns: input.returns.filter((r) => !r.returnNumber || !tracked.has(r.returnNumber)),
+    tracking: [...input.tracking],
+  };
+}
+
+/** One tracking line in words (the web's tracking and the phone's card). */
+export interface RequesterTrackingLineWords {
+  /** "Women's Polo, M ×1". */
+  returning: string;
+  /** What comes back instead; null for a return only. */
+  replacement: string | null;
+  /** The line's exchange state ("Requested", "Approved", "Declined", "Cancelled"); null for a return only. */
+  state: string | null;
+  /** "Changed by the warehouse" when another item than the one asked for was approved. */
+  changed: string | null;
+}
+
+function trackingItemWords(item: RequesterTrackingItem): string {
+  return itemQuantityLabel(returnLineLabel(item.name, item.sizeLabel), item.quantity);
+}
+
+/**
+ * One returned line of the requester's tracking, in the words both screens
+ * show (returns RX-3 fix round 1, desk check M3 and L4). A request made with
+ * a note has no replacement item until the warehouse approves one: it reads
+ * "Warehouse will review" while it is under review, and "A different
+ * replacement" once it was declined or cancelled, so it never says the
+ * warehouse will review what it already declined.
+ */
+export function requesterTrackingLineWords(line: RequesterTrackingLine): RequesterTrackingLineWords {
+  const x = line.exchange;
+  if (!x) return { returning: trackingItemWords(line.returning), replacement: null, state: null, changed: null };
+  const replacement = x.replacement
+    ? trackingItemWords(x.replacement)
+    : x.state === 'requested'
+      ? RETURNS_COPY.replacementWarehouseReview
+      : RETURNS_COPY.replacementAskedByNote;
+  return {
+    returning: trackingItemWords(line.returning),
+    replacement,
+    state: exchangeLineStatusLabel(x.state),
+    changed: x.substituted ? RETURNS_COPY.replacementChangedByWarehouse : null,
+  };
 }

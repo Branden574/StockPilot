@@ -23,6 +23,8 @@ import {
   REQUESTER_TRACKING_LINE_KEYS,
   REQUESTER_TRACKING_RETURN_KEYS,
   requesterAvailability,
+  requesterReturnsView,
+  requesterTrackingLineWords,
   type RequesterExchangeLine,
   type RequesterExchangeOption,
   type RequesterExchangeOptionsAnswer,
@@ -208,10 +210,23 @@ describe("the requester's tracking sentences (plan 3.10, brief 28)", () => {
   it('the return goes first unless the exchange sentence already says where it stands', () => {
     const cases: Array<[string, ExchangeStatus, string[]]> = [
       ['requested', 'requested', ['Exchange requested. The warehouse will review it.']],
-      ['cancelled', 'cancelled', ['Exchange request cancelled.']],
-      ['denied', 'cancelled', ['Exchange request declined.']],
+      // Re-pinned on purpose (RX-3 fix round 1, desk check M1): a declined or
+      // cancelled RMA says so for the return too, so a return-only line on the
+      // same RMA never reads as still standing (plan 3.10: the return's status
+      // is always shown beside the exchange's).
+      ['cancelled', 'cancelled', ['Return request cancelled.', 'Exchange request cancelled.']],
+      ['denied', 'cancelled', ['Return request declined.', 'Exchange request declined.']],
+      // An exchange cancelled while the return stands keeps the return's words.
+      [
+        'approved',
+        'cancelled',
+        ['Return approved. Bring or send the item back as arranged with the warehouse.', 'Exchange request cancelled.'],
+      ],
       ['approved', 'declined', ['Exchange declined. Your return was approved.']],
-      ['received', 'declined', ['Return received.', 'Exchange declined. Your return was approved.']],
+      // Re-pinned on purpose (desk check L7): once the return's own sentence
+      // is shown, "Your return was approved." would repeat an older state.
+      ['received', 'declined', ['Return received.', 'Exchange declined.']],
+      ['closed', 'declined', ['Return complete.', 'Exchange declined.']],
       ['closed', 'completed', ['Exchange completed.']],
       ['received', 'ready_to_pick', ['Return received. Your replacement is being prepared.']],
       ['closed', 'ready_to_pick', ['Return received. Your replacement is being prepared.']],
@@ -271,5 +286,99 @@ describe("the requester's tracking sentences (plan 3.10, brief 28)", () => {
 
   it('the exchange-declined title is the 3.10 requester sentence', () => {
     expect(RETURNS_COPY.requesterExchangeDeclined).toBe(exchangeRequesterSentence('declined'));
+  });
+});
+
+describe("the order screen's returns as the order's requester reads them (one rule, web and phone)", () => {
+  const rma = (returnNumber: string | null, id: string) => ({ id, returnNumber, notes: 'staff words' });
+  const tracked = (returnNumber: string | null): RequesterTrackingReturn => ({
+    returnNumber,
+    createdAt: '2026-10-11T18:00:00.000Z',
+    returnStatus: 'requested',
+    exchangeStatus: 'none',
+    sentences: ['Return requested. The warehouse will review it.'],
+    replacementOrderNumber: null,
+    lines: [],
+  });
+
+  it('a requester who cannot read returns sees each own request once, as tracking; a return staff made keeps its card (D15)', () => {
+    const view = requesterReturnsView({
+      returns: [rma('RMA-1', 'r1'), rma('RMA-STAFF', 'r2')],
+      tracking: [tracked('RMA-1')],
+      showTracking: true,
+      viewerCanReadReturns: false,
+    });
+    expect(view.tracking.map((t) => t.returnNumber)).toEqual(['RMA-1']);
+    expect(view.orderReturns.map((r) => r.id)).toEqual(['r2']);
+  });
+
+  it("a requester who can read returns (not manage) gets the tracking AND keeps the order's card, which opens the RMA", () => {
+    const returns = [rma('RMA-1', 'r1')];
+    const view = requesterReturnsView({ returns, tracking: [tracked('RMA-1')], showTracking: true, viewerCanReadReturns: true });
+    expect(view.tracking.map((t) => t.returnNumber)).toEqual(['RMA-1']);
+    expect(view.orderReturns).toEqual(returns);
+  });
+
+  it("no tracking (a returns manager, not their order, or the read failed): every return keeps the order's card", () => {
+    const returns = [rma('RMA-1', 'r1')];
+    expect(requesterReturnsView({ returns, tracking: null, showTracking: true, viewerCanReadReturns: false })).toEqual({
+      orderReturns: returns,
+      tracking: [],
+    });
+    expect(
+      requesterReturnsView({ returns, tracking: [tracked('RMA-1')], showTracking: false, viewerCanReadReturns: false }),
+    ).toEqual({ orderReturns: returns, tracking: [] });
+  });
+
+  it('a return with no number is never hidden (it cannot be matched)', () => {
+    const view = requesterReturnsView({
+      returns: [rma(null, 'r1')],
+      tracking: [tracked(null)],
+      showTracking: true,
+      viewerCanReadReturns: false,
+    });
+    expect(view.orderReturns.map((r) => r.id)).toEqual(['r1']);
+    expect(view.tracking).toHaveLength(1);
+  });
+});
+
+describe("one tracking line's words (web and phone)", () => {
+  const item = (name: string, sizeLabel: string | null, quantity = 1) => ({ name, sizeLabel, quantity });
+  const line = (exchange: RequesterTrackingLine['exchange']): RequesterTrackingLine => ({
+    returning: item("Women's Polo", 'M'),
+    exchange,
+  });
+
+  it('a return only has no replacement and no state', () => {
+    expect(requesterTrackingLineWords(line(null))).toEqual({
+      returning: "Women's Polo, M ×1",
+      replacement: null,
+      state: null,
+      changed: null,
+    });
+  });
+
+  it('every line state is named, the same on both screens', () => {
+    const states = (['requested', 'approved', 'declined', 'cancelled'] as const).map(
+      (state) => requesterTrackingLineWords(line({ state, replacement: item("Women's Polo", 'L'), substituted: false })).state,
+    );
+    expect(states).toEqual(['Requested', 'Approved', 'Declined', 'Cancelled']);
+  });
+
+  it('the size asked for, and "Changed by the warehouse" when another was approved', () => {
+    expect(
+      requesterTrackingLineWords(line({ state: 'approved', replacement: item("Women's Polo", 'S'), substituted: true })),
+    ).toMatchObject({ replacement: "Women's Polo, S ×1", changed: 'Changed by the warehouse' });
+  });
+
+  it('desk check M3: a note-only request reads "Warehouse will review" only while the warehouse is reviewing it', () => {
+    expect(requesterTrackingLineWords(line({ state: 'requested', replacement: null, substituted: false })).replacement).toBe(
+      'Warehouse will review',
+    );
+    for (const state of ['declined', 'cancelled'] as const) {
+      const words = requesterTrackingLineWords(line({ state, replacement: null, substituted: false }));
+      expect(words.replacement, state).toBe('A different replacement');
+      expect(words.replacement, state).not.toMatch(/review/i);
+    }
   });
 });

@@ -208,7 +208,10 @@ export interface RequesterTrackingSentenceInput {
  */
 const SENTENCE_SAYS_RETURN: Partial<Record<ExchangeStatus, 'any' | readonly string[]>> = {
   requested: 'any',
-  cancelled: 'any',
+  // Not `cancelled` (RX-3 fix round 1, desk check M1): "Exchange request
+  // declined." says nothing about the return, so a declined or cancelled RMA
+  // reads "Return request declined." first, and an exchange cancelled while
+  // the return stands keeps the return's own words.
   waiting_for_return: ['approved'],
   ready_to_pick: ['received', 'closed'],
   completed: ['closed'],
@@ -238,6 +241,13 @@ export function requesterTrackingSentences(input: RequesterTrackingSentenceInput
     (says === 'any' || (Array.isArray(says) && says.includes(String(input.returnStatus))));
   const out: string[] = [];
   if (!covered && returnSentence) out.push(returnSentence);
+  // Desk check L7: beside the return's own sentence (received, complete),
+  // "Exchange declined. Your return was approved." would repeat an older
+  // state; the short sentence says only what the exchange did.
+  if (exchangeSentence && input.exchangeStatus === 'declined' && !covered && returnSentence) {
+    out.push(RETURNS_COPY.requesterExchangeDeclinedShort);
+    return out;
+  }
   if (exchangeSentence) out.push(exchangeSentence);
   return out;
 }

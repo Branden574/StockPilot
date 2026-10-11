@@ -882,4 +882,57 @@ describe("(h) the requester's own order: Return or exchange, and their requests 
     expect(trackingForOrderMock).not.toHaveBeenCalled();
     expect(container.querySelector('#your-requests')).toBeNull();
   });
+
+  // RX-3 fix round 1 (desk checks H1, M1 and M2): the staff "Returns (N)"
+  // panel renders for every member (RLS), so the requester's own request
+  // showed twice, the second time in staff words (the reason, "Restock ·
+  // pending", "Waiting for returned item", the staff notes). One core rule
+  // with the phone (requesterReturnsView): a requester who cannot read
+  // returns sees it once, as their tracking.
+  describe("each own request once, in the requester's words", () => {
+    const ownRma = closedRma({
+      id: 'rma-own',
+      returnNumber: REQUEST.returnNumber,
+      status: 'approved',
+      reasonCode: 'wrong_size',
+      notes: 'Staff note: customer called twice',
+      closedAt: null,
+      lines: [{ orderRequestLineId: S_LINE, itemId: `item-${S_LINE}`, quantity: 1, disposition: 'restock', applied: false }],
+      exchangeLines: ["Exchange: Women's Polo, M ×1 → SO-000104 (Waiting for returned item)"],
+    });
+    const staffRma = closedRma({ id: 'rma-staff', returnNumber: 'RMA-STAFF-1' });
+
+    it('a requester without returns:read: the tracking only, no staff panel and no staff words', async () => {
+      loadOrderReturnsMock.mockResolvedValue([ownRma]);
+      const { container } = await renderPage();
+      const text = container.textContent ?? '';
+      expect(text.split(REQUEST.returnNumber).length - 1).toBe(1);
+      expect(container.querySelector('#your-requests')?.textContent).toContain(REQUEST.returnNumber);
+      expect(container.querySelector('[data-testid="order-returns"]')).toBeNull();
+      expect(text).not.toContain('Restock');
+      expect(text).not.toContain('Waiting for returned item');
+      expect(text).not.toContain('Staff note: customer called twice');
+      expect(text).not.toMatch(/Returns \(\d+\)/);
+    });
+
+    it('a return staff made on their order keeps its card beside the tracking (D15)', async () => {
+      loadOrderReturnsMock.mockResolvedValue([ownRma, staffRma]);
+      const { container } = await renderPage();
+      const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
+      expect(panel).not.toBeNull();
+      expect(panel.textContent).toContain('Returns (1)');
+      expect(panel.textContent).toContain('RMA-STAFF-1');
+      expect(panel.textContent).not.toContain(REQUEST.returnNumber);
+    });
+
+    it('a requester who can read returns (not manage) gets the tracking and keeps the card that opens the RMA, as on the phone', async () => {
+      setViewer(['returns:read']);
+      loadOrderReturnsMock.mockResolvedValue([ownRma]);
+      const { container } = await renderPage();
+      expect(trackingForOrderMock).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('#your-requests')?.textContent).toContain(REQUEST.returnNumber);
+      const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
+      expect(panel.querySelector('a[href="/dashboard/returns/rma-own"]')).not.toBeNull();
+    });
+  });
 });
