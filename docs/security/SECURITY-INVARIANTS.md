@@ -963,8 +963,10 @@ actually fire.
     status the caller's screen showed (`return_changed`), and a backorder
     that handed something over (`replacement_not_backordered`; a rest
     resumed into picking is out of scope). It calls the unchanged
-    `close_partial` under the transaction-bound flag, restores the flag, and
-    appends the non-head decision `replacement_closed` (reason and order
+    `close_partial` under the transaction-bound flag through the internal
+    helper `_return_replacement_close_partial` (INVOKER, no EXECUTE for any
+    role; it raises the flag and restores it), and appends the non-head
+    decision `replacement_closed` (reason and order
     required, no revision: `return_decisions_replacement_closed_chk`), so no
     revision read changes. Nothing moves in stock; every hold on the rest is
     released. Races against itself, `resume_fulfillment` and `close_return`
@@ -974,8 +976,12 @@ actually fire.
     `close_partial` on a replacement, and of the header guard. It counts only
     when it holds the current transaction's id, and no API role can set it:
     PostgREST sets only `request.*` and the role, and no API-callable
-    function sets it. Keep it that way: never add an API-callable function
-    that sets this setting, or that takes a setting's name from its input.
+    function sets it. Exactly three functions set it, each around one call
+    of its own and each with no EXECUTE for any role:
+    `_return_replacement_cancel_order`, `_return_exchange_on_cancel` and (RX-4)
+    `_return_replacement_close_partial` (0397 A1b pins the list). Keep it
+    that way: never add an API-callable function that sets this setting, or
+    that takes a setting's name from its input.
   - **Fixed lines.** `trg_zz_order_request_lines_replacement_guard`
     (BEFORE INSERT only) refuses an API-role insert of a replacement's lines
     (`replacement_lines_fixed`); an update is refused by the

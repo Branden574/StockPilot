@@ -38,7 +38,8 @@
 --   M3  close-the-rest accepts an approved RMA                         -> C1
 --   M4  close-the-rest accepts a backorder that handed nothing over    -> C2
 --   M5  close-the-rest ignores the shown status                        -> C3
---   M6  close-the-rest leaves the flag raised                          -> C4
+--   M6  the close_partial helper leaves the flag raised, or is granted
+--       to an API role                                                 -> C4, A1b
 --   M7  close-the-rest writes a head decision (a revision)             -> C4, H1
 --   M8  close-the-rest skips the replay                                -> C5
 --   M9  the requester lock set takes every named id again              -> E2
@@ -52,7 +53,7 @@
 
 begin;
 
-select plan(29);
+select plan(30);
 
 \set orgA    '\'03977000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03977000-0000-0000-0000-00000000000b\''
@@ -435,12 +436,26 @@ select is(
                      || ':' || coalesce((select string_agg(c, ';' order by c) from unnest(p.proconfig) c), ''),
                      ',' order by p.proname collate "C")
      from pg_proc p where p.pronamespace = 'public'::regnamespace
-      and p.proname in ('close_return_replacement_rest', 'order_id_for_return_token', 'return_exchange_options', '_return_exchange_create')),
+      and p.proname in ('close_return_replacement_rest', 'order_id_for_return_token', 'return_exchange_options', '_return_exchange_create',
+                        '_return_replacement_close_partial')),
   '_return_exchange_create:false:false:false:false:false:postgres:search_path=public, pg_temp,'
+  || '_return_replacement_close_partial:false:false:false:false:false:postgres:search_path=public, pg_temp,'
   || 'close_return_replacement_rest:true:true:false:false:false:postgres:lock_timeout=5s;search_path=public, pg_temp,'
   || 'order_id_for_return_token:true:false:false:true:false:postgres:search_path=public, pg_temp,'
   || 'return_exchange_options:true:false:false:true:false:postgres:search_path=public, pg_temp',
-  'A1: Close the rest is SECURITY DEFINER for authenticated only (5 s lock timeout); the token lookup and the requester options are the service role''s alone; the create hook stays INVOKER with no API EXECUTE; none for anon or PUBLIC');
+  'A1: Close the rest is SECURITY DEFINER for authenticated only (5 s lock timeout); the token lookup and the requester options are the service role''s alone; the create hook and the flagged close_partial helper are INVOKER with no EXECUTE for any role; none for anon or PUBLIC');
+-- Security review F-5: the exchange flag is raised only inside functions no
+-- API role may execute, around one call of their own.
+select is(
+  (select string_agg(p.proname || ':' || (has_function_privilege('anon', p.oid, 'EXECUTE')
+                                          or has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                                          or has_function_privilege('service_role', p.oid, 'EXECUTE')
+                                          or coalesce((select bool_or(a.grantee = 0) from aclexplode(p.proacl) a), false))::text,
+                     ',' order by p.proname collate "C")
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'ledger') and p.prosrc ~ 'set_config\(\s*''stockpilot\.return_exchange'''),
+  '_return_exchange_on_cancel:false,_return_replacement_cancel_order:false,_return_replacement_close_partial:false',
+  'A1b: exactly three functions set the exchange flag, none executable by any API role (security review F-5; RX-4 added the close_partial helper, Mutation M6)');
 select is(
   (select string_agg(p.proname || '=' || md5(regexp_replace(p.prosrc, '\n[^\n]*-- RX-4[^\n]*', '', 'g')), ',' order by p.proname collate "C")
      from pg_proc p where p.oid in ('public._return_exchange_create(uuid,uuid,jsonb,jsonb)'::regprocedure,
@@ -466,12 +481,13 @@ select is(
      cross join lateral extensions.plpgsql_check_function_tb(
         p.oid, fatal_errors => false, other_warnings => false, extra_warnings => false, performance_warnings => false) c
     where p.oid in ('public.close_return_replacement_rest(uuid,integer,text,text)'::regprocedure,
+                    'public._return_replacement_close_partial(uuid)'::regprocedure,
                     'public.order_id_for_return_token(uuid)'::regprocedure,
                     'public._return_exchange_create(uuid,uuid,jsonb,jsonb)'::regprocedure,
                     'public.return_exchange_options(uuid)'::regprocedure)
       and c.level = 'error'),
   'none',
-  'A4: plpgsql_check finds no error in the four functions this file creates or restates');
+  'A4: plpgsql_check finds no error in the five functions this file creates or restates');
 
 -- ══ B. Close the rest: gates ══════════════════════════════════════════════
 -- rK1: a replacement handed over in part, rest on backorder, RMA received.

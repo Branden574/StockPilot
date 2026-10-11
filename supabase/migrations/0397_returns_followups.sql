@@ -23,7 +23,9 @@
 --      function, cancel_return needs a requested or approved RMA, and the
 --      replacement cancel and change refuse anything handed over. This
 --      function closes it as delivered-partial from the RMA (close_partial,
---      unchanged, under the transaction-bound exchange flag): every hold on
+--      unchanged, under the transaction-bound exchange flag, raised by the
+--      internal helper _return_replacement_close_partial, which no API role
+--      may execute: security review F-5): every hold on
 --      the rest released, nothing moved, what was handed over kept as the
 --      record. It appends a NON-HEAD decision 'replacement_closed' (reason
 --      and order, no revision): the RMA's revision does not move, so no head
@@ -145,6 +147,7 @@ begin
   -- Already applied (or half applied by hand): every new name must be free.
   if to_regprocedure('public.close_return_replacement_rest(uuid,integer,text,text)') is not null
      or to_regprocedure('public.order_id_for_return_token(uuid)') is not null
+     or to_regprocedure('public._return_replacement_close_partial(uuid)') is not null
      or exists (select 1 from pg_constraint c
                  where c.conrelid = 'public.return_decisions'::regclass
                    and c.conname = 'return_decisions_replacement_closed_chk') then
@@ -344,7 +347,30 @@ begin
 end;
 $$;
 
--- ── 1d. Close the rest (RX-2 verification V3; RX3-NOTES option (i)) ───────
+-- ── 1d. The flag around close_partial (an internal helper) ────────────────
+-- Close the rest's one flagged call, the twin of _return_replacement_cancel_order:
+-- SECURITY INVOKER with EXECUTE for nobody (it runs inside the DEFINER
+-- function below, as postgres), so no API-callable function sets the
+-- exchange flag itself (security review F-5). It raises the flag with this
+-- transaction's id, calls close_partial (unchanged: releases the backorder's
+-- holds, backordered -> completed, which the header guard admits only under
+-- the flag) and restores the previous value.
+create function public._return_replacement_close_partial(p_order_id uuid)
+returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_prev text := current_setting('stockpilot.return_exchange', true);
+begin
+  perform set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
+  perform public.close_partial(p_order_id);
+  perform set_config('stockpilot.return_exchange', coalesce(v_prev, ''), true);
+end;
+$$;
+
+-- ── 1e. Close the rest (RX-2 verification V3; RX3-NOTES option (i)) ───────
 -- A replacement handed over in part, with the rest on backorder, under an
 -- RMA already received or closed: close it as delivered-partial from the RMA.
 -- Gates in the 3.3.1 order before any lock: signed in; the RMA read without
@@ -365,8 +391,9 @@ $$;
 -- the live replacement backordered with something handed over (P0001
 -- replacement_not_backordered, detail its status or 'none'; a rest resumed
 -- into picking is out of scope). Then close_partial, unchanged, under the
--- transaction-bound flag the header guard asks for (restored right after):
--- every hold on the rest released, backordered -> completed, nothing moved.
+-- transaction-bound flag the header guard asks for, raised and restored by
+-- _return_replacement_close_partial: every hold on the rest released,
+-- backordered -> completed, nothing moved.
 -- Appends 'replacement_closed' (reason, the order; no revision: the RMA's
 -- revision does not move). The replacement's own notify trigger tells its
 -- requester (the part-never-sent completion words); the app adds the order's
@@ -388,7 +415,6 @@ declare
   v_rev     integer;
   v_reason  text;
   v_live    record;
-  v_prev    text;
 begin
   if v_user is null then
     raise exception 'unauthenticated' using errcode = '42501', hint = 'unauthenticated';
@@ -458,11 +484,9 @@ begin
   end if;
 
   -- The header guard admits backordered -> completed only under this
-  -- transaction's flag (security review F-1); restored right after.
-  v_prev := current_setting('stockpilot.return_exchange', true);
-  perform set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
-  perform public.close_partial(v_live.id);
-  perform set_config('stockpilot.return_exchange', coalesce(v_prev, ''), true);
+  -- transaction's flag (security review F-1): the internal helper raises it
+  -- around close_partial and restores it.
+  perform public._return_replacement_close_partial(v_live.id);
 
   insert into public.return_decisions (organization_id, return_id, kind, channel, order_request_id, reason,
                                        actor_user_id, actor_kind)
@@ -478,6 +502,7 @@ revoke all on function public.return_exchange_options(uuid) from public, anon, a
 grant execute on function public.return_exchange_options(uuid) to service_role;
 revoke all on function public.order_id_for_return_token(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.order_id_for_return_token(uuid) to service_role;
+revoke all on function public._return_replacement_close_partial(uuid) from public, anon, authenticated, service_role;
 revoke all on function public.close_return_replacement_rest(uuid, integer, text, text) from public, anon, authenticated, service_role;
 grant execute on function public.close_return_replacement_rest(uuid, integer, text, text) to authenticated;
 
@@ -487,6 +512,8 @@ comment on function public.return_exchange_options(uuid) is
   'RX-2 (plan 3.6.10), used-up lines left out by RX-4: the requester tier''s options for an order, per line with return budget AND exchange budget left (RX-3 stock desk check F5: a line whose units were already replaced under a cancelled RMA offers no sizes): [{orderRequestLineId, returnedItemId, options: [{itemId, variantKey, free}]}]. The server resolves the token, portal principal or member first and projects availability to two states (the count never leaves it). STABLE, SECURITY DEFINER, EXECUTE to service_role only.';
 comment on function public.order_id_for_return_token(uuid) is
   'RX-4 (RX-3 security review, finding 1): the order a requester return token opens, from order_request_secrets; null for an unknown token. Called by the web''s admin client with .rpc() (a POST), so the raw token never reaches a URL or the API gateway''s query-string logs. STABLE, SECURITY DEFINER, EXECUTE to service_role only.';
+comment on function public._return_replacement_close_partial(uuid) is
+  'RX-4: Close the rest''s one flagged call: raises stockpilot.return_exchange with this transaction''s id, calls the unchanged close_partial (the header guard admits backordered -> completed only under the flag) and restores the previous value. The twin of _return_replacement_cancel_order. SECURITY INVOKER, no EXECUTE for any role: only close_return_replacement_rest (DEFINER, as postgres) calls it, so no API-callable function sets the flag itself (security review F-5).';
 comment on function public.close_return_replacement_rest(uuid, integer, text, text) is
   'RX-4 "Close the rest" (RX-2 verification V3): a replacement handed over in part with the rest on backorder, under an RMA received or closed, is closed as delivered-partial (close_partial under the transaction-bound exchange flag): holds on the rest released, nothing moved, the handed-over record kept. Gates before any lock: signed in, member (P0002 return_not_found), Returns and Orders modules (P0001 module_disabled), returns:manage (42501 returns_manage), orders:approve (42501 orders_approve), write access to the original order''s warehouse (42501 warehouse_write); a reason of 1 to 1,000 characters (P0001 reason_required); the revision the caller saw (22023 return_invalid when missing). Locks the RMA, then the live replacement (and asks write access to its warehouse too, verification V-1). Stale revision or a shown status that is no longer the replacement''s: P0001 return_changed. RMA not received or closed: P0001 invalid_status_transition. Nothing on backorder handed over in part: P0001 replacement_not_backordered (detail its status). A replacement already closed this way replays {changed: false}. Appends the non-head decision replacement_closed (reason, order). Never 40001 or 40P01.';
 
