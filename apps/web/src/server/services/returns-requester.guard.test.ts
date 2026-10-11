@@ -50,6 +50,22 @@ const REQUESTER_FILES = [
   'app/api/v1/orders/[id]/return-request/http.ts',
   'server/actions/portal.ts',
   'app/returns/request/[token]/page.tsx',
+  // The web screens (RX-3 web stage): the token page's form, the shared
+  // requester form and tracking, the portal's sheet, and their rules.
+  'app/returns/request/[token]/requester-return-form.tsx',
+  'components/returns/requester-return-sheet.tsx',
+  'components/returns/requester-tracking.tsx',
+  'components/portal/portal-return-sheet.tsx',
+  'lib/returns/requester-sheet.ts',
+];
+
+/** The screens a requester's browser runs (they receive only core's requester types). */
+const REQUESTER_SCREENS = [
+  'app/returns/request/[token]/requester-return-form.tsx',
+  'components/returns/requester-return-sheet.tsx',
+  'components/returns/requester-tracking.tsx',
+  'components/portal/portal-return-sheet.tsx',
+  'lib/returns/requester-sheet.ts',
 ];
 
 describe('the requester code paths (returns RX-3)', () => {
@@ -69,6 +85,16 @@ describe('the requester code paths (returns RX-3)', () => {
   it.each(sources)("%s never reads the order row's own token column", (_file, text) => {
     expect(text).not.toMatch(/return_token|public_track_token/);
   });
+
+  it.each(REQUESTER_SCREENS.map((f) => [f, code(f)] as [string, string]))(
+    '%s never puts the token in a URL, never reads a staff read, and never guesses a size from a name',
+    (_file, text) => {
+      // The sizes are a POST with the token in the body (plan RX-3 API).
+      expect(text).not.toMatch(/[?&]token=|\/options\/\$\{|returns\/options\?/);
+      expect(text).not.toMatch(/returns-workbench|returnExchangeCandidatesAction|orderExchangeCandidatesAction|\/candidates/);
+      expect(text).not.toMatch(/sizeRunStyleKey|groupBySizeRun|extractSize|custom_fields|bin_location/);
+    },
+  );
 
   it('the requester service reads the overview without the staff columns', () => {
     const text = code('server/services/returns-requester.ts');
