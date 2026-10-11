@@ -82,10 +82,29 @@ export const RELEASES: Release[] = [
     // warehouse releases it early (the gate), so the words say "usually"; the
     // 14-day prompt never cancels anything. The words never say "book" for a
     // recorded quantity and claim no inspection.
+    //
+    // PR-stage polish (2026-10-11, the RX-2 Demo Co walk's lows), two more
+    // entries, each claim checked against core (registry.test.ts pins them):
+    // - The exchange outcome words (polish a, b, d, e): the REPLACEMENT card
+    //   reads Handed over / Partly handed over / Not sent from the
+    //   replacement order's own lines (replacementCardStatusLabel; the
+    //   stored line status stays approved); a processed line's history names
+    //   its original rack from its own leg; on the original order a denied
+    //   or cancelled RMA's line reads not returned (describeReturnLine), a
+    //   declined or cancelled exchange is listed (originalExchangeLineFor),
+    //   and the note says a replacement is its own order
+    //   (ORDER_RETURN_SUMMARY_NOTE). Told to whoever opens Returns and to
+    //   order approvers (who meet the original order's returns section).
+    // - A completed pickup reads Handed over (polish c,
+    //   orderStatusLabelForFulfillment): the web badge on the order page and
+    //   the list, the phone's header and list pill; a delivery keeps
+    //   Delivered; on the web an organization's own word is kept (the phone
+    //   shows canonical words for every status). Emails, exports and reports
+    //   are unchanged.
     status: 'draft',
     title: 'Requesters can ask for an exchange themselves',
     summary:
-      'People who placed an order can now ask for an exchange from their return link, the customer portal or their own order, in the mobile app after the latest update too: each item can be Return only or Exchange for another size, from the sizes the warehouse offers, and the request shows where it stands. The warehouse reviews every request first. Order actions that meet another change at the same moment now say Busy. Try again.',
+      'People who placed an order can now ask for an exchange from their return link, the customer portal or their own order, in the mobile app after the latest update too: each item can be Return only or Exchange for another size, from the sizes the warehouse offers, and the request shows where it stands. The warehouse reviews every request first. Order actions that meet another change at the same moment now say Busy. Try again. A completed pickup order now reads Handed over.',
     publishedAt: '2026-10-15T17:10:00Z',
     entries: [
       {
@@ -138,6 +157,30 @@ export const RELEASES: Release[] = [
         howItAffectsYou: 'Returns, exchanges and replacement orders name the size S for these items, on the web and in the mobile app after the latest update.',
         whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-exchange-outcome-words',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Exchanges say how they ended, on the return and on the order',
+        whatChanged:
+          "Once its replacement order is handed over, a return's REPLACEMENT card says Handed over, with the quantity handed over, instead of Approved (or Partly handed over, or Not sent for an item never sent). The return's history names the original rack after the item is processed too. On the original order, a line of a denied or cancelled return reads not returned instead of pending, a declined or cancelled exchange is listed in its own words, and the returns note says a replacement from an exchange is its own order and is not counted in the net.",
+        whyItMatters: "After an exchange was complete the return still read Approved, and a cancelled return's line looked as if the item were still on its way.",
+        howItAffectsYou: 'Only the words change: what a return or an exchange does is the same. The mobile app shows them after the latest update.',
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
+      },
+      {
+        id: 'order-pickup-handed-over',
+        category: 'improved',
+        area: 'Orders',
+        title: 'A completed pickup order says Handed over',
+        whatChanged:
+          'A pickup order that was handed over now reads Handed over instead of Delivered, on the order page and in the orders list, on the web and in the mobile app. A delivery still reads Delivered. If your organization renamed this status on the web, its own word is kept there.',
+        whyItMatters: 'Delivered read wrong for an order someone collected at the counter.',
+        howItAffectsYou: "Only the word changes: the order's status is the same, and order emails, exports and reports keep their words. The mobile app shows it after the latest update.",
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
       },
     ],
   },

@@ -15,6 +15,7 @@ import {
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   dbPermissionRefusedCopy,
+  describeReturnLine,
   describeShortPickLines,
   EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
@@ -28,10 +29,14 @@ import {
   ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderCancelOffer,
+  ORDER_RETURN_SUMMARY_NOTE,
+  orderStatusLabelForFulfillment,
+  ORDER_STATUS_META,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
   PERMISSION_META,
   PERMISSIONS,
+  PICKUP_COMPLETED_STATUS_LABEL,
   processLabelFor,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
@@ -41,6 +46,8 @@ import {
   returnListFilter,
   RETURN_ERROR_WORDS,
   RETURNS_COPY,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
   returnLineLabel,
   returnToRackButton,
   stagingReturnedSourceLabel,
@@ -6775,24 +6782,41 @@ describe('requesters ask for an exchange themselves (returns RX-3) is held as a 
   it('tells each change only to the people who meet it', () => {
     const r = release();
     expect(r.audience).toBeUndefined();
+    // Re-pinned at the RX-3 PR stage (2026-10-11; was: four entries): the
+    // PR-stage polish adds two, the exchange outcome words (polish a, b, d,
+    // e) and a completed pickup's Handed over (polish c). Claim kept: each
+    // change is told only to the people who meet it.
     expect(r.entries.map((e) => e.id)).toEqual([
       'returns-requester-exchange',
       'returns-requester-exchange-review',
       'order-actions-busy',
       'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+      'order-pickup-handed-over',
     ]);
     const published: Release = { ...r, status: 'published' };
     const entriesFor = (permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['returns', 'orders']) =>
       visibleReleases([published], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
     // A member who places orders, with Returns on: their own order's sheet,
-    // and the busy words on their order actions.
-    expect(entriesFor(['orders:request'])).toEqual(['returns-requester-exchange', 'order-actions-busy']);
-    // Without Returns, only the order fix.
-    expect(entriesFor(['orders:request'], ['orders'])).toEqual(['order-actions-busy']);
-    // Whoever can open Returns: the requests that now ask for an exchange.
-    expect(entriesFor(['returns:read'], ['returns'])).toEqual(['returns-requester-exchange-review', 'returns-size-s-apostrophe']);
-    // An order approver meets the size label on a replacement's order page.
-    expect(entriesFor(['orders:approve'])).toEqual(['order-actions-busy', 'returns-size-s-apostrophe']);
+    // the busy words on their order actions and the pickup word.
+    expect(entriesFor(['orders:request'])).toEqual(['returns-requester-exchange', 'order-actions-busy', 'order-pickup-handed-over']);
+    // Without Returns, only the order changes.
+    expect(entriesFor(['orders:request'], ['orders'])).toEqual(['order-actions-busy', 'order-pickup-handed-over']);
+    // Whoever can open Returns: the requests that now ask for an exchange,
+    // and the words that say how an exchange ended.
+    expect(entriesFor(['returns:read'], ['returns'])).toEqual([
+      'returns-requester-exchange-review',
+      'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+    ]);
+    // An order approver meets the size label and the original order's
+    // returns section on order pages, and the pickup word.
+    expect(entriesFor(['orders:approve'])).toEqual([
+      'order-actions-busy',
+      'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+      'order-pickup-handed-over',
+    ]);
     expect(entriesFor([])).toEqual([]);
     const review = r.entries[1]!;
     expect(review.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
@@ -6820,6 +6844,12 @@ describe('requesters ask for an exchange themselves (returns RX-3) is held as a 
       RETURN_ERROR_WORDS.busy,
       'New return and exchange requests',
       'Order status changes',
+      // PR-stage polish (a), (c), (d).
+      RETURNS_COPY.replacementHandedOver,
+      RETURNS_COPY.replacementPartlyHandedOver,
+      RETURNS_COPY.replacementNotSent,
+      PICKUP_COMPLETED_STATUS_LABEL,
+      ORDER_STATUS_META.completed.label,
     ]) {
       // A label that is a sentence is quoted mid-sentence, without its period.
       expect(all).toContain(label.replace(/\.$/, ''));
@@ -6840,11 +6870,42 @@ describe('requesters ask for an exchange themselves (returns RX-3) is held as a 
     // The 14-day prompt cancels nothing on its own (D28).
     expect(r.entries[1]!.howItAffectsYou).toContain('Nothing is cancelled on its own.');
     // The phone needs the update for its screens; the busy words are the server's.
-    for (const id of ['returns-requester-exchange', 'returns-size-s-apostrophe']) {
+    for (const id of ['returns-requester-exchange', 'returns-size-s-apostrophe', 'returns-exchange-outcome-words', 'order-pickup-handed-over']) {
       expect(r.entries.find((e) => e.id === id)!.whatToDo, id).toBe(
         'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
       );
     }
     expect(r.summary).toContain('in the mobile app after the latest update');
+  });
+
+  // PR-stage polish: each claim of the two new entries checked against core,
+  // the rule both the web and the phone render.
+  it('the polish entries say what core does', () => {
+    const r = release();
+    const outcome = r.entries.find((e) => e.id === 'returns-exchange-outcome-words')!;
+    const pickup = r.entries.find((e) => e.id === 'order-pickup-handed-over')!;
+    // (a) The card's words after a hand-over, all of it.
+    const line = { status: 'approved' as const, approvedItemId: 'L', approvedQuantity: 1, requestedQuantity: 1 };
+    const handed = { live: true, status: 'completed', lines: [{ itemId: 'L', requested: 1, fulfilled: 1 }] };
+    expect(replacementCardStatusLabel(line, handed)).toBe('Handed over');
+    expect(replacementCardQuantityLabel(line, handed)).toBe('Qty handed over: 1');
+    expect(outcome.whatChanged).toContain('Handed over, with the quantity handed over');
+    // (d) A cancelled return's line reads not returned.
+    expect(describeReturnLine({ quantity: 1, itemName: 'X', disposition: 'restock', applied: false, returnStatus: 'cancelled' })).toContain(
+      '· not returned',
+    );
+    expect(outcome.whatChanged).toContain('reads not returned instead of pending');
+    // (e) The note.
+    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('A replacement from an exchange is its own order');
+    expect(outcome.whatChanged).toContain('is its own order and is not counted');
+    // (c) A completed pickup, a delivery, and an organization's own word.
+    expect(orderStatusLabelForFulfillment('completed', 'Delivered', 'pickup')).toBe('Handed over');
+    expect(orderStatusLabelForFulfillment('completed', 'Delivered', 'delivery')).toBe('Delivered');
+    expect(orderStatusLabelForFulfillment('completed', 'Closed out', 'pickup')).toBe('Closed out');
+    expect(pickup.whatChanged).toContain('A delivery still reads Delivered');
+    expect(pickup.whatChanged).toContain('its own word is kept there');
+    // Nothing a status filter or an export reads changes: the word only.
+    expect(pickup.howItAffectsYou).toContain('Only the word changes');
+    expect(r.summary).toContain('A completed pickup order now reads Handed over.');
   });
 });
