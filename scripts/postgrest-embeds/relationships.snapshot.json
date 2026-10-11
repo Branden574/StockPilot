@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-10-06",
+  "source": "production catalog, project xizpqmhhslgzbuqtjubv, read-only SELECT on pg_constraint/pg_class/pg_attribute (public schema), 2026-10-11, migrations through 0396",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
