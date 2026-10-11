@@ -59,6 +59,15 @@ const REQUESTER_FILES = [
   'lib/returns/requester-sheet.ts',
 ];
 
+/** The phone's requester files (returns RX-3 phone stage), from apps/web/src. */
+const PHONE_REQUESTER_FILES = [
+  '../../mobile/src/lib/requester-returns.ts',
+  '../../mobile/src/lib/requester-returns-api.ts',
+  '../../mobile/src/lib/use-requester-return.ts',
+  '../../mobile/src/components/requester-return-sheet.tsx',
+  '../../mobile/src/components/requester-tracking-card.tsx',
+];
+
 /** The screens a requester's browser runs (they receive only core's requester types). */
 const REQUESTER_SCREENS = [
   'app/returns/request/[token]/requester-return-form.tsx',
@@ -93,6 +102,21 @@ describe('the requester code paths (returns RX-3)', () => {
       expect(text).not.toMatch(/[?&]token=|\/options\/\$\{|returns\/options\?/);
       expect(text).not.toMatch(/returns-workbench|returnExchangeCandidatesAction|orderExchangeCandidatesAction|\/candidates/);
       expect(text).not.toMatch(/sizeRunStyleKey|groupBySizeRun|extractSize|custom_fields|bin_location/);
+    },
+  );
+
+  // RX-3 fix round 1 (completeness critic L3): the phone's requester files
+  // were outside this guard. The same rules: no token anywhere (the member's
+  // session is the credential), no staff read (the returns workbench, the
+  // staff routes, the candidates search), no size guessed from a name, no
+  // signing.
+  it.each(PHONE_REQUESTER_FILES.map((f) => [f, code(f)] as [string, string]))(
+    '%s (phone) carries no token, reads no staff route, never guesses a size from a name and never signs',
+    (_file, text) => {
+      expect(text).not.toMatch(/\btoken\b|return_token|public_track_token/i);
+      expect(text).not.toMatch(/\/api\/v1\/returns|returns-workbench|getReturnWorkbench|candidates/i);
+      expect(text).not.toMatch(/sizeRunStyleKey|groupBySizeRun|extractSize|custom_fields|bin_location/);
+      expect(text).not.toMatch(/createSignedUrls?\b/);
     },
   );
 

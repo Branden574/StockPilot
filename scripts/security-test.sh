@@ -1132,6 +1132,16 @@ WEB_TESTS=(
   src/app/api/v1/public/returns/options/route.test.ts
   'src/app/api/v1/orders/[id]/return-request/route.test.ts'
   src/server/actions/portal.test.ts
+  # RX-3 fix round 1 (completeness critic L3): the redaction the requester
+  # sees (tracking in their words, never a staff field), the portal's sheet
+  # and the token page, the public submit's no-store and stripping, and the
+  # web order page showing a requester each own request once, never the
+  # staff card beside it.
+  src/components/returns/requester-tracking.test.tsx
+  src/components/portal/portal-shop.test.tsx
+  'src/app/returns/request/[token]/page.test.tsx'
+  src/app/api/v1/public/returns/route.test.ts
+  'src/app/(dashboard)/dashboard/orders/[id]/page.returns.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1228,6 +1238,15 @@ MOBILE_TESTS=(
   # has no Add items, line edits or Cancel, and the helpers follow core.
   src/lib/returns-exchange-wiring.test.ts
   src/lib/returns-view.exchange.test.ts
+  # Returns RX-3 (no migration; fix round 1, completeness critic L3): the
+  # member's own Return or exchange on the phone is online only (no outbox
+  # kind), names the order by id alone (no token anywhere), parses only
+  # core's requester keys, shows a requester each own request once in their
+  # words, and never sends a second request from a press alone after a
+  # conflict.
+  src/lib/requester-returns.test.ts
+  src/lib/requester-returns-api.test.ts
+  src/lib/requester-returns-wiring.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
