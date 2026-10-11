@@ -31,7 +31,10 @@
 #      cancel holds; complete_picking waits, then refuses: nothing drawn, every
 #      hold released. 8b: complete_picking holds; the cancel waits, then takes
 #      the drawn branch: the batch back to Staging on record, the order
-#      cancelled, holdings equal on hand.
+#      cancelled, holdings equal on hand. 8c (verification V1): the same,
+#      but the cancel names the status its screen showed (on its pick
+#      slip): it waits, then is refused return_changed, so nothing is
+#      restocked unseen and the picked order stays live.
 #   9. receive_return against release_return_replacement_early. 9a: the
 #      receipt holds; the release waits, then answers not needed (changed
 #      false). 9b: the release holds; the receipt waits, then receives; one
@@ -66,8 +69,14 @@
 #      14a: A approves a return-only RMA with "Add a replacement" (N) and
 #      pauses; B creates another RMA asking to exchange the same line (navy):
 #      B waits on the line's budget lock, then is refused
-#      exchange_already_sent. 14b: the same the other way round: B's create
-#      holds, A's add waits, then is refused. Never both, never 40P01.
+#      exchange_already_sent (the return-only RMA's unit counts too:
+#      verification V2). 14b: with one more unit on the line, A creates an
+#      RMA asking to exchange it and pauses; B creates another asking the
+#      same: B waits (the line's cap lock, then its budget lock), then is
+#      refused exchange_already_sent. Since V2 every returned unit claims the
+#      line whatever its exchange, so an approval's "Add a replacement" no
+#      longer raises what another RMA sees: the contested raise is the
+#      create. Never both, never 40P01.
 #  10. No session ever sees 40001 or 40P01, nothing deadlocks, and on hand
 #      equals the sum of holdings for every fixture item.
 #
@@ -151,6 +160,7 @@ receive_sql() { printf "select 'R=' || public.receive_return('%s')::text;" "$1";
 release_sql() { printf "select 'R=' || public.release_return_replacement_early('%s', (select o.id from public.order_requests o where o.replacement_for_return_id = '%s' and o.status not in ('cancelled', 'denied')), 'Customer is completing an in-person exchange today.')::text;" "$1" "$1"; }
 change_sql()  { printf "select 'R=' || public.change_return_replacement('%s', %s, '[{\"exchangeLineId\":\"%s\",\"itemId\":\"%s\"}]'::jsonb, 'Race swap', 'refuse', null)::text;" "$1" "$2" "$3" "$4"; }
 cancel_repl_sql() { printf "select 'R=' || public.cancel_return_replacement('%s', %s, 'Race cancel replacement')::text;" "$1" "$2"; }
+cancel_repl_shown_sql() { printf "select 'R=' || public.cancel_return_replacement('%s', %s, 'Race cancel replacement', '%s')::text;" "$1" "$2" "$3"; }
 pick_sql()    { printf "select 'R=' || (public.complete_picking('%s')).status;" "$1"; }
 # The web's generatePickSlip: a compare-and-set update as the member.
 slip_sql()    { printf "with u as (update public.order_requests set status = 'pick_slip_generated', pick_slip_generated_at = now(), pick_slip_generated_by = auth.uid() where id = '%s' and status = 'approved' returning 1) select 'S=' || count(*) from u;" "$1"; }
@@ -450,6 +460,16 @@ waited pickcancel "8b"
 check "8b: the order cancelled; the batch back in Staging on record; on hand as before" \
   "$(order_status "$O")/$(python3 -c "print(int(float('$(staging_of "$IL")') - float('$S0')))")/$(on_hand "$IL")" "cancelled/1/$Q0"
 
+echo "== 8c. complete_picking holds; a cancel from a screen that showed the pick slip waits, then is refused"
+ready_to_pick 8c 40
+O="$(repl_of "$R")"; Q0="$(on_hand "$IL")"; S0="$(staging_of "$IL")"
+race pickshown "$MGR" "$(pick_sql "$O")" commit "$MGR2" "$(cancel_repl_shown_sql "$R" 1 pick_slip_generated)"
+check "8c: A picked" "$(ans pickshown A)" "picking_complete"
+check "8c: the cancel is refused return_changed (the screen showed it before the pick)" "$(refused pickshown B P0001 return_changed)" "1/1"
+waited pickshown "8c"
+check "8c: the order still picked and live; nothing back in Staging; on hand less the one unit picked; the RMA approved" \
+  "$(order_status "$O")/$(python3 -c "print(int(float('$(staging_of "$IL")') - float('$S0')))")/$(python3 -c "print(int(float('$(on_hand "$IL")') - float('$Q0')))")/$(status_of "$R")" "picking_complete/0/-1/approved"
+
 # ═══ 9. receive_return against the early release ═════════════════════════
 echo "== 9a. the receipt holds; the release waits, then answers not needed"
 R="$(new_ex 11)"
@@ -614,12 +634,11 @@ check "14a: B is refused exchange_already_sent, nothing created" "$(refused r14a
 waited r14a "14a"
 check "14a: no session deadlocked (never 40P01)" "$(deadlocked r14a)" "0"
 
-echo "== 14b. a create asking for an exchange on L3 holds; an approval adding one waits"
+echo "== 14b. a create asking for an exchange on L3 holds; another create asking for one waits"
 q "update public.order_request_lines set quantity_fulfilled = 3, quantity_requested = 3 where id = '$L3'" >/dev/null
-RB4="$(member_now "$(create3_sql "$(key 33)" "")" | jget returnId)"
-race r14b "$MGR" "$(create3_sql "$(key 34)" "{\"itemId\":\"$INAVY\"}")" commit "$MGR2" "$(add_sql "$RB4" "$IN")"
+race r14b "$MGR" "$(create3_sql "$(key 34)" "{\"itemId\":\"$INAVY\"}")" commit "$MGR2" "$(create3_sql "$(key 35)" "{\"itemId\":\"$INAVY\"}")"
 check "14b: A created its RMA with the exchange (the line's last unit)" "$(ans r14b A | jget returnId | grep -c -- -)" "1"
-check "14b: B is refused exchange_already_sent, its RMA still requested" "$(refused r14b B P0001 exchange_already_sent)/$(status_of "$RB4")" "1/1/requested"
+check "14b: B is refused exchange_already_sent, nothing created" "$(refused r14b B P0001 exchange_already_sent)/$(q "select count(*) from public.returns where order_request_id = '$ORDER3' and status <> 'cancelled'")" "1/1/2"
 waited r14b "14b"
 check "14b: no session deadlocked (never 40P01)" "$(deadlocked r14b)" "0"
 check "14: L3 never had more exchange claims than units (1 handed over under the cancelled RMA + one claim per later line)" \

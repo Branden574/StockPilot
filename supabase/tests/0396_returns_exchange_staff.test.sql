@@ -58,10 +58,14 @@
 -- P.  Parity T2-C2 with create_order_request.
 -- Y.  The requester tier (RX-3's predicate, shipped here).
 -- W.  The review fixes: an original unit is exchanged once whatever RMA asks
---     (stock S1, probe P1), the RMA cancel refused while its replacement is
---     picked or on its way (S2, probe P4), the replacement's header and its
---     close-partial owned by the RMA (security F-1), the issuer's own gates
---     (F-4). The S3 lock mode is pinned in A10 and raced in race 13.
+--     (stock S1, probe P1), and a return only made before a cancelled
+--     hand-over never frees it again (verification V2), the RMA cancel
+--     refused while its replacement is picked, staged or on its way (S2,
+--     probe P4; every status, completeness C-5), Cancel replacement refused
+--     when the replacement was picked or sent since the screen showed it
+--     (verification V1), the replacement's header and its close-partial
+--     owned by the RMA (security F-1), the issuer's own gates (F-4). The S3
+--     lock mode is pinned in A10 and raced in race 13.
 -- F.  Frozen bodies and triggers; holdings equal on hand; org deletion.
 --
 -- MUTATION TABLE (stockpilot-work/returns-exchange/mutate-0396.py; each must
@@ -100,7 +104,7 @@
 --   M32 the CHECK refuses a replacement on a declined line again         -> X5, X6, X7
 --   M33 a move that is not into approved rewrites the line's decision    -> X7
 --   M34 the issue's short read names its table l again (42702)          -> A11, B6, C3
---   M35 the line budget forgets units a cancelled RMA handed over        -> W1, W2, W3
+--   M35 the line budget forgets units a cancelled RMA handed over        -> W1, W2, W3, W10
 --   M36 the create skips the line budget                                 -> W1, W3
 --   M37 the approval's add skips the line budget                         -> W2
 --   M38 the approval's approve skips the line budget                     -> W4
@@ -113,6 +117,11 @@
 --   M45 the issue skips its own orders:approve gate                      -> W9
 --   M46 the issue skips its own warehouse write gate                     -> W9
 --   M47 the create takes the budget lock before its item locks           -> A12
+--   M49 the RMA cancel cancels a counter replacement staged for pickup   -> W11
+--   M50 the RMA cancel cancels a replacement staged for delivery         -> W11
+--   M51 the replacement cancel ignores the status its screen showed      -> W12
+--   M52 the line budget leaves return-only lines out again               -> W10
+--   M53 the line budget forgets returns already applied (closed)         -> W10
 --
 -- Roles: fixtures as the test superuser. Every attempt runs through
 -- pg_temp.attempt / pg_temp.try_rpc (always undone) or pg_temp.rpc /
@@ -123,7 +132,7 @@
 
 begin;
 
-select plan(113);
+select plan(116);
 
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
@@ -224,6 +233,8 @@ select plan(113);
 \set lK7     '\'03970000-0000-0000-0000-000000000215\''
 \set oW1     '\'03970000-0000-0000-0000-000000000116\''
 \set lW1     '\'03970000-0000-0000-0000-000000000216\''
+\set oW10    '\'03970000-0000-0000-0000-000000000117\''
+\set lW10    '\'03970000-0000-0000-0000-000000000217\''
 \set nobody  '\'03970000-0000-0000-0000-0000000009ff\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -2025,6 +2036,50 @@ select is(
   'P0001:exchange_already_sent:0|approved:none|1:1',
   'W2: "Add a replacement" on that second RMA is refused the same way, the return-only approval goes through, and the line has had exactly one replacement unit handed over across both RMAs (review S1)');
 
+-- Verification V2 (the S1 rule, the other order of events): oW10 is a line
+-- of two Mediums. rW10a brings one back as a return only FIRST; rW10c then
+-- exchanges the other for a Large, released early and handed over, and is
+-- cancelled (the driver could not collect the Medium). The customer holds one
+-- Medium, the one rW10c already replaced, and one Large. A third RMA returning
+-- that Medium may not exchange it again, while rW10a is still pending (its
+-- unapplied line) and once it is closed (its unit in returned_quantity); it
+-- is accepted as a return only.
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, requester_name, fulfillment_type)
+values (:oW10, :orgA, :whA, 'completed', 'internal', :req, 'Req Person', 'pickup');
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
+values (:lW10, :oW10, :gM, 2, 2);
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oW10, pg_temp.xbody(:lW10, 1))) as "rW10a" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oW10, pg_temp.xbody(:lW10, 1, jsonb_build_object('itemId', :gL)))) as "rW10c" \gset
+select pg_temp.approve(:mgr, :'rW10c', pg_temp.xdec(:'rW10c')) as "jW10c" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.release_return_replacement_early(%L, %L, 'Swap at delivery: the driver collects the returned item.')$q$, :'rW10c', pg_temp.live(:'rW10c'))) as "jW10r" \gset
+select coalesce(pg_temp.live(:'rW10c'), '00000000-0000-0000-0000-000000000000'::uuid) as "oW10R" \gset
+select pg_temp.pick(:mgr, :'oW10R') as "w10Pick" \gset
+select pg_temp.stage(:mgr, :'oW10R') as "w10Stage" \gset
+select pg_temp.call_as('authenticated', :mgr, format($q$select (public.confirm_physical_signature(%L, 'Walk tester')).status$q$, :'oW10R')) as "w10Sign" \gset
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'The driver could not collect the Medium')$q$, :'rW10c', pg_temp.rev(:'rW10c'))) as "jW10k" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW10,
+         pg_temp.xbody(:lW10, 1, jsonb_build_object('itemId', :gL))::text)) as "jW10x" \gset
+select pg_temp.approve(:mgr, :'rW10a', pg_temp.xdec(:'rW10a', null)) as "jW10a" \gset
+select pg_temp.call_as('authenticated', :mgr, format('select (public.receive_return(%L))->>''status''', :'rW10a')) as "w10Recv" \gset
+select pg_temp.rpc('authenticated', :mgr, format('select public.close_return(%L)', :'rW10a')) as "jW10z" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format('select public.create_return_request(%L, %L::jsonb, gen_random_uuid())', :oW10,
+         pg_temp.xbody(:lW10, 1, jsonb_build_object('itemId', :gL))::text)) as "jW10y" \gset
+select pg_temp.as_uuid(pg_temp.mk(:mgr, :oW10, pg_temp.xbody(:lW10, 1))) as "rW10b" \gset
+select is(
+  :'w10Pick' || ':' || :'w10Stage' || ':' || :'w10Sign' || ':' || coalesce((:'jW10k'::jsonb)->>'status', pg_temp.err(:'jW10k'::jsonb))
+  || '|' || pg_temp.err(:'jW10x'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW10x'::jsonb)::text, '-')
+  || '|' || :'w10Recv' || ':' || coalesce((:'jW10z'::jsonb)->>'status', pg_temp.err(:'jW10z'::jsonb))
+  || ':' || (select trim_scale(returned_quantity)::text from public.order_request_lines where id = :lW10)
+  || '|' || pg_temp.err(:'jW10y'::jsonb) || ':' || coalesce(pg_temp.detail(:'jW10y'::jsonb)::text, '-')
+  || '|' || coalesce((select status from public.returns where id = :'rW10b'::uuid), 'none')
+  || ':' || (select count(*)::text from public.return_exchange_lines where return_id = :'rW10b'::uuid),
+  'picking_complete:ok:1:completed:cancelled'
+  || '|P0001:exchange_already_sent:{"quantity": 1, "available": 0}'
+  || '|received:closed:1'
+  || '|P0001:exchange_already_sent:{"quantity": 1, "available": 0}'
+  || '|requested:0',
+  'W10: a return only made BEFORE a cancelled RMA handed a replacement over still counts: the unit that RMA replaced cannot be exchanged again, with the return only pending and once it is closed; the same RMA as a return only is accepted (verification V2)');
+
 -- The budget counts units, not RMAs (review S1 on a line of four): oK5's line
 -- of 4 Mediums had 1 replacement unit handed over under rK5, cancelled (K5).
 -- A new RMA returning all 4 may exchange 3 at most: at the create, at the
@@ -2076,11 +2131,25 @@ select pg_temp.write_as('authenticated', :mgr,
 select coalesce(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6')))->>'status', 'error') as "w6Early" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.complete_picking(%L)).status', :'oW6')) as "w6Pick" \gset
 select pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6')))) as "w6Picked" \gset
+-- Verification V1 (each attempt undone): Cancel replacement from a screen
+-- that showed the replacement before the pick, and from one that showed it
+-- picked.
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Picked the wrong size', 'approved')$q$,
+         :'rW6', pg_temp.rev(:'rW6'))) as "jW12a" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Picked the wrong size', 'picking_complete')$q$,
+         :'rW6', pg_temp.rev(:'rW6'))) as "jW12b" \gset
 select pg_temp.call_as('authenticated', :mgr, format('select (public.generate_order_packing_slips(%L)).status', :'oW6')) as "w6Slips" \gset
+-- Completeness C-5 (undone): staged for pickup (the counter's status) and
+-- staged for delivery refuse the RMA cancel too.
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6')),
+         format($q$update public.order_requests set status = 'staged_for_pickup' where id = %L$q$, :'oW6')) as "jW11p" \gset
 update public.order_requests set status = 'staged_for_delivery' where id = :'oW6';
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW11d" \gset
 update public.order_requests set status = 'in_transit' where id = :'oW6';
 select pg_temp.snap(:gL) as "w6Snap" \gset
 select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6t" \gset
+select pg_temp.try_rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Delivery refused at the door', 'staged_for_delivery')$q$,
+         :'rW6', pg_temp.rev(:'rW6'))) as "jW12c" \gset
 select is(
   :'w6Slip' || ':' || :'w6Early' || ':' || :'w6Pick' || ':' || :'w6Picked' || ':' || :'w6Slips'
   || '|' || pg_temp.err(:'jW6t'::jsonb) || ':' || coalesce(:'jW6t'::jsonb->>'detail', '-')
@@ -2089,7 +2158,21 @@ select is(
   'ok:1:cancelled:picking_complete:P0001:replacement_in_progress:packing_slip_generated'
   || '|P0001:replacement_in_progress:in_transit:in_transit:approved:true',
   'W6: the RMA cancel still cancels a replacement on its pick slip, but is refused replacement_in_progress once it is picked and while it is on its way (the order, the RMA and stock unchanged), so a stale screen never restocks a unit on the truck (review S2, probe P4)');
-select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Delivery refused at the door')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6k" \gset
+select is(
+  pg_temp.err(:'jW11p'::jsonb) || ':' || coalesce(:'jW11p'::jsonb->>'detail', '-')
+  || '|' || pg_temp.err(:'jW11d'::jsonb) || ':' || coalesce(:'jW11d'::jsonb->>'detail', '-'),
+  'P0001:replacement_in_progress:staged_for_pickup|P0001:replacement_in_progress:staged_for_delivery',
+  'W11: the RMA cancel is refused replacement_in_progress while the replacement is staged for pickup (the counter) and staged for delivery as well (review S2, every status of the refusal; completeness C-5)');
+select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return_replacement(%L, %s, 'Delivery refused at the door', 'in_transit')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6k" \gset
+select is(
+  pg_temp.err(:'jW12a'::jsonb)
+  || '|' || coalesce((:'jW12b'::jsonb)->>'changed', pg_temp.err(:'jW12b'::jsonb)) || ':' || coalesce((:'jW12b'::jsonb)->>'drawn', '-')
+  || ':' || coalesce((:'jW12b'::jsonb)->>'inTransit', '-')
+  || '|' || pg_temp.err(:'jW12c'::jsonb)
+  || '|' || coalesce((:'jW6k'::jsonb)->>'changed', pg_temp.err(:'jW6k'::jsonb)) || ':' || coalesce((:'jW6k'::jsonb)->>'drawn', '-')
+  || ':' || coalesce((:'jW6k'::jsonb)->>'inTransit', '-'),
+  'P0001:return_changed|true:true:false|P0001:return_changed|true:true:true',
+  'W12: Cancel replacement names the status its screen showed: picked since a screen that showed it approved, or on its way since one that showed it staged, is return_changed (nothing cancelled: the screen reloads into its Staging and driver warnings); shown as it is, it cancels and answers drawn and in transit (verification V1)');
 select pg_temp.rpc('authenticated', :mgr, format($q$select public.cancel_return(%L, %s, 'Not needed')$q$, :'rW6', pg_temp.rev(:'rW6'))) as "jW6z" \gset
 
 -- Security F-1: a replacement's warehouse, delivery site and created_at, and
@@ -2155,6 +2238,10 @@ select is(
 --   confirm_physical_signature (was f7a14a46d2c70f635c3da844c786ce67): the
 --     driver branch needs a member with Orders on (0395 R3); the hand-overs
 --     here sign as a manager, a branch 0395 left unchanged.
+-- close_partial (0390's body) joined the list with the migration's preflight
+-- (verification V-3): the RMA cancel closes a part-handed-over backorder
+-- with it, and the header guard takes it as the only writer of
+-- backordered -> completed.
 select is(
   (select coalesce(string_agg(x.sig, ','), '')
      from (values
@@ -2167,6 +2254,7 @@ select is(
        ('public.approve_partial(uuid)',                           '40ca0878733b08a649773fe9b7efd4e0'),
        ('public.cancel_order_request(uuid,text)',                 '535fc49935f15adc8d7dfa78836a06af'),
        ('public.complete_picking(uuid)',                          'b8f1ef1fb01efa5c04c916c178129541'),
+       ('public.close_partial(uuid)',                             'a519c3e58fb577c3ff1b30fb3a6cc0ad'),
        ('public.resume_fulfillment(uuid)',                        '2e2d5aab1db5392250879bfa9ff4bccd'),
        ('public.hold_order_stock(uuid)',                          '3b0691d604823164daaa7f248616f00f'),
        ('public.reopen_picking(uuid,text)',                       '14e49293fa670dc2e05a1c1b6930bce5'),
