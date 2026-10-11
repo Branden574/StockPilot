@@ -26,8 +26,7 @@ import {
   describeLineFulfilment,
   describeReturnLine,
   exchangeStatusStaffLabel,
-  itemQuantityLabel,
-  originalExchangeLine,
+  originalExchangeLineFor,
   parseExchangeStatus,
   RETURNS_COPY,
   returnLineLabel,
@@ -412,7 +411,8 @@ export function exchangeItemIdsOf(rows: readonly RawExchangeOverviewRow[]): stri
 /**
  * Per RMA, "Exchange: Large ×1 → SO-000104 (Waiting for returned item)" (plan
  * 3.6.9), the same sentences the web's order page prints (core
- * originalExchangeLine), declined and cancelled lines left out.
+ * originalExchangeLineFor): declined and cancelled lines in their own words
+ * (returns RX-3 PR stage, polish (d)).
  */
 export function exchangeLinesByReturn(
   rows: readonly RawExchangeOverviewRow[],
@@ -428,18 +428,25 @@ export function exchangeLinesByReturn(
   for (const r of rows) {
     if (r.kind !== 'exchange') continue;
     // Desk check F9: a replacement closed with part never sent says so.
-    const words = exchangeStatusStaffLabel(parseExchangeStatus(r.exchange_status), {
+    const status = parseExchangeStatus(r.exchange_status);
+    const words = exchangeStatusStaffLabel(status, {
       returnStatus: r.status,
       replacementStatus: r.replacement_status ?? null,
       replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
     });
     const sentences: string[] = [];
     for (const x of r.exchange_lines ?? []) {
-      if (x.status === 'declined' || x.status === 'cancelled') continue;
       const id = x.approved_item_id ?? x.requested_item_id;
-      const qty = Number(x.approved_quantity ?? x.requested_quantity) || 0;
-      const what = id ? itemQuantityLabel(label.get(id) ?? 'Item', qty) : RETURNS_COPY.replacementWarehouseReview;
-      sentences.push(originalExchangeLine(what, x.status === 'approved' ? r.replacement_order_number : null, words));
+      sentences.push(
+        originalExchangeLineFor({
+          status: x.status,
+          itemLabel: id ? (label.get(id) ?? 'Item') : null,
+          quantity: Number(x.approved_quantity ?? x.requested_quantity) || 0,
+          replacementOrderNumber: r.replacement_order_number,
+          exchangeStatus: status,
+          statusWords: words,
+        }),
+      );
     }
     if (sentences.length > 0) out.set(r.id, sentences);
   }

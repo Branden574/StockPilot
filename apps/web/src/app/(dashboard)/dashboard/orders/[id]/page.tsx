@@ -1733,6 +1733,7 @@ export default async function OrderDetailPage({
                                 (rl.itemId ? `Item ${rl.itemId.slice(0, 8)}` : null),
                               disposition: rl.disposition,
                               applied: rl.applied,
+                              returnStatus: r.status,
                             })}
                           </li>
                         ))}

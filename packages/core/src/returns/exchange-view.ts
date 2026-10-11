@@ -14,11 +14,13 @@
  */
 
 import { sortBySizeOrder } from '../sports/size-order';
-import { replacementPartlySent, type ExchangeStatus } from './exchange-status';
+import { EXCHANGE_STATUS_STAFF_LABELS, replacementPartlySent, type ExchangeStatus } from './exchange-status';
 import {
   approveReplacementSentence,
   availableLabel,
   deliverToSiteLabel,
+  itemQuantityLabel,
+  originalExchangeLine,
   pickingWaitsSentence,
   qtyHandedOverLabel,
   qtyRequestedLabel,
@@ -131,6 +133,62 @@ export function replacementCardQuantityLabel(
 ): string {
   const qty = line.approvedQuantity ?? line.requestedQuantity;
   return replacementLineHandOver(line, replacement) === 'all' ? qtyHandedOverLabel(qty) : qtyRequestedLabel(qty);
+}
+
+// ── The original order's returns section ───────────────────────────────────
+
+/**
+ * One exchange line of the original order's returns section, the web order
+ * page and the phone's order screen (returns RX-3 PR stage, polish (d), from
+ * the RX-2 Demo Co walk: a cancelled RMA's card showed no exchange line,
+ * because declined and cancelled lines were left out). Each line reads in its
+ * own words:
+ *
+ *   approved   "Exchange: Large ×1 → SO-000104 (<the RMA's exchange status>)"
+ *   requested  "Exchange: Large ×1 (Exchange requested)"
+ *   declined   "Exchange: Large ×1 (Exchange declined)"
+ *   cancelled  the RMA's words when the whole exchange was cancelled or its
+ *              replacement was ("Exchange cancelled", "Replacement cancelled:
+ *              …"), else "Exchange cancelled"
+ *
+ * Only an approved line names the replacement order: a cancelled replacement
+ * is listed on its RMA. A request made with a note names no item until one is
+ * approved: "Warehouse will review" while requested, "A different
+ * replacement" once it ended (the requester tracking's words).
+ */
+export function originalExchangeLineFor(input: {
+  /** return_exchange_lines.status. */
+  status: string;
+  /** "Walk Exchange Tee, L" (the approved item, else the one asked for); null for a note. */
+  itemLabel: string | null;
+  quantity: number;
+  /** The RMA's replacement order (the live one). */
+  replacementOrderNumber: number | null;
+  /** The RMA's exchange status and its staff words (exchangeStatusStaffLabel). */
+  exchangeStatus: ExchangeStatus;
+  statusWords: string;
+}): string {
+  const what = input.itemLabel
+    ? itemQuantityLabel(input.itemLabel, input.quantity)
+    : input.status === 'requested'
+      ? RETURNS_COPY.replacementWarehouseReview
+      : RETURNS_COPY.replacementAskedByNote;
+  switch (input.status) {
+    case 'approved':
+      return originalExchangeLine(what, input.replacementOrderNumber, input.statusWords);
+    case 'declined':
+      return originalExchangeLine(what, null, EXCHANGE_STATUS_STAFF_LABELS.declined);
+    case 'cancelled':
+      return originalExchangeLine(
+        what,
+        null,
+        input.exchangeStatus === 'cancelled' || input.exchangeStatus === 'replacement_cancelled'
+          ? input.statusWords
+          : EXCHANGE_STATUS_STAFF_LABELS.cancelled,
+      );
+    default:
+      return originalExchangeLine(what, null, input.statusWords);
+  }
 }
 
 // ── The outbound rail ──────────────────────────────────────────────────────

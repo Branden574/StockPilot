@@ -253,15 +253,50 @@ describe('loadOrderReturns — the exchange line (returns RX-2, plan 3.6.9)', ()
         error: null,
       },
       'inventory_items.select': {
-        data: [{ id: 'item-l', name: 'Walk New Hire Shirt', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null }],
+        data: [
+          { id: 'item-l', name: 'Walk New Hire Shirt', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null },
+          { id: 'item-xl', name: 'Walk New Hire Shirt', variant_size: 'XL', variant_width: null, variant_color: null, jersey_number: null },
+        ],
         error: null,
       },
     });
     const [r] = await loadOrderReturns(stub.client, ORG, ORDER);
+    // Re-pinned by returns RX-3 PR stage, polish (d) (was: the declined line
+    // left out): each line reads in its own words, the declined one too.
     expect(r!.exchangeLines).toEqual([
       'Exchange: Walk New Hire Shirt, L ×1 → SO-000104 (Replacement reserved. Waiting for returned item)',
+      'Exchange: Walk New Hire Shirt, XL ×1 (Exchange declined)',
     ]);
     expect(stub.fromCalls.filter((t) => t === 'return_overview')).toHaveLength(1);
+  });
+
+  // Returns RX-3 PR stage, polish (d), from the RX-2 Demo Co walk: a
+  // cancelled RMA's card showed no exchange line.
+  it('a cancelled RMA names its cancelled exchange, without the cancelled replacement\'s number', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': { data: [rawReturn({ status: 'cancelled', closed_at: null })], error: null },
+      'return_overview.select': {
+        data: [
+          {
+            id: '85d6084b-0000-0000-0000-000000000000',
+            status: 'cancelled',
+            kind: 'exchange',
+            exchange_status: 'cancelled',
+            replacement_order_number: 29,
+            exchange_lines: [
+              { status: 'cancelled', requested_item_id: 'item-l', requested_quantity: 1, approved_item_id: 'item-l', approved_quantity: 1 },
+            ],
+          },
+        ],
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [{ id: 'item-l', name: 'Walk Exchange Tee', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null }],
+        error: null,
+      },
+    });
+    const [r] = await loadOrderReturns(stub.client, ORG, ORDER);
+    expect(r!.exchangeLines).toEqual(['Exchange: Walk Exchange Tee, L ×1 (Exchange cancelled)']);
   });
 
   it('an order without returns reads no return_overview at all', async () => {

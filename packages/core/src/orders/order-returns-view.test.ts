@@ -320,6 +320,28 @@ describe('labels + panel wording', () => {
     ).toBe('2 × Unknown item — Scrap · pending');
   });
 
+  // Returns RX-3 PR stage, polish (d), from the RX-2 Demo Co walk: a
+  // cancelled RMA's card on the original order read "Restock · pending", as
+  // if the unit were still on its way. A denied or cancelled RMA waits for
+  // nothing (the workbench's own words say "Not returned").
+  it('describeReturnLine: an unapplied line on a denied or cancelled RMA reads "not returned"; in flight it stays pending', () => {
+    for (const returnStatus of ['denied', 'cancelled']) {
+      expect(
+        describeReturnLine({ quantity: 1, itemName: 'Walk Exchange Tee M', disposition: 'restock', applied: false, returnStatus }),
+        returnStatus,
+      ).toBe('1 × Walk Exchange Tee M — Restock · not returned');
+    }
+    for (const returnStatus of ['requested', 'approved', 'received']) {
+      expect(
+        describeReturnLine({ quantity: 1, itemName: 'Walk Exchange Tee M', disposition: 'restock', applied: false, returnStatus }),
+        returnStatus,
+      ).toBe('1 × Walk Exchange Tee M — Restock · pending');
+    }
+    expect(
+      describeReturnLine({ quantity: 1, itemName: 'Walk Exchange Tee M', disposition: 'restock', applied: true, returnStatus: 'closed' }),
+    ).toBe('1 × Walk Exchange Tee M — Restock · applied');
+  });
+
   it('returnHandle: the number, else an id prefix', () => {
     expect(returnHandle(CLOSED_RMA)).toBe('RMA-20260817-EEF074');
     expect(returnHandle({ id: 'abcdef12-3456', returnNumber: null })).toBe('Return abcdef12');

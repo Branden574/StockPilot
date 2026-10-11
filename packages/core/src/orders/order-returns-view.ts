@@ -286,15 +286,29 @@ export function formatOrderReturnSummary(s: OrderReturnSummary): string {
 export const ORDER_RETURN_SUMMARY_NOTE =
   'Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.';
 
-/** "1 × Women's Polo S — Restock · applied" (the panel's per-line row). */
+/**
+ * "1 × Women's Polo S — Restock · applied" (the panel's per-line row). An
+ * unapplied line is "pending" while its RMA is in flight and "not returned"
+ * once the RMA was denied or cancelled: it waits for nothing (returns RX-3 PR
+ * stage, polish (d), from the RX-2 Demo Co walk, where a cancelled RMA's card
+ * read "Restock · pending"). Without `returnStatus` an unapplied line reads
+ * "pending", as before.
+ */
 export function describeReturnLine(input: {
   quantity: number | null | undefined;
   itemName: string | null | undefined;
   disposition: string;
   applied: boolean;
+  /** The RMA's status. */
+  returnStatus?: ReturnStatus | string | null;
 }): string {
   const name = input.itemName?.trim() || 'Unknown item';
-  return `${n(input.quantity)} × ${name} — ${returnDispositionLabel(input.disposition)} · ${input.applied ? 'applied' : 'pending'}`;
+  const state = input.applied
+    ? 'applied'
+    : input.returnStatus === 'denied' || input.returnStatus === 'cancelled'
+      ? 'not returned'
+      : 'pending';
+  return `${n(input.quantity)} × ${name} — ${returnDispositionLabel(input.disposition)} · ${state}`;
 }
 
 /** Title / accessibility text for the per-line "N returned" figure. */

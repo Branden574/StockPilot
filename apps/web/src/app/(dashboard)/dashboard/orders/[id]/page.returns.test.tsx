@@ -573,7 +573,11 @@ describe('(d) an unapplied return counts for nothing in the returned figure — 
       expect(container.querySelector('[data-testid="order-return-summary"]')).toBeNull();
       const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
       expect(panel.textContent).toContain(mobile.RETURN_STATUS_LABELS[status]);
-      expect(panel.textContent).toContain("1 × Women's Polo S — Scrap · pending");
+      // Re-pinned by returns RX-3 PR stage, polish (d) (was: "Scrap ·
+      // pending"): a denied or cancelled RMA waits for nothing, so its
+      // unapplied line reads "not returned". Claim kept: nothing returned.
+      expect(panel.textContent).toContain("1 × Women's Polo S — Scrap · not returned");
+      expect(panel.textContent).not.toContain('· pending');
     },
   );
 
@@ -742,6 +746,7 @@ describe('(e) the phone says what the web page renders — pinned against the MO
       itemName: mobile.returnLineItemName(rl, MOBILE_LINES),
       disposition: rl.disposition,
       applied: rl.applied,
+      returnStatus: rma.status,
     });
     expect(row.textContent).toContain(phoneLine);
     expect(row.textContent).toContain(mobile.returnStatusLabel('closed'));

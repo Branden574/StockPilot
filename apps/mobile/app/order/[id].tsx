@@ -3390,6 +3390,7 @@ export default function OrderDetail() {
                         itemName: returnLineItemName(rl, order.lines),
                         disposition: rl.disposition,
                         applied: rl.applied,
+                        returnStatus: r.status,
                       })}
                     </Mono>
                   ))}

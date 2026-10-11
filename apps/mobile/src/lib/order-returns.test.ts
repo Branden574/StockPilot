@@ -221,7 +221,11 @@ describe('RX-2: the create sheet exchange and the original order exchange lines'
     expect(plain.ok && plain.body.lines[0]).toEqual({ orderRequestLineId: 'ol1', quantity: 1, disposition: 'scrap' });
   });
 
-  it('names each exchange like the web: approved with its SO and status words; declined lines left out', async () => {
+  // Re-pinned by returns RX-3 PR stage, polish (d) (was: "declined lines
+  // left out"): each line reads in its own words (core
+  // originalExchangeLineFor, the web's rule), so a declined or cancelled
+  // exchange still shows on the order.
+  it('names each exchange like the web: approved with its SO and status words; declined and cancelled lines in their own words', async () => {
     const { exchangeItemIdsOf, exchangeLinesByReturn } = await import('./order-returns');
     const rows = [
       {
@@ -240,8 +244,27 @@ describe('RX-2: the create sheet exchange and the original order exchange lines'
     expect(exchangeItemIdsOf(rows).sort()).toEqual(['l', 'xl']);
     const lines = exchangeLinesByReturn(rows, [
       { id: 'l', name: 'Walk New Hire Shirt', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null },
+      { id: 'xl', name: 'Walk New Hire Shirt', variant_size: 'XL', variant_width: null, variant_color: null, jersey_number: null },
     ]);
-    expect(lines.get('rma-1')).toEqual(['Exchange: Walk New Hire Shirt, L ×1 → SO-000104 (Replacement reserved. Waiting for returned item)']);
+    expect(lines.get('rma-1')).toEqual([
+      'Exchange: Walk New Hire Shirt, L ×1 → SO-000104 (Replacement reserved. Waiting for returned item)',
+      'Exchange: Walk New Hire Shirt, XL ×1 (Exchange declined)',
+    ]);
     expect(lines.has('rma-2')).toBe(false);
+    // The RX-2 walk's cancelled RMA: its exchange shows, cancelled.
+    const cancelled = exchangeLinesByReturn(
+      [
+        {
+          id: 'rma-3',
+          status: 'cancelled',
+          kind: 'exchange',
+          exchange_status: 'cancelled',
+          replacement_order_number: 29,
+          exchange_lines: [{ status: 'cancelled', requested_item_id: 'l', requested_quantity: 1, approved_item_id: 'l', approved_quantity: 1 }],
+        },
+      ],
+      [{ id: 'l', name: 'Walk Exchange Tee', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null }],
+    );
+    expect(cancelled.get('rma-3')).toEqual(['Exchange: Walk Exchange Tee, L ×1 (Exchange cancelled)']);
   });
 });

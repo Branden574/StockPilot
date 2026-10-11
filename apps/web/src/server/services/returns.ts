@@ -6,14 +6,12 @@ import {
   can,
   exchangeStatusStaffLabel,
   formatOrderNumber,
-  itemQuantityLabel,
   mapReturnError,
-  originalExchangeLine,
+  originalExchangeLineFor,
   parseExchangeCandidates,
   parseExchangeStatus,
   returnLineLabel,
   RETURN_ERROR_WORDS,
-  RETURNS_COPY,
   variantLabel,
   parseReturnBody,
   parseRestockOptions,
@@ -397,13 +395,21 @@ async function loadOriginalExchangeLines(
         replacementStatus: r.replacement_status ?? null,
         replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
       });
+      // Returns RX-3 PR stage, polish (d): declined and cancelled lines are
+      // listed too, each in its own words (core originalExchangeLineFor).
       const sentences: string[] = [];
       for (const x of r.exchange_lines ?? []) {
-        if (x.status === 'declined' || x.status === 'cancelled') continue;
         const id = x.approved_item_id ?? x.requested_item_id;
-        const qty = Number(x.approved_quantity ?? x.requested_quantity) || 0;
-        const what = id ? itemQuantityLabel(label.get(id) ?? 'Item', qty) : RETURNS_COPY.replacementWarehouseReview;
-        sentences.push(originalExchangeLine(what, x.status === 'approved' ? r.replacement_order_number : null, words));
+        sentences.push(
+          originalExchangeLineFor({
+            status: x.status,
+            itemLabel: id ? (label.get(id) ?? 'Item') : null,
+            quantity: Number(x.approved_quantity ?? x.requested_quantity) || 0,
+            replacementOrderNumber: r.replacement_order_number,
+            exchangeStatus: status,
+            statusWords: words,
+          }),
+        );
       }
       if (sentences.length > 0) out.set(r.id, sentences);
     }
