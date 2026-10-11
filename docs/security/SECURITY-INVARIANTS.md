@@ -799,23 +799,39 @@ actually fire.
     body at the same revision is `return_changed`. Stale screens: the
     replacement cancel and "Close as return only" need the revision the
     caller saw, and the early release names the replacement order the caller
-    saw; anything newer is `return_changed` (desk check F7).
+    saw; anything newer is `return_changed` (desk check F7). The
+    replacement cancel also names the replacement's status as the caller's
+    screen showed it (`p_shown_status`): a replacement picked since a screen
+    that showed it unpicked, or on its way since one that showed it in the
+    building, is `return_changed`, so the screen reloads into its Staging and
+    driver warnings (verification V1: a release, the pick, packing, staging
+    and the departure never bump the revision). An API caller that names no
+    status is not checked; its answer carries `drawn` and `inTransit`, and
+    both screens say those after the call too.
   - **Never more out than returned, per original unit** (desk check F2;
     review S1). Every unit of an original order line is exchanged once,
     whatever RMA asks: an exchange quantity is capped by the RMA's returned
     quantity and by what the original line has left
-    (`_return_exchange_line_budget`): its handed-over quantity, less the
-    units replacements already handed over for it under cancelled RMAs (the
-    customer kept those units, so a later RMA brings them back as a return
-    only), less what each other RMA on the line claims (the returned
-    quantity of an exchange requested, approved or re-issuable; the units
-    handed over by one declined for good; nothing for denied RMAs and
-    return-only lines). The create, the approval (approve and "Add a
-    replacement"), a change and a re-issue refuse more with
-    `exchange_already_sent` (detail quantity and available), each under the
-    line's budget lock. Without a cancelled RMA's hand-over the budget never
-    binds (RX-1's return budget keeps the returned quantities within the
-    handed-over quantity). A replacement that handed anything over, whatever
+    (`_return_exchange_line_budget`): its handed-over quantity, less every
+    unit the other RMAs neither cancelled nor denied return or returned on it
+    (the durable `returned_quantity` less this RMA's own applied units, and
+    the others' unapplied lines), exchange or return only, less the units
+    replacements already handed over for it under cancelled RMAs (the
+    customer kept those units: a later RMA brings them back as a return
+    only). A return only claims its units too (verification V2): units are
+    alike, and one made BEFORE a cancelled hand-over cannot have brought back
+    the unit that RMA replaced (RX-1's pool kept them apart), so counting
+    only exchanges let that unit be exchanged a second time. The price,
+    accepted: a return only made AFTER the cancel does not free another unit
+    for exchange either (an exchange refused there can be handled as a return
+    only plus an ordinary order). The create, the approval (approve and "Add
+    a replacement"), a change and a re-issue refuse more with
+    `exchange_already_sent` (detail quantity and available). Without a
+    cancelled RMA's hand-over the budget never binds: it is RX-1's returnable
+    pool with the RMA's own units put back. Every claim is a returned unit,
+    fixed when its RMA is created, and creates on one line meet on the 0153
+    cap trigger's row lock, so since V2 the line's budget lock is defence in
+    depth. A replacement that handed anything over, whatever
     its status (a backorder, or one resumed into picking), is handed over:
     neither cancelled nor changed from its RMA (`replacement_handed_over`).
     A re-issue sends each exchange line at most its returned quantity minus
@@ -868,21 +884,35 @@ actually fire.
     transaction that creates it. A replacement already picked is cancelled through
     `cancel_order_request`'s drawn branch (the batch back to Staging, holds
     released) by "Cancel replacement" only: cancelling the RMA is refused
-    while its replacement is picked, being packed, staged or in transit
-    (`replacement_in_progress`, review S2), so a stale screen or the API
-    never restocks a unit that is on the truck; one handed over is never
-    cancelled (`replacement_handed_over`).
+    while its replacement is picked, being packed, staged (for pickup or
+    delivery) or in transit (`replacement_in_progress`, review S2), and
+    "Cancel replacement" is refused when the replacement was picked or sent
+    after its screen showed it (verification V1), so neither path restocks a
+    unit nobody was warned about; one handed over is never cancelled
+    (`replacement_handed_over`).
   - **The header guard** (security review F-1).
     `trg_order_requests_zz_replacement_header` (SECURITY INVOKER, every
     role, `postgres` included) refuses a change of a replacement's
     `warehouse_id`, `delivery_charter_id` or `created_at`, and its move from
     `backordered` to `completed` (`close_partial`, the order page's "close
     as delivered-partial"), unless an RMA function raised the
-    transaction-bound flag (`replacement_cancel_via_return`): the RMA's gates
-    read the original order's warehouse, and `created_at` orders the RMA's
-    replacements (a re-issue inherits the newest one's fulfilment). The RMA
-    cancel raises the flag around its own `close_partial`. A data fix by the
-    owner raises the flag the same way.
+    transaction-bound flag (`replacement_cancel_via_return`): `created_at`
+    orders the RMA's replacements (a re-issue inherits the newest one's
+    fulfilment), and the replacement stays in the warehouse it was issued
+    in. The RMA cancel raises the flag around its own `close_partial` (pinned
+    by the 0396 preflight since verification V-3). A data fix by the owner
+    raises the flag the same way. Residual (verification V-1, recorded): the
+    RMA's gates read the ORIGINAL order's warehouse, which this guard does not
+    pin; `order_requests_update` still lets an `orders:approve` holder who
+    writes both warehouses move a completed original by a raw PATCH (no
+    screen or service writes an order's warehouse), and the RMA's warehouse
+    scope follows it: staff of the new warehouse can then release or cancel
+    the replacement in the old one (no order crosses warehouses: a change to
+    an item of the old warehouse is `exchange_item_not_eligible`). Production
+    had 0 such RMAs on 2026-10-11. Follow-up for a later returns slice:
+    refuse a warehouse change on an order that has an RMA, or also require
+    write access to the live replacement's warehouse in the exchange
+    functions.
   - **The flag** (security review F-5). `stockpilot.return_exchange` is the
     only barrier for SECURITY DEFINER callers of `cancel_order_request` and
     `close_partial` on a replacement, and of the header guard. It counts only
@@ -894,7 +924,14 @@ actually fire.
     (BEFORE INSERT only) refuses an API-role insert of a replacement's lines
     (`replacement_lines_fixed`); an update is refused by the
     `order_request_lines_no_update` policy, not by this trigger (desk check
-    F8). The app refuses both before any write.
+    F8). The app refuses both before any write. Recorded (verification V7):
+    unlike the header guard, the lines guard holds for API roles only; the
+    service role bypasses the policy and the trigger returns early for it,
+    so a service-role line insert or quantity update on a replacement would
+    pass outside the exchange budget. Today every admin-client line edit goes
+    through `loadEditableOrderHeader`, which refuses a replacement first; an
+    every-role guard (allowed only under the flag, and only for the columns
+    picking and approval write) is defence in depth for a later slice.
   - **Reads.** `return_exchange_lines`: members SELECT (RLS on the RMA's
     organization), no API write; `return_decisions.exchange_line_id` is a
     composite key to (exchange line, RMA). A line's decision (approved item,
@@ -932,8 +969,10 @@ actually fire.
     replacement out for delivery (`in_transit`) restocks the picked batch to
     Staging on record while the unit is still with the driver
     (`cancel_order_request`'s unchanged drawn branch); only "Cancel
-    replacement" does this, and its screens say to ask the driver to bring
-    it back (the RMA cancel is refused there, review S2).
+    replacement" does this, its screens say to ask the driver to bring it
+    back before and after the call, and a screen that showed the replacement
+    before it left is refused (`return_changed`, verification V1); the RMA
+    cancel is refused there (review S2).
     `return_exchange_lines.request_note`, the requester's own words, is
     readable by every member, the same posture as `returns.notes`.
     `return_exchange_candidates` (SECURITY INVOKER) checks neither the
@@ -943,7 +982,11 @@ actually fire.
     part-handed-over replacement on backorder whose RMA is already received
     or closed cannot be closed as delivered-partial (the header guard; the
     RMA cancel needs a requested or approved RMA): it waits on backorder
-    until Resume sends the rest (an RMA-side close is an RX-3 follow-up).
+    until Resume sends the rest. Nothing is held and nothing moves. An
+    RMA-side "Close the rest" (`close_partial` under the flag) needs a
+    function change: RX-3 did not build it, so it is assigned to RX-4 (or
+    its own migration if RX-4 is not scheduled first; verification V3,
+    completeness C-6).
 - **Why it matters**: a replacement is stock promised to someone. Without
   these rules an exchange could be issued twice for one approval, picked and
   handed over before the item it replaces came back, cancelled from the
