@@ -9,7 +9,7 @@
 --        production's own keys) and no composite key or column-list SET NULL
 --        to a person;
 --    K2  no RESTRICT or NO ACTION key to a person in any schema;
---    K3  the CASCADE person keys in public are exactly the 19 personal ones
+--    K3  the CASCADE person keys in public are exactly the 20 personal ones (0399 adds one)
 --        (delivery_locations and order_submissions added, invites gone);
 --    K4  the tables carrying deleted_users are exactly the 16 of the narrow
 --        scope, and each table's trigger arguments are exactly its SET NULL
@@ -310,11 +310,15 @@ select is(
                     || (count(*) filter (where c.confdelsetcols is not null))::text
                from pg_constraint c
               where c.contype = 'f' and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)),
-  -- Production d05804c6ca1f8bee2744301f5b1e43bb|130 before 0393; this value
-  -- is production's own keys with exactly 0393's changes applied (19 SET
-  -- NULL, 9 NOT NULL dropped, delivery_locations CASCADE, 4 new keys).
-  'afc55a5ab973223f06d7c9d0245929f1|134|0/0',
-  'K1: the person-key census in public is 0393''s (134 keys), and no key to a person is composite or names SET NULL columns');
+  -- Production d05804c6ca1f8bee2744301f5b1e43bb|130 before 0393; with
+  -- exactly 0393's changes applied (19 SET NULL, 9 NOT NULL dropped,
+  -- delivery_locations CASCADE, 4 new keys) it was
+  -- afc55a5ab973223f06d7c9d0245929f1|134, production's own census through
+  -- 0396 (read 2026-10-11). 0399 (Ungroup) adds one key: the grouping
+  -- request log's person, item_grouping_requests.user_id>user_profiles:c:NN
+  -- (recomputed from that production census with the one entry added).
+  '885e1d5a80696bacdf3424d5f34953e2|135|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log (135 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -328,11 +332,12 @@ select is(
     where c.contype = 'f' and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass)
       and c.connamespace = 'public'::regnamespace and c.confdeltype = 'c'),
   'ai_chat_sessions.user_id,customer_users.user_id,delivery_locations.driver_user_id,import_jobs.user_id,'
+  'item_grouping_requests.user_id,'
   'mfa_recovery_codes.user_id,notification_preferences.user_id,notifications.user_id,order_submissions.user_id,'
   'organization_members.user_id,platform_impersonation_sessions.admin_user_id,push_tokens.user_id,saved_views.user_id,'
   'user_category_assignments.user_id,user_login_devices.user_id,user_onboarding.user_id,user_permission_overrides.user_id,'
   'user_profiles.id,user_release_state.user_id,user_warehouse_assignments.user_id',
-  'K3: the person keys in public that cascade are exactly the 19 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL)');
+  'K3: the person keys in public that cascade are exactly the 20 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log)');
 select is(
   (select string_agg(c.relname, ',' order by c.relname collate "C")
      from pg_attribute a join pg_class c on c.oid = a.attrelid

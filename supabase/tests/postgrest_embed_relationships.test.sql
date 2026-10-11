@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 399 foreign keys, 8 junctions, 35 ambiguous pairs.
+-- 401 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -166,6 +166,8 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('item_attachments', 'item_attachments_created_by_fkey', 'user_profiles', 'created_by', 'id'),
   ('item_attachments', 'item_attachments_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('item_attachments', 'item_attachments_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('item_grouping_requests', 'item_grouping_requests_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('item_grouping_requests', 'item_grouping_requests_user_id_fkey', 'user_profiles', 'user_id', 'id'),
   ('item_images', 'item_images_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('item_images', 'item_images_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('item_import_batches', 'item_import_batches_imported_by_fkey', 'user_profiles', 'imported_by', 'id'),
@@ -449,6 +451,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
 insert into expected_junctions (junction, a, b, a_fk, b_fk) values
   ('bundle_components', 'bundles', 'inventory_items', 'bundle_components_bundle_id_fkey', 'bundle_components_item_id_fkey'),
   ('customer_catalog', 'customers', 'inventory_items', 'customer_catalog_customer_id_fkey', 'customer_catalog_item_id_fkey'),
+  ('item_grouping_requests', 'organizations', 'user_profiles', 'item_grouping_requests_organization_id_fkey', 'item_grouping_requests_user_id_fkey'),
   ('item_tags', 'inventory_items', 'tags', 'item_tags_item_id_fkey', 'item_tags_tag_id_fkey'),
   ('order_submissions', 'organizations', 'user_profiles', 'order_submissions_organization_id_fkey', 'order_submissions_user_id_fkey'),
   ('price_list_items', 'inventory_items', 'price_lists', 'price_list_items_item_id_fkey', 'price_list_items_price_list_id_fkey'),
@@ -475,7 +478,7 @@ insert into expected_pairs (a, b, relationships) values
   ('order_requests', 'user_profiles', 'order_requests_approved_by_fkey,order_requests_assigned_delivery_by_fkey,order_requests_assigned_delivery_user_id_fkey,order_requests_assigned_picker_id_fkey,order_requests_cancelled_by_fkey,order_requests_completed_by_fkey,order_requests_in_transit_by_fkey,order_requests_packing_slip_generated_by_fkey,order_requests_pick_slip_generated_by_fkey,order_requests_picking_claimed_by_fkey,order_requests_picking_completed_by_fkey,order_requests_requester_user_id_fkey,order_requests_staged_by_fkey'),
   ('organization_members', 'user_profiles', 'organization_members_invited_by_fkey,organization_members_user_id_fkey'),
   ('organizations', 'platform_impersonation_sessions', 'platform_impersonation_sessions_previous_organization_id_fkey,platform_impersonation_sessions_target_organization_id_fkey'),
-  ('organizations', 'user_profiles', 'order_submissions,user_permission_overrides,user_profiles_default_organization_id_fkey'),
+  ('organizations', 'user_profiles', 'item_grouping_requests,order_submissions,user_permission_overrides,user_profiles_default_organization_id_fkey'),
   ('platform_admin_audit', 'user_profiles', 'platform_admin_audit_actor_user_id_fkey,platform_admin_audit_target_user_id_fkey'),
   ('po_imports', 'user_profiles', 'po_imports_approved_by_fkey,po_imports_uploaded_by_fkey'),
   ('procedures', 'user_profiles', 'procedures_created_by_fkey,procedures_updated_by_fkey'),
