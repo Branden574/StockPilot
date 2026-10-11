@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  availableReturnActions,
   availableReturnListFilters,
   COMPLETION_CONFIRM_LABEL,
   CONFIRM_COUNT_LABEL,
@@ -6639,5 +6640,38 @@ describe('exchanges on returns (returns RX-2) is published', () => {
     // Nothing claims the replacement card's status after the hand-over, or
     // the phone order header's word for a completed pickup (walk Lows).
     expect(all).not.toMatch(/\bdelivered\b|\bcompleted\b/i);
+  });
+
+  // Corrected by the claims review of #345 (2026-10-11), against d6469127:
+  // the line said Cancel return also cancels "a replacement not picked yet".
+  // At an approved RMA, core availableReturnActions (the RMA's buttons on the
+  // web and the phone) offers Cancel return while the replacement waits for
+  // the returned item, and not once it is released early (Ready to pick, or
+  // a pick slip and picking: at an approved RMA the gate lets a pick slip
+  // through only after a release), picked or sent; there Cancel replacement
+  // is the path, and Cancel return comes back after it.
+  it('says Cancel return cancels a waiting replacement, and one released early, picked or sent is handed over or cancelled first', () => {
+    const [, order] = release().entries;
+    expect(order!.howItAffectsYou).toMatch(
+      /Cancelling the return also cancels a waiting replacement; once it is released early, picked or sent, hand it over first, or cancel the replacement if none was handed over\.$/,
+    );
+    expect(order!.howItAffectsYou).not.toMatch(/not picked yet/);
+    const at = (exchangeStatus: 'waiting_for_return' | 'ready_to_pick' | 'in_progress' | 'replacement_cancelled') =>
+      availableReturnActions({
+        status: 'approved',
+        exchangeStatus,
+        hasExchange: true,
+        hasApprovedExchange: true,
+        replacementClass: exchangeStatus === 'replacement_cancelled' ? 'none' : 'undrawn',
+        viewerCanManageReturns: true,
+        viewerCanApproveOrders: true,
+      });
+    const offers = (a: ReturnType<typeof at>) => [a.primary, ...a.secondary];
+    expect(offers(at('waiting_for_return'))).toContain('cancel');
+    for (const released of ['ready_to_pick', 'in_progress'] as const) {
+      expect(offers(at(released))).not.toContain('cancel');
+      expect(offers(at(released))).toContain('cancel_replacement');
+    }
+    expect(offers(at('replacement_cancelled'))).toContain('cancel');
   });
 });
