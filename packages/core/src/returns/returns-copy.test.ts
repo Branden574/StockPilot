@@ -181,6 +181,21 @@ describe('returns copy', () => {
     expect(returnLineLabel(null, null)).toBe('Item');
   });
 
+  // RX-3 (found by the requester tracking, web stage): an apostrophe-s is a
+  // possessive, never the size S, so "Women's Polo" in size S kept no size
+  // at all ("Women's Polo ×1" beside "Women's Polo, M ×1"). L4L's own
+  // exchange items are the New Hire Men's and Women's Polos (plan RX-0).
+  it("never reads a possessive's s as the size S (Women's, Men's, curly or straight)", () => {
+    expect(returnLineLabel("Women's Polo", 'Size S')).toBe("Women's Polo, S");
+    expect(returnLineLabel("New Hire Men's Polo", 'S')).toBe("New Hire Men's Polo, S");
+    expect(returnLineLabel('Women’s Polo', 'Size S')).toBe('Women’s Polo, S');
+    expect(returnLineLabel("Kids' Tee", 'Size S')).toBe("Kids' Tee, S");
+    // A name that does carry the size still is not repeated.
+    expect(returnLineLabel("Women's Polo S", 'Size S')).toBe("Women's Polo S");
+    expect(returnLineLabel("Women's Polo - S", 'Size S')).toBe("Women's Polo - S");
+    expect(returnLineLabel("Women's Polo (M)", 'Size M')).toBe("Women's Polo (M)");
+  });
+
   it('RX-2: prints the plan section 6 replacement sentences', () => {
     expect(exchangeReplacementBanner('RMA-20261005-ABC123', 100)).toBe('Exchange replacement for RMA-20261005-ABC123 · Original order SO-000100');
     expect(waitingForReturnLine('RMA-1')).toBe('Replacement reserved. Waiting for returned item (RMA-1)');

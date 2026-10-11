@@ -386,13 +386,14 @@ export function choiceNeededSentence(item: string | null, reason: string): strin
 
 /** "New Hire Shirt, M" or "New Hire Shirt" for the sentences that name a
  *  line; a name that already carries the size ("Walk New Hire Shirt - 2XL")
- *  is not repeated. */
+ *  is not repeated. An apostrophe is part of a word here (RX-3): the s of
+ *  "Women's" is a possessive, never the size S. */
 export function returnLineLabel(name: string | null | undefined, variant: string | null | undefined): string {
   const n = (name ?? '').trim() || 'Item';
   const v = (variant ?? '').trim().replace(/^Size\s+/i, '');
   if (!v) return n;
   const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^A-Za-z0-9])${escaped}($|[^A-Za-z0-9])`, 'i').test(n) ? n : `${n}, ${v}`;
+  return new RegExp(`(^|[^A-Za-z0-9'’])${escaped}($|[^A-Za-z0-9'’])`, 'i').test(n) ? n : `${n}, ${v}`;
 }
 
 /** "Already marked received by Dana at 3:04 PM." */
