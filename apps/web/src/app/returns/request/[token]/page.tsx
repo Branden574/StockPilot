@@ -1,9 +1,13 @@
 import { headers } from 'next/headers';
 
+import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { RETURN_PAGE_VIEWS_PER_IP_PER_HOUR, returnPageIpBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { loadRequesterReturnContext } from '@/server/services/returns';
+import { loadRequesterReturnSheet } from '@/server/services/returns-requester';
+
+import { RETURNS_COPY } from '@stockpilot/core';
 
 import { RequesterReturnForm } from './requester-return-form';
 
@@ -16,8 +20,16 @@ import { RequesterReturnForm } from './requester-return-form';
  * service-role admin client (the visitor has no JWT) and render ONLY that
  * order's still-returnable lines. No cross-order data is ever loaded or exposed.
  *
+ * Returns RX-3: the page is the requester's "Return or exchange" sheet
+ * (loadRequesterReturnSheet: names, sizes and photos signed for the order's
+ * own items, never a SKU), each line Return only or Exchange for another
+ * size (the sizes come from a POST with the token in the body, on the first
+ * Exchange), and "Your requests on this order" below it (the requester's own
+ * requests in core's sentences; never a rack, Staging, a disposition, a
+ * cost, a note, a reason or a staff name).
+ *
  * An unknown/expired token, a non-returnable order, or an org with the returns
- * module disabled all 404 silently (loadRequesterReturnContext returns null) so
+ * module disabled all 404 silently (loadRequesterReturnSheet returns null) so
  * we never leak which tokens are live.
  *
  * Mirrors the public order-request landing page (`/r/[token]`): bare layout,
@@ -29,7 +41,7 @@ export const dynamic = 'force-dynamic';
 
 export async function generateMetadata() {
   return {
-    title: 'Request a return',
+    title: exchangeCreateEnabled() ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return',
     robots: { index: false, follow: false },
   };
 }
@@ -56,47 +68,51 @@ export default async function RequesterReturnPage({
   if (!limit.allowed) return <ReturnLinkBusy />;
 
   const admin = createAdminClient();
-  const ctx = await loadRequesterReturnContext(admin, token);
+  const sheet = await loadRequesterReturnSheet(admin, token);
   // Unknown, expired, non-returnable, and module-off all render the SAME
   // return-branded dead-end (owner report 2026-07-20: the generic global 404
   // is too blunt for a page people reach from an email link). Deliberately
   // ONE message for every failure mode — no oracle about whether a token
   // ever existed. notFound() is not used so the copy can be return-specific.
-  if (!ctx) return <ReturnLinkInvalid />;
+  if (!sheet) return <ReturnLinkInvalid />;
 
+  const exchanges = sheet.exchangesEnabled;
   return (
     <div className="min-h-screen bg-background text-foreground">
       <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
         <header className="border-border mb-8 border-b pb-6">
           <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
-            Return request
+            Return request{sheet.orderNumber ? ` · Order ${sheet.orderNumber}` : ''}
           </div>
           <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
-            Request a return
+            {exchanges ? RETURNS_COPY.requesterReturnOrExchange : 'Request a return'}
           </h1>
           <p className="text-muted-foreground mt-4 max-w-[56ch] text-sm leading-relaxed">
-            Pick the items you&apos;d like to return and how many of each. The
-            warehouse team reviews every request before anything is processed —
-            you&apos;ll hear back once it&apos;s approved.
+            {exchanges ? (
+              <>
+                Choose the items you&apos;re sending back and how many of each. For each one, choose{' '}
+                {RETURNS_COPY.returnOnly} or {RETURNS_COPY.exchangeRequester}. The warehouse team reviews
+                every request before anything happens, and this page shows where each request stands.
+              </>
+            ) : (
+              <>
+                Pick the items you&apos;d like to return and how many of each. The
+                warehouse team reviews every request before anything is processed —
+                you&apos;ll hear back once it&apos;s approved.
+              </>
+            )}
           </p>
         </header>
 
-        {ctx.lines.length === 0 ? (
-          <div className="border-border bg-card rounded-2xl border p-6 text-center">
-            <h2 className="font-display text-lg">Nothing left to return</h2>
-            <p className="text-muted-foreground mt-2 text-sm">
-              Every item on this order has already been returned, or this order
-              has no returnable items. If you think this is a mistake, reach out
-              to the warehouse directly.
-            </p>
-          </div>
-        ) : (
-          <RequesterReturnForm
-            token={token}
-            lines={ctx.lines}
-            requesterName={ctx.requesterName}
-          />
-        )}
+        <RequesterReturnForm
+          token={token}
+          lines={sheet.lines}
+          exchangesEnabled={exchanges}
+          requesterName={sheet.requesterName}
+          hasRequests={sheet.tracking.length > 0}
+        />
+
+        <RequesterTracking requests={sheet.tracking} className="mt-10" id="your-requests" />
 
         <p className="text-muted-foreground mt-10 text-center text-[11px]">
           Powered by StockPilot
