@@ -781,6 +781,35 @@ describe('cancel with a live replacement (X-2)', () => {
     await cancelled.svc.cancel(RET_ID, { reason: 'Customer kept it' });
     expect(returnPromptMock).not.toHaveBeenCalled();
   });
+
+  // RX-3 fix round 1 (desk check F7, RX-2 code): the order service's
+  // close-partial sends order.completed { closedPartial: true }, writes
+  // order.closed_partial and broadcasts the order, for the same database edge;
+  // the RMA cancel's close sent only the email, so accounting exports and
+  // webhooks showed the replacement open or backordered forever.
+  it('a part-handed-over replacement the cancel closed gets the close-partial trail: order.completed, its audit and the broadcast', async () => {
+    const { svc } = svcFor({
+      'order_requests.select': orderReads({ live: { id: REPL_ID, status: 'backordered', order_number: 104 }, after: 'completed' }),
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+    });
+    await svc.cancel(RET_ID, { reason: 'Customer kept it' });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'order.completed', { id: REPL_ID, orderNumber: 'SO-000104', closedPartial: true });
+    const closedAudit = auditMock.mock.calls.map((c) => c[0] as { event: string; entityId: string; extra?: Record<string, unknown> }).find((a) => a.event === 'order.closed_partial');
+    expect(closedAudit).toMatchObject({ entityId: REPL_ID, extra: { via: 'return.cancelled', replacementForReturnId: RET_ID } });
+    expect(broadcastMock).toHaveBeenCalledWith('org-test', REPL_ID);
+  });
+
+  it('a replacement the cancel cancelled, or one already completed, sends no order.completed', async () => {
+    for (const [status, after] of [['approved', 'cancelled'], ['completed', 'completed']] as const) {
+      vi.clearAllMocks();
+      const { svc } = svcFor({
+        'order_requests.select': orderReads({ live: { id: REPL_ID, status, order_number: 104 }, after }),
+        'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+      });
+      await svc.cancel(RET_ID, { reason: 'Customer kept it' });
+      expect(dispatchMock.mock.calls.filter((c) => c[1] === 'order.completed'), `${status} -> ${after}`).toEqual([]);
+    }
+  });
 });
 
 describe('the replacement order\'s timeline learns of the receipt', () => {

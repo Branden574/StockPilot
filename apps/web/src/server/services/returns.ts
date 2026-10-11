@@ -1093,10 +1093,31 @@ export class RMAService {
           invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.cancel');
         } else if (after === 'completed' && liveBefore.status !== 'completed') {
           // 0396: the cancel closed a part-handed-over replacement as
-          // delivered-partial (its rest is never sent). Its requester gets the
-          // completion email a close-partial sends from the order page ("Your
-          // replacement order was closed", the one-time return prompt):
-          // best-effort and marker-deduped, never failing the cancel.
+          // delivered-partial (its rest is never sent). The order's own trail
+          // is the order service's closePartial's for the same edge (RX-3 fix
+          // round 1, F7): order.closed_partial, order.completed { closedPartial }
+          // (accounting exports and webhooks otherwise show it open or
+          // backordered forever) and the order broadcast.
+          await audit(
+            {
+              event: 'order.closed_partial',
+              entityType: 'order_request',
+              entityId: liveBefore.id,
+              warehouseId: facts.warehouseId,
+              extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, via: 'return.cancelled' },
+            },
+            this.ctx,
+          );
+          void dispatchEvent(this.ctx.organizationId, 'order.completed', {
+            id: liveBefore.id,
+            orderNumber: formatOrderNumber(liveBefore.orderNumber) ?? liveBefore.id.slice(0, 8).toUpperCase(),
+            closedPartial: true,
+          });
+          void broadcastOrderChanged(this.ctx.organizationId, liveBefore.id);
+          // Its requester gets the completion email a close-partial sends from
+          // the order page ("Your replacement order was closed", the one-time
+          // return prompt): best-effort and marker-deduped, never failing the
+          // cancel.
           try {
             await maybeSendReturnPrompt(createAdminClient(), liveBefore.id, {
               appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
