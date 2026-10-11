@@ -40,6 +40,7 @@ export * from './warehouse/exception-escalation';
 export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
+export * from './inventory/grouping-contract';
 export * from './inventory/movement-history';
 export * from './inventory/movement-note-sentinel';
 export * from './inventory/movement-order-ref';
