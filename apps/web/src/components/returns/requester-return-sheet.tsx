@@ -483,13 +483,17 @@ function ReplacementCard({
       </p>
     );
   } else if (opts.length > 0) {
+    // The columns follow the card's own width (the article below is the
+    // container), never the window's: beside RETURNING (md and up) the card is
+    // about half the page, where a window breakpoint gave three ~80px columns
+    // and "Available" ran past the card (RX-3 test stage, fix round 1, E1).
     body = (
       <div
         role="radiogroup"
         aria-labelledby={headingId}
         aria-invalid={problemHere ? true : undefined}
         aria-describedby={problemHere ? errorId : undefined}
-        className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+        className="grid grid-cols-2 gap-2 @md:grid-cols-3"
       >
         {opts.map((o) => (
           <OptionCard key={o.itemId} p={p} lineId={id} option={o} checked={draft.itemId === o.itemId} disabled={busy} onChoose={onChoose} />
@@ -523,7 +527,7 @@ function ReplacementCard({
 
   const ready = exchangesOn && opts !== null && options.status === 'loaded';
   return (
-    <article className={cn(cardClass, 'border-l-primary space-y-3 border-l-4')} aria-labelledby={headingId}>
+    <article className={cn(cardClass, 'border-l-primary @container space-y-3 border-l-4')} aria-labelledby={headingId}>
       {/* The card's name, not a heading (RX-3 fix round 1, L5: the token page
           went from its h1 straight to an h3 here). */}
       <p id={headingId} className="flex items-center gap-1.5 text-xs font-medium">
@@ -595,12 +599,12 @@ function OptionCard({
         <span className="min-w-0">
           <span className="block text-sm font-medium leading-snug">{option.sizeLabel ?? option.name}</span>
           {option.sizeLabel ? <span className="text-muted-foreground block truncate text-xs">{option.name}</span> : null}
-          <span className="mt-0.5 flex items-center gap-1.5 text-xs">
+          <span className="mt-0.5 flex items-start gap-1.5 text-xs">
             <span
               aria-hidden
-              className={cn('inline-block h-2 w-2 shrink-0 rounded-full', available ? 'bg-success' : 'bg-warning')}
+              className={cn('mt-1 inline-block h-2 w-2 shrink-0 rounded-full', available ? 'bg-success' : 'bg-warning')}
             />
-            {REQUESTER_AVAILABILITY_WORDS[option.availability]}
+            <span className="min-w-0 break-words">{REQUESTER_AVAILABILITY_WORDS[option.availability]}</span>
           </span>
         </span>
       </span>

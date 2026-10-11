@@ -290,6 +290,27 @@ describe('RequesterReturnSheetForm: the REPLACEMENT side', () => {
     const replacement = screen.getByRole('article', { name: /REPLACEMENT for New Hire Shirt, M/ });
     expect(within(replacement).getByText(RETURNS_COPY.replacement)).toBeInTheDocument();
   });
+
+  // RX-3 test stage, fix round 1 (E1): beside RETURNING (md and up) the card is about half the
+  // page, so a column count read from the window gave three columns of about 80px and
+  // "Available" ran past the card's border. The columns follow the card's own width instead
+  // (two; three from 28rem), and the availability words wrap inside their size. The real
+  // layout is measured in the browser flows (A, C, E, F at 1440, 1024 and 768 px; N at 390).
+  it("lays the sizes out by the REPLACEMENT card's own width, never the window's, and keeps the availability words inside each size", async () => {
+    const { user } = setup({ lines: [SHIRT] });
+    await user.click(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
+    const group = await screen.findByRole('radiogroup', { name: /REPLACEMENT for New Hire Shirt, M/ });
+    const classes = (el: Element) => el.className.split(/\s+/);
+    const card = screen.getByRole('article', { name: /REPLACEMENT for New Hire Shirt, M/ });
+    expect(classes(card)).toContain('@container');
+    expect(classes(group)).toEqual(expect.arrayContaining(['grid-cols-2', '@md:grid-cols-3']));
+    expect(classes(group).filter((c) => /^(sm|md|lg|xl|2xl):grid-cols-/.test(c))).toEqual([]);
+    for (const words of ['Available', 'Not in stock right now']) {
+      for (const el of within(group).getAllByText(words)) {
+        expect(classes(el)).toEqual(expect.arrayContaining(['min-w-0', 'break-words']));
+      }
+    }
+  });
 });
 
 describe('RequesterReturnSheetForm: sending', () => {
