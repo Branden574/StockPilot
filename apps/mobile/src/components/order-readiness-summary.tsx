@@ -9,6 +9,7 @@ import {
   SHORTFALL_PO_PHONE_STRIP_HINT,
   type OrderReadinessResult,
   type PutAwayOffer,
+  type ReadinessCopyOptions,
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
@@ -16,7 +17,7 @@ import { ReadinessIcon, readinessToneColor } from '@/components/order-line-readi
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
-import { readinessFailureAnnouncement } from '@/lib/order-readiness';
+import { readinessFailureAnnouncement, type ReplacementReadinessGate } from '@/lib/order-readiness';
 import type { ShortfallPoOffer } from '@/lib/order-shortfall-po';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -57,6 +58,12 @@ import { useTheme } from '@/lib/use-theme';
  * instead ("Putting stock away needs the Transfer stock permission."). 44 pt,
  * disabled while anything runs and offline.
  *
+ * AN EXCHANGE REPLACEMENT WAITING FOR ITS RETURNED ITEM (RX-2 review fix
+ * P6): while the return-first gate holds (`gate`), core's roll-up says the
+ * stock is held and picking waits, with when it starts, in the info tone with
+ * the clock, never a green "Ready to pick"; the requester's sentence is
+ * unchanged. After a release or the receipt the card reads as for any order.
+ *
  * DRAFT PO FOR WHAT IS SHORT (F2-5): on the full panel, when something on
  * the order may be drafted (lib/order-shortfall-po.ts shortfallPoOffer, the
  * web strip's rule): the button for a manager holding purchase_orders:manage
@@ -77,11 +84,16 @@ export function OrderReadinessSummary({
   hold = null,
   putAway = null,
   shortfallPo = null,
+  gate = null,
 }: {
   result: OrderReadinessResult;
   audience: 'full' | 'requester';
   /** The organization's zone, for "Checked at" and the needed-by date. */
   timeZone: string | null;
+  /** RX-2 review fix P6: an exchange replacement's return-first gate, only
+   *  while it holds (lib/order-readiness.ts replacementReadinessGate): the
+   *  card says the stock is held and picking waits, never green. */
+  gate?: ReplacementReadinessGate | null;
   /** No connection: Check again is disabled, with the reason. */
   offline: boolean;
   /** A check is running (the button is disabled meanwhile). */
@@ -107,7 +119,7 @@ export function OrderReadinessSummary({
   } | null;
 }) {
   const { c, mode } = useTheme();
-  const opts = { timeZone: timeZone ?? undefined };
+  const opts: ReadinessCopyOptions = { timeZone: timeZone ?? undefined, ...gate };
 
   // Announced when the failure appears, keyed on its words: a re-render, or a
   // Try again that fails the same way, does not repeat it; a new failure (or

@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 390 foreign keys, 8 junctions, 33 ambiguous pairs.
+-- 399 foreign keys, 8 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -227,6 +227,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('order_requests', 'order_requests_pick_slip_generated_by_fkey', 'user_profiles', 'pick_slip_generated_by', 'id'),
   ('order_requests', 'order_requests_picking_claimed_by_fkey', 'user_profiles', 'picking_claimed_by', 'id'),
   ('order_requests', 'order_requests_picking_completed_by_fkey', 'user_profiles', 'picking_completed_by', 'id'),
+  ('order_requests', 'order_requests_replacement_return_fkey', 'returns', 'replacement_for_return_id,organization_id', 'id,organization_id'),
   ('order_requests', 'order_requests_requester_user_id_fkey', 'user_profiles', 'requester_user_id', 'id'),
   ('order_requests', 'order_requests_staged_by_fkey', 'user_profiles', 'staged_by', 'id'),
   ('order_requests', 'order_requests_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
@@ -334,12 +335,20 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('rentals', 'rentals_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
   ('restore_points', 'restore_points_created_by_fkey', 'user_profiles', 'created_by', 'id'),
   ('restore_points', 'restore_points_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('return_decisions', 'return_decisions_exchange_line_fkey', 'return_exchange_lines', 'exchange_line_id,return_id', 'id,return_id'),
   ('return_decisions', 'return_decisions_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('return_decisions', 'return_decisions_line_fkey', 'return_lines', 'return_line_id,return_id', 'id,return_id'),
   ('return_decisions', 'return_decisions_order_request_id_fkey', 'order_requests', 'order_request_id', 'id'),
   ('return_decisions', 'return_decisions_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('return_decisions', 'return_decisions_previous_item_id_fkey', 'inventory_items', 'previous_item_id', 'id'),
   ('return_decisions', 'return_decisions_return_fkey', 'returns', 'return_id,organization_id', 'id,organization_id'),
+  ('return_exchange_lines', 'return_exchange_lines_approved_item_id_fkey', 'inventory_items', 'approved_item_id', 'id'),
+  ('return_exchange_lines', 'return_exchange_lines_line_fkey', 'return_lines', 'return_line_id,return_id', 'id,return_id'),
+  ('return_exchange_lines', 'return_exchange_lines_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('return_exchange_lines', 'return_exchange_lines_replacement_order_line_id_fkey', 'order_request_lines', 'replacement_order_line_id', 'id'),
+  ('return_exchange_lines', 'return_exchange_lines_replacement_order_request_id_fkey', 'order_requests', 'replacement_order_request_id', 'id'),
+  ('return_exchange_lines', 'return_exchange_lines_requested_item_id_fkey', 'inventory_items', 'requested_item_id', 'id'),
+  ('return_exchange_lines', 'return_exchange_lines_return_fkey', 'returns', 'return_id,organization_id', 'id,organization_id'),
   ('return_lines', 'return_lines_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('return_lines', 'return_lines_order_request_line_id_fkey', 'order_request_lines', 'order_request_line_id', 'id'),
   ('return_lines', 'return_lines_organization_id_fkey', 'organizations', 'organization_id', 'id'),
@@ -458,9 +467,11 @@ insert into expected_pairs (a, b, relationships) values
   ('exception_occurrences', 'user_profiles', 'exception_occurrences_acknowledged_by_fkey,exception_occurrences_confirmed_by_fkey,exception_occurrences_escalated_by_fkey,exception_occurrences_escalation_claimed_by_fkey'),
   ('inventory_items', 'po_import_lines', 'po_import_lines_item_id_fkey,po_import_lines_suggested_item_id_fkey'),
   ('inventory_items', 'return_decisions', 'return_decisions_item_id_fkey,return_decisions_previous_item_id_fkey'),
+  ('inventory_items', 'return_exchange_lines', 'return_exchange_lines_approved_item_id_fkey,return_exchange_lines_requested_item_id_fkey'),
   ('inventory_items', 'user_profiles', 'inventory_items_created_by_fkey,inventory_items_deleted_by_fkey,inventory_items_updated_by_fkey'),
   ('locations', 'stock_movements', 'stock_movements_from_location_id_fkey,stock_movements_to_location_id_fkey'),
   ('order_request_lines', 'user_profiles', 'order_request_lines_packed_by_fkey,order_request_lines_picked_by_fkey'),
+  ('order_requests', 'returns', 'order_requests_replacement_return_fkey,returns_order_request_id_fkey'),
   ('order_requests', 'user_profiles', 'order_requests_approved_by_fkey,order_requests_assigned_delivery_by_fkey,order_requests_assigned_delivery_user_id_fkey,order_requests_assigned_picker_id_fkey,order_requests_cancelled_by_fkey,order_requests_completed_by_fkey,order_requests_in_transit_by_fkey,order_requests_packing_slip_generated_by_fkey,order_requests_pick_slip_generated_by_fkey,order_requests_picking_claimed_by_fkey,order_requests_picking_completed_by_fkey,order_requests_requester_user_id_fkey,order_requests_staged_by_fkey'),
   ('organization_members', 'user_profiles', 'organization_members_invited_by_fkey,organization_members_user_id_fkey'),
   ('organizations', 'platform_impersonation_sessions', 'platform_impersonation_sessions_previous_organization_id_fkey,platform_impersonation_sessions_target_organization_id_fkey'),

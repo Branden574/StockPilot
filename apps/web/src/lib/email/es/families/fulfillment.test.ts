@@ -718,3 +718,170 @@ describe('return-update (returns RX-1)', () => {
     expect(def.from).toBe(FULFILLMENT_ORDERS_FROM);
   });
 });
+
+describe('return-update: the exchange events (returns RX-2)', () => {
+  const base = {
+    returnNumber: 'RMA-20261005-ABC123',
+    orderNumber: 'SO-000103',
+    recipientFirstName: 'Pat Lee',
+    recipientEmail: 'pat@example.com',
+    viewUrl: 'https://app.example.com/returns/request/tok',
+    urls: URLS,
+  };
+
+  // Each row pins the whole sentence (the preheader and the text's line), so
+  // a sentence that grows or shrinks is caught, not only one that changes.
+  // Review fix (P14): an approved exchange tells the requester to bring the
+  // item back, since the replacement waits for it.
+  it.each([
+    [
+      'exchange_approved',
+      'exchange approved',
+      'Your exchange was approved.',
+      'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    ],
+    [
+      'exchange_approved_short',
+      'exchange approved',
+      'Your exchange was approved.',
+      'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+    ],
+    ['replacement_changed', 'replacement changed', 'Your replacement was changed.', 'The warehouse will let you know when it is ready.'],
+    ['replacement_cancelled', 'replacement cancelled', 'Your replacement was cancelled.', 'The warehouse will follow up.'],
+    ['replacement_ready_pickup', 'replacement ready', 'Your replacement is ready.', 'Ready for pickup.'],
+    ['replacement_ready_delivery', 'replacement ready', 'Your replacement is ready.', 'Ready for delivery.'],
+    ['replacement_on_the_way', 'replacement on the way', 'Your replacement is on the way.', 'It is out for delivery.'],
+    ['replacement_partly_handed_over', 'part of your replacement handed over', 'Part of your replacement was handed over.', 'The rest will follow.'],
+    // Review fix (P14): the completion email's "Start a return" button gets
+    // its sentence, and says the return is of the replacement.
+    [
+      'replacement_handed_over',
+      'replacement handed over',
+      'Your replacement was handed over.',
+      'Thank you. If something is wrong with the replacement, you can start a return of it here.',
+    ],
+    [
+      'exchange_complete',
+      'exchange complete',
+      'Your exchange is complete.',
+      'Thank you. If something is wrong with the replacement, you can start a return from here.',
+    ],
+    // Review fix (P14): a replacement closed with part never sent says so,
+    // as the in-app ping does.
+    [
+      'replacement_closed_partial',
+      'replacement order closed',
+      'Your replacement order was closed.',
+      'Part of it was handed over. The rest will not be sent. If something is wrong with what you received, you can start a return here.',
+    ],
+    // Review fix (P14): the receipt for a signer who is not the requester.
+    ['replacement_signed_for', 'replacement handed over', 'The exchange replacement was handed over.', 'Thank you for signing for it.'],
+    // Review fixes P28 and P15 (core's in-app words, 0c99857b): a return the
+    // requester asked for, approved with a replacement staff added; and a
+    // return kept as a return only after its replacement was cancelled.
+    [
+      'return_approved_replacement_added',
+      'approved',
+      'Your return was approved.',
+      // Re-pinned by fix round 1 (verification M2): bring or send it back.
+      'The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    ],
+    [
+      'return_approved_replacement_added_short',
+      'approved',
+      'Your return was approved.',
+      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+    ],
+    ['replacement_closed_return_only', 'return only', 'No replacement will be sent.', 'Your return goes on as a return only.'],
+  ] as const)('%s: "%s"', (event, summary, lead, sentence) => {
+    const r = renderReturnUpdateEmail({ ...base, event });
+    expect(r.subject).toBe(`Return RMA-20261005-ABC123: ${summary}`);
+    expect(r.html).toContain(lead);
+    expect(r.text).toContain(lead);
+    expect(r.preheader).toBe(`${lead} ${sentence}`);
+    expect(r.text.split('\n')).toContain(`Return RMA-20261005-ABC123 from order SO-000103. ${sentence}`);
+    for (const out of [r.html, r.text, r.subject, r.preheader]) {
+      expect(out).not.toMatch(/\brack\b|staging|scrap|restock|disposition|on record|cost/i);
+      expect(out).not.toMatch(/\bbooks?\b/i);
+    }
+    expect(() => assertEmailWeight(r.html)).not.toThrow();
+  });
+
+  // Re-pinned by returns RX-2 review fix (P14; was: the approval preheader
+  // equals core's in-app words, which began "Your exchange was approved.").
+  // Core's in-app words are now the sentence alone, telling the requester to
+  // bring or send the item back; the email keeps its headline in front. Claim
+  // kept: one vocabulary for the app and the email.
+  it('the requester words match core (one vocabulary for the app and the email)', async () => {
+    const { RETURNS_COPY } = await import('@stockpilot/core');
+    const words = (event: Parameters<typeof renderReturnUpdateEmail>[0]['event']) => {
+      const r = renderReturnUpdateEmail({ ...base, event });
+      return r.preheader;
+    };
+    expect(words('exchange_approved')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedReserved}`);
+    expect(words('exchange_approved_short')).toBe(`Your exchange was approved. ${RETURNS_COPY.requesterExchangeApprovedShort}`);
+    expect(words('replacement_partly_handed_over')).toBe(RETURNS_COPY.requesterPartlyHandedOver);
+    expect(words('return_approved_replacement_added')).toBe(RETURNS_COPY.requesterReturnApprovedReplacementAdded);
+    expect(words('return_approved_replacement_added_short')).toBe(RETURNS_COPY.requesterReturnApprovedReplacementAddedShort);
+    expect(words('replacement_closed_return_only')).toBe(RETURNS_COPY.requesterReplacementClosedReturnOnly);
+  });
+
+  it('the completion email can carry its own button words (the replacement\'s return page)', () => {
+    const r = renderReturnUpdateEmail({ ...base, event: 'exchange_complete', ctaLabel: 'Start a return' });
+    expect(r.html).toContain('Start a return');
+    expect(r.html).not.toContain('View your return');
+    expect(r.text).toContain('Start a return: https://app.example.com/returns/request/tok');
+  });
+
+  // Review fix (P14): the signer's receipt said "you can start a return from
+  // here" with no button. A sentence that points at the button is used only
+  // when the email carries one.
+  it.each([
+    'request_received',
+    'approved',
+    'received',
+    'denied',
+    'cancelled',
+    'exchange_approved',
+    'exchange_approved_short',
+    'replacement_changed',
+    'replacement_cancelled',
+    'replacement_ready_pickup',
+    'replacement_ready_delivery',
+    'replacement_on_the_way',
+    'replacement_partly_handed_over',
+    'replacement_handed_over',
+    'exchange_complete',
+    'replacement_closed_partial',
+    'replacement_signed_for',
+    'return_approved_replacement_added',
+    'return_approved_replacement_added_short',
+    'replacement_closed_return_only',
+  ] as const)('%s without a link points at no button', (event) => {
+    const r = renderReturnUpdateEmail({ ...base, event, viewUrl: null });
+    for (const out of [r.html, r.text, r.preheader]) {
+      expect(out).not.toMatch(/start a return|\bhere\b|from here/i);
+    }
+    expect(r.html).not.toContain('View your return');
+  });
+
+  it('without a link the completion emails keep their news and drop the pointer', () => {
+    const plain = (event: 'replacement_handed_over' | 'exchange_complete' | 'replacement_closed_partial') =>
+      renderReturnUpdateEmail({ ...base, event, viewUrl: null }).preheader;
+    expect(plain('replacement_handed_over')).toBe('Your replacement was handed over. Thank you.');
+    expect(plain('exchange_complete')).toBe('Your exchange is complete. Thank you.');
+    expect(plain('replacement_closed_partial')).toBe(
+      'Your replacement order was closed. Part of it was handed over. The rest will not be sent.',
+    );
+  });
+
+  it("the signer's receipt never says \"your exchange\" or \"your replacement\" and has no button", () => {
+    const r = renderReturnUpdateEmail({ ...base, event: 'replacement_signed_for', viewUrl: null, recipientFirstName: 'Dana' });
+    expect(r.subject).toBe('Return RMA-20261005-ABC123: replacement handed over');
+    for (const out of [r.html, r.text, r.subject, r.preheader]) {
+      expect(out).not.toMatch(/your exchange|your replacement|start a return/i);
+    }
+    expect(r.html).not.toContain('/returns/request/');
+    expect(r.text).not.toContain('/returns/request/');
+  });
+});

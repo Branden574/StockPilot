@@ -86,6 +86,8 @@ describe('loadOrderReturns — mapping', () => {
             applied: true,
           },
         ],
+        // RX-2: a return with no exchange names none.
+        exchangeLines: [],
       },
     ]);
   });
@@ -227,5 +229,44 @@ describe('loadOrderReturns — the query', () => {
     expect(select).toBe(
       'id, return_number, status, reason_code, notes, created_at, closed_at, lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied)',
     );
+  });
+});
+
+describe('loadOrderReturns — the exchange line (returns RX-2, plan 3.6.9)', () => {
+  it('one batched return_overview read names each exchange: "Exchange: Large ×1 → SO-000104 (…)"', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': { data: [rawReturn({ status: 'approved', closed_at: null })], error: null },
+      'return_overview.select': {
+        data: [
+          {
+            id: '85d6084b-0000-0000-0000-000000000000',
+            status: 'approved',
+            kind: 'exchange',
+            exchange_status: 'waiting_for_return',
+            replacement_order_number: 104,
+            exchange_lines: [
+              { status: 'approved', requested_item_id: 'item-l', requested_quantity: 1, approved_item_id: 'item-l', approved_quantity: 1 },
+              { status: 'declined', requested_item_id: 'item-xl', requested_quantity: 1, approved_item_id: null, approved_quantity: null },
+            ],
+          },
+        ],
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [{ id: 'item-l', name: 'Walk New Hire Shirt', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null }],
+        error: null,
+      },
+    });
+    const [r] = await loadOrderReturns(stub.client, ORG, ORDER);
+    expect(r!.exchangeLines).toEqual([
+      'Exchange: Walk New Hire Shirt, L ×1 → SO-000104 (Replacement reserved. Waiting for returned item)',
+    ]);
+    expect(stub.fromCalls.filter((t) => t === 'return_overview')).toHaveLength(1);
+  });
+
+  it('an order without returns reads no return_overview at all', async () => {
+    const stub = makeSupabaseStub({ 'returns.select': { data: [], error: null } });
+    await loadOrderReturns(stub.client, ORG, ORDER);
+    expect(stub.fromCalls).not.toContain('return_overview');
   });
 });

@@ -90,3 +90,12 @@ describe('the Waiting for signature filter (L88)', () => {
     expect(src).not.toMatch(/dashboard\/orders\?tab=/);
   });
 });
+
+describe('orderExportCells: the exchange column (returns RX-2)', () => {
+  it('names the RMA an exchange replacement belongs to; blank for an ordinary order', () => {
+    expect(orderExportCells(exportRow({ replacementForReturnNumber: 'RMA-20261005-ABC123' })).exchange_replacement_for).toBe(
+      'RMA-20261005-ABC123',
+    );
+    expect(orderExportCells(exportRow({})).exchange_replacement_for).toBe('');
+  });
+});

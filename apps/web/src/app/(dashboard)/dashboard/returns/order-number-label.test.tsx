@@ -138,3 +138,36 @@ describe('returns detail — "Against order …"', () => {
     expect(screen.getByRole('link', { name: ORDER_ID.slice(0, 8) })).toBeInTheDocument();
   });
 });
+
+describe('returns list — exchanges (RX-2)', () => {
+  it('an exchange row says Exchange, its status words and its replacement SO; the exchange filters are offered', async () => {
+    listPage.mockResolvedValueOnce({
+      organizationId: 'org-1',
+      filter: 'all',
+      q: '',
+      rows: [
+        {
+          ...row(49),
+          type: 'exchange',
+          exchangeStatus: 'waiting_for_return',
+          exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
+          replacementOrderNumber: 104,
+        },
+      ],
+      nextCursor: null,
+      pageSize: 25,
+    });
+    render(await ReturnsPage(listArgs));
+    expect(screen.getByText('Exchange')).toBeInTheDocument();
+    expect(screen.getByTestId('return-row-exchange-status')).toHaveTextContent('Replacement reserved. Waiting for returned item · SO-000104');
+    for (const f of ['Returns only', 'Exchanges', 'Replacement unavailable', 'Replacement ready']) {
+      expect(screen.getByRole('link', { name: f })).toBeInTheDocument();
+    }
+  });
+
+  it('?filter=exchanges reaches the service', async () => {
+    listPage.mockResolvedValueOnce({ organizationId: 'org-1', filter: 'exchanges', q: '', rows: [], nextCursor: null, pageSize: 25 });
+    render(await ReturnsPage({ searchParams: Promise.resolve({ filter: 'exchanges' }) } as never));
+    expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ filter: 'exchanges' }));
+  });
+});

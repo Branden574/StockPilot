@@ -17,6 +17,8 @@ import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/retur
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
+import { ReplacementBanner } from '@/components/orders/replacement-banner';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import { NeededByChangeButton, ReviseNeededByDialog } from '@/components/orders/revise-needed-by-dialog';
@@ -155,8 +157,11 @@ export default async function OrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
   /** `return`: the Book Order Totals view this order was opened from (plan
-   *  D17). Accepted only through bookReportReturnPath. */
-  searchParams?: Promise<{ return?: string | string[] }>;
+   *  D17). Accepted only through bookReportReturnPath. `sign=physical`: the
+   *  RMA's Hand over (returns RX-2 review fix): the manager panel opens the
+   *  Physical signature dialog once, when the order is ready and the viewer
+   *  may confirm it. */
+  searchParams?: Promise<{ return?: string | string[]; sign?: string | string[] }>;
 }) {
   // The service context starts now, beside the request context, not after
   // it: the order and attachment reads below go through withContext, which
@@ -231,6 +236,11 @@ export default async function OrderDetailPage({
     attachmentsRes.status === 'fulfilled' ? attachmentsRes.value : [];
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
+  // Returns RX-2: an exchange replacement order. Its items come from its RMA
+  // (no Add items, no line edits, no Cancel here: "Change or cancel in
+  // RMA-…"), and the return-first gate words its pick slip.
+  const replacement = detail.replacement ?? null;
+  const isReplacement = Boolean(request.replacement_for_return_id);
 
   // ---- Sync gates (no I/O). Every boolean the Tier-2 batch below needs to
   // decide WHICH round trips to fire is derived here, purely from ctx +
@@ -263,7 +273,7 @@ export default async function OrderDetailPage({
     'cancelled',
   ];
   const canAddLines =
-    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status);
+    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
   // Correcting a line is the same act as adding one — addLines,
   // updateLineQuantity and removeLine all run the SAME
   // loadEditableOrderHeader gate (ship gate + requester-or-approver +
@@ -741,8 +751,15 @@ export default async function OrderDetailPage({
   const orgTimeZone = resolveOrgTimezone(
     factsTimeZone(readinessGate ? readiness : zoneFacts) ?? deliveryRequestTimezone,
   );
+  // Returns RX-2 review fix P6: while this exchange replacement waits for its
+  // returned item, the stock card says the stock is held and picking waits
+  // (only while the gate holds; after a release or the receipt, as before).
+  const replacementReadinessGate =
+    replacement?.live && replacement.waitingForReturn
+      ? { replacementGate: 'waiting' as const, returnNumber: replacement.returnNumber }
+      : null;
   const readinessStrip = readinessNow
-    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone })
+    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone, ...replacementReadinessGate })
     : null;
   // ── F2-4: change the needed-by. "Change" beside the date, for an approver
   // with write access to the order's warehouse, on an open order, once the
@@ -1147,6 +1164,12 @@ export default async function OrderDetailPage({
   // view, only when `return` passes safeReturnPath AND is the report's own
   // path (anything else keeps "Back to orders").
   const backToReport = bookReportReturnPath((await searchParams)?.return);
+  const signParam = (await searchParams)?.sign;
+  // Honoured only on a live exchange replacement: the RMA's Hand over is the
+  // request's only source, so a link to any other order opens nothing (fix
+  // round 1, verification V-2). The dialog names the order.
+  const openPhysicalSignature =
+    (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical' && isReplacement && replacement?.live === true;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -1187,7 +1210,9 @@ export default async function OrderDetailPage({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {canCreateReturn && <CreateReturnDialog orderId={id} lines={returnableLines} />}
+            {canCreateReturn && (
+              <CreateReturnDialog orderId={id} lines={returnableLines} exchangesEnabled={exchangeCreateEnabled()} />
+            )}
             {requesterReturnPath && (
               <Button asChild variant="outline">
                 <a href={requesterReturnPath}>Request a return</a>
@@ -1218,13 +1243,15 @@ export default async function OrderDetailPage({
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
                 order; and every cancel needs orders:request (desk check F3).
-                core's orderCancelOffer is that rule, shared with the phone. */}
-            {orderCancelOffer({
-              status: request.status,
-              canApprove,
-              isOwnRequest,
-              canRequest: can(ctx, 'orders:request'),
-            }) !== null && (
+                core's orderCancelOffer is that rule, shared with the phone.
+                Returns RX-2: a replacement is cancelled only from its RMA. */}
+            {!isReplacement &&
+              orderCancelOffer({
+                status: request.status,
+                canApprove,
+                isOwnRequest,
+                canRequest: can(ctx, 'orders:request'),
+              }) !== null && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
             <ReportProblemButton
@@ -1235,6 +1262,8 @@ export default async function OrderDetailPage({
           </div>
         </div>
       </div>
+
+      <ReplacementBanner replacement={replacement} fulfillmentType={request.fulfillment_type} isRequester={isOwnRequest} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -1533,6 +1562,7 @@ export default async function OrderDetailPage({
                               {...readinessCellFor(l.id)}
                               timeZone={orgTimeZone}
                               position={rowIndex + 1}
+                              replacementGate={replacementReadinessGate?.replacementGate ?? null}
                             />
                           </div>
                         )}
@@ -1655,6 +1685,14 @@ export default async function OrderDetailPage({
                         ))}
                       </ul>
                     )}
+                    {/* RX-2: "Exchange: Large ×1 → SO-000104 (Waiting for returned item)". */}
+                    {r.exchangeLines && r.exchangeLines.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5 text-xs" data-testid="order-return-exchange">
+                        {r.exchangeLines.map((line) => (
+                          <li key={`${r.id}-${line}`}>{line}</li>
+                        ))}
+                      </ul>
+                    )}
                     {r.notes && (
                       <p className="mt-1.5 whitespace-pre-wrap text-sm" data-testid="order-return-notes">
                         {r.notes}
@@ -1725,6 +1763,22 @@ export default async function OrderDetailPage({
               assignedPickerName={assignedPickerName}
               pickers={pickers}
               viewerCanPick={viewerCanPick}
+              openPhysicalSignature={openPhysicalSignature}
+              orderLabel={formatOrderNumber((request as { order_number?: number | null }).order_number) ?? null}
+              replacement={
+                replacement && replacement.live
+                  ? {
+                      returnId: replacement.returnId,
+                      returnNumber: replacement.returnNumber,
+                      waitingForReturn: replacement.waitingForReturn,
+                      returnClosed: replacement.returnClosed,
+                      canReleaseEarly: replacement.canReleaseEarly,
+                      driverLine: replacement.driverLine,
+                      exchangeStatus: replacement.exchangeStatus,
+                      held: replacement.held,
+                    }
+                  : null
+              }
             />
           )}
 

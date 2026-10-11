@@ -811,8 +811,37 @@ export function renderReturnPromptEmail(p: ReturnPromptParams): RenderedEmail {
 
 // ── 5 · Return Update (`return-update`, returns RX-1) ───────────────
 
-/** What happened to the requester's return. */
-export type ReturnUpdateEvent = 'request_received' | 'approved' | 'received' | 'denied' | 'cancelled';
+/** What happened to the requester's return (RX-1) or exchange (RX-2). */
+export type ReturnUpdateEvent =
+  | 'request_received'
+  | 'approved'
+  | 'received'
+  | 'denied'
+  | 'cancelled'
+  // RX-2: the exchange, from the RMA's functions (changed: true only).
+  | 'exchange_approved'
+  | 'exchange_approved_short'
+  | 'replacement_changed'
+  | 'replacement_cancelled'
+  // RX-2: the replacement order's own edges (plan 3.6.7, reworded).
+  | 'replacement_ready_pickup'
+  | 'replacement_ready_delivery'
+  | 'replacement_on_the_way'
+  | 'replacement_partly_handed_over'
+  | 'replacement_handed_over'
+  | 'exchange_complete'
+  // RX-2 review fix (P14): the replacement order closed with part of it
+  // never sent (delivered-partial), and the hand-over receipt for a signer
+  // who is not the requester (no button, never "your exchange").
+  | 'replacement_closed_partial'
+  | 'replacement_signed_for'
+  // RX-2 review fixes P28 and P15 (core's in-app words): a return the
+  // requester asked for, approved with a replacement staff added (not "your
+  // exchange", they asked for none), and a return kept as a return only after
+  // its replacement was cancelled. Sent once the web wires them.
+  | 'return_approved_replacement_added'
+  | 'return_approved_replacement_added_short'
+  | 'replacement_closed_return_only';
 
 export interface ReturnUpdateParams {
   event: ReturnUpdateEvent;
@@ -824,17 +853,25 @@ export interface ReturnUpdateParams {
   recipientEmail: string;
   /** The requester's own page for this order (token page or portal), or null. */
   viewUrl: string | null;
+  /** The button's words when not the registry's "View your return" (the
+   *  replacement's completion email links the replacement's own return page:
+   *  "Start a return"; a member's button opens the replacement order: "View
+   *  your replacement"). */
+  ctaLabel?: string | null;
   urls: PrefFooterUrls;
 }
 
 /**
  * Per event: the subject's summary, the badge, the headline and the one
  * sentence (core's returns copy: no rack, no disposition, no reason text,
- * no staff name ever reaches a requester).
+ * no staff name ever reaches a requester). A sentence that points at the
+ * button ("you can start a return here") has `withoutLink`, the words used
+ * when the email carries no button, so no email points at a button it does
+ * not have.
  */
 const RETURN_UPDATE_WORDS: Record<
   ReturnUpdateEvent,
-  { summary: string; badge: string; lead: string; sentence: string }
+  { summary: string; badge: string; lead: string; sentence: string; withoutLink?: string }
 > = {
   request_received: {
     summary: 'request received',
@@ -866,17 +903,131 @@ const RETURN_UPDATE_WORDS: Record<
     lead: 'Your return request was cancelled.',
     sentence: 'Contact the warehouse if you have questions about this request.',
   },
+  // RX-2 (plan 3.6.7, 3.6.8; core RETURNS_COPY requester words). No reason,
+  // rack, quantity on record or staff name. An approved exchange says to
+  // bring the item back: the replacement waits for it (review P14).
+  exchange_approved: {
+    summary: 'exchange approved',
+    badge: 'Approved',
+    lead: 'Your exchange was approved.',
+    sentence:
+      'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+  },
+  exchange_approved_short: {
+    summary: 'exchange approved',
+    badge: 'Approved',
+    lead: 'Your exchange was approved.',
+    sentence:
+      'Your replacement is not in stock yet. The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+  },
+  replacement_changed: {
+    summary: 'replacement changed',
+    badge: 'Replacement changed',
+    lead: 'Your replacement was changed.',
+    sentence: 'The warehouse will let you know when it is ready.',
+  },
+  replacement_cancelled: {
+    summary: 'replacement cancelled',
+    badge: 'Replacement cancelled',
+    lead: 'Your replacement was cancelled.',
+    sentence: 'The warehouse will follow up.',
+  },
+  replacement_ready_pickup: {
+    summary: 'replacement ready',
+    badge: 'Ready',
+    lead: 'Your replacement is ready.',
+    sentence: 'Ready for pickup.',
+  },
+  replacement_ready_delivery: {
+    summary: 'replacement ready',
+    badge: 'Ready',
+    lead: 'Your replacement is ready.',
+    sentence: 'Ready for delivery.',
+  },
+  replacement_on_the_way: {
+    summary: 'replacement on the way',
+    badge: 'On the way',
+    lead: 'Your replacement is on the way.',
+    sentence: 'It is out for delivery.',
+  },
+  replacement_partly_handed_over: {
+    summary: 'part of your replacement handed over',
+    badge: 'Partly handed over',
+    lead: 'Part of your replacement was handed over.',
+    sentence: 'The rest will follow.',
+  },
+  // The requester's completion email (the return prompt's replacement
+  // branch): its button opens the replacement's own return page. After an
+  // early release the requester may still owe the original, so the sentence
+  // says the return is of the replacement (review P14).
+  replacement_handed_over: {
+    summary: 'replacement handed over',
+    badge: 'Handed over',
+    lead: 'Your replacement was handed over.',
+    sentence: 'Thank you. If something is wrong with the replacement, you can start a return of it here.',
+    withoutLink: 'Thank you.',
+  },
+  exchange_complete: {
+    summary: 'exchange complete',
+    badge: 'Complete',
+    lead: 'Your exchange is complete.',
+    sentence: 'Thank you. If something is wrong with the replacement, you can start a return from here.',
+    withoutLink: 'Thank you.',
+  },
+  // A replacement completed with part of it never sent (closed as delivered-
+  // partial): the notify trigger's in-app words, plus the return link.
+  replacement_closed_partial: {
+    summary: 'replacement order closed',
+    badge: 'Closed',
+    lead: 'Your replacement order was closed.',
+    sentence:
+      'Part of it was handed over. The rest will not be sent. If something is wrong with what you received, you can start a return here.',
+    withoutLink: 'Part of it was handed over. The rest will not be sent.',
+  },
+  // To a signer who is not the requester: a receipt, never a link.
+  replacement_signed_for: {
+    summary: 'replacement handed over',
+    badge: 'Handed over',
+    lead: 'The exchange replacement was handed over.',
+    sentence: 'Thank you for signing for it.',
+  },
+  // Review fix P28: every exchange line was added by staff on a return the
+  // requester asked for.
+  return_approved_replacement_added: {
+    summary: 'approved',
+    badge: 'Approved',
+    lead: 'Your return was approved.',
+    // Fix round 1 (verification M2): the replacement waits for the returned
+    // item, so the requester is told to bring or send it back (core's words).
+    sentence:
+      'The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+  },
+  return_approved_replacement_added_short: {
+    summary: 'approved',
+    badge: 'Approved',
+    lead: 'Your return was approved.',
+    sentence:
+      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+  },
+  // Review fix P15: Close as return only after a replacement cancel.
+  replacement_closed_return_only: {
+    summary: 'return only',
+    badge: 'Return only',
+    lead: 'No replacement will be sent.',
+    sentence: 'Your return goes on as a return only.',
+  },
 };
 
 export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
   const def = esEmailById('return-update');
   const words = RETURN_UPDATE_WORDS[p.event];
+  const sentence = p.viewUrl ? words.sentence : (words.withoutLink ?? words.sentence);
   const handle = p.returnNumber ?? p.orderNumber ?? 'your return';
   const subject = def.subject({ returnNumber: handle, summary: words.summary });
-  const preheader = def.preheader({ sentence: `${words.lead} ${words.sentence}` });
+  const preheader = def.preheader({ sentence: `${words.lead} ${sentence}` });
   const hi = greeting(p.recipientFirstName);
   const against = p.orderNumber ? ` from order ${strong(escapeHtml(p.orderNumber))}` : '';
-  const body = `${hi} an update on return ${strong(escapeHtml(handle))}${against}. ${escapeHtml(words.sentence)}`;
+  const body = `${hi} an update on return ${strong(escapeHtml(handle))}${against}. ${escapeHtml(sentence)}`;
 
   const rows = [
     brandStrip({ tag: def.tag }),
@@ -890,7 +1041,7 @@ export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
       ? [
           section(
             '0 36px 30px',
-            ctaRow({ primary: { label: def.cta, href: p.viewUrl } }),
+            ctaRow({ primary: { label: p.ctaLabel ?? def.cta, href: p.viewUrl } }),
           ),
           section('0 36px 24px', linkFallback(p.viewUrl)),
         ]
@@ -913,8 +1064,8 @@ export function renderReturnUpdateEmail(p: ReturnUpdateParams): RenderedEmail {
     greetingText(p.recipientFirstName),
     '',
     words.lead,
-    `Return ${handle}${p.orderNumber ? ` from order ${p.orderNumber}` : ''}. ${words.sentence}`,
-    ...(p.viewUrl ? ['', `${def.cta}: ${p.viewUrl}`] : []),
+    `Return ${handle}${p.orderNumber ? ` from order ${p.orderNumber}` : ''}. ${sentence}`,
+    ...(p.viewUrl ? ['', `${p.ctaLabel ?? def.cta}: ${p.viewUrl}`] : []),
     '',
     prefFooterText(`Updates on a return requested for orders placed by ${p.recipientEmail}.`, p.urls),
   ].join('\n');

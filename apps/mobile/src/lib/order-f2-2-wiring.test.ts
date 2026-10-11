@@ -197,7 +197,12 @@ describe('the departure confirm guards every step that takes the order further f
       "{ action: 'confirm_physical_signature', signerName: signer }",
     );
     expect(code.match(/\bcollectSignature\b/g)).toHaveLength(2); // declared + guarded
-    expect(code.match(/\bpromptPhysicalSignature\b/g)).toHaveLength(2);
+    // Re-pinned by returns RX-2 review (counter taps; the claim is kept: the
+    // paper signature is reached only through the departure confirm): its
+    // button and the arrival from an RMA's Hand over (?focus=sign) both call
+    // it through confirmDeparture.
+    expect(code.match(/\bpromptPhysicalSignature\b/g)).toHaveLength(3); // declared + guarded twice
+    expect(code.match(/confirmDeparture\('signature', promptPhysicalSignature\)/g)).toHaveLength(2);
   });
 
   // Mutation caught: going ahead without asking when the risk is there, or

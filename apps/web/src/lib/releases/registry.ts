@@ -28,6 +28,77 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'returns-exchange-2026-10',
+    revision: 1,
+    // Returns RX-2 (migration 0396: exchanges for staff and the counter, the
+    // linked replacement order, the return-first gate). Held as a DRAFT until
+    // the migration is pushed and verified, the web deploy is READY, the OTA
+    // with the phone's exchange screens is published and launched, and the
+    // Demo Co walk passed (returns plan 10.1); the follow-up that publishes
+    // it (RX-5) sets 'published' and the real publishedAt and re-reads these
+    // words against what shipped. Newest first: it is the only draft, so it
+    // sits at the top, above the public order link release (the newest
+    // published release, 2026-10-06 12:42Z), and is dated after every
+    // release (a placeholder; the publishing follow-up dates and orders it
+    // for real). The words name the screens'
+    // own labels, claim no number nobody measured and never say "book" for a
+    // recorded quantity. The counter steps follow the screens in order, with
+    // the review fix's two shortcuts (the only returnable line starts ticked;
+    // Hand over opens the replacement's order with the Physical signature
+    // dialog open).
+    // Who is told (review fix P13): anyone who can open Returns or approves
+    // orders, in an organization with Returns on; order approvers meet a
+    // replacement on its order page (the waiting line instead of Generate
+    // pick slip, the Exchange chip, the banner). The exchange entry: whoever
+    // can open Returns. The replacement order's entry: people who manage
+    // returns or approve orders. `modules` is ANY of the modules listed (core
+    // audienceIncludes), so the entry names Returns only, like the release
+    // (naming Orders as well would also reach organizations with Orders and
+    // no Returns); a replacement exists only where Orders is on too. That
+    // entry links nothing: an order approver without a returns permission
+    // cannot open Returns, and no entry sends anyone to a page that bounces
+    // them.
+    status: 'draft',
+    title: 'Exchanges on returns',
+    summary:
+      'Staff can now turn a return line into an exchange for a different size or item. The replacement is a real order with its own SO number, reserved when the exchange is approved and picked once the returned item is in, unless a manager releases it earlier with a reason. Everything stays on one RMA, on the web and in the mobile app after the latest update.',
+    publishedAt: '2026-10-14T17:10:00Z',
+    audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
+    entries: [
+      {
+        id: 'returns-exchange',
+        category: 'new',
+        area: 'Returns',
+        title: 'Exchange a returned item for another size or item',
+        whatChanged:
+          'When you create a return, each line can be Return only or Exchange for another size or item. The replacement shows beside the returning item with its other sizes first and what is available. When you approve, choose Approve as requested, Change replacement… or Decline the exchange, return only. You can also Add a replacement to a return-only line. Approving creates the replacement order and reserves it. If it is not in stock, the approval shows what is short first; then choose Approve, replacement on backorder or Change replacement.',
+        whyItMatters:
+          'A wrong size used to mean a return and a separate new order typed by hand, with nothing tying the two together.',
+        howItAffectsYou:
+          "Approving an exchange needs order approval as well as Manage returns. With Manage returns but without order approval, you can still approve the return: choose Decline the exchange, return only. At the counter, switch on The item is here when you start the return (when only one line can be returned, it starts ticked), then use Approve and receive, Get replacement ready, process the returned item (Process return, or the button that names its rack, such as Return to 31-C), and Hand over, which opens the replacement's order with the Physical signature dialog already open.",
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-exchange-replacement-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'The replacement order waits for the returned item',
+        whatChanged:
+          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager releases it early with a reason: Release before return is received on its order, or Release replacement before return is received on the RMA. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
+        whyItMatters:
+          'A replacement is not handed out while the item it replaces is still missing, unless a manager decides to, with a reason.',
+        howItAffectsYou:
+          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent after you opened the return, the page reloads to show that first. Cancelling the return also cancels a replacement not picked yet; once it is picked or on its way, hand it over first, or cancel the replacement if none of it was handed over.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['returns:manage', 'orders:approve'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
     id: 'public-link-sent-request-2026-10',
     revision: 1,
     // The public order link fix (#336, b362eab2, merged 2026-10-06 06:24:12Z;

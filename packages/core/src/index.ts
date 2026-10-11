@@ -78,6 +78,7 @@ export * from './orders/requester-identity';
 export * from './orders/order-returns-view';
 export * from './returns/returns-copy';
 export * from './returns/exchange-status';
+export * from './returns/exchange-view';
 export * from './returns/return-error-map';
 export * from './returns/restock-view';
 export * from './returns/return-actions';

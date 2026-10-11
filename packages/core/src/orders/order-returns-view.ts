@@ -120,6 +120,12 @@ export interface OrderReturnView {
   createdAt: string;
   closedAt: string | null;
   lines: OrderReturnLineView[];
+  /**
+   * Returns RX-2: per exchange line, "Exchange: Large ×1 → SO-000103
+   * (Waiting for returned item)" (core originalExchangeLine), built where
+   * the RMA's return_overview row was read. Absent or empty for a return.
+   */
+  exchangeLines?: string[];
 }
 
 function n(v: number | null | undefined): number {

@@ -630,6 +630,12 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
   // asked for, outside the original design package (like maintenance-
   // resolved). One template, five events; the words come from core's
   // returns copy, which never names a rack, a disposition or a reason.
+  // Returns RX-2 adds the exchange's events and the replacement order's
+  // reworded ones (server/email/replacement-update.ts and the return
+  // prompt's replacement branch). Two other button words: "Start a return"
+  // (the replacement's completion, its own return page) and "View your
+  // replacement" (a member's button, opening the replacement order). A
+  // signer who is not the requester gets the hand-over receipt, no button.
   d({
     id: 'return-update',
     family: 'fulfillment',
@@ -637,8 +643,9 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     status: 'live',
     category: 'pref',
     tag: 'Return Update',
-    trigger: 'A requester-sourced return is received, approved, received in, declined or cancelled',
-    to: 'Requester',
+    trigger:
+      'A requester-sourced return is received, approved, received in, declined or cancelled; an exchange is approved, or its replacement is changed, cancelled, ready, on the way, partly handed over, handed over or closed',
+    to: "Requester (a replacement's hand-over receipt: a signer who is not the requester)",
     from: 'StockPilot <orders@stockpilotusa.com>',
     replyTo: 'Not monitored',
     subject: (p: { returnNumber: string; summary: string }) => `Return ${p.returnNumber}: ${p.summary}`,

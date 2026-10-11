@@ -94,6 +94,7 @@ describe('GET /api/v1/orders/[id]', () => {
         'order_number',
         'picking_claimed_at',
         'picking_claimed_by',
+        'replacement_for_return_id',
         'status',
         'warehouse_id',
       ].sort(),
@@ -113,6 +114,43 @@ describe('GET /api/v1/orders/[id]', () => {
     get.mockResolvedValueOnce({ request: { id: ORDER, status: 'approved' }, lines: [], warehouseName: null, requesterName: null, requesterEmail: null });
     const body = await (await GET(req(), { params })).json();
     expect(body.order).toMatchObject({ id: ORDER, status: 'approved', picking_claimed_by: null });
+  });
+
+  // Returns RX-2: the phone's replacement banner, gate and driver line come
+  // with the order; an ordinary order answers null. The kill switch rides
+  // along so a create sheet can hide "Exchange".
+  it('answers the replacement block and the exchange switch (RX-2)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce({ userId: 'u1', organizationId: 'o1' } as never);
+    const replacement = {
+      returnId: 'r1',
+      returnNumber: 'RMA-20261005-ABC123',
+      waitingForReturn: true,
+      driverLine: 'Collect the returned item: New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+    };
+    get.mockResolvedValueOnce({
+      request: { id: ORDER, status: 'approved', replacement_for_return_id: 'r1' },
+      lines: [],
+      warehouseName: null,
+      requesterName: null,
+      requesterEmail: null,
+      replacement,
+    });
+    const body = await (await GET(req(), { params })).json();
+    expect(body.order.replacement_for_return_id).toBe('r1');
+    expect(body.replacement).toEqual(replacement);
+    expect(body.exchangesEnabled).toBe(true);
+
+    vi.mocked(withApiContext).mockResolvedValueOnce({ userId: 'u1', organizationId: 'o1' } as never);
+    get.mockResolvedValueOnce({ request: { id: ORDER, status: 'approved' }, lines: [], warehouseName: null, requesterName: null, requesterEmail: null });
+    vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
+    try {
+      const plain = await (await GET(req(), { params })).json();
+      expect(plain.replacement).toBeNull();
+      expect(plain.order.replacement_for_return_id).toBeNull();
+      expect(plain.exchangesEnabled).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('maps a not_found ServiceError to 404', async () => {

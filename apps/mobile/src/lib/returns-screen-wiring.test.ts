@@ -45,7 +45,11 @@ describe('the list filters', () => {
     const list = code(read('app/(drawer)/returns.tsx'));
     const view = code(read('src/components/return-workbench-view.tsx'));
     expect(list).toMatch(/<ReturnWorkbenchView[^>]*onChanged=\{\(\) => scheduler\.schedule\(\(\) => void load\(\)\)\}/);
-    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(2);
+    // Receive, every sheet's answer, and (RX-2) "Get replacement ready".
+    // Re-pinned by returns RX-2 review fix S2 (the claim is kept: the list
+    // reloads after every answer): also after a refusal that means the
+    // screen is behind (refresh()).
+    expect(view.match(/onChanged\?\.\(\);/g)?.length).toBe(4);
   });
 });
 
@@ -60,9 +64,11 @@ describe('the create sheet and the order screen (returns review)', () => {
   });
 
   it('gives VoiceOver radios with their state, labelled steppers and a labelled Close', () => {
-    expect(sheet.match(/accessibilityRole="radio"/g)?.length).toBe(2);
+    // Disposition, reason and (RX-2) Return only or Exchange per line.
+    expect(sheet.match(/accessibilityRole="radio"/g)?.length).toBe(3);
     expect(sheet).toContain('accessibilityState={{ checked: on, disabled: returnSubmitting }}');
-    expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(2);
+    expect(sheet.match(/accessibilityRole="radiogroup"/g)?.length).toBe(3);
+    expect(sheet).toContain('accessibilityLabel={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.name}`}');
     expect(sheet).toContain("`${delta < 0 ? 'Return one fewer' : 'Return one more'} ${l.name}`");
     expect(sheet).toMatch(/accessibilityRole="button"\s+accessibilityLabel="Close"/);
   });
@@ -129,7 +135,11 @@ describe('the order screen', () => {
   const screen = code(read('app/order/[id].tsx'));
 
   it('mints a key when the create sheet opens and sends it with the item-is-here switch', () => {
-    expect(screen).toMatch(/function openReturnSheet\(\) \{[\s\S]*?setReturnKey\(mintReturnKey\(\)\);[\s\S]*?setReturnItemIsHere\(false\);/);
+    // Re-pinned on purpose (RX-2, desk check F9.3): the key is minted first
+    // so the exchange switch's answer can carry it; the claim is unchanged.
+    expect(screen).toMatch(
+      /function openReturnSheet\(\) \{\s*const sheetKey = mintReturnKey\(\);[\s\S]*?setReturnKey\(sheetKey\);[\s\S]*?setReturnItemIsHere\(false\);/,
+    );
     expect(screen).toMatch(/idempotencyKey: returnKey,\s*itemIsHere: returnItemIsHere,/);
     expect(screen).toContain('useState(false);');
   });

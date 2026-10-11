@@ -101,11 +101,19 @@ describe('the public order link release (a sent request leaves nothing behind)',
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-07T00:00:00Z'));
   });
 
-  it('is the newest entry, at the top, dated after every other release', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    for (const r of RELEASES.slice(1)) {
+  // Re-pinned by returns RX-2 (2026-10-11; was: "is the newest entry, at the
+  // top, dated after every other release"): RX-2's draft, dated later, sits
+  // above it. Claim kept: it is the newest published release, dated after
+  // every release below it.
+  it('is the newest published release, directly below returns RX-2\'s draft, dated after every release below it', () => {
+    expect(RELEASES[0]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the Public requests settings page, and links there', () => {

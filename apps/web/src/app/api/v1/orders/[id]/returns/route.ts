@@ -25,6 +25,11 @@ export const dynamic = 'force-dynamic';
  * counter switch, off by default). A body without a key (phones installed
  * before RX-1) gets a fresh key per request, exactly as safe as before.
  *
+ * RX-2: a line may carry `exchange` { itemId?, quantity?, note? } ("Exchange
+ * for another size or item"; the quantity defaults to, and is capped by, the
+ * line's return quantity). With RETURNS_EXCHANGE_CREATE=off it is refused
+ * with 400 exchange_not_available; the legacy body is unchanged.
+ *
  * → 200 { ok: true, return: ReturnWithLines, replay }
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

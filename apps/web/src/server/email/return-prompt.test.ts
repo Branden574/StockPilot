@@ -462,3 +462,121 @@ describe('maybeSendReturnPrompt', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Returns RX-2 (X-4): an exchange replacement's completion email is "Your
+ * exchange is complete" (or "Your replacement was handed over" while the RMA
+ * is still open, or "Your replacement order was closed" when part of it was
+ * never sent), carrying the replacement's OWN return link, under the same
+ * 0278 marker: at most once, and never the ordinary prompt as well.
+ */
+describe('maybeSendReturnPrompt: the exchange replacement branch (RX-2)', () => {
+  const RMA_ID = '22222222-2222-4222-8222-222222222222';
+  const REPLACEMENT = { ...COMPLETED_ORDER, source: 'internal', requester_user_id: null, replacement_for_return_id: RMA_ID };
+  const rmaRow = (status: string) => ({
+    data: [{ id: RMA_ID, return_number: 'RMA-20261005-ABC123', status, order_request_id: 'orig', order_request: { order_number: 103 } }],
+    error: null,
+  });
+
+  it('closed RMA: ONE "exchange complete" email linking the replacement\'s own return page, marker claimed first', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [REPLACEMENT], error: null },
+      'returns.select': rmaRow('closed'),
+      'public_email_unsubscribes.select': { data: [], error: null },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    expect(res).toEqual({ sent: true });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; html: string; text: string; to: string };
+    expect(mail.to).toBe('requester@example.com');
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: exchange complete');
+    expect(mail.text).toContain('Your exchange is complete.');
+    expect(mail.text).toContain(`Start a return: ${APP_URL}/returns/request/${TOKEN}`);
+    expect(mail.html).not.toContain('Need to return anything');
+    // The marker was claimed by the guarded update before the send.
+    expect(stub.chainsAll.get('order_requests.update')?.[0]).toContain('is');
+  });
+
+  it('RMA still open: "Your replacement was handed over.", and the button has its sentence', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [REPLACEMENT], error: null },
+      'returns.select': rmaRow('approved'),
+      'public_email_unsubscribes.select': { data: [], error: null },
+    });
+    await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; text: string };
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: replacement handed over');
+    expect(mail.text).toContain('Your replacement was handed over.');
+    // Review fix (P14): the "Start a return" button opens the replacement's
+    // own return page; after an early release the original may still be
+    // owed, so the sentence says the return is of the replacement.
+    expect(mail.text).toContain('Thank you. If something is wrong with the replacement, you can start a return of it here.');
+    expect(mail.text).toContain(`Start a return: ${APP_URL}/returns/request/${TOKEN}`);
+  });
+
+  // Review fix (P14): a replacement completed with part of it never sent
+  // (closed as delivered-partial; after the review fix only its RMA's cancel
+  // does that) said "handed over" or "complete". It says what the in-app ping
+  // says, from the order's own lines, whatever the RMA's status.
+  it.each(['cancelled', 'closed', 'approved'])(
+    'closed with part never sent (RMA %s): "Your replacement order was closed."',
+    async (rmaStatus) => {
+      const stub = makeStub({
+        'order_requests.select': { data: [REPLACEMENT], error: null },
+        'order_request_lines.select': {
+          data: [
+            { quantity_requested: 2, quantity_fulfilled: 1 },
+            { quantity_requested: 1, quantity_fulfilled: 1 },
+          ],
+          error: null,
+        },
+        'returns.select': rmaRow(rmaStatus),
+        'public_email_unsubscribes.select': { data: [], error: null },
+      });
+      expect(await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL })).toEqual({ sent: true });
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; text: string; html: string };
+      expect(mail.subject).toBe('Return RMA-20261005-ABC123: replacement order closed');
+      expect(mail.text).toContain('Your replacement order was closed.');
+      expect(mail.text).toContain(
+        'Part of it was handed over. The rest will not be sent. If something is wrong with what you received, you can start a return here.',
+      );
+      expect(mail.text).toContain(`Start a return: ${APP_URL}/returns/request/${TOKEN}`);
+      expect(`${mail.subject} ${mail.text} ${mail.html}`).not.toMatch(/your exchange is complete|your replacement was handed over/i);
+      // The lines read asks for what was requested as well as what was handed over.
+      const linesSelect = String(stub.chainArgsAll.get('order_request_lines.select')?.[0]?.[0]?.[0] ?? '');
+      expect(linesSelect).toContain('quantity_requested');
+      expect(linesSelect).toContain('quantity_fulfilled');
+    },
+  );
+
+  it('handed over in full (every line), RMA closed: still "exchange complete"', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [REPLACEMENT], error: null },
+      'order_request_lines.select': { data: [{ quantity_requested: 2, quantity_fulfilled: 2 }], error: null },
+      'returns.select': rmaRow('closed'),
+      'public_email_unsubscribes.select': { data: [], error: null },
+    });
+    await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string };
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: exchange complete');
+  });
+
+  it('an ordinary order closed partial keeps the ordinary prompt', async () => {
+    const stub = makeStub({
+      'order_request_lines.select': { data: [{ quantity_requested: 5, quantity_fulfilled: 2 }], error: null },
+    });
+    await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string };
+    expect(mail.subject).toBe('Need to return anything from your order?');
+  });
+
+  it('at most once: a replacement already prompted sends nothing', async () => {
+    const stub = makeStub({
+      'order_requests.select': { data: [{ ...REPLACEMENT, return_prompt_sent_at: '2026-10-05T00:00:00Z' }], error: null },
+      'returns.select': rmaRow('closed'),
+    });
+    expect(await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL })).toEqual({ sent: false, reason: 'already_sent' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+});

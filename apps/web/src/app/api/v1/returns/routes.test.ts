@@ -73,12 +73,22 @@ describe('GET /api/v1/returns', () => {
     expect(checkRateLimit).toHaveBeenCalledWith('returns-read:u-1', 120, 60_000);
   });
 
-  it('an unknown or exchange-only filter reads as all in RX-1', async () => {
+  it('RX-2: the exchange filters pass through; an unknown filter reads as all', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
     const listPage = vi.fn(async (..._a: unknown[]) => ({ rows: [] }));
     service({ listPage });
     await listGET(req('/api/v1/returns?filter=exchanges'));
-    expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ filter: 'all' }));
+    expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ filter: 'exchanges' }));
+    for (const f of ['returns', 'replacement_unavailable', 'replacement_ready']) {
+      vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+      service({ listPage });
+      await listGET(req(`/api/v1/returns?filter=${f}`));
+      expect(listPage).toHaveBeenLastCalledWith(expect.objectContaining({ filter: f }));
+    }
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    service({ listPage });
+    await listGET(req('/api/v1/returns?filter=nope'));
+    expect(listPage).toHaveBeenLastCalledWith(expect.objectContaining({ filter: 'all' }));
   });
 
   it('403 for a member without returns:read keeps the reason shape', async () => {

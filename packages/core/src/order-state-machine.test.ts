@@ -6,6 +6,7 @@ import {
   availableOrderActions,
   derivePickingStatus,
   OrderTransitionError,
+  type OrderAction,
   type OrderStatus,
 } from './order-state-machine';
 
@@ -514,5 +515,167 @@ describe('approval-class actions follow canApproveOrders (0390)', () => {
 
   it('a viewer who cannot pick still gets view and print only, whatever the permission', () => {
     expect(at('pick_slip_generated', 'staff', true, { viewerCanPick: false })).toEqual(['print_pick_slip']);
+  });
+});
+
+/**
+ * RX-2 (0396): an exchange replacement. Its lines come from its RMA and it is
+ * changed or cancelled only there; while the returned item has not arrived
+ * (and nobody released it early) the database refuses the pick slip and a
+ * resume, so neither is offered.
+ */
+describe('exchange replacements (0396)', () => {
+  const mgr = {
+    fulfillmentType: 'pickup' as const,
+    hasAssignedDelivery: false,
+    viewerRole: 'manager' as const,
+    viewerUserId: 'u1',
+    assignedPickerId: null,
+    assignedDeliveryUserId: null,
+    canApproveOrders: true,
+  };
+
+  it('defaults off: an ordinary order is unchanged', () => {
+    expect(availableOrderActions({ ...mgr, status: 'approved' })).toEqual(['generate_pick_slip', 'cancel']);
+    expect(availableOrderActions({ ...mgr, status: 'approved', isReplacement: false, replacementGate: null })).toEqual([
+      'generate_pick_slip',
+      'cancel',
+    ]);
+  });
+
+  it('a replacement is cancelled only in its RMA', () => {
+    expect(availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'open' })).toEqual([
+      'generate_pick_slip',
+      'cancel_in_rma',
+    ]);
+    expect(availableOrderActions({ ...mgr, status: 'staged_for_pickup', isReplacement: true })).toEqual([
+      'collect_signature',
+      'print_warehouse_slip',
+      'cancel_in_rma',
+    ]);
+    // A viewer who could not cancel is not offered the RMA route either.
+    expect(
+      availableOrderActions({ ...mgr, viewerRole: 'staff', canApproveOrders: false, status: 'approved', isReplacement: true }),
+    ).toEqual(['generate_pick_slip']);
+  });
+
+  it('while waiting for the returned item: no pick slip, no resume; the release for whoever may give it', () => {
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'waiting', canReleaseReplacement: true }),
+    ).toEqual(['release_replacement_early', 'cancel_in_rma']);
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'waiting', canReleaseReplacement: false }),
+    ).toEqual(['cancel_in_rma']);
+    expect(
+      availableOrderActions({
+        ...mgr,
+        status: 'backordered',
+        hasFulfillableStock: true,
+        isReplacement: true,
+        replacementGate: 'waiting',
+        canReleaseReplacement: true,
+      }),
+    ).toEqual(['cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
+  });
+
+  // Desk check F3: once the RMA was cancelled or denied the gate never lets
+  // the replacement into picking, released or not: no pick slip, no resume,
+  // and nothing to release.
+  it('after the RMA was cancelled: no pick slip, no resume, no release', () => {
+    expect(
+      availableOrderActions({ ...mgr, status: 'approved', isReplacement: true, replacementGate: 'closed', canReleaseReplacement: true }),
+    ).toEqual(['cancel_in_rma']);
+    expect(
+      availableOrderActions({
+        ...mgr,
+        status: 'backordered',
+        hasFulfillableStock: true,
+        isReplacement: true,
+        replacementGate: 'closed',
+        canReleaseReplacement: true,
+      }),
+    ).toEqual(['cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
+  });
+
+  // RX-2 review fix (0396, security F-1): the order header guard refuses, on
+  // a replacement, a close-partial (backordered -> completed) and a change of
+  // warehouse, delivery site or created date from anywhere but the RMA
+  // functions (replacement_cancel_via_return). So the order page never offers
+  // them: a backordered replacement ends from its RMA. The list below is every
+  // action a replacement may offer; a close-partial, a plain cancel or any
+  // header edit added to OrderAction later is not on it.
+  const ALLOWED_ON_A_REPLACEMENT: readonly OrderAction[] = [
+    'approve',
+    'approve_partial',
+    'resume_fulfillment',
+    'deny',
+    'generate_pick_slip',
+    'claim_picking',
+    'reassign_picker',
+    'release_picking',
+    'open_digital_pick',
+    'print_pick_slip',
+    'mark_picking_complete',
+    'reopen_picking',
+    'generate_packing_slips',
+    'print_customer_slip',
+    'print_warehouse_slip',
+    'mark_staged_pickup',
+    'mark_staged_delivery',
+    'assign_delivery',
+    'mark_in_transit',
+    'collect_signature',
+    'view_signature',
+    'view_denial_reason',
+    'view_final_packing_slip',
+    'release_replacement_early',
+    'cancel_in_rma',
+  ];
+
+  it('never offers a close-partial, a plain cancel or a header edit on a replacement, for any status, viewer or gate', () => {
+    const statuses = Object.keys(ALLOWED_TRANSITIONS) as OrderStatus[];
+    let checked = 0;
+    for (const status of statuses)
+      for (const viewerRole of ['owner', 'admin', 'manager', 'staff', 'viewer'] as const)
+        for (const canApproveOrders of [true, false, undefined])
+          for (const replacementGate of ['waiting', 'open', 'closed', null] as const)
+            for (const fulfillmentType of ['pickup', 'delivery'] as const)
+              for (const flag of [true, false]) {
+                const actions = availableOrderActions({
+                  status,
+                  fulfillmentType,
+                  hasAssignedDelivery: flag,
+                  viewerRole,
+                  viewerUserId: 'u1',
+                  assignedPickerId: flag ? 'u1' : null,
+                  assignedDeliveryUserId: flag ? 'u1' : null,
+                  hasFulfillableStock: flag,
+                  isShortStock: flag,
+                  canApproveOrders,
+                  isReplacement: true,
+                  replacementGate,
+                  canReleaseReplacement: flag,
+                });
+                const where = `${status} ${viewerRole} ${String(canApproveOrders)} ${String(replacementGate)} ${fulfillmentType} ${flag}`;
+                expect(actions, where).not.toContain('close_partial');
+                expect(actions, where).not.toContain('cancel');
+                expect(actions.filter((a) => !ALLOWED_ON_A_REPLACEMENT.includes(a)), where).toEqual([]);
+                checked += 1;
+              }
+    expect(checked).toBe(statuses.length * 5 * 3 * 4 * 2 * 2);
+  });
+
+  it('a backordered replacement ends from its RMA: resume once the gate is open, never close-partial', () => {
+    expect(
+      availableOrderActions({ ...mgr, status: 'backordered', hasFulfillableStock: true, isReplacement: true, replacementGate: 'open' }),
+    ).toEqual(['resume_fulfillment', 'cancel_in_rma', 'view_signature', 'view_final_packing_slip']);
+    // An ordinary backordered order keeps its close-partial.
+    expect(availableOrderActions({ ...mgr, status: 'backordered', hasFulfillableStock: true })).toEqual([
+      'resume_fulfillment',
+      'close_partial',
+      'cancel',
+      'view_signature',
+      'view_final_packing_slip',
+    ]);
   });
 });

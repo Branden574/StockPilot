@@ -130,9 +130,24 @@ export const ORDER_EXPORT_HEADERS = [
   'created_at',
   'approved_at',
   'completed_at',
+  // Returns RX-2: the RMA an exchange replacement order belongs to (its
+  // RMA number, read with the row through the hinted embed; no extra query).
+  'exchange_replacement_for',
 ] as const;
 
 export type OrderExportHeader = (typeof ORDER_EXPORT_HEADERS)[number];
+
+/**
+ * The PDF's columns: every CSV column except the exchange link (returns RX-2).
+ * The PDF is one fixed landscape page whose fourteen columns already sit at
+ * their width floors (orders-export-pdf-headers-fit.test.ts), so the RMA
+ * number an exchange replacement belongs to is in the CSV only.
+ */
+export const ORDER_EXPORT_PDF_HEADERS = ORDER_EXPORT_HEADERS.filter(
+  (h): h is Exclude<OrderExportHeader, 'exchange_replacement_for'> => h !== 'exchange_replacement_for',
+);
+
+export type OrderExportPdfHeader = (typeof ORDER_EXPORT_PDF_HEADERS)[number];
 
 /** Accept either a known tab key, an explicit status, or fall through to undefined. */
 export function resolveOrderExportStatusFilter(
@@ -181,6 +196,7 @@ export function orderExportCells(
     created_at: r.createdAt,
     approved_at: r.approvedAt ?? '',
     completed_at: r.completedAt ?? '',
+    exchange_replacement_for: r.replacementForReturnNumber ?? '',
   };
 }
 

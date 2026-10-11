@@ -76,6 +76,7 @@ function renderLine(
     neededBy?: string | null;
     position?: number;
     putAwayHref?: string | null;
+    replacementGate?: 'waiting' | 'open' | 'closed' | null;
   } = {},
 ) {
   const a = assessed(status, lines, items, opts.neededBy ?? null);
@@ -89,12 +90,39 @@ function renderLine(
       canCountItem={opts.canCountItem ?? false}
       position={opts.position}
       putAwayHref={opts.putAwayHref}
+      replacementGate={opts.replacementGate}
     />,
   );
   return screen.getByTestId('readiness-line');
 }
 
 describe('ReadinessLineCell', () => {
+  // RX-2 review fix P6: a replacement waiting for its returned item is never
+  // "Ready to pick" in green beside a page that refuses the pick slip.
+  it('a replacement waiting for its return: the chip reads Waiting for return; its shelf and hold words stay', () => {
+    const cell = renderLine(
+      'approved',
+      [{ lineId: 'L1', itemId: 'a', requested: 1 }],
+      [visibleItemFacts('a', { here: { rack: 6 }, heldOwn: 1 })],
+      { replacementGate: 'waiting' },
+    );
+    const chip = within(cell).getByTestId('readiness-chip');
+    expect(chip).toHaveTextContent('Waiting for return');
+    expect(chip).not.toHaveTextContent('Ready to pick');
+    expect(cell).toHaveTextContent('Line 1, Waiting for return, 1 on the shelf.');
+    expect(within(cell).getByTestId('readiness-sentence')).toHaveTextContent('1 on the shelf for this order.');
+    expect(within(cell).getByTestId('readiness-hold')).toHaveTextContent('Held for this order');
+    cleanup();
+    // Released or received: the normal words.
+    const open = renderLine(
+      'approved',
+      [{ lineId: 'L1', itemId: 'a', requested: 1 }],
+      [visibleItemFacts('a', { here: { rack: 6 }, heldOwn: 1 })],
+      { replacementGate: 'open' },
+    );
+    expect(within(open).getByTestId('readiness-chip')).toHaveTextContent('Ready to pick');
+  });
+
   it('ready: the chip (words and an icon), the sentence, and no rack recorded when served from Unplaced', () => {
     const cell = renderLine(
       'pending_approval',

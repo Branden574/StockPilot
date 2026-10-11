@@ -15,6 +15,7 @@ vi.mock('./item-images', () => ({
   },
 }));
 
+import { buildReturnChainEvents } from './return-history';
 import {
   buildReturnListPage,
   buildReturnWorkbench,
@@ -221,6 +222,197 @@ describe('buildReturnWorkbench', () => {
     expect(reportError).toHaveBeenCalled();
   });
 
+  // RX-2 review fix P8: a replacement chosen at approval and changed since is
+  // named in the history ("Exchange approved: … (instead of …)"), never "an
+  // item", with ONE batched read of the decision items no line names now.
+  it('the history names every item an exchange decision names, from one batched read of those no line names now', async () => {
+    const S = itemId(7);
+    const L = itemId(8);
+    const M = itemId(2);
+    const exchangeLine = {
+      id: 'x1',
+      return_line_id: lineId(1),
+      status: 'approved',
+      requested_item_id: L,
+      requested_quantity: 1,
+      request_note: null,
+      requested_by_kind: 'staff',
+      approved_item_id: M,
+      approved_quantity: 1,
+      replacement_order_request_id: null,
+      revision: 2,
+      created_at: '2026-10-02T00:00:00Z',
+    };
+    const row = (id: string, size: string) => ({
+      id,
+      name: 'Walk Exchange Tee',
+      sku: null,
+      deleted_at: null,
+      variant_size: size,
+      variant_width: null,
+      variant_color: null,
+      jersey_number: null,
+      quantity_on_hand: 5,
+    });
+    const rows = new Map([
+      [itemId(1), row(itemId(1), 'M')],
+      [S, row(S, 'S')],
+      [L, row(L, 'L')],
+      [M, row(M, 'M')],
+    ]);
+    const reads: string[][] = [];
+    const decision = (seq: number, kind: string, item: string | null, previous: string | null) => ({
+      seq,
+      kind,
+      channel: 'staff',
+      revision: seq,
+      return_line_id: lineId(1),
+      exchange_line_id: 'x1',
+      item_id: item,
+      previous_item_id: previous,
+      quantity: 1,
+      order_request_id: null,
+      disposition: null,
+      restock_target: null,
+      location_id: null,
+      basis: null,
+      reason: kind === 'replacement_changed' ? 'Wrong size' : null,
+      actor_user_id: null,
+      actor_kind: 'staff',
+      created_at: `2026-10-0${seq}T00:00:00Z`,
+    });
+    const { ctx } = ctxFor({
+      'returns.select': { data: [header([LINE], { exchange_lines: [exchangeLine] })], error: null },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': {
+        data: [decision(3, 'exchange_approved', S, L), decision(4, 'replacement_changed', M, S)],
+        error: null,
+      },
+      'inventory_items.select': (call: MockCall) => {
+        const ids = (inFilters(call).find(([c]) => c === 'id')?.[1] ?? []) as string[];
+        reads.push(ids);
+        return { data: ids.map((id) => rows.get(id)).filter(Boolean), error: null };
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.find((e) => e.kind === 'exchange_approved')!.label).toBe(
+      'Exchange approved: Walk Exchange Tee, S ×1 (instead of Walk Exchange Tee, L)',
+    );
+    expect(wb.chain.map((e) => e.label).join(' | ')).not.toContain('an item');
+    // The S (named only by a decision) came from one read of just it.
+    expect(reads.filter((ids) => ids.includes(S))).toEqual([[S]]);
+  });
+
+  // Fix round 1 (verification L2): a decision naming the RETURNED item (staff
+  // approved "Same as returned", then changed it) is named too, never "an item".
+  it('the history names the returned item when an exchange decision names it', async () => {
+    const S = itemId(7);
+    const M = itemId(1);
+    const exchangeLine = {
+      id: 'x1',
+      return_line_id: lineId(1),
+      status: 'approved',
+      requested_item_id: null,
+      requested_quantity: 1,
+      request_note: 'Same size, it tore',
+      requested_by_kind: 'staff',
+      approved_item_id: S,
+      approved_quantity: 1,
+      replacement_order_request_id: null,
+      revision: 2,
+      created_at: '2026-10-02T00:00:00Z',
+    };
+    const row = (id: string, size: string) => ({
+      id,
+      name: 'Walk Exchange Tee',
+      sku: null,
+      deleted_at: null,
+      variant_size: size,
+      variant_width: null,
+      variant_color: null,
+      jersey_number: null,
+      quantity_on_hand: 5,
+    });
+    const rows = new Map([
+      [M, row(M, 'M')],
+      [S, row(S, 'S')],
+    ]);
+    const decision = (seq: number, kind: string, item: string | null, previous: string | null) => ({
+      seq,
+      kind,
+      channel: 'staff',
+      revision: seq,
+      return_line_id: lineId(1),
+      exchange_line_id: 'x1',
+      item_id: item,
+      previous_item_id: previous,
+      quantity: 1,
+      order_request_id: null,
+      disposition: null,
+      restock_target: null,
+      location_id: null,
+      basis: null,
+      reason: kind === 'replacement_changed' ? 'Wrong size' : null,
+      actor_user_id: null,
+      actor_kind: 'staff',
+      created_at: `2026-10-0${seq}T00:00:00Z`,
+    });
+    const { ctx } = ctxFor({
+      'returns.select': { data: [header([LINE], { exchange_lines: [exchangeLine] })], error: null },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': {
+        data: [decision(3, 'exchange_approved', M, null), decision(4, 'exchange_approved', S, M)],
+        error: null,
+      },
+      'inventory_items.select': (call: MockCall) => {
+        const ids = (inFilters(call).find(([c]) => c === 'id')?.[1] ?? []) as string[];
+        return { data: ids.map((id) => rows.get(id)).filter(Boolean), error: null };
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    const labels = wb.chain.filter((e) => e.kind === 'exchange_approved').map((e) => e.label);
+    expect(labels).toEqual([
+      'Exchange approved: Walk Exchange Tee, M ×1',
+      'Exchange approved: Walk Exchange Tee, S ×1 (instead of Walk Exchange Tee, M)',
+    ]);
+    expect(wb.chain.map((e) => e.label).join(' | ')).not.toContain('an item');
+  });
+
+  // Fix round 1 (verification M1): the decision log carries no hold, and a
+  // replacement approved, changed or re-issued on backorder holds nothing, so
+  // the history never says "reserved".
+  it('the history says a replacement order was created, never that it was reserved', () => {
+    const events = buildReturnChainEvents({
+      orderNumber: 3,
+      completedAt: null,
+      picks: [],
+      decisions: [
+        {
+          seq: 2,
+          kind: 'replacement_issued',
+          channel: 'staff',
+          revision: 1,
+          disposition: null,
+          restockTarget: null,
+          locationName: null,
+          reason: null,
+          actorName: 'Dana',
+          actorKind: 'staff',
+          createdAt: '2026-10-02T00:00:00Z',
+          orderRequestId: 'o-19',
+        },
+      ],
+      movements: [],
+      itemNames: new Map(),
+      exchangeNames: { items: new Map(), orders: new Map([['o-19', 19]]) },
+    });
+    const issued = events.find((e) => e.label.startsWith('Replacement order'));
+    expect(issued?.label).toBe('Replacement order SO-000019 created');
+    expect(events.map((e) => e.label).join(' | ')).not.toMatch(/reserved/);
+  });
+
   it('a destination read that fails leaves the destinations out and is reported (actions are refused in the database anyway)', async () => {
     const { ctx } = ctxFor({
       'returns.select': { data: [header([LINE])], error: null },
@@ -376,7 +568,10 @@ describe('buildReturnListPage', () => {
       ['Pat Lee', null],
       [null, null],
     ]);
-    expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(/requested_by, deleted_users$/);
+    // RX-2 appends kind, exchange_status and the replacement number after 0393's two.
+    expect(String(stub.chainArgs.get('return_overview.select')?.[0]?.[0] ?? '')).toMatch(
+      /requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed$/,
+    );
   });
 
   it('the waiting list filters to approved and sorts by the oldest approval', async () => {

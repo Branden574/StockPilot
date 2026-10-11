@@ -1,4 +1,4 @@
-import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useNetworkState } from 'expo-network';
 import {
@@ -83,15 +83,33 @@ import {
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
-import { mintReturnKey } from '@/lib/returns-api';
+import {
+  getExchangeSwitch,
+  getOrderExchangeCandidates,
+  mintReturnKey,
+  releaseReturnReplacement,
+} from '@/lib/returns-api';
+import {
+  changeInRmaLabel,
+  orderReplacementLines,
+  replacementGateLine,
+  replacementHeldNow,
+  replacementPickBlocked,
+  type MobileOrderReplacement,
+} from '@/lib/returns-view';
+import { ReplacementPickerList } from '@/components/replacement-picker-list';
+import { ReleaseReplacementSheet } from '@/components/release-replacement-sheet';
 import {
   buildReturnPayload,
   describeLineFulfilment,
   describeReturnLine,
   describeReturnMeta,
+  exchangeItemIdsOf,
+  exchangeLinesByReturn,
   formatOrderReturnSummary,
   initialReturnDraft,
   ORDER_RETURN_SUMMARY_NOTE,
+  ORDER_RETURNS_EXCHANGE_SELECT,
   ORDER_RETURNS_SELECT,
   orderReturnSummary,
   parseOrderReturns,
@@ -103,7 +121,9 @@ import {
   returnStatusLabel,
   shouldLoadOrderReturns,
   shouldShowReturnsSection,
+  type ExchangeItemRow,
   type OrderReturnView,
+  type RawExchangeOverviewRow,
   type RawOrderReturnRow,
   type ReturnDraftLine,
   type ReturnReasonCode,
@@ -121,6 +141,7 @@ import {
   recalledOrderView,
   reconcileReadiness,
   rememberOrderView,
+  replacementReadinessGate,
   shouldReadReadiness,
 } from '@/lib/order-readiness';
 import {
@@ -142,7 +163,7 @@ import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
 import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
-import { focusScrollY, orderScreenFocus } from '@/lib/order-focus';
+import { focusScrollY, initialSignArrival, orderScreenFocus, physicalSignatureTitle, stepSignatureOnArrival } from '@/lib/order-focus';
 import { cancelReasonForPost, phoneOrderCancel, type PhoneOrderCancel } from '@/lib/order-cancel-action';
 import { orderManagerActions } from '@/lib/order-manager-actions';
 import {
@@ -197,6 +218,7 @@ import {
   READINESS_NEEDS_CONNECTION_COPY,
   RETURNS_COPY,
   readinessOfflineCopy,
+  releaseOutcomeLine,
   shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
   type DepartureAction,
@@ -351,6 +373,11 @@ interface OrderHeader {
    *  read there) and when nothing was ever returned. Decisions about what they
    *  mean live in lib/order-returns (shared with web through core). */
   returns: OrderReturnView[];
+  /** Returns RX-2 (0396): the RMA this order is the exchange replacement for. */
+  replacementForReturnId: string | null;
+  /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
+   *  the driver's line); null for an ordinary order or when unread. */
+  replacement: MobileOrderReplacement | null;
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -476,6 +503,10 @@ export default function OrderDetail() {
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
+  // RX-2: "Release before return is received" on a gated replacement.
+  const [releaseOpen, setReleaseOpen] = React.useState(false);
+  const [releaseBusy, setReleaseBusy] = React.useState(false);
+  const [releaseError, setReleaseError] = React.useState<string | null>(null);
   // The sheet's size at any text size (returns review, AX5 walk): bounded by
   // the screen with its header and Submit pinned and the rest scrolling, the
   // line rows stacked at large text (the exception sheets' layout).
@@ -492,6 +523,13 @@ export default function OrderDetail() {
   // same RMA), and "The item is here", off by default.
   const [returnKey, setReturnKey] = React.useState<string | null>(null);
   const [returnItemIsHere, setReturnItemIsHere] = React.useState(false);
+  // RX-2: the exchange kill switch, read when the sheet opens (desk check F9).
+  // The answer is kept with the key of the sheet that asked, so a late answer
+  // for an earlier opening never shows. Off until it answers: the sheet
+  // offers a return only meanwhile. (State, not a ref: the handler that reads
+  // it is passed down during render.)
+  const [exchangeSwitch, setExchangeSwitch] = React.useState<{ sheetKey: string; on: boolean } | null>(null);
+  const exchangesEnabled = exchangeSwitch !== null && exchangeSwitch.sheetKey === returnKey && exchangeSwitch.on;
 
   // Add-items sheet state (parity with the web add-items dialog).
   const [addOpen, setAddOpen] = React.useState(false);
@@ -744,12 +782,15 @@ export default function OrderDetail() {
     permissions,
     ordersModuleEnabled: enabledModules.has('orders'),
   };
-  const canAddItems = canAddOrderItems(lineGate);
+  // Returns RX-2: an exchange replacement's items come from its RMA; they are
+  // changed or cancelled only there ("Change or cancel in RMA-…").
+  const isReplacementOrder = Boolean(order?.replacementForReturnId);
+  const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder;
   // Correcting a line rides the SAME gate — on the server all three line
   // mutations load the order through one helper (loadEditableOrderHeader), and
   // an order you can add to but cannot correct is exactly the bug the owner
   // reported.
-  const canEditItems = canEditOrderLines(lineGate);
+  const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder;
   const existingItemIds = React.useMemo(
     () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
     [order],
@@ -1073,12 +1114,32 @@ export default function OrderDetail() {
     void afterLineEdit(res.pickSlipStale, 'Item removed', lineRemovedSummary(line, res));
   }
 
+  // RX-2: release a gated replacement for picking, with a reason (one route).
+  async function releaseReplacement(reason: string) {
+    if (!order?.replacement || releaseBusy || offline) return;
+    setReleaseBusy(true);
+    setReleaseError(null);
+    try {
+      // This order is the replacement the screen shows (desk check F7).
+      const res = await releaseReturnReplacement(order.replacement.returnId, order.id, reason);
+      setReleaseOpen(false);
+      Alert.alert(RETURNS_COPY.releaseBeforeReturn, releaseOutcomeLine(res.answer));
+      await load();
+    } catch (e) {
+      setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
+    } finally {
+      setReleaseBusy(false);
+    }
+  }
+
   function openReturnSheet() {
+    const sheetKey = mintReturnKey();
+    void getExchangeSwitch().then((on) => setExchangeSwitch({ sheetKey, on }));
     setReturnDraft(initialReturnDraft(orderReturnable));
     setReturnReason(null);
     setReturnNotes('');
     setReturnError(null);
-    setReturnKey(mintReturnKey());
+    setReturnKey(sheetKey);
     setReturnItemIsHere(false);
     setReturnOpen(true);
   }
@@ -1098,6 +1159,23 @@ export default function OrderDetail() {
       const existing = prev[lineId] ?? { quantity: 0, disposition: 'restock' as const };
       return { ...prev, [lineId]: { ...existing, disposition } };
     });
+  }
+
+  // RX-2: "Return only" or "Exchange for another size or item" per line.
+  function setReturnMode(lineId: string, mode: 'return' | 'exchange') {
+    setReturnDraft((prev) => {
+      const existing = prev[lineId] ?? { quantity: 0, disposition: 'restock' as const };
+      return { ...prev, [lineId]: { ...existing, mode, exchangeItemId: null } };
+    });
+    setReturnError(null);
+  }
+
+  function setReturnExchangeItem(lineId: string, itemId: string) {
+    setReturnDraft((prev) => {
+      const existing = prev[lineId] ?? { quantity: 0, disposition: 'restock' as const };
+      return { ...prev, [lineId]: { ...existing, mode: 'exchange', exchangeItemId: itemId } };
+    });
+    setReturnError(null);
   }
 
   async function submitReturn() {
@@ -1210,7 +1288,7 @@ export default function OrderDetail() {
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          requester_deleted_at, signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
-         needed_by, notes, delivery_charter_id,
+         needed_by, notes, delivery_charter_id, replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          picker:user_profiles!assigned_picker_id (full_name, email)`,
@@ -1328,6 +1406,52 @@ export default function OrderDetail() {
         .eq('order_request_id', id)
         .order('created_at', { ascending: true });
       orderReturns = parseOrderReturns((returnRows ?? []) as unknown as RawOrderReturnRow[]);
+      // RX-2: each RMA's exchange ("Exchange: Large ×1 → SO-000104 (…)"),
+      // one batched return_overview read and one items read; a failed read
+      // leaves the RMAs without the line.
+      if (orderReturns.length > 0) {
+        try {
+          const { data: ov } = await supabase
+            .from('return_overview')
+            .select(ORDER_RETURNS_EXCHANGE_SELECT)
+            .eq('organization_id', orgId)
+            .eq('kind', 'exchange')
+            // in-list-bound: one order's RMAs (each takes returnable budget: a handful)
+            .in('id', orderReturns.map((rr) => rr.id));
+          const ovRows = (ov ?? []) as unknown as RawExchangeOverviewRow[];
+          const exchangeLabelIds = exchangeItemIdsOf(ovRows);
+          const { data: itemRows } = exchangeLabelIds.length
+            ? await supabase
+                .from('inventory_items')
+                .select('id, name, variant_size, variant_width, variant_color, jersey_number')
+                .eq('organization_id', orgId)
+                // in-list-bound: the replacement items of one order's RMAs (a handful)
+                .in('id', exchangeLabelIds)
+            : { data: [] };
+          const byReturn = exchangeLinesByReturn(ovRows, (itemRows ?? []) as unknown as ExchangeItemRow[]);
+          orderReturns = orderReturns.map((rr) => ({ ...rr, exchangeLines: byReturn.get(rr.id) ?? [] }));
+        } catch {
+          /* the RMAs show without their exchange line */
+        }
+      }
+    }
+
+    // RX-2: a replacement order's banner and gate come with GET
+    // /api/v1/orders/[id], read only for a replacement. The create sheet's
+    // Exchange switch is read when the sheet opens (desk check F9: never the
+    // whole order for every completed order).
+    const replacementForReturnId =
+      ((data as Record<string, unknown> | null)?.replacement_for_return_id as string | null | undefined) ?? null;
+    let replacement: MobileOrderReplacement | null = null;
+    if (replacementForReturnId) {
+      try {
+        const extras = await api<{ replacement?: MobileOrderReplacement | null }>(
+          `/api/v1/orders/${encodeURIComponent(id)}`,
+        );
+        replacement = extras.replacement ?? null;
+      } catch {
+        /* the order still shows; the gate is the server's anyway */
+      }
     }
 
     // NOTE (2026-07-22): the per-order stock_reservations read that used to sit
@@ -1503,6 +1627,8 @@ export default function OrderDetail() {
         readiness,
         receivedAt: new Date().toISOString(),
         returns: orderReturns,
+        replacementForReturnId,
+        replacement,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -1716,7 +1842,8 @@ export default function OrderDetail() {
 
   function promptPhysicalSignature() {
     Alert.prompt(
-      'Physical signature',
+      // Fix round 1 (verification V-2): the prompt names the order it records.
+      physicalSignatureTitle(order?.orderNumber),
       "Customer signed on paper? Enter the signer's name — this completes the hand-over exactly like the digital sign page (backordering any still-owed items).",
       [
         { text: 'Cancel', style: 'cancel' },
@@ -1773,6 +1900,14 @@ export default function OrderDetail() {
     );
   }, [order]);
   const showLineReadiness = readinessShown && readinessAudienceNow === 'full';
+  // RX-2 review fix P6: while a replacement's return-first gate holds (and
+  // only then) the readiness words say the stock is held and picking waits,
+  // never a green "Ready to pick" (core's words, the web strip's too).
+  const readinessGate = React.useMemo(() => replacementReadinessGate(order?.replacement), [order?.replacement]);
+  // RX-2 review fix P5: what the replacement holds now (the server's number,
+  // else this screen's readiness), so its gate never says "Replacement
+  // reserved" over nothing held.
+  const replacementHeld = order?.replacement ? replacementHeldNow(order.replacement, order.readiness) : null;
 
   // F2-3 "Put away" on the full panel: a line with units in this warehouse's
   // Staging, and "Put away N items" on the card (core put-away.ts). The gate
@@ -1845,9 +1980,10 @@ export default function OrderDetail() {
       line: editLine,
       position: order.lines.findIndex((l) => l.orderRequestLineId === lineId) + 1,
       totalLines: order.lines.length,
+      gate: readinessGate,
       readinessLine: showLineReadiness ? (readinessByLine?.get(lineId)?.line ?? null) : null,
     });
-  }, [editLine, order, showLineReadiness, readinessByLine]);
+  }, [editLine, order, showLineReadiness, readinessByLine, readinessGate]);
 
   // Every action needs a connection; this is the reason shown with them.
   const connectionNotice = offline ? (
@@ -1934,7 +2070,11 @@ export default function OrderDetail() {
   // button. Deriving from `availableOrderActions` (rather than re-checking
   // role + status inline) means mobile can never drift from web on who may
   // reopen picking or from which statuses.
-  const canReopenPicking =
+  // RX-2 review fix (0396, security F-1): the same ask also decides Close as
+  // delivered-partial, with the order's replacement facts, so an exchange
+  // replacement (closed only from its RMA; the header guard refuses it
+  // anywhere else) is never offered it.
+  const orderMachineActions =
     order && role
       ? availableOrderActions({
           status: st as OrderStatus,
@@ -1948,8 +2088,11 @@ export default function OrderDetail() {
           // 0390: reopen_picking asks orders:approve, so a granted staff
           // member is offered it and a revoked manager is not (as on the web).
           canApproveOrders: rpApprove,
-        }).includes('reopen_picking')
-      : false;
+          isReplacement: isReplacementOrder,
+        })
+      : [];
+  const canReopenPicking = orderMachineActions.includes('reopen_picking');
+  const machineOffersClosePartial = orderMachineActions.includes('close_partial');
   // Slice D (0390): the MANAGER ACTIONS section and each button in it follow
   // the rule the server applies to that action (the effective orders:approve
   // for approval-class actions, orders:assign_delivery for the driver, a
@@ -1965,18 +2108,46 @@ export default function OrderDetail() {
     isManagerByRole: isManager,
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    machineOffersClosePartial,
     machineOffersReopen: canReopenPicking,
     isViewerRole: role === 'viewer',
   });
   const hasPipelineActions = managerActions.showSection;
   // Cancel (L93): core's orderCancelOffer, the web order page's rule. The
   // effective orders:request too: the service asserts it for every cancel.
-  const cancelOffer = phoneOrderCancel({
+  // Returns RX-2: a replacement is cancelled only from its RMA, as on the web.
+  const cancelOffer = isReplacementOrder ? null : phoneOrderCancel({
     status: st,
     canApproveOrders: rpApprove,
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
     canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
   });
+  // Returns RX-2 review (counter taps): the RMA's Hand over opens this
+  // screen with ?focus=sign. The paper signature opens once, through the same
+  // departure confirm as its button, when the order has loaded, is ready to
+  // hand over and this viewer may confirm it, online and idle; a reload or a
+  // cancelled prompt never opens it again. The request belongs to THIS screen
+  // while it is in front and to who tapped Hand over (review fix, simulator
+  // fault 2026-10-06): a screen left mounted under another one, or a session
+  // that changed, never opens it (stepSignatureOnArrival).
+  const screenInFront = useIsFocused();
+  const signArrival = React.useRef(initialSignArrival(userId));
+  React.useEffect(() => {
+    const step = stepSignatureOnArrival(signArrival.current, {
+      focus,
+      focused: screenInFront,
+      loaded: loadedOrder !== null,
+      // Fix round 1 (verification V-2): only a live exchange replacement.
+      replacement: loadedOrder?.replacement?.live === true,
+      offered: managerActions.physicalSignature,
+      online: !offline,
+      busy: acting !== null,
+      userId,
+    });
+    signArrival.current = step.state;
+    if (step.open) confirmDeparture('signature', promptPhysicalSignature);
+  });
+
   const pickerLabel =
     !order || order.assignedPickerId === null
       ? 'Unassigned'
@@ -2312,6 +2483,60 @@ export default function OrderDetail() {
             </Mono>
           </View>
 
+          {/* RX-2: an exchange replacement says which RMA it belongs to, the
+              return-first gate while it holds (with what it holds, review fix
+              P5), an early release, the driver's line for an early-released
+              delivery (never to the requester, P10), and where it is changed,
+              for who reads it (P9): the RMA link itself for someone who can
+              open the RMA, who to ask for the requester, who can for anyone
+              else. Once handed over, how the exchange ended and "Open RMA-…". */}
+          {order.replacement ? (
+            <Card padding={14} style={{ borderLeftWidth: 4, borderLeftColor: c.ink }}>
+              <View style={{ gap: 6 }}>
+                {orderReplacementLines(
+                  order.replacement,
+                  order.fulfillmentType === 'delivery' ? 'delivery' : order.fulfillmentType === 'pickup' ? 'pickup' : null,
+                  {
+                    isRequester: !!order.requesterUserId && order.requesterUserId === userId,
+                    held: replacementHeld,
+                  },
+                ).map((t) =>
+                  t.key === 'rma_link' ? (
+                    <Pressable
+                      key={t.key}
+                      onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
+                      accessibilityRole="link"
+                      accessibilityLabel={t.text}
+                      hitSlop={6}
+                      style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
+                    >
+                      <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                        {t.text}
+                      </Body>
+                    </Pressable>
+                  ) : (
+                    <Body key={t.key} size={t.key === 'title' ? 14.5 : 13} color={t.key === 'title' ? c.ink : undefined} muted={t.key !== 'title'}>
+                      {t.text}
+                    </Body>
+                  ),
+                )}
+                {order.replacement.live && order.replacement.handedOver && order.replacement.canOpenReturn ? (
+                  <Pressable
+                    onPress={() => router.push(`/returns/${order.replacement!.returnId}` as Href)}
+                    accessibilityRole="link"
+                    accessibilityLabel={changeInRmaLabel(order.replacement)}
+                    hitSlop={6}
+                    style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
+                  >
+                    <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                      {changeInRmaLabel(order.replacement)}
+                    </Body>
+                  </Pressable>
+                ) : null}
+              </View>
+            </Card>
+          ) : null}
+
           {/* OFFLINE: the order as it was last loaded, and when. Every action
               below is disabled and says it needs a connection. */}
           {offline ? (
@@ -2415,6 +2640,7 @@ export default function OrderDetail() {
               result={order.readiness}
               audience={readinessAudienceNow}
               timeZone={order.orgTimezone}
+              gate={readinessGate}
               offline={offline}
               checking={retrying}
               onCheckAgain={() => void retryLoad()}
@@ -2641,6 +2867,7 @@ export default function OrderDetail() {
                             item={lineReadiness.item}
                             position={i + 1}
                             timeZone={order.orgTimezone}
+                            gate={readinessGate}
                             onOpenItem={(itemId) => router.push(`/item/${itemId}`)}
                             putAway={
                               lineOffer
@@ -2790,11 +3017,28 @@ export default function OrderDetail() {
                   {stockNotice}
                 </>
               ) : null}
-              {managerActions.generatePickSlip
+              {managerActions.generatePickSlip && !replacementPickBlocked(order.replacement)
                 ? actionBtn('Generate pick slip', 'gps', () =>
                     void act({ action: 'generate_pick_slip' }, 'gps'),
                   )
                 : null}
+              {/* RX-2: the return-first gate holds a replacement's pick slip
+                  until its returned item is received, or a manager with
+                  returns:manage and orders:approve releases it with a reason. */}
+              {order.replacement?.live && order.replacement.waitingForReturn &&
+              (order.status === 'approved' || order.status === 'backordered') ? (
+                <>
+                  <Body size={12.5} color={c.ink3} accessibilityRole="text">
+                    {replacementGateLine(order.replacement, replacementHeld)}
+                  </Body>
+                  {order.status === 'approved' && order.replacement.canReleaseEarly
+                    ? actionBtn(RETURNS_COPY.releaseBeforeReturn, 'release', () => {
+                        setReleaseError(null);
+                        setReleaseOpen(true);
+                      }, 'default')
+                    : null}
+                </>
+              ) : null}
               {managerActions.generatePackingSlips
                 ? actionBtn('Generate packing slips', 'gpk', () =>
                     void act({ action: 'generate_packing_slips' }, 'gpk'),
@@ -2850,7 +3094,7 @@ export default function OrderDetail() {
                 : null}
               {managerActions.backorderedActions ? (
                 <>
-                  {stockGates.resume === 'waiting' ? (
+                  {replacementPickBlocked(order.replacement) ? null : stockGates.resume === 'waiting' ? (
                     <Body size={12} color={c.ink4}>
                       Resume unlocks when owed items are back in stock.
                     </Body>
@@ -2865,23 +3109,28 @@ export default function OrderDetail() {
                     )
                   )}
                   {stockNotice}
-                  {actionBtn(
-                    'Close as delivered-partial',
-                    'closepartial',
-                    () =>
-                      Alert.alert(
-                        'Close as delivered-partial?',
-                        'This ends the order and keeps the record of what was delivered. The remaining backordered units will NOT be fulfilled.',
-                        [
-                          { text: 'Keep open', style: 'cancel' },
-                          {
-                            text: 'Close order',
-                            onPress: () => void act({ action: 'close_partial' }, 'closepartial'),
-                          },
-                        ],
-                      ),
-                    'default',
-                  )}
+                  {/* RX-2 review fix F-1: as the shared machine offers it
+                      (never on an exchange replacement, which ends from its
+                      RMA). */}
+                  {managerActions.closePartial
+                    ? actionBtn(
+                        'Close as delivered-partial',
+                        'closepartial',
+                        () =>
+                          Alert.alert(
+                            'Close as delivered-partial?',
+                            'This ends the order and keeps the record of what was delivered. The remaining backordered units will NOT be fulfilled.',
+                            [
+                              { text: 'Keep open', style: 'cancel' },
+                              {
+                                text: 'Close order',
+                                onPress: () => void act({ action: 'close_partial' }, 'closepartial'),
+                              },
+                            ],
+                          ),
+                        'default',
+                      )
+                    : null}
                 </>
               ) : null}
               {connectionNotice}
@@ -3069,6 +3318,12 @@ export default function OrderDetail() {
                         disposition: rl.disposition,
                         applied: rl.applied,
                       })}
+                    </Mono>
+                  ))}
+                  {/* RX-2: "Exchange: Large ×1 → SO-000104 (…)". */}
+                  {(r.exchangeLines ?? []).map((t, i) => (
+                    <Mono key={`${r.id}-x-${i}`} size={11} color={c.ink} style={{ marginTop: i === 0 ? 8 : 2 }}>
+                      {t}
                     </Mono>
                   ))}
                   {r.notes ? (
@@ -3558,6 +3813,17 @@ export default function OrderDetail() {
         </View>
       </Modal>
 
+      {order?.replacement ? (
+        <ReleaseReplacementSheet
+          visible={releaseOpen}
+          online={!offline}
+          submitting={releaseBusy}
+          error={releaseError}
+          onClose={() => setReleaseOpen(false)}
+          onConfirm={(reason) => void releaseReplacement(reason)}
+        />
+      ) : null}
+
       {/* Create-return sheet (staff parity with web's CreateReturnDialog):
           per-line qty steppers capped at the remaining budget, per-line
           Restock/Scrap disposition, optional reason + notes. Submits to
@@ -3726,6 +3992,61 @@ export default function OrderDetail() {
                         );
                       })}
                     </View>
+                    {/* RX-2: an exchange per line, while exchanges are on; the
+                        replacement's other sizes load on the first Exchange. */}
+                    {exchangesEnabled && d.quantity > 0 ? (
+                      <View style={{ gap: 8 }}>
+                        <View
+                          style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}
+                          accessibilityRole="radiogroup"
+                          accessibilityLabel={`${RETURNS_COPY.whatWouldYouLikeToDo} ${l.name}`}
+                        >
+                          {(
+                            [
+                              ['return', RETURNS_COPY.returnOnly],
+                              ['exchange', RETURNS_COPY.exchangeStaff],
+                            ] as const
+                          ).map(([mode, words]) => {
+                            const on = (d.mode ?? 'return') === mode;
+                            return (
+                              <Pressable
+                                key={mode}
+                                onPress={() => setReturnMode(l.orderRequestLineId, mode)}
+                                disabled={returnSubmitting}
+                                accessibilityRole="radio"
+                                accessibilityLabel={words}
+                                accessibilityState={{ checked: on, disabled: returnSubmitting }}
+                                style={{
+                                  paddingHorizontal: 10,
+                                  paddingVertical: 6,
+                                  borderRadius: 8,
+                                  borderWidth: 1,
+                                  minHeight: MIN_TAP,
+                                  justifyContent: 'center',
+                                  borderColor: on ? c.ink : c.hair,
+                                  backgroundColor: on ? c.ink : 'transparent',
+                                }}
+                              >
+                                <Mono size={10.5} color={on ? c.paper : c.ink3} maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.control)}>
+                                  {words}
+                                </Mono>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                        {d.mode === 'exchange' && id ? (
+                          <ReplacementPickerList
+                            load={(q) => getOrderExchangeCandidates(id, l.orderRequestLineId, q)}
+                            needed={Math.max(1, d.quantity)}
+                            selectedItemId={d.exchangeItemId ?? null}
+                            onSelect={(row) => setReturnExchangeItem(l.orderRequestLineId, row.itemId)}
+                            label={l.name}
+                            online={!offline}
+                            disabled={returnSubmitting}
+                          />
+                        ) : null}
+                      </View>
+                    ) : null}
                   </View>
                 );
               })}
@@ -3806,7 +4127,10 @@ export default function OrderDetail() {
             </ScrollView>
 
             {returnError ? (
-              <Mono size={11} color="#b42318">{returnError}</Mono>
+              // Verification L7 (pattern 20): announced to VoiceOver.
+              <Mono size={11} color="#b42318" accessibilityRole="alert">
+                {returnError}
+              </Mono>
             ) : null}
             {offline ? (
               <Body size={12} color={c.ink3}>

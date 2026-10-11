@@ -1,9 +1,21 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useRouter } from 'expo-router';
 import * as React from 'react';
-import { AccessibilityInfo, ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Image,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import {
+  exchangeLineStatusLabel,
+  exchangeRailAccessibilityLabel,
   formatOrderNumber,
   qtyReturningLabel,
   READINESS_NEEDS_CONNECTION_COPY,
@@ -18,15 +30,34 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
 import {
   describeReturnError,
   getReturnWorkbench,
+  prepareReturnReplacement,
+  returnErrorReason,
   runReturnSteps,
   type MobileReturnWorkbench,
 } from '@/lib/returns-api';
-import { actionLabel, returnStatusTone, stepOutcomeMessage, workbenchActions } from '@/lib/returns-view';
-import { FONT } from '@/lib/theme';
+import {
+  actionHelp,
+  actionLabel,
+  exchangeForLine,
+  exchangeOf,
+  exchangeRailText,
+  prepareOutcomeMessage,
+  refusalRefreshesWorkbench,
+  replacementCardLabel,
+  replacementOrderHref,
+  replacementPhotoUrl,
+  replacementOrderLines,
+  replacementSideLines,
+  returnStatusTone,
+  stepOutcomeMessage,
+  workbenchActions,
+} from '@/lib/returns-view';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -54,6 +85,11 @@ export function ReturnWorkbenchView({
   onChanged?: () => void;
 }) {
   const { c } = useTheme();
+  // Simulator fault F-B (2026-10-06): at AX5 on the iPhone the 72 pt photo
+  // beside each card's words broke them mid-word. Past the AX threshold both
+  // cards put the photo above their words (the orders card's rule).
+  const { fontScale } = useWindowDimensions();
+  const cardsStacked = shouldStackRow(fontScale);
   const router = useRouter();
   const offline = isOfflineState(useNetworkState());
   const [wb, setWb] = React.useState<MobileReturnWorkbench | null>(null);
@@ -113,8 +149,39 @@ export function ReturnWorkbenchView({
   }
 
   const r = wb.return;
+  const ex = exchangeOf(wb);
+  const hasExchange = ex.kind === 'exchange';
   const actions = workbenchActions(wb, { itemIsHere: wb.createdOnCounter, online: !offline, busy });
   const disabled = actions.disabledReason !== null;
+  // Review fix P18: what "Get replacement ready" does, under it and as its
+  // hint, when it is one of the secondary buttons.
+  const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;
+
+  // Review fix S2: after a refusal that means the screen is behind the
+  // server, read the RMA again (and the iPad list beside it).
+  function refresh() {
+    void load();
+    onChanged?.();
+  }
+
+  // RX-2: "Get replacement ready" is one tap (the server runs the order's own
+  // steps, each with its gates, and stops before the signature).
+  async function prepare() {
+    if (!wb || disabled) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await prepareReturnReplacement(wb.return.id);
+      setWb(res.workbench);
+      setNotice(prepareOutcomeMessage(res.answer));
+      onChanged?.();
+    } catch (e) {
+      setNotice(describeReturnError(e));
+      if (refusalRefreshesWorkbench(returnErrorReason(e))) refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function receive() {
     if (!wb || disabled) return;
@@ -128,6 +195,7 @@ export function ReturnWorkbenchView({
       onChanged?.();
     } catch (e) {
       setNotice(describeReturnError(e));
+      if (refusalRefreshesWorkbench(returnErrorReason(e))) refresh();
     } finally {
       setBusy(false);
     }
@@ -154,6 +222,32 @@ export function ReturnWorkbenchView({
       case 'receive':
         void receive();
         return;
+      // RX-2: the replacement.
+      case 'release_early':
+        setSheet('release');
+        return;
+      case 'cancel_replacement':
+        setSheet('cancel_replacement');
+        return;
+      case 'change_replacement':
+        setSheet('change_replacement');
+        return;
+      case 'issue_replacement':
+        setSheet('issue_replacement');
+        return;
+      // Desk check F9: the exchange ends for good after a replacement cancel.
+      case 'close_as_return_only':
+        setSheet('close_as_return_only');
+        return;
+      case 'get_replacement_ready':
+        void prepare();
+        return;
+      case 'open_replacement':
+      case 'hand_over':
+        // The replacement's own order screen: its signature is the one
+        // hand-over. Hand over opens it with the paper signature ready.
+        if (ex.replacement) router.push(replacementOrderHref(ex.replacement.orderId, a) as Href);
+        return;
     }
   }
 
@@ -175,7 +269,7 @@ export function ReturnWorkbenchView({
         }
       >
         <View style={{ gap: 6 }}>
-          <Eyebrow>RMA · {RETURNS_COPY.typeReturn.toUpperCase()}</Eyebrow>
+          <Eyebrow>RMA · {(hasExchange ? RETURNS_COPY.typeExchange : RETURNS_COPY.typeReturn).toUpperCase()}</Eyebrow>
           <Display size={compact ? 24 : 30} accessibilityRole="header">
             {r.returnNumber ?? 'Return'}
           </Display>
@@ -184,6 +278,11 @@ export function ReturnWorkbenchView({
               {returnStatusLabel(r.status)}
             </Pill>
             <Pill dot={false}>{r.source === 'requester' ? RETURNS_COPY.requestedByRequester : RETURNS_COPY.createdByStaff}</Pill>
+            {hasExchange ? (
+              <Pill dot={false} status={ex.status === 'unavailable' ? 'crit' : 'default'}>
+                {ex.statusLabel}
+              </Pill>
+            ) : null}
           </View>
           <Pressable
             onPress={() => router.push(`/order/${r.orderRequestId}` as Href)}
@@ -221,11 +320,18 @@ export function ReturnWorkbenchView({
               <Button
                 block
                 disabled={disabled}
-                accessibilityHint={actions.disabledReason ?? undefined}
+                accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}
                 onPress={() => onAction(actions.primary!)}
               >
-                {busy && actions.primary === 'receive' ? 'Saving…' : actionLabel(actions.primary)}
+                {busy && (actions.primary === 'receive' || actions.primary === 'get_replacement_ready')
+                  ? 'Saving…'
+                  : actionLabel(actions.primary, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}
               </Button>
+            ) : null}
+            {actionHelp(actions.primary) ? (
+              <Body size={12.5} muted>
+                {actionHelp(actions.primary)}
+              </Body>
             ) : null}
             {actions.secondary.length > 0 ? (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -235,13 +341,18 @@ export function ReturnWorkbenchView({
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
                     disabled={disabled}
-                    accessibilityHint={actions.disabledReason ?? undefined}
+                    accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}
                     onPress={() => onAction(a)}
                   >
-                    {actionLabel(a)}
+                    {actionLabel(a, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}
                   </Button>
                 ))}
               </View>
+            ) : null}
+            {secondaryHelp ? (
+              <Body size={12.5} muted>
+                {secondaryHelp}
+              </Body>
             ) : null}
             {actions.disabledReason ? (
               <Body size={12.5} muted>
@@ -266,15 +377,56 @@ export function ReturnWorkbenchView({
           </View>
         </Card>
 
-        <Eyebrow>{RETURNS_COPY.returning}</Eyebrow>
+        {hasExchange ? (
+          <>
+            <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            <Card padding={14}>
+              <View style={{ gap: 6 }}>
+                {ex.rail.length > 0 ? (
+                  // Review fixes P4 and P21: every step's state in core's words
+                  // on screen and in one VoiceOver label (after a stop nothing
+                  // reads "next"; a part never sent ends Partly handed over).
+                  <Body size={13} color={c.ink} accessibilityLabel={exchangeRailAccessibilityLabel(ex.rail)}>
+                    {exchangeRailText(ex.rail)}
+                  </Body>
+                ) : null}
+                {replacementOrderLines(wb, wb.viewer.canReadDecisions).map((t) =>
+                  t.key === 'so' && ex.replacement ? (
+                    <Pressable
+                      key={t.key}
+                      onPress={() => router.push(`/order/${ex.replacement!.orderId}` as Href)}
+                      accessibilityRole="link"
+                      accessibilityLabel={t.text}
+                      hitSlop={6}
+                    >
+                      <Body size={14} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                        {t.text}
+                      </Body>
+                    </Pressable>
+                  ) : (
+                    <Body key={t.key} size={13} muted={t.key !== 'short'} color={t.key === 'short' ? c.ink : undefined}>
+                      {t.text}
+                    </Body>
+                  ),
+                )}
+              </View>
+            </Card>
+          </>
+        ) : null}
+
+        <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
         <View style={compact ? { gap: 10 } : styles.cards}>
           {wb.lines.map((l) => {
             const name = l.item.name ?? 'Deleted item';
             const sub = [l.item.variant, l.item.sku].filter(Boolean).join(' · ');
+            const x = exchangeForLine(wb, l.id);
+            // Review fix P11: the replacement's photo, as the returned item's.
+            const photo = x ? replacementPhotoUrl(x) : null;
             return (
-              <Card key={l.id} padding={14} style={compact ? undefined : styles.card}>
+              <View key={l.id} style={compact ? { gap: 10 } : styles.pair}>
+              <Card padding={14} style={compact ? undefined : styles.card}>
                 <View
-                  style={{ flexDirection: 'row', gap: 12 }}
+                  style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
                   accessible
                   accessibilityLabel={`${name}${sub ? `, ${sub}` : ''}, ${qtyReturningLabel(l.quantity)}, ${l.inboundState}`}
                 >
@@ -287,8 +439,9 @@ export function ReturnWorkbenchView({
                   ) : (
                     <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
                   )}
-                  <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                    <Body size={15} color={c.ink} numberOfLines={2} style={{ fontFamily: FONT.display }}>
+                  <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
+                    {/* An item's name is never capped (the app's policy). */}
+                    <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
                       {name}
                     </Body>
                     {sub ? (
@@ -305,6 +458,41 @@ export function ReturnWorkbenchView({
                   </View>
                 </View>
               </Card>
+              {x ? (
+                // The REPLACEMENT side: stacked on the phone, beside the
+                // returning card on the iPad; a text label and an arrow, never
+                // colour alone.
+                <Card padding={14} style={{ ...(compact ? {} : styles.card), borderLeftWidth: 4, borderLeftColor: c.ink }}>
+                  <View
+                    style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
+                    accessible
+                    accessibilityLabel={replacementCardLabel(name, x)}
+                  >
+                    {photo ? (
+                      <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
+                    ) : (
+                      <View style={[styles.photo, { backgroundColor: c.paper2 }]} />
+                    )}
+                    <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
+                      <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
+                      {replacementSideLines(x).map((t) => (
+                        <Body
+                          key={t.key}
+                          size={t.tone === 'ink' ? 14.5 : 13}
+                          color={t.tone === 'ink' ? c.ink : t.tone === 'crit' ? ACCENT.crit : undefined}
+                          muted={t.tone === 'muted'}
+                        >
+                          {t.text}
+                        </Body>
+                      ))}
+                      <View style={{ alignSelf: 'flex-start' }}>
+                        <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
+                      </View>
+                    </View>
+                  </View>
+                </Card>
+              ) : null}
+              </View>
             );
           })}
         </View>
@@ -318,7 +506,7 @@ export function ReturnWorkbenchView({
           </Card>
         ) : null}
 
-        <Eyebrow>HISTORY</Eyebrow>
+        <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
         <Card padding={14}>
           <View style={{ gap: 10 }}>
             {wb.chain.length === 0 ? (
@@ -364,7 +552,9 @@ export function ReturnWorkbenchView({
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, gap: 14 },
-  cards: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  cards: { gap: 10 },
+  // RX-2: a returning card and its REPLACEMENT side by side on the iPad.
+  pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   card: { flexGrow: 1, flexBasis: 320 },
   photo: { width: 72, height: 72, borderRadius: 10 },
 });

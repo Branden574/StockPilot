@@ -342,25 +342,31 @@ describe('the scan itself (planted selects)', () => {
   });
 
   it('follows constants across files, templates, joins, spreads and helper parameters', () => {
+    // Since 0396 (returns RX-2) order_requests and returns are joined twice
+    // (an RMA's order, and a replacement order's RMA), so the template names
+    // the RMA's order key to keep the nested spread the ambiguous part; an
+    // unnamed returns embed from order_requests (`four`) is flagged itself.
     const r = run({
       'cols.ts': `
         export const MEMBER = 'user:user_profiles(full_name)';
         export const PARTS = ['id', 'status', 'picker:user_profiles(full_name)'];`,
       'service.ts': `
         import { MEMBER, PARTS } from './cols';
-        const WITH_RETURNS = \`id, \${'returns'}(id, ...user_profiles(email))\`;
+        const WITH_RETURNS = \`id, \${'returns'}!returns_order_request_id_fkey(id, ...user_profiles(email))\`;
         function read(sb: any, table: string, columns: string) {
           return sb.from(table).select(columns);
         }
         export const one = (sb: any) => sb.from('organization_members').select(MEMBER);
         export const two = (sb: any) => read(sb, 'order_requests', PARTS.join(', '));
-        export const three = (sb: any) => sb.from('order_requests').select(WITH_RETURNS);`,
+        export const three = (sb: any) => sb.from('order_requests').select(WITH_RETURNS);
+        export const four = (sb: any) => sb.from('order_requests').select('id, returns(id)');`,
     });
     expect(flagged(r).sort()).toEqual(
       [
         'service.ts:5 order_requests -> picker:user_profiles',
         'service.ts:7 organization_members -> user:user_profiles',
         'service.ts:9 returns -> returns > user_profiles',
+        'service.ts:10 order_requests -> returns',
       ].sort(),
     );
   });

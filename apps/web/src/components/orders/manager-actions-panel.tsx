@@ -67,6 +67,10 @@ import {
   describeDepartureRisk,
   isManagerOrAbove,
   previewPartialFulfilment,
+  releaseOutcomeLine,
+  returnCancelledReplacementLine,
+  RETURNS_COPY,
+  waitingForReturnLine,
   type CompletionConfirmCopy,
   type DepartureAction,
   type DepartureLine,
@@ -79,6 +83,8 @@ import {
 
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
+import { ReleaseEarlyDialog } from '@/components/returns/exchange-panel';
+import { releaseReturnReplacementAction } from '@/server/actions/returns';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -176,6 +182,38 @@ interface Props {
    *  the picking phase offers only view/print (never Claim/Pick/Complete/
    *  Release) to a viewer the backend would reject. */
   viewerCanPick: boolean;
+  /**
+   * Returns RX-2: this order is the live exchange replacement of an RMA.
+   * While its RMA waits for the returned item (the return-first gate),
+   * "Generate pick slip" and "Resume fulfillment" give way to the gate's
+   * words and, for holders of returns:manage and orders:approve, "Release
+   * before return is received". The driver's line is the banner's (review
+   * fix P10). Null for an ordinary order.
+   */
+  replacement?: {
+    returnId: string;
+    returnNumber: string | null;
+    waitingForReturn: boolean;
+    /** The RMA was cancelled or denied: never picked again (desk check F3). */
+    returnClosed?: boolean;
+    canReleaseEarly: boolean;
+    /** Kept for callers; the banner shows the driver's line (review fix P10). */
+    driverLine: string | null;
+    /** The view's exchange status and what this order holds now: the gate
+     *  line says "Replacement reserved" only when something is held (review
+     *  fix P5, core's waitingForReturnLine). */
+    exchangeStatus?: string | null;
+    held?: number | null;
+  } | null;
+  /**
+   * Returns RX-2 review fix (counter taps): the RMA's Hand over arrived
+   * (?sign=physical): open the Physical signature dialog once, when the order
+   * is ready for the hand-over and this viewer may confirm it (and nothing
+   * is short to confirm first); otherwise the panel as today.
+   */
+  openPhysicalSignature?: boolean;
+  /** "SO-000123": the physical signature dialog names the order it records (fix round 1, verification V-2). */
+  orderLabel?: string | null;
 }
 
 type BusyKey =
@@ -193,6 +231,7 @@ type BusyKey =
   | 'physical-signature'
   | 'reopen-picking'
   | 'notes'
+  | 'release-early'
   | null;
 
 /** No stock check: nothing to offer, nothing to say. */
@@ -238,9 +277,34 @@ export function ManagerActionsPanel({
   assignedPickerName,
   pickers,
   viewerCanPick,
+  replacement = null,
+  openPhysicalSignature = false,
+  orderLabel = null,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
+  const [releaseOpen, setReleaseOpen] = React.useState(false);
+  const gated = replacement?.waitingForReturn === true;
+  // Desk check F3: a replacement whose RMA was cancelled or denied is never
+  // picked again (the gate refuses it), so the pick slip and Resume go too.
+  const returnClosed = replacement?.returnClosed === true;
+  const pickBlocked = gated || returnClosed;
+  async function releaseEarly(reason: string) {
+    if (!replacement) return;
+    setBusy('release-early');
+    // This order is the replacement the page shows (desk check F7: a stale
+    // page never releases a newer replacement).
+    const res = await releaseReturnReplacementAction({ id: replacement.returnId, orderId, reason });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      router.refresh();
+      return;
+    }
+    toast.success(releaseOutcomeLine(res.data.answer));
+    setReleaseOpen(false);
+    router.refresh();
+  }
   const [rechecking, startRecheck] = React.useTransition();
 
   // Approval-class actions (approve, deny, the pick slip, packing slips,
@@ -279,6 +343,10 @@ export function ManagerActionsPanel({
     // was revoked neither); the picker override stays manager rank. Never a
     // viewer (approves, above).
     canApproveOrders: approves,
+    // RX-2: an exchange replacement and its return-first gate.
+    isReplacement: replacement !== null,
+    replacementGate: replacement ? (gated ? 'waiting' : returnClosed ? 'closed' : 'open') : null,
+    canReleaseReplacement: replacement?.canReleaseEarly === true && approves,
   });
   // The stock notice belongs to the two stock-dependent statuses only.
   const stockNotice =
@@ -328,7 +396,27 @@ export function ManagerActionsPanel({
   // can't be styled, and doesn't handle cancel cleanly. The dialog
   // also captures focus so screen readers announce the action.
   const [denyOpen, setDenyOpen] = React.useState(false);
-  const [physicalSigOpen, setPhysicalSigOpen] = React.useState(false);
+  // Opened at once when the RMA's Hand over asked for it and the button would
+  // be offered now with no departure confirm owed (counter taps).
+  const [physicalSigOpen, setPhysicalSigOpen] = React.useState(
+    () =>
+      openPhysicalSignature &&
+      offersPhysicalSignature &&
+      (status === 'staged_for_pickup' || status === 'in_transit') &&
+      (approves || isDriverHere) &&
+      describeDepartureRisk({ lines: departureLines, status, action: 'signature' }) === null,
+  );
+  // Honoured once: the request leaves the address, so a reload is the page as today.
+  // `null` state, never window.history.state: Next skips its router sync for
+  // its own state (`__NA`), so the router would keep ?sign=physical and the
+  // next refresh would push it back (lib/updates/safe-reload.ts, the same trap).
+  React.useEffect(() => {
+    if (!openPhysicalSignature || typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('sign') !== 'physical') return;
+    url.searchParams.delete('sign');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [openPhysicalSignature]);
   const [physicalSignerName, setPhysicalSignerName] = React.useState('');
   const [denyReason, setDenyReason] = React.useState('');
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
@@ -700,7 +788,7 @@ export function ManagerActionsPanel({
             </>
           )}
 
-          {status === 'approved' && approves && (
+          {status === 'approved' && approves && !pickBlocked && (
             <Button
               variant="gradient"
               onClick={generatePickSlip}
@@ -713,6 +801,32 @@ export function ManagerActionsPanel({
               )}
               Generate pick slip
             </Button>
+          )}
+
+          {/* RX-2: the return-first gate (0396) holds the pick slip of an
+              exchange replacement until the returned item is received. */}
+          {(status === 'approved' || status === 'backordered') && gated && (
+            <>
+              <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
+                <ClipboardList className="h-3.5 w-3.5" />
+                {waitingForReturnLine(replacement?.returnNumber ?? null, {
+                  exchangeStatus: replacement?.exchangeStatus ?? null,
+                  held: replacement?.held ?? null,
+                })}
+              </span>
+              {status === 'approved' && approves && replacement?.canReleaseEarly ? (
+                <Button variant="outline" onClick={() => setReleaseOpen(true)} disabled={busy !== null}>
+                  <Unlock className="h-3.5 w-3.5" />
+                  {RETURNS_COPY.releaseBeforeReturn}
+                </Button>
+              ) : null}
+            </>
+          )}
+          {(status === 'approved' || status === 'backordered') && returnClosed && !gated && (
+            <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-xs" role="status">
+              <ClipboardList className="h-3.5 w-3.5" />
+              {returnCancelledReplacementLine(replacement?.returnNumber ?? null)}
+            </span>
           )}
 
           {isPickingPhase && (
@@ -940,6 +1054,11 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
+          {/* RX-2 review fix P10: the driver's line for an exchange swap shows
+              once, in the replacement banner (core's replacementDriverLine:
+              an early-released delivery not yet returned, never to the
+              requester), never repeated here. */}
+
           {(status === 'staged_for_pickup' || status === 'in_transit') && (approves || isDriverHere) && (
             <>
               {/* The sign page opens in the "anyway" click itself, so the
@@ -976,7 +1095,7 @@ export function ManagerActionsPanel({
 
           {status === 'backordered' && approves && (
             <>
-              {stockGates.resume !== 'waiting' ? (
+              {pickBlocked ? null : stockGates.resume !== 'waiting' ? (
                 <Button
                   variant="gradient"
                   onClick={() => openPartial('resume')}
@@ -993,14 +1112,19 @@ export function ManagerActionsPanel({
                   Resume unlocks when owed items are back in stock.
                 </span>
               )}
-              <Button
-                variant="outline"
-                onClick={() => setClosePartialOpen(true)}
-                disabled={busy !== null}
-              >
-                <PackageX className="h-3.5 w-3.5" />
-                Close as delivered-partial
-              </Button>
+              {/* Core decides (availableOrderActions): never for an exchange
+                  replacement, whose close-partial the 0396 header guard
+                  refuses from anywhere but its RMA (security F-1). */}
+              {actions.includes('close_partial') && (
+                <Button
+                  variant="outline"
+                  onClick={() => setClosePartialOpen(true)}
+                  disabled={busy !== null}
+                >
+                  <PackageX className="h-3.5 w-3.5" />
+                  Close as delivered-partial
+                </Button>
+              )}
             </>
           )}
 
@@ -1196,6 +1320,15 @@ export function ManagerActionsPanel({
 
       {/* Deny-reason dialog. Replaces the old window.prompt() which
           was blocked in iOS Safari webviews and couldn't be styled. */}
+      {replacement ? (
+        <ReleaseEarlyDialog
+          open={releaseOpen}
+          onOpenChange={setReleaseOpen}
+          busy={busy === 'release-early'}
+          onConfirm={(reason) => void releaseEarly(reason)}
+        />
+      ) : null}
+
       <Dialog open={denyOpen} onOpenChange={closeDenyDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -1305,7 +1438,7 @@ export function ManagerActionsPanel({
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Record a physical signature</DialogTitle>
+            <DialogTitle>{orderLabel ? `Record a physical signature for ${orderLabel}` : 'Record a physical signature'}</DialogTitle>
             <DialogDescription>
               Use this when the customer signed on paper. It completes the
               hand-over exactly like the digital sign page (including

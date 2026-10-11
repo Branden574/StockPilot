@@ -11,6 +11,7 @@ import {
 import {
   Addresses,
   BrandBand,
+  ExchangeLine,
   FooterCode,
   FooterContact,
   LinesTable,
@@ -101,6 +102,8 @@ export async function renderWarehousePackingSlipPdf(
           isPickup={isPickup}
           qrDataUrl={qrDataUrl}
         />
+
+        <ExchangeLine line={detail.replacement?.slipLine} />
 
         {request.internal_notes ? (
           <View

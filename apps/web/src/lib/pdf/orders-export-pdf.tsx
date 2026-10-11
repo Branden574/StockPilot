@@ -3,9 +3,9 @@ import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { PAPER_SIZE_PT } from '@/lib/exports/pdf-layout';
 import {
   EXPORTABLE_ORDER_STATUSES,
-  ORDER_EXPORT_HEADERS,
+  ORDER_EXPORT_PDF_HEADERS,
   orderExportCells,
-  type OrderExportHeader,
+  type OrderExportPdfHeader,
 } from '@/lib/orders/export';
 import type { OrderExportRow } from '@/server/services/order-requests';
 
@@ -95,7 +95,7 @@ const DATE_COLUMN_PT = Math.max(
 );
 
 interface OrdersPdfColumnSpec {
-  key: OrderExportHeader;
+  key: OrderExportPdfHeader;
   align: 'left' | 'right';
   /** Relative share of surplus width (fitColumnWidths weight). */
   weight: number;
@@ -105,7 +105,7 @@ interface OrdersPdfColumnSpec {
 
 /** Numeric columns right-aligned, everything else left — same convention as
  *  the inventory registry's align rules. */
-const COLUMN_SPECS: readonly OrdersPdfColumnSpec[] = ORDER_EXPORT_HEADERS.map(
+const COLUMN_SPECS: readonly OrdersPdfColumnSpec[] = ORDER_EXPORT_PDF_HEADERS.map(
   (key): OrdersPdfColumnSpec => {
     const header = headerFloorPt(key);
     switch (key) {
@@ -140,7 +140,7 @@ const COLUMN_SPECS: readonly OrdersPdfColumnSpec[] = ORDER_EXPORT_HEADERS.map(
 );
 
 export interface OrdersPdfColumn {
-  key: OrderExportHeader;
+  key: OrderExportPdfHeader;
   /** The CSV header string, verbatim — format parity over prettiness. */
   label: string;
   align: 'left' | 'right';
@@ -171,11 +171,11 @@ export function computeOrdersExportPdfColumns(): OrdersPdfColumn[] {
  */
 export function buildOrdersExportPdfRows(
   rows: readonly OrderExportRow[],
-): Array<Record<OrderExportHeader, string>> {
+): Array<Record<OrderExportPdfHeader, string>> {
   return rows.map((row) => {
     const cells = orderExportCells(row);
-    const out = {} as Record<OrderExportHeader, string>;
-    for (const key of ORDER_EXPORT_HEADERS) {
+    const out = {} as Record<OrderExportPdfHeader, string>;
+    for (const key of ORDER_EXPORT_PDF_HEADERS) {
       const value = cells[key];
       out[key] =
         value === null || value === undefined || value === ''
@@ -255,7 +255,7 @@ export interface OrdersExportPdfProps {
   /** "Order requests — <view label>" — composed by the route. */
   title: string;
   subtitle: string;
-  rows: Array<Record<OrderExportHeader, string>>;
+  rows: Array<Record<OrderExportPdfHeader, string>>;
   /** Truncation sentinel, when the row cap was hit. */
   footerNote?: string;
 }

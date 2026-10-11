@@ -21,7 +21,14 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { describeReturnError, listReturns, type MobileReturnListRow } from '@/lib/returns-api';
-import { returnRowItems, returnRowMeta, returnRowTitle, returnRowWaiting, returnStatusTone } from '@/lib/returns-view';
+import {
+  returnRowExchange,
+  returnRowItems,
+  returnRowMeta,
+  returnRowTitle,
+  returnRowWaiting,
+  returnStatusTone,
+} from '@/lib/returns-view';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
@@ -29,9 +36,11 @@ import { showWriteCta } from '@/lib/cta-gating';
 
 /**
  * Returns: the phone twin of the web /dashboard/returns list (returns RX-1).
- * The same filters RX-1 offers on the web (core availableReturnListFilters:
- * All, Awaiting approval, Waiting for returned item, Received, not
- * processed, Closed), a search over the RMA number, SO number and requester,
+ * The same filters the web offers (core availableReturnListFilters: All,
+ * Returns only, Exchanges, Awaiting approval, Waiting for returned item,
+ * Received, not processed, Replacement unavailable, Replacement ready,
+ * Closed; RX-2 added the exchange ones), a search over the RMA number, SO
+ * number and requester,
  * and pages of 25 that load as the list scrolls (keyset cursor from GET
  * /api/v1/returns). Pull to refresh starts again from the first page.
  *
@@ -51,7 +60,7 @@ export default function ReturnsListScreen() {
   const enabled = enabledModules.has('returns');
   const perms = useEffectivePermissions();
   const canRead = showWriteCta(perms, 'returns:read') || showWriteCta(perms, 'returns:manage');
-  const filters = availableReturnListFilters({ exchanges: false });
+  const filters = availableReturnListFilters({ exchanges: true });
   // iPad (and any wide window): the list and the selected RMA side by side.
   const { width } = useWindowDimensions();
   const split = width >= SPLIT_MIN_WIDTH;
@@ -288,9 +297,10 @@ export default function ReturnsListScreen() {
 function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRow; selected?: boolean; onPress: () => void }) {
   const { c } = useTheme();
   const waiting = returnRowWaiting(row);
+  const exchange = returnRowExchange(row);
   const label = `${returnRowTitle(row)}, ${returnStatusLabel(row.status)}, ${returnRowMeta(row)}, ${returnRowItems(row)}${
-    waiting ? `, ${waiting.label}` : ''
-  }`;
+    exchange ? `, ${exchange}` : ''
+  }${waiting ? `, ${waiting.label}` : ''}`;
   return (
     <Pressable
       onPress={onPress}
@@ -327,6 +337,11 @@ function ReturnRow({ row, selected = false, onPress }: { row: MobileReturnListRo
             {returnRowItems(row)}
           </Body>
         </View>
+        {exchange ? (
+          <Body size={12.5} color={c.ink} style={{ marginTop: 8 }}>
+            {exchange}
+          </Body>
+        ) : null}
         {waiting ? (
           <Mono size={11} tracking={0.04} color={waiting.overdue ? c.ink : c.ink4} style={{ marginTop: 8 }}>
             {waiting.label}

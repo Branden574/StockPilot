@@ -56,10 +56,12 @@ export default async function ReturnsPage({
   }
 
   const sp = await searchParams;
-  const filter = parseReturnListFilter(sp.filter);
+  // RX-2: the exchange filters (returns only, exchanges, replacement
+  // unavailable, replacement ready) are on.
+  const filter = parseReturnListFilter(sp.filter, { exchanges: true });
   const svc = await RMAService.forCurrentUser();
   const page = await svc.listPage({ filter, q: sp.q ?? null, cursor: sp.cursor ?? null });
-  const filters = availableReturnListFilters({ exchanges: false });
+  const filters = availableReturnListFilters({ exchanges: true });
 
   const hrefFor = (next: { filter?: ReturnListFilterId; cursor?: string | null }) => {
     const params = new URLSearchParams();
@@ -148,7 +150,17 @@ export default async function ReturnsPage({
                       </Link>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{RETURNS_COPY.typeReturn}</Badge>
+                      <div className="flex flex-col items-start gap-1">
+                        <Badge variant="outline">
+                          {r.type === 'exchange' ? RETURNS_COPY.typeExchange : RETURNS_COPY.typeReturn}
+                        </Badge>
+                        {r.type === 'exchange' && r.exchangeStatusLabel ? (
+                          <span className="text-muted-foreground text-xs" data-testid="return-row-exchange-status">
+                            {r.exchangeStatusLabel}
+                            {r.replacementOrderNumber ? ` · ${formatOrderNumber(r.replacementOrderNumber)}` : ''}
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="text-sm">
                       {r.requesterName ?? r.requesterEmail ?? (

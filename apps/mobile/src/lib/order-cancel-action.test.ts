@@ -102,7 +102,9 @@ describe('order/[id].tsx wiring (L93)', () => {
   // role), or the effective orders:request left out (desk check F3).
   it('offers Cancel through the tested rule, with the effective approve, request and the requester', () => {
     expect(screen).toMatch(
-      /const cancelOffer = phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*\}\);/,
+      // Returns RX-2: a replacement order gets no offer (it is cancelled
+      // from its RMA), as on the web.
+      /const cancelOffer = isReplacementOrder \? null : phoneOrderCancel\(\{\s*status: st,\s*canApproveOrders: rpApprove,\s*isOwnRequest: !!order\?\.requesterUserId && order\.requesterUserId === userId,\s*canRequestOrders: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:request'\),\s*\}\);/,
     );
     expect(screen).toMatch(/\{cancelOffer \? \(/);
     expect(screen).toContain("actionBtn(cancelOffer.label, 'cancelorder', () => promptCancel(cancelOffer), 'danger')");

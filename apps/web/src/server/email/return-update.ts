@@ -16,7 +16,8 @@ import { reportError } from '@/lib/error-reporter';
 /**
  * The requester's return update email (returns RX-1, plan 3.6.8): one email
  * per event for an email-only or B2B portal requester of a requester-sourced
- * RMA. The caller emits it only after the RPC answered `changed: true`, so a
+ * RMA. RX-2 adds the exchange's events (approved, changed, cancelled) and the
+ * replacement order's reworded edges (server/email/replacement-update.ts). The caller emits it only after the RPC answered `changed: true`, so a
  * replay never sends twice; a crash between commit and send loses that one
  * email (best-effort, never a duplicate).
  *
@@ -43,6 +44,8 @@ export async function sendReturnUpdateEmail(
     isAccountHolder: boolean;
     viewUrl: string | null;
     appUrl: string;
+    /** The button's words when not "View your return" (RX-2 exchange complete). */
+    ctaLabel?: string | null;
   },
 ): Promise<ReturnUpdateEmailResult> {
   try {
@@ -62,6 +65,7 @@ export async function sendReturnUpdateEmail(
       recipientFirstName: args.recipientName,
       recipientEmail: args.to,
       viewUrl: args.viewUrl,
+      ctaLabel: args.ctaLabel ?? null,
       urls: delivery.urls,
     });
     assertEmailWeight(rendered.html);

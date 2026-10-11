@@ -1,9 +1,13 @@
 import {
   mapReturnError,
+  parseExchangeCandidates,
   parseRestockOptions,
   randomRequestUuid,
+  type ExchangeCandidatesAnswer,
   type ExchangeStatus,
   type InboundLeg,
+  type RailStep,
+  type ReplacementClass,
   type RestockOptionsLine,
   type ReturnActions,
   type ReturnLineDecision,
@@ -11,6 +15,9 @@ import {
 } from '@stockpilot/core';
 
 import { api, ApiError } from './api';
+import { NO_EXCHANGE } from './returns-view';
+
+export { NO_EXCHANGE };
 
 /**
  * The phone's returns client (returns RX-1): thin typed wrappers over the
@@ -57,7 +64,11 @@ export interface MobileReturnListRow {
   unitCount: number;
   items: MobileReturnListRowItem[];
   moreItems: number;
-  type: 'return';
+  /** RX-2: a return or an exchange (older servers send 'return' only). */
+  type: 'return' | 'exchange';
+  exchangeStatus?: ExchangeStatus;
+  exchangeStatusLabel?: string | null;
+  replacementOrderNumber?: number | null;
 }
 
 export interface MobileReturnListPage {
@@ -87,6 +98,76 @@ export interface MobileReturnWorkbenchLine {
   restock: RestockOptionsLine | null;
   legs: InboundLeg[];
   inboundState: string;
+}
+
+// ── RX-2: the exchange half (mirrors server/services/returns-exchange-workbench.ts) ──
+
+export interface MobileExchangeItem {
+  name: string | null;
+  sku: string | null;
+  variant: string | null;
+  deleted: boolean;
+  imageUrl: string | null;
+  thumbUrl: string | null;
+}
+
+export interface MobileExchangeLine {
+  id: string;
+  returnLineId: string;
+  status: 'requested' | 'approved' | 'declined' | 'cancelled';
+  requestedItemId: string | null;
+  requestedQuantity: number;
+  requestNote: string | null;
+  requestedByKind: string;
+  requestedItem: MobileExchangeItem | null;
+  requestedFree: number | null;
+  approvedItemId: string | null;
+  approvedQuantity: number | null;
+  approvedItem: MobileExchangeItem | null;
+  approvedFree: number | null;
+  changedByWarehouse: boolean;
+  revision: number;
+}
+
+export interface MobileReplacementLine {
+  orderLineId: string;
+  itemId: string;
+  label: string;
+  item: MobileExchangeItem | null;
+  requested: number;
+  fulfilled: number;
+  held: number;
+  take: string | null;
+}
+
+export interface MobileReplacement {
+  orderId: string;
+  orderNumber: number | null;
+  status: string;
+  fulfillmentType: 'pickup' | 'delivery';
+  live: boolean;
+  class: ReplacementClass;
+  owed: number;
+  held: number;
+  short: boolean;
+  lines: MobileReplacementLine[];
+}
+
+export interface MobileReturnExchange {
+  kind: 'return' | 'exchange';
+  status: ExchangeStatus;
+  statusLabel: string;
+  lines: MobileExchangeLine[];
+  replacement: MobileReplacement | null;
+  history: { orderId: string; orderNumber: number | null; status: string }[];
+  releasedEarly: boolean;
+  release: { byName: string | null; reason: string | null; at: string } | null;
+  counter: boolean;
+  rail: RailStep[];
+  hasApprovedExchange: boolean;
+  createEnabled: boolean;
+  /** Desk check F6: the sites the warehouse serves (absent from an older server). */
+  deliverySites?: { id: string; name: string }[];
 }
 
 export interface MobileReturnChainEvent {
@@ -137,8 +218,11 @@ export interface MobileReturnWorkbench {
   chain: MobileReturnChainEvent[];
   viewer: { canManageReturns: boolean; canApproveOrders: boolean; canReadDecisions: boolean };
   actions: ReturnActions;
-  /** RX-2 adds it; absent means 'none'. */
+  /** RX-1 shape; absent means 'none' (RX-2 servers send `exchange`). */
   exchangeStatus?: ExchangeStatus;
+  /** RX-2: the REPLACEMENT column, the rail and the exchange facts
+   *  (normalizeWorkbench fills it; read through returns-view exchangeOf). */
+  exchange?: MobileReturnExchange;
 }
 
 export interface MobileReturnStepResult {
@@ -146,6 +230,8 @@ export interface MobileReturnStepResult {
   outcome: 'done' | 'already' | 'refused';
   reason?: string;
   message?: string;
+  /** RX-2: a refusal's structured detail (replacement_unavailable: [{itemId, needed, available}]). */
+  detail?: unknown;
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
@@ -177,7 +263,8 @@ export function normalizeWorkbench(raw: MobileReturnWorkbench): MobileReturnWork
   });
   const destinationsUnavailable =
     typeof raw.destinationsUnavailable === 'boolean' ? raw.destinationsUnavailable : lines.some((l) => !l.applied && !l.restock);
-  return { ...raw, lines, chain: raw.chain ?? [], destinationsUnavailable };
+  const exchange = raw.exchange ?? { ...NO_EXCHANGE, status: raw.exchangeStatus ?? 'none' };
+  return { ...raw, lines, chain: raw.chain ?? [], destinationsUnavailable, exchange };
 }
 
 // ── Writes (online only) ───────────────────────────────────────────────────
@@ -186,7 +273,12 @@ export interface ReturnStepsBody {
   steps: ('approve' | 'receive' | 'process')[];
   expectedRevision: number | null;
   expectedPlanSeq: number | null;
-  approve?: { lines: ReturnLineDecision[] } | null;
+  approve?: {
+    lines: ReturnLineDecision[];
+    /** RX-2: one decision per requested exchange line, and adds (G9). */
+    exchange?: Record<string, unknown>[];
+    replacement?: { whenShort: 'refuse' | 'backorder' };
+  } | null;
   receiveNow?: boolean;
   process?: { lines: ReturnLineDecision[] } | null;
 }
@@ -229,6 +321,114 @@ export async function planReturnDispositions(
   );
 }
 
+// ── RX-2: the exchange (online only) ────────────────────────────────────────
+
+export interface ReplacementAnswer<A> {
+  answer: A;
+  workbench: MobileReturnWorkbench;
+}
+
+async function replacementCall<A>(id: string, path: string, body: unknown): Promise<ReplacementAnswer<A>> {
+  const res = await api<{ answer: A; workbench: MobileReturnWorkbench }>(
+    `/api/v1/returns/${encodeURIComponent(id)}/replacement${path}`,
+    { method: 'POST', body },
+  );
+  return { answer: res.answer, workbench: normalizeWorkbench(res.workbench) };
+}
+
+/** Change the replacement, or issue a new one after a cancel (C-1). */
+export function changeReturnReplacement(
+  id: string,
+  body: {
+    expectedRevision: number;
+    lines: { exchangeLineId: string; itemId: string | null; quantity: number }[];
+    reason: string;
+    whenShort: 'refuse' | 'backorder';
+    /** Desk check F6: where it goes when the original site is refused. */
+    replacement?: { fulfillmentType: 'pickup' | 'delivery'; deliveryCharterId: string | null };
+  },
+): Promise<ReplacementAnswer<{ changed: boolean; mode: 'substitute' | 'reissue' | null }>> {
+  return replacementCall(id, '', body);
+}
+
+/** The revision the screen shows is required (desk check F7): a stale one is return_changed. */
+export function cancelReturnReplacement(
+  id: string,
+  // Fix round 1 (verification V1): shownStatus is the replacement's status as
+  // the sheet showed it; picked or sent since, the server answers return_changed.
+  body: { expectedRevision: number; reason: string; shownStatus?: string | null },
+): Promise<ReplacementAnswer<{ changed: boolean; drawn: boolean; inTransit: boolean }>> {
+  return replacementCall(id, '/cancel', body);
+}
+
+/**
+ * Whether a new exchange may be asked for right now (the kill switch), read
+ * when the create-return sheet opens (desk check F9: never the whole order
+ * for every completed order the screen opens). Any failure answers false:
+ * the sheet then offers a return only, and the server decides anyway.
+ */
+export async function getExchangeSwitch(): Promise<boolean> {
+  try {
+    const res = await api<{ exchangesEnabled?: boolean }>('/api/v1/returns/exchange-switch');
+    return res.exchangesEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * "Close as return only" after a replacement cancel (desk check F9): the
+ * exchange ends for good. The revision the screen shows is required.
+ */
+export function declineReturnReplacement(
+  id: string,
+  body: { expectedRevision: number; reason: string },
+): Promise<ReplacementAnswer<{ changed: boolean; declined: number }>> {
+  return replacementCall(id, '/decline', body);
+}
+
+/**
+ * Release the replacement order the screen shows (desk check F7): after a
+ * substitution or a re-issue the server answers return_changed rather than
+ * releasing an order the user has not seen.
+ */
+export function releaseReturnReplacement(
+  id: string,
+  orderId: string,
+  reason: string,
+): Promise<ReplacementAnswer<{ changed: boolean; replay: boolean; notNeeded: boolean; orderId: string | null }>> {
+  return replacementCall(id, '/release', { orderId, reason });
+}
+
+export interface MobilePrepareAnswer {
+  orderId: string;
+  ran: { step: string; outcome: 'done' | 'already' | 'refused'; reason?: string; message?: string }[];
+  status: string;
+  fulfillmentType: 'pickup' | 'delivery';
+}
+
+export function prepareReturnReplacement(id: string): Promise<ReplacementAnswer<MobilePrepareAnswer>> {
+  return replacementCall(id, '/prepare', {});
+}
+
+function candidatesPath(base: string, line: string, q: string): string {
+  const params = [`line=${encodeURIComponent(line)}`];
+  if (q.trim().length >= 2) params.push(`q=${encodeURIComponent(q.trim())}`);
+  return `${base}?${params.join('&')}`;
+}
+
+/** The replacement picker for one returned line of an RMA. */
+export async function getReturnCandidates(id: string, line: string, q: string): Promise<ExchangeCandidatesAnswer> {
+  return parseExchangeCandidates(await api<unknown>(candidatesPath(`/api/v1/returns/${encodeURIComponent(id)}/candidates`, line, q)));
+}
+
+/** The same before the RMA exists (the create sheet's Exchange choice). */
+export async function getOrderExchangeCandidates(orderId: string, line: string, q: string): Promise<ExchangeCandidatesAnswer> {
+  return parseExchangeCandidates(
+    await api<unknown>(candidatesPath(`/api/v1/orders/${encodeURIComponent(orderId)}/exchange-candidates`, line, q)),
+  );
+}
+
 /** One key per opened create sheet (the server replays a resend of it). */
 export function mintReturnKey(): string {
   return randomRequestUuid();
@@ -243,9 +443,14 @@ export function mintReturnKey(): string {
  */
 export function describeReturnError(e: unknown): string {
   if (e instanceof ApiError) {
-    const reason = (e.details as { reason?: unknown } | undefined)?.reason;
+    const details = e.details as { reason?: unknown; detail?: unknown } | undefined;
+    const reason = details?.reason;
     if (typeof reason === 'string' && reason !== 'failed') {
-      const mapped = mapReturnError({ hint: reason });
+      // The refusal's structured detail goes to core too: some words come
+      // from it (exchange_already_sent: what the original line has left,
+      // review fix S1).
+      const detail = details?.detail;
+      const mapped = mapReturnError({ hint: reason, details: detail && typeof detail === 'object' ? JSON.stringify(detail) : null });
       if (mapped.reason !== 'internal_error') return mapped.message;
     }
     if (e.status === 401) return mapReturnError({ hint: 'unauthenticated' }).message;

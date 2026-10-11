@@ -840,6 +840,61 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
 
+  // RX-2 review fix P6: while an exchange replacement waits for its returned
+  // item the strip never says "Ready to pick" in green: the stock is held and
+  // picking waits, and when it starts; each ready line reads Waiting for return.
+  it('a replacement waiting for its returned item: "Stock held", when picking starts, lines Waiting for return', async () => {
+    asManager();
+    const replacement = {
+      returnId: 'rma-1',
+      returnNumber: 'RMA-20261006-C27F66',
+      returnStatus: 'approved',
+      originalOrderId: 'orig',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      exchangeStatus: 'waiting_for_return',
+      exchangeStatusLabel: 'Replacement reserved. Waiting for returned item',
+      waitingForReturn: true,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      returnReceived: false,
+      returnedItems: [],
+      revision: 1,
+      canOpenReturn: true,
+      canReleaseEarly: true,
+      slipLine: 'Exchange replacement for RMA-20261006-C27F66',
+      driverLine: null,
+      held: 1,
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'approved', replacement_for_return_id: 'rma-1' }),
+        lines: [orderLine('LA', 'iA', 1)],
+        replacement,
+      }),
+    );
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 1 }], [
+          visibleItemFacts('iA', { here: { rack: 6 }, heldOwn: 1 }),
+        ]),
+      ),
+    );
+    await renderPage();
+    const strip = screen.getByTestId('readiness-strip');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent(
+      'Stock held (1 of 1 line). Picking waits for the returned item.',
+    );
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'Picking starts once RMA-20261006-C27F66 is received, or a manager releases it early.',
+    );
+    expect(within(strip).queryByText(/Ready to pick/)).toBeNull();
+    const cell = screen.getAllByTestId('readiness-line')[0]!;
+    expect(within(cell).getByTestId('readiness-chip')).toHaveTextContent('Waiting for return');
+  });
+
   it('a manager on a pending order: one read of THIS order, the strip, each line under its item, and gates from the same result', async () => {
     asManager();
     orderAt('pending_approval', [LINE_A, LINE_B]);
@@ -2674,5 +2729,56 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
     expect(src).not.toMatch(/SuppliersService|listForLookups|from\('suppliers'\)/);
     // The view comes from the page's own readiness result.
     expect(src).toMatch(/shortfallPoView\(readinessAssessment\)/);
+  });
+});
+
+// RX-2 review fix (counter taps): the RMA's Hand over arrives with
+// ?sign=physical; the page asks the panel to open the physical signature
+// (the panel opens it only when the order is ready and the viewer may).
+describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
+  // Re-pinned by fix round 1 (verification V-2), claim narrowed: the request
+  // is honoured only on an exchange replacement (the RMA's Hand over is its
+  // only source), so a link to any other order opens nothing; the dialog
+  // names the order.
+  it('passes the request to the manager panel only for a live exchange replacement; without it, or on another order, the panel opens nothing', async () => {
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+    const replacement = {
+      returnId: 'rma-1',
+      returnNumber: 'RMA-20261006-C27F66',
+      returnStatus: 'received',
+      originalOrderId: 'orig',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      exchangeStatus: 'ready_for_pickup',
+      exchangeStatusLabel: 'Ready for pickup',
+      waitingForReturn: false,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      returnReceived: true,
+      returnedItems: [],
+      revision: 1,
+      canOpenReturn: true,
+      canReleaseEarly: true,
+      canChangeReplacement: true,
+      slipLine: 'Exchange replacement for RMA-20261006-C27F66',
+      driverLine: null,
+      held: 0,
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'staged_for_pickup', replacement_for_return_id: 'rma-1' }), replacement }),
+    );
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
+    const props = managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect(props.openPhysicalSignature).toBe(true);
+    expect(props.orderLabel).toMatch(/^SO-\d{6}$/);
+    managerActionsProps.mockClear();
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
+    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+    managerActionsProps.mockClear();
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
+    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
   });
 });

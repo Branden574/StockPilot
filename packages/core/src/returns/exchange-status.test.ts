@@ -11,6 +11,7 @@ import {
   exchangeRequesterSentence,
   exchangeStatusStaffLabel,
   isExchangeStatus,
+  parseExchangeStatus,
   parseReturnListFilter,
   RETURN_LIST_FILTERS,
   returnListFilter,
@@ -54,6 +55,36 @@ describe('exchange status', () => {
     expect(exchangeStatusStaffLabel('requested', {})).toBe('Exchange requested');
   });
 
+  // Desk check F9: a replacement closed with something never sent (its
+  // backorder closed as delivered-partial, or its remainder cancelled with
+  // the RMA) never reads as a full hand-over.
+  it('words a replacement closed with part never sent, for staff and the requester', () => {
+    const closedPartial = { replacementStatus: 'completed', replacementOwed: 1 };
+    expect(exchangeStatusStaffLabel('completed', closedPartial)).toBe('Exchange completed; part of the replacement was not sent');
+    expect(exchangeStatusStaffLabel('handed_over_return_open', closedPartial)).toBe(
+      'Part of the replacement handed over, the rest not sent; return not received',
+    );
+    expect(exchangeStatusStaffLabel('handed_over_return_open', { ...closedPartial, returnStatus: 'received' })).toBe(
+      'Part of the replacement handed over, the rest not sent; return not processed',
+    );
+    expect(exchangeStatusStaffLabel('handed_over_return_cancelled', { replacementStatus: 'cancelled', replacementOwed: 1 })).toBe(
+      'Part of the replacement handed over, the rest not sent; return cancelled',
+    );
+    expect(exchangeRequesterSentence('handed_over_return_cancelled', { replacementStatus: 'cancelled', replacementOwed: 1 })).toBe(
+      'Part of your replacement was handed over. The rest will not be sent.',
+    );
+    // Handed over in full: the plain words stay.
+    expect(exchangeStatusStaffLabel('completed', { replacementStatus: 'completed', replacementOwed: 0 })).toBe('Exchange completed');
+    expect(exchangeStatusStaffLabel('handed_over_return_cancelled', { replacementStatus: 'completed', replacementOwed: 0 })).toBe(
+      'Replacement handed over; return cancelled',
+    );
+    expect(exchangeRequesterSentence('completed', { replacementStatus: 'completed', replacementOwed: 0 })).toBe('Exchange completed.');
+    // A backorder still on its way is not "not sent".
+    expect(exchangeStatusStaffLabel('partly_handed_over', { replacementStatus: 'backordered', replacementOwed: 1 })).toBe(
+      'Partly handed over; rest on backorder',
+    );
+  });
+
   it('gives no requester sentence for a plain return, and one for every exchange code', () => {
     expect(exchangeRequesterSentence('none')).toBeNull();
     for (const s of EXCHANGE_STATUSES.filter((x) => x !== 'none')) expect(exchangeRequesterSentence(s)).toBeTruthy();
@@ -67,20 +98,32 @@ describe('exchange status', () => {
     expect(isExchangeStatus(null)).toBe(false);
   });
 
-  it('RX-1: no migration computes an exchange status yet, so no view may carry the column (RX-2 adds the CASE and its parity test)', () => {
+  it('RX-2: the view\'s one CASE (between the exchange-status markers) names exactly these codes, in this precedence order', () => {
     const files = readdirSync(MIGRATIONS).filter((f) => /^\d{4}_.*\.sql$/.test(f));
-    const withMarkers = files.filter((f) => readFileSync(join(MIGRATIONS, f), 'utf8').includes('-- exchange-status:begin'));
-    const rx1 = files.find((f) => f.endsWith('_returns_lifecycle_original_rack.sql'));
-    expect(rx1).toBeDefined();
-    if (withMarkers.length === 0) {
-      expect(readFileSync(join(MIGRATIONS, rx1!), 'utf8')).not.toMatch(/exchange_status/);
-    } else {
-      // RX-2 has landed: its CASE must name exactly these codes.
-      const sql = readFileSync(join(MIGRATIONS, withMarkers.at(-1)!), 'utf8');
-      const block = sql.slice(sql.indexOf('-- exchange-status:begin'), sql.indexOf('-- exchange-status:end'));
-      const codes = [...block.matchAll(/then\s+'([a-z_]+)'/g)].map((m) => m[1]);
-      expect(new Set(codes)).toEqual(new Set(EXCHANGE_STATUSES));
-    }
+    const withMarkers = files.filter((f) => /^[ \t]*-- exchange-status:begin[ \t]*$/m.test(readFileSync(join(MIGRATIONS, f), 'utf8')));
+    const rx2 = files.find((f) => f.endsWith('_returns_exchange_staff.sql'));
+    expect(rx2).toBeDefined();
+    expect(withMarkers.at(-1)).toBe(rx2);
+    const sql = readFileSync(join(MIGRATIONS, rx2!), 'utf8');
+    // The marker LINES (a comment elsewhere may name the markers).
+    const begins = [...sql.matchAll(/^[ \t]*-- exchange-status:begin[ \t]*$/gm)];
+    const ends = [...sql.matchAll(/^[ \t]*-- exchange-status:end[ \t]*$/gm)];
+    expect(begins).toHaveLength(1);
+    expect(ends).toHaveLength(1);
+    const begin = begins[0]!.index!;
+    const end = ends[0]!.index!;
+    expect(end).toBeGreaterThan(begin);
+    const block = sql.slice(begin, end);
+    const codes = [...block.matchAll(/then\s+'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(codes).toEqual([...EXCHANGE_STATUSES]);
+    // One code per arm, and no ELSE hiding an unlisted code.
+    expect(block).not.toMatch(/\belse\s+'/i);
+  });
+
+  it('parses the view value, reading an unknown or missing one as none', () => {
+    expect(parseExchangeStatus('unavailable')).toBe('unavailable');
+    expect(parseExchangeStatus(null)).toBe('none');
+    expect(parseExchangeStatus('newer_code')).toBe('none');
   });
 });
 
@@ -104,6 +147,16 @@ describe('the list filters', () => {
     expect(returnListFilter('all').statuses).toBeNull();
   });
 
+  it('RX-2: the exchange filters read the view\'s kind and exchange status (replacement unavailable also takes a requested exchange that is short)', () => {
+    expect(returnListFilter('returns')).toMatchObject({ kind: 'return', requiresExchanges: true });
+    expect(returnListFilter('exchanges')).toMatchObject({ kind: 'exchange', requiresExchanges: true });
+    expect(returnListFilter('replacement_unavailable')).toMatchObject({ exchangeStatuses: ['unavailable'], orRequestedShort: true });
+    expect(returnListFilter('replacement_ready').exchangeStatuses).toEqual(['ready_to_pick', 'ready_for_pickup']);
+    for (const f of RETURN_LIST_FILTERS) {
+      for (const code of f.exchangeStatuses ?? []) expect(isExchangeStatus(code)).toBe(true);
+    }
+  });
+
   it('parses a query value, falling back to all for an unknown or unavailable filter', () => {
     expect(parseReturnListFilter('waiting_for_return')).toBe('waiting_for_return');
     expect(parseReturnListFilter(['closed', 'all'])).toBe('closed');
@@ -111,5 +164,17 @@ describe('the list filters', () => {
     expect(parseReturnListFilter('exchanges', { exchanges: true })).toBe('exchanges');
     expect(parseReturnListFilter('drop table')).toBe('all');
     expect(parseReturnListFilter(undefined)).toBe('all');
+  });
+});
+
+describe('replacementChipState (the orders list chip, web and phone)', () => {
+  it('words only the two gate states', async () => {
+    const { replacementChipState, EXCHANGE_STATUSES } = await import('./exchange-status');
+    expect(replacementChipState('waiting_for_return')).toBe('Waiting for return');
+    expect(replacementChipState('ready_to_pick')).toBe('Ready to pick');
+    for (const s of EXCHANGE_STATUSES.filter((x) => x !== 'waiting_for_return' && x !== 'ready_to_pick')) {
+      expect(replacementChipState(s)).toBeNull();
+    }
+    expect(replacementChipState(null)).toBeNull();
   });
 });

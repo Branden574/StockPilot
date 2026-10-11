@@ -13,6 +13,9 @@ import { sendEmail } from '@/lib/email/resend';
 import { normalizeUnsubscribeEmail } from '@/lib/email/unsubscribe';
 import { reportError } from '@/lib/error-reporter';
 
+import { loadReplacementEmailFacts } from './replacement-update';
+import { sendReturnUpdateEmail } from './return-update';
+
 /**
  * The one-time "Need to return anything from your order?" prompt (returns-
  * access Unit A). Extracted from the digital sign route so EVERY app-side
@@ -96,7 +99,7 @@ export async function maybeSendReturnPrompt(
     const { data: row, error: rowErr } = await admin
       .from('order_requests')
       .select(
-        'id, organization_id, status, requester_email, requester_name, requester_user_id, requester_deleted_at, order_number, return_prompt_sent_at',
+        'id, organization_id, status, source, requester_email, requester_name, requester_user_id, requester_deleted_at, order_number, return_prompt_sent_at, replacement_for_return_id',
       )
       .eq('id', orderId)
       .maybeSingle();
@@ -112,6 +115,8 @@ export async function maybeSendReturnPrompt(
       requester_deleted_at: string | null;
       order_number: number | null;
       return_prompt_sent_at: string | null;
+      source?: string | null;
+      replacement_for_return_id?: string | null;
     };
 
     if (order.status !== 'completed') return { sent: false, reason: 'not_completed' };
@@ -133,14 +138,17 @@ export async function maybeSendReturnPrompt(
     // partial completion still has the earlier batch's fulfilled units.)
     const { data: lines, error: linesErr } = await admin
       .from('order_request_lines')
-      .select('quantity_fulfilled')
+      .select('quantity_requested, quantity_fulfilled')
       .eq('order_request_id', order.id);
     if (linesErr) return await readFailed(linesErr, 'orders.return-prompt.lines_read', orderId);
-    const totalFulfilled = ((lines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
-      (s, l) => s + (Number(l.quantity_fulfilled) || 0),
-      0,
-    );
+    const lineRows = (lines ?? []) as { quantity_requested?: number | null; quantity_fulfilled: number | null }[];
+    const totalFulfilled = lineRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
     if (totalFulfilled <= 0) return { sent: false, reason: 'zero_fulfilled' };
+    // Completed with part of it never sent (closed as delivered-partial): the
+    // notify trigger's rule (0396), a line asked for more than was handed over.
+    const partNeverSent = lineRows.some(
+      (l) => (Number(l.quantity_requested) || 0) > (Number(l.quantity_fulfilled) || 0),
+    );
 
     // Ensure the per-order return token (0156) exists. The mint happens for
     // EVERY structurally-qualifying completion — BEFORE any email-specific
@@ -207,6 +215,31 @@ export async function maybeSendReturnPrompt(
     if (!claimed) return { sent: false, reason: 'lost_race' };
 
     try {
+      if (order.replacement_for_return_id) {
+        // Returns RX-2 (X-4): an exchange replacement's completion email is
+        // "Your exchange is complete" (or "Your replacement was handed over"
+        // while the RMA is still open), carrying the replacement's OWN return
+        // link minted above. The ordinary order emails skip a replacement's
+        // completion for the requester, so this is the one email. Closed
+        // with part never sent, it says so (review P14): "Your replacement
+        // order was closed." The words come from the order's own lines, not
+        // from the caller: the sign route, the paper signature and the order
+        // page's close-partial (which the database now refuses for a
+        // replacement). An RMA cancel that closes a part-handed-over
+        // replacement (cancel_return's hook) does not call this today; a
+        // caller that does gets the same words.
+        const sent = await sendReplacementCompletionEmail(admin, {
+          returnId: order.replacement_for_return_id,
+          to: order.requester_email,
+          recipientName: order.requester_name,
+          appUrl: opts.appUrl,
+          token,
+          isAccountHolder: Boolean(order.requester_user_id),
+          partNeverSent,
+        });
+        if (!sent) return { sent: false, reason: 'send_failed' };
+        return { sent: true };
+      }
       await sendReturnPromptEmail({
         to: order.requester_email,
         recipientName: order.requester_name,
@@ -348,4 +381,47 @@ async function sendReturnPromptEmail(args: {
     from: FULFILLMENT_ORDERS_FROM,
     headers: delivery.headers,
   });
+}
+
+/** The replacement completion email's button (it opens the replacement's own return page). */
+const REPLACEMENT_RETURN_CTA = 'Start a return';
+
+/**
+ * Returns RX-2 (X-4): the replacement's completion email through the return-
+ * update family, the button opening the replacement's own return page. True
+ * when sent (a recorded public opt-out also answers true: nothing to retry).
+ * Part never sent comes first (the order's own news, whatever the RMA's
+ * status), then a closed RMA's "Your exchange is complete", else "Your
+ * replacement was handed over".
+ */
+async function sendReplacementCompletionEmail(
+  admin: SupabaseClient,
+  args: {
+    returnId: string;
+    to: string;
+    recipientName: string | null;
+    appUrl: string;
+    token: string;
+    isAccountHolder: boolean;
+    partNeverSent: boolean;
+  },
+): Promise<boolean> {
+  const facts = await loadReplacementEmailFacts(admin, args.returnId);
+  const base = args.appUrl.replace(/\/+$/, '');
+  const result = await sendReturnUpdateEmail(admin, {
+    event: args.partNeverSent
+      ? 'replacement_closed_partial'
+      : facts?.returnStatus === 'closed'
+        ? 'exchange_complete'
+        : 'replacement_handed_over',
+    to: args.to,
+    recipientName: args.recipientName,
+    returnNumber: facts?.returnNumber ?? null,
+    orderNumber: formatOrderNumber(facts?.originalOrderNumber ?? null),
+    isAccountHolder: args.isAccountHolder,
+    viewUrl: `${base}/returns/request/${args.token}`,
+    appUrl: args.appUrl,
+    ctaLabel: REPLACEMENT_RETURN_CTA,
+  });
+  return result.sent || result.reason === 'suppressed';
 }

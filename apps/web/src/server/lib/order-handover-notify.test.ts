@@ -31,6 +31,8 @@ vi.mock('@/server/services/notifications', () => ({
   createNotification: createNotificationMock,
 }));
 
+vi.mock('@/server/lib/order-secrets', () => ({ resolveReturnToken: vi.fn(async () => 'tok-orig') }));
+
 const adminStubRef = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
@@ -318,5 +320,82 @@ describe('sendPartialReceiptEmail (partial-receipt)', () => {
     expect(args.html).toContain(
       'one-time receipt because you signed for a delivery managed through StockPilot',
     );
+  });
+});
+
+/**
+ * Returns RX-2: an exchange replacement's hand-over notices. The in-app
+ * notice is the notify trigger's reworded ping (0396); a partial hand-over
+ * emails "Part of your replacement was handed over" with the RMA's link; the
+ * completion is the trigger's ping plus the return prompt's replacement
+ * email. So none of the ordinary notices goes out for a replacement.
+ */
+describe('an exchange replacement (RX-2)', () => {
+  const RMA_ROW = {
+    data: [{ id: 'rma-1', return_number: 'RMA-20261005-ABC123', status: 'approved', order_request_id: 'orig', order_request: { order_number: 103 } }],
+    error: null,
+  };
+
+  it('partial hand-over: no ordinary in-app notice; one reworded email on the RMA page', async () => {
+    wireAdmin({ 'returns.select': RMA_ROW, 'public_email_unsubscribes.select': { data: [], error: null } });
+    await notifyRequesterBackordered(
+      backorderedArgs({ requesterUserId: null, replacementForReturnId: 'rma-1', orderSource: 'internal' }),
+    );
+    expect(createNotificationMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const mail = sendEmailMock.mock.calls[0]![0] as { subject: string; text: string };
+    expect(mail.subject).toBe('Return RMA-20261005-ABC123: part of your replacement handed over');
+    expect(mail.text).toContain('Part of your replacement was handed over.');
+    expect(mail.text).toContain(`${APP_URL}/returns/request/tok-orig`);
+  });
+
+  it('a member who opted out of order emails gets no email (the trigger pings them in the app)', async () => {
+    wireAdmin({ 'returns.select': RMA_ROW });
+    await notifyRequesterBackordered(backorderedArgs({ emailOptedOut: true, replacementForReturnId: 'rma-1', orderSource: 'internal' }));
+    expect(createNotificationMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it('the remainder handed over: nothing here at all', async () => {
+    wireAdmin({ 'returns.select': RMA_ROW });
+    await notifyRequesterBackorderShipped({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      requesterUserId: 'user-1',
+      requesterEmail: 'req@example.com',
+      requesterName: 'Reggie',
+      appUrl: APP_URL,
+      emailOptedOut: false,
+      replacementForReturnId: 'rma-1',
+      orderSource: 'internal',
+    });
+    expect(createNotificationMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it('a caller without the row: the order is read once to tell', async () => {
+    const stub = wireAdmin({
+      'order_requests.select': { data: [{ replacement_for_return_id: 'rma-1', source: 'internal' }], error: null },
+      'returns.select': RMA_ROW,
+    });
+    await notifyRequesterBackorderShipped({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      requesterUserId: 'user-1',
+      requesterEmail: 'req@example.com',
+      requesterName: 'Reggie',
+      appUrl: APP_URL,
+      emailOptedOut: false,
+    });
+    expect(stub.fromCalls.filter((t) => t === 'order_requests')).toHaveLength(1);
+    expect(createNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary order passed with its row (replacementForReturnId null) reads nothing more and sends as before', async () => {
+    const stub = wireAdmin();
+    await notifyRequesterBackordered(backorderedArgs({ replacementForReturnId: null, orderSource: 'internal' }));
+    expect(stub.fromCalls).not.toContain('order_requests');
+    expect(createNotificationMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
   });
 });

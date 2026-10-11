@@ -55,6 +55,18 @@ describe('orderManagerActions: approval follows orders:approve', () => {
     expect(at(manager, 'backordered').backorderedActions).toBe(true);
   });
 
+  // RX-2 review fix (0396, security F-1): the order header guard refuses a
+  // close-partial on an exchange replacement from anywhere but its RMA, and
+  // core's shared machine never offers it there. Close as delivered-partial
+  // now follows the machine; Resume (and Cancel's own offer) are unchanged.
+  it('Close as delivered-partial follows the shared machine, so never on an exchange replacement (RX-2 F-1)', () => {
+    expect(at(manager, 'backordered')).toMatchObject({ backorderedActions: true, closePartial: true });
+    expect(at(manager, 'backordered', { machineOffersClosePartial: false })).toMatchObject({ backorderedActions: true, closePartial: false });
+    expect(at(grantedStaff, 'backordered', { machineOffersClosePartial: true }).closePartial).toBe(true);
+    expect(at(revokedManager, 'backordered', { machineOffersClosePartial: true }).closePartial).toBe(false);
+    expect(at(manager, 'approved').closePartial).toBe(false);
+  });
+
   it('reopen needs orders:approve AND the shared machine (mutation: drop either)', () => {
     expect(at({ ...manager, canApproveOrders: false }, 'picking_complete').reopenPicking).toBe(false);
     expect(at({ ...grantedStaff, machineOffersReopen: false }, 'picking_complete').reopenPicking).toBe(false);
@@ -152,6 +164,17 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toContain('const hasPipelineActions = managerActions.showSection;');
     expect(SCREEN).not.toMatch(/const hasPipelineActions =\s*isManager/);
     expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
+  });
+
+  // RX-2 review fix F-1: one ask of the shared machine, with the order's
+  // replacement facts, answers both Reopen picking and Close as
+  // delivered-partial (so a replacement is never offered the close).
+  it('asks the shared machine with the replacement facts, for reopen and close-partial alike (RX-2 F-1)', () => {
+    expect(SCREEN).toMatch(/const orderMachineActions =\s*order && role\s*\? availableOrderActions\(\{[\s\S]*?isReplacement: isReplacementOrder,[\s\S]*?\}\)\s*: \[\];/);
+    expect(SCREEN).toContain("const canReopenPicking = orderMachineActions.includes('reopen_picking');");
+    expect(SCREEN).toContain("const machineOffersClosePartial = orderMachineActions.includes('close_partial');");
+    expect(SCREEN).toMatch(/machineOffersClosePartial,\s*machineOffersReopen: canReopenPicking,/);
+    expect(SCREEN).toMatch(/\{managerActions\.closePartial\s*\?\s*actionBtn\(\s*'Close as delivered-partial'/);
   });
 
   it('the screen tells the helper when the viewer is a viewer (mutation: drop or invert it)', () => {

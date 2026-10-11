@@ -68,6 +68,10 @@ vi.mock('@/server/actions/order-requests', () => ({
   suggestNeededByAction: vi.fn(),
 }));
 
+// Returns RX-2: the replacement's early release from the order page.
+const releaseReplacement = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/returns', () => ({ releaseReturnReplacementAction: releaseReplacement }));
+
 const reopenPicking = vi.mocked(reopenPickingAction);
 
 type PanelProps = React.ComponentProps<typeof ManagerActionsPanel>;
@@ -1043,5 +1047,174 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     r2.unmount();
     render(<ManagerActionsPanel {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+  });
+});
+
+describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () => {
+  const waiting = {
+    returnId: 'rma-1',
+    returnNumber: 'RMA-20261005-ABC123',
+    waitingForReturn: true,
+    canReleaseEarly: true,
+    driverLine: 'Collect the returned item: Walk New Hire Shirt, M ×1 (RMA-20261005-ABC123)',
+  };
+
+  it('while the return-first gate holds, the pick slip gives way to the gate words and the early release', async () => {
+    releaseReplacement.mockResolvedValue({ ok: true, data: { answer: { changed: true, notNeeded: false }, workbench: {} } });
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: waiting })} />);
+    expect(screen.queryByRole('button', { name: /Generate pick slip/ })).toBeNull();
+    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
+    // Desk check F7: the release names this order, the replacement the page shows.
+    expect(releaseReplacement).toHaveBeenCalledWith({
+      id: 'rma-1',
+      orderId: 'order-1',
+      reason: 'Customer is completing an in-person exchange today.',
+    });
+  });
+
+  // RX-2 review fix P5: a replacement approved on backorder holds nothing,
+  // so the gate line never says "Replacement reserved".
+  it('while gated, a replacement that holds nothing says it is not in stock yet', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, exchangeStatus: 'unavailable', held: 0 } })}
+      />,
+    );
+    expect(screen.getByText('Not in stock yet. Picking also waits for the returned item (RMA-20261005-ABC123).')).toBeInTheDocument();
+    expect(screen.queryByText(/Replacement reserved/)).toBeNull();
+    unmount();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, exchangeStatus: 'unavailable', held: 1 } })}
+      />,
+    );
+    // Re-pinned by fix round 1 (verification L9): held in part says so.
+    expect(
+      screen.getByText('Partly reserved; the rest is not in stock yet. Picking also waits for the returned item (RMA-20261005-ABC123).'),
+    ).toBeInTheDocument();
+  });
+
+  it('released or received: the pick slip is back; no release without both permissions', () => {
+    const { unmount } = render(
+      <ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })} />,
+    );
+    expect(screen.getByRole('button', { name: /Generate pick slip/ })).toBeInTheDocument();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, canReleaseEarly: false } })} />);
+    expect(screen.queryByRole('button', { name: /Release before return is received/ })).toBeNull();
+    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+  });
+
+  // Desk check F3: the RMA was cancelled or denied: never picked again.
+  it('the RMA cancelled: no pick slip, no Resume, no release; it says why', () => {
+    const closed = { ...waiting, waitingForReturn: false, returnClosed: true };
+    const { unmount } = render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: closed })} />);
+    expect(screen.queryByRole('button', { name: /Generate pick slip/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Release before return is received/ })).toBeNull();
+    expect(screen.getByText("RMA-20261005-ABC123 was cancelled. This replacement isn't picked.")).toBeInTheDocument();
+    unmount();
+    const enabled = { approvePartial: 'hidden' as const, resume: 'enabled' as const, notice: null, canRetry: false };
+    const stocked = render(
+      <ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: { ...closed, returnClosed: false } })} />,
+    );
+    // Stock is back: with the RMA open (and the replacement released) Resume is offered...
+    expect(screen.getByRole('button', { name: /Resume fulfillment/ })).toBeInTheDocument();
+    stocked.unmount();
+    render(
+      <ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: closed })} />,
+    );
+    // ...and never once the RMA was cancelled.
+    expect(screen.queryByRole('button', { name: /Resume fulfillment/ })).toBeNull();
+    // Re-pinned by returns RX-2 review fix (0396 security F-1): the order
+    // header guard refuses a replacement's close-partial from anywhere but its
+    // RMA, so it is never offered here (core availableOrderActions).
+    expect(screen.queryByRole('button', { name: /Close as delivered-partial/ })).toBeNull();
+  });
+
+  it('a backordered replacement is never offered Close as delivered-partial; an ordinary order still is', () => {
+    const enabled = { approvePartial: 'hidden' as const, resume: 'enabled' as const, notice: null, canRetry: false };
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled, replacement: { ...waiting, waitingForReturn: false } })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Resume fulfillment/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close as delivered-partial/ })).toBeNull();
+    unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'backordered', canApprove: true, stockGates: enabled })} />);
+    expect(screen.getByRole('button', { name: /Close as delivered-partial/ })).toBeInTheDocument();
+  });
+
+  // Re-pinned by returns RX-2 review fix P10: the driver's line shows once,
+  // in the banner above (core's replacementDriverLine decides when), never
+  // repeated in the panel.
+  it('a delivery swap: the panel never repeats the driver line the banner shows', () => {
+    for (const status of ['staged_for_delivery', 'in_transit'] as const) {
+      const { unmount } = render(
+        <ManagerActionsPanel
+          {...baseProps({ status, fulfillmentType: 'delivery', canApprove: true, replacement: { ...waiting, waitingForReturn: false } })}
+        />,
+      );
+      expect(screen.queryByTestId('collect-returned-item')).toBeNull();
+      expect(screen.queryByText(/returned item: Walk New Hire Shirt/)).toBeNull();
+      unmount();
+    }
+  });
+});
+
+// RX-2 review fix (counter taps): the RMA's Hand over opens the replacement
+// order with the Physical signature dialog already open, once, only when the
+// order is ready for the hand-over and the viewer may confirm it.
+describe('ManagerActionsPanel — Hand over from the RMA opens the physical signature', () => {
+  it('opens the Physical signature dialog when asked and the order is ready to hand over', () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+    expect(screen.getByRole('dialog', { name: 'Record a physical signature' })).toBeInTheDocument();
+  });
+
+  // Fix round 1 (verification V-2): the dialog names the order it records.
+  it('names the order in the Physical signature dialog', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true, orderLabel: 'SO-000123' })}
+      />,
+    );
+    expect(screen.getByRole('dialog', { name: 'Record a physical signature for SO-000123' })).toBeInTheDocument();
+  });
+
+  it('not before the hand-over, not for a viewer who may not confirm it, and never unasked', () => {
+    const early = render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    early.unmount();
+    const staff = render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'staff', openPhysicalSignature: true })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    staff.unmount();
+    render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager' })} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // Review-fix browser flow G (2026-10-06): the request leaves the address
+  // THROUGH Next's router. Next patches history.replaceState and skips its
+  // router sync when handed its own state (`__NA`, which window.history.state
+  // carries on a Next page): the address bar was cleaned but the router kept
+  // ?sign=physical, the next router refresh (any stock event) pushed it back,
+  // and a reload opened the dialog again. `null` is the documented form
+  // (lib/updates/safe-reload.ts, the same trap).
+  it('takes ?sign=physical out of the address through the router (null state), so a refresh never brings it back', () => {
+    const before = window.location.href;
+    window.history.replaceState({ __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: 'x' }, '', '/dashboard/orders/o-1?sign=physical&tab=lines');
+    const spy = vi.spyOn(window.history, 'replaceState');
+    try {
+      render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0]![0]).toBeNull();
+      expect(spy.mock.calls[0]![2]).toBe('/dashboard/orders/o-1?tab=lines');
+    } finally {
+      spy.mockRestore();
+      window.history.replaceState(null, '', before);
+    }
   });
 });

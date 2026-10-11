@@ -15,10 +15,12 @@ export const dynamic = 'force-dynamic';
  * first two returning items per row (names, sizes, thumbnails). Cookie or
  * Bearer; returns:read or returns:manage; the returns module on.
  *
- * filter: all | awaiting_approval | waiting_for_return |
- *   received_not_processed | closed (RX-2 adds the exchange filters; an
+ * filter: all | returns | exchanges | awaiting_approval | waiting_for_return
+ *   | received_not_processed | replacement_unavailable | replacement_ready |
+ *   closed (RX-2 added returns, exchanges and the two replacement views; an
  *   unknown value reads as all). q: RMA number, SO number, requester name or
- *   email. cursor: the previous page's `nextCursor`.
+ *   email. cursor: the previous page's `nextCursor`. Each row carries its
+ *   type (return or exchange), exchange status and replacement SO number.
  *
  * 200 { organizationId, filter, q, rows, nextCursor, pageSize } · 401 · 403
  * (module off, missing permission, MFA) · 429.
@@ -30,7 +32,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   try {
     const page = await RMAService.forApiContext(ctx).listPage({
-      filter: parseReturnListFilter(url.searchParams.get('filter')),
+      filter: parseReturnListFilter(url.searchParams.get('filter'), { exchanges: true }),
       q: url.searchParams.get('q'),
       cursor: url.searchParams.get('cursor'),
     });

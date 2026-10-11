@@ -78,6 +78,17 @@ describe('returnableLines', () => {
 });
 
 describe('initialReturnDraft', () => {
+  // Returns RX-2 review (counter taps): with one returnable line the sheet
+  // starts it ticked at what can come back, as the web's create dialog does
+  // (one tap fewer at the counter); with several, nothing is chosen for the
+  // person.
+  it('starts the only returnable line ticked at what can come back (counter taps)', () => {
+    expect(
+      initialReturnDraft([{ orderRequestLineId: 'l-1', name: 'A', sku: null, quantityFulfilled: 3, quantityRemaining: 2 }]),
+    ).toEqual({ 'l-1': { quantity: 2, disposition: 'restock' } });
+    expect(initialReturnDraft([])).toEqual({});
+  });
+
   it('starts every line unselected (qty 0) with Restock as the default', () => {
     const lines: ReturnableLine[] = [
       { orderRequestLineId: 'l-1', name: 'A', sku: null, quantityFulfilled: 2, quantityRemaining: 2 },
@@ -178,5 +189,59 @@ describe('RETURN_REASONS', () => {
       'overage',
       'other',
     ]);
+  });
+});
+
+describe('RX-2: the create sheet exchange and the original order exchange lines', () => {
+  const line = {
+    orderRequestLineId: 'ol1',
+    itemId: 'm',
+    name: 'Walk Shirt M',
+    sku: 'WS-M',
+    quantityFulfilled: 2,
+    quantityRemaining: 2,
+  };
+
+  it('an Exchange line sends its replacement at the return quantity; one without a choice is refused', async () => {
+    const { buildReturnPayload } = await import('./order-returns');
+    const ok = buildReturnPayload({
+      lines: [line] as never,
+      draft: { ol1: { quantity: 2, disposition: 'restock', mode: 'exchange', exchangeItemId: 'l' } },
+    });
+    expect(ok).toEqual({
+      ok: true,
+      body: { lines: [{ orderRequestLineId: 'ol1', quantity: 2, disposition: 'restock', exchange: { itemId: 'l', quantity: 2 } }] },
+    });
+    const missing = buildReturnPayload({
+      lines: [line] as never,
+      draft: { ol1: { quantity: 1, disposition: 'restock', mode: 'exchange', exchangeItemId: null } },
+    });
+    expect(missing).toEqual({ ok: false, error: 'Choose the replacement: Walk Shirt M' });
+    const plain = buildReturnPayload({ lines: [line] as never, draft: { ol1: { quantity: 1, disposition: 'scrap' } } });
+    expect(plain.ok && plain.body.lines[0]).toEqual({ orderRequestLineId: 'ol1', quantity: 1, disposition: 'scrap' });
+  });
+
+  it('names each exchange like the web: approved with its SO and status words; declined lines left out', async () => {
+    const { exchangeItemIdsOf, exchangeLinesByReturn } = await import('./order-returns');
+    const rows = [
+      {
+        id: 'rma-1',
+        status: 'approved',
+        kind: 'exchange',
+        exchange_status: 'waiting_for_return',
+        replacement_order_number: 104,
+        exchange_lines: [
+          { status: 'approved', requested_item_id: 'l', requested_quantity: 1, approved_item_id: 'l', approved_quantity: 1 },
+          { status: 'declined', requested_item_id: 'xl', requested_quantity: 1, approved_item_id: null, approved_quantity: null },
+        ],
+      },
+      { id: 'rma-2', status: 'closed', kind: 'return', exchange_status: 'none', replacement_order_number: null, exchange_lines: [] },
+    ];
+    expect(exchangeItemIdsOf(rows).sort()).toEqual(['l', 'xl']);
+    const lines = exchangeLinesByReturn(rows, [
+      { id: 'l', name: 'Walk New Hire Shirt', variant_size: 'L', variant_width: null, variant_color: null, jersey_number: null },
+    ]);
+    expect(lines.get('rma-1')).toEqual(['Exchange: Walk New Hire Shirt, L ×1 → SO-000104 (Replacement reserved. Waiting for returned item)']);
+    expect(lines.has('rma-2')).toBe(false);
   });
 });

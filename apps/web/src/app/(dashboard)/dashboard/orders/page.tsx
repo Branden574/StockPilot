@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
-import { formatOrderNumber } from '@stockpilot/core';
+import { formatOrderNumber, RETURNS_COPY } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Orders' };
 
@@ -274,6 +274,15 @@ export default async function OrdersPage({
                     </TableCell>
                     <TableCell>
                       <OrderStatusBadge status={r.status} />
+                      {/* Returns RX-2: the Exchange chip from the order's own
+                          column; the gate's words from the page's one batched
+                          return_overview read (no read per row). */}
+                      {r.replacementForReturnId ? (
+                        <Badge variant="outline" className="ml-2 align-middle" data-testid="order-exchange-chip">
+                          {RETURNS_COPY.typeExchange}
+                          {r.exchange?.state ? <span className="text-muted-foreground"> · {r.exchange.state}</span> : null}
+                        </Badge>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-xs">
                       <span className="border-border bg-muted/40 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]">

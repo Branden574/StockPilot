@@ -575,6 +575,10 @@ select is(
 -- slice E on assigned_delivery_user_id/by/at and in_transit_at/by
 -- (assign_order_delivery's and mark_order_in_transit's since 0390). The
 -- user-client writes left (KO2, KO3, KO4, KO6) name none of them.
+-- Re-pinned by 0396 (returns RX-2): order_requests.replacement_for_return_id
+-- is server-owned (written only by the exchange functions as postgres; a
+-- link guard refuses any change for every role), so authenticated holds no
+-- UPDATE on it and it joins this list (sorted by name).
 select is(
   (select coalesce(string_agg(a.attname, ',' order by a.attname), '')
      from pg_attribute a
@@ -585,7 +589,7 @@ select is(
   'confirmation_token_expires_at,confirmation_token_hash,customer_id,delivered_at,fulfillment_type,id,in_transit_at,in_transit_by,'
   'needed_by,notes,order_number,organization_id,packaging_at,packing_slip_generated_at,packing_slip_generated_by,'
   'picking_claimed_at,picking_claimed_by,picking_completed_at,'
-  'picking_completed_by,pickup_location_notes,public_track_token,ready_at,requester_deleted_at,requester_email,requester_name,'
+  'picking_completed_by,pickup_location_notes,public_track_token,ready_at,replacement_for_return_id,requester_deleted_at,requester_email,requester_name,'
   'requester_org_label,requester_phone,requester_user_id,return_prompt_sent_at,return_token,signature_data_url,'
   'signature_method,signature_token,signature_token_expires_at,signed_at,signed_by_email,signed_by_name,source,updated_at',
   'GO1: authenticated may UPDATE every order_requests column but organization_id, the 38 columns 0387 revokes, 0388''s requester_deleted_at and the 9 0392 revokes (created_at and warehouse_id included: owner Q4; a NEW column the app writes must be granted in its migration, and this fails until it is)');

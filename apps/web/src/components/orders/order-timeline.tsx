@@ -1,4 +1,5 @@
 import {
+  createdAsReplacementLabel,
   describeHoldResult,
   NEEDED_BY_REVISED_TIMELINE_LABEL,
   neededByLabel,
@@ -80,6 +81,10 @@ const EVENT_LABELS: Record<string, string> = {
   // F2-5 (0385): draft POs were created for what the order was short (core's
   // label; the detail line says which drafts, for how many items and units).
   'order_request.shortfall_po_drafted': SHORTFALL_PO_TIMELINE_LABEL,
+  // Returns RX-2: an exchange replacement released for picking before its
+  // return arrived, and its returned item received (the gate opened).
+  'order_request.released_early': 'Released before the return',
+  'order_request.return_received': 'Returned item received',
 };
 
 /**
@@ -97,6 +102,15 @@ const STOCK_HELD_LABELS: Readonly<Record<string, string>> = {
 };
 
 function eventLabel(event: string, metadata: Record<string, unknown> | null): string {
+  // Returns RX-2: an exchange replacement's own trail names its RMA.
+  const rma = typeof metadata?.returnNumber === 'string' ? metadata.returnNumber : null;
+  if (typeof metadata?.replacementForReturnId === 'string') {
+    if (event === 'order_request.created') {
+      return createdAsReplacementLabel(rma, typeof metadata.revision === 'number' ? metadata.revision : null);
+    }
+    if (event === 'order_request.approved') return `Approved with the exchange${rma ? ` (${rma})` : ''}`;
+    if (event === 'order_request.cancelled') return `Cancelled from ${rma ?? 'its RMA'}`;
+  }
   if (event === 'order.stock_held') {
     const after = (metadata?.after ?? {}) as Record<string, unknown>;
     const trigger = typeof after.trigger === 'string' ? after.trigger : '';
@@ -131,11 +145,22 @@ function humanDetails(
 
   switch (event) {
     case 'order_request.created': {
+      if (typeof md.replacementForReturnId === 'string') {
+        // RX-2: created and held by the exchange approval, never reviewed here.
+        lines.push('Created by the exchange approval; its items come from the RMA.');
+        break;
+      }
       const n = after.lineCount ?? md.lineCount;
       if (typeof n === 'number') lines.push(`${n} line${n === 1 ? '' : 's'} requested.`);
       lines.push('Waiting for a manager to review and approve.');
       break;
     }
+    case 'order_request.released_early':
+      lines.push('Picking may start before the returned item arrives.');
+      break;
+    case 'order_request.return_received':
+      lines.push('The returned item is in. Picking can start.');
+      break;
     case 'order_request.approved':
       // approve_partial records this event too, and may reserve only part of
       // the order or nothing, so the line claims no reservation (small fixes

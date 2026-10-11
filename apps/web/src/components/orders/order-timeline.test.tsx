@@ -250,3 +250,38 @@ describe('OrderTimeline — an approval claims no reservation', () => {
     expect(screen.queryByText(/Stock reserved/)).not.toBeInTheDocument();
   });
 });
+
+describe('OrderTimeline — an exchange replacement (returns RX-2)', () => {
+  const row = (id: string, event: string, extra: Record<string, unknown>) => ({
+    id,
+    event,
+    created_at: '2026-10-05T17:00:00Z',
+    user_id: 'u1',
+    metadata: { entity_type: 'order_request', entity_id: 'order-1', ...extra },
+  });
+
+  it('names its RMA: created at a revision, approved with the exchange, released, received, cancelled from the RMA', async () => {
+    const link = { replacementForReturnId: 'rma-1', returnNumber: 'RMA-20261005-ABC123', originalOrderId: 'orig' };
+    await renderTimeline([
+      row('a', 'order_request.created', { ...link, revision: 2 }),
+      row('b', 'order_request.approved', { ...link, revision: 2 }),
+      row('c', 'order_request.released_early', { ...link, reason: 'Swap at delivery: the driver collects the returned item.' }),
+      row('d', 'order_request.return_received', link),
+      row('e', 'order_request.cancelled', { ...link, via: 'return.replacement_cancelled' }),
+    ]);
+    // Re-pinned by fix round 1 (verification L6; claim kept): a changed or
+    // re-issued replacement says so, never the internal revision number.
+    expect(screen.getByText('Created as exchange replacement for RMA-20261005-ABC123 (after a change)')).toBeInTheDocument();
+    expect(screen.getByText('Created by the exchange approval; its items come from the RMA.')).toBeInTheDocument();
+    expect(screen.getByText('Approved with the exchange (RMA-20261005-ABC123)')).toBeInTheDocument();
+    expect(screen.getByText('Released before the return')).toBeInTheDocument();
+    expect(screen.getByText('Returned item received')).toBeInTheDocument();
+    expect(screen.getByText('Cancelled from RMA-20261005-ABC123')).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for a manager to review and approve.')).toBeNull();
+  });
+
+  it('a first revision says no revision', async () => {
+    await renderTimeline([row('a', 'order_request.created', { replacementForReturnId: 'rma-1', returnNumber: 'RMA-1', revision: 1 })]);
+    expect(screen.getByText('Created as exchange replacement for RMA-1')).toBeInTheDocument();
+  });
+});

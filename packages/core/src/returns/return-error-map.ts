@@ -13,10 +13,12 @@
  * the holdings writer's bare `forbidden` (desk check F7). A refusal with no
  * known hint is an internal error, whatever its message says.
  *
- * Specific before general: a hint wins over the SQLSTATE; 55P03 and 57014
- * (lock wait, statement timeout) map to a retryable "Busy" only when no hint
- * matched; anything unknown is an internal error with a generic sentence (the
- * raw text stays server-side).
+ * Specific before general: a hint wins over the SQLSTATE; 55P03, 57014 and
+ * 40P01 (lock wait, statement timeout, and a deadlock the server resolved by
+ * rolling one side back: never raised by a function, 0367, and the exchange
+ * writers take their locks in one order, desk check F4) map to a retryable
+ * "Busy" only when no hint matched; anything unknown is an internal error
+ * with a generic sentence (the raw text stays server-side).
  *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
@@ -68,7 +70,11 @@ export const RETURN_ERROR_WORDS = {
   replacementHandedOver: 'The replacement was already handed over.',
   replacementNotWaiting: "The replacement isn't waiting for the return.",
   replacementWaiting: 'Waiting for the returned item.',
+  replacementReturnCancelled: "This replacement's return was cancelled, so it isn't picked.",
   replacementCancelViaReturn: 'Change or cancel this replacement from its RMA.',
+  // RX-2 review fix P9: the same refusal for the replacement's requester (the
+  // order page's cancel, from an older screen), who cannot open the RMA.
+  replacementCancelViaReturnRequester: 'To change or cancel this replacement, contact the warehouse.',
   replacementLinesFixed: "A replacement's items come from its RMA and can't be edited here.",
   notAllowed: 'Not allowed.',
   reload: 'Reload the page to continue.',
@@ -79,6 +85,18 @@ export const RETURN_ERROR_WORDS = {
   decisionIncomplete: 'Choose what happens to every returned line.',
   notReturnable: 'Only orders that were handed over can be returned.',
   insufficientStock: 'Scrapping this line would take stock on record below zero.',
+  replacementNoRequester: 'This replacement has no requester to send it to. Decline the exchange or ask an admin.',
+  // RX-2 review fix (0396): cancel_return under a replacement already picked,
+  // being packed, staged or in transit. The workbenches treat it as a stale
+  // screen (its own reason key) and refresh.
+  replacementInProgress:
+    'The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',
+  // RX-2 review fix (0396): more than the original order line has left to
+  // exchange (replacement units were already handed over for it under another
+  // RMA, or other RMAs claim it). The words with what is left come from the
+  // refusal's detail (exchangeAlreadySentWords); these are the nothing-left
+  // words and the fallback for a detail that cannot be read.
+  exchangeAlreadySent: 'This item already got a replacement on an earlier return, so it can only be returned now.',
   internal: 'Something went wrong. Try again.',
 } as const;
 
@@ -114,6 +132,9 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   replacement_handed_over: { code: 'conflict', status: 409, message: W.replacementHandedOver },
   replacement_not_waiting: { code: 'conflict', status: 409, message: W.replacementNotWaiting },
   replacement_waiting_for_return: { code: 'conflict', status: 409, message: W.replacementWaiting },
+  // Desk check F3: the gate never lets a cancelled or denied return's
+  // replacement into picking, released or not.
+  replacement_return_cancelled: { code: 'conflict', status: 409, message: W.replacementReturnCancelled },
   replacement_cancel_via_return: { code: 'forbidden', status: 403, message: W.replacementCancelViaReturn },
   replacement_lines_fixed: { code: 'forbidden', status: 403, message: W.replacementLinesFixed },
   replacement_link_server_only: { code: 'forbidden', status: 403, message: W.notAllowed },
@@ -131,6 +152,18 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   return_decision_incomplete: { code: 'validation_error', status: 400, message: W.decisionIncomplete },
   order_not_returnable: { code: 'validation_error', status: 400, message: W.notReturnable },
   insufficient_stock: { code: 'validation_error', status: 400, message: W.insufficientStock },
+  // RX-2 (0396): the replacement order's own checks and the exchange table's
+  // defence-in-depth trigger (only the functions write it).
+  replacement_requester_unavailable: { code: 'validation_error', status: 400, message: W.replacementNoRequester },
+  exchange_line_invalid: { code: 'validation_error', status: 400, message: W.invalid },
+  exchange_request_immutable: { code: 'forbidden', status: 403, message: W.notAllowed },
+  // RX-2 review fix (0396): the RMA cancel is refused while the live
+  // replacement is picked, being packed, staged or in transit (detail: the
+  // replacement's status), and an exchange is refused above what the original
+  // order line has left (detail: {"quantity": n, "available": m}; the message
+  // is worded from it in mapReturnError).
+  replacement_in_progress: { code: 'conflict', status: 409, message: W.replacementInProgress },
+  exchange_already_sent: { code: 'validation_error', status: 400, message: W.exchangeAlreadySent },
 };
 
 const BUSY: ReturnErrorEntry = { code: 'conflict', status: 409, message: W.busy, retryable: true };
@@ -147,8 +180,30 @@ export interface ReturnDbError {
 export interface MappedReturnError extends ReturnErrorEntry {
   /** The key that matched (hint or bare token), `busy`, or `internal_error`. */
   reason: string;
-  /** The parsed `detail` when it is JSON (e.g. {rule, locationId}). */
+  /** The parsed `detail` when it is a JSON object (e.g. {rule, locationId}). */
   detail: Record<string, unknown> | null;
+  /** The parsed `detail` when it is a JSON array (replacement_unavailable:
+   *  [{itemId, needed, available}]). */
+  detailList: Array<Record<string, unknown>> | null;
+}
+
+/** One short line of a refused approval (replacement_unavailable's detail). */
+export interface ReplacementShortItem {
+  itemId: string;
+  needed: number;
+  available: number;
+}
+
+/** replacement_unavailable's detail as typed rows (bad rows dropped). */
+export function replacementShortItems(list: Array<Record<string, unknown>> | null | undefined): ReplacementShortItem[] {
+  const out: ReplacementShortItem[] = [];
+  for (const r of list ?? []) {
+    const itemId = typeof r.itemId === 'string' ? r.itemId : null;
+    const needed = Number(r.needed);
+    const available = Number(r.available);
+    if (itemId && Number.isFinite(needed) && Number.isFinite(available)) out.push({ itemId, needed, available });
+  }
+  return out;
 }
 
 /** The key a refusal is mapped by: its hint, and nothing else. */
@@ -171,14 +226,44 @@ function parseDetail(details: string | null | undefined): Record<string, unknown
   }
 }
 
+function parseDetailList(details: string | null | undefined): Array<Record<string, unknown>> | null {
+  if (!details) return null;
+  const text = details.trim();
+  if (!text.startsWith('[')) return null;
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (!Array.isArray(value)) return null;
+    return value.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * exchange_already_sent's words from its detail ({"quantity": n, "available":
+ * m}): what is left to exchange on the original order line, as a whole
+ * number, or the nothing-left words when nothing is (or the detail cannot be
+ * read).
+ */
+export function exchangeAlreadySentWords(detail: Record<string, unknown> | null | undefined): string {
+  const raw = detail?.available;
+  const available = typeof raw === 'number' || typeof raw === 'string' ? Math.floor(Number(raw)) : Number.NaN;
+  if (!Number.isFinite(available) || available <= 0) return W.exchangeAlreadySent;
+  return `Only ${available} of these can still be exchanged; the rest already got a replacement on an earlier return.`;
+}
+
 /** One refusal -> its entry, the key that matched and any structured detail. */
 export function mapReturnError(err: ReturnDbError | null | undefined): MappedReturnError {
   const key = returnErrorKey(err);
   const detail = parseDetail(err?.details);
-  if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail };
+  const detailList = parseDetailList(err?.details);
+  if (key === 'exchange_already_sent') {
+    return { ...RETURN_ERROR_TABLE[key]!, message: exchangeAlreadySentWords(detail), reason: key, detail, detailList };
+  }
+  if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail, detailList };
   const code = (err?.code ?? '').toUpperCase();
-  if (code === '55P03' || code === '57014') return { ...BUSY, reason: 'busy', detail };
-  return { ...INTERNAL, reason: 'internal_error', detail };
+  if (code === '55P03' || code === '57014' || code === '40P01') return { ...BUSY, reason: 'busy', detail, detailList };
+  return { ...INTERNAL, reason: 'internal_error', detail, detailList };
 }
 
 /** The rule names restock_location_unavailable carries, as words for the

@@ -49,6 +49,8 @@ export const INTEGRATION_EVENT_TYPES = [
   // Returns RX-1 (0394).
   'return.received',
   'return.cancelled',
+  // Returns RX-2 (0396): an exchange approved with its linked replacement order.
+  'return.exchange_approved',
   'cycle_count.completed',
   // Security feed (cybersecurity monitoring Phase 1, 2026-06-12): forensic-
   // relevant account/credential events an org admin wants in a #security
@@ -184,6 +186,11 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
       return { title: 'Return received', summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was received.` };
     case 'return.cancelled':
       return { title: 'Return cancelled', summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was cancelled.` };
+    case 'return.exchange_approved':
+      return {
+        title: 'Exchange approved',
+        summary: `Return ${s('returnNumber') ?? s('returnId') ?? ''} was approved with an exchange${s('replacementOrderNumber') ? `; replacement order ${s('replacementOrderNumber')}` : ''}.`,
+      };
     case 'cycle_count.completed':
       return { title: '🔢 Cycle count complete', summary: `A cycle count finished${s('warehouse') ? ` at ${s('warehouse')}` : ''}.` };
     case 'security.new_device_login':

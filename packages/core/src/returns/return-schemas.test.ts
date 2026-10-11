@@ -11,12 +11,14 @@ const L1 = '00000000-0000-4000-8000-000000000001';
 const L2 = '00000000-0000-4000-8000-000000000002';
 
 describe('the case table shared with pgTAP', () => {
-  const file = readdirSync(TESTS).find((f) => f.endsWith('_returns_lifecycle_original_rack.test.sql'));
-  const sql = file ? readFileSync(join(TESTS, file), 'utf8') : '';
+  const files = readdirSync(TESTS).filter(
+    (f) => f.endsWith('_returns_lifecycle_original_rack.test.sql') || f.endsWith('_returns_exchange_staff.test.sql'),
+  );
+  const sql = files.map((f) => readFileSync(join(TESTS, f), 'utf8')).join('\n');
   const markers = new Set([...sql.matchAll(/^-- case: ([a-z0-9_]+)\s*$/gm)].map((m) => m[1]));
 
-  it('finds the RX-1 suite', () => {
-    expect(file).toBeDefined();
+  it('finds the RX-1 and RX-2 suites', () => {
+    expect(files).toHaveLength(2);
   });
 
   it.each(returnSchemaCases().map((c) => [c.name, c] as const))('%s has a pgTAP marker and core agrees', (name, c) => {
@@ -120,5 +122,86 @@ describe('the steps body', () => {
 
   it('builds the schemas once', () => {
     expect(returnSchemas()).toBe(returnSchemas());
+  });
+});
+
+describe('RX-2: the exchange bodies', () => {
+  const L3 = '00000000-0000-4000-8000-000000000003';
+
+  it('a create line may ask for an item or for the warehouse to review, never more than it returns', () => {
+    expect(parseReturnBody('create', { lines: [{ orderRequestLineId: L1, quantity: 2, exchange: { itemId: L2 } }] }).ok).toBe(true);
+    expect(parseReturnBody('create', { lines: [{ orderRequestLineId: L1, quantity: 2, exchange: { itemId: L2, quantity: 2 } }] }).ok).toBe(true);
+    const review = parseReturnBody('create', { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { note: '  Next size up  ' } }] });
+    expect(review.ok && review.value.lines[0]!.exchange?.note).toBe('Next size up');
+    expect(parseReturnBody('create', { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { itemId: L2, warehouse: L3 } }] }).ok).toBe(false);
+    expect(parseReturnBody('create', { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { itemId: 'nope' } }] }).ok).toBe(false);
+    expect(parseReturnBody('requester', { lines: [{ orderRequestLineId: L1, quantity: 1, exchange: { itemId: L2, quantity: 3 } }] }).ok).toBe(false);
+  });
+
+  it('an approval takes one decision per exchange line: approve, decline with a reason, or add', () => {
+    const lines = [{ returnLineId: L1, disposition: 'restock' }];
+    expect(
+      parseReturnBody('approve', {
+        lines,
+        exchange: [
+          { exchangeLineId: L2, action: 'approve', itemId: L3, reason: 'Navy instead' },
+          { returnLineId: L3, action: 'add', itemId: L2 },
+        ],
+        replacement: { whenShort: 'backorder', fulfillmentType: 'delivery', deliveryCharterId: L3 },
+      }).ok,
+    ).toBe(true);
+    expect(parseReturnBody('approve', { lines, exchange: [{ exchangeLineId: L2, action: 'decline', reason: 'No' }] }).ok).toBe(true);
+    expect(
+      parseReturnBody('approve', {
+        lines,
+        exchange: [
+          { exchangeLineId: L2, action: 'approve' },
+          { exchangeLineId: L2, action: 'decline', reason: 'Twice' },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(parseReturnBody('approve', { lines, exchange: [{ returnLineId: L1, action: 'add' }] }).ok).toBe(false);
+    expect(parseReturnBody('approve', { lines, replacement: { whenShort: 'maybe' } }).ok).toBe(false);
+  });
+
+  it('the replacement actions take their reasons (release: at most 500 characters) and a revision', () => {
+    const change = parseReturnBody('changeReplacement', { expectedRevision: 1, lines: [{ exchangeLineId: L2, itemId: L3 }], reason: ' Navy ' });
+    expect(change.ok && change.value).toMatchObject({ reason: 'Navy', whenShort: 'refuse' });
+    expect(parseReturnBody('changeReplacement', { expectedRevision: 2, reason: 'Again' }).ok).toBe(true);
+    expect(parseReturnBody('changeReplacement', { lines: [], reason: 'x' }).ok).toBe(false);
+    // Desk check F7: the cancel needs the revision the caller saw and the
+    // release the replacement order it saw.
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'Changed mind' }).ok).toBe(true);
+    expect(parseReturnBody('cancelReplacement', { reason: 'Changed mind' }).ok).toBe(false);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: null, reason: 'Changed mind' }).ok).toBe(false);
+    // Fix round 1 (verification V1): the replacement status the screen showed.
+    const shown = parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'picking_complete' });
+    expect(shown.ok && shown.value.shownStatus).toBe('picking_complete');
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: null }).ok).toBe(true);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'Picked!' }).ok).toBe(false);
+    expect(parseReturnBody('cancelReplacement', { expectedRevision: 1, reason: 'x', shownStatus: 'a'.repeat(41) }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: L3, reason: 'x'.repeat(500) }).ok).toBe(true);
+    expect(parseReturnBody('releaseEarly', { reason: 'x'.repeat(500) }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: 'not-an-order', reason: 'x' }).ok).toBe(false);
+    expect(parseReturnBody('releaseEarly', { orderId: L3, reason: '' }).ok).toBe(false);
+  });
+
+  it('the candidate search takes a line and a trimmed term; the prepare chain stops at staged', () => {
+    const q = parseReturnBody('candidates', { line: L1, q: '  polo  ' });
+    expect(q.ok && q.value.q).toBe('polo');
+    expect(parseReturnBody('candidates', { q: 'polo' }).ok).toBe(false);
+    expect(parseReturnBody('prepare', {}).ok).toBe(true);
+    expect(parseReturnBody('prepare', { stopAt: 'signed' }).ok).toBe(false);
+  });
+
+  it('a steps approval carries the exchange decisions', () => {
+    expect(
+      parseReturnBody('steps', {
+        steps: ['approve'],
+        expectedRevision: 0,
+        receiveNow: true,
+        approve: { lines: [{ returnLineId: L1, disposition: 'restock' }], exchange: [{ exchangeLineId: L2, action: 'approve' }] },
+      }).ok,
+    ).toBe(true);
   });
 });

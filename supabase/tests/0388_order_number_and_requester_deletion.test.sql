@@ -87,7 +87,10 @@
 
 begin;
 
-select plan(95);
+-- Re-planned by 0396 (returns RX-2; was 95): N4 writes one line per
+-- order_requests column authenticated may not insert, and 0396 adds
+-- replacement_for_return_id (server-owned, no column grant).
+select plan(96);
 
 \set orgA   '\'03880000-0000-0000-0000-00000000000a\''
 \set own    '\'03880000-0000-0000-0000-0000000000a0\''

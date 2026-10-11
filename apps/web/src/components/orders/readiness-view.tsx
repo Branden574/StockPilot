@@ -119,12 +119,20 @@ export type ReadinessStripView =
 export function readinessStripView(
   result: OrderReadinessResult,
   audience: ReadinessAudience,
-  opts: { timeZone: string },
+  opts: {
+    timeZone: string;
+    /** RX-2 review fix P6: an exchange replacement waiting for its returned
+     *  item reads "Stock held … Picking waits for the returned item." and when
+     *  picking starts (core describeReadinessRollup); the requester's card is
+     *  unchanged. */
+    replacementGate?: 'waiting' | 'open' | 'closed' | null;
+    returnNumber?: string | null;
+  },
 ): ReadinessStripView | null {
   const failed = result.state === 'failed';
   if (audience === 'none') return null;
   if (audience === 'requester') {
-    const card = describeReadinessForRequester(result, opts);
+    const card = describeReadinessForRequester(result, { timeZone: opts.timeZone });
     return card ? { mode: 'requester', ...card } : null;
   }
   const rollup = describeReadinessRollup(result, opts);

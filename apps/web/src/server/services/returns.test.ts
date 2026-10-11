@@ -232,7 +232,7 @@ describe('approve (approve_return)', () => {
       p_decision: DECISION,
       p_receive_now: false,
     });
-    expect(answer).toEqual({ changed: true, replay: false, status: 'approved', revision: 1 });
+    expect(answer).toEqual({ changed: true, replay: false, status: 'approved', revision: 1, replacement: null });
     expect(auditMock.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['return.approved', 'return.disposition_planned']);
     expect(auditMock.mock.calls[0]![0]).toMatchObject({
       extra: { revision: 1, channel: 'staff', plan: [{ returnLineId: RLINE_ID, disposition: 'restock', target: 'original', locationId: null }] },
@@ -435,7 +435,14 @@ describe('runSteps (the steps endpoint)', () => {
     const result = await svc.runSteps(RET_ID, { steps: ['receive', 'process'] } as never);
     expect(result.ran).toEqual([
       { step: 'receive', outcome: 'done' },
-      { step: 'process', outcome: 'refused', reason: 'restock_location_unavailable', message: 'Original rack is no longer available.' },
+      {
+        step: 'process',
+        outcome: 'refused',
+        reason: 'restock_location_unavailable',
+        message: 'Original rack is no longer available.',
+        // RX-2: the refusal's structured detail travels with the step.
+        detail: { rule: 'archived', locationId: 'l' },
+      },
     ]);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['receive_return', 'close_return']);
     expect(workbenchMock).toHaveBeenCalledTimes(1);
@@ -795,11 +802,40 @@ describe('guards over the returns code', () => {
   });
 
   /**
-   * Plan 3.1.4: RX-2 gives returns and order_requests a second relationship
-   * (the replacement link). Every embed between them must name its
-   * constraint or PostgREST answers PGRST201. Scans the web and the phone.
+   * Plan 3.1.4 and desk check F11: 0396 gives returns and order_requests a
+   * second relationship (the replacement link, order_requests ->
+   * returns(id, organization_id)), which the list view return_overview
+   * inherits through returns' id and organization_id, and gives
+   * return_exchange_lines two keys to inventory_items (requested and
+   * approved), as return_decisions already has (item and previous item).
+   * Every embed between such a pair must name its constraint or column, or
+   * PostgREST answers PGRST201 (HTTP 300). `!inner` and `!left` are join
+   * modifiers, not hints. Scans the web and the phone, select constants
+   * included.
    */
-  it('no embed between returns and order_requests is left unhinted (web and phone)', () => {
+  const AMBIGUOUS_PAIRS: ReadonlyArray<readonly [string, string]> = [
+    ['returns', 'order_requests'],
+    ['order_requests', 'returns'],
+    ['return_overview', 'order_requests'],
+    ['order_requests', 'return_overview'],
+    ['return_exchange_lines', 'inventory_items'],
+    ['return_decisions', 'inventory_items'],
+    ['inventory_items', 'return_exchange_lines'],
+    ['inventory_items', 'return_decisions'],
+  ];
+  const JOIN_MODIFIERS = new Set(['inner', 'left']);
+  /** Unhinted embeds of `child` in a select text: the child with no `!name` that is a constraint or column. */
+  const unhintedEmbeds = (selectText: string, child: string): string[] => {
+    const out: string[] = [];
+    const re = new RegExp(`(^|[\\s,:(\`'"])${child}((?:\\s*!\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s*\\(`, 'g');
+    for (const m of selectText.matchAll(re)) {
+      const hints = [...(m[2] ?? '').matchAll(/!\s*([A-Za-z_][A-Za-z0-9_]*)/g)].map((h) => h[1]!);
+      if (!hints.some((h) => !JOIN_MODIFIERS.has(h))) out.push(`${child}${m[2] ?? ''}(`);
+    }
+    return out;
+  };
+
+  it('no embed between two tables with two relationships is left unhinted (web and phone, select constants too)', () => {
     const roots = [
       join(HERE, '..', '..'),
       join(HERE, '..', '..', '..', '..', 'mobile', 'app'),
@@ -822,25 +858,41 @@ describe('guards over the returns code', () => {
       }
     };
     roots.forEach(walk);
-    const offenders: string[] = [];
-    for (const file of files) {
-      const text = readFileSync(file, 'utf8');
-      // A read FROM returns that embeds order_requests, or FROM order_requests
-      // that embeds returns, within the same query chain.
-      for (const m of text.matchAll(/from\(['"](returns|order_requests)['"]\)([\s\S]{0,700}?)(?=\.from\(|$)/g)) {
-        const parent = m[1];
-        const chain = m[2] ?? '';
-        const child = parent === 'returns' ? 'order_requests' : 'returns';
-        const unhinted = new RegExp(`(^|[\\s,:(\`'"])${child}\\s*\\(`);
-        if (unhinted.test(chain)) offenders.push(`${file.split('/apps/')[1]}: ${parent} -> ${child}`);
+    const texts = new Map(files.map((f) => [f, readFileSync(f, 'utf8')]));
+    // Select strings kept in constants (RETURN_SELECT_WITH_ORDER, ORDER_RETURNS_SELECT, ...).
+    const constants = new Map<string, string>();
+    for (const text of texts.values()) {
+      for (const m of text.matchAll(/(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)\s*=\s*(?:'([^']*)'|`([^`]*)`)/g)) {
+        constants.set(m[1]!, m[2] ?? m[3] ?? '');
       }
     }
+    const offenders: string[] = [];
+    let chainsSeen = 0;
+    for (const [file, text] of texts) {
+      for (const m of text.matchAll(/from\(['"]([a-z_]+)['"]\)([\s\S]{0,900}?)(?=\.from\(|$)/g)) {
+        const parent = m[1]!;
+        const children = AMBIGUOUS_PAIRS.filter(([p]) => p === parent).map(([, c]) => c);
+        if (children.length === 0) continue;
+        chainsSeen += 1;
+        let chain = m[2] ?? '';
+        const sel = /\.select\(\s*([A-Z][A-Z0-9_]*)\s*[,)]/.exec(chain);
+        if (sel && constants.has(sel[1]!)) chain += ` ${constants.get(sel[1]!)}`;
+        for (const child of children) {
+          for (const e of unhintedEmbeds(chain, child)) offenders.push(`${file.split('/apps/')[1]}: ${parent} -> ${e}`);
+        }
+      }
+    }
+    // Vacuity control: the scan reached the reads it is about.
+    expect(chainsSeen).toBeGreaterThan(5);
     expect(offenders).toEqual([]);
   });
 
-  it('the guard sees an unhinted embed', () => {
-    const chain = ".select('*, order_request:order_requests (order_number)')";
-    expect(/(^|[\s,:(`'"])order_requests\s*\(/.test(chain)).toBe(true);
-    expect(/(^|[\s,:(`'"])order_requests\s*\(/.test(".select('*, order_request:order_requests!order_request_id (order_number)')")).toBe(false);
+  it('the guard sees an unhinted embed, a join modifier without a hint, and a hint', () => {
+    expect(unhintedEmbeds(".select('*, order_request:order_requests (order_number)')", 'order_requests')).toHaveLength(1);
+    expect(unhintedEmbeds(".select('item_id, order_requests!inner(status)')", 'order_requests')).toHaveLength(1);
+    expect(unhintedEmbeds(".select('*, order_request:order_requests!order_request_id (order_number)')", 'order_requests')).toEqual([]);
+    expect(unhintedEmbeds(".select('*, o:order_requests!order_request_id!inner (id)')", 'order_requests')).toEqual([]);
+    expect(unhintedEmbeds(".select('x:returns!order_requests_replacement_return_fkey (return_number)')", 'returns')).toEqual([]);
+    expect(unhintedEmbeds(".select('id, item:inventory_items (name)')", 'inventory_items')).toHaveLength(1);
   });
 });
