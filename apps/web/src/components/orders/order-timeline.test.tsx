@@ -269,7 +269,9 @@ describe('OrderTimeline — an exchange replacement (returns RX-2)', () => {
       row('d', 'order_request.return_received', link),
       row('e', 'order_request.cancelled', { ...link, via: 'return.replacement_cancelled' }),
     ]);
-    expect(screen.getByText('Created as exchange replacement for RMA-20261005-ABC123 (revision 2)')).toBeInTheDocument();
+    // Re-pinned by fix round 1 (verification L6; claim kept): a changed or
+    // re-issued replacement says so, never the internal revision number.
+    expect(screen.getByText('Created as exchange replacement for RMA-20261005-ABC123 (after a change)')).toBeInTheDocument();
     expect(screen.getByText('Created by the exchange approval; its items come from the RMA.')).toBeInTheDocument();
     expect(screen.getByText('Approved with the exchange (RMA-20261005-ABC123)')).toBeInTheDocument();
     expect(screen.getByText('Released before the return')).toBeInTheDocument();

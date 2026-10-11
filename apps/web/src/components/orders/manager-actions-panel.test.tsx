@@ -1092,7 +1092,10 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
         {...baseProps({ status: 'approved', canApprove: true, replacement: { ...waiting, exchangeStatus: 'unavailable', held: 1 } })}
       />,
     );
-    expect(screen.getByText('Replacement reserved. Waiting for returned item (RMA-20261005-ABC123)')).toBeInTheDocument();
+    // Re-pinned by fix round 1 (verification L9): held in part says so.
+    expect(
+      screen.getByText('Partly reserved; the rest is not in stock yet. Picking also waits for the returned item (RMA-20261005-ABC123).'),
+    ).toBeInTheDocument();
   });
 
   it('released or received: the pick slip is back; no release without both permissions', () => {
@@ -1170,6 +1173,16 @@ describe('ManagerActionsPanel — Hand over from the RMA opens the physical sign
   it('opens the Physical signature dialog when asked and the order is ready to hand over', () => {
     render(<ManagerActionsPanel {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true })} />);
     expect(screen.getByRole('dialog', { name: 'Record a physical signature' })).toBeInTheDocument();
+  });
+
+  // Fix round 1 (verification V-2): the dialog names the order it records.
+  it('names the order in the Physical signature dialog', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ status: 'staged_for_pickup', canApprove: true, viewerRole: 'manager', openPhysicalSignature: true, orderLabel: 'SO-000123' })}
+      />,
+    );
+    expect(screen.getByRole('dialog', { name: 'Record a physical signature for SO-000123' })).toBeInTheDocument();
   });
 
   it('not before the hand-over, not for a viewer who may not confirm it, and never unasked', () => {

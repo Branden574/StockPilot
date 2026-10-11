@@ -204,3 +204,43 @@ describe('CreateReturnDialog starts the only returnable line ticked', () => {
     expect(within(dialog).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, true]);
   });
 });
+
+// Fix round 1 (verification L7, pattern 20; completeness C-2): a refusal is
+// said inside the dialog too, and a call that rejects never leaves it busy.
+describe('CreateReturnDialog refusals stay in the dialog', () => {
+  it('a refused create shows its words in the dialog as an alert, cleared on the next try', async () => {
+    createAction.mockResolvedValueOnce({
+      ok: false,
+      error: { message: 'Only 1 of these can still be exchanged; the rest can be returned, not exchanged.' },
+    });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
+    const dialog = openDialog();
+    submit(dialog);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Only 1 of these can still be exchanged; the rest can be returned, not exchanged.',
+    );
+    await settled(dialog);
+    createAction.mockReturnValueOnce(new Promise(() => {}));
+    submit(dialog);
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull());
+  });
+
+  it('an Exchange with no replacement chosen says so in the dialog', async () => {
+    candidatesAction.mockResolvedValue({ ok: true, data: { siblings: [], matches: [] } });
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} exchangesEnabled />);
+    const dialog = openDialog();
+    fireEvent.click(within(dialog).getByLabelText('Exchange for another size or item'));
+    submit(dialog);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Choose the replacement');
+    expect(createAction).not.toHaveBeenCalled();
+  });
+
+  it('a call that rejects frees the dialog and says so', async () => {
+    createAction.mockRejectedValueOnce(new Error('fetch failed'));
+    render(<CreateReturnDialog orderId={ORDER} lines={LINES} />);
+    const dialog = openDialog();
+    submit(dialog);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Something went wrong. Try again.');
+    await settled(dialog);
+  });
+});

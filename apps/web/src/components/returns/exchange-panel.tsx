@@ -479,15 +479,28 @@ export function ReplacementOrderSection({
 
 // ── Dialogs ─────────────────────────────────────────────────────────────────
 
+/** A refusal kept inside the open dialog, announced (pattern 20; fix round 1, completeness C-3). */
+function DialogError({ error }: { error: string | null }) {
+  if (!error) return null;
+  return (
+    <p className="text-destructive text-sm" role="alert">
+      {error}
+    </p>
+  );
+}
+
 export function ReleaseEarlyDialog({
   open,
   onOpenChange,
   busy,
+  error = null,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   busy: boolean;
+  /** The last refusal, kept inside the dialog (pattern 20; fix round 1, completeness C-3). */
+  error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
   const [reason, setReason] = React.useState('');
@@ -519,6 +532,7 @@ export function ReleaseEarlyDialog({
           onChange={setReason}
           max={RETURN_RELEASE_REASON_MAX}
         />
+        <DialogError error={error} />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep waiting
@@ -537,12 +551,15 @@ export function CancelReplacementDialog({
   open,
   onOpenChange,
   busy,
+  error = null,
   consequences,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   busy: boolean;
+  /** The last refusal, kept inside the dialog (pattern 20; fix round 1, completeness C-3). */
+  error?: string | null;
   /**
    * What happens (core exchangeActionConsequences 'cancel_replacement'):
    * picked, the items go back to Staging on record (X-1); in transit, ask the
@@ -583,6 +600,7 @@ export function CancelReplacementDialog({
           value={reason}
           onChange={setReason}
         />
+        <DialogError error={error} />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep it
@@ -672,11 +690,14 @@ export function CloseAsReturnOnlyDialog({
   open,
   onOpenChange,
   busy,
+  error = null,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   busy: boolean;
+  /** The last refusal, kept inside the dialog (pattern 20; fix round 1, completeness C-3). */
+  error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
   const [reason, setReason] = React.useState('');
@@ -701,6 +722,7 @@ export function CloseAsReturnOnlyDialog({
           value={reason}
           onChange={setReason}
         />
+        <DialogError error={error} />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Keep it open
@@ -734,6 +756,7 @@ export function ChangeReplacementDialog({
   open,
   onOpenChange,
   busy,
+  error = null,
   mode,
   lines,
   loaderFor,
@@ -744,6 +767,8 @@ export function ChangeReplacementDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   busy: boolean;
+  /** The last refusal, kept inside the dialog (pattern 20; fix round 1, completeness C-3). */
+  error?: string | null;
   mode: 'change' | 'issue';
   lines: ChangeLineInput[];
   loaderFor: (orderRequestLineId: string) => CandidateLoader;
@@ -756,10 +781,21 @@ export function ChangeReplacementDialog({
     whenShort: 'refuse' | 'backorder';
   }) => void;
 }) {
-  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number }>>({});
+  // Fix round 1 (verification L1): a pick keeps the picked row's own label,
+  // so a short refusal names it ("Walk Exchange Tee - 2XL: 0 available, 1
+  // needed."), never "Item".
+  const [picks, setPicks] = React.useState<Record<string, { itemId: string | null; quantity: number; label?: string }>>({});
   const [reason, setReason] = React.useState('');
+  // The short numbers belong to the picks they refused: a new pick hides them
+  // (and the backorder button) until the next refusal (fix round 1, L1).
+  const [shortSeen, setShortSeen] = React.useState<unknown>(null);
   const pick = (l: ChangeLineInput) => picks[l.exchangeLineId] ?? { itemId: l.currentItemId, quantity: l.currentQuantity };
-  const short = Array.isArray(shortDetail) ? replacementShortItems(shortDetail as Array<Record<string, unknown>>) : [];
+  const short =
+    Array.isArray(shortDetail) && shortDetail !== shortSeen ? replacementShortItems(shortDetail as Array<Record<string, unknown>>) : [];
+  const labelOf = (itemId: string): string => {
+    for (const p of Object.values(picks)) if (p.itemId === itemId && p.label) return p.label;
+    return itemLabel(itemId);
+  };
   const send = (whenShort: 'refuse' | 'backorder') =>
     onConfirm({
       lines: lines.map((l) => ({ exchangeLineId: l.exchangeLineId, itemId: pick(l).itemId, quantity: pick(l).quantity })),
@@ -776,6 +812,7 @@ export function ChangeReplacementDialog({
         if (!v) {
           setPicks({});
           setReason('');
+          setShortSeen(null);
         }
       }}
     >
@@ -797,7 +834,10 @@ export function ChangeReplacementDialog({
                 load={loaderFor(l.orderRequestLineId)}
                 needed={pick(l).quantity}
                 selectedItemId={pick(l).itemId}
-                onSelect={(row) => setPicks((p) => ({ ...p, [l.exchangeLineId]: { ...pick(l), itemId: row.itemId } }))}
+                onSelect={(row, rowLabel) => {
+                  setShortSeen(shortDetail);
+                  setPicks((p) => ({ ...p, [l.exchangeLineId]: { ...pick(l), itemId: row.itemId, label: rowLabel } }));
+                }}
                 label={l.returnedLabel}
                 disabled={busy}
               />
@@ -819,10 +859,11 @@ export function ChangeReplacementDialog({
           {short.length > 0 ? (
             <ul className="text-destructive space-y-0.5 text-sm" role="alert" aria-label="Not in stock">
               {short.map((s) => (
-                <li key={s.itemId}>{replacementShortLine(itemLabel(s.itemId), s.available, s.needed)}</li>
+                <li key={s.itemId}>{replacementShortLine(labelOf(s.itemId), s.available, s.needed)}</li>
               ))}
             </ul>
           ) : null}
+          <DialogError error={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
@@ -830,7 +871,7 @@ export function ChangeReplacementDialog({
           </Button>
           {short.length > 0 ? (
             <Button variant="outline" onClick={() => send('backorder')} disabled={!ready}>
-              {RETURNS_COPY.approveReplacementOnBackorder}
+              {mode === 'issue' ? RETURNS_COPY.issueReplacementOnBackorder : RETURNS_COPY.changeReplacementOnBackorder}
             </Button>
           ) : null}
           <Button variant="gradient" onClick={() => send('refuse')} disabled={!ready}>

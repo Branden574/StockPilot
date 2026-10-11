@@ -997,13 +997,17 @@ const RETURN_UPDATE_WORDS: Record<
     summary: 'approved',
     badge: 'Approved',
     lead: 'Your return was approved.',
-    sentence: 'The warehouse added a replacement for you, and it is reserved.',
+    // Fix round 1 (verification M2): the replacement waits for the returned
+    // item, so the requester is told to bring or send it back (core's words).
+    sentence:
+      'The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
   },
   return_approved_replacement_added_short: {
     summary: 'approved',
     badge: 'Approved',
     lead: 'Your return was approved.',
-    sentence: 'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+    sentence:
+      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
   },
   // Review fix P15: Close as return only after a replacement cancel.
   replacement_closed_return_only: {

@@ -128,7 +128,10 @@ function decisionLabel(
     case 'exchange_declined':
       return d.reason ? `Exchange declined: ${d.reason}` : 'Exchange declined';
     case 'replacement_issued':
-      return `Replacement order ${so ?? 'created'}${so ? ' created' : ''} and reserved`;
+      // The decision carries no hold: an approval, change or re-issue on
+      // backorder holds nothing, so never "and reserved" (fix round 1,
+      // verification M1; the order's own lines say what is held).
+      return so ? `Replacement order ${so} created` : 'Replacement order created';
     case 'replacement_changed':
       return d.reason ? `Replacement changed: ${d.reason}` : 'Replacement changed';
     case 'replacement_cancelled':

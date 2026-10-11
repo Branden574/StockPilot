@@ -110,6 +110,12 @@ export interface OrderReplacementInfo {
   canOpenReturn: boolean;
   /** The viewer may release it early (returns module on, returns:manage and orders:approve). */
   canReleaseEarly: boolean;
+  /**
+   * The viewer may change and cancel it from its RMA (the same gates): the
+   * banner's link reads "Change or cancel in RMA-…" only then, else "Open
+   * RMA-…" (fix round 1, verification L5).
+   */
+  canChangeReplacement: boolean;
   /** "Exchange replacement for RMA-… (returned item: …, received)" for the slips. */
   slipLine: string;
   /** "On delivery, the driver collects the returned item: …" for the
@@ -177,6 +183,8 @@ export async function loadReplacementInfo(
 
   const canReadDecisions =
     ctx.enabledModules.has('returns') && (can(ctx, 'returns:read') || can(ctx, 'returns:manage'));
+  // Release early, change and cancel: the RMA functions' own gates.
+  const canChange = ctx.enabledModules.has('returns') && can(ctx, 'returns:manage') && can(ctx, 'orders:approve');
 
   const [overviewRes, decisionsRes] = await Promise.all([
     ctx.supabase
@@ -285,8 +293,8 @@ export async function loadReplacementInfo(
     returnedItems,
     revision: issued?.revision ?? null,
     canOpenReturn: canReadDecisions,
-    canReleaseEarly:
-      ctx.enabledModules.has('returns') && can(ctx, 'returns:manage') && can(ctx, 'orders:approve'),
+    canReleaseEarly: canChange,
+    canChangeReplacement: canChange,
     slipLine: slipExchangeLine(returnNumber, returnedWords, returnReceived),
     driverLine: returnedWords && !returnReceived ? collectReturnedItemLine(returnedWords, returnNumber) : null,
     held: null,

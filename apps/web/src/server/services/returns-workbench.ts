@@ -552,6 +552,15 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   const exchangeLabels = new Map<string, string>(
     exchangeIds.map((iid) => [iid, returnLineLabel(items.get(iid)?.name ?? null, variantOf(items.get(iid)))]),
   );
+  // Fix round 1 (verification L2): a decision may name an item a line already
+  // reads (the returned item, approved "Same as returned"): label it too.
+  for (const d of decisionRows) {
+    for (const iid of [d.item_id, d.previous_item_id]) {
+      if (typeof iid === 'string' && items.has(iid) && !exchangeLabels.has(iid)) {
+        exchangeLabels.set(iid, returnLineLabel(items.get(iid)?.name ?? null, variantOf(items.get(iid))));
+      }
+    }
+  }
   // Review fix P8: every item an exchange decision names (a replacement chosen
   // at approval and changed since, the item it replaced) is named in the
   // history, never "an item": ONE batched read of those no line names now.

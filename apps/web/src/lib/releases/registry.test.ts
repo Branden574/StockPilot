@@ -4868,7 +4868,9 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     // Re-pinned by returns RX-2 (2026-10-05; was RETURN_ACTION_LABELS[a]):
     // core's returnActionLabel words an exchange's approval, and answers
     // RETURN_ACTION_LABELS for every other action, Process return included.
-    expect(web).toContain("a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, { hasExchange });");
+    // Re-pinned again by RX-2 fix round 1 (verification L3; claim kept): the
+    // options also carry the viewer's order approval.
+    expect(web).toContain("a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, labelOpts);");
     expect(returnActionLabel('process', { hasExchange: true })).toBe(RETURN_ACTION_LABELS.process);
     expect(returnActionLabel('process')).toBe(RETURN_ACTION_LABELS.process);
     const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/returns-view.ts'), 'utf8');
@@ -6374,6 +6376,8 @@ describe('exchanges on returns (returns RX-2) is held as a draft', () => {
       RETURNS_COPY.approveReplacementOnBackorder,
       RETURNS_COPY.getReplacementReady,
       RETURNS_COPY.releaseEarly,
+      // Fix round 1 (completeness C-7): the order page's own button too.
+      RETURNS_COPY.releaseBeforeReturn,
       RETURNS_COPY.cancelReplacement,
       RETURNS_COPY.issueNewReplacement,
       RETURNS_COPY.closeAsReturnOnly,

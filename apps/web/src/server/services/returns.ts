@@ -1362,7 +1362,8 @@ export class RMAService {
    * Keep the return, drop the replacement (X-1, X-2): undrawn, its holds are
    * released; picked or staged, the picked batch goes back to Staging on
    * record; handed over, refused. Needs a reason. Nothing live answers
-   * changed false.
+   * changed false. shownStatus (the replacement status the caller's screen
+   * showed): picked or sent since then is return_changed (verification V1).
    */
   async cancelReplacement(id: string, raw: unknown): Promise<ReturnReplacementCancelAnswer> {
     this.gate();
@@ -1374,6 +1375,9 @@ export class RMAService {
       p_return_id: id,
       p_expected_revision: parsed.value.expectedRevision,
       p_reason: parsed.value.reason,
+      // Fix round 1 (verification V1): the status the screen showed; the
+      // database refuses (return_changed) a replacement picked or sent since.
+      p_shown_status: parsed.value.shownStatus ?? null,
     });
     if (error) throw returnRpcError(error);
     const answer = asObject(data);

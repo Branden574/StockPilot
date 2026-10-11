@@ -75,7 +75,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A wrong size used to mean a return and a separate new order typed by hand, with nothing tying the two together.',
         howItAffectsYou:
-          "Approving an exchange needs order approval as well as Manage returns. Without order approval you can still approve the return: choose Decline the exchange, return only. At the counter, switch on The item is here when you start the return (when only one line can be returned, it starts ticked), then use Approve and receive, Get replacement ready, process the returned item (Process return, or the button that names its rack, such as Return to 31-C), and Hand over, which opens the replacement's order with the Physical signature dialog already open.",
+          "Approving an exchange needs order approval as well as Manage returns. With Manage returns but without order approval, you can still approve the return: choose Decline the exchange, return only. At the counter, switch on The item is here when you start the return (when only one line can be returned, it starts ticked), then use Approve and receive, Get replacement ready, process the returned item (Process return, or the button that names its rack, such as Return to 31-C), and Hand over, which opens the replacement's order with the Physical signature dialog already open.",
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
@@ -87,11 +87,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The replacement order waits for the returned item',
         whatChanged:
-          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager uses Release replacement before return is received with a reason. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
+          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager releases it early with a reason: Release before return is received on its order, or Release replacement before return is received on the RMA. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
         whyItMatters:
           'A replacement is not handed out while the item it replaces is still missing, unless a manager decides to, with a reason.',
         howItAffectsYou:
-          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a replacement that was already picked puts the picked items back in Staging on record. Cancelling the whole return also cancels a replacement that is not picked yet; once it is picked or on its way, hand it over or cancel the replacement first. If part of it was handed over, cancelling the return closes it and the rest is not sent.',
+          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent after you opened the return, the page reloads to show that first. Cancelling the return also cancels a replacement not picked yet; once it is picked or on its way, hand it over first, or cancel the replacement if none of it was handed over.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['returns:manage', 'orders:approve'], modules: ['returns'] },

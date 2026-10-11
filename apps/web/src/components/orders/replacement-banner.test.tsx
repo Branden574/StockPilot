@@ -34,6 +34,7 @@ const INFO = {
   revision: 1,
   canOpenReturn: true,
   canReleaseEarly: true,
+  canChangeReplacement: true,
   held: 1,
   slipLine: 'Exchange replacement for RMA-20261005-ABC123 (returned item: Walk New Hire Shirt, M ×1, not yet received)',
   // Re-pinned by returns RX-2 review fix (P10): core's driver words.
@@ -41,6 +42,14 @@ const INFO = {
 };
 
 describe('ReplacementBanner', () => {
+  // Fix round 1 (verification L5): a returns reader without order approval
+  // opens the RMA; the link never promises a change or cancel they cannot make.
+  it('a viewer who cannot change or cancel the replacement gets "Open RMA-…"', () => {
+    render(<ReplacementBanner replacement={{ ...INFO, canReleaseEarly: false, canChangeReplacement: false }} fulfillmentType="pickup" />);
+    expect(screen.getByRole('link', { name: 'Open RMA-20261005-ABC123' })).toHaveAttribute('href', '/dashboard/returns/rma-1');
+    expect(screen.queryByRole('link', { name: /Change or cancel/ })).toBeNull();
+  });
+
   it('names the RMA and the original order, and the gate while it holds', () => {
     render(<ReplacementBanner replacement={INFO} fulfillmentType="pickup" />);
     const title = screen.getByTestId('replacement-banner-title');

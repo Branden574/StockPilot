@@ -212,6 +212,8 @@ interface Props {
    * is short to confirm first); otherwise the panel as today.
    */
   openPhysicalSignature?: boolean;
+  /** "SO-000123": the physical signature dialog names the order it records (fix round 1, verification V-2). */
+  orderLabel?: string | null;
 }
 
 type BusyKey =
@@ -277,6 +279,7 @@ export function ManagerActionsPanel({
   viewerCanPick,
   replacement = null,
   openPhysicalSignature = false,
+  orderLabel = null,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
@@ -1435,7 +1438,7 @@ export function ManagerActionsPanel({
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Record a physical signature</DialogTitle>
+            <DialogTitle>{orderLabel ? `Record a physical signature for ${orderLabel}` : 'Record a physical signature'}</DialogTitle>
             <DialogDescription>
               Use this when the customer signed on paper. It completes the
               hand-over exactly like the digital sign page (including

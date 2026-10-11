@@ -2736,13 +2736,49 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
 // ?sign=physical; the page asks the panel to open the physical signature
 // (the panel opens it only when the order is ready and the viewer may).
 describe('orders/[id]: ?sign=physical from the RMA\'s Hand over', () => {
-  it('passes the request to the manager panel; without it the panel opens nothing', async () => {
+  // Re-pinned by fix round 1 (verification V-2), claim narrowed: the request
+  // is honoured only on an exchange replacement (the RMA's Hand over is its
+  // only source), so a link to any other order opens nothing; the dialog
+  // names the order.
+  it('passes the request to the manager panel only for a live exchange replacement; without it, or on another order, the panel opens nothing', async () => {
     ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
+    const replacement = {
+      returnId: 'rma-1',
+      returnNumber: 'RMA-20261006-C27F66',
+      returnStatus: 'received',
+      originalOrderId: 'orig',
+      originalOrderNumber: 103,
+      live: true,
+      handedOver: false,
+      exchangeStatus: 'ready_for_pickup',
+      exchangeStatusLabel: 'Ready for pickup',
+      waitingForReturn: false,
+      returnClosed: false,
+      releasedEarly: false,
+      release: null,
+      returnReceived: true,
+      returnedItems: [],
+      revision: 1,
+      canOpenReturn: true,
+      canReleaseEarly: true,
+      canChangeReplacement: true,
+      slipLine: 'Exchange replacement for RMA-20261006-C27F66',
+      driverLine: null,
+      held: 0,
+    };
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status: 'staged_for_pickup', replacement_for_return_id: 'rma-1' }), replacement }),
+    );
     render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
-    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(true);
+    const props = managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect(props.openPhysicalSignature).toBe(true);
+    expect(props.orderLabel).toMatch(/^SO-\d{6}$/);
     managerActionsProps.mockClear();
     render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
+    expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
+    managerActionsProps.mockClear();
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'staged_for_pickup' }) }));
+    render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }), searchParams: Promise.resolve({ sign: 'physical' }) }));
     expect((managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>).openPhysicalSignature).toBe(false);
   });
 });

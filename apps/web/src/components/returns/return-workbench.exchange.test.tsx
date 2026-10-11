@@ -331,7 +331,9 @@ describe('a returns manager without order approval', () => {
         'Approving the replacement needs order approval permission. You can still approve the return: choose Decline the exchange, return only.',
       ),
     ).toBeInTheDocument();
-    const approveBtn = screen.getByRole('button', { name: 'Approve return & exchange' });
+    // Re-pinned by fix round 1 (verification L3): this viewer approves the
+    // return only, so the button never says "& exchange".
+    const approveBtn = screen.getByRole('button', { name: 'Approve return' });
     expect(approveBtn).toBeDisabled();
     fireEvent.change(within(side).getByLabelText('Reason for declining the exchange (required)'), { target: { value: 'No order approval here' } });
     expect(approveBtn).not.toBeDisabled();
@@ -732,6 +734,153 @@ describe('an approved exchange waiting for the returned item', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: 'Get replacement ready' })).toBeNull();
-    expect(screen.getByText('Approving the replacement needs order approval permission.')).toBeInTheDocument();
+    // Re-pinned by fix round 1 (verification L3): after the approval nothing
+    // is approved; the words say what needs order approval.
+    expect(
+      screen.getByText('Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.'),
+    ).toBeInTheDocument();
+  });
+});
+
+// RX-2 fix round 1 (independent verification 2026-10-11).
+describe('fix round 1: Cancel replacement says what it saw, what happened, and never sticks', () => {
+  const CANCELLED = {
+    ...WAITING,
+    status: 'replacement_cancelled',
+    statusLabel: 'Replacement cancelled',
+    lines: [exchangeLine({ status: 'cancelled', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: ITEM_L })],
+    replacement: null,
+  };
+  async function confirmCancelReplacement() {
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel replacement' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Reason for cancelling the replacement/), { target: { value: 'Wrong colour' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel replacement' }));
+    return dialog;
+  }
+
+  // Verification V1: the database refuses a replacement picked or sent since
+  // the screen showed it, and the answer's drawn and inTransit are said after
+  // the call whatever the screen showed.
+  it('sends the replacement status the dialog showed, and after the call says what to do with what was picked or sent', async () => {
+    cancelReplacementAction.mockResolvedValue({
+      ok: true,
+      data: {
+        answer: { changed: true, status: 'approved', revision: 2, cancelledOrderId: 'repl-1', drawn: true, inTransit: true },
+        workbench: bench('approved', CANCELLED),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    await confirmCancelReplacement();
+    await waitFor(() => expect(cancelReplacementAction).toHaveBeenCalledTimes(1));
+    expect(cancelReplacementAction.mock.calls[0]![0]).toEqual({
+      id: RET,
+      body: { expectedRevision: 1, reason: 'Wrong colour', shownStatus: 'approved' },
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Replacement cancelled.'));
+    const followUp = await screen.findByRole('alert', { name: 'After cancelling the replacement' });
+    expect(within(followUp).getByText('The picked items go back to Staging on record. Put them in the staging area.')).toBeInTheDocument();
+    expect(within(followUp).getByText('Ask the driver to bring it back.')).toBeInTheDocument();
+    fireEvent.click(within(followUp).getByRole('button', { name: 'Done' }));
+    expect(screen.queryByRole('alert', { name: 'After cancelling the replacement' })).toBeNull();
+  });
+
+  it('an undrawn cancel says only that it was cancelled', async () => {
+    cancelReplacementAction.mockResolvedValue({
+      ok: true,
+      data: {
+        answer: { changed: true, status: 'approved', revision: 2, cancelledOrderId: 'repl-1', drawn: false, inTransit: false },
+        workbench: bench('approved', CANCELLED),
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    await confirmCancelReplacement();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Replacement cancelled.'));
+    expect(screen.queryByRole('alert', { name: 'After cancelling the replacement' })).toBeNull();
+  });
+
+  // Completeness C-3 (pattern 20): a refusal shows inside the dialog too.
+  it('a refusal stays inside the open dialog as an alert, cleared on the next attempt', async () => {
+    cancelReplacementAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'Another person changed this return. Review it again.', details: { reason: 'return_changed' } },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    const dialog = await confirmCancelReplacement();
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Another person changed this return. Review it again.');
+    expect(refresh).toHaveBeenCalled();
+    cancelReplacementAction.mockReturnValueOnce(new Promise(() => {}));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel replacement' }));
+    await waitFor(() => expect(within(dialog).queryByText('Another person changed this return. Review it again.')).toBeNull());
+  });
+
+  // Completeness C-2: a call that rejects (a network drop, a deploy's
+  // server-action skew) never leaves the dialog busy and unclosable.
+  it('a call that rejects frees the dialog and says so inside it', async () => {
+    cancelReplacementAction.mockRejectedValueOnce(new Error('fetch failed'));
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    const dialog = await confirmCancelReplacement();
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Something went wrong. Try again.');
+    expect(within(dialog).getByRole('button', { name: 'Keep it' })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('every other workbench action frees its busy state when the call rejects', async () => {
+    runSteps.mockRejectedValueOnce(new Error('fetch failed'));
+    render(<ReturnWorkbench workbench={bench('requested', {})} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve return & exchange' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Something went wrong. Try again.'));
+    expect(screen.getByRole('button', { name: 'Approve return & exchange' })).toBeEnabled();
+  });
+
+  // Verification L3: a viewer who can only decline approves the return.
+  it('a decline-only viewer reads "Approve return", never "& exchange"', () => {
+    render(
+      <ReturnWorkbench
+        workbench={bench('requested', {}, { viewer: { canManageReturns: true, canApproveOrders: false, canReadDecisions: true } })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Approve return' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve return & exchange' })).toBeNull();
+  });
+});
+
+// Verification L1 (the F-C class in Change replacement): a short refusal
+// names the picked item by its own row label, the backorder button says
+// what it does, and a new pick hides the stale numbers.
+describe('fix round 1: Change replacement short refusal', () => {
+  const XXL = {
+    itemId: 'item-2xl', name: 'Walk New Hire Shirt', sku: 'NH-2XL', variantSize: '2XL', variantKey: '2XL', groupId: 'g1',
+    sibling: true, isReturnedItem: false, onHand: 0, held: 0, free: 0,
+  };
+  const S = { ...XXL, itemId: 'item-s', sku: 'NH-S', variantSize: 'S', variantKey: 'S', onHand: 4, free: 4 };
+  it('names the picked short item, says "Change, replacement on backorder", and drops the numbers after a new pick', async () => {
+    candidatesAction.mockResolvedValue({
+      ok: true,
+      data: { orderId: 'o1', orderRequestLineId: 'ol1', returnedItemId: 'item-m', groupId: 'g1', siblings: [XXL, S], matches: [] },
+    } as never);
+    changeAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'Not in stock.',
+        details: { reason: 'replacement_unavailable', detail: [{ itemId: 'item-2xl', needed: 1, available: 0 }] },
+      },
+    });
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change replacement' }));
+    const change = await screen.findByRole('dialog', { name: 'Change replacement' });
+    fireEvent.click(await within(change).findByDisplayValue('item-2xl'));
+    fireEvent.change(within(change).getByLabelText('Reason (required)'), { target: { value: 'Wrong size' } });
+    fireEvent.click(within(change).getByRole('button', { name: 'Change replacement' }));
+    const short = await within(change).findByRole('alert', { name: 'Not in stock' });
+    expect(short).toHaveTextContent('Walk New Hire Shirt, 2XL: 0 available, 1 needed.');
+    expect(short.textContent).not.toMatch(/^Item:/);
+    expect(within(change).getByRole('button', { name: 'Change, replacement on backorder' })).toBeInTheDocument();
+    expect(within(change).queryByRole('button', { name: 'Approve, replacement on backorder' })).toBeNull();
+    fireEvent.click(within(change).getByDisplayValue('item-s'));
+    await waitFor(() => expect(within(change).queryByRole('alert', { name: 'Not in stock' })).toBeNull());
+    expect(within(change).queryByRole('button', { name: 'Change, replacement on backorder' })).toBeNull();
   });
 });

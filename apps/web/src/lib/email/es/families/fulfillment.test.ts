@@ -783,13 +783,14 @@ describe('return-update: the exchange events (returns RX-2)', () => {
       'return_approved_replacement_added',
       'approved',
       'Your return was approved.',
-      'The warehouse added a replacement for you, and it is reserved.',
+      // Re-pinned by fix round 1 (verification M2): bring or send it back.
+      'The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
     ],
     [
       'return_approved_replacement_added_short',
       'approved',
       'Your return was approved.',
-      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up.',
+      'The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
     ],
     ['replacement_closed_return_only', 'return only', 'No replacement will be sent.', 'Your return goes on as a return only.'],
   ] as const)('%s: "%s"', (event, summary, lead, sentence) => {

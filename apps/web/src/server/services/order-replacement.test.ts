@@ -179,6 +179,24 @@ describe('loadReplacementInfo', () => {
     const info = await loadReplacementInfo(ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
     expect(info).toMatchObject({ canOpenReturn: false, canReleaseEarly: false });
   });
+
+  // Fix round 1 (verification L5): "Change or cancel in RMA-…" only for a
+  // viewer who may do both (returns:manage and orders:approve); a returns
+  // reader opens the RMA ("Open RMA-…").
+  it('says whether the viewer may change and cancel the replacement, for the banner link', async () => {
+    const manager = ctxFor({});
+    expect(await loadReplacementInfo(manager.ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA })).toMatchObject({
+      canOpenReturn: true,
+      canChangeReplacement: true,
+    });
+    const reader = ctxFor({}, { permissions: ['returns:read', 'orders:request'] });
+    const info = await loadReplacementInfo(reader.ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA });
+    expect(info).toMatchObject({ canOpenReturn: true, canChangeReplacement: false });
+    const counter = ctxFor({}, { permissions: ['returns:manage', 'orders:request'] });
+    expect(await loadReplacementInfo(counter.ctx as never, { id: ORDER, status: 'approved', replacement_for_return_id: RMA })).toMatchObject({
+      canChangeReplacement: false,
+    });
+  });
 });
 
 describe('exchangeChipState', () => {

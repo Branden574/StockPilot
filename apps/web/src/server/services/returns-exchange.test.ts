@@ -504,7 +504,8 @@ describe('cancelReplacement (cancel_return_replacement)', () => {
     const answer = await svc.cancelReplacement(RET_ID, { expectedRevision: 1, reason: 'Wrong colour' });
     expect(stub.rpcCalls[0]).toEqual({
       name: 'cancel_return_replacement',
-      args: { p_return_id: RET_ID, p_expected_revision: 1, p_reason: 'Wrong colour' },
+      // Fix round 1 (verification V1): what the screen showed travels too (null: not said).
+      args: { p_return_id: RET_ID, p_expected_revision: 1, p_reason: 'Wrong colour', p_shown_status: null },
     });
     expect(answer).toMatchObject({ changed: true, drawn: true, cancelledOrderId: REPL_ID });
     expect(invalidateMock).toHaveBeenCalledWith('org-test', 'return.replacement_cancel');
@@ -528,6 +529,23 @@ describe('cancelReplacement (cancel_return_replacement)', () => {
     const noRevision = await svc.cancelReplacement(RET_ID, { reason: 'x' }).catch((x: unknown) => x);
     expect((noRevision as ServiceError).code).toBe('validation_error');
     expect(stub.rpcCalls).toHaveLength(1);
+  });
+
+  // Verification V1: the replacement status the screen showed reaches the
+  // database, which refuses (return_changed) one picked or sent since.
+  it('sends the status the screen showed; a replacement picked or sent since is a 409 return_changed', async () => {
+    const { stub, svc } = svcFor({
+      'rpc:cancel_return_replacement': {
+        data: null,
+        error: { code: 'P0001', message: 'return_changed', hint: 'return_changed', details: '1' },
+      },
+    });
+    const e = await svc
+      .cancelReplacement(RET_ID, { expectedRevision: 1, reason: 'Wrong colour', shownStatus: 'approved' })
+      .catch((x: unknown) => x);
+    expect(stub.rpcCalls[0]!.args).toMatchObject({ p_shown_status: 'approved' });
+    expect((e as ServiceError).details?.reason).toBe('return_changed');
+    expect(auditMock).not.toHaveBeenCalled();
   });
 });
 

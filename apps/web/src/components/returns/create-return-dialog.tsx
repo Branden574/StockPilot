@@ -30,7 +30,7 @@ import { createReturnFromOrderAction, orderExchangeCandidatesAction } from '@/se
 
 import type { ReturnableLine } from '@/server/services/returns';
 
-import { randomRequestUuid, RETURNS_COPY } from '@stockpilot/core';
+import { randomRequestUuid, RETURN_ERROR_WORDS, RETURNS_COPY } from '@stockpilot/core';
 
 interface Props {
   orderId: string;
@@ -66,6 +66,9 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // Fix round 1 (verification L7, pattern 20): the last refusal, said inside
+  // the dialog as well as in the toast; cleared on the next try.
+  const [error, setError] = React.useState<string | null>(null);
   const [reason, setReason] = React.useState<ReasonCode | ''>('');
   const [notes, setNotes] = React.useState('');
   const [lineState, setLineState] = React.useState<Record<string, LineState>>(() =>
@@ -85,6 +88,7 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
   const keyRef = React.useRef<string | null>(null);
 
   function reset() {
+    setError(null);
     setReason('');
     setNotes('');
     setItemIsHere(false);
@@ -103,7 +107,13 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
     return lineState[id] ?? { selected: false, quantity: '1', disposition: 'restock' };
   }
 
+  function fail(words: string) {
+    toast.error(words);
+    setError(words);
+  }
+
   async function submit() {
+    setError(null);
     const selected = lines
       .filter((l) => lineStateFor(l.orderRequestLineId).selected)
       .map((l) => {
@@ -118,20 +128,20 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
       });
 
     if (selected.length === 0) {
-      toast.error('Select at least one line to return.');
+      fail('Select at least one line to return.');
       return;
     }
     for (const s of selected) {
       if (!Number.isInteger(s.quantity) || s.quantity <= 0) {
-        toast.error('Each selected line needs a whole quantity of at least 1.');
+        fail('Each selected line needs a whole quantity of at least 1.');
         return;
       }
       if (s.quantity > s.remaining) {
-        toast.error(`Quantity exceeds the ${s.remaining} returnable on a line.`);
+        fail(`Quantity exceeds the ${s.remaining} returnable on a line.`);
         return;
       }
       if (s.exchange === null) {
-        toast.error(RETURNS_COPY.chooseReplacement);
+        fail(RETURNS_COPY.chooseReplacement);
         return;
       }
     }
@@ -152,12 +162,22 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
     };
     keyRef.current ??= randomRequestUuid();
 
+    // Freed whatever happens (completeness C-2): a call that rejects (a
+    // network drop, a deploy's server-action skew) never leaves the dialog
+    // busy and unclosable.
     setBusy(true);
-    const res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createReturnFromOrderAction>>;
+    try {
+      res = await createReturnFromOrderAction({ ...payload, idempotencyKey: keyRef.current });
+    } catch {
+      fail(RETURN_ERROR_WORDS.internal);
+      return;
+    } finally {
+      setBusy(false);
+    }
 
     if (!res.ok) {
-      toast.error(res.error.message);
+      fail(res.error.message);
       return;
     }
     toast.success(res.data.replay ? 'Return already created.' : 'Return created.');
@@ -347,6 +367,11 @@ export function CreateReturnDialog({ orderId, lines, exchangesEnabled = false }:
           </div>
         </div>
 
+        {error ? (
+          <p className="text-destructive text-sm" role="alert">
+            {error}
+          </p>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
             Cancel

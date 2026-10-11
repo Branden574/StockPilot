@@ -71,6 +71,7 @@ import {
   processLabelFor,
   qtyReturningLabel,
   releaseOutcomeLine,
+  replacementCancelledLines,
   returnActionLabel,
   returnLineLabel,
   replacementShortItems,
@@ -212,6 +213,12 @@ export function ReturnWorkbench({
   // refusal's "Change replacement", with a token so a second press moves it again.
   const [focusPicker, setFocusPicker] = React.useState<{ lineId: string; token: number } | null>(null);
   const [changeShort, setChangeShort] = React.useState<unknown>(null);
+  // Fix round 1 (completeness C-3, pattern 20): the last refusal of the open
+  // exchange dialog, shown inside it as well as in the toast.
+  const [dialogError, setDialogError] = React.useState<string | null>(null);
+  // Fix round 1 (verification V1): after Cancel replacement, what to do with
+  // what was picked or sent, from the database's answer, until dismissed.
+  const [followUp, setFollowUp] = React.useState<string[] | null>(null);
   // Review fix P1: every returns manager reviews a requested exchange; without
   // order approval only the decline is open, and the review starts there
   // (core exchangeReviewOptions / defaultExchangeReviewState). Adding a
@@ -277,17 +284,40 @@ export function ReturnWorkbench({
     setChoices((prev) => ({ ...prev, [lineId]: next }));
   }
 
+  /**
+   * Every workbench call runs through here (fix round 1, completeness C-2):
+   * busy while it is in flight, and freed whatever happens. A call that
+   * rejects (a network drop, a deploy's server-action skew) says so, in the
+   * open dialog too, and the page redraws; the caller gets null.
+   */
+  async function guarded<T>(key: string, call: () => Promise<T>): Promise<T | null> {
+    setBusy(key);
+    setDialogError(null);
+    setFollowUp(null);
+    try {
+      return await call();
+    } catch {
+      toast.error(RETURN_ERROR_WORDS.internal);
+      setDialogError(RETURN_ERROR_WORDS.internal);
+      router.refresh();
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runSteps(
     steps: Array<'approve' | 'receive' | 'process'>,
     extra: Record<string, unknown>,
     key: string,
   ): Promise<Array<{ outcome: string; reason?: string | null }> | null> {
-    setBusy(key);
-    const res = await runReturnStepsAction({
-      id: r.id,
-      body: { steps, expectedRevision: wb.revision, expectedPlanSeq: wb.planSeq, ...extra },
-    });
-    setBusy(null);
+    const res = await guarded(key, () =>
+      runReturnStepsAction({
+        id: r.id,
+        body: { steps, expectedRevision: wb.revision, expectedPlanSeq: wb.planSeq, ...extra },
+      }),
+    );
+    if (!res) return null;
     if (!res.ok) {
       toast.error(res.error.message);
       router.refresh();
@@ -385,9 +415,14 @@ export function ReturnWorkbench({
 
   // ── RX-2: the replacement actions ──────────────────────────────────────
 
-  function afterReplacement(res: { ok: true; data: { workbench: unknown } } | { ok: false; error: { message: string } }, done: string) {
+  function afterReplacement(
+    res: { ok: true; data: { workbench: unknown } } | { ok: false; error: { message: string } } | null,
+    done: string,
+  ) {
+    if (!res) return false;
     if (!res.ok) {
       toast.error(res.error.message);
+      setDialogError(res.error.message);
       router.refresh();
       return false;
     }
@@ -410,10 +445,8 @@ export function ReturnWorkbench({
       router.refresh();
       return;
     }
-    setBusy('release');
-    const res = await releaseReturnReplacementAction({ id: r.id, orderId: shownOrderId, reason });
-    setBusy(null);
-    if (res.ok && !res.data.answer.changed) {
+    const res = await guarded('release', () => releaseReturnReplacementAction({ id: r.id, orderId: shownOrderId, reason }));
+    if (res && res.ok && !res.data.answer.changed) {
       adopt(res.data.workbench as Workbench);
       toast.message(releaseOutcomeLine(res.data.answer));
       setReleaseOpen(false);
@@ -423,34 +456,45 @@ export function ReturnWorkbench({
   }
 
   async function cancelReplacement(reason: string) {
-    setBusy('cancel_replacement');
-    const res = await cancelReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } });
-    setBusy(null);
-    if (afterReplacement(res, 'Replacement cancelled.')) setCancelReplacementOpen(false);
+    // Verification V1: the status the dialog's warnings came from; the
+    // database refuses (return_changed) a replacement picked or sent since,
+    // and the page redraws into its Staging and driver warnings.
+    const shownStatus = replacementFacts.replacementStatus;
+    const res = await guarded('cancel_replacement', () =>
+      cancelReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason, shownStatus } }),
+    );
+    if (res && res.ok) {
+      const [done, ...after] = replacementCancelledLines(res.data.answer);
+      if (afterReplacement(res, done ?? RETURNS_COPY.replacementCancelledDone)) setCancelReplacementOpen(false);
+      setFollowUp(after.length > 0 ? after : null);
+      return;
+    }
+    afterReplacement(res, RETURNS_COPY.replacementCancelledDone);
   }
 
   // Desk check F9: after a replacement cancel the exchange ends for good.
   async function closeAsReturnOnly(reason: string) {
-    setBusy('close_as_return_only');
-    const res = await declineReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } });
-    setBusy(null);
+    const res = await guarded('close_as_return_only', () =>
+      declineReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } }),
+    );
     if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly)) setReturnOnlyOpen(false);
   }
 
   async function changeReplacement(body: ChangeBody, site: ReplacementFulfilment | null = null) {
-    setBusy('change_replacement');
     setChangeShort(null);
-    const res = await changeReturnReplacementAction({
-      id: r.id,
-      body: {
-        expectedRevision: wb.revision,
-        lines: body.lines,
-        reason: body.reason,
-        whenShort: body.whenShort,
-        ...(site ? { replacement: site } : {}),
-      },
-    });
-    setBusy(null);
+    const res = await guarded('change_replacement', () =>
+      changeReturnReplacementAction({
+        id: r.id,
+        body: {
+          expectedRevision: wb.revision,
+          lines: body.lines,
+          reason: body.reason,
+          whenShort: body.whenShort,
+          ...(site ? { replacement: site } : {}),
+        },
+      }),
+    );
+    if (!res) return;
     if (!res.ok && res.error.details?.reason === 'replacement_unavailable') {
       setChangeShort(res.error.details.detail ?? []);
       toast.error(res.error.message);
@@ -466,9 +510,8 @@ export function ReturnWorkbench({
   }
 
   async function prepareReplacement() {
-    setBusy('prepare');
-    const res = await prepareReturnReplacementAction({ id: r.id });
-    setBusy(null);
+    const res = await guarded('prepare', () => prepareReturnReplacementAction({ id: r.id }));
+    if (!res) return;
     if (!res.ok) {
       toast.error(res.error.message);
       router.refresh();
@@ -505,9 +548,8 @@ export function ReturnWorkbench({
       setMode('idle');
       return;
     }
-    setBusy('plan');
-    const res = await planReturnDispositionsAction({ id: r.id, lines: changed });
-    setBusy(null);
+    const res = await guarded('plan', () => planReturnDispositionsAction({ id: r.id, lines: changed }));
+    if (!res) return;
     if (!res.ok) {
       toast.error(res.error.message);
       router.refresh();
@@ -519,9 +561,8 @@ export function ReturnWorkbench({
   }
 
   async function deny() {
-    setBusy('deny');
-    const res = await denyReturnAction({ id: r.id, reason: denyReason });
-    setBusy(null);
+    const res = await guarded('deny', () => denyReturnAction({ id: r.id, reason: denyReason }));
+    if (!res) return;
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -533,9 +574,10 @@ export function ReturnWorkbench({
   }
 
   async function cancel() {
-    setBusy('cancel');
-    const res = await cancelReturnAction({ id: r.id, expectedRevision: wb.revision, reason: cancelReason.trim() || null });
-    setBusy(null);
+    const res = await guarded('cancel', () =>
+      cancelReturnAction({ id: r.id, expectedRevision: wb.revision, reason: cancelReason.trim() || null }),
+    );
+    if (!res) return;
     if (!res.ok) {
       toast.error(res.error.message);
       // A stale screen (0396: the replacement was picked or left meanwhile,
@@ -555,9 +597,8 @@ export function ReturnWorkbench({
   }
 
   async function buyLabel() {
-    setBusy('label');
-    const res = await buyReturnLabelAction(r.id);
-    setBusy(null);
+    const res = await guarded('label', () => buyReturnLabelAction(r.id));
+    if (!res) return;
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -567,6 +608,7 @@ export function ReturnWorkbench({
   }
 
   function onAction(a: ReturnAction) {
+    setDialogError(null);
     switch (a) {
       case 'approve':
       case 'approve_and_receive':
@@ -654,8 +696,11 @@ export function ReturnWorkbench({
     r.status === 'received' && openLines.length === 1 && openLines[0]!.restock
       ? processLabelFor(openLines[0]!.restock, choiceFor(openLines[0]!))
       : null;
+  // Fix round 1 (verification L3): a viewer who can only decline the
+  // exchange approves the return, so the button never says "& exchange".
+  const labelOpts = { hasExchange, canApproveOrders: wb.viewer.canApproveOrders };
   const primaryLabel = (a: ReturnAction): string =>
-    a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, { hasExchange });
+    a === 'process' && processLabel ? processLabel.button : returnActionLabel(a, labelOpts);
   const primaryDisabled = (a: ReturnAction): boolean =>
     busy !== null ||
     ((a === 'process' || a === 'approve' || a === 'approve_and_receive') && !allOffered) ||
@@ -738,6 +783,20 @@ export function ReturnWorkbench({
               <span className="text-muted-foreground block text-xs">{RETURNS_COPY.itemIsHereHelp}</span>
             </span>
           </label>
+        ) : null}
+        {/* Verification V1: after Cancel replacement, what to do with what
+            was picked or sent (the database's answer), until dismissed. */}
+        {followUp ? (
+          <div className="basis-full space-y-2 rounded-md border border-amber-500/40 p-3" role="alert" aria-label="After cancelling the replacement">
+            <ul className="space-y-0.5 text-sm">
+              {followUp.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <Button variant="outline" size="sm" onClick={() => setFollowUp(null)}>
+              Done
+            </Button>
+          </div>
         ) : null}
         {/* Why nothing, or less, is offered (RX-2: the replacement actions
             need order approval while the return actions stay). */}
@@ -1055,11 +1114,24 @@ export function ReturnWorkbench({
 
       {hasExchange ? (
         <>
-          <ReleaseEarlyDialog open={releaseOpen} onOpenChange={setReleaseOpen} busy={busy === 'release'} onConfirm={releaseEarly} />
+          <ReleaseEarlyDialog
+            open={releaseOpen}
+            onOpenChange={(v) => {
+              setReleaseOpen(v);
+              setDialogError(null);
+            }}
+            busy={busy === 'release'}
+            error={dialogError}
+            onConfirm={releaseEarly}
+          />
           <CancelReplacementDialog
             open={cancelReplacementOpen}
-            onOpenChange={setCancelReplacementOpen}
+            onOpenChange={(v) => {
+              setCancelReplacementOpen(v);
+              setDialogError(null);
+            }}
             busy={busy === 'cancel_replacement'}
+            error={dialogError}
             consequences={exchangeActionConsequences('cancel_replacement', replacementFacts)}
             onConfirm={cancelReplacement}
           />
@@ -1084,8 +1156,12 @@ export function ReturnWorkbench({
           />
           <CloseAsReturnOnlyDialog
             open={returnOnlyOpen}
-            onOpenChange={setReturnOnlyOpen}
+            onOpenChange={(v) => {
+              setReturnOnlyOpen(v);
+              setDialogError(null);
+            }}
             busy={busy === 'close_as_return_only'}
+            error={dialogError}
             onConfirm={closeAsReturnOnly}
           />
           <ChangeReplacementDialog
@@ -1093,8 +1169,10 @@ export function ReturnWorkbench({
             open={changeMode !== null}
             onOpenChange={(v) => {
               if (!v) setChangeMode(null);
+              setDialogError(null);
             }}
             busy={busy === 'change_replacement'}
+            error={dialogError}
             mode={changeMode ?? 'change'}
             lines={changeLines}
             loaderFor={loaderFor}

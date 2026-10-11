@@ -1165,7 +1165,11 @@ export default async function OrderDetailPage({
   // path (anything else keeps "Back to orders").
   const backToReport = bookReportReturnPath((await searchParams)?.return);
   const signParam = (await searchParams)?.sign;
-  const openPhysicalSignature = (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical';
+  // Honoured only on a live exchange replacement: the RMA's Hand over is the
+  // request's only source, so a link to any other order opens nothing (fix
+  // round 1, verification V-2). The dialog names the order.
+  const openPhysicalSignature =
+    (Array.isArray(signParam) ? signParam[0] : signParam) === 'physical' && isReplacement && replacement?.live === true;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -1760,6 +1764,7 @@ export default async function OrderDetailPage({
               pickers={pickers}
               viewerCanPick={viewerCanPick}
               openPhysicalSignature={openPhysicalSignature}
+              orderLabel={formatOrderNumber((request as { order_number?: number | null }).order_number) ?? null}
               replacement={
                 replacement && replacement.live
                   ? {
