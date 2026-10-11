@@ -738,12 +738,20 @@ select is(
        ('public._return_exchange_line_budget(uuid,uuid)',         'a19c4994d724a227dfbb5d35b7f0d7c0'),
        ('public._return_replacement_class(uuid)',                 'fb118357c2024c55f80c095f783c68f1'),
        ('public.create_requester_return_request(uuid,jsonb,uuid,jsonb)', '157aebbe26a7baff32dd56755ab9025d'),
-       ('public.process_return_disposition(uuid)',                '7ec76cc98b9cefc31707590071ac14d9')
+       ('public.process_return_disposition(uuid)',                '7ec76cc98b9cefc31707590071ac14d9'),
+       -- Fix round 1 (desk check stock S2): the two gates the close calls
+       -- and the order_requests trigger bodies it relies on.
+       ('public.is_org_member(uuid)',                             '76492a6556e9f6a7c33d942aa9726f9f'),
+       ('public.module_enabled(uuid,text)',                       'df3260cbcd15f986798e5377d1e95dce'),
+       ('public._notify_replacement_order_changes()',             '543131721dbd9c04bb954b447e389972'),
+       ('public.tg_order_requests_replacement_status()',          '38b9236c6e628e63f39eac5d8d1c83ff'),
+       ('public._validate_order_request_status_transition()',     'dee8cd4782ec83abdb31a2b48fcd4ef2'),
+       ('public.tg_order_requests_workflow_guard()',              '55bceafc13d599f8d77d6a4180c28140')
      ) x(sig, want)
      left join pg_proc p on p.oid = to_regprocedure(x.sig)
     where md5(p.prosrc) is distinct from x.want),
   '',
-  'H2: the bodies RX-4 calls or relies on keep their md5 (close_partial, the header guard, the replacement cancel, the requester predicate, the item check, the line budget, the class, the requester create, the frozen wrapper)');
+  'H2: the bodies RX-4 calls or relies on keep their md5 (close_partial, the header guard, the replacement cancel, the requester predicate, the item check, the line budget, the class, the requester create, the frozen wrapper, the member and module gates, the replacement ping, the replacement status rule, the transition table, the workflow guard)');
 select is(
   (select coalesce(string_agg(i.sku, ',' order by i.sku collate "C"), '')
      from public.inventory_items i where i.organization_id = :orgA and not pg_temp.balanced(i.id)),

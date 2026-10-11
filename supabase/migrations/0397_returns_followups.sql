@@ -85,9 +85,13 @@ set lock_timeout = '5s';
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 -- Every body this file replaces, and every body the new functions call, must
 -- be the one this file was written against: the two replaced bodies as 0396
--- built them (not in production yet on 2026-10-11), close_partial and the
--- gates as production has them (read-only, 2026-10-11). Anything else is
--- drift: stop before changing anything.
+-- built them (in production since 2026-10-11), close_partial and the gates
+-- as production has them (read-only, 2026-10-11), and the order_requests
+-- trigger bodies the close relies on when close_partial moves a replacement
+-- from backordered to completed (fix round 1, desk check stock S2: the
+-- requester's ping, the replacement status rule, the transition table and
+-- the workflow guard; production matched every value on 2026-10-11).
+-- Anything else is drift: stop before changing anything.
 do $preflight$
 declare
   v_bad text := '';
@@ -115,7 +119,15 @@ begin
         ('public.close_partial(uuid)',                                         'a519c3e58fb577c3ff1b30fb3a6cc0ad', true),
         -- The gates, as production has them (plan 3.12).
         ('public.has_permission(uuid,text)',                                   'cc0accdad7e2fdf4f88aa82aa887e85f', true),
-        ('public.user_can_access_inventory(uuid,uuid,uuid,text)',              '8a214b77e32a052ca3bf07a2be39a8ae', true)
+        ('public.user_can_access_inventory(uuid,uuid,uuid,text)',              '8a214b77e32a052ca3bf07a2be39a8ae', true),
+        ('public.is_org_member(uuid)',                                         '76492a6556e9f6a7c33d942aa9726f9f', true),
+        ('public.module_enabled(uuid,text)',                                   'df3260cbcd15f986798e5377d1e95dce', true),
+        -- The order_requests trigger bodies close_partial fires on a
+        -- replacement (backordered -> completed), as production has them.
+        ('public._notify_replacement_order_changes()',                         '543131721dbd9c04bb954b447e389972', true),
+        ('public.tg_order_requests_replacement_status()',                      '38b9236c6e628e63f39eac5d8d1c83ff', true),
+        ('public._validate_order_request_status_transition()',                 'dee8cd4782ec83abdb31a2b48fcd4ef2', false),
+        ('public.tg_order_requests_workflow_guard()',                          '55bceafc13d599f8d77d6a4180c28140', false)
       ) v(sig, want_src, want_secdef)
       left join pg_proc p on p.oid = to_regprocedure(v.sig)
   loop

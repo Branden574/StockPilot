@@ -28,6 +28,13 @@
 #       R5b (control): the same with an item that IS an option: the create
 #       waits for the holder (the key-share in id order is still taken, so
 #       the lock order RX-2 proved still holds), then succeeds.
+#   R6. Close the rest against Cancel replacement on the same RMA (fix round
+#       1, desk check stock S4): both take the RMA row, then the live
+#       replacement, so they serialise. The close holds; the cancel waits on
+#       the RMA row, then reads the replacement handed over in part and is
+#       refused replacement_handed_over: one replacement_closed decision, no
+#       replacement_cancelled. (The other order needs no race: the cancel
+#       refuses a part-handed-over replacement before it could hold.)
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0397 applied. Fixtures are committed under the 03979999-... namespace
@@ -59,6 +66,7 @@ IP2='03979999-0000-0000-0000-0000000000f2'
 IP3='03979999-0000-0000-0000-0000000000f3'
 IP4='03979999-0000-0000-0000-0000000000f4'
 IP5='03979999-0000-0000-0000-0000000000f5'
+IP6='03979999-0000-0000-0000-0000000000f6'
 ORDER='03979999-0000-0000-0000-000000000101'
 ORDERQ='03979999-0000-0000-0000-000000000102'
 L='03979999-0000-0000-0000-000000000201'
@@ -91,6 +99,7 @@ dec_backorder() { printf '{"lines":[{"returnLineId":"%s","disposition":"restock"
 rest_sql()    { printf "select 'R=' || public.close_return_replacement_rest('%s', %s, 'Race close the rest', %s)::text;" "$1" "$2" "${3:-null}"; }
 resume_sql()  { printf "select 'R=' || (public.resume_fulfillment('%s')).status;" "$1"; }
 close_sql()   { printf "select 'R=' || public.close_return('%s')::text;" "$1"; }
+cancel_rep_sql() { printf "select 'R=' || public.cancel_return_replacement('%s', %s, 'Race cancel the replacement', null)::text;" "$1" "$2"; }
 req_sql()     { printf "select 'R=' || public.create_requester_return_request('%s', '%s'::jsonb, '%s', '{\"channel\":\"token\"}'::jsonb)::text;" "$ORDERQ" "$(body_req "$LQ" "$1")" "$2"; }
 
 wait_for() {
@@ -184,7 +193,8 @@ insert into public.inventory_items
   ('$IP2', '$ORG', '$WH', '0397-2S-P2', '2S part 2',   1, 'active', 'none', '$R2', null, null, null),
   ('$IP3', '$ORG', '$WH', '0397-2S-P3', '2S part 3',   1, 'active', 'none', '$R2', null, null, null),
   ('$IP4', '$ORG', '$WH', '0397-2S-P4', '2S part 4',   1, 'active', 'none', '$R2', null, null, null),
-  ('$IP5', '$ORG', '$WH', '0397-2S-P5', '2S part 5',   1, 'active', 'none', '$R2', null, null, null);
+  ('$IP5', '$ORG', '$WH', '0397-2S-P5', '2S part 5',   1, 'active', 'none', '$R2', null, null, null),
+  ('$IP6', '$ORG', '$WH', '0397-2S-P6', '2S part 6',   1, 'active', 'none', '$R2', null, null, null);
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$ORDER',  '$ORG', '$WH', 'completed', 'internal', '$MGR', 'pickup'),
@@ -302,6 +312,16 @@ race closerest "$MGR" "$(close_sql "$R")" commit "$MGR2" "$(rest_sql "$R" "$(rev
 check "R3b: both finish" "$(ans closerest A | jget status)/$(ans closerest B | jget changed status)" "closed/true/closed"
 waited closerest "R3b"
 check "R3b: the exchange reads completed" "$(xstatus "$R")" "completed"
+
+# ═══ R6. Close the rest against Cancel replacement ════════════════════════
+echo "== R6. the close of the rest holds; Cancel replacement waits on the RMA, then refuses"
+part_handed_over 6 "$IP6"
+race restcancel "$MGR" "$(rest_sql "$R" "$(rev_of "$R")")" commit "$MGR2" "$(cancel_rep_sql "$R" "$(rev_of "$R")")"
+check "R6: A closed the rest" "$(ans restcancel A | jget changed)" "true"
+check "R6: Cancel replacement is refused replacement_handed_over" "$(refused restcancel B P0001 replacement_handed_over)" "1/1"
+waited restcancel "R6"
+check "R6: completed, no hold; one replacement_closed, no replacement_cancelled" \
+  "$(order_status "$O")/$(holds_of "$O")/$(decisions "$R" replacement_closed)/$(decisions "$R" replacement_cancelled)" "completed/0/1/0"
 
 # ═══ R5. The requester tier's lock set ═══════════════════════════════════
 # hold <tag> <item>: a third session holds the item FOR UPDATE for 3 s.

@@ -17,8 +17,11 @@
 --   authenticated: INSERT on returns and return_lines, and UPDATE on the
 --                  eight returns columns, revoked. SELECT stays (returns_select
 --                  and return_lines_select are unchanged).
---   anon:          holds nothing on either table since 0394 (checked below).
---   DELETE, TRUNCATE, TRIGGER, REFERENCES, MAINTAIN: none since 0394 (checked).
+--   anon:          holds nothing on either table since 0394 (checked below,
+--                  before and after).
+--   DELETE, TRUNCATE, TRIGGER, REFERENCES, MAINTAIN: none since 0394 (the
+--                  post-check asks every one of them; fix round 1, desk
+--                  check security S3).
 --
 -- Afterwards the only writers of both tables are the RMA functions (as
 -- postgres) and the service role. The four write policies and the two API
@@ -120,9 +123,15 @@ begin
   end if;
   if has_any_column_privilege('authenticated', 'public.returns', 'INSERT, UPDATE, REFERENCES')
      or has_any_column_privilege('authenticated', 'public.return_lines', 'INSERT, UPDATE, REFERENCES')
-     or has_table_privilege('authenticated', 'public.returns', 'DELETE, TRUNCATE, TRIGGER')
-     or has_table_privilege('authenticated', 'public.return_lines', 'DELETE, TRUNCATE, TRIGGER') then
+     or has_table_privilege('authenticated', 'public.returns', 'DELETE, TRUNCATE, TRIGGER, MAINTAIN')
+     or has_table_privilege('authenticated', 'public.return_lines', 'DELETE, TRUNCATE, TRIGGER, MAINTAIN') then
     v_bad := v_bad || ' authenticated still holds a write privilege;';
+  end if;
+  if has_any_column_privilege('anon', 'public.returns', 'SELECT, INSERT, UPDATE, REFERENCES')
+     or has_any_column_privilege('anon', 'public.return_lines', 'SELECT, INSERT, UPDATE, REFERENCES')
+     or has_table_privilege('anon', 'public.returns', 'DELETE, TRUNCATE, TRIGGER, MAINTAIN')
+     or has_table_privilege('anon', 'public.return_lines', 'DELETE, TRUNCATE, TRIGGER, MAINTAIN') then
+    v_bad := v_bad || ' anon holds a privilege on a return table;';
   end if;
   if exists (select 1 from pg_attribute a
               where a.attrelid in ('public.returns'::regclass, 'public.return_lines'::regclass)
