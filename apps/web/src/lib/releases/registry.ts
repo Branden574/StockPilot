@@ -30,22 +30,71 @@ export const RELEASES: Release[] = [
   {
     id: 'returns-exchange-2026-10',
     revision: 1,
-    // Returns RX-2 (migration 0396: exchanges for staff and the counter, the
-    // linked replacement order, the return-first gate). Held as a DRAFT until
-    // the migration is pushed and verified, the web deploy is READY, the OTA
-    // with the phone's exchange screens is published and launched, and the
-    // Demo Co walk passed (returns plan 10.1); the follow-up that publishes
-    // it (RX-5) sets 'published' and the real publishedAt and re-reads these
-    // words against what shipped. Newest first: it is the only draft, so it
-    // sits at the top, above the public order link release (the newest
-    // published release, 2026-10-06 12:42Z), and is dated after every
-    // release (a placeholder; the publishing follow-up dates and orders it
-    // for real). The words name the screens'
-    // own labels, claim no number nobody measured and never say "book" for a
-    // recorded quantity. The counter steps follow the screens in order, with
-    // the review fix's two shortcuts (the only returnable line starts ticked;
-    // Hand over opens the replacement's order with the Physical signature
-    // dialog open).
+    // Returns RX-2: exchanges for staff and the counter, the linked
+    // replacement order and the return-first gate (#343, d6469127, merged
+    // 2026-10-11 20:48:38Z; migration 0396). PUBLISHED by RX-5. 0396 was
+    // pushed to production at 20:47:32-36Z and verified (R5: 166 of 166
+    // checks true, every count read before the push unchanged). Web build
+    // 935b8b102a19 (the first 12 hex of the sha256 of d6469127, built
+    // 20:48:52Z) was live at 20:50:24Z; #344, a docs-only line, followed in
+    // web build 41724dc27f09, which carries the same code. The phone part is
+    // OTA group 2a955842 (iOS update 01a12cbc, from main d6469127): its
+    // served launch asset equals the local export, and its source map holds
+    // the exchange words. eas update:insights, read 2026-10-11 22:06Z: 1
+    // iOS launch for 1 user, 0 failed. Android was not checked.
+    //
+    // The Demo Co production walk (walk-rx2, 20:57-21:41Z; independent
+    // audit CONFIRMED) on the web: the create dialog started the only
+    // returnable line ticked and listed Other sizes first ("Available: 3");
+    // a counter exchange (The item is here on) answered Approve and receive
+    // with "Replacement order SO-000028 created and 1 reserved." and no
+    // manager notification; Process return put the returned M back on 31-B;
+    // Get replacement ready picked L from 31-B and staged SO-000028; Hand
+    // over opened SO-000028 with the Physical signature dialog open, and the
+    // exchange completed. A staff exchange (SO-000029) waited for the
+    // returned item: its order page showed the waiting line and offered no
+    // Generate pick slip, a pick slip request was refused ("Waiting for the
+    // returned item."), and Cancel return cancelled SO-000029 and freed its
+    // hold. On the iPad and iPhone 17 simulators, on the published bundle,
+    // both RMAs, the replacement banners and the history read as on the web.
+    // NOT exercised in production: Release before return is received,
+    // Change replacement, Cancel replacement (picked or not), Issue a new
+    // replacement, Close as return only, Add a replacement, a backorder
+    // approval and a delivery's driver line. Their evidence is #343's tests
+    // (pgTAP, the browser flows, 300 of 300, and the simulator checks).
+    // Walk observations these words do not contradict: after the exchange
+    // completed, the web REPLACEMENT card still read Approved, and the
+    // phone's order header read DELIVERED for a completed pickup; no line
+    // here names the card's status or the header.
+    //
+    // Corrected at publish (re-read against d6469127 and the walk):
+    // - The summary said "Staff can now turn a return line into an
+    //   exchange". Staff is also a role, with no returns permission by
+    //   default, and creating an exchange needs Manage returns
+    //   (ReturnsService writes, create_return_request), so it says "People
+    //   who manage returns".
+    // - "A manager" releases early (the summary, the order entry and its
+    //   why): release_return_replacement_early and the order page's button
+    //   both need order approval and Manage returns (0396;
+    //   order-replacement.ts canReleaseEarly), so the words name both.
+    // - "The replacement shows beside the returning item with its other
+    //   sizes first" put the create dialog's picker and the return's two
+    //   sides in one sentence, and the two sides stack on an iPhone: the
+    //   line now says what Exchange lists, then that the return shows each
+    //   replacement with the item it replaces.
+    // - "It starts ticked": the phone's create sheet has a quantity, not a
+    //   tick (the only line starts at what can come back), so it says "it
+    //   is already chosen".
+    // - A Cancel replacement for a replacement picked or sent after the
+    //   page was opened is refused (return_changed) before the reload, so
+    //   the line says nothing is cancelled.
+    // The words name the screens' own labels, claim no number nobody
+    // measured and never say "book" for a recorded quantity. The counter
+    // steps follow the screens in order, with the two shortcuts (the only
+    // returnable line is already chosen; Hand over opens the replacement's
+    // order with the Physical signature dialog open). Newest first: published
+    // after every release below it, it sits at the top, above the public
+    // order link release (2026-10-06 12:42Z), and no draft is left.
     // Who is told (review fix P13): anyone who can open Returns or approves
     // orders, in an organization with Returns on; order approvers meet a
     // replacement on its order page (the waiting line instead of Generate
@@ -57,12 +106,13 @@ export const RELEASES: Release[] = [
     // no Returns); a replacement exists only where Orders is on too. That
     // entry links nothing: an order approver without a returns permission
     // cannot open Returns, and no entry sends anyone to a page that bounces
-    // them.
-    status: 'draft',
+    // them. Requesters, who now see a replacement order and its banner, are
+    // told with the requester's own exchange (RX-3; verification C-7 d).
+    status: 'published',
     title: 'Exchanges on returns',
     summary:
-      'Staff can now turn a return line into an exchange for a different size or item. The replacement is a real order with its own SO number, reserved when the exchange is approved and picked once the returned item is in, unless a manager releases it earlier with a reason. Everything stays on one RMA, on the web and in the mobile app after the latest update.',
-    publishedAt: '2026-10-14T17:10:00Z',
+      'People who manage returns can now turn a return line into an exchange for a different size or item. The replacement is a real order with its own SO number, reserved when the exchange is approved and picked once the returned item is in, unless someone with order approval and Manage returns releases it earlier, with a reason. Everything stays on one RMA, on the web and in the mobile app after the latest update.',
+    publishedAt: '2026-10-11T22:18:00Z',
     audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
     entries: [
       {
@@ -71,11 +121,11 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Exchange a returned item for another size or item',
         whatChanged:
-          'When you create a return, each line can be Return only or Exchange for another size or item. The replacement shows beside the returning item with its other sizes first and what is available. When you approve, choose Approve as requested, Change replacement… or Decline the exchange, return only. You can also Add a replacement to a return-only line. Approving creates the replacement order and reserves it. If it is not in stock, the approval shows what is short first; then choose Approve, replacement on backorder or Change replacement.',
+          "When you create a return, each line can be Return only or Exchange for another size or item. Exchange lists the item's other sizes first, with what's available, then a search for other items; the return shows each replacement with the item it replaces. When you approve, choose Approve as requested, Change replacement… or Decline the exchange, return only. You can also Add a replacement to a return-only line. Approving creates the replacement order and reserves it. If it is not in stock, the approval shows what is short first; then choose Approve, replacement on backorder or Change replacement.",
         whyItMatters:
           'A wrong size used to mean a return and a separate new order typed by hand, with nothing tying the two together.',
         howItAffectsYou:
-          "Approving an exchange needs order approval as well as Manage returns. With Manage returns but without order approval, you can still approve the return: choose Decline the exchange, return only. At the counter, switch on The item is here when you start the return (when only one line can be returned, it starts ticked), then use Approve and receive, Get replacement ready, process the returned item (Process return, or the button that names its rack, such as Return to 31-C), and Hand over, which opens the replacement's order with the Physical signature dialog already open.",
+          "Approving an exchange needs order approval as well as Manage returns. With Manage returns but without order approval, you can still approve the return: choose Decline the exchange, return only. At the counter, switch on The item is here when you start the return (when only one line can be returned, it is already chosen), then use Approve and receive, Get replacement ready, process the returned item (Process return, or the button that names its rack, such as Return to 31-C), and Hand over, which opens the replacement's order with the Physical signature dialog already open.",
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
@@ -87,11 +137,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The replacement order waits for the returned item',
         whatChanged:
-          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless a manager releases it early with a reason: Release before return is received on its order, or Release replacement before return is received on the RMA. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
+          'A replacement order says which RMA it belongs to. Picking waits until the returned item is received, unless someone with order approval and Manage returns releases it early, with a reason: Release before return is received on its order, or Release replacement before return is received on the RMA. Its items are changed or cancelled only from the RMA: Change replacement, Cancel replacement, then Issue a new replacement or Close as return only.',
         whyItMatters:
-          'A replacement is not handed out while the item it replaces is still missing, unless a manager decides to, with a reason.',
+          'A replacement is not handed out while the item it replaces is still missing, unless someone with order approval and Manage returns decides to, with a reason.',
         howItAffectsYou:
-          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent after you opened the return, the page reloads to show that first. Cancelling the return also cancels a replacement not picked yet; once it is picked or on its way, hand it over first, or cancel the replacement if none of it was handed over.',
+          'Until it can be picked, its order page says it is waiting for the returned item instead of offering Generate pick slip. On a delivery released early, the order shows what the driver collects. The orders list marks these orders Exchange. Cancelling a picked replacement puts the picked items back in Staging on record; if it was picked or sent since you opened the return, nothing is cancelled and the page reloads to show it. Cancelling the return also cancels a replacement not picked yet; once it is picked or on its way, hand it over first, or cancel the replacement if none of it was handed over.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['returns:manage', 'orders:approve'], modules: ['returns'] },

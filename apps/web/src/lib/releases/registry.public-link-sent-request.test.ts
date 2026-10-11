@@ -70,7 +70,19 @@ describe('the public order link release (a sent request leaves nothing behind)',
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
     // The newest release, so it is the notice for whoever it reaches.
-    expect(list.latestUnread?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: ID for
+    // an owner with every module): returns RX-2's release is published later
+    // and reaches that owner first. Claim kept: it is the notice for whoever
+    // manages public links (below), whom RX-2's release does not reach.
+    expect(list.latestUnread?.id).toBe('returns-exchange-2026-10');
+    const rx2Read = {
+      release_id: 'returns-exchange-2026-10',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-10-11T23:00:00Z',
+      read_at: '2026-10-11T23:00:00Z',
+    };
+    expect(buildReleaseList(RELEASES, everyone, [rx2Read], null).latestUnread?.id).toBe(ID);
     const linkManager: ReleaseViewer = {
       role: 'staff',
       permissions: ['public_links:manage'],
@@ -78,7 +90,10 @@ describe('the public order link release (a sent request leaves nothing behind)',
     };
     expect(buildReleaseList(RELEASES, linkManager, [], null).latestUnread?.id).toBe(ID);
     // An old phone build lists it first, with its link.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+    // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: the
+    // owner with every module, who is now told RX-2's release first): the
+    // reader who manages public links.
+    expect(legacyAnnouncementsFor(RELEASES, linkManager, {})[0]).toEqual({
       id: ID,
       date: '2026-10-06',
       title: release().title,
@@ -105,11 +120,16 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // top, dated after every other release"): RX-2's draft, dated later, sits
   // above it. Claim kept: it is the newest published release, dated after
   // every release below it.
-  it('is the newest published release, directly below returns RX-2\'s draft, dated after every release below it', () => {
+  // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: "is the
+  // newest published release, directly below returns RX-2's draft"): RX-2's
+  // release is published, in the same place, so it is the newest published
+  // release. Claim kept: directly below it, dated after every release below.
+  it('sits directly below returns RX-2\'s release (published later), dated after every release below it', () => {
     expect(RELEASES[0]?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
     for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
