@@ -99,6 +99,16 @@ import {
 } from '@/lib/returns-view';
 import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReleaseReplacementSheet } from '@/components/release-replacement-sheet';
+import { RequesterReturnSheet } from '@/components/requester-return-sheet';
+import { RequesterTrackingCard } from '@/components/requester-tracking-card';
+import {
+  requesterButtonShown,
+  requesterLoadedSheet,
+  requesterReturnGate,
+  requesterReturnsView,
+  requesterSentTitle,
+} from '@/lib/requester-returns';
+import { useRequesterReturn } from '@/lib/use-requester-return';
 import {
   buildReturnPayload,
   describeLineFulfilment,
@@ -503,6 +513,8 @@ export default function OrderDetail() {
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
+  // Returns RX-3: the requester's own "Return or exchange" sheet.
+  const [requesterOpen, setRequesterOpen] = React.useState(false);
   // RX-2: "Release before return is received" on a gated replacement.
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [releaseBusy, setReleaseBusy] = React.useState(false);
@@ -669,6 +681,42 @@ export default function OrderDetail() {
         : null,
     [order],
   );
+
+  // Returns RX-3: the REQUESTER's own "Return or exchange" (the web order
+  // page's rule: their own handed-over order, Returns on, and they do not
+  // manage returns, so never two return buttons). The sheet, what can come
+  // back and their own requests come from GET .../return-request, read again
+  // with every order read (the view's receipt time) and only for them; the
+  // server decides (another member's order, a portal order or one that
+  // cannot come back is the one 404, and nothing shows).
+  const requesterGate = requesterReturnGate({
+    orderStatus: order?.status ?? null,
+    requesterUserId: order?.requesterUserId ?? null,
+    viewerUserId: userId,
+    viewerCanManageReturns: canManageReturns,
+    returnsModuleOn: enabledModules.has('returns'),
+    fulfilledTotal: order?.totalFulfilled ?? 0,
+  });
+  const requester = useRequesterReturn({
+    orderId: order?.id ?? null,
+    eligible: requesterGate,
+    reloadKey: order?.receivedAt ?? null,
+    offline,
+  });
+  const requesterSheet = requesterLoadedSheet(requester.load);
+  const showRequesterReturn = requesterButtonShown({
+    gate: requesterGate,
+    load: requester.load,
+    phoneReturnable: orderReturnable.length,
+  });
+  // The requester (who cannot open the RMA) reads each of their own requests
+  // once, in the server's sentences; returns staff made keep the order's card.
+  const returnsShown = requesterReturnsView({
+    returns: order?.returns ?? [],
+    tracking: requesterSheet?.tracking ?? null,
+    requesterView: requesterGate && !canReadReturns,
+  });
+  const requesterScope = React.useMemo(() => (userId && orgId ? { userId, orgId } : null), [userId, orgId]);
 
   // ── Delivery request ────────────────────────────────────────────────────
   // Mobile parity with the web order page's SendDeliveryRequestButton. Opens a
@@ -1142,6 +1190,12 @@ export default function OrderDetail() {
     setReturnKey(sheetKey);
     setReturnItemIsHere(false);
     setReturnOpen(true);
+  }
+
+  // Returns RX-3: the requester's sheet. After a failed read it asks again.
+  function openRequesterSheet() {
+    if (requester.load.state === 'failed') requester.reload();
+    setRequesterOpen(true);
   }
 
   /** Step one line's return quantity, clamped to [0, remaining]. */
@@ -3270,14 +3324,26 @@ export default function OrderDetail() {
               the note verbatim. Demo Co held no such order at ship time; the
               read-only smoke suite (scripts/smoke) cannot create one. */}
           {shouldShowReturnsSection({
-            returnsCount: order.returns.length,
-            canCreateReturn: showCreateReturn,
+            returnsCount: returnsShown.orderReturns.length + returnsShown.tracking.length,
+            canCreateReturn: showCreateReturn || showRequesterReturn,
           }) ? (
             <View style={{ gap: 8 }}>
-              <Eyebrow>
-                {`RETURNS${order.returns.length > 0 ? ` · ${order.returns.length}` : ''}`}
-              </Eyebrow>
-              {order.returns.map((r) => (
+              {/* Returns RX-3: the requester's own requests, in the server's
+                  sentences (the token page's "Your requests on this order"). */}
+              {returnsShown.tracking.length > 0 ? (
+                <>
+                  <Eyebrow>{RETURNS_COPY.requesterYourRequests}</Eyebrow>
+                  {returnsShown.tracking.map((t, i) => (
+                    <RequesterTrackingCard key={t.returnNumber ?? `${t.createdAt}-${i}`} request={t} />
+                  ))}
+                </>
+              ) : null}
+              {returnsShown.orderReturns.length > 0 || returnsShown.tracking.length === 0 ? (
+                <Eyebrow>
+                  {`RETURNS${returnsShown.orderReturns.length > 0 ? ` · ${returnsShown.orderReturns.length}` : ''}`}
+                </Eyebrow>
+              ) : null}
+              {returnsShown.orderReturns.map((r) => (
                 <Pressable
                   key={r.id}
                   disabled={!canReadReturns}
@@ -3351,6 +3417,12 @@ export default function OrderDetail() {
                   <Mono size={10.5} color={c.ink4}>
                     {RETURNS_COPY.createReturnQueueNote}
                   </Mono>
+                </>
+              ) : null}
+              {showRequesterReturn ? (
+                <>
+                  {actionBtn(RETURNS_COPY.requesterReturnOrExchange, 'requester-return', openRequesterSheet)}
+                  {connectionNotice}
                 </>
               ) : null}
             </View>
@@ -4163,6 +4235,25 @@ export default function OrderDetail() {
           </View>
         </View>
       </Modal>
+
+      {/* Returns RX-3: the requester's "Return or exchange" (mounted per
+          opening; the draft is kept in memory between openings). Online only:
+          offline nothing is sent and Send says why. */}
+      {requesterOpen && requesterGate && order ? (
+        <RequesterReturnSheet
+          orderId={order.id}
+          scope={requesterScope}
+          load={requester.load}
+          online={!offline}
+          onReloadSheet={requester.reload}
+          onClose={() => setRequesterOpen(false)}
+          onSent={(sent) => {
+            setRequesterOpen(false);
+            Alert.alert(requesterSentTitle(sent.exchange), sent.returnNumber ?? undefined);
+            void load();
+          }}
+        />
+      ) : null}
 
       {/* Add-items sheet (parity with the web add-items dialog): warehouse-
           constrained item search with a per-item quantity, submitted to

@@ -74,6 +74,16 @@ export function useSheetKeyboard() {
         if (span) revealer.fieldLaid(span.top, span.height);
         revealer.focus();
       },
+      /** A sheet with SEVERAL note blocks (returns RX-3, the requester's
+       *  Return or exchange: a note per line the warehouse reviews, and the
+       *  notes): the block that holds the field that took focus (its own
+       *  onLayout, the block directly in the body), the field inside it (its
+       *  own onLayout), then reveal it. */
+      onSpanFocus: (block: { top: number; height: number } | null, field: { top: number; height: number } | null) => {
+        if (block) revealer.blockLaid(block.top, block.height);
+        if (field) revealer.fieldLaid(field.top, field.height);
+        revealer.focus();
+      },
       onNoteBlur: () => revealer.blur(),
       claimTapOutside: () => Keyboard.isVisible(),
       onTapOutside: () => Keyboard.dismiss(),
