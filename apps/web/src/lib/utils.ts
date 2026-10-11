@@ -92,7 +92,7 @@ function randomBase36(n: number): string {
  * whole space was 46,656 draws, and a 5,000-row import spread over a second was
  * ~1,000 birthday trials against it. Measured: 159 duplicates per 10,000 mints.
  * Every one of those becomes a 23505 on `inventory_items_org_sku_uniq` and
- * surfaces to the user as "A item with that SKU already exists" on a row that
+ * surfaces to the user as a "SKU already used" conflict on a row that
  * was perfectly fine. Six-wide CSV imports make same-millisecond mints the norm
  * rather than the exception, which is what turned a latent flaw into a real one.
  *

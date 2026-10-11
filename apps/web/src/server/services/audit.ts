@@ -34,6 +34,14 @@ export type AuditEvent =
   | 'inventory.item.archived'
   | 'inventory.item.restored'
   | 'inventory.item.deleted'
+  /**
+   * Ungroup (0399): a record that shared its SKU got a fresh SKU of its own.
+   * Written by split_item_sku itself, in the same transaction as the change,
+   * one row per changed record: before/after SKU, left_sku, anchor_item_id
+   * (the record that kept the SKU, or null), barcode_kept, request_key,
+   * request_hash, surface. No ip or user agent (a SQL-written row).
+   */
+  | 'inventory.item.ungrouped'
   // Sports product-group identity + variant provenance. 'matched' is recorded
   // as well as 'created' because "this import joined an existing group" is the
   // event a reviewer needs when a grouping later looks wrong.

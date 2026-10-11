@@ -358,6 +358,9 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     const { svc } = harness({ targetSku: 'SP-X', siblingFails23505: true });
     const err = await svc.update('row-a', { unitCost: 1 }).catch((e: unknown) => e);
     expect((err as { code: string }).code).toBe('conflict');
-    expect((err as Error).message).toMatch(/already uses that SKU/i);
+    // Plain words since Ungroup (0399): what was saved and what was not, never
+    // advice to change a charter or a rack (inventory.sku-conflict-wording.test.ts).
+    expect((err as Error).message).toMatch(/could not be updated/i);
+    expect((err as Error).message).not.toMatch(/charter|rack/i);
   });
 });
