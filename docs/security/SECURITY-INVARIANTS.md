@@ -997,9 +997,13 @@ actually fire.
     `server/lib/order-secrets.ts` is a PostgREST GET
     (`order_request_secrets?return_token=eq.<token>`), so the raw token
     reaches the Supabase API gateway's logs, readable only by project
-    admins, who can read the secrets table anyway; the app's own URLs are
-    clean. The fix needs a migration (a service-role function called by
-    POST, or a lookup by sha256), RX-4 or later. A requester create with an
+    admins, who can read the secrets table anyway. The app's API URLs and
+    its own logs are clean (every RX-3 read and write carries the token in
+    the body; `reportError` redacts). The token page's own path
+    (`/returns/request/<token>`, and its refresh after a submit) is the
+    emailed link by design (RX-1), so the hosting platform's request log
+    records it. The fix needs a migration (a service-role function called
+    by POST, or a lookup by sha256), RX-4 or later. A requester create with an
     exchange takes `FOR KEY SHARE` on every item id named in the body before
     eligibility is checked (`_return_exchange_create`, 0396); at most 100
     ids, rate-limited, one short transaction; the fix (lock only the line's
