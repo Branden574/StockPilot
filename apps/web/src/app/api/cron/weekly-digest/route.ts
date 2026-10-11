@@ -212,13 +212,15 @@ export async function GET(req: Request) {
     const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
     const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
     // Lock the subject's date label to the cron-start time so every
-    // recipient in this run gets the same dateline, even if the loop
-    // spans midnight UTC.
+    // recipient in an organization gets the same dateline, even if the loop
+    // spans midnight.
     const runStartedAt = new Date();
-    const subject = weeklyDigestSubject(runStartedAt);
 
     for (const [orgId, group] of byOrg) {
       try {
+        // The organization's date, not the server's (small fixes slice 8):
+        // this run (Mondays 14:00 UTC) is already Tuesday from UTC+10 east.
+        const subject = weeklyDigestSubject(runStartedAt, group.timeZone);
         // One org-wide read (the service role sees every row), plus what
         // decides each recipient's view: their warehouse and category
         // assignments and the purchase_orders:read permission. A failed read
@@ -237,7 +239,15 @@ export async function GET(req: Request) {
             group.recipients.map((r) => r.userId),
           ),
         ]);
-        const opts = { orgName: group.orgName, appUrl, settingsUrl };
+        // The plain text's dateline and days, at the run's start, in the
+        // organization's zone like the HTML.
+        const opts = {
+          orgName: group.orgName,
+          appUrl,
+          settingsUrl,
+          now: runStartedAt,
+          timeZone: group.timeZone,
+        };
         for (const { userId, email: to, name, sections } of group.recipients) {
           // Re-check membership + opt-in + disabled-status IMMEDIATELY
           // before sending. The recipient set was assembled at the top of

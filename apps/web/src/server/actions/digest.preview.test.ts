@@ -103,3 +103,25 @@ describe('sendDigestPreviewAction', () => {
     );
   });
 });
+
+describe('sendDigestPreviewAction: its days are the organization\'s (small fixes slice 8)', () => {
+  it('dates the subject, the email and the text in the organization\'s zone, at the one moment the preview was built', async () => {
+    vi.setSystemTime(new Date('2026-10-13T01:00:00.000Z')); // Mon Oct 12, 6 PM in Los Angeles
+    getCachedOrgTimezoneMock.mockResolvedValue('America/Los_Angeles');
+    const { weeklyDigestPreviewSubject, weeklyDigestText } = await import('@/lib/email/es/families/digest');
+
+    await sendDigestPreviewAction();
+
+    const now = (getDigestDataMock.mock.calls[0]![2] as { now: Date }).now;
+    expect(now.toISOString()).toBe('2026-10-13T01:00:00.000Z');
+    expect(weeklyDigestPreviewSubject).toHaveBeenCalledWith(now, 'America/Los_Angeles');
+    expect(renderMock).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ now, timeZone: 'America/Los_Angeles' }),
+    );
+    expect(weeklyDigestText).toHaveBeenCalledWith(
+      EMPTY,
+      expect.objectContaining({ now, timeZone: 'America/Los_Angeles' }),
+    );
+  });
+});
