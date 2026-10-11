@@ -48,12 +48,27 @@ export const RELEASES: Release[] = [
     //     nothing for, and why (item C);
     //   - the team calendar's last evening, times and today (item F);
     //   - the weekly digest's dates (item G).
-    // Left out as not visible in production: the purchase orders list's
-    // Placed day is now the organization's in both lists (item H). The
-    // server-paged list (above 800 purchase orders) printed the server's UTC
-    // day, and no organization has more than 800; the instant list printed
-    // the viewer's day, which is the organization's for anyone in its zone
-    // (both production organizations are in America/Los_Angeles, 2026-10-11).
+    //   - the purchase orders list's Placed day, now the organization's in
+    //     both lists (item H), said in the Overdue view's line: the instant
+    //     list printed the viewer's day, a different one for a viewer outside
+    //     the organization's zone in the evening (slice 8 review);
+    //   - New and Edit event taking their times in the organization's zone
+    //     (slice 8 review), in the calendar line;
+    //   - ordering a draft to a deleted location refused, in the Edit
+    //     purchase order line; a send-mode template whose purchase order
+    //     could not be sent named, in the run line.
+    // Left out as wording or labels with no new behaviour (slice 8 review):
+    // the dashboard's overdue line no longer advises updating the ETA (an
+    // ordered purchase order's expected date cannot be changed); the audit
+    // log labels "Recurring PO template"; a supplier the recurring page could
+    // not read is "Supplier unknown". Left out as not visible in production:
+    // the location pickers list every site past 1000 locations (the largest
+    // organization has 114), and the calendar reads fewer old open-ended
+    // events (the same events show).
+    //
+    // The Overdue line's link is labelled for both platforms: the phone opens
+    // the bare Purchase orders list for any /dashboard/purchase-orders?...
+    // (apps/mobile web-path-rewrite), which has no Overdue view yet.
     //
     // Who is told: the Overdue view, whoever can open the purchase orders list
     // (purchase_orders:read, Purchase orders on), linked to the view; the
@@ -78,13 +93,13 @@ export const RELEASES: Release[] = [
         area: 'Purchase orders',
         title: 'The purchase orders list has an Overdue view',
         whatChanged:
-          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export CSV work on it too.",
+          "The dashboard's overdue purchase orders line opened the purchase orders list on All. The list now has an Overdue view, next to All: the purchase orders that are ordered or in transit and not fully received, with an expected date before today in your organization's time zone, the same ones the dashboard counts. Search and Export work on it too. The list's Placed date is now the day in your organization's time zone.",
         whyItMatters:
           "From the dashboard, the overdue purchase orders were mixed in with every other purchase order.",
         howItAffectsYou:
           "Select the dashboard's overdue line, or Overdue at the top of the purchase orders list, to see just those purchase orders.",
         whatToDo: 'No action needed.',
-        link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open overdue purchase orders' },
+        link: { href: '/dashboard/purchase-orders?status=overdue', label: 'Open purchase orders' },
         audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
       },
       {
@@ -95,7 +110,7 @@ export const RELEASES: Release[] = [
         area: 'Purchase orders',
         title: "Editing a draft purchase order names a destination or supplier you can't pick",
         whatChanged:
-          "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location is refused, naming the location.",
+          "When a draft purchase order went to a location you can't pick as its destination, such as a staging area or a location deleted since, or its supplier was archived, Edit purchase order showed an empty box and saved the draft with that destination or supplier anyway. It now opens on None or No supplier, with a note under the box naming what the draft had. Saving a purchase order to a deleted location, or ordering a draft that goes to one, is refused, naming the location.",
         whyItMatters:
           'A draft could be ordered to a destination or a supplier nobody could see on the form.',
         howItAffectsYou:
@@ -111,9 +126,9 @@ export const RELEASES: Release[] = [
         area: 'Recurring purchase orders',
         title: 'Recurring templates name a deleted destination or an archived supplier',
         whatChanged:
-          "Editing a recurring purchase order template whose destination was deleted after it was saved showed an empty Destination box, and saving was then refused by a name the form never showed. Editing a template, and Make recurring, now name a deleted destination or an archived supplier under the box and open on None or No supplier. The list shows an archived supplier by name, and says when a template's destination stops it from creating purchase orders.",
+          "Editing a recurring purchase order template whose destination was deleted after it was saved showed an empty Destination box, and saving was then refused by a name the form never showed. Editing a template now names a deleted destination or an archived supplier under the box and opens on None or No supplier, and Make recurring names an archived supplier the same way. The list shows an archived supplier by name, and says when a template's destination stops it from creating purchase orders.",
         whyItMatters:
-          'A template whose destination was deleted creates no purchase orders, and nothing on the page said so.',
+          'A template whose destination was deleted showed an empty Destination box, and nothing on the page said where it was ordering to.',
         howItAffectsYou:
           'Choose another destination or supplier from the list and save the template.',
         whatToDo:
@@ -129,10 +144,10 @@ export const RELEASES: Release[] = [
         area: 'Recurring purchase orders',
         title: 'A recurring template that cannot create its purchase order says why',
         whatChanged:
-          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. The notification goes to your organization's owners and admins and to the person who created the template.",
+          "When a recurring template's purchase order could not be saved, the daily run created nothing and told nobody, and a template whose destination was deleted after it was saved still created purchase orders to that location. The run no longer creates a purchase order to a deleted location. When it creates none for a template, its Recurring purchase orders notification names the template and why. It also names a template set to send whose purchase order could not be sent, kept as a draft. The notification goes to your organization's owners and admins and to the person who created the template.",
         whyItMatters: 'A template could stop ordering, period after period, without anyone knowing.',
         howItAffectsYou:
-          'If the notification names a template, edit that template: for a deleted destination, choose another.',
+          'If the notification names a template, edit that template on the web, in Recurring POs: for a deleted destination, choose another. If it names a purchase order that could not be sent, open it and send it.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders/recurring', label: 'Open recurring purchase orders' },
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
@@ -145,7 +160,7 @@ export const RELEASES: Release[] = [
         area: 'Schedule',
         title: 'The team calendar shows events late in the day on its last date',
         whatChanged:
-          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today.",
+          "Events starting late in the day on the last date the team calendar shows, from 5 PM Pacific time (4 PM in winter), were left off it. They now show. The calendar also places each event on its date and prints its time in your organization's time zone, as an event's own page does, and marks your organization's today. New event and Edit event take the date and time in that time zone too, and say which, so an event added from a date on the calendar lands on that date.",
         whyItMatters: 'An evening event on the calendar\'s last date was on the schedule but not on the calendar.',
         howItAffectsYou: 'Every event on a date the calendar shows is on it.',
         whatToDo: 'No action needed.',

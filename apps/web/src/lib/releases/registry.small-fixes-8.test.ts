@@ -89,9 +89,12 @@ describe('the small fixes slice 8 release', () => {
       anyPermission: ['purchase_orders:read'],
       modules: ['purchase_orders'],
     });
+    // Labelled for both platforms: the phone opens its plain Purchase orders
+    // list for this link (it has no Overdue view yet), so "overdue" in the
+    // label would be false there; the web still opens the Overdue view.
     expect(entry('po-list-overdue-view').link).toEqual({
       href: '/dashboard/purchase-orders?status=overdue',
-      label: 'Open overdue purchase orders',
+      label: 'Open purchase orders',
     });
     for (const id of ['po-edit-names-unoffered-choices', 'recurring-template-names-unoffered-choices', 'recurring-run-says-why']) {
       expect(entry(id).audience, id).toEqual({ anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] });
@@ -131,7 +134,10 @@ describe('the small fixes slice 8 release', () => {
     expect(text).toContain(TAB_LABELS.overdue);
     expect(text).toContain('None or No supplier');
     expect(text).toContain('Make recurring');
-    expect(text).toContain('Export CSV');
+    // The button reads "Export" (CSV is only in its accessible name).
+    expect(text).toContain('Search and Export work on it too.');
+    expect(text).not.toContain('Export CSV');
+    expect(text).toContain('Recurring POs');
     expect(text).toContain('Recurring purchase orders notification');
     expect(text).toContain('As of date');
     // The notes it describes say what the form had, and ask for a choice.
@@ -147,6 +153,16 @@ describe('the small fixes slice 8 release', () => {
     expect(entry('recurring-run-says-why').whatChanged).toContain('names the template and why');
     expect(entry('recurring-run-says-why').whatChanged).toContain(
       "The notification goes to your organization's owners and admins and to the person who created the template.",
+    );
+    // The past is told as it was: a deleted destination's template DID create
+    // purchase orders (the run line says so), so the template line does not
+    // say it created none (slice 8 review).
+    expect(entry('recurring-template-names-unoffered-choices').whyItMatters).not.toMatch(/creates no purchase orders/);
+    expect(entry('recurring-run-says-why').whatChanged).toContain('still created purchase orders to that location');
+    // Make recurring already named a deleted destination (#334): only the
+    // archived supplier is new there.
+    expect(entry('recurring-template-names-unoffered-choices').whatChanged).toContain(
+      'Make recurring names an archived supplier the same way',
     );
     // Saving with no choice keeps none, as the box shows: said plainly.
     expect(entry('po-edit-names-unoffered-choices').howItAffectsYou).toContain(
