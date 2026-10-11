@@ -203,6 +203,13 @@ export default async function EditBookPage({
             lotSerialEnabled={lotSerialEnabled}
             canManagePublicVisibility={can(ctx, 'public_links:manage')}
             sharedSkuOthers={skuSiblings ?? 0}
+            sharedSkuKeeps={
+              (item as { is_bundle?: boolean | null }).is_bundle === true
+                ? 'kit'
+                : (item as { group_id?: string | null }).group_id != null
+                  ? 'family'
+                  : null
+            }
             itemPageHref={`/dashboard/books/${id}`}
             initialPublicVisibility={
               ((item as { public_visibility?: string | null }).public_visibility ??

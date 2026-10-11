@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   assertPermission: vi.fn(),
   invalidate: vi.fn(),
   revalidateTag: vi.fn(),
+  holdings: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -30,7 +31,9 @@ vi.mock('./context', () => ({
 }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: h.invalidate }));
 vi.mock('next/cache', () => ({ revalidateTag: h.revalidateTag }));
+vi.mock('./rack-holdings', () => ({ fetchRackHoldingsByItem: h.holdings }));
 
+import { ServiceError } from './context';
 import { ItemGroupingService, UNGROUP_BUSY_RETRIES } from './item-grouping';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -119,6 +122,92 @@ beforeEach(() => {
   h.assertPermission.mockReset();
   h.invalidate.mockReset();
   h.revalidateTag.mockReset();
+  h.holdings.mockReset();
+  h.holdings.mockResolvedValue(new Map());
+});
+
+// The MFA floor and the permission are checked by assertPermission, FIRST, in
+// both entry points (fix round 1, SEC-2). The database does not read the aal
+// claim, so for the phone's route and the web action the MFA step-up depends
+// only on this order: a refactor that moved the gate after the RPC or the
+// reads would pass every other test here. These prove nothing is called when
+// the gate refuses, and that the step-up's reason reaches the caller intact
+// (the phone and useStepUp() prompt for TOTP on reason 'aal2_required').
+describe('ItemGroupingService: the gate runs before anything else', () => {
+  const stepUp = () =>
+    new ServiceError('forbidden', 'Re-authenticate with MFA before performing this action.', {
+      reason: 'aal2_required',
+    });
+  const enroll = () =>
+    new ServiceError(
+      'forbidden',
+      'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      { reason: 'mfa_required' },
+    );
+
+  it('splitSku: an MFA step-up refusal calls no RPC and reads nothing, and keeps its reason', async () => {
+    h.assertPermission.mockImplementation(() => {
+      throw stepUp();
+    });
+    const { svc, rpcCalls, reads } = harness([{ data: ANSWER, error: null }]);
+    await expect(svc.splitSku(body(), 'app')).rejects.toMatchObject({
+      code: 'forbidden',
+      message: 'Re-authenticate with MFA before performing this action.',
+      details: { reason: 'aal2_required' },
+    });
+    expect(rpcCalls).toHaveLength(0);
+    expect(reads).toHaveLength(0);
+    expect(h.invalidate).not.toHaveBeenCalled();
+  });
+
+  it('previewSplit: an MFA step-up refusal reads nothing, and keeps its reason', async () => {
+    h.assertPermission.mockImplementation(() => {
+      throw stepUp();
+    });
+    const { svc, rpcCalls, reads } = harness([], {
+      inventory_items: [{ id: A, sku: 'SP-PAIR' }],
+    });
+    await expect(svc.previewSplit([A])).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'aal2_required' },
+    });
+    expect(reads).toHaveLength(0);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('an unenrolled member is told to enroll (mfa_required passes through unchanged)', async () => {
+    h.assertPermission.mockImplementation(() => {
+      throw enroll();
+    });
+    const { svc, rpcCalls } = harness([]);
+    await expect(svc.splitSku(body(), 'web')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  // A grant revoked after the screen loaded (fix round 1, P5): core's plain
+  // words, not "Missing permission: items:update", on the web and the phone.
+  it("a missing permission is said in core's words with reason 'permission', and nothing is called", async () => {
+    h.assertPermission.mockImplementation(() => {
+      throw new ServiceError('forbidden', 'Missing permission: items:update');
+    });
+    const split = harness([{ data: ANSWER, error: null }]);
+    await expect(split.svc.splitSku(body(), 'app')).rejects.toMatchObject({
+      code: 'forbidden',
+      message: GROUPING_ERROR_WORDS.permission,
+      details: { reason: 'permission' },
+    });
+    expect(split.rpcCalls).toHaveLength(0);
+    const preview = harness([]);
+    await expect(preview.svc.previewSplit([A])).rejects.toMatchObject({
+      code: 'forbidden',
+      message: GROUPING_ERROR_WORDS.permission,
+      details: { reason: 'permission' },
+    });
+    expect(preview.reads).toHaveLength(0);
+  });
 });
 
 describe('ItemGroupingService.splitSku', () => {
@@ -252,6 +341,7 @@ describe('ItemGroupingService.previewSplit', () => {
           group_id: null,
           barcode: null,
           bin_location: '22-C',
+          custom_fields: {},
           quantity_on_hand: 4,
           status: 'active',
           created_at: '2026-01-02T00:00:00Z',
@@ -284,6 +374,7 @@ describe('ItemGroupingService.previewSplit', () => {
         inFamily: false,
         barcode: null,
         binLocation: '22-C',
+        placementLabel: '22-C',
         charterName: null,
         warehouseName: 'DC4',
         quantityOnHand: 4,
@@ -292,11 +383,77 @@ describe('ItemGroupingService.previewSplit', () => {
     ]);
   });
 
-  it('refuses more than 100 records and answers nothing for none', async () => {
-    const { svc } = harness([]);
+  // Fix round 1, P2: the review line names where each record IS, the way the
+  // lists do (core resolvePlacement over the book rack keys / the neutral rack
+  // pair, the rack and crate holdings, then bin_location), never bin_location
+  // alone. Production: 11 of L4L's 34 shared-SKU book records have a blank
+  // bin_location and a book rack with stock on it.
+  it("names each record's rack from its rack keys and holdings, as the lists do, not from bin_location alone", async () => {
+    const BOOK = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const SPLIT = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const row = (id: string, over: Record<string, unknown>) => ({
+      id,
+      sku: '9780000000001',
+      name: 'Algebra 1',
+      item_type: 'book',
+      is_bundle: false,
+      group_id: null,
+      barcode: '9780000000001',
+      bin_location: '',
+      custom_fields: {},
+      quantity_on_hand: 3,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00Z',
+      charter: null,
+      warehouse: { name: 'DC4' },
+      ...over,
+    });
+    h.holdings.mockResolvedValue(
+      new Map([
+        [BOOK, [{ name: '37-B', quantity: 3, kind: 'rack' }]],
+        [
+          SPLIT,
+          [
+            { name: '5-A', quantity: 2, kind: 'rack' },
+            { name: '12-C', quantity: 1, kind: 'rack' },
+          ],
+        ],
+      ]),
+    );
+    const { svc } = harness([], {
+      inventory_items: [{ id: BOOK, sku: '9780000000001' }],
+      'inventory_items:candidates': [
+        row(BOOK, { custom_fields: { book_rack_number: '37', book_rack_row: 'B' } }),
+        row(SPLIT, { bin_location: 'Green #1 on rack 37-B', created_at: '2026-01-02T00:00:00Z' }),
+        row(A, { item_type: 'product', bin_location: '  ', created_at: '2026-01-03T00:00:00Z' }),
+      ],
+    });
+    const out = await svc.previewSplit([BOOK]);
+    expect(h.holdings).toHaveBeenCalledWith(expect.anything(), [BOOK, SPLIT, A]);
+    expect(out.candidates.map((c) => [c.id, c.placementLabel])).toEqual([
+      [BOOK, 'Rack 37-B'],
+      [SPLIT, '12-C ×1 · 5-A ×2'],
+      [A, null],
+    ]);
+  });
+
+  it('refuses more than 100 records, saying so plainly, and answers nothing for none', async () => {
+    const { svc, reads } = harness([]);
+    // Fix round 1, C7(d): the bulk bar can hold more than 100 shared records;
+    // the refusal names the limit instead of "Check the selection".
     await expect(svc.previewSplit(Array.from({ length: 101 }, () => A))).rejects.toMatchObject({
       code: 'validation_error',
+      message: GROUPING_ERROR_WORDS.tooMany,
+      details: { reason: 'invalid', field: 'item_ids' },
     });
+    expect(GROUPING_ERROR_WORDS.tooMany).toBe(
+      'Ungroup works on at most 100 records at a time. Select fewer and try again.',
+    );
+    await expect(svc.previewSplit(['not-a-uuid'])).rejects.toMatchObject({
+      code: 'validation_error',
+      message: GROUPING_ERROR_WORDS.invalid,
+    });
+    expect(reads).toHaveLength(0);
     await expect(svc.previewSplit([])).resolves.toEqual({ candidates: [] });
   });
 });

@@ -56,7 +56,7 @@ const DEFAULTS = {
   itemType: 'product' as const,
 };
 
-function renderEdit(sharedSkuOthers?: number) {
+function renderEdit(sharedSkuOthers?: number, sharedSkuKeeps?: 'kit' | 'family' | null) {
   return render(
     <ItemForm
       defaults={DEFAULTS as never}
@@ -69,6 +69,7 @@ function renderEdit(sharedSkuOthers?: number) {
       warehouseLabel="Warehouse"
       charterLabel="Charter"
       sharedSkuOthers={sharedSkuOthers}
+      sharedSkuKeeps={sharedSkuKeeps}
       itemPageHref={`/dashboard/inventory/${DEFAULTS.id}`}
     />,
   );
@@ -86,6 +87,15 @@ describe('ItemForm: a SKU other records share', () => {
     expect(
       screen.getAllByText(/Shared with 1 other record that uses this SKU/).length,
     ).toBeGreaterThan(0);
+  });
+
+  // Fix round 1, P4: a kit or a family member is told why its SKU stays, and
+  // is not sent to an action that would refuse it.
+  it('a kit is told why its SKU stays, with no link to Make this its own item', () => {
+    renderEdit(1, 'kit');
+    expect(screen.getByText(sharedSkuBannerCopy(1, 'kit')!)).toBeInTheDocument();
+    expect(screen.queryByText(/Make this its own item/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open the item page' })).toBeNull();
   });
 
   it('says nothing extra when no other record the editor can see shares it', () => {

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -224,9 +224,30 @@ vi.mock('@/server/services/item-grouping', () => ({
     }
   },
 }));
-vi.mock('@/components/inventory/make-own-item-button', () => ({
-  MakeOwnItemButton: ({ itemId }: { itemId: string }) => <button type="button">make-own:{itemId}</button>,
-}));
+// The host keeps state the way the real one keeps its open dialog: the page
+// re-renders after a split (the action refreshes it), and the host must
+// survive that render, not unmount or remount, or its open dialog, with the
+// split's result, is torn down (fix round 1, P1).
+vi.mock('@/components/inventory/make-own-item-button', async () => {
+  const React = await import('react');
+  return {
+    MakeOwnItemButton: ({ itemId, offer }: { itemId: string; offer: boolean }) => {
+      const [opened, setOpened] = React.useState(false);
+      return (
+        <>
+          {offer ? (
+            <button type="button" onClick={() => setOpened(true)}>
+              make-own:{itemId}
+            </button>
+          ) : null}
+          <span data-testid="make-own-host">
+            {opened ? 'dialog-open' : 'closed'}:{itemId}
+          </span>
+        </>
+      );
+    },
+  };
+});
 
 import { ItemDetail } from './item-detail';
 
@@ -454,13 +475,45 @@ describe('ItemDetail: a SKU other records share (Ungroup, 0399)', () => {
     skuSiblings.count = 0;
   });
 
+  it('after a split leaves no other record on the SKU, the editor\'s host stays mounted (not offered), so its open result survives the refresh', async () => {
+    skuSiblings.count = 1;
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
+    const { rerender } = await renderItemDetail();
+    fireEvent.click(screen.getByRole('button', { name: `make-own:${ITEM_ID}` }));
+    expect(screen.getByTestId('make-own-host')).toHaveTextContent(`dialog-open:${ITEM_ID}`);
+    // The page as the action's refresh renders it: the record's SKU is its own.
+    skuSiblings.count = 0;
+    rerender(
+      await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back to inventory' }),
+    );
+    expect(screen.queryByText(/is also used by/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /make-own:/ })).toBeNull();
+    // Same host, same state: the open dialog was not torn down or reset.
+    expect(screen.getByTestId('make-own-host')).toHaveTextContent(`dialog-open:${ITEM_ID}`);
+  });
+
+  it('kits and family members never get the host, and a viewer who cannot edit never does', async () => {
+    skuSiblings.count = 0;
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
+    inventoryGet.mockResolvedValue(itemFixture({ is_bundle: true }));
+    await renderItemDetail();
+    expect(screen.queryByTestId('make-own-host')).toBeNull();
+    inventoryGet.mockResolvedValue(itemFixture({ group_id: '99999999-9999-4999-8999-999999999999' }));
+    await renderItemDetail();
+    expect(screen.queryByTestId('make-own-host')).toBeNull();
+    inventoryGet.mockResolvedValue(itemFixture());
+    ctxHolder.current = { ...ctxHolder.current, permissions: new Set<string>() };
+    await renderItemDetail();
+    expect(screen.queryByTestId('make-own-host')).toBeNull();
+  });
+
   it('says how many other records the viewer can see share the SKU, and offers Make this its own item to an editor', async () => {
     skuSiblings.count = 1;
     ctxHolder.current = { ...ctxHolder.current, permissions: new Set(['items:update']) };
     await renderItemDetail();
     expect(
       screen.getByText(
-        'SKU HVAC-WALL-204 is also used by 1 other record you can see. Editing the name, SKU, cost, price or category changes all of them.',
+        'SKU HVAC-WALL-204 is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.',
       ),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: `make-own:${ITEM_ID}` })).toBeTruthy();

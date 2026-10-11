@@ -3,11 +3,13 @@ import 'server-only';
 import { revalidateTag } from 'next/cache';
 
 import {
+  formatPlacementLabel,
   GROUPING_ERROR_WORDS,
   GROUPING_MAX_ITEMS,
   mapGroupingError,
   parseSplitSkuBody,
   parseSplitSkuOutcome,
+  resolvePlacement,
   sharedSkuKey,
   toSplitSkuRpcRequest,
   type GroupingDbError,
@@ -18,6 +20,7 @@ import {
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { fetchRackHoldingsByItem } from './rack-holdings';
 
 /**
  * Grouping writes, shared by the web action (server/actions/item-grouping.ts)
@@ -53,6 +56,10 @@ export interface UngroupCandidate extends SplitCandidate {
   itemType: string;
   barcode: string | null;
   binLocation: string | null;
+  /** Where the record's stock is, as the lists say it (core resolvePlacement:
+   *  split or crate-only holdings, then the book rack keys or the neutral
+   *  rack pair, then bin_location), one line; null when nothing is known. */
+  placementLabel: string | null;
   charterName: string | null;
   warehouseName: string | null;
   quantityOnHand: number;
@@ -88,6 +95,31 @@ function refusal(error: GroupingDbError): ServiceError {
   });
 }
 
+/**
+ * The gate, FIRST in every entry point (before any read or RPC): the MFA
+ * floor and items:update, through assertPermission. The database does not
+ * read the aal claim, so this order is the MFA floor for the web action and
+ * the phone's route (pinned by the service tests). An MFA refusal passes
+ * through unchanged: its reason ('aal2_required' / 'mfa_required') is what
+ * the web's useStepUp() and the phone's challenge screen act on. A missing
+ * permission (a grant revoked after the screen loaded) is said in core's
+ * words instead of "Missing permission: items:update".
+ */
+function gate(ctx: ServiceContext): void {
+  try {
+    assertPermission(ctx, 'items:update');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'forbidden') {
+      const reason = e.details?.reason;
+      if (reason === 'aal2_required' || reason === 'mfa_required') throw e;
+      throw new ServiceError('forbidden', GROUPING_ERROR_WORDS.permission, {
+        reason: 'permission',
+      });
+    }
+    throw e;
+  }
+}
+
 export class ItemGroupingService {
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -109,8 +141,14 @@ export class ItemGroupingService {
    * "oldest keeps" rule uses. Reads only; Cancel writes nothing.
    */
   async previewSplit(itemIds: readonly string[]): Promise<{ candidates: UngroupCandidate[] }> {
-    assertPermission(this.ctx, 'items:update');
-    if (itemIds.length > GROUPING_MAX_ITEMS || !itemIds.every((id) => UUID.test(id))) {
+    gate(this.ctx);
+    if (itemIds.length > GROUPING_MAX_ITEMS) {
+      throw new ServiceError('validation_error', GROUPING_ERROR_WORDS.tooMany, {
+        reason: 'invalid',
+        field: 'item_ids',
+      });
+    }
+    if (!itemIds.every((id) => UUID.test(id))) {
       throw new ServiceError('validation_error', GROUPING_ERROR_WORDS.invalid, {
         reason: 'invalid',
         field: 'item_ids',
@@ -139,7 +177,7 @@ export class ItemGroupingService {
     const { data: rows, error } = await this.ctx.supabase
       .from('inventory_items')
       .select(
-        `id, sku, name, item_type, is_bundle, group_id, barcode, bin_location, quantity_on_hand, status, created_at,
+        `id, sku, name, item_type, is_bundle, group_id, barcode, bin_location, custom_fields, quantity_on_hand, status, created_at,
          charter:charters!charter_id (name),
          warehouse:warehouses!warehouse_id (name)`,
       )
@@ -152,24 +190,44 @@ export class ItemGroupingService {
       .limit(PREVIEW_ROW_CAP);
     if (error) throw new ServiceError('internal_error', error.message);
 
+    const list = (rows ?? []) as Array<Record<string, unknown>>;
+    // The rack and crate holdings, under the caller's RLS (batched, paged): the
+    // review line names where each record IS, by the same rule the lists use,
+    // so a book whose bin_location is blank still shows its rack (fix round 1,
+    // P2). A failed batch degrades to the stored keys, never to an error.
+    const holdings = await fetchRackHoldingsByItem(
+      this.ctx,
+      list.map((r) => r.id as string),
+    );
     const one = (v: unknown): { name?: string | null } | null =>
       (Array.isArray(v) ? v[0] : v) as { name?: string | null } | null;
-    const candidates = ((rows ?? []) as Array<Record<string, unknown>>).map(
-      (r): UngroupCandidate => ({
+    const candidates = list.map((r): UngroupCandidate => {
+      const itemType = (r.item_type as string | null) ?? 'product';
+      const binLocation = (r.bin_location as string | null) ?? null;
+      const placementLabel = formatPlacementLabel(
+        resolvePlacement({
+          itemType,
+          customFields: (r.custom_fields as Record<string, unknown> | null) ?? null,
+          binLocation,
+          holdings: holdings.get(r.id as string) ?? [],
+        }),
+      );
+      return {
         id: r.id as string,
         sku: r.sku as string,
         name: (r.name as string | null) ?? '',
-        itemType: (r.item_type as string | null) ?? 'product',
+        itemType,
         isBundle: r.is_bundle === true,
         inFamily: r.group_id != null,
         barcode: (r.barcode as string | null) ?? null,
-        binLocation: (r.bin_location as string | null) ?? null,
+        binLocation,
+        placementLabel,
         charterName: one(r.charter)?.name ?? null,
         warehouseName: one(r.warehouse)?.name ?? null,
         quantityOnHand: Number(r.quantity_on_hand ?? 0),
         status: (r.status as string | null) ?? 'active',
-      }),
-    );
+      };
+    });
     return { candidates };
   }
 
@@ -204,7 +262,7 @@ export class ItemGroupingService {
    * may have been lost before its refresh.
    */
   async splitSku(raw: unknown, surface: GroupingSurface): Promise<UngroupResult> {
-    assertPermission(this.ctx, 'items:update');
+    gate(this.ctx);
     const parsed = parseSplitSkuBody(raw);
     if (!parsed.ok) {
       throw new ServiceError('validation_error', parsed.refusal.message, {

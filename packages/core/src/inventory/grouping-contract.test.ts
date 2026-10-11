@@ -13,6 +13,7 @@ import {
   planSkuSplit,
   sharedSkuBannerCopy,
   sharedSkuItemIds,
+  sharedSkuNoteCopy,
   splitSkuBodyForPlan,
   toSplitSkuRpcRequest,
   type SplitCandidate,
@@ -323,12 +324,33 @@ describe('the words', () => {
   });
 
   it('says plainly how many other records share the SKU and that editing changes them all', () => {
+    // Fix round 1, P4: every field the edit fans out is named (the variant
+    // details and the product family too, SHARED_ITEM_FIELDS).
     expect(sharedSkuBannerCopy(1)).toBe(
-      'This SKU is also used by 1 other record you can see. Saving name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes every record with this SKU. To change only this record, use Make this its own item on the item page.',
+      'This SKU is also used by 1 other record you can see. Saving the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes every record with this SKU. To change only this record, use Make this its own item on the item page.',
     );
     expect(sharedSkuBannerCopy(3)).toMatch(
       /^This SKU is also used by 3 other records you can see\./,
     );
     expect(sharedSkuBannerCopy(0)).toBeNull();
+  });
+
+  // Fix round 1, P4: a kit or a family member cannot be made its own item, so
+  // the banner says why its SKU stays instead of pointing to the action.
+  it('tells a kit or a product-family member why its SKU stays, instead of pointing to Make this its own item', () => {
+    const kit = sharedSkuBannerCopy(1, 'kit')!;
+    expect(kit.endsWith(GROUPING_ERROR_WORDS.kit)).toBe(true);
+    expect(kit).not.toContain(UNGROUP_COPY.makeOwnItem);
+    const family = sharedSkuBannerCopy(2, 'family')!;
+    expect(family.endsWith(GROUPING_ERROR_WORDS.family)).toBe(true);
+    expect(family).not.toContain(UNGROUP_COPY.makeOwnItem);
+    expect(sharedSkuBannerCopy(0, 'kit')).toBeNull();
+  });
+
+  it("the item screens' note names the shared fields the edit form names", () => {
+    expect(sharedSkuNoteCopy(1, 'SP-PAIR')).toBe(
+      'SKU SP-PAIR is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.',
+    );
+    expect(sharedSkuNoteCopy(0, 'SP-PAIR')).toBeNull();
   });
 });

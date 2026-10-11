@@ -620,22 +620,32 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               // Ungroup (0399): an honest note when other records the viewer
               // can see share this SKU (edits of the shared fields change them
               // all), and the way to change this record alone.
+              //
+              // The host of Make this its own item is mounted for EVERY editor
+              // of a record that can be ungrouped, offered or not, at the same
+              // place in the tree: a split makes the SKU the record's own, the
+              // action's refresh then renders no note, and a host mounted only
+              // with the note would unmount its open dialog and the split's
+              // result with it (fix round 1, P1).
               const note = skuSiblings ? sharedSkuNoteCopy(skuSiblings, item.sku as string) : null;
-              if (!note) return null;
               const isKit = (item as { is_bundle?: boolean | null }).is_bundle === true;
               const inFamily = (item as { group_id?: string | null }).group_id != null;
+              const host = canEditItem && !isKit && !inFamily;
+              if (!note && !host) return null;
               return (
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <p className="text-muted-foreground text-xs">{note}</p>
-                  {canEditItem ? (
-                    isKit ? (
-                      <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.kit}</p>
-                    ) : inFamily ? (
-                      <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.family}</p>
-                    ) : (
-                      <MakeOwnItemButton itemId={id} />
-                    )
+                <div
+                  className={
+                    note ? 'mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1' : 'contents'
+                  }
+                >
+                  {note ? <p className="text-muted-foreground text-xs">{note}</p> : null}
+                  {note && canEditItem && isKit ? (
+                    <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.kit}</p>
                   ) : null}
+                  {note && canEditItem && !isKit && inFamily ? (
+                    <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.family}</p>
+                  ) : null}
+                  {host ? <MakeOwnItemButton itemId={id} offer={note !== null} /> : null}
                 </div>
               );
             })()}

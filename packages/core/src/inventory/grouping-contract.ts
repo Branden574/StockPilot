@@ -212,6 +212,7 @@ export const GROUPING_ERROR_WORDS = {
     "You can't edit one or more of these records: they are in a warehouse you can't change.",
   notFound: "One or more of these records isn't available any more. Reload and try again.",
   invalid: 'Check the selection and try again.',
+  tooMany: 'Ungroup works on at most 100 records at a time. Select fewer and try again.',
   keyRequired: 'Reload and try again.',
   idempotencyConflict:
     'This request was already sent with different details. Reload and try again.',
@@ -532,26 +533,49 @@ export const UNGROUP_COPY = {
   done: (n: number) =>
     `${n} record${n === 1 ? '' : 's'} now ${n === 1 ? 'has its' : 'have their'} own SKU.`,
   labelsHint: 'Labels without a barcode print the SKU. Reprint them for the records that changed.',
+  /** Before Save, when a record that gets a new SKU has no barcode: its label
+   *  prints the old SKU, so a scan of it finds the records that keep it. */
+  labelsBefore:
+    "Labels without a barcode print the SKU: until a changed record's label is reprinted, scanning it finds the records that keep the old SKU.",
+  /** After Save, for a record the review said would get a new SKU but the
+   *  database let keep it (the other records of its SKU changed meanwhile). */
+  keptUnplanned: (sku: string) =>
+    `Kept SKU ${sku}: the other records that had it changed since you opened this, so this one keeps it.`,
   offline: 'Making a record its own item needs a connection. Try again when you are online.',
   confirmOne:
     'This record gets its own new SKU. Only this record changes. Stock, charter, rack, barcode/ISBN and history stay as they are.',
 } as const;
 
+/** Why a record keeps its SKU on an Ungroup: a kit, or a product-family
+ *  member (the database refuses both: not_groupable kit, family_member_sku). */
+export type SharedSkuKeeps = 'kit' | 'family' | null;
+
 /**
  * The edit form's banner when other records the caller can see share the
- * SKU (the seed's wording item): how many, which fields are shared, and how
- * to change one record alone. Null when no other record shares it. It never
- * counts records the caller cannot see.
+ * SKU (the seed's wording item): how many, which fields are shared (every
+ * field the edit fans out: InventoryService SHARED_ITEM_FIELDS, the variant
+ * details and the family link among them), and how to change one record
+ * alone, or, for a kit or a family member, why it cannot be. Null when no
+ * other record shares it. It never counts records the caller cannot see.
  */
-export function sharedSkuBannerCopy(othersVisible: number): string | null {
+export function sharedSkuBannerCopy(
+  othersVisible: number,
+  keeps: SharedSkuKeeps = null,
+): string | null {
   if (!Number.isFinite(othersVisible) || othersVisible < 1) return null;
   const n = Math.floor(othersVisible);
-  return `This SKU is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Saving name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes every record with this SKU. To change only this record, use ${UNGROUP_COPY.makeOwnItem} on the item page.`;
+  const tail =
+    keeps === 'kit'
+      ? GROUPING_ERROR_WORDS.kit
+      : keeps === 'family'
+        ? GROUPING_ERROR_WORDS.family
+        : `To change only this record, use ${UNGROUP_COPY.makeOwnItem} on the item page.`;
+  return `This SKU is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Saving the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes every record with this SKU. ${tail}`;
 }
 
 /** The item screens' note next to Make this its own item. */
 export function sharedSkuNoteCopy(othersVisible: number, sku: string): string | null {
   if (!Number.isFinite(othersVisible) || othersVisible < 1) return null;
   const n = Math.floor(othersVisible);
-  return `SKU ${sku} is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Editing the name, SKU, cost, price or category changes all of them.`;
+  return `SKU ${sku} is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.`;
 }

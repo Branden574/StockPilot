@@ -88,6 +88,7 @@ import {
   placementWarningMessage,
   type CustomFieldDefinition,
   type RequiredAttributeProblem,
+  type SharedSkuKeeps,
   type TrackingMode,
   type UpdateItemInput,
 } from '@stockpilot/core';
@@ -291,6 +292,10 @@ interface ItemFormProps {
    * are never counted. Default 0: the generic notes, as before.
    */
   sharedSkuOthers?: number;
+  /** Why this record keeps its SKU on an Ungroup (a kit or a product-family
+   *  member): the banner then says so instead of pointing to Make this its
+   *  own item, which would refuse it (fix round 1, P4). */
+  sharedSkuKeeps?: SharedSkuKeeps;
   /** The item page (where Make this its own item is), for the banner's link. */
   itemPageHref?: string;
 }
@@ -323,6 +328,7 @@ export function ItemForm({
   initialPublicDisplayName = null,
   initialPublicDescription = null,
   sharedSkuOthers = 0,
+  sharedSkuKeeps = null,
   itemPageHref,
 }: ItemFormProps) {
   const router = useRouter();
@@ -492,7 +498,7 @@ export function ItemForm({
   }, [isEdit, defaults?.quantityOnHand, setValue]);
 
   const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
-  const sharedSkuBanner = isEdit ? sharedSkuBannerCopy(sharedSkuOthers) : null;
+  const sharedSkuBanner = isEdit ? sharedSkuBannerCopy(sharedSkuOthers, sharedSkuKeeps) : null;
   const cfDefault = (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
   const [author, setAuthor] = React.useState<string>(isBook ? String(cfDefault.author ?? '') : '');
   // Rack number / row inputs. Books write to custom_fields.book_rack_*
@@ -1576,7 +1582,7 @@ export function ItemForm({
           className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-[12px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100"
         >
           <p>{sharedSkuBanner}</p>
-          {itemPageHref ? (
+          {itemPageHref && !sharedSkuKeeps ? (
             <Link href={itemPageHref} className="mt-1 inline-block font-medium underline">
               Open the item page
             </Link>

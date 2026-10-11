@@ -50,7 +50,8 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'ready' }
   | { kind: 'saving' }
-  | { kind: 'done'; items: SplitSkuOutcomeItem[] };
+  /** `anchors`: the records the Save named to keep their SKU. */
+  | { kind: 'done'; items: SplitSkuOutcomeItem[]; anchors: string[] };
 
 interface Props {
   open: boolean;
@@ -78,6 +79,8 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
   const pending = React.useRef<{ json: string; body: SplitSkuBody } | null>(null);
   // Only the newest preview may paint (a re-preview can overtake an older one).
   const seq = React.useRef(0);
+  // Done replaces the focused Save button: focus moves to it (fix round 1, P6).
+  const doneRef = React.useRef<HTMLButtonElement>(null);
   const idsKey = itemIds.join(',');
 
   React.useEffect(() => {
@@ -129,7 +132,18 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     }
     setError(null);
     setPhase({ kind: 'saving' });
-    const r = await ungroupItemsAction(pending.current.body);
+    const body = pending.current.body;
+    let r: Awaited<ReturnType<typeof ungroupItemsAction>>;
+    try {
+      r = await ungroupItemsAction(body);
+    } catch {
+      // No answer (the network, a deploy): the split may or may not have
+      // applied. Back to the review with the SAME body and key pending, so
+      // Save replays it if it did (fix round 1, D6). Never the raw error.
+      setError({ message: GROUPING_ERROR_WORDS.internal, stale: false });
+      setPhase({ kind: 'ready' });
+      return;
+    }
     if (!r.ok) {
       const reason =
         typeof r.error.details?.reason === 'string' ? r.error.details.reason : r.error.code;
@@ -141,12 +155,25 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
       return;
     }
     pending.current = null;
-    setPhase({ kind: 'done', items: r.data.items });
+    setPhase({ kind: 'done', items: r.data.items, anchors: body.anchorItemIds });
     onDone(r.data.items);
   }
 
+  React.useEffect(() => {
+    if (phase.kind === 'done') doneRef.current?.focus();
+  }, [phase.kind]);
+
   const changed = phase.kind === 'done' ? phase.items.filter((i) => !i.kept) : [];
+  // Kept although the review showed "Gets a new SKU" (fix round 1, D5).
+  const keptUnplanned =
+    phase.kind === 'done' ? phase.items.filter((i) => i.kept && !phase.anchors.includes(i.id)) : [];
   const relabel = changed.filter((i) => !(byId.get(i.id)?.barcode ?? '').trim()).map((i) => i.id);
+  // Before Save: will a record without a barcode get a new SKU (fix round 1,
+  // D2)? Its label prints the old SKU, so a scan finds the records keeping it.
+  const relabelPlanned = plan.groups.some((g) => {
+    const anchor = g.allSelected ? anchorOf(g.sku, g.defaultAnchorId) : null;
+    return g.selected.some((r) => r.id !== anchor && !(r.barcode ?? '').trim());
+  });
 
   return (
     <Dialog open={open} onOpenChange={(v) => (phase.kind === 'saving' ? null : onOpenChange(v))}>
@@ -157,12 +184,14 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
         </DialogHeader>
 
         {phase.kind === 'loading' ? (
-          <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading the records…
+          <div role="status" className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the records…
           </div>
         ) : phase.kind === 'done' ? (
-          <div className="space-y-3 text-sm">
-            <p className="font-medium">{UNGROUP_COPY.done(changed.length)}</p>
+          <div role="status" className="space-y-3 text-sm">
+            {changed.length > 0 ? (
+              <p className="font-medium">{UNGROUP_COPY.done(changed.length)}</p>
+            ) : null}
             <ul className="space-y-1.5">
               {changed.map((i) => (
                 <li key={i.id} className="flex flex-wrap items-baseline gap-x-2">
@@ -174,6 +203,15 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                 </li>
               ))}
             </ul>
+            {keptUnplanned.length > 0 ? (
+              <ul className="text-muted-foreground space-y-1 text-xs">
+                {keptUnplanned.map((i) => (
+                  <li key={i.id}>
+                    {byId.get(i.id)?.name ?? 'Record'}: {UNGROUP_COPY.keptUnplanned(i.afterSku)}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {relabel.length > 0 ? (
               <p className="text-muted-foreground text-xs">
                 {UNGROUP_COPY.labelsHint}{' '}
@@ -208,6 +246,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                                 type="radio"
                                 name={`ungroup-anchor-${g.sku}`}
                                 className="mt-1"
+                                aria-describedby={`ungroup-outcome-${r.id}`}
                                 checked={keeps}
                                 disabled={phase.kind === 'saving'}
                                 onChange={() => setAnchorBySku((m) => ({ ...m, [g.sku]: r.id }))}
@@ -218,7 +257,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                               <span className="text-muted-foreground block text-xs">
                                 {[
                                   r.charterName ?? 'No charter',
-                                  r.binLocation?.trim() ? r.binLocation : 'No rack',
+                                  r.placementLabel ?? 'No rack',
                                   r.warehouseName,
                                   `${r.quantityOnHand} on hand`,
                                 ]
@@ -227,7 +266,7 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                               </span>
                             </span>
                           </label>
-                          <span className="shrink-0 text-xs">
+                          <span id={`ungroup-outcome-${r.id}`} className="shrink-0 text-xs">
                             {keeps ? UNGROUP_COPY.keepsSku(g.sku) : UNGROUP_COPY.getsNewSku}
                           </span>
                         </li>
@@ -259,6 +298,9 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
             {count > 0 ? (
               <p className="text-muted-foreground text-xs">{UNGROUP_COPY.barcodeNote}</p>
             ) : null}
+            {count > 0 && relabelPlanned ? (
+              <p className="text-muted-foreground text-xs">{UNGROUP_COPY.labelsBefore}</p>
+            ) : null}
           </div>
         )}
 
@@ -270,7 +312,9 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
 
         <DialogFooter>
           {phase.kind === 'done' ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button ref={doneRef} onClick={() => onOpenChange(false)}>
+              Done
+            </Button>
           ) : (
             <>
               <Button

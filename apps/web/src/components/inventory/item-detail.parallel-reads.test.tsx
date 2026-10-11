@@ -58,6 +58,9 @@ vi.mock('@/lib/error-reporter', async (importOriginal) => ({
 vi.mock('@/components/inventory/placements-breakdown', () => ({ PlacementsBreakdown: () => null }));
 vi.mock('@/components/inventory/barcode-display', () => ({ BarcodeDisplay: () => null }));
 vi.mock('@/components/inventory/duplicate-item-dialog', () => ({ DuplicateItemDialog: () => null }));
+// Ungroup's host (0399) is mounted for every editor since fix round 1 (P1: it
+// must outlive the refresh after a split); a client island like the others.
+vi.mock('@/components/inventory/make-own-item-button', () => ({ MakeOwnItemButton: () => null }));
 vi.mock('@/components/dashboard/charts/cost-trend-island', () => ({ CostTrendIsland: () => null }));
 vi.mock('@/components/inventory/item-detail-tabs', () => ({ ItemDetailTabs: () => null }));
 vi.mock('@/components/inventory/item-serials-panel', () => ({ ItemSerialsPanel: () => null }));

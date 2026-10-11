@@ -161,6 +161,26 @@ describe('POST /api/v1/items/ungroup', () => {
     });
   });
 
+  it.each([
+    ['aal2_required', 'Re-authenticate with MFA before performing this action.'],
+    [
+      'mfa_required',
+      'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    ],
+    ['permission', GROUPING_ERROR_WORDS.permission],
+  ])(
+    'the gate refusal %s is a 403 that keeps its reason (the phone steps up on aal2_required)',
+    async (reason, message) => {
+      vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+      serviceAnswering(async () => {
+        throw new ServiceError('forbidden', message, { reason });
+      });
+      const res = await POST(req({}));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'forbidden', message, details: { reason } });
+    },
+  );
+
   it('an internal error answers 500 with no detail', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
     serviceAnswering(async () => {
