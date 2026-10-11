@@ -40,13 +40,19 @@ export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterN
   const router = useRouter();
   const [hp, setHp] = React.useState('');
   const [submitted, setSubmitted] = React.useState<RequesterSubmitted | null>(null);
+  // RX-3 fix round 1 (L5): the form is gone once the request is in, so focus
+  // moves to the confirmation's heading instead of falling to the page.
+  const doneHeading = React.useRef<HTMLHeadingElement>(null);
+  React.useEffect(() => {
+    if (submitted) doneHeading.current?.focus();
+  }, [submitted]);
 
   if (submitted) {
     const first = requesterName?.trim().split(/\s+/)[0];
     return (
       <div className="border-border bg-card rounded-2xl border p-6 text-center" role="status">
         <CheckCircle2 className="text-success mx-auto mb-3 h-6 w-6" aria-hidden />
-        <h2 className="font-display text-lg">
+        <h2 ref={doneHeading} tabIndex={-1} className="font-display text-lg outline-none">
           {submitted.hasExchange ? RETURNS_COPY.requesterReceivedExchangeRequest : RETURNS_COPY.requesterReceivedReturnRequest}
         </h2>
         <p className="text-muted-foreground mt-2 text-sm">
@@ -106,6 +112,9 @@ export function RequesterReturnForm({ token, lines, exchangesEnabled, requesterN
         setSubmitted(result);
         router.refresh();
       }}
+      // The server said the page is behind (RX-3 fix round 1, M4): read it
+      // again; the form checks its choices against the lines it then gets.
+      onStale={() => router.refresh()}
     />
   );
 }

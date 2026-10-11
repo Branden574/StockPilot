@@ -274,6 +274,15 @@ describe('RequesterReturnSheetForm: the REPLACEMENT side', () => {
     expect(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester })).toBeDisabled();
   });
 
+  // RX-3 fix round 1 (desk check L5): the token page went from its h1 to the
+  // REPLACEMENT h3. The card is an article named by its label, not a heading.
+  it('names the REPLACEMENT card without making it a heading (no skipped heading level)', async () => {
+    const { user } = setup({ lines: [SHIRT] });
+    await user.click(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
+    expect(await screen.findByRole('article', { name: /REPLACEMENT for New Hire Shirt, M/ })).toBeInTheDocument();
+    expect(screen.queryAllByRole('heading')).toHaveLength(0);
+  });
+
   it('marks the two sides apart with text labels and an arrow, never colour alone', async () => {
     const { user } = setup({ lines: [SHIRT] });
     await user.click(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
@@ -327,6 +336,81 @@ describe('RequesterReturnSheetForm: sending', () => {
     expect(onSubmitted).not.toHaveBeenCalled();
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.getAllByText(RETURNS_COPY.exchangeKillSwitch).length).toBeGreaterThan(0);
+  });
+
+  // RX-3 fix round 1 (desk checks M4 and F4): after a refusal that means the
+  // form is behind, the web kept its stale quantities and sizes until a full
+  // reload and resent the same refused choice. It now reads the lines (the
+  // page's onStale) and the sizes again, unchooses a size no longer offered,
+  // and keeps its key (the refused transaction rolled back the key row).
+  it('a refusal that means the form is behind reads the lines and sizes again, keeps the key, and unchooses a size no longer offered', async () => {
+    const onStale = vi.fn();
+    const { user, submit, loadOptions } = setup(
+      { lines: [SHIRT], onStale },
+      { submit: [{ ok: false, message: 'Choose another size.', reason: 'exchange_item_not_eligible' }] },
+    );
+    await user.click(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
+    await user.click(within(await screen.findByRole('radiogroup')).getByRole('radio', { name: /Size L/ }));
+    // The second sizes answer no longer offers L.
+    loadOptions.mockResolvedValueOnce({
+      ok: true,
+      answer: { ...ANSWER, lines: [{ orderRequestLineId: SHIRT_LINE, options: ANSWER.lines[0]!.options.filter((o) => o.itemId !== SIZE_L) }] },
+    });
+    await user.click(submitButton());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choose another size.');
+    expect(onStale).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(loadOptions).toHaveBeenCalledTimes(2));
+    const group = await screen.findByRole('radiogroup');
+    expect(within(group).queryByRole('radio', { name: /Size L/ })).toBeNull();
+    expect(within(group).getAllByRole('radio').every((r) => !(r as HTMLInputElement).checked)).toBe(true);
+    await user.click(within(group).getByRole('radio', { name: /Size S/ }));
+    await user.click(submitButton());
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[1]![0].idempotencyKey).toBe(submit.mock.calls[0]![0].idempotencyKey);
+    expect(submit.mock.calls[1]![0].lines[0]!.exchange).toMatchObject({ itemId: SIZE_S });
+  });
+
+  // RX-3 fix round 1 (desk checks M4 and F3): idempotency_conflict means an
+  // earlier send with this key went through (its answer was lost) with other
+  // details. The form resent the same key forever. It now says so, reads the
+  // page again, and starts over with nothing chosen and a new key: a press
+  // alone never sends a second request.
+  it('idempotency_conflict: says the earlier request went through, starts over with nothing chosen, and a press alone sends nothing', async () => {
+    const onStale = vi.fn();
+    const { user, submit } = setup(
+      { lines: [SHIRT], onStale },
+      {
+        submit: [
+          { ok: false, message: 'This request was already sent with different details. Reload and try again.', reason: 'idempotency_conflict' },
+          { ok: true, returnNumber: 'RMA-2', replay: false },
+        ],
+      },
+    );
+    await user.click(submitButton());
+    expect(await screen.findByRole('alert')).toHaveTextContent(RETURNS_COPY.requesterEarlierRequestSent);
+    expect(onStale).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    await user.click(submitButton());
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('alert')).toHaveTextContent(RETURNS_COPY.requesterPickAtLeastOne);
+    // Choosing again is a new request, with a new key.
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(submitButton());
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(submit.mock.calls[0]![0].idempotencyKey);
+  });
+
+  it('lines read again: each quantity stays within what is left, a line with nothing left is unticked, and a new line gets its own row', async () => {
+    const { user, rerender, loadOptions, submit, onSubmitted } = setup({ lines: [SHIRT] });
+    expect(screen.getByRole('checkbox')).toBeChecked();
+    const props = { exchangesEnabled: true, loadOptions, submit, onSubmitted, idPrefix: 't' } as const;
+    rerender(<RequesterReturnSheetForm {...props} lines={[{ ...SHIRT, quantityRemaining: 1 }, NOTEBOOK]} />);
+    await user.click(submitButton());
+    expect(lastBody(submit).lines).toEqual([{ orderRequestLineId: SHIRT_LINE, quantity: 1 }]);
+    expect(screen.getByText('Composition Notebook')).toBeInTheDocument();
+    rerender(<RequesterReturnSheetForm {...props} lines={[{ ...SHIRT, quantityRemaining: 0 }, NOTEBOOK]} />);
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes[0]).not.toBeChecked();
   });
 
   it('a send that throws says so and keeps the form', async () => {

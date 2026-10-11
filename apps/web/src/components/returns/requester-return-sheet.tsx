@@ -11,8 +11,11 @@ import {
   effectiveReplacementQuantity,
   initialRequesterDrafts,
   optionsForLine,
+  reconcileDraftsWithOptions,
+  reconcileRequesterDrafts,
   REQUESTER_REASON_OPTIONS,
   requesterLinesFromDrafts,
+  restartRequesterDrafts,
   type RequesterLineDraft,
   type RequesterLineMode,
   type RequesterOptionsOutcome,
@@ -25,6 +28,7 @@ import { cn } from '@/lib/utils';
 import {
   randomRequestUuid,
   REQUESTER_AVAILABILITY_WORDS,
+  requesterRefusalRecovery,
   RETURN_EXCHANGE_NOTE_MAX,
   RETURNS_COPY,
   returnLineLabel,
@@ -52,6 +56,12 @@ export interface RequesterReturnSheetFormProps {
   loadOptions: () => Promise<RequesterOptionsOutcome>;
   submit: (body: RequesterSubmitBody) => Promise<RequesterSubmitOutcome>;
   onSubmitted: (result: RequesterSubmitted) => void;
+  /**
+   * The server said the form is behind (core requesterRefusalRecovery): read
+   * the lines again (the token page refreshes, the portal reads its sheet
+   * again). The form checks its drafts against the lines it is given.
+   */
+  onStale?: () => void;
   onCancel?: () => void;
   /** The token page's honeypot (an off-screen field real people never fill). */
   honeypot?: { value: string; onChange: (value: string) => void };
@@ -62,7 +72,7 @@ export interface RequesterReturnSheetFormProps {
   submitLabel?: string;
 }
 
-const LOADING_SIZES = 'Loading the other sizes…';
+const LOADING_SIZES = RETURNS_COPY.requesterLoadingSizes;
 const NETWORK_FAILED = 'Could not submit your request. Check your connection and try again.';
 
 /**
@@ -88,6 +98,7 @@ export function RequesterReturnSheetForm({
   loadOptions,
   submit,
   onSubmitted,
+  onStale,
   onCancel,
   honeypot,
   idPrefix = 'requester-return',
@@ -96,6 +107,14 @@ export function RequesterReturnSheetForm({
 }: RequesterReturnSheetFormProps) {
   const p = idPrefix;
   const [drafts, setDrafts] = React.useState<Record<string, RequesterLineDraft>>(() => initialRequesterDrafts(lines));
+  // Lines read again (after a refusal, or a refresh): the drafts are checked
+  // against them during render, never in an effect (RX-3 fix round 1, M4).
+  const linesKey = lines.map((l) => `${l.orderRequestLineId}:${l.quantityRemaining}`).join('|');
+  const [seenLinesKey, setSeenLinesKey] = React.useState(linesKey);
+  if (seenLinesKey !== linesKey) {
+    setSeenLinesKey(linesKey);
+    setDrafts((prev) => reconcileRequesterDrafts(prev, lines));
+  }
   const [options, setOptions] = React.useState<RequesterOptionsState>({ status: 'idle' });
   // A refusal in the kill switch's words turns Exchange off for this form.
   const [switchedOff, setSwitchedOff] = React.useState(false);
@@ -127,6 +146,11 @@ export function RequesterReturnSheetForm({
     }
     loadingRef.current = false;
     setOptions(outcome.ok ? { status: 'loaded', answer: outcome.answer } : { status: 'failed', message: outcome.message });
+    // A size no longer offered is unchosen (the person picks again).
+    if (outcome.ok) {
+      const answer = outcome.answer;
+      setDrafts((prev) => reconcileDraftsWithOptions(prev, answer));
+    }
   }
 
   function update(lineId: string, patch: Partial<RequesterLineDraft>) {
@@ -181,7 +205,27 @@ export function RequesterReturnSheetForm({
     setBusy(false);
     if (!outcome.ok) {
       if (outcome.reason === 'exchange_not_available') setSwitchedOff(true);
+      // RX-3 fix round 1 (M4, F3, F4): one rule with the phone.
+      const recovery = requesterRefusalRecovery(outcome.reason);
+      if (recovery === 'restart') {
+        // The earlier send with this key went through: start over with
+        // nothing chosen and a new key, and read the page again.
+        keyRef.current = randomRequestUuid();
+        setDrafts(restartRequesterDrafts(lines));
+        setOptions({ status: 'idle' });
+        setProblem({ message: RETURNS_COPY.requesterEarlierRequestSent, lineId: null });
+        onStale?.();
+        return;
+      }
       setProblem({ message: outcome.message, lineId: null });
+      if (recovery === 'reload') {
+        // Behind the server: the lines and the sizes again; the key stays
+        // (the refused transaction rolled its key row back).
+        onStale?.();
+        const wantsSizes = Object.values(drafts).some((d) => d.selected && d.mode === 'exchange');
+        if (outcome.reason !== 'exchange_not_available' && wantsSizes) void ensureOptions(true);
+        else setOptions({ status: 'idle' });
+      }
       return;
     }
     onSubmitted({ returnNumber: outcome.returnNumber, replay: outcome.replay, hasExchange: built.hasExchange });
@@ -479,11 +523,13 @@ function ReplacementCard({
   const ready = exchangesOn && opts !== null && options.status === 'loaded';
   return (
     <article className={cn(cardClass, 'border-l-primary space-y-3 border-l-4')} aria-labelledby={headingId}>
-      <h3 id={headingId} className="flex items-center gap-1.5 text-xs font-medium">
+      {/* The card's name, not a heading (RX-3 fix round 1, L5: the token page
+          went from its h1 straight to an h3 here). */}
+      <p id={headingId} className="flex items-center gap-1.5 text-xs font-medium">
         <ArrowRight className="h-3.5 w-3.5" aria-hidden />
         <span className="font-mono uppercase tracking-[0.12em]">{RETURNS_COPY.replacement}</span>
         <span className="sr-only"> for {label}</span>
-      </h3>
+      </p>
       {body}
       {ready ? (
         draft.quantity > 1 ? (

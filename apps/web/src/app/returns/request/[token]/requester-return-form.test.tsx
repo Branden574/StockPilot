@@ -129,7 +129,11 @@ describe('RequesterReturnForm (returns RX-3)', () => {
     expect(done).not.toHaveTextContent('reference');
   });
 
-  it("says the server's refusal in the form, beside the button, and keeps the choices", async () => {
+  // Re-pinned on purpose (RX-3 fix round 1, desk checks M4 and F4): this
+  // refusal means the page is behind (a size archived, hidden or no longer
+  // the group's), so the page and the sizes are read again; a size still
+  // offered stays chosen.
+  it("says the server's refusal in the form, beside the button, reads the page and the sizes again, and keeps a size still offered", async () => {
     fetchMock.mockResolvedValueOnce(json(200, ANSWER));
     fetchMock.mockResolvedValueOnce(
       json(400, {
@@ -138,14 +142,16 @@ describe('RequesterReturnForm (returns RX-3)', () => {
         details: { reason: 'exchange_item_not_eligible' },
       }),
     );
+    fetchMock.mockResolvedValueOnce(json(200, ANSWER));
     const user = userEvent.setup();
     renderForm();
     await user.click(screen.getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
     await user.click(within(await screen.findByRole('radiogroup')).getByRole('radio', { name: /Size L/ }));
     await user.click(submit());
     expect(await screen.findByRole('alert')).toHaveTextContent("That item can't be used as a replacement.");
-    expect(screen.getByRole('radio', { name: /Size L/ })).toBeChecked();
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(calls('/api/v1/public/returns/options')).toHaveLength(2));
+    expect(await screen.findByRole('radio', { name: /Size L/ })).toBeChecked();
   });
 
   it('sends whatever lands in the honeypot (the server answers a filled one with a fake success)', async () => {
@@ -168,5 +174,26 @@ describe('RequesterReturnForm (returns RX-3)', () => {
     expect(screen.getByText(/already been returned, or this order has no returnable items/)).toBeInTheDocument();
     rerender(<RequesterReturnForm token={TOKEN} lines={[]} exchangesEnabled requesterName={null} hasRequests />);
     expect(screen.getByText(/already returned or in one of your requests below/)).toBeInTheDocument();
+  });
+});
+
+// RX-3 fix round 1 (desk checks M4, F4 and L5).
+describe('RequesterReturnForm after an answer', () => {
+  it('a refusal that means the page is behind refreshes it, so the lines are read again (the form keeps its key)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      json(400, { error: 'validation_error', message: 'Only 1 of "New Hire Shirt, M" can still be returned.', details: { reason: 'return_exceeds_fulfilled' } }),
+    );
+    renderForm();
+    fireEvent.click(submit());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only 1 of "New Hire Shirt, M" can still be returned.');
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves focus to the confirmation heading once the request is in, so a screen reader hears it', async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { id: 'r1', returnNumber: 'RMA-1', replay: false }));
+    renderForm();
+    fireEvent.click(submit());
+    const heading = await screen.findByRole('heading', { level: 2, name: RETURNS_COPY.requesterReceivedReturnRequest });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 });

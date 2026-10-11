@@ -368,3 +368,38 @@ export function requesterTrackingLineWords(line: RequesterTrackingLine): Request
     changed: x.substituted ? RETURNS_COPY.replacementChangedByWarehouse : null,
   };
 }
+
+// ── After a refusal (token page, portal, phone) ─────────────────────────────
+
+/**
+ * What a requester form does after the server refused a request (RX-3 fix
+ * round 1, desk checks M4, F3 and F4), one rule for every surface:
+ *
+ *   - 'reload': the form is behind the server (what can come back, an
+ *     earlier exchange, a size no longer offered, exchanges switched off).
+ *     Read the lines and the sizes again, check the draft against them, and
+ *     KEEP the request key: the refused transaction rolled back its key row,
+ *     so the same key still means this request.
+ *   - 'restart': idempotency_conflict. This key was already used by a request
+ *     that went through with other details (an answer lost, then the draft
+ *     changed, or a re-read clamped it). Read the lines and the tracking
+ *     again, start the draft over with NOTHING chosen and a new key, and say
+ *     so (RETURNS_COPY.requesterEarlierRequestSent). Nothing is sent again by
+ *     a press alone: a second request needs the person to choose again.
+ *   - null: anything else; the form stays as it is.
+ */
+export type RequesterRefusalRecovery = 'reload' | 'restart';
+
+export function requesterRefusalRecovery(reason: string | null | undefined): RequesterRefusalRecovery | null {
+  switch (reason) {
+    case 'return_exceeds_fulfilled':
+    case 'exchange_already_sent':
+    case 'exchange_item_not_eligible':
+    case 'exchange_not_available':
+      return 'reload';
+    case 'idempotency_conflict':
+      return 'restart';
+    default:
+      return null;
+  }
+}

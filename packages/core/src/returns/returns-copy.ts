@@ -320,6 +320,13 @@ export const RETURNS_COPY = {
   /** The title of a request that has no RMA number yet. */
   requesterRequestTitle: 'Return request',
   requesterReference: (returnNumber: string): string => `Your reference is ${returnNumber}.`,
+  /** RX-3 fix round 1 (M4, F3): after idempotency_conflict, the earlier send went through. */
+  requesterEarlierRequestSent:
+    'Your earlier request went through. It is listed under Your requests on this order. Choose again only for anything else to send back.',
+  /** RX-3 fix round 1 (L4): the sizes loading, the web's words and the phone's spinner name. */
+  requesterLoadingSizes: 'Loading the other sizes…',
+  /** The sheet itself loading (the portal's words; the phone's spinner name). */
+  requesterLoadingForm: 'Loading the return form…',
 } as const;
 
 /**

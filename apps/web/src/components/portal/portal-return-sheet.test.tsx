@@ -96,3 +96,30 @@ describe('PortalReturnSheet (returns RX-3)', () => {
     expect(onDone).toHaveBeenCalledWith({ returnNumber: 'RMA-1', replay: true, hasExchange: false });
   });
 });
+
+// RX-3 fix round 1 (desk checks M4 and F4): a refusal that means the sheet is
+// behind reads it again in place (the form and its words stay), and tells the
+// order list to refresh its requests.
+describe('PortalReturnSheet after a refusal that means it is behind', () => {
+  it('reads the sheet again without closing the form, and calls onStale', async () => {
+    actions.portalReturnSheetAction.mockResolvedValueOnce({ ok: true, data: SHEET });
+    actions.portalReturnSheetAction.mockResolvedValueOnce({
+      ok: true,
+      data: { ...SHEET, lines: [{ ...SHEET.lines[0]!, quantityRemaining: 1 }] },
+    });
+    actions.requestPortalReturnAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'validation_error', message: 'Only 1 can still be returned.', details: { reason: 'return_exceeds_fulfilled' } },
+    });
+    const onStale = vi.fn();
+    const user = userEvent.setup();
+    render(<PortalReturnSheet orderId={ORDER_ID} onDone={vi.fn()} onCancel={vi.fn()} onStale={onStale} />);
+    await screen.findByRole('region', { name: 'Request a return' });
+    await user.click(screen.getByRole('button', { name: 'Submit return request' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only 1 can still be returned.');
+    await vi.waitFor(() => expect(actions.portalReturnSheetAction).toHaveBeenCalledTimes(2));
+    expect(onStale).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('1 of 2 returnable')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Only 1 can still be returned.');
+  });
+});

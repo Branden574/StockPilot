@@ -73,6 +73,60 @@ export function initialRequesterDrafts(lines: readonly RequesterReturnableLine[]
   return out;
 }
 
+function blankDraft(l: RequesterReturnableLine): RequesterLineDraft {
+  return {
+    selected: false,
+    quantity: Math.max(1, Math.floor(l.quantityRemaining)),
+    mode: 'return',
+    itemId: null,
+    replacementQuantity: null,
+    note: '',
+  };
+}
+
+/**
+ * The drafts against lines read again (RX-3 fix round 1, desk checks M4 and
+ * F4; the phone's reconcileRequesterDraft rule): a line keeps its choices with
+ * its quantity inside what is left, a line with nothing left is unticked, and
+ * a line new to the form gets its own unticked row (it was hidden before).
+ */
+export function reconcileRequesterDrafts(
+  drafts: Readonly<Record<string, RequesterLineDraft>>,
+  lines: readonly RequesterReturnableLine[],
+): Record<string, RequesterLineDraft> {
+  const out: Record<string, RequesterLineDraft> = {};
+  for (const l of lines) {
+    const d = drafts[l.orderRequestLineId];
+    const left = Math.floor(l.quantityRemaining);
+    if (!d) out[l.orderRequestLineId] = blankDraft(l);
+    else if (!(left >= 1)) out[l.orderRequestLineId] = { ...d, selected: false, quantity: 1 };
+    else out[l.orderRequestLineId] = { ...d, quantity: Math.max(1, Math.min(Math.floor(d.quantity) || 1, left)) };
+  }
+  return out;
+}
+
+/**
+ * Start over after idempotency_conflict (core requesterRefusalRecovery
+ * 'restart'): every line unticked and nothing chosen, NOT the only-line rule,
+ * so a press alone never sends a second request.
+ */
+export function restartRequesterDrafts(lines: readonly RequesterReturnableLine[]): Record<string, RequesterLineDraft> {
+  return Object.fromEntries(lines.map((l) => [l.orderRequestLineId, blankDraft(l)]));
+}
+
+/** The drafts against a sizes answer: a size no longer offered is unchosen. */
+export function reconcileDraftsWithOptions(
+  drafts: Readonly<Record<string, RequesterLineDraft>>,
+  answer: RequesterExchangeOptionsAnswer,
+): Record<string, RequesterLineDraft> {
+  const offered = new Map(answer.lines.map((l) => [l.orderRequestLineId, new Set(l.options.map((o) => o.itemId))]));
+  const out: Record<string, RequesterLineDraft> = {};
+  for (const [lineId, d] of Object.entries(drafts)) {
+    out[lineId] = d.itemId && !offered.get(lineId)?.has(d.itemId) ? { ...d, itemId: null } : d;
+  }
+  return out;
+}
+
 /** A whole number between min and max (min for anything unreadable). */
 export function clampWhole(raw: unknown, min: number, max: number): number {
   const n = Math.floor(Number(raw));

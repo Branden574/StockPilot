@@ -92,6 +92,12 @@ export function PortalShop({
   // got a request (drives the in-portal confirmation banner).
   const [returnFormOrderId, setReturnFormOrderId] = React.useState<string | null>(null);
   const [returnPlaced, setReturnPlaced] = React.useState<({ orderId: string } & RequesterSubmitted) | null>(null);
+  // RX-3 fix round 1 (L5): the sheet is gone once the request is in, so focus
+  // moves to the confirmation banner instead of falling to the page.
+  const returnBanner = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (returnPlaced) returnBanner.current?.focus();
+  }, [returnPlaced]);
   const returnButtonWords = requesterEntryLabel(exchangesEnabled);
   // Order and return days are the viewer's; the server's zone (UTC) would
   // print the next day for an evening order (React error #418). Printed once
@@ -301,7 +307,9 @@ export function PortalShop({
 
                   {returnPlaced?.orderId === o.id && (
                     <div
-                      className="border-success/40 bg-success/10 mt-3 flex items-center gap-2 rounded-lg border p-3 text-sm"
+                      ref={returnBanner}
+                      tabIndex={-1}
+                      className="border-success/40 bg-success/10 mt-3 flex items-center gap-2 rounded-lg border p-3 text-sm outline-none"
                       role="status"
                     >
                       <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
@@ -310,7 +318,7 @@ export function PortalShop({
                           ? RETURNS_COPY.requesterReceivedExchangeRequest
                           : RETURNS_COPY.requesterReceivedReturnRequest}{' '}
                         {returnPlaced.returnNumber ? `${RETURNS_COPY.requesterReference(returnPlaced.returnNumber)} ` : ''}
-                        Your supplier will review it and follow up.
+                        The warehouse will review it and follow up.
                       </span>
                     </div>
                   )}
@@ -325,6 +333,7 @@ export function PortalShop({
                         router.refresh();
                       }}
                       onCancel={() => setReturnFormOrderId(null)}
+                      onStale={() => router.refresh()}
                     />
                   )}
                 </div>

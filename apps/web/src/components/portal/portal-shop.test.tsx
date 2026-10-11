@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -235,9 +235,13 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
       idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     const banner = await screen.findByRole('status');
+    // RX-3 fix round 1 (desk check L1): one name for the same people on the
+    // portal's form and banner ("the warehouse"), and the banner takes focus
+    // once the form is gone (L5).
     expect(banner).toHaveTextContent(
-      `${RETURNS_COPY.requesterReceivedExchangeRequest} Your reference is RMA-20261011-PRT001. Your supplier will review it and follow up.`,
+      `${RETURNS_COPY.requesterReceivedExchangeRequest} Your reference is RMA-20261011-PRT001. The warehouse will review it and follow up.`,
     );
+    await waitFor(() => expect(document.activeElement).toBe(banner));
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange })).toBeNull();
   });
@@ -253,7 +257,12 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
     const sheet = await screen.findByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange });
     await user.click(within(sheet).getByRole('button', { name: 'Submit return request' }));
     expect(await within(sheet).findByRole('alert')).toHaveTextContent('That is more than was handed over.');
-    expect(refresh).not.toHaveBeenCalled();
+    // Re-pinned on purpose (RX-3 fix round 1, M4 and F4): the refusal means the
+    // sheet is behind, so the sheet is read again in place and the order list
+    // refreshes its requests; the sheet stays open with the words.
+    await waitFor(() => expect(actions.portalReturnSheetAction).toHaveBeenCalledTimes(2));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange })).toBeInTheDocument();
   });
 
   it("lists the customer's own requests in the requester's words, with the replacement order, never a staff label", () => {

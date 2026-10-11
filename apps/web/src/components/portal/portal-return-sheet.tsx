@@ -35,15 +35,31 @@ export function PortalReturnSheet({
   id,
   onDone,
   onCancel,
+  onStale,
 }: {
   orderId: string;
   /** The element id the order's toggle button controls. */
   id?: string;
   onDone: (result: RequesterSubmitted) => void;
   onCancel: () => void;
+  /** The server said the sheet is behind: the order list reads its requests again. */
+  onStale?: () => void;
 }) {
   const [state, setState] = React.useState<SheetState>({ status: 'loading' });
   const [attempt, setAttempt] = React.useState(0);
+
+  // RX-3 fix round 1 (M4, F4): a refusal that means the sheet is behind reads
+  // it again IN PLACE (the form stays, with its words, and checks its choices
+  // against the new lines); a failed read keeps the sheet it has.
+  const readAgain = React.useCallback(async () => {
+    onStale?.();
+    try {
+      const res = await portalReturnSheetAction(orderId);
+      if (res.ok) setState({ status: 'ready', sheet: res.data });
+    } catch {
+      // Keep the sheet on screen; the next send is checked by the server.
+    }
+  }, [orderId, onStale]);
 
   React.useEffect(() => {
     let live = true;
@@ -69,7 +85,7 @@ export function PortalReturnSheet({
       <div id={id} className={shell}>
         <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status" aria-live="polite">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-          Loading the return form…
+          {RETURNS_COPY.requesterLoadingForm}
         </p>
       </div>
     );
@@ -124,6 +140,7 @@ export function PortalReturnSheet({
           loadOptions={async () => readActionOptions(await portalReturnOptionsAction(orderId))}
           submit={async (body) => readActionSubmit(await requestPortalReturnAction({ orderId, ...body }))}
           onSubmitted={onDone}
+          onStale={() => void readAgain()}
           onCancel={onCancel}
         />
       )}

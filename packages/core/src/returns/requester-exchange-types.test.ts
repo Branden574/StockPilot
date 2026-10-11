@@ -23,6 +23,7 @@ import {
   REQUESTER_TRACKING_LINE_KEYS,
   REQUESTER_TRACKING_RETURN_KEYS,
   requesterAvailability,
+  requesterRefusalRecovery,
   requesterReturnsView,
   requesterTrackingLineWords,
   type RequesterExchangeLine,
@@ -379,6 +380,29 @@ describe("one tracking line's words (web and phone)", () => {
       const words = requesterTrackingLineWords(line({ state, replacement: null, substituted: false }));
       expect(words.replacement, state).toBe('A different replacement');
       expect(words.replacement, state).not.toMatch(/review/i);
+    }
+  });
+});
+
+// RX-3 fix round 1 (desk checks M4, F3, F4): what a requester form does after
+// a refusal, one rule for the token page, the portal and the phone.
+describe('a requester refusal: read the sheet again, or start over', () => {
+  it('a refusal that means the form is behind reads the lines and sizes again and keeps the key (the refused transaction rolled back its key row)', () => {
+    for (const reason of ['return_exceeds_fulfilled', 'exchange_already_sent', 'exchange_item_not_eligible', 'exchange_not_available']) {
+      expect(requesterRefusalRecovery(reason), reason).toBe('reload');
+    }
+  });
+
+  it('idempotency_conflict: the earlier send with this key went through, so the form starts over with nothing chosen and a new key', () => {
+    expect(requesterRefusalRecovery('idempotency_conflict')).toBe('restart');
+    expect(RETURNS_COPY.requesterEarlierRequestSent).toBe(
+      'Your earlier request went through. It is listed under Your requests on this order. Choose again only for anything else to send back.',
+    );
+  });
+
+  it('anything else changes nothing in the form', () => {
+    for (const reason of [null, undefined, 'busy', 'return_invalid', 'module_disabled', 'unknown_reason']) {
+      expect(requesterRefusalRecovery(reason), String(reason)).toBeNull();
     }
   });
 });
