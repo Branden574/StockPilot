@@ -134,6 +134,15 @@ begin;
 
 select plan(116);
 
+-- Returns RX-4 (0398, the contract, 2026-10-11) revoked the UPDATE on the
+-- eight returns columns that L4's old-tab PATCH needs to reach the returns
+-- API guard's RX-2 clause. 0398 keeps the guard as defence in depth, so this
+-- file puts 0394's column grant back inside its own transaction (rolled back
+-- at the end) and L4 still proves the clause; the contract itself is proven
+-- by 0398_returns_contract.test.sql.
+grant update (status, approved_by, approved_at, received_by, received_at, denied_by, denied_at, denial_reason)
+  on public.returns to authenticated;
+
 \set orgA    '\'03970000-0000-0000-0000-00000000000a\''
 \set orgZ    '\'03970000-0000-0000-0000-00000000000b\''
 \set own     '\'03970000-0000-0000-0000-0000000000a0\''
