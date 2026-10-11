@@ -600,13 +600,18 @@ actually fire.
     grant: a staff member granted it for one warehouse cannot insert, approve,
     deny, receive or cancel another warehouse's RMA through PostgREST.
     `anon` and PUBLIC hold nothing on `returns`, `return_lines`,
-    `return_decisions` or `return_overview`. `authenticated` holds SELECT
-    and INSERT on `returns` and `return_lines`, UPDATE on exactly eight
-    `returns` columns (`status` and the approve, receive and deny stamps,
-    `denial_reason`), no UPDATE on `return_lines`, and no DELETE, TRUNCATE,
-    TRIGGER, REFERENCES or MAINTAIN on either.
+    `return_decisions` or `return_overview`. Since 0398 (returns RX-4, the
+    contract) `authenticated` holds SELECT only on `returns` and
+    `return_lines`: RX-1's INSERT on both and UPDATE on the eight `returns`
+    columns the old tabs' raw edges used (`status` and the approve, receive
+    and deny stamps, `denial_reason`) are revoked, and no column ACL is left.
+    DELETE, TRUNCATE, TRIGGER, REFERENCES and MAINTAIN were never held after
+    0394. The four write policies and the two guards below stay as defence
+    in depth: a grant restored by mistake still meets them (0398 K5).
   - **Guards** (`trg_returns_zz_api_guard`, `trg_return_lines_zz_api_guard`,
-    INVOKER, firing only when `current_user` is `authenticated` or `anon`):
+    INVOKER, firing only when `current_user` is `authenticated` or `anon`;
+    since 0398 no API role can reach them, and they stay as defence in
+    depth):
     an API insert of an RMA must be `requested`, `internal`, unstamped and
     carry no requester name or email (`return_insert_through_rpc`), and its
     RMA number is replaced by the server's; `requested_by` is the caller
@@ -625,18 +630,34 @@ actually fire.
     flight is waited for and the status read again, so no line slips into an
     RMA approved a moment ago), only on an internal RMA the caller inserted
     itself that no function wrote (no decision row): a requester's RMA,
-    another member's, or a function-created one takes no raw line. The old
-    tabs' raw create, approve, deny, receive and cancel keep working within
-    these rules; closing (the only edge that moves stock) is function-only.
-  - **Accepted until RX-4** (review 2026-10-05): the raw edges above and the
-    frozen wrapper `public.process_return_disposition` still move an RMA
-    forward outside the functions for a `returns:manage` holder with write
-    access to the order's warehouse. Such an edge writes no decision, no
-    audit row and no requester notification, and the raw policies and the
-    wrapper do not check the Returns module. Every stock rule still holds on
-    that path (status gate, budget, latch, the planned-rack revalidation,
-    holdings = on hand). RX-4 revokes the remaining INSERT, the eight UPDATE
-    columns and the wrapper's EXECUTE. The read boundary is also wider than
+    another member's, or a function-created one takes no raw line. Between
+    0394 and 0398 the old tabs' raw create, approve, deny, receive and
+    cancel kept working within these rules; closing (the only edge that
+    moves stock) was always function-only.
+  - **The contract (0398, returns RX-4).** The raw edges are gone: an API
+    insert, a status update, a line insert or update and a delete of either
+    table are refused by privilege (42501) for every member, a manager with
+    `returns:manage` and warehouse write included (0398 K2). No product
+    code writes either table through a client
+    (`returns-raw-writes.guard.test.ts`; RX-1 deleted the last two,
+    `RMAService.applyTransition` and the requester create's compensating
+    delete).
+  - **Accepted residuals after RX-4** (recorded 2026-10-11, RX4-NOTES B2 and
+    B3). (1) The frozen 0359 wrapper `public.process_return_disposition`
+    keeps EXECUTE for `authenticated` (plan 1.5, P30; five suites prove the
+    stock body through it, and 0398 K7 pins the decision): a
+    `returns:manage` holder with write access to the order's warehouse, the
+    person `close_return` admits, can still close a received RMA through it
+    without a decision row, an audit row, a requester notification or the
+    Returns module check. Every stock rule holds on that path (status gate,
+    budget, latch, the planned-rack revalidation, holdings = on hand). Its
+    revoke, with those suites moved to `close_return`, is a later slice.
+    (2) `idempotency_keys_write` still lets a manager write any key row of
+    their organization, the return scopes included: the RMA functions never
+    trust a row they did not complete (below), so a planted or edited row
+    can only turn a replay into `return_changed` or `idempotency_conflict`;
+    narrowing the policy would make supautils lock every policy_grants table
+    at push time for no further gain. The read boundary is also wider than
     the app's `returns:read` gate: every member reads `returns`,
     `return_lines` and `return_overview` (requester email and the denial
     reason included); only `return_decisions` needs `returns:read` or
@@ -714,8 +735,9 @@ actually fire.
   for one manager was ignored by the database. And a restock could only
   land in Staging; letting the client name a rack would let a caller place
   stock on any location in the organization.
-- **Enforced by**: the four policies, the grants, the two guard triggers,
-  the append-only trigger, and the in-body gates. In the app,
+- **Enforced by**: the grants (SELECT only for API roles since 0398), the
+  four policies and the two guard triggers (defence in depth), the
+  append-only trigger, and the in-body gates. In the app,
   `RMAService` calls only the functions (the raw edges are gone from new
   code), reads the RMA (or, for a create, the order) in the ACTIVE
   organization before any function runs and answers a miss as not found (the
@@ -741,7 +763,13 @@ actually fire.
   file is caught by the test before it. The 0359 census (tests 15, 17, 18),
   INV-25 and the 0367 class guard cover the new functions.
   `scripts/db-concurrency/0394_return_close_races.sh` proves the close,
-  approve and plan races across two sessions. App side:
+  approve and plan races across two sessions. The contract is
+  [`0398_returns_contract.test.sql`](../../supabase/tests/0398_returns_contract.test.sql)
+  (K1 grants, K2 every direct write refused, K3 reads unchanged, K4 every
+  function path, K5 the guards behind a restored grant, K6 the guards and
+  policies installed, K7 the wrapper residual); the 0394 and 0396 suites put
+  0394's grants back inside their own transactions so the guards stay
+  proven. App side: `returns-raw-writes.guard.test.ts`,
   `returns.test.ts`, `returns.requester.test.ts`, `returns.portal.test.ts`,
   the `/api/v1/returns` route tests and core `return-actions.test.ts`,
   `return-error-map.test.ts` and `restock-view.test.ts`.
@@ -901,8 +929,10 @@ actually fire.
     orders the RMA's replacements (a re-issue inherits the newest one's
     fulfilment), and the replacement stays in the warehouse it was issued
     in. The RMA cancel raises the flag around its own `close_partial` (pinned
-    by the 0396 preflight since verification V-3). A data fix by the owner
-    raises the flag the same way. Residual (verification V-1, recorded): the
+    by the 0396 preflight since verification V-3), and so does "Close the
+    rest" (`close_return_replacement_rest`, 0397, returns RX-4; below). A
+    data fix by the owner raises the flag the same way. Residual
+    (verification V-1, recorded): the
     RMA's gates read the ORIGINAL order's warehouse, which this guard does not
     pin; `order_requests_update` still lets an `orders:approve` holder who
     writes both warehouses move a completed original by a raw PATCH (no
@@ -910,10 +940,35 @@ actually fire.
     scope follows it: staff of the new warehouse can then release or cancel
     the replacement in the old one (no order crosses warehouses: a change to
     an item of the old warehouse is `exchange_item_not_eligible`). Production
-    had 0 such RMAs on 2026-10-11. Follow-up for a later returns slice:
-    refuse a warehouse change on an order that has an RMA, or also require
-    write access to the live replacement's warehouse in the exchange
-    functions.
+    had 0 such RMAs on 2026-10-11. "Close the rest" (RX-4) also asks write
+    access to the live replacement's own warehouse, under its lock, so it is
+    closed for that path (0397 B7); change, cancel and release keep the
+    residual. Follow-up for a later returns slice: refuse a warehouse change
+    on an order that has an RMA, or ask the replacement's warehouse in those
+    three functions too.
+  - **Close the rest** (0397, returns RX-4; RX-2 verification V3).
+    `close_return_replacement_rest` (SECURITY DEFINER, EXECUTE for
+    `authenticated` only, 5 s lock timeout) ends a replacement handed over
+    in part whose rest is on backorder, once its RMA is received or closed
+    (an approved RMA keeps `cancel_return`'s own close). Gates before any
+    lock, in the 3.3.1 order: signed in; the RMA read without a lock (a
+    foreign RMA answers like a missing one); the Returns and Orders modules;
+    `returns:manage`; `orders:approve`; write access to the original order's
+    warehouse; a reason (1 to 1,000 characters) and the revision the caller
+    saw. Then the RMA row and the live replacement `FOR UPDATE` (the X-2
+    order; it names no item, so it takes no item lock), write access to the
+    replacement's warehouse, the revision (head kinds, unchanged:
+    `return_changed`), the RMA status (`invalid_status_transition`), a
+    replay (completed after an earlier close: `{changed: false}`), the
+    status the caller's screen showed (`return_changed`), and a backorder
+    that handed something over (`replacement_not_backordered`; a rest
+    resumed into picking is out of scope). It calls the unchanged
+    `close_partial` under the transaction-bound flag, restores the flag, and
+    appends the non-head decision `replacement_closed` (reason and order
+    required, no revision: `return_decisions_replacement_closed_chk`), so no
+    revision read changes. Nothing moves in stock; every hold on the rest is
+    released. Races against itself, `resume_fulfillment` and `close_return`
+    are `scripts/db-concurrency/0397_returns_followups_races.sh` R1 to R3.
   - **The flag** (security review F-5). `stockpilot.return_exchange` is the
     only barrier for SECURITY DEFINER callers of `cancel_order_request` and
     `close_partial` on a replacement, and of the header guard. It counts only
@@ -961,7 +1016,14 @@ actually fire.
     must be one of the line's own options (`_return_exchange_item_ok`
     'requester', the same predicate as `return_exchange_options`), and any
     other item, known or not, other organization included, answers the same
-    generic `exchange_item_not_eligible` 400 (no oracle). The
+    generic `exchange_item_not_eligible` 400 (no oracle). Since 0397 (RX-4;
+    RX-3 security review, finding 2) the requester create key-shares only
+    the named items that are options of their own line, still in id order
+    before the budget lock, so a body naming any other id locks nothing of
+    it (race R5a; R5b proves an option is still locked first). Since 0397
+    `return_exchange_options` also leaves out a line whose exchange budget
+    is used up (a unit replaced under a cancelled RMA; RX-3 stock desk check
+    F5), so its sizes are never offered. The
     `RETURNS_EXCHANGE_CREATE=off` switch refuses a new exchange on every
     create surface (and "Add a replacement") with `exchange_not_available`;
     a return still goes through.
@@ -993,22 +1055,19 @@ actually fire.
     each own request once, as tracking, never the staff card (reason,
     disposition, notes) beside it (core `requesterReturnsView`, the phone's
     rule too).
-  - **Accepted residuals (RX-3, recorded).** The token lookup in
-    `server/lib/order-secrets.ts` is a PostgREST GET
-    (`order_request_secrets?return_token=eq.<token>`), so the raw token
-    reaches the Supabase API gateway's logs, readable only by project
-    admins, who can read the secrets table anyway. The app's API URLs and
-    its own logs are clean (every RX-3 read and write carries the token in
-    the body; `reportError` redacts). The token page's own path
+  - **The token lookup (RX-4, 0397; RX-3 security review, finding 1).**
+    `orderIdForReturnToken` calls the service-role SECURITY DEFINER function
+    `order_id_for_return_token` with `.rpc()`, a POST, so the raw token
+    travels in the request body and never in a PostgREST query string the
+    API gateway logs; a token that is not a uuid asks nothing. No product
+    file filters on `return_token` (`order-secrets.test.ts`).
+  - **Accepted residuals (RX-3, recorded; the token query string and the
+    requester lock set were closed by 0397).** The app's API URLs and its
+    own logs are clean (every RX-3 read and write carries the token in the
+    body; `reportError` redacts). The token page's own path
     (`/returns/request/<token>`, and its refresh after a submit) is the
     emailed link by design (RX-1), so the hosting platform's request log
-    records it. The fix needs a migration (a service-role function called
-    by POST, or a lookup by sha256), RX-4 or later. A requester create with an
-    exchange takes `FOR KEY SHARE` on every item id named in the body before
-    eligibility is checked (`_return_exchange_create`, 0396); at most 100
-    ids, rate-limited, one short transaction; the fix (lock only the line's
-    own options for the requester tier) is a function change for a later
-    migration. A comped organization with the Returns row explicitly off
+    records it. A comped organization with the Returns row explicitly off
     answers the member routes 404 rather than 403 (two module checks; fails
     closed). Off Vercel, `publicRequestIp` falls back to a client-settable
     `x-real-ip` (production runs on Vercel, where the platform sets
@@ -1037,13 +1096,8 @@ actually fire.
     and holds under the caller's own RLS, so a member sees only what they
     may read already, and it writes nothing; the app gates the module. A
     part-handed-over replacement on backorder whose RMA is already received
-    or closed cannot be closed as delivered-partial (the header guard; the
-    RMA cancel needs a requested or approved RMA): it waits on backorder
-    until Resume sends the rest. Nothing is held and nothing moves. An
-    RMA-side "Close the rest" (`close_partial` under the flag) needs a
-    function change: RX-3 did not build it, so it is assigned to RX-4 (or
-    its own migration if RX-4 is not scheduled first; verification V3,
-    completeness C-6).
+    or closed is closed as delivered-partial only by "Close the rest" (RX-4,
+    above); a rest already resumed into picking is ended from its order.
 - **Why it matters**: a replacement is stock promised to someone. Without
   these rules an exchange could be issued twice for one approval, picked and
   handed over before the item it replaces came back, cancelled from the
@@ -1057,7 +1111,13 @@ actually fire.
   replacement, `prepareForHandover` running each order step with its own
   gates and never signing) and the order email choke point (a replacement
   never gets the ordinary order emails).
-- **Tested at**: [`0396_returns_exchange_staff.test.sql`](../../supabase/tests/0396_returns_exchange_staff.test.sql)
+- **Tested at**: [`0397_returns_followups.test.sql`](../../supabase/tests/0397_returns_followups.test.sql)
+  (RX-4: Close the rest's posture, gates, states, the close, the replay,
+  the flag restored, a closed RMA, a resumed rest; the token lookup; the
+  requester lock set; used-up lines; a discontinued group and a foreign
+  item on the requester tier; the decision shape; the frozen bodies) with
+  `scripts/db-concurrency/0397_returns_followups_races.sh`, and
+  [`0396_returns_exchange_staff.test.sql`](../../supabase/tests/0396_returns_exchange_staff.test.sql)
   (acceptance 36 end to end and 41, header inheritance, the staff tier, one
   replacement per revision, the link and lines guards, the cancel guard,
   X-1 and C-1, "Close as return only", a replacement handed over in part
