@@ -28,6 +28,67 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'ungroup-2026-10',
+    revision: 1,
+    // Ungroup, slice G1 of the grouping work (migration 0399, a placeholder
+    // number fixed at the PR stage; owner bug 2026-10-05). Held as a DRAFT
+    // until the migration is pushed and verified, the web deploy is READY,
+    // the OTA with the phone's Make this its own item is published and
+    // launched, and a Demo Co walk passed (Demo Co has no shared SKU, so the
+    // walk needs seeded records, a production write that waits for the
+    // owner's go); the follow-up that publishes it sets 'published' and the
+    // real publishedAt and re-reads these words against what shipped. Newest
+    // first: drafts sit above the newest published release, and this one is
+    // dated after returns RX-4's draft (returns-close-rest-2026-10, itself a
+    // placeholder), so it sits at the top, directly above it (a placeholder;
+    // the publishing follow-up dates and orders it for real). Re-placed at
+    // the rebase onto RX-4 (2026-10-12; was: dated after RX-2's draft, at
+    // the top above it; RX-2 and RX-3 are published now).
+    // Who is told: whoever can edit items (items:update), the gate of the
+    // bulk bar's Ungroup, the item page's button and the server; Items is a
+    // core page, so no module. The fixed entry adds items:create (the same
+    // words on a new record). The words name the screens' own labels, claim
+    // no number nobody measured, and never call a recorded quantity "the
+    // book".
+    status: 'draft',
+    title: 'Give records that share a SKU a SKU of their own',
+    summary:
+      'Records that share a SKU can now be separated: Ungroup gives the records you choose a new SKU of their own and changes nothing else, so stock, charter, rack, barcode/ISBN and history stay as they are. Select them on Items or Books and choose Ungroup, or open one and use Make this its own item, on the web and in the mobile app after the latest update.',
+    publishedAt: '2026-10-20T17:00:00Z',
+    audience: { anyPermission: ['items:update', 'items:create'] },
+    entries: [
+      {
+        id: 'ungroup-shared-sku',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Ungroup records that share a SKU',
+        whatChanged:
+          'On Items or Books, select records that share a SKU and choose Ungroup. The review lists each record with its charter, rack and stock and says which ones get a new SKU; when you select every record of a SKU that you can see, choose the one that keeps it. On an item page, Make this its own item does the same for that one record, on the web and in the mobile app.',
+        whyItMatters:
+          'Editing the SKU on one record changed it on every record with that SKU, so records that should not share a SKU could not be separated.',
+        howItAffectsYou:
+          'Only the records you choose change, and only their SKU. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU, so reprint them for the records that changed; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'sku-taken-names-the-record',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'A SKU already in use says which record has it',
+        whatChanged:
+          'Saving a record with a SKU that another record already uses in the same charter and rack used to suggest changing the SKU, the charter or the rack. It now names the SKU and, when you can see it, the record that has it, with Open it.',
+        whyItMatters:
+          'Changing the charter or the rack only to get past that message gave records the same SKU that were not meant to share one.',
+        howItAffectsYou: 'Use a different SKU, or open the record that already has it.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update', 'items:create'] },
+      },
+    ],
+  },
+  {
     id: 'returns-history-hand-over-2026-10',
     revision: 1,
     // D-H1 (Low), from the independent audit of the returns RX-4 Demo Co walk
