@@ -1768,7 +1768,6 @@ export class RMAService {
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.replacement');
   }
 
-  /** A replacement cancelled by its RMA: the order's own trail and event. */
   /**
    * A replacement an RMA function closed as delivered-partial (its rest never
    * sent): the order's own trail, exactly what OrderRequestsService.closePartial
@@ -1812,6 +1811,7 @@ export class RMAService {
     }
   }
 
+  /** A replacement cancelled by its RMA: the order's own trail and event. */
   private async recordReplacementCancelled(
     id: string,
     facts: ReturnFacts,

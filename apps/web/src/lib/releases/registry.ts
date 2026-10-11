@@ -48,11 +48,15 @@ export const RELEASES: Release[] = [
     //   words say so; the entry is told to returns readers too, who see the
     //   return's new state and history line.
     // - Members who place orders, where Returns is on: Return or exchange no
-    //   longer offers other sizes for an item whose unit already got a
-    //   replacement under an earlier, cancelled return (0397
-    //   return_exchange_options leaves a used-up line out; RX-3 stock desk
-    //   check F5). Such an item can only be returned: the database refuses an
-    //   exchange there (exchange_already_sent), note or size.
+    //   longer offers other sizes for an item whose units all got a
+    //   replacement on an earlier return (0397 return_exchange_options leaves
+    //   a line out only when its whole exchange budget is used; RX-3 stock
+    //   desk check F5). The database refuses an exchange there
+    //   (exchange_already_sent), note or size, but the screens still offer
+    //   the warehouse-review note on such a line (as on any line without
+    //   sizes), so the words tell the person to choose Return only (fix
+    //   round 1, desk checks people M1 and complete C9; showing Return only
+    //   on that line is a deferred follow-up).
     // Not told, on purpose: the contract (0398: the old raw INSERT and
     // UPDATE privileges, unused by every screen since RX-1), the token lookup
     // by POST and the requester lock set (server and database only, nothing
@@ -63,13 +67,15 @@ export const RELEASES: Release[] = [
     // replacement's own notification ("Your replacement order was closed /
     // Part of it was handed over. The rest will not be sent.", 0396
     // _notify_replacement_order_changes) and, by email, the return prompt;
-    // an approved return keeps Cancel return's own close of the backorder.
+    // an approved return keeps Cancel return's own close of the backorder
+    // (cancelling the return also cancels the return itself, so the words say
+    // "cancelling the return", fix round 1, desk check people I3).
     // The words never say "book" for a recorded quantity and claim no
     // inspection.
     status: 'draft',
     title: 'Close the rest of a replacement on backorder',
     summary:
-      'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item that already got a replacement on an earlier return.',
+      'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return.',
     publishedAt: '2026-10-16T17:10:00Z',
     entries: [
       {
@@ -81,7 +87,7 @@ export const RELEASES: Release[] = [
           'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history.',
         whyItMatters: 'Such a replacement used to wait on backorder, with no way to end it from its return once the returned item was in.',
         howItAffectsYou:
-          'Close the rest needs order approval permission, like every replacement action. Nothing moves in stock. The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason. While the return still waits for the returned item, Cancel return closes the rest as before.',
+          'Close the rest needs order approval permission as well as permission to manage returns, like every replacement action. Nothing moves in stock. The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason. While the return still waits for the returned item, cancelling the return closes the rest, as before.',
         whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
         audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
@@ -90,9 +96,9 @@ export const RELEASES: Release[] = [
         id: 'returns-exchange-sizes-used-up',
         category: 'fixed',
         area: 'Orders',
-        title: 'No sizes offered for an item that already got a replacement',
+        title: 'No sizes offered once every unit of an item got a replacement',
         whatChanged:
-          'Return or exchange no longer offers other sizes for an item that already got a replacement on an earlier return. Such an item can only be returned.',
+          'Return or exchange no longer offers other sizes for an item whose units all got a replacement on an earlier return. Choose Return only for it: asking the warehouse for a different replacement there is refused too.',
         whyItMatters: 'Choosing a size there was always refused after the request was sent.',
         howItAffectsYou: 'Every other item offers its sizes as before.',
         whatToDo: 'No action needed.',

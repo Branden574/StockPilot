@@ -7070,10 +7070,21 @@ describe('Close the rest (returns RX-4) is held as a draft', () => {
     expect(close.howItAffectsYou).toContain('needs order approval permission');
     expect(close.howItAffectsYou).toContain('Nothing moves in stock.');
     expect(close.howItAffectsYou).toContain('never the reason');
-    expect(close.howItAffectsYou).toContain('Cancel return closes the rest as before');
+    // Fix round 1 (desk check people I3): cancelling the return also cancels
+    // the return, so the words say cancelling the return, not the button.
+    expect(close.howItAffectsYou).toContain('cancelling the return closes the rest, as before');
+    expect(close.howItAffectsYou).toContain('permission to manage returns');
     // Core's words: the button is "Close the rest".
     expect(text).toContain('Close the rest');
-    expect(r.entries[1]!.whatChanged).toContain('Such an item can only be returned.');
+    // Fix round 1 (desk checks people M1, complete C9): the line leaves only
+    // when every unit already got a replacement, and the warehouse-review
+    // request there is refused too (the screens still offer it: deferred).
+    const usedUp = r.entries[1]!;
+    expect(usedUp.whatChanged).toContain('whose units all got a replacement on an earlier return');
+    expect(usedUp.whatChanged).toContain('Choose Return only for it');
+    expect(usedUp.whatChanged).toContain('asking the warehouse for a different replacement there is refused too');
+    expect(usedUp.whatChanged).not.toContain('can only be returned');
+    expect(r.summary).toContain('whose units all got a replacement');
     // Never "book" for a recorded quantity; no inspection claims; no emojis.
     expect(text).not.toMatch(/\bbooks?\b|verified|inspected|certif|guarantee/i);
     expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
