@@ -277,14 +277,17 @@ export function formatOrderReturnSummary(s: OrderReturnSummary): string {
 
 /**
  * The caveat printed with the summary (title/aria on web, a caption on the
- * phone). The net figure is arithmetic on records: it is right for a plain
- * return and WRONG for an in-person exchange recorded only in a return's notes
- * (the SO-000085 case — the swapped-in Medium exists on no order line). Until
- * an exchange is first-class, the honest thing is to say so and point at the
- * notes, which sit directly beneath.
+ * phone). The net figure is arithmetic on THIS order's records: provided minus
+ * returned. Since returns RX-2 an exchange's replacement is its own order
+ * (its SO number is listed with the return, "Exchange: Large ×1 → SO-…"), so
+ * it is never counted here; before RX-2 a replacement handed over in person
+ * was recorded only in a return's notes (the SO-000085 case: the swapped-in
+ * Medium exists on no order line), and that is still said (returns RX-3 PR
+ * stage, polish (e), from the RX-2 Demo Co walk, where the pre-RX-2 words
+ * sat beside a linked replacement).
  */
 export const ORDER_RETURN_SUMMARY_NOTE =
-  'Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.';
+  'Net is provided minus returned, counting only returns that were received and closed. A replacement from an exchange is its own order, listed with its return below, and is not counted here; nor is one recorded only in a return’s notes.';
 
 /**
  * "1 × Women's Polo S — Restock · applied" (the panel's per-line row). An

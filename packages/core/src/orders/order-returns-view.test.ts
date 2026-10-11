@@ -281,10 +281,18 @@ describe('orderReturnSummary — null with no returns, net = provided − return
     });
   });
 
-  it('the caveat names the exchange gap and points at the notes', () => {
+  // Re-pinned by returns RX-3 PR stage, polish (e) (was: "names the
+  // exchange gap and points at the notes"): since RX-2 an exchange's
+  // replacement is its own order, listed with its return, so the caveat says
+  // that first; a replacement recorded only in a return's notes (before RX-2)
+  // is still named. Claim kept: what the net leaves out is said.
+  it('the caveat says a replacement is its own order, not counted here, and still names one recorded only in notes', () => {
     expect(ORDER_RETURN_SUMMARY_NOTE).toContain('received and closed');
-    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('not counted');
-    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('return notes');
+    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('A replacement from an exchange is its own order');
+    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('not counted here');
+    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('recorded only in a return’s notes');
+    // The pre-RX-2 words that made notes the only record of a replacement.
+    expect(ORDER_RETURN_SUMMARY_NOTE).not.toContain('handed over in person');
   });
 });
 

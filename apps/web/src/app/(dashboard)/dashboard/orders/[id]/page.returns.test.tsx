@@ -405,7 +405,11 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     expect(strip.textContent).toContain('3 provided · 1 returned · net 2 with requester');
     const figure = strip.querySelector('[title]') as HTMLElement;
     expect(figure.getAttribute('title')).toContain('not counted');
-    expect(figure.getAttribute('title')).toContain('return notes');
+    // Re-pinned by returns RX-3 PR stage, polish (e) (was: 'return notes',
+    // the pre-RX-2 words): the caveat now says the replacement is its own
+    // order and still names one recorded only in a return's notes.
+    expect(figure.getAttribute('title')).toContain('its own order');
+    expect(figure.getAttribute('title')).toContain('a return’s notes');
     expect(strip.querySelector('a[href="#order-returns"]')?.textContent).toBe('See returns');
   });
 
@@ -418,12 +422,17 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     const strip = container.querySelector('[data-testid="order-return-summary"]') as HTMLElement;
     const note = strip.querySelector('[data-testid="order-return-summary-note"]') as HTMLElement;
     expect(note).not.toBeNull();
+    // Re-pinned by returns RX-3 PR stage, polish (e) (was the pre-RX-2
+    // sentence: "A replacement handed over in person and recorded only in a
+    // return’s notes is not counted — read the return notes below."): an
+    // exchange's replacement is its own order since RX-2. Claim kept: the
+    // caveat is printed, verbatim, in the phone's words.
     expect(note.textContent).toBe(
-      'Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+      'Net is provided minus returned, counting only returns that were received and closed. A replacement from an exchange is its own order, listed with its return below, and is not counted here; nor is one recorded only in a return’s notes.',
     );
     // It is real rendered text, not an attribute: the strip's textContent
     // carries it, and it is not hidden from anyone.
-    expect(strip.textContent).toContain('is not counted — read the return notes below.');
+    expect(strip.textContent).toContain('and is not counted here; nor is one recorded only in a return’s notes.');
     expect(note.getAttribute('aria-hidden')).toBeNull();
     expect(note.hasAttribute('hidden')).toBe(false);
     expect(note.getAttribute('title')).toBeNull();
@@ -640,7 +649,8 @@ describe('(d) an unapplied return counts for nothing in the returned figure — 
       // aria-label, literally.
       const figure = container.querySelector('[data-testid="order-return-summary"] [title]') as HTMLElement;
       expect(figure.getAttribute('aria-label')).toBe(
-        '3 provided · 1 returned · net 2 with requester. Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+        // Re-pinned by returns RX-3 PR stage, polish (e): the caveat's new words.
+        '3 provided · 1 returned · net 2 with requester. Net is provided minus returned, counting only returns that were received and closed. A replacement from an exchange is its own order, listed with its return below, and is not counted here; nor is one recorded only in a return’s notes.',
       );
     } finally {
       vi.useRealTimers();
