@@ -1,21 +1,27 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { hydrateAcrossClockShift } from '@/test/hydration';
 
+import { RETURNS_COPY, type RequesterReturnSheet } from '@stockpilot/core';
+
 import { PortalShop } from './portal-shop';
 
+const refresh = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh, push: vi.fn() }),
 }));
 
 // The panel imports the server-action module; stub every action it
 // references so the client component renders without pulling server deps.
-vi.mock('@/server/actions/portal', () => ({
+const actions = vi.hoisted(() => ({
   submitPortalOrderAction: vi.fn(),
   requestPortalReturnAction: vi.fn(),
+  portalReturnSheetAction: vi.fn(),
+  portalReturnOptionsAction: vi.fn(),
 }));
+vi.mock('@/server/actions/portal', () => actions);
 
 const ITEM = {
   itemId: 'i-1',
@@ -124,5 +130,162 @@ describe('PortalShop hydrates with the server in UTC and the browser in Los Ange
     } finally {
       run.unmount();
     }
+  });
+});
+
+// ── Returns RX-3: the customer's "Return or exchange" ───────────────────────
+
+const ORDER_ID = '0f1e2d3c-4b5a-4968-8776-655443322110';
+const LINE_ID = '11111111-1111-4111-8111-111111111111';
+const SIZE_L = '44444444-4444-4444-8444-444444444444';
+
+function completedOrder(over: Record<string, unknown> = {}) {
+  return {
+    id: ORDER_ID,
+    status: 'completed',
+    created_at: '2026-10-06T18:30:00.000Z',
+    total: 0,
+    lines: [
+      {
+        orderRequestLineId: LINE_ID,
+        itemId: 'i-1',
+        name: 'New Hire Shirt - M',
+        quantity: 1,
+        unitPrice: 0,
+        quantityFulfilled: 1,
+        quantityReturned: 0,
+        quantityPendingReturn: 0,
+      },
+    ],
+    returns: [],
+    ...over,
+  };
+}
+
+const SHEET: RequesterReturnSheet = {
+  orderNumber: 'SO-000103',
+  requesterName: 'Acme School',
+  exchangesEnabled: true,
+  lines: [
+    {
+      orderRequestLineId: LINE_ID,
+      name: 'New Hire Shirt',
+      sizeLabel: 'Size M',
+      photo: { url: 'https://signed.test/m.jpg', thumbUrl: 'https://signed.test/m-thumb.jpg' },
+      quantityFulfilled: 1,
+      quantityRemaining: 1,
+    },
+  ],
+  tracking: [],
+};
+
+describe('PortalShop: Return or exchange (returns RX-3)', () => {
+  beforeEach(() => {
+    refresh.mockReset();
+    for (const fn of Object.values(actions)) fn.mockReset();
+    actions.portalReturnSheetAction.mockResolvedValue({ ok: true, data: SHEET });
+    actions.portalReturnOptionsAction.mockResolvedValue({
+      ok: true,
+      data: {
+        exchangesEnabled: true,
+        lines: [
+          {
+            orderRequestLineId: LINE_ID,
+            options: [{ itemId: SIZE_L, name: 'New Hire Shirt', sizeLabel: 'Size L', availability: 'not_in_stock', photo: null }],
+          },
+        ],
+      },
+    });
+    actions.requestPortalReturnAction.mockResolvedValue({
+      ok: true,
+      data: { id: 'ret-9', status: 'requested', returnNumber: 'RMA-20261011-PRT001', replay: false },
+    });
+  });
+
+  it('says Return or exchange on an order with something to return, and Request a return while exchanges are off', () => {
+    const { rerender } = renderShop({ orders: [completedOrder()], returnsEnabled: true, exchangesEnabled: true });
+    expect(screen.getByRole('button', { name: RETURNS_COPY.requesterReturnOrExchange })).toHaveAttribute('aria-expanded', 'false');
+    rerender(<PortalShop catalog={[]} orders={[completedOrder()]} returnsEnabled exchangesEnabled={false} pricingMode="no_charge" />);
+    expect(screen.getByRole('button', { name: 'Request a return' })).toBeInTheDocument();
+  });
+
+  it("opens the sheet for this order only, with its photos (the portal's first image surface), and sends an exchange through the portal actions", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShop({ orders: [completedOrder()], returnsEnabled: true, exchangesEnabled: true });
+    const toggle = screen.getByRole('button', { name: RETURNS_COPY.requesterReturnOrExchange });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(actions.portalReturnSheetAction).toHaveBeenCalledWith(ORDER_ID);
+    const sheet = await screen.findByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange });
+    expect(sheet).toHaveAttribute('id', toggle.getAttribute('aria-controls'));
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('https://signed.test/m-thumb.jpg');
+
+    await user.click(within(sheet).getByRole('radio', { name: RETURNS_COPY.exchangeRequester }));
+    const sizes = await within(sheet).findByRole('radiogroup');
+    expect(actions.portalReturnOptionsAction).toHaveBeenCalledTimes(1);
+    expect(actions.portalReturnOptionsAction).toHaveBeenCalledWith(ORDER_ID);
+    // Two-state availability (D6): never a count.
+    expect(within(sizes).getByText(RETURNS_COPY.notInStock)).toBeInTheDocument();
+    await user.click(within(sizes).getByRole('radio', { name: /Size L/ }));
+    await user.click(within(sheet).getByRole('button', { name: 'Submit return request' }));
+
+    expect(actions.requestPortalReturnAction).toHaveBeenCalledWith({
+      orderId: ORDER_ID,
+      lines: [{ orderRequestLineId: LINE_ID, quantity: 1, exchange: { itemId: SIZE_L, quantity: 1 } }],
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    const banner = await screen.findByRole('status');
+    expect(banner).toHaveTextContent(
+      `${RETURNS_COPY.requesterReceivedExchangeRequest} Your reference is RMA-20261011-PRT001. Your supplier will review it and follow up.`,
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange })).toBeNull();
+  });
+
+  it("says the portal's refusal in the sheet and keeps it open", async () => {
+    actions.requestPortalReturnAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'validation_error', message: 'That is more than was handed over.', details: { reason: 'return_exceeds_fulfilled' } },
+    });
+    const user = userEvent.setup();
+    renderShop({ orders: [completedOrder()], returnsEnabled: true, exchangesEnabled: true });
+    await user.click(screen.getByRole('button', { name: RETURNS_COPY.requesterReturnOrExchange }));
+    const sheet = await screen.findByRole('region', { name: RETURNS_COPY.requesterReturnOrExchange });
+    await user.click(within(sheet).getByRole('button', { name: 'Submit return request' }));
+    expect(await within(sheet).findByRole('alert')).toHaveTextContent('That is more than was handed over.');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("lists the customer's own requests in the requester's words, with the replacement order, never a staff label", () => {
+    renderShop({
+      returnsEnabled: true,
+      orders: [
+        completedOrder({
+          returns: [
+            {
+              id: 'ret-1',
+              status: 'approved',
+              created_at: '2026-10-07T18:00:00.000Z',
+              returnNumber: 'RMA-20261007-XYZ789',
+              exchangeStatus: 'waiting_for_return' as const,
+              sentences: ['Replacement reserved. Waiting for your return.'],
+              replacementOrderNumber: 'SO-000104',
+              lines: [
+                {
+                  returning: { name: 'New Hire Shirt', sizeLabel: 'Size M', quantity: 1 },
+                  exchange: { state: 'approved' as const, replacement: { name: 'New Hire Shirt', sizeLabel: 'Size L', quantity: 1 }, substituted: false },
+                },
+              ],
+            },
+          ],
+        }),
+      ],
+    });
+    const region = screen.getByRole('region', { name: RETURNS_COPY.requesterYourRequests });
+    expect(within(region).getByText('RMA-20261007-XYZ789')).toBeInTheDocument();
+    expect(within(region).getByText('Replacement reserved. Waiting for your return.')).toBeInTheDocument();
+    expect(within(region).getByText('New Hire Shirt, L ×1')).toBeInTheDocument();
+    expect(within(region).getByText('SO-000104')).toBeInTheDocument();
+    expect(region.textContent).not.toMatch(/awaiting drop-off|pending approval|staging|\brack\b|disposition/i);
   });
 });

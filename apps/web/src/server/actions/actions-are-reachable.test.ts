@@ -112,20 +112,6 @@ const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: str
     file: 'order-requests.ts',
     reason: 'No caller: public-request token rotation has no settings control yet.',
   },
-  // Returns RX-3 ships in stages: stage A (server, API, core) adds the portal
-  // sheet's two reads; the web stage's portal "Return or exchange" sheet
-  // (components/portal) calls them and removes these two entries (this
-  // guard fails the moment an excused action gains a caller).
-  {
-    name: 'portalReturnSheetAction',
-    file: 'portal.ts',
-    reason: 'Returns RX-3 stage A: the portal sheet UI (RX-3 web stage) is its caller; remove this entry when it is wired.',
-  },
-  {
-    name: 'portalReturnOptionsAction',
-    file: 'portal.ts',
-    reason: 'Returns RX-3 stage A: the portal sheet UI (RX-3 web stage) is its caller; remove this entry when it is wired.',
-  },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {

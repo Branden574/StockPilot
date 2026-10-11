@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { PortalShop } from '@/components/portal/portal-shop';
+import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import {
   portalCatalog,
   portalOrders,
@@ -62,6 +63,7 @@ export default async function PortalPage() {
         catalog={catalog}
         orders={orders}
         returnsEnabled={returnsEnabled}
+        exchangesEnabled={exchangeCreateEnabled()}
         pricingMode={ctx.pricingMode}
       />
     </main>
