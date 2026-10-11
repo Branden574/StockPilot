@@ -134,30 +134,50 @@ export const RELEASES: Release[] = [
     // given an expected date of Oct 11 through the web form, showed Oct 11 in
     // the purchase orders list and 10/11/2026 on its page from both zones,
     // and the date was cleared again; production logs held no server error
-    // from 06:24Z to 12:08Z. NOT checked on a phone when this was written:
-    // the simulator was held by another check, so the Purchase orders and
-    // Receive POs lines rest on the published bundle's code and on simulator
-    // runs of their branches with fixture data: #335's (a Los Angeles
-    // organization, both screens: ETAs Oct 10, Nov 1 and Jan 1 as set, where
+    // from 06:24Z to 12:08Z. At publish the phone screens were not checked
+    // (the simulator was held by another check): the Purchase orders and
+    // Receive POs lines rested on the published bundle's code and on
+    // simulator runs of their branches with fixture data: #335's (a simulator
+    // in Los Angeles, both screens: ETAs Oct 10, Nov 1 and Jan 1 as set, where
     // main showed Oct 9, Oct 31 and Dec 31) and #338's (Receive POs: no
     // overdue count on the evening before, 1 overdue the next day, ETA Oct
-    // 10), and a Demo Co phone check of the expected date on this update
-    // gates the merge (its result is added here before merging). #338's
-    // dashboard, briefing, digest and scorecard rules were not exercised in
-    // production (no Demo Co purchase order has an expected date); they rest
-    // on #338's tests. Published with the public link and PO-2 releases,
-    // between them (newest first).
+    // 10).
+    //
+    // The Demo Co phone check of the expected date, a merge gate, passed on
+    // 2026-10-11 (pr335-336-prodcheck C3): the published bundle of iOS update
+    // 01a1111c (its launch asset hashes to the served manifest's hash) on an
+    // iPhone 17 simulator in America/Los_Angeles, signed in as demo
+    // (organization zone America/Los_Angeles, organization day Oct 11). The
+    // web form edits only draft purchase orders and Receive POs lists only
+    // ordered, partially received and expected ones, so the expected date of
+    // the ordered PO-DEMO-002 was set by four guarded single-row database
+    // updates (no status change, so no notification or push; its updated_at
+    // is the one lasting trace), and the screens were read after each:
+    // - Oct 14: Receive POs "5 OPEN", ETA Oct 14; Purchase orders "ETA Oct
+    //   14" (the code before #335 printed the UTC midnight in the phone's
+    //   zone: Oct 13).
+    // - Oct 10: Receive POs "5 OPEN · 1 OVERDUE", ETA Oct 10; Purchase orders
+    //   "ETA Oct 10".
+    // - Oct 11: Receive POs "5 OPEN" (not overdue on the organization's day;
+    //   the rule before #338 counted it from 5 PM Pacific on Oct 10), ETA Oct
+    //   11; Purchase orders "ETA Oct 11".
+    // - Back to no date: Receive POs "5 OPEN", ETA "—".
+    //
+    // #338's dashboard, briefing, digest and scorecard rules were not
+    // exercised in production (no Demo Co purchase order has an expected
+    // date); they rest on #338's tests. Published with the public link and
+    // PO-2 releases, between them (newest first).
     //
     // Its words were re-read against what shipped. Corrected at publish:
     // - The digest's overdue line: no weekly digest has been sent yet (the
     //   first Monday run with #326 is 2026-10-12, after #338), so the words
-    //   no longer say a Monday digest listed that day's deliveries. They say
-    //   what the digest counted, what a preview sent that evening counted and
-    //   what the Monday digest would have counted.
+    //   no longer say a Monday digest listed that day's deliveries. At publish
+    //   they said what the digest counted, what a preview sent that evening
+    //   counted and what the Monday digest would have counted.
     // - The Receive POs overdue line's why: before #335's update the screen
     //   printed the ETA a day early, so "while its ETA was the next day" was
-    //   not what every reader saw. It says the screen could count a purchase
-    //   order as overdue on the evening before it was due.
+    //   not what every reader saw. At publish it said the screen could count
+    //   a purchase order as overdue on the evening before it was due.
     // - The calendar line: the server's month ran ahead only west of UTC
     //   (east of it, it lagged early on the 1st), so it says "In US time
     //   zones", as the other lines do.
@@ -184,8 +204,8 @@ export const RELEASES: Release[] = [
     // - The digest setting's How it affects you said the setting and the
     //   email give the same day and time. The card names the next run, and a
     //   Monday email's footer its own run (digest.ts, 'this-week'), which
-    //   differ in the week after a clock change, so it now names the footer
-    //   of the next digest email.
+    //   differ from the last Monday run before a clock change until the first
+    //   run after it, so it now names the footer of the next digest email.
     //
     // Every user-visible change in the two pull requests has a line (owner
     // rule 2026-09-25). The phone lines ride the over-the-air update, which

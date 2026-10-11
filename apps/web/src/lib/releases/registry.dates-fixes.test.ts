@@ -520,9 +520,10 @@ describe('the dates fixes release says what a reader saw, in every US zone', () 
 
   it('the digest setting is matched to the footer of the next digest email, as the card and a Monday email compute them', () => {
     // The card names the NEXT run; a Monday email's footer names its own run
-    // ('this-week') and a preview's the next. In the week after a clock
-    // change the card and the last Monday email differ (Oct 26 2026: "7:00
-    // AM PDT" in that email, "6:00 AM PST" on the card from 14:00Z).
+    // ('this-week') and a preview's the next. From the last Monday run before
+    // a clock change until the first run after it, the card and the last
+    // Monday email differ (Oct 26 2026: "7:00 AM PDT" in that email, "6:00 AM
+    // PST" on the card from 14:00Z).
     const settings = source('apps/web/src/app/(dashboard)/dashboard/settings/notifications/page.tsx');
     expect(settings).toContain("digestScheduleLabel(org?.timezone, digestSendAt(new Date(), 'next'))");
     const email = source('apps/web/src/lib/email/es/families/digest.ts');
