@@ -108,15 +108,22 @@ describe('the dates fixes release is published', () => {
     // above.
     // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was: RX-3's
     // release at the top as a draft): it is published, in the same place.
+    // Re-pinned by returns RX-4 (2026-10-12; was: at 3, RX-3's published
+    // release at 0, RX-2's at 1, the public link release at 2): RX-4's draft,
+    // dated later still, sits at the top above RX-3's published release.
+    // Claim kept: the public link release, published a minute later, sits
+    // directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(3);
-    expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
+    expect(at).toBe(4);
+    expect(RELEASES[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[2]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(Date.parse(RELEASES[2]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[3]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[3]?.status).toBe('published');
+    expect(Date.parse(RELEASES[3]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

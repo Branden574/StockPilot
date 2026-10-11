@@ -55,11 +55,6 @@ const MOBILE_SRC = path.resolve(WEB_SRC, '../../mobile/src');
  */
 const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: string }> = [
   {
-    name: 'closeReturnReplacementRestAction',
-    file: 'returns.ts',
-    reason: 'Returns RX-4 server commit: the workbench dialog that calls it lands in the next (web) commit, which removes this entry.',
-  },
-  {
     name: 'createProcedureCategoryAction',
     file: 'procedures.ts',
     reason: 'SP-120 orphan; procedures.ts is outside this change — delete or wire it.',

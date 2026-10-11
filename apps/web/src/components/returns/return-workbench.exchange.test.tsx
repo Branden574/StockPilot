@@ -15,6 +15,7 @@ const cancelReturn = vi.hoisted(() => vi.fn());
 const releaseAction = vi.hoisted(() => vi.fn());
 const cancelReplacementAction = vi.hoisted(() => vi.fn());
 const declineAction = vi.hoisted(() => vi.fn());
+const closeRestAction = vi.hoisted(() => vi.fn());
 const changeAction = vi.hoisted(() => vi.fn());
 const candidatesAction = vi.hoisted(() => vi.fn(async () => ({ ok: true, data: { siblings: [], matches: [] } })));
 vi.mock('@/server/actions/returns', () => ({
@@ -26,6 +27,7 @@ vi.mock('@/server/actions/returns', () => ({
   releaseReturnReplacementAction: releaseAction,
   cancelReturnReplacementAction: cancelReplacementAction,
   declineReturnReplacementAction: declineAction,
+  closeReturnReplacementRestAction: closeRestAction,
   changeReturnReplacementAction: changeAction,
   prepareReturnReplacementAction: vi.fn(),
   returnExchangeCandidatesAction: candidatesAction,
@@ -463,6 +465,83 @@ describe('an approved exchange waiting for the returned item', () => {
     await waitFor(() =>
       expect(declineAction).toHaveBeenCalledWith({ id: RET, body: { expectedRevision: 2, reason: 'The requester wants a refund instead' } }),
     );
+  });
+
+  // RX-4 (0397; RX-2 verification V3): handed over in part, the rest on
+  // backorder, the returned item in: "Close the rest" ends it from the RMA.
+  describe('Close the rest (RX-4)', () => {
+    const PARTLY = {
+      ...WAITING,
+      status: 'partly_handed_over',
+      statusLabel: 'Partly handed over; rest on backorder',
+      replacement: { ...WAITING.replacement, status: 'backordered', live: true, class: 'handed_over', owed: 1, held: 0 },
+    };
+
+    it('asks a reason, says what happens, and sends the revision, the reason and the status the screen showed', async () => {
+      closeRestAction.mockResolvedValue({
+        ok: true,
+        data: {
+          answer: { changed: true, replay: false, status: 'received', revision: 1, closedOrderId: 'repl-1' },
+          workbench: bench('received', { ...PARTLY, status: 'handed_over_return_open', replacement: { ...PARTLY.replacement, status: 'completed' } }),
+        },
+      });
+      render(<ReturnWorkbench workbench={bench('received', PARTLY)} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Close the rest' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('The rest of the replacement is never sent. What was already handed over stays handed over.')).toBeInTheDocument();
+      const confirm = within(dialog).getByRole('button', { name: 'Close the rest' });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(within(dialog).getByLabelText('Reason for closing the rest (required)'), {
+        target: { value: 'The requester no longer needs the rest' },
+      });
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(closeRestAction).toHaveBeenCalledWith({
+          id: RET,
+          body: { expectedRevision: 1, reason: 'The requester no longer needs the rest', shownStatus: 'backordered' },
+        }),
+      );
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('The rest of the replacement was closed.'));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('an earlier close of the same rest says so; a refusal stays in the dialog and the page reloads', async () => {
+      closeRestAction.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          answer: { changed: false, replay: true, status: 'received', revision: 1, closedOrderId: 'repl-1' },
+          workbench: bench('received', PARTLY),
+        },
+      });
+      const { unmount } = render(<ReturnWorkbench workbench={bench('received', PARTLY)} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Close the rest' }));
+      let dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Reason for closing the rest (required)'), { target: { value: 'x' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close the rest' }));
+      await waitFor(() => expect(toast.message).toHaveBeenCalledWith('The rest of the replacement was already closed.'));
+      unmount();
+      closeRestAction.mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'conflict', message: 'There is nothing on backorder to close.', details: { reason: 'replacement_not_backordered' } },
+      });
+      render(<ReturnWorkbench workbench={bench('received', PARTLY)} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Close the rest' }));
+      dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Reason for closing the rest (required)'), { target: { value: 'x' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close the rest' }));
+      await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('There is nothing on backorder to close.'));
+      expect(refresh).toHaveBeenCalled();
+    });
+
+    it('is not offered without order approval, nor while the RMA is approved', () => {
+      const { unmount } = render(
+        <ReturnWorkbench workbench={bench('received', PARTLY, { viewer: { canManageReturns: true, canApproveOrders: false, canReadDecisions: true } })} />,
+      );
+      expect(screen.queryByRole('button', { name: 'Close the rest' })).not.toBeInTheDocument();
+      unmount();
+      render(<ReturnWorkbench workbench={bench('approved', PARTLY)} />);
+      expect(screen.queryByRole('button', { name: 'Close the rest' })).not.toBeInTheDocument();
+    });
   });
 
   // Desk check F6 (verifier): the change and the re-issue ask where the

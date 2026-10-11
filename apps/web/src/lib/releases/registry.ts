@@ -28,6 +28,79 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'returns-close-rest-2026-10',
+    revision: 1,
+    // Returns RX-4 (migrations 0397 and 0398). Held as a DRAFT until both
+    // migrations and this slice's web deploy are live, the OTA with the
+    // phone's Close the rest sheet is published and launched, and the Demo Co
+    // walk passed (returns plan 10.1 and 11); the follow-up that publishes it
+    // (RX-5) sets 'published' and the real publishedAt and re-reads these
+    // words against what shipped. Newest first: drafts sit above the newest
+    // published release, so it sits at the top, directly above RX-3's
+    // release (published by #347 at 2026-10-12T02:07Z), and is dated after
+    // every release (a placeholder; the publishing follow-up dates it).
+    //
+    // What a person can see, and who is told:
+    // - People who can open Returns: a received or closed return whose
+    //   replacement was handed over in part, the rest on backorder, offers
+    //   Close the rest (core availableReturnActions close_replacement_rest;
+    //   0397 close_return_replacement_rest). It needs order approval, so the
+    //   words say so; the entry is told to returns readers too, who see the
+    //   return's new state and history line.
+    // - Members who place orders, where Returns is on: Return or exchange no
+    //   longer offers other sizes for an item whose unit already got a
+    //   replacement under an earlier, cancelled return (0397
+    //   return_exchange_options leaves a used-up line out; RX-3 stock desk
+    //   check F5). Such an item can only be returned: the database refuses an
+    //   exchange there (exchange_already_sent), note or size.
+    // Not told, on purpose: the contract (0398: the old raw INSERT and
+    // UPDATE privileges, unused by every screen since RX-1), the token lookup
+    // by POST and the requester lock set (server and database only, nothing
+    // anyone sees).
+    //
+    // Claims review, each checked against the code: nothing moves in stock
+    // (close_partial releases holds only); the requester is told by the
+    // replacement's own notification ("Your replacement order was closed /
+    // Part of it was handed over. The rest will not be sent.", 0396
+    // _notify_replacement_order_changes) and, by email, the return prompt;
+    // an approved return keeps Cancel return's own close of the backorder.
+    // The words never say "book" for a recorded quantity and claim no
+    // inspection.
+    status: 'draft',
+    title: 'Close the rest of a replacement on backorder',
+    summary:
+      'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is in, on the web and in the mobile app after the latest update. Return or exchange no longer offers other sizes for an item that already got a replacement on an earlier return.',
+    publishedAt: '2026-10-16T17:10:00Z',
+    entries: [
+      {
+        id: 'returns-close-replacement-rest',
+        category: 'new',
+        area: 'Returns',
+        title: 'Close the rest of a replacement on backorder',
+        whatChanged:
+          'When part of an exchange replacement was handed over and the rest is on backorder, the return now offers Close the rest once the returned item is received. You give a reason; the rest of the replacement is never sent, what was already handed over stays handed over, and anything reserved for the rest is freed. The return keeps the reason in its history.',
+        whyItMatters: 'Such a replacement used to wait on backorder, with no way to end it from its return once the returned item was in.',
+        howItAffectsYou:
+          'Close the rest needs order approval permission, like every replacement action. Nothing moves in stock. The requester is told that part of the replacement was handed over and the rest will not be sent, never the reason. While the return still waits for the returned item, Cancel return closes the rest as before.',
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-exchange-sizes-used-up',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'No sizes offered for an item that already got a replacement',
+        whatChanged:
+          'Return or exchange no longer offers other sizes for an item that already got a replacement on an earlier return. Such an item can only be returned.',
+        whyItMatters: 'Choosing a size there was always refused after the request was sent.',
+        howItAffectsYou: 'Every other item offers its sizes as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
     id: 'returns-requester-exchange-2026-10',
     revision: 1,
     // Returns RX-3: the requester's own exchange (the return link, the

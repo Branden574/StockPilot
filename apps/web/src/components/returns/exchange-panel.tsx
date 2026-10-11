@@ -742,6 +742,64 @@ export function CloseAsReturnOnlyDialog({
   );
 }
 
+/**
+ * "Close the rest" (returns RX-4, 0397; RX-2 verification V3): a replacement
+ * handed over in part whose rest is on backorder is closed from its RMA once
+ * the returned item is in. The rest is never sent; what was handed over
+ * stays. A reason is required (kept on the return, never shown to the
+ * requester).
+ */
+export function CloseReplacementRestDialog({
+  open,
+  onOpenChange,
+  busy,
+  error = null,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  busy: boolean;
+  /** The last refusal, kept inside the dialog (pattern 20). */
+  error?: string | null;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = React.useState('');
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (busy) return;
+        onOpenChange(v);
+        if (!v) setReason('');
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{RETURNS_COPY.closeReplacementRest}?</DialogTitle>
+          <DialogDescription>{RETURNS_COPY.closeReplacementRestHelp}</DialogDescription>
+        </DialogHeader>
+        <ReasonField
+          id="close-replacement-rest-reason"
+          label={RETURNS_COPY.closeReplacementRestReasonLabel}
+          help={RETURNS_COPY.replacementReasonHelp}
+          value={reason}
+          onChange={setReason}
+        />
+        <DialogError error={error} />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Keep it open
+          </Button>
+          <Button onClick={() => onConfirm(reason.trim())} disabled={busy || !reason.trim()}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {RETURNS_COPY.closeReplacementRest}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export interface ChangeLineInput {
   exchangeLineId: string;
   orderRequestLineId: string;
