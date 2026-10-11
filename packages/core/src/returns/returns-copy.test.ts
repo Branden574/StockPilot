@@ -113,6 +113,7 @@ function allStrings(): string[] {
     pickingWaitsSentence(null, true, true),
     replacementShortLine('Large', 0, 1),
     stillWaitingLine(15),
+    stillWaitingLine(15, { held: 0 }),
     replacementChangeOthersLine('RMA-20261005-ABC123'),
     replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'backordered' }),
     replacementLineSummary({ label: 'Walk Exchange Tee - L', requested: 1, fulfilled: 0, held: 0, status: 'staged_for_pickup' }),
@@ -540,6 +541,22 @@ describe('returns copy', () => {
       RETURNS_COPY.requesterReturnApprovedReplacementAdded,
       RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
       RETURNS_COPY.replacementChangeContactWarehouse,
+      // RX-3: the requester's tracking and sheet words.
+      RETURNS_COPY.requesterExchangeDeclined,
+      RETURNS_COPY.requesterTrackRequested,
+      RETURNS_COPY.requesterTrackApproved,
+      RETURNS_COPY.requesterTrackReceived,
+      RETURNS_COPY.requesterTrackClosed,
+      RETURNS_COPY.requesterTrackDenied,
+      RETURNS_COPY.requesterTrackCancelled,
+      RETURNS_COPY.requesterReturnOrExchange,
+      RETURNS_COPY.requesterYourRequests,
+      RETURNS_COPY.requesterOptionsUnavailable,
+      RETURNS_COPY.available,
+      RETURNS_COPY.notInStock,
+      RETURNS_COPY.warehouseReview,
+      RETURNS_COPY.warehouseReviewNote,
+      RETURNS_COPY.exchangeRequester,
     ];
     expect(requester.filter((s) => /rack|staging|scrap|restock|on hand|cost|supplier/i.test(s))).toEqual([]);
   });

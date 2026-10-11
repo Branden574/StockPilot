@@ -200,7 +200,12 @@ export const RETURNS_COPY = {
     'The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
   changeReplacementEffect: 'The current replacement order is cancelled and a new one is created and reserved in the same step.',
   issueReplacementEffect: 'A new replacement order is created and reserved.',
-  stillWaiting: 'Still waiting? Cancel the exchange to free the reserved items.',
+  // RX-2 review fix P17 (built in RX-3): the 14-day prompt names the two
+  // buttons that end the wait (plan section 6 had "Still waiting? Cancel the
+  // exchange to free the reserved items.", which named no button).
+  stillWaiting: 'Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+  stillWaitingNothingHeld:
+    'Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
 
   // Deny and cancel
   denyReasonLabel: 'Reason for denying',
@@ -276,6 +281,23 @@ export const RETURNS_COPY = {
   requesterReplacementHandedOver: 'Your replacement was handed over.',
   requesterReturnDeclined: 'Your return request was declined.',
   requesterReturnCancelled: 'Your return request was cancelled.',
+  // RX-3: a requester's exchange request whose every line the warehouse
+  // declined at approval (the return goes on): the 3.10 requester sentence.
+  requesterExchangeDeclined: 'Exchange declined. Your return was approved.',
+
+  // RX-3: the requester's tracking, the return's own status in their words
+  // (core requesterReturnStatusSentence). The exchange's sentence follows it
+  // (exchangeRequesterSentence), never merged into it.
+  requesterTrackRequested: 'Return requested. The warehouse will review it.',
+  requesterTrackApproved: 'Return approved. Bring or send the item back as arranged with the warehouse.',
+  requesterTrackReceived: 'Return received.',
+  requesterTrackClosed: 'Return complete.',
+  requesterTrackDenied: 'Return request declined.',
+  requesterTrackCancelled: 'Return request cancelled.',
+  // RX-3: the requester sheet (token page, portal, member).
+  requesterReturnOrExchange: 'Return or exchange',
+  requesterYourRequests: 'Your requests on this order',
+  requesterOptionsUnavailable: "Couldn't load the other sizes. Try again.",
 } as const;
 
 // ── Sentences with values ───────────────────────────────────────────────────
@@ -844,7 +866,16 @@ export function replacementShortLine(item: string, available: number, needed: nu
   return `${item}: ${available} available, ${needed} needed.`;
 }
 
-/** "waiting 15 days. Still waiting? Cancel the exchange to free the reserved items." (from 14 days). */
-export function stillWaitingLine(days: number): string {
-  return `${RETURNS_COPY.waitingDays(days)}. ${RETURNS_COPY.stillWaiting}`;
+/**
+ * The 14-day prompt (plan 3.10, D28; RX-2 review fix P17, built in RX-3):
+ * "Waiting 15 days. Still waiting for the returned item? Cancel replacement
+ * frees the reserved items; Cancel return ends the return too." When the
+ * replacement holds nothing (not in stock), nothing is said to be freed.
+ * Nothing expires on its own.
+ */
+export function stillWaitingLine(days: number, opts: { held?: number | null } = {}): string {
+  const age = RETURNS_COPY.waitingDays(days);
+  const lead = `${age.charAt(0).toUpperCase()}${age.slice(1)}`;
+  const tail = opts.held === 0 ? RETURNS_COPY.stillWaitingNothingHeld : RETURNS_COPY.stillWaiting;
+  return `${lead}. ${tail}`;
 }

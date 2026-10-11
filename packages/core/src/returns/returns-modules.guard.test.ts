@@ -40,6 +40,8 @@ describe('the returns modules', () => {
     expect(SOURCES.sort()).toEqual([
       'exchange-status.ts',
       'exchange-view.ts',
+      // RX-3: the requester's contract (types, key lists, two-state availability).
+      'requester-exchange-types.ts',
       'restock-view.ts',
       'return-actions.ts',
       'return-error-map.ts',

@@ -11,6 +11,7 @@ import {
   RETURN_ACTION_LABELS,
   returnActionLabel,
   stepsForAction,
+  stillWaitingPrompt,
   type ReplacementClass,
   type ReturnAction,
   type ReturnActions,
@@ -441,5 +442,45 @@ describe('RX-2 fix round 1: what a viewer without order approval is offered and 
       const receivedWithout = availableReturnActions({ ...base, status: 'received', exchangeStatus: ex, viewerCanApproveOrders: false });
       expect([receivedWithout.primary, ...receivedWithout.secondary]).not.toContain('hand_over');
     }
+  });
+});
+
+// RX-2 review fix P17, built in RX-3: the 14-day "still waiting" prompt (plan
+// 3.10, D28). Nothing expires; the prompt only names the buttons that end the
+// wait, for a viewer who has them.
+describe('the still-waiting prompt (review fix P17)', () => {
+  const offered = (input: Parameters<typeof availableReturnActions>[0]): ReturnAction[] => {
+    const a = availableReturnActions(input);
+    return [a.primary, ...a.secondary].filter((x): x is ReturnAction => x !== null);
+  };
+  const approver = { viewerCanManageReturns: true, viewerCanApproveOrders: true, hasExchange: true, hasApprovedExchange: true };
+
+  it('from 14 days after approval, reserved or not in stock, for a viewer offered Cancel replacement', () => {
+    const waiting = offered({ ...approver, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: waiting, held: 1 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+    );
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 14, offered: waiting })).toMatch(
+      /^Waiting 14 days\. Still waiting for the returned item\?/,
+    );
+    const short = offered({ ...approver, status: 'approved', exchangeStatus: 'unavailable', replacementClass: 'undrawn' });
+    // Nothing held (not in stock): nothing is said to be freed.
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'unavailable', waitingDays: 20, offered: short, held: 0 })).toBe(
+      'Waiting 20 days. Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+    );
+  });
+
+  it('not before 14 days, not once the item is in, not for another exchange state, and not for a viewer without the button', () => {
+    const waiting = offered({ ...approver, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 13, offered: waiting })).toBeNull();
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: null, offered: waiting })).toBeNull();
+    expect(stillWaitingPrompt({ status: 'received', exchangeStatus: 'ready_to_pick', waitingDays: 30, offered: waiting })).toBeNull();
+    for (const ex of EXCHANGE_STATUSES.filter((s) => s !== 'waiting_for_return' && s !== 'unavailable')) {
+      expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: ex, waitingDays: 30, offered: waiting }), ex).toBeNull();
+    }
+    // Manage returns without order approval: no Cancel replacement, no prompt.
+    const noOrders = offered({ ...approver, viewerCanApproveOrders: false, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(noOrders).not.toContain('cancel_replacement');
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 30, offered: noOrders })).toBeNull();
   });
 });

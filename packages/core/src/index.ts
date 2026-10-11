@@ -83,6 +83,7 @@ export * from './returns/return-error-map';
 export * from './returns/restock-view';
 export * from './returns/return-actions';
 export * from './returns/return-schemas';
+export * from './returns/requester-exchange-types';
 export * from './orders/readiness';
 export * from './orders/readiness-copy';
 export * from './orders/order-stock-gates';

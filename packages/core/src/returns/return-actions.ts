@@ -79,10 +79,10 @@
  * Plain literals and pure functions only: importing this module runs nothing.
  */
 
-import type { ExchangeStatus } from './exchange-status';
+import { RETURN_WAITING_PROMPT_DAYS, type ExchangeStatus } from './exchange-status';
 import type { ReturnStatus } from '../orders/order-returns-view';
 import { RETURN_ERROR_WORDS } from './return-error-map';
-import { cancelReturnReplacementSentence, RETURNS_COPY } from './returns-copy';
+import { cancelReturnReplacementSentence, RETURNS_COPY, stillWaitingLine } from './returns-copy';
 
 export type ReturnAction =
   | 'approve'
@@ -441,4 +441,35 @@ export function stepsForAction(action: ReturnAction): ReturnStep[] | null {
     default:
       return null;
   }
+}
+
+/** What the 14-day prompt reads (RX-2 review fix P17, built in RX-3). */
+export interface StillWaitingInput {
+  /** The RMA's status. */
+  status: ReturnStatus | string;
+  /** The view's exchange status. */
+  exchangeStatus: ExchangeStatus;
+  /** Days since approval while approved (the view's waiting_days). */
+  waitingDays: number | null | undefined;
+  /** What the workbench offers this viewer: availableReturnActions' primary
+   *  and secondary together. */
+  offered: readonly (ReturnAction | null)[];
+  /** What the live replacement holds now, when known (0: nothing to free). */
+  held?: number | null;
+}
+
+/**
+ * The workbench's "still waiting" prompt (plan 3.10, D28; review fix P17):
+ * from 14 days after approval, while the returned item is still out and the
+ * replacement waits for it (reserved, or not in stock), for a viewer offered
+ * Cancel replacement. Null otherwise. Nothing expires on its own: the prompt
+ * only names the two buttons that end the wait.
+ */
+export function stillWaitingPrompt(input: StillWaitingInput): string | null {
+  if (input.status !== 'approved') return null;
+  if (input.exchangeStatus !== 'waiting_for_return' && input.exchangeStatus !== 'unavailable') return null;
+  const days = typeof input.waitingDays === 'number' && Number.isFinite(input.waitingDays) ? Math.floor(input.waitingDays) : null;
+  if (days === null || days < RETURN_WAITING_PROMPT_DAYS) return null;
+  if (!input.offered.includes('cancel_replacement')) return null;
+  return stillWaitingLine(days, { held: input.held ?? null });
 }
