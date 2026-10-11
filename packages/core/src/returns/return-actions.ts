@@ -471,5 +471,5 @@ export function stillWaitingPrompt(input: StillWaitingInput): string | null {
   const days = typeof input.waitingDays === 'number' && Number.isFinite(input.waitingDays) ? Math.floor(input.waitingDays) : null;
   if (days === null || days < RETURN_WAITING_PROMPT_DAYS) return null;
   if (!input.offered.includes('cancel_replacement')) return null;
-  return stillWaitingLine(days, { held: input.held ?? null });
+  return stillWaitingLine(days, { held: input.held ?? null, cancelReturn: input.offered.includes('cancel') });
 }

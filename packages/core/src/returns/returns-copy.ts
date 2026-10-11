@@ -208,6 +208,10 @@ export const RETURNS_COPY = {
   stillWaiting: 'Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
   stillWaitingNothingHeld:
     'Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+  /** RX-3 fix round 1 (L5): the same, for a viewer not offered Cancel return. */
+  stillWaitingNoCancelReturn: 'Still waiting for the returned item? Cancel replacement frees the reserved items.',
+  stillWaitingNothingHeldNoCancelReturn:
+    'Still waiting for the returned item? Cancel replacement cancels the replacement order.',
 
   // Deny and cancel
   denyReasonLabel: 'Reason for denying',
@@ -902,9 +906,18 @@ export function replacementShortLine(item: string, available: number, needed: nu
  * replacement holds nothing (not in stock), nothing is said to be freed.
  * Nothing expires on its own.
  */
-export function stillWaitingLine(days: number, opts: { held?: number | null } = {}): string {
+export function stillWaitingLine(days: number, opts: { held?: number | null; cancelReturn?: boolean } = {}): string {
   const age = RETURNS_COPY.waitingDays(days);
   const lead = `${age.charAt(0).toUpperCase()}${age.slice(1)}`;
-  const tail = opts.held === 0 ? RETURNS_COPY.stillWaitingNothingHeld : RETURNS_COPY.stillWaiting;
+  // Name Cancel return only when the viewer is offered it (RX-3 fix round 1, L5).
+  const withCancelReturn = opts.cancelReturn !== false;
+  const tail =
+    opts.held === 0
+      ? withCancelReturn
+        ? RETURNS_COPY.stillWaitingNothingHeld
+        : RETURNS_COPY.stillWaitingNothingHeldNoCancelReturn
+      : withCancelReturn
+        ? RETURNS_COPY.stillWaiting
+        : RETURNS_COPY.stillWaitingNoCancelReturn;
   return `${lead}. ${tail}`;
 }

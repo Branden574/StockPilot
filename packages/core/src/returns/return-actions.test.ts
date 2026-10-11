@@ -470,6 +470,21 @@ describe('the still-waiting prompt (review fix P17)', () => {
     );
   });
 
+  // RX-3 fix round 1 (desk check L5): the words name only buttons the viewer
+  // is offered. RX-2's fix round 1 changes the offered sets, so Cancel return
+  // can be missing beside Cancel replacement.
+  it('names Cancel return only when it is offered', () => {
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: ['cancel_replacement'], held: 1 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items.',
+    );
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'unavailable', waitingDays: 15, offered: ['cancel_replacement', null], held: 0 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement cancels the replacement order.',
+    );
+    expect(
+      stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: ['cancel_replacement', 'cancel'], held: 1 }),
+    ).toMatch(/; Cancel return ends the return too\.$/);
+  });
+
   it('not before 14 days, not once the item is in, not for another exchange state, and not for a viewer without the button', () => {
     const waiting = offered({ ...approver, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
     expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 13, offered: waiting })).toBeNull();
