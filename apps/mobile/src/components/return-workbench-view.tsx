@@ -56,6 +56,7 @@ import {
   returnStatusTone,
   stepOutcomeMessage,
   workbenchActions,
+  workbenchStillWaiting,
 } from '@/lib/returns-view';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -156,6 +157,9 @@ export function ReturnWorkbenchView({
   // Review fix P18: what "Get replacement ready" does, under it and as its
   // hint, when it is one of the secondary buttons.
   const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;
+  // RX-2 review fix P17 (built in RX-3): from 14 days waiting for the
+  // returned item, the two buttons that end the wait, under the bar.
+  const stillWaiting = workbenchStillWaiting(wb, actions);
 
   // Review fix S2: after a refusal that means the screen is behind the
   // server, read the RMA again (and the iPad list beside it).
@@ -352,6 +356,11 @@ export function ReturnWorkbenchView({
             {secondaryHelp ? (
               <Body size={12.5} muted>
                 {secondaryHelp}
+              </Body>
+            ) : null}
+            {stillWaiting ? (
+              <Body size={13} color={c.ink}>
+                {stillWaiting}
               </Body>
             ) : null}
             {actions.disabledReason ? (

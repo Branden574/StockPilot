@@ -56,7 +56,9 @@ import {
   RETURNS_COPY,
   returnLineLabel,
   returnStatusLabel,
+  returnWaitingDays,
   sameChoice,
+  stillWaitingPrompt,
   unreadDestinationChoice,
   waitingForReturnLine,
   whenProcessedSentence,
@@ -207,6 +209,34 @@ export function shortBackorderLabel(mode: string): string {
  */
 export function actionHelp(action: ReturnAction | null): string | null {
   return action === 'get_replacement_ready' ? RETURNS_COPY.getReplacementReadyHelp : null;
+}
+
+/**
+ * The 14-day prompt under the next-step bar (RX-2 review fix P17, built in
+ * RX-3; plan 3.10, D28): from 14 whole days after approval, while the
+ * returned item is still out and the replacement waits for it (reserved, or
+ * not in stock), for a viewer offered Cancel replacement, core's words name
+ * the two buttons that end the wait ("Waiting 15 days. Still waiting for the
+ * returned item? Cancel replacement frees the reserved items; Cancel return
+ * ends the return too."), and say nothing is freed when nothing is held.
+ * Nothing expires on its own. The days follow the list's rule (the view's
+ * waiting_days, core returnWaitingDays) from the workbench's approval time;
+ * the buttons are the ones this workbench offers (the same core
+ * availableReturnActions the server runs). Null otherwise.
+ */
+export function workbenchStillWaiting(
+  wb: Pick<MobileReturnWorkbench, 'return'> & { exchange?: MobileReturnExchange | null },
+  actions: Pick<ReturnActions, 'primary' | 'secondary'>,
+  now: number = Date.now(),
+): string | null {
+  const ex = exchangeOf(wb);
+  return stillWaitingPrompt({
+    status: wb.return.status,
+    exchangeStatus: ex.status,
+    waitingDays: returnWaitingDays(wb.return.status, wb.return.approvedAt, now),
+    offered: [actions.primary, ...actions.secondary],
+    held: ex.replacement ? ex.replacement.held : null,
+  });
 }
 
 // ── Destinations ───────────────────────────────────────────────────────────
