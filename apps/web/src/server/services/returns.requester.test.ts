@@ -13,8 +13,10 @@ vi.mock('./returns-notify', () => ({
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
 
 import {
+  createMemberReturn,
   createRequesterReturn,
   loadRequesterReturnContext,
+  requesterApprovalEvent,
 } from './returns';
 
 /**
@@ -297,5 +299,154 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     expect((stub.rpcCalls[0]!.args as { p_key: string }).p_key).toBe(key);
     expect(auditRow).not.toHaveBeenCalled();
     expect(notifyRequester).not.toHaveBeenCalled();
+  });
+});
+
+// ── Returns RX-3: the requester's own exchange ──────────────────────────────
+
+describe('RX-3: an exchange on the token path (the database decides, one generic refusal)', () => {
+  const EXCHANGE_INPUT = {
+    lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: '44444444-4444-4444-8444-444444444444', quantity: 2 } }],
+  };
+
+  it('passes the exchange through unchanged; the staff ping and the receipt are worded as an exchange; the audit counts it', async () => {
+    const stub = makeStub();
+    await createRequesterReturn(stub.client, TOKEN, EXCHANGE_INPUT);
+    const call = stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!;
+    expect(call.args).toMatchObject({
+      p_request: { lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: '44444444-4444-4444-8444-444444444444', quantity: 2 } }] },
+      p_actor: { channel: 'token', userId: null },
+    });
+    expect(notifyStaff).toHaveBeenCalledWith(expect.objectContaining({ kind: 'exchange' }));
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'exchange_request_received', channel: 'token' }));
+    expect(auditRow).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ exchangeLines: 1, channel: 'token' }) }),
+    );
+  });
+
+  it('a return only stays "return" for staff and the requester', async () => {
+    await createRequesterReturn(makeStub().client, TOKEN, VALID_INPUT);
+    expect(notifyStaff).toHaveBeenCalledWith(expect.objectContaining({ kind: 'return' }));
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'request_received' }));
+  });
+
+  it('an unknown item and an item of another size group get the SAME answer (no oracle): the one generic hint', async () => {
+    const refused = { 'rpc:create_requester_return_request': { data: null, error: { code: 'P0001', hint: 'exchange_item_not_eligible', message: 'exchange_item_not_eligible', details: null } } };
+    const unknown = await createRequesterReturn(makeStub(refused).client, TOKEN, EXCHANGE_INPUT).catch((e: unknown) => e);
+    const sibling = await createRequesterReturn(makeStub(refused).client, TOKEN, {
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: ITEM_ID } }],
+    }).catch((e: unknown) => e);
+    for (const e of [unknown, sibling]) {
+      expect(e).toMatchObject({ code: 'validation_error', message: "That item can't be used as a replacement.", details: { reason: 'exchange_item_not_eligible' } });
+    }
+    expect(notifyStaff).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a quantity of 0', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 0 }] }],
+    ['a fractional quantity', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1.5 }] }],
+    ['an exchange above the returned quantity', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_ID, quantity: 2 } }] }],
+    ['a fractional exchange quantity', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: ITEM_ID, quantity: 1.5 } }] }],
+    ['an exchange with neither an item nor a note', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: {} }] }],
+    ['a forged approved item inside the exchange', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_ID, approvedItemId: ITEM_ID } }] }],
+    ['a forged replacement order inside the exchange', { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { note: 'L please', replacementOrderId: ORDER_ID } }] }],
+  ])('refuses %s before the database', async (_label, input) => {
+    const stub = makeStub();
+    await expect(createRequesterReturn(stub.client, TOKEN, input as never)).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('strips forged line and header fields (disposition, status, warehouse, organization, location)', async () => {
+    const stub = makeStub();
+    await createRequesterReturn(stub.client, TOKEN, {
+      lines: [
+        {
+          orderRequestLineId: OLINE_ID,
+          quantity: 1,
+          disposition: 'scrap',
+          status: 'approved',
+          warehouseId: 'w',
+          locationId: 'l',
+          approvedItemId: ITEM_ID,
+          replacementOrderId: ORDER_ID,
+          exchange: { note: 'A larger size' },
+        },
+      ],
+      organizationId: 'org-forged',
+      status: 'approved',
+    } as never);
+    const body = (stub.rpcCalls[0]!.args as { p_request: Record<string, unknown> }).p_request;
+    expect(body).toEqual({
+      reasonCode: null,
+      notes: null,
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { note: 'A larger size' } }],
+    });
+  });
+});
+
+describe('RX-3: a member asks on their own order (channel member)', () => {
+  const MEMBER = { organizationId: ORG_ID, userId: 'member-1', orderRequestId: ORDER_ID };
+
+  it('resolves the order as the caller own (requester, organization) and creates as the member', async () => {
+    const stub = makeStub();
+    const result = await createMemberReturn(stub.client, MEMBER, VALID_INPUT, { idempotencyKey: '44444444-4444-4444-8444-444444444444' });
+    expect(result).toMatchObject({ id: 'ret-1', replay: false });
+    const read = stub.chainArgsAll.get('order_requests.select')![0]!;
+    expect(read).toContainEqual(['requester_user_id', 'member-1']);
+    expect(read).toContainEqual(['organization_id', ORG_ID]);
+    const call = stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!;
+    expect(call.args).toMatchObject({ p_actor: { channel: 'member', userId: 'member-1' }, p_key: '44444444-4444-4444-8444-444444444444' });
+    expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ channel: 'member', event: 'request_received' }));
+    expect(notifyStaff).toHaveBeenCalledWith(expect.objectContaining({ actorUserId: 'member-1' }));
+  });
+
+  it("another member's order, or a portal order, is the closed door in the member's words; nothing is created", async () => {
+    const none = makeStub({ 'order_requests.select': { data: [], error: null } });
+    await expect(createMemberReturn(none.client, MEMBER, VALID_INPUT)).rejects.toMatchObject({
+      code: 'not_found',
+      message: "This order isn't available.",
+    });
+    expect(none.rpcCalls).toHaveLength(0);
+    const portal = makeStub({ 'order_requests.select': { data: [{ ...COMPLETED_ORDER, source: 'portal' }], error: null } });
+    await expect(createMemberReturn(portal.client, MEMBER, VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
+    expect(portal.rpcCalls).toHaveLength(0);
+  });
+
+  it('a database closed door (order gone, module off) answers the same words', async () => {
+    const stub = makeStub({
+      'rpc:create_requester_return_request': { data: null, error: { code: 'P0001', hint: 'module_disabled', message: 'module_disabled', details: null } },
+    });
+    await expect(createMemberReturn(stub.client, MEMBER, VALID_INPUT)).rejects.toMatchObject({
+      code: 'not_found',
+      message: "This order isn't available.",
+    });
+  });
+});
+
+describe("RX-3: the requester's approval message (requesterApprovalEvent, plan 3.6.8)", () => {
+  const held = { short: false };
+  const short = { short: true };
+  it.each([
+    ['a return only', null, [], 'approved'],
+    ['unread lines, no replacement', null, null, 'approved'],
+    ['the requester asked, every line declined', null, [{ status: 'declined', requested_by_kind: 'requester' }], 'exchange_declined'],
+    ['a portal customer asked, declined', null, [{ status: 'declined', requested_by_kind: 'portal_customer' }], 'exchange_declined'],
+    ['staff added and declined their own add', null, [{ status: 'declined', requested_by_kind: 'staff' }], 'approved'],
+    ['the requester asked, reserved', held, [{ status: 'approved', requested_by_kind: 'requester' }], 'exchange_approved'],
+    ['the requester asked, not in stock', short, [{ status: 'approved', requested_by_kind: 'requester' }], 'exchange_approved_short'],
+    ['unread lines, a replacement', held, null, 'exchange_approved'],
+    ['staff added every line', held, [{ status: 'approved', requested_by_kind: 'staff' }], 'return_approved_replacement_added'],
+    ['staff added every line, short', short, [{ status: 'approved', requested_by_kind: 'staff' }], 'return_approved_replacement_added_short'],
+    [
+      'one asked line declined, one staff line approved',
+      held,
+      [
+        { status: 'declined', requested_by_kind: 'requester' },
+        { status: 'approved', requested_by_kind: 'staff' },
+      ],
+      'exchange_approved',
+    ],
+  ] as const)('%s -> %s', (_label, replacement, lines, expected) => {
+    expect(requesterApprovalEvent(replacement, lines as never)).toBe(expected);
   });
 });

@@ -34,6 +34,7 @@ import {
   replacementRmaLinkLabel,
   replacementShortLine,
   replacementCancelledLines,
+  requesterEntryLabel,
   type ReplacementBannerInput,
   slipExchangeLine,
   stillWaitingLine,
@@ -113,6 +114,7 @@ function allStrings(): string[] {
     pickingWaitsSentence(null, true, true),
     replacementShortLine('Large', 0, 1),
     stillWaitingLine(15),
+    stillWaitingLine(15, { held: 0 }),
     replacementChangeOthersLine('RMA-20261005-ABC123'),
     replacementLineSummary({ label: 'Walk Exchange Tee - XL', requested: 2, fulfilled: 1, held: 0, status: 'backordered' }),
     replacementLineSummary({ label: 'Walk Exchange Tee - L', requested: 1, fulfilled: 0, held: 0, status: 'staged_for_pickup' }),
@@ -178,6 +180,41 @@ describe('returns copy', () => {
     expect(returnLineLabel('Walk New Hire Shirt - 2XL', 'Size 2XL')).toBe('Walk New Hire Shirt - 2XL');
     expect(returnLineLabel('Medium Tee', 'Size M')).toBe('Medium Tee, M');
     expect(returnLineLabel(null, null)).toBe('Item');
+  });
+
+  // RX-3 (found by the requester tracking, web stage): an apostrophe-s is a
+  // possessive, never the size S, so "Women's Polo" in size S kept no size
+  // at all ("Women's Polo ×1" beside "Women's Polo, M ×1"). L4L's own
+  // exchange items are the New Hire Men's and Women's Polos (plan RX-0).
+  it("never reads a possessive's s as the size S (Women's, Men's, curly or straight)", () => {
+    expect(returnLineLabel("Women's Polo", 'Size S')).toBe("Women's Polo, S");
+    expect(returnLineLabel("New Hire Men's Polo", 'S')).toBe("New Hire Men's Polo, S");
+    expect(returnLineLabel('Women’s Polo', 'Size S')).toBe('Women’s Polo, S');
+    expect(returnLineLabel("Kids' Tee", 'Size S')).toBe("Kids' Tee, S");
+    // A name that does carry the size still is not repeated.
+    expect(returnLineLabel("Women's Polo S", 'Size S')).toBe("Women's Polo S");
+    expect(returnLineLabel("Women's Polo - S", 'Size S')).toBe("Women's Polo - S");
+    expect(returnLineLabel("Women's Polo (M)", 'Size M')).toBe("Women's Polo (M)");
+  });
+
+  // RX-3 merge: the requester sheet's words, one set for the token page, the
+  // B2B portal and the phone (the web and phone stages had each written
+  // their own: "Send request" / "Submit return request", "Select at least" /
+  // "Pick at least", "Choose the replacement: X" / "Choose a size for X.").
+  it('RX-3: one set of requester sheet words for the web and the phone', () => {
+    expect(RETURNS_COPY.requesterRequestReturn).toBe('Request a return');
+    expect(requesterEntryLabel(true)).toBe('Return or exchange');
+    expect(requesterEntryLabel(false)).toBe('Request a return');
+    expect(RETURNS_COPY.requesterSubmit).toBe('Submit return request');
+    expect(RETURNS_COPY.requesterSending).toBe('Sending…');
+    expect(RETURNS_COPY.requesterNothingLeft).toBe('Nothing left to return on this order.');
+    expect(RETURNS_COPY.requesterPickAtLeastOne).toBe('Pick at least one item to return.');
+    expect(RETURNS_COPY.requesterChooseSize("Women's Polo, S")).toBe("Choose a size for Women's Polo, S.");
+    expect(RETURNS_COPY.requesterNoteRequired('Composition Notebook')).toBe('Tell the warehouse what you need for Composition Notebook.');
+    expect(RETURNS_COPY.requesterNotesLabel).toBe('Notes for the warehouse');
+    expect(RETURNS_COPY.requesterNotesPlaceholder).toBe('Anything the warehouse should know about this return.');
+    expect(RETURNS_COPY.requesterRequestTitle).toBe('Return request');
+    expect(RETURNS_COPY.requesterReference('RMA-20261011-ABC123')).toBe('Your reference is RMA-20261011-ABC123.');
   });
 
   it('RX-2: prints the plan section 6 replacement sentences', () => {
@@ -540,6 +577,33 @@ describe('returns copy', () => {
       RETURNS_COPY.requesterReturnApprovedReplacementAdded,
       RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
       RETURNS_COPY.replacementChangeContactWarehouse,
+      // RX-3: the requester's tracking and sheet words.
+      RETURNS_COPY.requesterExchangeDeclined,
+      RETURNS_COPY.requesterTrackRequested,
+      RETURNS_COPY.requesterTrackApproved,
+      RETURNS_COPY.requesterTrackReceived,
+      RETURNS_COPY.requesterTrackClosed,
+      RETURNS_COPY.requesterTrackDenied,
+      RETURNS_COPY.requesterTrackCancelled,
+      RETURNS_COPY.requesterReturnOrExchange,
+      RETURNS_COPY.requesterYourRequests,
+      RETURNS_COPY.requesterOptionsUnavailable,
+      RETURNS_COPY.requesterRequestReturn,
+      RETURNS_COPY.requesterSubmit,
+      RETURNS_COPY.requesterSending,
+      RETURNS_COPY.requesterNothingLeft,
+      RETURNS_COPY.requesterPickAtLeastOne,
+      RETURNS_COPY.requesterChooseSize('Walk Exchange Tee, M'),
+      RETURNS_COPY.requesterNoteRequired('Walk Cap'),
+      RETURNS_COPY.requesterNotesLabel,
+      RETURNS_COPY.requesterNotesPlaceholder,
+      RETURNS_COPY.requesterRequestTitle,
+      RETURNS_COPY.requesterReference('RMA-20261011-ABC123'),
+      RETURNS_COPY.available,
+      RETURNS_COPY.notInStock,
+      RETURNS_COPY.warehouseReview,
+      RETURNS_COPY.warehouseReviewNote,
+      RETURNS_COPY.exchangeRequester,
     ];
     expect(requester.filter((s) => /rack|staging|scrap|restock|on hand|cost|supplier/i.test(s))).toEqual([]);
   });

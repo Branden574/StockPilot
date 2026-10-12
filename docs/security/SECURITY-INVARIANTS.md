@@ -858,12 +858,13 @@ actually fire.
     `hold_order_stock`, `resume_fulfillment` and `complete_picking` (review
     S4; the window is the gap between two rows' foreign-key checks, so it is
     rare, and nothing is written). The RMA side answers it with the plain
-    "Busy. Try again." (40P01, like 55P03 and 57014); on the order side the
-    victim reads the generic error, because the order service maps errors
-    function by function (`holdStockError` and the inline mappers of the
-    `approve_partial`, `resume_fulfillment` and `complete_picking` calls)
-    and sends 40P01 to `internal_error`: mapping it to "Busy. Try again."
-    there is a recorded follow-up, not a one-place change.
+    "Busy. Try again." (40P01, like 55P03 and 57014), and since returns RX-3
+    so does the order side: every mapping place of the order service
+    (`lib/order-busy.ts` `isOrderBusyError` / `orderBusyRefusal`: the named
+    mappers keep their own busy words, the inline mappers of every order
+    function, the gated pick-slip write, the line insert, the placement and
+    the shortfall PO draft) answers 55P03, 57014 and 40P01 as a retryable
+    409 instead of an internal error (`order-requests.busy.test.ts`).
   - **The return-first gate.** `trg_order_requests_zz_replacement_status`
     (SECURITY DEFINER, every role) refuses a replacement's move to
     `pick_slip_generated` (from `approved`, or a resume from `backordered`)
@@ -954,12 +955,68 @@ actually fire.
     approval, cancel or denial, rewords the requester's ready, on the way,
     partly handed over and completed pings, and stays silent on ready for
     pickup after a counter receipt. Staff are never pinged for a replacement.
-  - **The requester tier.** The database accepts a requester's exchange
-    (`create_requester_return_request`, service role only, items from
-    `return_exchange_options`), but the server refuses one with
-    `exchange_not_available` until RX-3 ships its pages and messages. The
+  - **The requester tier (RX-3).** A requester's exchange is created by
+    `create_requester_return_request` (service role only) from the token
+    page, the B2B portal and a member's own order (web and phone); the item
+    must be one of the line's own options (`_return_exchange_item_ok`
+    'requester', the same predicate as `return_exchange_options`), and any
+    other item, known or not, other organization included, answers the same
+    generic `exchange_item_not_eligible` 400 (no oracle). The
     `RETURNS_EXCHANGE_CREATE=off` switch refuses a new exchange on every
-    create surface (and "Add a replacement") the same way.
+    create surface (and "Add a replacement") with `exchange_not_available`;
+    a return still goes through.
+  - **The requester surfaces (RX-3).** The sizes for the token page are a
+    POST (`/api/v1/public/returns/options`) with the token in the BODY, never
+    in a URL; every answer of it and of the public submit is
+    `Cache-Control: no-store`; an unknown token, an order that cannot come
+    back and the Returns module off answer one 404 shape; the limits are
+    fail-closed and keyed by IP and by sha256(token), never the raw token.
+    zod strips a disposition, an approved item, a status, a warehouse, an
+    organization, a location and a replacement order id; the token never
+    opens the catalog; `order_requests.return_token` is never read (tokens
+    live only in `order_request_secrets`, read through
+    `loadRequesterReturnContext` with the service role). The member routes
+    (`/api/v1/orders/[id]/return-request`, its `options`) serve the caller's
+    own order only (`requester_user_id` = the caller, never a portal order;
+    anything else is the one 404), are module-gated, answer 401 for a
+    disabled account (an account whose status cannot be read gets the
+    route's own 500, no-store) and apply the MFA floor to the write. A
+    requester payload carries only core's key lists
+    (`requester-exchange-types.ts`); `forbiddenRequesterKeys` is run by the
+    tests on every payload a requester receives (no organization, warehouse,
+    rack, Staging, disposition, cost, quantity on record, note, reason or
+    staff key); availability is two words, never a count. Tracking ("Your
+    requests on this order") shows only the requester's own requests in core
+    sentences. Photos are signed only for the order's returned items and the
+    eligible options, chunked at 1,000 paths, never inside a cached
+    function. The web order page shows a requester who cannot read returns
+    each own request once, as tracking, never the staff card (reason,
+    disposition, notes) beside it (core `requesterReturnsView`, the phone's
+    rule too).
+  - **Accepted residuals (RX-3, recorded).** The token lookup in
+    `server/lib/order-secrets.ts` is a PostgREST GET
+    (`order_request_secrets?return_token=eq.<token>`), so the raw token
+    reaches the Supabase API gateway's logs, readable only by project
+    admins, who can read the secrets table anyway. The app's API URLs and
+    its own logs are clean (every RX-3 read and write carries the token in
+    the body; `reportError` redacts). The token page's own path
+    (`/returns/request/<token>`, and its refresh after a submit) is the
+    emailed link by design (RX-1), so the hosting platform's request log
+    records it. The fix needs a migration (a service-role function called
+    by POST, or a lookup by sha256), RX-4 or later. A requester create with an
+    exchange takes `FOR KEY SHARE` on every item id named in the body before
+    eligibility is checked (`_return_exchange_create`, 0396); at most 100
+    ids, rate-limited, one short transaction; the fix (lock only the line's
+    own options for the requester tier) is a function change for a later
+    migration. A comped organization with the Returns row explicitly off
+    answers the member routes 404 rather than 403 (two module checks; fails
+    closed). Off Vercel, `publicRequestIp` falls back to a client-settable
+    `x-real-ip` (production runs on Vercel, where the platform sets
+    `x-forwarded-for`). A member's web request on an order WITH a return
+    token goes through the token page and is recorded as the token channel
+    with no user (RX-1's design, D16); one without a token, and the phone,
+    go through the member routes and record the member; moving the web's
+    token path to the member routes is an owner decision.
   - **Accepted limits** (desk check F10, recorded). The kill switch is
     app-only: a `returns:manage` holder calling `create_return_request` with
     an exchange line, or `approve_return` with "add", straight through the

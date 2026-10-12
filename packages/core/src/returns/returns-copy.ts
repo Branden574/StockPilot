@@ -103,7 +103,17 @@ export const RETURNS_COPY = {
   replacementApproved: 'Approved',
   replacementDeclined: 'Declined',
   replacementCancelled: 'Cancelled',
+  /**
+   * RX-3 PR stage, polish (a): the REPLACEMENT card once its replacement
+   * order's line was handed over (all of it, part of it, or closed with none
+   * of it sent). The stored line status stays 'approved' after the hand-over.
+   */
+  replacementHandedOver: 'Handed over',
+  replacementPartlyHandedOver: 'Partly handed over',
+  replacementNotSent: 'Not sent',
   replacementWarehouseReview: 'Warehouse will review',
+  /** RX-3 fix round 1 (M3): a replacement asked for with a note, once declined or cancelled. */
+  replacementAskedByNote: 'A different replacement',
   replacementNoteFromRequester: 'Note from the requester',
   replacementChangedByWarehouse: 'Changed by the warehouse',
   approveAsRequested: 'Approve as requested',
@@ -200,7 +210,16 @@ export const RETURNS_COPY = {
     'The replacement order is cancelled. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
   changeReplacementEffect: 'The current replacement order is cancelled and a new one is created and reserved in the same step.',
   issueReplacementEffect: 'A new replacement order is created and reserved.',
-  stillWaiting: 'Still waiting? Cancel the exchange to free the reserved items.',
+  // RX-2 review fix P17 (built in RX-3): the 14-day prompt names the two
+  // buttons that end the wait (plan section 6 had "Still waiting? Cancel the
+  // exchange to free the reserved items.", which named no button).
+  stillWaiting: 'Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+  stillWaitingNothingHeld:
+    'Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+  /** RX-3 fix round 1 (L5): the same, for a viewer not offered Cancel return. */
+  stillWaitingNoCancelReturn: 'Still waiting for the returned item? Cancel replacement frees the reserved items.',
+  stillWaitingNothingHeldNoCancelReturn:
+    'Still waiting for the returned item? Cancel replacement cancels the replacement order.',
 
   // Deny and cancel
   denyReasonLabel: 'Reason for denying',
@@ -276,7 +295,77 @@ export const RETURNS_COPY = {
   requesterReplacementHandedOver: 'Your replacement was handed over.',
   requesterReturnDeclined: 'Your return request was declined.',
   requesterReturnCancelled: 'Your return request was cancelled.',
+  // RX-3: a requester's exchange request whose every line the warehouse
+  // declined at approval (the return goes on): the 3.10 requester sentence.
+  requesterExchangeDeclined: 'Exchange declined. Your return was approved.',
+
+  // RX-3: the requester's tracking, the return's own status in their words
+  // (core requesterReturnStatusSentence). The exchange's sentence follows it
+  // (exchangeRequesterSentence), never merged into it.
+  requesterTrackRequested: 'Return requested. The warehouse will review it.',
+  requesterTrackApproved: 'Return approved. Bring or send the item back as arranged with the warehouse.',
+  requesterTrackReceived: 'Return received.',
+  requesterTrackClosed: 'Return complete.',
+  requesterTrackDenied: 'Return request declined.',
+  requesterTrackCancelled: 'Return request cancelled.',
+  /** RX-3 fix round 1 (L7): the exchange declined, said after the return's own sentence. */
+  requesterExchangeDeclinedShort: 'Exchange declined.',
+  // RX-3: the requester sheet (token page, portal, member).
+  requesterReturnOrExchange: 'Return or exchange',
+  requesterYourRequests: 'Your requests on this order',
+  requesterOptionsUnavailable: "Couldn't load the other sizes. Try again.",
+  // RX-3 merge: the sheet's own words, one set for the token page, the B2B
+  // portal and the phone (requesterEntryLabel picks the entry's words).
+  requesterRequestReturn: 'Request a return',
+  requesterSubmit: 'Submit return request',
+  requesterSending: 'Sending…',
+  requesterNothingLeft: 'Nothing left to return on this order.',
+  requesterPickAtLeastOne: 'Pick at least one item to return.',
+  requesterChooseSize: (line: string): string => `Choose a size for ${line}.`,
+  requesterNoteRequired: (line: string): string => `Tell the warehouse what you need for ${line}.`,
+  requesterNotesLabel: 'Notes for the warehouse',
+  requesterNotesPlaceholder: 'Anything the warehouse should know about this return.',
+  /** The title of a request that has no RMA number yet. */
+  requesterRequestTitle: 'Return request',
+  requesterReference: (returnNumber: string): string => `Your reference is ${returnNumber}.`,
+  /** RX-3 fix round 1 (M4, F3): after idempotency_conflict, the earlier send went through. */
+  requesterEarlierRequestSent:
+    'Your earlier request went through. It is listed under Your requests on this order. Choose again only for anything else to send back.',
+  /** RX-3 fix round 1 (L4): the sizes loading, the web's words and the phone's spinner name. */
+  requesterLoadingSizes: 'Loading the other sizes…',
+  /** The sheet itself loading (the portal's words; the phone's spinner name). */
+  requesterLoadingForm: 'Loading the return form…',
+  requesterWarehouseWillReview: 'The warehouse will review it.',
 } as const;
+
+/**
+ * The replacement's quantity on a requester sheet when there is no stepper
+ * (one comes back): "Quantity: 1", the web form's and the phone's words
+ * (RX-3 fix round 1, L4; the phone said "Qty requested: 1", staff words).
+ */
+export function requesterReplacementQuantityLabel(quantity: number): string {
+  return `${RETURNS_COPY.replacementQuantity}: ${quantity}`;
+}
+
+/**
+ * After a requester's request is in: the reference, then that the warehouse
+ * reviews it (the token page's confirmation, the phone's alert; RX-3 fix
+ * round 1, L4).
+ */
+export function requesterSentWords(returnNumber: string | null): string {
+  const review = RETURNS_COPY.requesterWarehouseWillReview;
+  return returnNumber ? `${RETURNS_COPY.requesterReference(returnNumber)} ${review}` : review;
+}
+
+/**
+ * The words on the requester's way in (the order's link or button, the token
+ * page's heading and title, the portal's button and sheet): "Return or
+ * exchange" while exchanges are on, "Request a return" while the kill switch
+ * holds them back, so no page promises an exchange it then refuses.
+ */
+export function requesterEntryLabel(exchangesEnabled: boolean): string {
+  return exchangesEnabled ? RETURNS_COPY.requesterReturnOrExchange : RETURNS_COPY.requesterRequestReturn;
+}
 
 // ── Sentences with values ───────────────────────────────────────────────────
 
@@ -288,6 +377,11 @@ export function qtyReturningLabel(quantity: number): string {
 /** "Qty requested: 1". */
 export function qtyRequestedLabel(quantity: number): string {
   return `Qty requested: ${quantity}`;
+}
+
+/** "Qty handed over: 1" (the REPLACEMENT card once all of it was handed over). */
+export function qtyHandedOverLabel(quantity: number): string {
+  return `Qty handed over: ${quantity}`;
 }
 
 /** "Available: 14". */
@@ -364,13 +458,14 @@ export function choiceNeededSentence(item: string | null, reason: string): strin
 
 /** "New Hire Shirt, M" or "New Hire Shirt" for the sentences that name a
  *  line; a name that already carries the size ("Walk New Hire Shirt - 2XL")
- *  is not repeated. */
+ *  is not repeated. An apostrophe is part of a word here (RX-3): the s of
+ *  "Women's" is a possessive, never the size S. */
 export function returnLineLabel(name: string | null | undefined, variant: string | null | undefined): string {
   const n = (name ?? '').trim() || 'Item';
   const v = (variant ?? '').trim().replace(/^Size\s+/i, '');
   if (!v) return n;
   const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^A-Za-z0-9])${escaped}($|[^A-Za-z0-9])`, 'i').test(n) ? n : `${n}, ${v}`;
+  return new RegExp(`(^|[^A-Za-z0-9'’])${escaped}($|[^A-Za-z0-9'’])`, 'i').test(n) ? n : `${n}, ${v}`;
 }
 
 /** "Already marked received by Dana at 3:04 PM." */
@@ -844,7 +939,25 @@ export function replacementShortLine(item: string, available: number, needed: nu
   return `${item}: ${available} available, ${needed} needed.`;
 }
 
-/** "waiting 15 days. Still waiting? Cancel the exchange to free the reserved items." (from 14 days). */
-export function stillWaitingLine(days: number): string {
-  return `${RETURNS_COPY.waitingDays(days)}. ${RETURNS_COPY.stillWaiting}`;
+/**
+ * The 14-day prompt (plan 3.10, D28; RX-2 review fix P17, built in RX-3):
+ * "Waiting 15 days. Still waiting for the returned item? Cancel replacement
+ * frees the reserved items; Cancel return ends the return too." When the
+ * replacement holds nothing (not in stock), nothing is said to be freed.
+ * Nothing expires on its own.
+ */
+export function stillWaitingLine(days: number, opts: { held?: number | null; cancelReturn?: boolean } = {}): string {
+  const age = RETURNS_COPY.waitingDays(days);
+  const lead = `${age.charAt(0).toUpperCase()}${age.slice(1)}`;
+  // Name Cancel return only when the viewer is offered it (RX-3 fix round 1, L5).
+  const withCancelReturn = opts.cancelReturn !== false;
+  const tail =
+    opts.held === 0
+      ? withCancelReturn
+        ? RETURNS_COPY.stillWaitingNothingHeld
+        : RETURNS_COPY.stillWaitingNothingHeldNoCancelReturn
+      : withCancelReturn
+        ? RETURNS_COPY.stillWaiting
+        : RETURNS_COPY.stillWaitingNoCancelReturn;
+  return `${lead}. ${tail}`;
 }

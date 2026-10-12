@@ -15,6 +15,7 @@ import {
   describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   dbPermissionRefusedCopy,
+  describeReturnLine,
   describeShortPickLines,
   EXCEPTION_ACT_REFUSED_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
@@ -28,10 +29,14 @@ import {
   ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_WAREHOUSE_WRITE_REFUSED_COPY,
   orderCancelOffer,
+  ORDER_RETURN_SUMMARY_NOTE,
+  orderStatusLabelForFulfillment,
+  ORDER_STATUS_META,
   PARTIAL_RESULT_ORDER_CHANGED_COPY,
   partialActionMovedOnCopy,
   PERMISSION_META,
   PERMISSIONS,
+  PICKUP_COMPLETED_STATUS_LABEL,
   processLabelFor,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
   PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
@@ -39,7 +44,11 @@ import {
   RETURN_ACTION_LABELS,
   returnActionLabel,
   returnListFilter,
+  RETURN_ERROR_WORDS,
   RETURNS_COPY,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
+  returnLineLabel,
   returnToRackButton,
   stagingReturnedSourceLabel,
   VERIFICATION_SESSION_ENDED_COPY,
@@ -3907,11 +3916,16 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by returns RX-2 (2026-10-11; was: at 2, the public link and
     // dates fixes releases at 0 and 1): RX-2's draft, dated later, sits at
     // the top, above both. Claim kept: those two sit directly above this one.
+    // Re-pinned by returns RX-3 (2026-10-11; was: at 3, RX-2's release at 0):
+    // RX-3's draft, dated later still, sits at the top above RX-2's published
+    // release. Claim kept: the public link and dates fixes releases sit
+    // directly above.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(at).toBe(3);
-    expect(RELEASES[0]?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES[1]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[2]?.id).toBe('dates-fixes-2026-10');
+    expect(at).toBe(4);
+    expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[2]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[3]?.id).toBe('dates-fixes-2026-10');
     // Re-pinned by 0395 (was: the Items first-paint and weekly digest drafts
     // and this one): the partial-approval draft (small fixes slice 2) sits
     // right below this one and is dated earlier.
@@ -3932,8 +3946,13 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: RX-2's
     // draft the only one): it is published, in the same place, so no draft
     // is left. Claim kept: these three are published.
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    expect(RELEASES[0]?.status).toBe('published');
+    // Re-pinned by returns RX-3 (2026-10-11; was: no draft, RELEASES[0]
+    // published): RX-3's draft is the only one, at the top, and RX-2's
+    // release below it is published. Claim kept: these three are published.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
+    ]);
+    expect(RELEASES[1]?.status).toBe('published');
     for (const id of ['public-link-sent-request-2026-10', 'dates-fixes-2026-10', ID]) {
       expect(RELEASES.find((r) => r.id === id)?.status, id).toBe('published');
     }
@@ -3984,8 +4003,10 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     }
     // Re-pinned by returns RX-2 (2026-10-11; was: RELEASES[1] and [0]): the
     // same two releases, one place lower under RX-2's draft.
-    expect(Date.parse(RELEASES[2]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
-    expect(Date.parse(RELEASES[1]!.publishedAt) - Date.parse(RELEASES[2]!.publishedAt)).toBe(60_000);
+    // Re-pinned by returns RX-3 (2026-10-11; was: RELEASES[2] and [1]): the
+    // same two releases, one place lower again under RX-3's draft.
+    expect(Date.parse(RELEASES[3]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(Date.parse(RELEASES[2]!.publishedAt) - Date.parse(RELEASES[3]!.publishedAt)).toBe(60_000);
   });
 
   it('is told to whoever can open the New order page, and links there', () => {
@@ -4187,7 +4208,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
   // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: "all
   // published but returns RX-2's draft at the top"): RX-2's release is
   // published, in the same place, so all of them are published again.
-  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published, are dated later', () => {
+  // Re-pinned by returns RX-3 (2026-10-11; was: "the releases above it, all
+  // published, are dated later"): RX-3's draft, dated later still, sits at
+  // the top above RX-2's release.
+  it('is dated after every release below it (pinned by id), returns RX-1\'s a minute below it; the releases above it, all published but returns RX-3\'s draft at the top, are dated later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by the weekly digest fixes (2026-10-05): their draft sits at
@@ -4210,7 +4234,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // it): a draft dated later still, at the top.
     // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
     // later still, at the top.
+    // Re-pinned by returns RX-3 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -4230,7 +4257,10 @@ describe('placing an order in the mobile app (phone ordering PO-4) is published'
     // at the top, then the same seven, published.
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: draft,
     // then published x7): RX-2's release is published, so all eight are.
+    // Re-pinned by returns RX-3 (2026-10-11; was: published x8): RX-3's
+    // draft at the top, then the same eight, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5137,7 +5167,11 @@ describe('the small fixes release (slice 1) is published', () => {
   // Re-pinned by docs/whats-new-dates-link-submit (2026-10-06; was: "...
   // with the weekly digest and slice 2 releases (published later still) and
   // the drafts above them; ..."): no draft is left above it.
-  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes and public link releases above that one, published later still; phone ordering's below it", () => {
+  // Re-pinned by returns RX-3 (2026-10-11; was: no draft above it): RX-3's
+  // draft, dated later still, sits at the top above RX-2's release. Claim
+  // kept: directly below the Items first-paint release, every release above
+  // it dated later.
+  it("sits directly below the Items first-paint release, published later, with the weekly digest, slice 2, PO-2, dates fixes, public link and returns RX-2 releases above that one, published later still, and returns RX-3's draft at the top; phone ordering's below it", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
     // Drafts go above the newest published release, newest first: the Items
@@ -5157,7 +5191,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // it): a draft dated later still, at the top.
     // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
     // later still, at the top.
+    // Re-pinned by returns RX-3 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -5176,7 +5213,10 @@ describe('the small fixes release (slice 1) is published', () => {
     // at the top, then the same six, published.
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: draft,
     // then published x6): RX-2's release is published, so all seven are.
+    // Re-pinned by returns RX-3 (2026-10-11; was: published x7): RX-3's
+    // draft at the top, then the same seven, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5548,7 +5588,10 @@ describe('the weekly digest and fixes release', () => {
     // (the title no longer counts the drafts).
     // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
     // later still, at the top.
+    // Re-pinned by returns RX-3 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -5565,7 +5608,10 @@ describe('the weekly digest and fixes release', () => {
     // at the top, then the same four, published.
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: draft,
     // then published x4): RX-2's release is published, so all five are.
+    // Re-pinned by returns RX-3 (2026-10-11; was: published x5): RX-3's
+    // draft at the top, then the same five, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -5811,7 +5857,10 @@ describe('the Items first-paint release', () => {
     // it): a draft dated later still, at the top.
     // Re-pinned by returns RX-2 (2026-10-11; was: without it): a draft dated
     // later still, at the top.
+    // Re-pinned by returns RX-3 (2026-10-11; was: without it): a draft dated
+    // later still, at the top.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -5829,7 +5878,10 @@ describe('the Items first-paint release', () => {
     // at the top, then the same five, published.
     // Re-pinned by docs/whats-new-returns-exchange (2026-10-11; was: draft,
     // then published x5): RX-2's release is published, so all six are.
+    // Re-pinned by returns RX-3 (2026-10-11; was: published x6): RX-3's
+    // draft at the top, then the same six, published.
     expect(RELEASES.slice(0, at).map((r) => r.status)).toEqual([
+      'draft',
       'published',
       'published',
       'published',
@@ -6072,7 +6124,10 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     expect(at).toBeGreaterThanOrEqual(0);
     // Re-pinned by returns RX-2 (2026-10-11; was: without it): RX-2's draft,
     // dated later, sits at the top, above the three published releases.
+    // Re-pinned by returns RX-3 (2026-10-11; was: without it): RX-3's draft,
+    // dated later still, sits at the top, above RX-2's release.
     expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
       'returns-exchange-2026-10',
       'public-link-sent-request-2026-10',
       'dates-fixes-2026-10',
@@ -6089,9 +6144,14 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     // draft at the top, and the public link release the newest published):
     // RX-2's release is published, in the same place, the newest, and no
     // draft is left. Claim kept: every release above this one is published.
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'published')).toBe(true);
+    // Re-pinned by returns RX-3 (2026-10-11; was: slice(0, at) all published
+    // and no draft): RX-3's draft is the only draft, at the top. Claim kept:
+    // every release between it and this one is published, RX-2's the newest.
+    expect(RELEASES.slice(1, at).every((r) => r.status === 'published')).toBe(true);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
+    ]);
     expect(RELEASES[at + 1]?.id).toBe('weekly-digest-and-fixes-2026-10');
     expect(RELEASES.slice(at + 1).every((r) => r.status === 'published' || r.status === 'withdrawn')).toBe(true);
     for (const r of RELEASES.slice(0, at)) {
@@ -6481,15 +6541,23 @@ describe('exchanges on returns (returns RX-2) is published', () => {
   // published), dated after every release"): published in the same place,
   // it is the newest release, and no draft is left. Claim kept: at the top,
   // directly above the public order link release, dated after every release.
-  it('is the newest release, at the top above the public order link release, dated after every release, and no draft is left', () => {
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+  // Re-pinned by returns RX-3 (2026-10-11; was: "is the newest release, at
+  // the top ..., and no draft is left"): RX-3's draft, dated later still,
+  // sits at the top above it. Claim kept: the newest published release,
+  // directly above the public order link release, dated after every release
+  // but RX-3's draft.
+  it('is the newest published release, directly below returns RX-3\'s draft and above the public order link release, dated after every release but that draft', () => {
+    expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
+    ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe('public-link-sent-request-2026-10');
-    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[2]?.status).toBe('published');
     const rx1 = RELEASES.findIndex((r) => r.id === 'returns-original-rack-2026-10');
     expect(RELEASES[rx1]?.status).toBe('published');
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.id !== 'returns-requester-exchange-2026-10')) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -6673,5 +6741,171 @@ describe('exchanges on returns (returns RX-2) is published', () => {
       expect(offers(at(released))).toContain('cancel_replacement');
     }
     expect(offers(at('replacement_cancelled'))).toContain('cancel');
+  });
+});
+
+describe('requesters ask for an exchange themselves (returns RX-3) is held as a draft', () => {
+  const ID = 'returns-requester-exchange-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it, and preparing it changes nothing a client can observe', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+  });
+
+  // Drafts sit above the newest published release, newest first. Re-pinned
+  // at the RX-3 PR stage (2026-10-11; was: "the newest draft, at the top
+  // above returns RX-2's" draft): RX-2's release is published (#345), so
+  // RX-3's is the only draft, at the top directly above RX-2's release, the
+  // newest published one, and dated after every release.
+  it("is the only draft, at the top directly above returns RX-2's release (the newest published), dated after every release", () => {
+    expect(RELEASES[0]?.id).toBe(ID);
+    expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([ID]);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('tells each change only to the people who meet it', () => {
+    const r = release();
+    expect(r.audience).toBeUndefined();
+    // Re-pinned at the RX-3 PR stage (2026-10-11; was: four entries): the
+    // PR-stage polish adds two, the exchange outcome words (polish a, b, d,
+    // e) and a completed pickup's Handed over (polish c). Claim kept: each
+    // change is told only to the people who meet it.
+    expect(r.entries.map((e) => e.id)).toEqual([
+      'returns-requester-exchange',
+      'returns-requester-exchange-review',
+      'order-actions-busy',
+      'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+      'order-pickup-handed-over',
+    ]);
+    const published: Release = { ...r, status: 'published' };
+    const entriesFor = (permissions: ReleaseViewer['permissions'], modules: ModuleId[] = ['returns', 'orders']) =>
+      visibleReleases([published], { role: 'staff', permissions, enabledModules: modules })[0]?.entries.map((e) => e.id) ?? [];
+    // A member who places orders, with Returns on: their own order's sheet,
+    // the busy words on their order actions and the pickup word.
+    expect(entriesFor(['orders:request'])).toEqual(['returns-requester-exchange', 'order-actions-busy', 'order-pickup-handed-over']);
+    // Without Returns, only the order changes.
+    expect(entriesFor(['orders:request'], ['orders'])).toEqual(['order-actions-busy', 'order-pickup-handed-over']);
+    // Whoever can open Returns: the requests that now ask for an exchange,
+    // and the words that say how an exchange ended.
+    expect(entriesFor(['returns:read'], ['returns'])).toEqual([
+      'returns-requester-exchange-review',
+      'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+    ]);
+    // An order approver meets the size label and the original order's
+    // returns section on order pages, and the pickup word.
+    expect(entriesFor(['orders:approve'])).toEqual([
+      'order-actions-busy',
+      'returns-size-s-apostrophe',
+      'returns-exchange-outcome-words',
+      'order-pickup-handed-over',
+    ]);
+    expect(entriesFor([])).toEqual([]);
+    const review = r.entries[1]!;
+    expect(review.link).toEqual({ href: '/dashboard/returns', label: 'Open Returns' });
+    expect(review.audience).toEqual({ anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] });
+    // Only the review entry links anywhere: an order page is per order.
+    expect(r.entries.filter((e) => e.link).map((e) => e.id)).toEqual(['returns-requester-exchange-review']);
+  });
+
+  it("uses the screens' own words", () => {
+    const all = readerText(release()).join(' ');
+    for (const label of [
+      RETURNS_COPY.requesterReturnOrExchange,
+      RETURNS_COPY.returnOnly,
+      RETURNS_COPY.exchangeRequester,
+      RETURNS_COPY.warehouseReview,
+      RETURNS_COPY.requesterYourRequests,
+      RETURNS_COPY.available,
+      RETURNS_COPY.notInStock,
+      RETURNS_COPY.approveAsRequested,
+      RETURNS_COPY.changeReplacementEllipsis,
+      RETURNS_COPY.declineExchange,
+      RETURNS_COPY.cancelReplacement,
+      RETURNS_COPY.cancelReturn,
+      RETURNS_COPY.staffNewExchangeTitle,
+      RETURN_ERROR_WORDS.busy,
+      'New return and exchange requests',
+      'Order status changes',
+      // PR-stage polish (a), (c), (d).
+      RETURNS_COPY.replacementHandedOver,
+      RETURNS_COPY.replacementPartlyHandedOver,
+      RETURNS_COPY.replacementNotSent,
+      PICKUP_COMPLETED_STATUS_LABEL,
+      ORDER_STATUS_META.completed.label,
+    ]) {
+      // A label that is a sentence is quoted mid-sentence, without its period.
+      expect(all).toContain(label.replace(/\.$/, ''));
+    }
+    // The label fix's example is what core prints now.
+    expect(returnLineLabel("Women's Polo", 'Size S')).toBe("Women's Polo, S");
+    expect(release().entries[3]!.whatChanged).toContain("Women's Polo, S");
+  });
+
+  it('claims nothing the product does not do', () => {
+    const r = release();
+    const all = readerText(r).join(' ');
+    expect(all).not.toMatch(/\bbooks?\b|verified|inspected|certif|guarantee|%/i);
+    // The sizes are the line's own product group's (plan 3.6.10), never any size or the catalog.
+    expect(all).not.toMatch(/any size|any item|whole catalog|browse/i);
+    // Availability is two words, never a count (D6).
+    expect(all).not.toMatch(/\d+ available|how many are left/i);
+    // The 14-day prompt cancels nothing on its own (D28).
+    expect(r.entries[1]!.howItAffectsYou).toContain('Nothing is cancelled on its own.');
+    // The phone needs the update for its screens; the busy words are the server's.
+    for (const id of ['returns-requester-exchange', 'returns-size-s-apostrophe', 'returns-exchange-outcome-words', 'order-pickup-handed-over']) {
+      expect(r.entries.find((e) => e.id === id)!.whatToDo, id).toBe(
+        'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+      );
+    }
+    expect(r.summary).toContain('in the mobile app after the latest update');
+  });
+
+  // PR-stage polish: each claim of the two new entries checked against core,
+  // the rule both the web and the phone render.
+  it('the polish entries say what core does', () => {
+    const r = release();
+    const outcome = r.entries.find((e) => e.id === 'returns-exchange-outcome-words')!;
+    const pickup = r.entries.find((e) => e.id === 'order-pickup-handed-over')!;
+    // (a) The card's words after a hand-over, all of it.
+    const line = { status: 'approved' as const, approvedItemId: 'L', approvedQuantity: 1, requestedQuantity: 1 };
+    const handed = { live: true, status: 'completed', lines: [{ itemId: 'L', requested: 1, fulfilled: 1 }] };
+    expect(replacementCardStatusLabel(line, handed)).toBe('Handed over');
+    expect(replacementCardQuantityLabel(line, handed)).toBe('Qty handed over: 1');
+    expect(outcome.whatChanged).toContain('Handed over, with the quantity handed over');
+    // (d) A cancelled return's line reads not returned.
+    expect(describeReturnLine({ quantity: 1, itemName: 'X', disposition: 'restock', applied: false, returnStatus: 'cancelled' })).toContain(
+      '· not returned',
+    );
+    expect(outcome.whatChanged).toContain('reads not returned instead of pending');
+    // (e) The note.
+    expect(ORDER_RETURN_SUMMARY_NOTE).toContain('A replacement from an exchange is its own order');
+    expect(outcome.whatChanged).toContain('is its own order and is not counted');
+    // (c) A completed pickup, a delivery, and an organization's own word.
+    expect(orderStatusLabelForFulfillment('completed', 'Delivered', 'pickup')).toBe('Handed over');
+    expect(orderStatusLabelForFulfillment('completed', 'Delivered', 'delivery')).toBe('Delivered');
+    expect(orderStatusLabelForFulfillment('completed', 'Closed out', 'pickup')).toBe('Closed out');
+    expect(pickup.whatChanged).toContain('A delivery still reads Delivered');
+    expect(pickup.whatChanged).toContain('its own word is kept there');
+    // Nothing a status filter or an export reads changes: the word only.
+    expect(pickup.howItAffectsYou).toContain('Only the word changes');
+    expect(r.summary).toContain('A completed pickup order now reads Handed over.');
   });
 });

@@ -6,13 +6,12 @@ import {
   can,
   exchangeStatusStaffLabel,
   formatOrderNumber,
-  itemQuantityLabel,
   mapReturnError,
-  originalExchangeLine,
+  originalExchangeLineFor,
   parseExchangeCandidates,
   parseExchangeStatus,
   returnLineLabel,
-  RETURNS_COPY,
+  RETURN_ERROR_WORDS,
   variantLabel,
   parseReturnBody,
   parseRestockOptions,
@@ -44,7 +43,7 @@ import { dispatchEvent } from './integration-events';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import type { PrepareForHandoverResult } from './order-requests';
-import { notifyRequesterReturnEvent, notifyStaffNewReturnRequest } from './returns-notify';
+import { notifyRequesterReturnEvent, notifyStaffNewReturnRequest, type RequesterReturnEvent } from './returns-notify';
 import {
   buildReturnListPage,
   buildReturnWorkbench,
@@ -396,13 +395,21 @@ async function loadOriginalExchangeLines(
         replacementStatus: r.replacement_status ?? null,
         replacementOwed: r.replacement_owed === undefined || r.replacement_owed === null ? null : Number(r.replacement_owed),
       });
+      // Returns RX-3 PR stage, polish (d): declined and cancelled lines are
+      // listed too, each in its own words (core originalExchangeLineFor).
       const sentences: string[] = [];
       for (const x of r.exchange_lines ?? []) {
-        if (x.status === 'declined' || x.status === 'cancelled') continue;
         const id = x.approved_item_id ?? x.requested_item_id;
-        const qty = Number(x.approved_quantity ?? x.requested_quantity) || 0;
-        const what = id ? itemQuantityLabel(label.get(id) ?? 'Item', qty) : RETURNS_COPY.replacementWarehouseReview;
-        sentences.push(originalExchangeLine(what, x.status === 'approved' ? r.replacement_order_number : null, words));
+        sentences.push(
+          originalExchangeLineFor({
+            status: x.status,
+            itemLabel: id ? (label.get(id) ?? 'Item') : null,
+            quantity: Number(x.approved_quantity ?? x.requested_quantity) || 0,
+            replacementOrderNumber: r.replacement_order_number,
+            exchangeStatus: status,
+            statusWords: words,
+          }),
+        );
       }
       if (sentences.length > 0) out.set(r.id, sentences);
     }
@@ -540,6 +547,35 @@ export function parseReplacementSummary(raw: unknown): ReturnReplacementSummary 
       };
     }),
   };
+}
+
+/** One exchange line's state and who asked for it (the approval event). */
+export interface ExchangeLineKind {
+  status?: string | null;
+  requested_by_kind?: string | null;
+}
+
+/**
+ * The requester's message for an approval (plan 3.6.8; review fix P28;
+ * RX-3): a replacement issued is "exchange approved" (reserved, or not in
+ * stock yet), or, when staff added every exchange line to a return the
+ * requester asked for, "the warehouse added a replacement for you"; no
+ * replacement issued is "approved", or, when the requester asked for an
+ * exchange and every line of it was declined, "Exchange declined. Your
+ * return was approved." Unread lines (null) give the plain words.
+ */
+export function requesterApprovalEvent(
+  replacement: { short: boolean } | null,
+  lines: readonly ExchangeLineKind[] | null,
+): RequesterReturnEvent {
+  const rows = lines ?? [];
+  if (replacement) {
+    const staffAdded = rows.length > 0 && rows.every((r) => r.requested_by_kind === 'staff');
+    if (staffAdded) return replacement.short ? 'return_approved_replacement_added_short' : 'return_approved_replacement_added';
+    return replacement.short ? 'exchange_approved_short' : 'exchange_approved';
+  }
+  const askedByRequester = rows.some((r) => r.requested_by_kind === 'requester' || r.requested_by_kind === 'portal_customer');
+  return askedByRequester && rows.every((r) => r.status !== 'approved') ? 'exchange_declined' : 'approved';
 }
 
 export interface ReturnPlanAnswer {
@@ -937,23 +973,16 @@ export class RMAService {
       }
       // Review fix P28: a return the requester asked for, whose every
       // exchange line staff added at approval, is not "your exchange": the
-      // warehouse added a replacement for them.
-      const staffAdded =
-        result.replacement !== null && facts.source === 'requester' && (await this.everyExchangeLineAddedByStaff(id));
+      // warehouse added a replacement for them. RX-3: an exchange the
+      // requester asked for, every line of it declined, is "Exchange
+      // declined. Your return was approved.", never a bare "approved".
+      const exchangeLines = facts.source === 'requester' ? await this.exchangeLineKinds(id) : null;
       await notifyRequesterReturnEvent({
         organizationId: this.ctx.organizationId,
         returnId: id,
         returnNumber: facts.returnNumber,
         orderId: facts.orderRequestId,
-        event: result.replacement
-          ? staffAdded
-            ? result.replacement.short
-              ? 'return_approved_replacement_added_short'
-              : 'return_approved_replacement_added'
-            : result.replacement.short
-              ? 'exchange_approved_short'
-              : 'exchange_approved'
-          : 'approved',
+        event: requesterApprovalEvent(result.replacement, exchangeLines),
         source: facts.source,
         channel,
         linkOrderId: result.replacement?.orderId ?? null,
@@ -962,20 +991,20 @@ export class RMAService {
     return result;
   }
 
-  /** Every exchange line of the RMA was added by staff (none asked for by the
-   *  requester). False when unread: the exchange words are the fallback. */
-  private async everyExchangeLineAddedByStaff(id: string): Promise<boolean> {
+  /** Who asked for each exchange line of the RMA, and its state (one read).
+   *  Null when unread: requesterApprovalEvent then falls back to the plain
+   *  words (an exchange's when a replacement was issued). */
+  private async exchangeLineKinds(id: string): Promise<ExchangeLineKind[] | null> {
     try {
       const { data, error } = await this.ctx.supabase
         .from('return_exchange_lines')
-        .select('requested_by_kind')
+        .select('status, requested_by_kind')
         .eq('organization_id', this.ctx.organizationId)
         .eq('return_id', id);
-      if (error) return false;
-      const rows = (data as Array<{ requested_by_kind?: string | null }> | null) ?? [];
-      return rows.length > 0 && rows.every((r) => r.requested_by_kind === 'staff');
+      if (error) return null;
+      return (data as ExchangeLineKind[] | null) ?? [];
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -1070,10 +1099,31 @@ export class RMAService {
           invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.cancel');
         } else if (after === 'completed' && liveBefore.status !== 'completed') {
           // 0396: the cancel closed a part-handed-over replacement as
-          // delivered-partial (its rest is never sent). Its requester gets the
-          // completion email a close-partial sends from the order page ("Your
-          // replacement order was closed", the one-time return prompt):
-          // best-effort and marker-deduped, never failing the cancel.
+          // delivered-partial (its rest is never sent). The order's own trail
+          // is the order service's closePartial's for the same edge (RX-3 fix
+          // round 1, F7): order.closed_partial, order.completed { closedPartial }
+          // (accounting exports and webhooks otherwise show it open or
+          // backordered forever) and the order broadcast.
+          await audit(
+            {
+              event: 'order.closed_partial',
+              entityType: 'order_request',
+              entityId: liveBefore.id,
+              warehouseId: facts.warehouseId,
+              extra: { replacementForReturnId: id, returnNumber: facts.returnNumber, via: 'return.cancelled' },
+            },
+            this.ctx,
+          );
+          void dispatchEvent(this.ctx.organizationId, 'order.completed', {
+            id: liveBefore.id,
+            orderNumber: formatOrderNumber(liveBefore.orderNumber) ?? liveBefore.id.slice(0, 8).toUpperCase(),
+            closedPartial: true,
+          });
+          void broadcastOrderChanged(this.ctx.organizationId, liveBefore.id);
+          // Its requester gets the completion email a close-partial sends from
+          // the order page ("Your replacement order was closed", the one-time
+          // return prompt): best-effort and marker-deduped, never failing the
+          // cancel.
           try {
             await maybeSendReturnPrompt(createAdminClient(), liveBefore.id, {
               appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
@@ -1948,7 +1998,7 @@ async function returnableLinesFrom(
   return out;
 }
 
-// ── Requester-initiated returns (PUBLIC token page and B2B portal) ─────────
+// ── Requester-initiated returns (PUBLIC token page, B2B portal, member) ────
 
 /** What the requester surfaces POST (the token is the only authorization on
  *  the public page). Disposition is never accepted from a requester. */
@@ -1958,12 +2008,21 @@ export interface RequesterReturnInput {
   lines: Array<{ orderRequestLineId: string; quantity: number; exchange?: unknown }>;
 }
 
-/** The minimal, token-scoped order context the public page renders. */
-export interface RequesterReturnOrderContext {
+/**
+ * The order a requester surface resolved, before its lines: the order is
+ * returnable (completed, or the legacy delivered) and its organization has
+ * the returns module on. Every requester read and write starts here.
+ */
+export interface RequesterOrderRef {
   orderRequestId: string;
   organizationId: string;
+  orderNumber: number | null;
   requesterEmail: string | null;
   requesterName: string | null;
+}
+
+/** The minimal, scoped order context the requester pages render. */
+export interface RequesterReturnOrderContext extends RequesterOrderRef {
   lines: ReturnableLine[];
 }
 
@@ -1971,19 +2030,23 @@ interface RequesterReturnOrderRow {
   id: string;
   organization_id: string;
   status: string;
+  order_number?: number | null;
   requester_email: string | null;
   requester_name: string | null;
+  source?: string | null;
 }
 
+const REQUESTER_ORDER_COLUMNS = 'id, organization_id, status, order_number, requester_email, requester_name';
+
 /**
- * Shared second half of both requester loaders: the order is returnable, the
- * org has the returns module on, and the still-returnable lines. Null on any
- * closed door (both public surfaces answer that 404-shaped).
+ * Shared first half of every requester loader: the order is returnable and
+ * the org has the returns module on. Null on any closed door (the public
+ * surfaces answer every one of them the same 404).
  */
-async function buildRequesterReturnContext(
+async function openRequesterOrder(
   admin: SupabaseClient,
   order: RequesterReturnOrderRow,
-): Promise<RequesterReturnOrderContext | null> {
+): Promise<RequesterOrderRef | null> {
   if (!RETURNABLE_ORDER_STATUSES.has(order.status)) return null;
   const { data: modRow, error: modErr } = await admin
     .from('organization_modules')
@@ -1993,70 +2056,128 @@ async function buildRequesterReturnContext(
     .eq('enabled', true)
     .maybeSingle();
   if (modErr || !modRow) return null;
+  return {
+    orderRequestId: order.id,
+    organizationId: order.organization_id,
+    orderNumber: typeof order.order_number === 'number' ? order.order_number : null,
+    requesterEmail: order.requester_email,
+    requesterName: order.requester_name,
+  };
+}
 
+/** The second half: the still-returnable lines (durable budget less live
+ *  pending demand). Null when they cannot be read. */
+async function requesterOrderLines(
+  admin: SupabaseClient,
+  ref: RequesterOrderRef,
+): Promise<RequesterReturnOrderContext | null> {
   const { data: orderLines, error: linesError } = await admin
     .from('order_request_lines')
     .select(
       `id, item_id, quantity_fulfilled, returned_quantity,
        item:inventory_items!item_id (id, name, sku)`,
     )
-    .eq('order_request_id', order.id);
+    .eq('order_request_id', ref.orderRequestId);
   if (linesError) return null;
 
   let lines: ReturnableLine[];
   try {
-    lines = await returnableLinesFrom(admin, order.organization_id, orderLines as RawOrderLine[] | null);
+    lines = await returnableLinesFrom(admin, ref.organizationId, orderLines as RawOrderLine[] | null);
   } catch {
     return null;
   }
-  return {
-    orderRequestId: order.id,
-    organizationId: order.organization_id,
-    requesterEmail: order.requester_email,
-    requesterName: order.requester_name,
-    lines,
-  };
+  return { ...ref, lines };
 }
 
 /**
- * Resolve a return token to its single order's still-returnable lines (the
- * service-role client: the requester has no JWT). The token lives only in
- * order_request_secrets (0392); it opens exactly one order.
+ * Resolve a return token to its single order (the service-role client: the
+ * requester has no JWT). The token lives only in order_request_secrets
+ * (0392); it opens exactly one order, and the order row's own token column
+ * is never asked.
  */
-export async function loadRequesterReturnContext(
-  admin: SupabaseClient,
-  token: string,
-): Promise<RequesterReturnOrderContext | null> {
+export async function resolveRequesterOrder(admin: SupabaseClient, token: string): Promise<RequesterOrderRef | null> {
   if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
   const orderId = await orderIdForReturnToken(admin, token);
   if (!orderId) return null;
   const { data: order, error: orderError } = await admin
     .from('order_requests')
-    .select('id, organization_id, status, requester_email, requester_name')
+    .select(REQUESTER_ORDER_COLUMNS)
     .eq('id', orderId)
     .maybeSingle();
   if (orderError || !order) return null;
-  return buildRequesterReturnContext(admin, order as RequesterReturnOrderRow);
+  return openRequesterOrder(admin, order as RequesterReturnOrderRow);
+}
+
+/** A return token's order and its still-returnable lines (the token page
+ *  and the public submit). */
+export async function loadRequesterReturnContext(
+  admin: SupabaseClient,
+  token: string,
+): Promise<RequesterReturnOrderContext | null> {
+  const ref = await resolveRequesterOrder(admin, token);
+  return ref ? requesterOrderLines(admin, ref) : null;
 }
 
 /**
  * Resolve a B2B portal customer's OWN order (scope from the server-resolved
- * portal context, never the client) to its still-returnable lines.
+ * portal context, never the client).
  */
-export async function loadPortalReturnContext(
+export async function resolvePortalOrder(
   admin: SupabaseClient,
   scope: { organizationId: string; customerId: string; orderRequestId: string },
-): Promise<RequesterReturnOrderContext | null> {
+): Promise<RequesterOrderRef | null> {
   if (!scope.orderRequestId || !/^[0-9a-fA-F-]{36}$/.test(scope.orderRequestId)) return null;
   const { data: order, error: orderError } = await admin
     .from('order_requests')
-    .select('id, organization_id, status, requester_email, requester_name')
+    .select(REQUESTER_ORDER_COLUMNS)
     .eq('id', scope.orderRequestId)
     .eq('organization_id', scope.organizationId)
     .eq('customer_id', scope.customerId)
     .maybeSingle();
   if (orderError || !order) return null;
-  return buildRequesterReturnContext(admin, order as RequesterReturnOrderRow);
+  return openRequesterOrder(admin, order as RequesterReturnOrderRow);
+}
+
+/** A portal customer's own order and its still-returnable lines. */
+export async function loadPortalReturnContext(
+  admin: SupabaseClient,
+  scope: { organizationId: string; customerId: string; orderRequestId: string },
+): Promise<RequesterReturnOrderContext | null> {
+  const ref = await resolvePortalOrder(admin, scope);
+  return ref ? requesterOrderLines(admin, ref) : null;
+}
+
+/**
+ * Resolve a MEMBER requester's OWN order (returns RX-3): the order of the
+ * caller's organization whose requester is the caller, never a B2B portal
+ * order (the portal's own surface asks for those). The service-role client
+ * reads it with exact filters; the caller's identity comes from the
+ * server-built context, never the client.
+ */
+export async function resolveMemberOrder(
+  admin: SupabaseClient,
+  scope: { organizationId: string; userId: string; orderRequestId: string },
+): Promise<RequesterOrderRef | null> {
+  if (!scope.orderRequestId || !/^[0-9a-fA-F-]{36}$/.test(scope.orderRequestId) || !scope.userId) return null;
+  const { data: order, error: orderError } = await admin
+    .from('order_requests')
+    .select(`${REQUESTER_ORDER_COLUMNS}, source`)
+    .eq('id', scope.orderRequestId)
+    .eq('organization_id', scope.organizationId)
+    .eq('requester_user_id', scope.userId)
+    .maybeSingle();
+  if (orderError || !order) return null;
+  if ((order as RequesterReturnOrderRow).source === 'portal') return null;
+  return openRequesterOrder(admin, order as RequesterReturnOrderRow);
+}
+
+/** A member's own order and its still-returnable lines. */
+export async function loadMemberReturnContext(
+  admin: SupabaseClient,
+  scope: { organizationId: string; userId: string; orderRequestId: string },
+): Promise<RequesterReturnOrderContext | null> {
+  const ref = await resolveMemberOrder(admin, scope);
+  return ref ? requesterOrderLines(admin, ref) : null;
 }
 
 export interface RequesterReturnCreated {
@@ -2073,6 +2194,15 @@ export interface RequesterReturnCreated {
  * budget less pending demand, the cap trigger), which stamps the item from
  * the source line, forces restock, and copies the requester's name and email
  * from the order. Idempotent on the request key.
+ *
+ * RX-3: a line may ask for an exchange ({ itemId?, quantity?, note? }). The
+ * database re-checks it in the same transaction against the requester tier
+ * (one of the line's own sizes, return_exchange_options' predicate, plan
+ * 3.6.10), the quantity (whole, at most the line's return quantity, within
+ * what the original line has left to exchange) and the note; any other item,
+ * known or not, answers the one generic exchange_item_not_eligible, so the
+ * answer is no oracle. With RETURNS_EXCHANGE_CREATE=off an exchange is
+ * refused before anything runs; a return only goes through.
  */
 export async function createRequesterReturn(
   admin: SupabaseClient,
@@ -2082,16 +2212,17 @@ export async function createRequesterReturn(
 ): Promise<RequesterReturnCreated> {
   const parsed = parseReturnBody('requester', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
   if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
-  refuseRequesterExchange(parsed.value.lines);
-  const ctx = await loadRequesterReturnContext(admin, token);
-  if (!ctx) throw new ServiceError('not_found', 'This return link is invalid or has expired.');
-  return createRequesterRpc(admin, ctx, parsed.value, { channel: 'token', userId: null });
+  refuseExchangeWhenSwitchedOff(parsed.value.lines);
+  const ctx = await resolveRequesterOrder(admin, token);
+  if (!ctx) throw new ServiceError('not_found', TOKEN_CLOSED_DOOR);
+  return createRequesterRpc(admin, ctx, parsed.value, { channel: 'token', userId: null }, TOKEN_CLOSED_DOOR);
 }
 
 /**
  * The B2B portal variant: the order resolved through the PORTAL principal
  * (server-resolved org and customer scope), the portal user recorded on the
- * created decision. Same database function as the token path.
+ * created decision. Same database function as the token path; a portal
+ * order's sizes are also limited to the customer's catalog (3.6.10).
  */
 export async function createPortalReturn(
   admin: SupabaseClient,
@@ -2101,30 +2232,56 @@ export async function createPortalReturn(
 ): Promise<RequesterReturnCreated> {
   const parsed = parseReturnBody('requester', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
   if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
-  refuseRequesterExchange(parsed.value.lines);
-  const ctx = await loadPortalReturnContext(admin, scope);
-  if (!ctx) throw new ServiceError('not_found', 'This order could not be found.');
-  return createRequesterRpc(admin, ctx, parsed.value, { channel: 'portal', userId: scope.portalUserId });
+  refuseExchangeWhenSwitchedOff(parsed.value.lines);
+  const ctx = await resolvePortalOrder(admin, scope);
+  if (!ctx) throw new ServiceError('not_found', PORTAL_CLOSED_DOOR);
+  return createRequesterRpc(admin, ctx, parsed.value, { channel: 'portal', userId: scope.portalUserId }, PORTAL_CLOSED_DOOR);
 }
 
 /**
- * The requester's own exchange (the token page, the B2B portal, a member
- * requester) arrives in RX-3 with its pages, options and messages. Until
- * then a requester body that names an exchange is refused here, in the
- * kill switch's words, before anything runs: 0396's database already
- * accepts the requester tier, so the server is what holds it back.
+ * A member requester's own return or exchange (the phone's "Return or
+ * exchange" sheet, RX-3): the same database function as the token and
+ * portal paths, channel member, the member recorded as the requester. The
+ * route checked the account (a disabled one never gets here), the returns
+ * module and the MFA floor; this resolves the order as the caller's own.
  */
-function refuseRequesterExchange(lines: Array<{ exchange?: unknown }>): void {
-  if (lines.some((l) => l.exchange !== undefined && l.exchange !== null)) {
+export async function createMemberReturn(
+  admin: SupabaseClient,
+  scope: { organizationId: string; userId: string; orderRequestId: string },
+  input: RequesterReturnInput,
+  opts: { idempotencyKey?: string | null } = {},
+): Promise<RequesterReturnCreated> {
+  const parsed = parseReturnBody('requester', { ...input, idempotencyKey: opts.idempotencyKey ?? undefined });
+  if (!parsed.ok) throw new ServiceError('validation_error', parsed.message, { reason: 'return_invalid' });
+  refuseExchangeWhenSwitchedOff(parsed.value.lines);
+  const ctx = await resolveMemberOrder(admin, scope);
+  if (!ctx) throw new ServiceError('not_found', MEMBER_CLOSED_DOOR);
+  return createRequesterRpc(admin, ctx, parsed.value, { channel: 'member', userId: scope.userId }, MEMBER_CLOSED_DOOR);
+}
+
+/** The one answer each requester surface gives for every closed door. */
+const TOKEN_CLOSED_DOOR = 'This return link is invalid or has expired.';
+const PORTAL_CLOSED_DOOR = 'This order could not be found.';
+const MEMBER_CLOSED_DOOR = RETURN_ERROR_WORDS.orderNotFound;
+
+/**
+ * The kill switch (plan 10.2) on every requester create: with
+ * RETURNS_EXCHANGE_CREATE=off a body that names an exchange is refused
+ * before anything runs, in the switch's words; a return only goes through.
+ * (RX-2 held every requester exchange back here "until RX-3".)
+ */
+function refuseExchangeWhenSwitchedOff(lines: Array<{ exchange?: unknown }>): void {
+  if (!exchangeCreateEnabled() && lines.some((l) => l.exchange !== undefined && l.exchange !== null)) {
     throw returnRpcError({ hint: 'exchange_not_available' });
   }
 }
 
 async function createRequesterRpc(
   admin: SupabaseClient,
-  ctx: RequesterReturnOrderContext,
+  ctx: RequesterOrderRef,
   body: { reasonCode?: ReturnReasonCode | null; notes?: string; lines: Array<{ orderRequestLineId: string; quantity: number; exchange?: unknown }>; idempotencyKey?: string },
   actor: { channel: 'token' | 'portal' | 'member'; userId: string | null },
+  closedDoor: string,
 ): Promise<RequesterReturnCreated> {
   const key = body.idempotencyKey ?? randomRequestUuid();
   const { data, error } = await admin.rpc('create_requester_return_request', {
@@ -2135,7 +2292,7 @@ async function createRequesterRpc(
       lines: body.lines.map((l) => ({
         orderRequestLineId: l.orderRequestLineId,
         quantity: l.quantity,
-        ...(l.exchange !== undefined ? { exchange: l.exchange } : {}),
+        ...(l.exchange !== undefined && l.exchange !== null ? { exchange: l.exchange } : {}),
       })),
     },
     p_key: key,
@@ -2146,7 +2303,7 @@ async function createRequesterRpc(
     // Every requester-facing refusal that is not the requester's own input is
     // one closed door: the order went away or the module was switched off.
     if (refusal.code === 'not_found' || refusal.code === 'module_disabled') {
-      throw new ServiceError('not_found', 'This return link is invalid or has expired.');
+      throw new ServiceError('not_found', closedDoor);
     }
     throw refusal;
   }
@@ -2162,6 +2319,10 @@ async function createRequesterRpc(
   };
 
   if (answer.changed === true) {
+    // RX-3: one message, worded by kind (plan 3.6.8): an exchange when any
+    // line asks for one.
+    const exchangeLines = body.lines.filter((l) => l.exchange !== undefined && l.exchange !== null).length;
+    const kind = exchangeLines > 0 ? 'exchange' : 'return';
     await insertAuditRowReported({
       organization_id: result.organizationId,
       user_id: actor.userId,
@@ -2174,6 +2335,7 @@ async function createRequesterRpc(
         orderRequestId: ctx.orderRequestId,
         returnNumber,
         lineCount: body.lines.length,
+        exchangeLines,
       },
     });
     await publishReturnCreated(admin, result.organizationId, id, returnNumber, ctx.orderRequestId);
@@ -2184,13 +2346,14 @@ async function createRequesterRpc(
       returnNumber,
       orderId: ctx.orderRequestId,
       actorUserId: actor.userId,
+      kind,
     });
     await notifyRequesterReturnEvent({
       organizationId: result.organizationId,
       returnId: id,
       returnNumber,
       orderId: ctx.orderRequestId,
-      event: 'request_received',
+      event: kind === 'exchange' ? 'exchange_request_received' : 'request_received',
       source: 'requester',
       channel: actor.channel,
     });

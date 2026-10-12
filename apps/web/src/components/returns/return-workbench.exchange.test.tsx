@@ -299,6 +299,20 @@ describe('a requested exchange', () => {
     });
   });
 
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // (warehouse will review, the common case at launch) opened at "Approve as
+  // requested", which is off for it, and Approve then said "Choose the
+  // replacement". It opens at Change replacement… with its picker.
+  it('a note-only request opens at Change replacement with its picker, never at the choice that is off', () => {
+    const noteOnly = { lines: [exchangeLine({ requestedItemId: null, requestedItem: null, requestedFree: null, requestNote: 'A bigger one', requestedByKind: 'requester' })] };
+    render(<ReturnWorkbench workbench={bench('requested', noteOnly)} />);
+    const side = screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+    expect(within(side).getByLabelText('Approve as requested')).not.toBeChecked();
+    expect(within(side).getByLabelText('Change replacement…')).toBeChecked();
+    expect(within(side).getByRole('group', { name: 'Choose the replacement for Walk New Hire Shirt, M' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve return & exchange' })).toBeDisabled();
+  });
+
   it('a return-only line can get "Add a replacement" while exchanges are on; not while the switch is off', () => {
     const plain = { kind: 'return', status: 'none', lines: [], rail: [] };
     const { unmount } = render(<ReturnWorkbench workbench={bench('requested', plain)} />);
@@ -882,5 +896,115 @@ describe('fix round 1: Change replacement short refusal', () => {
     fireEvent.click(within(change).getByDisplayValue('item-s'));
     await waitFor(() => expect(within(change).queryByRole('alert', { name: 'Not in stock' })).toBeNull());
     expect(within(change).queryByRole('button', { name: 'Change, replacement on backorder' })).toBeNull();
+  });
+});
+
+// RX-2 review fix P17, built in RX-3 (plan 3.10, D28): the 14-day prompt.
+describe('the 14-day prompt while the replacement waits for the returned item', () => {
+  const DAY = 86_400_000;
+  /** Approved `days` whole days ago (and a minute), from this test's clock. */
+  const approvedDaysAgo = (days: number) => new Date(Date.now() - days * DAY - 60_000).toISOString();
+  const waitingBench = (days: number, exchange: Record<string, unknown> = WAITING, viewer?: Record<string, boolean>) => {
+    const b = bench('approved', exchange) as unknown as { return: Record<string, unknown>; viewer: Record<string, boolean> };
+    b.return.approvedAt = approvedDaysAgo(days);
+    if (viewer) b.viewer = { ...b.viewer, ...viewer };
+    return b as never;
+  };
+
+  it('from 14 days says how long it has waited and what Cancel replacement and Cancel return do, under the next-step bar, and describes both buttons', () => {
+    render(<ReturnWorkbench workbench={waitingBench(15)} />);
+    const prompt = screen.getByTestId('still-waiting');
+    expect(prompt).toHaveTextContent(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+    );
+    const bar = screen.getByRole('region', { name: 'Next step' });
+    expect(bar).toContainElement(prompt);
+    for (const name of ['Cancel replacement', 'Cancel return']) {
+      expect(within(bar).getByRole('button', { name })).toHaveAttribute('aria-describedby', prompt.id);
+    }
+    // The other buttons are not described by it.
+    expect(within(bar).getByRole('button', { name: 'Receive' })).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('says nothing before 14 days', () => {
+    render(<ReturnWorkbench workbench={waitingBench(13)} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel replacement' })).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('when the replacement holds nothing (not in stock), says Cancel replacement cancels the order, not that it frees anything', () => {
+    const short = {
+      ...WAITING,
+      status: 'unavailable',
+      statusLabel: 'Replacement unavailable (backordered)',
+      replacement: { ...WAITING.replacement, held: 0, short: true, lines: [{ ...WAITING.replacement.lines[0]!, held: 0 }] },
+    };
+    render(<ReturnWorkbench workbench={waitingBench(20, short)} />);
+    expect(screen.getByTestId('still-waiting')).toHaveTextContent(
+      'Waiting 20 days. Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+    );
+  });
+
+  it('is not shown to someone who cannot cancel the replacement (no order approval)', () => {
+    render(<ReturnWorkbench workbench={waitingBench(30, WAITING, { canApproveOrders: false })} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+  });
+
+  it('is gone once the returned item is received', () => {
+    const b = bench('received', { ...WAITING, status: 'ready_to_pick' }) as unknown as { return: Record<string, unknown> };
+    b.return.approvedAt = approvedDaysAgo(30);
+    render(<ReturnWorkbench workbench={b as never} />);
+    expect(screen.queryByTestId('still-waiting')).toBeNull();
+  });
+});
+
+// Returns RX-3 PR stage, polish (a), from the RX-2 Demo Co walk: after the
+// exchange completed, the REPLACEMENT card still read "Approved" and "Qty
+// requested: 1" (return_exchange_lines.status stays 'approved'; the
+// replacement's own order lines carry what was handed over). The card now
+// says the replacement's outcome from the replacement block the workbench
+// already loads.
+describe('the REPLACEMENT card once its replacement was handed over', () => {
+  const approvedLine = (qty: number) => exchangeLine({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: qty, approvedItem: ITEM_L });
+  const withReplacement = (status: string, requested: number, fulfilled: number, over: Record<string, unknown> = {}) => ({
+    ...WAITING,
+    lines: [approvedLine(requested)],
+    replacement: {
+      ...WAITING.replacement,
+      status,
+      class: fulfilled > 0 ? 'handed_over' : 'undrawn',
+      owed: requested - fulfilled,
+      held: 0,
+      lines: [{ ...WAITING.replacement.lines[0]!, requested, fulfilled, held: 0, take: null }],
+    },
+    ...over,
+  });
+  const card = () => screen.getByRole('article', { name: /REPLACEMENT for Walk New Hire Shirt, M/ });
+
+  it('says Handed over and how many, never Approved or Qty requested, once all of it was handed over', () => {
+    render(<ReturnWorkbench workbench={bench('closed', withReplacement('completed', 1, 1, { status: 'completed', statusLabel: 'Exchange completed' }))} />);
+    expect(within(card()).getByText('Handed over')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty handed over: 1')).toBeInTheDocument();
+    expect(within(card()).queryByText('Approved')).toBeNull();
+    expect(card().textContent).not.toContain('Qty requested');
+  });
+
+  it('says Partly handed over while the rest is on backorder, keeping the quantity asked for', () => {
+    render(<ReturnWorkbench workbench={bench('approved', withReplacement('backordered', 2, 1, { status: 'partly_handed_over' }))} />);
+    expect(within(card()).getByText('Partly handed over')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 2')).toBeInTheDocument();
+    expect(within(card()).queryByText('Approved')).toBeNull();
+  });
+
+  it('says Not sent when the replacement was closed with none of this item handed over', () => {
+    render(<ReturnWorkbench workbench={bench('cancelled', withReplacement('completed', 1, 0, { status: 'completed' }))} />);
+    expect(within(card()).getByText('Not sent')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 1')).toBeInTheDocument();
+  });
+
+  it('keeps Approved and Qty requested while the replacement is still to be handed over', () => {
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    expect(within(card()).getByText('Approved')).toBeInTheDocument();
+    expect(within(card()).getByText('Qty requested: 1')).toBeInTheDocument();
   });
 });

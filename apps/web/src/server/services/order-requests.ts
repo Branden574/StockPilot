@@ -105,6 +105,7 @@ import {
   submissionStatusFromRpc,
 } from './order-submission';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { isOrderBusyError, orderBusyRefusal } from './lib/order-busy';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import {
   loadOrderExchangeChips,
@@ -527,6 +528,24 @@ function orderGuardRefusal(err: { message?: string | null }): ServiceError | nul
   return ORDER_GUARD_SENTENCES.has(message) ? new ServiceError('validation_error', message) : null;
 }
 
+/**
+ * Add items wrote part of the change before it failed (returns RX-3 fix round
+ * 1, desk check F1): the top-ups of items already on the order are saved, the
+ * rest is not. Non-retryable on purpose: sending the same request again would
+ * add the saved quantities twice. A guard refusal's own sentence (which item
+ * cannot be ordered) comes first.
+ */
+const ADD_LINES_PARTIAL_COPY =
+  'Part of this change was saved. Reload the order to see it before adding again.';
+
+function addLinesPartialRefusal(guardSentence: string | null): ServiceError {
+  return new ServiceError(
+    'conflict',
+    guardSentence ? `${guardSentence} ${ADD_LINES_PARTIAL_COPY}` : ADD_LINES_PARTIAL_COPY,
+    { reason: 'partial', retryable: false },
+  );
+}
+
 /** What started a hold (F2-2), recorded on its audit entry. */
 export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
 
@@ -535,10 +554,12 @@ export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
  * platforms show (core HOLD_* copy). `details.reason` is the HoldFailureReason
  * a line edit reports when its automatic top-up fails. Matched on the
  * function's own messages and codes only: any other error (a revoked grant's
- * "permission denied for function", a 40P01 deadlock with a writer that locks
- * items out of id order, a network fault) is internal_error, whose public
- * message is the generic sentence; the Postgres code and text stay on
+ * "permission denied for function", a network fault) is internal_error, whose
+ * public message is the generic sentence; the Postgres code and text stay on
  * `internalDetail` for the error report (holdFailureCause), never on screen.
+ * A lock wait, a timeout and a deadlock the database resolved (40P01: a
+ * writer that locks the same items in another order, an RMA create with an
+ * exchange among them, RX-2 review S4) are busy (isOrderBusyError).
  */
 function holdStockError(error: {
   message?: string | null;
@@ -568,10 +589,11 @@ function holdStockError(error: {
   }
   // lock_timeout (5 s) on the order or one of its items: someone else is
   // changing it. The authenticated role's statement_timeout (8 s) can end a
-  // call that waited on the order row and then an item first (57014): the
-  // same situation, so the same answer. Never 40001/40P01 from the function
-  // (0367): PostgREST would retry 40001 forever.
-  if (error.code === '55P03' || error.code === '57014') {
+  // call that waited on the order row and then an item first (57014), and the
+  // database can resolve a deadlock by rolling this call back (40P01, RX-2
+  // review S4): the same situation, so the same answer. Never 40001/40P01
+  // RAISED by the function (0367): PostgREST would retry 40001 forever.
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', HOLD_BUSY_COPY, reason('busy'));
   }
   return new ServiceError(
@@ -656,7 +678,7 @@ function deliveryWriteError(
   if (msg === 'order_status_changed') {
     return new ServiceError('conflict', 'Order status changed — refresh and try again.');
   }
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', DELIVERY_BUSY_COPY);
   }
   return new ServiceError('internal_error', `${error.code ?? 'no code'}: ${msg || 'no message'}`);
@@ -800,7 +822,7 @@ function packingSlipMintError(error: {
   }
   // lock_timeout (5 s) on the order row, or the role's statement_timeout:
   // someone else is changing the order. Never 40001/40P01 from the function.
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return new ServiceError('conflict', NEEDED_BY_BUSY_COPY, { reason: 'busy', retryable: true });
   }
   return new ServiceError(
@@ -869,7 +891,7 @@ function neededByRevisionError(
       current,
     });
   }
-  if (error.code === '55P03' || error.code === '57014') {
+  if (isOrderBusyError(error)) {
     return neededByRefusal('conflict', NEEDED_BY_BUSY_COPY, 'busy', { retryable: true });
   }
   return neededByRefusal(
@@ -2049,6 +2071,34 @@ export class OrderRequestsService {
     // Service role: see the note on the merge branch below.
     const admin = createAdminClient();
     const toInsert: Array<Record<string, unknown>> = [];
+    const mergedItems: Array<[string, number]> = [];
+    // The top-ups below are separate, COMMITTED statements, and the insert of
+    // the new lines comes after them (returns RX-3 fix round 1, desk check
+    // F1). A failure after a top-up must never be "Busy. Try again." (which
+    // promises nothing was written): a resend would add the merged quantities
+    // a second time, and the holds and the pick would follow. So busy is said
+    // only while nothing has been written; after that the answer is the
+    // non-retryable partial conflict, the audit records what was saved, and
+    // the person reloads the order. A single function for Add items (one
+    // transaction) is the later fix (a follow-up for a migration slice).
+    const failAfterWrite = async (
+      err: { message?: string | null; code?: string | null },
+      stage: 'merge' | 'insert',
+    ): Promise<never> => {
+      const guard = stage === 'insert' ? orderGuardRefusal(err) : null;
+      if (merged === 0) {
+        throw guard ?? orderBusyRefusal(err) ?? new ServiceError('internal_error', err.message ?? 'add lines failed');
+      }
+      if (!guard) {
+        void reportSrvError(new Error(err.message ?? 'add lines failed'), {
+          tag: 'orders.add_lines_partial',
+          organizationId: this.ctx.organizationId,
+          extra: { orderId: h.id, stage, code: err.code ?? null, merged },
+        });
+      }
+      await this.auditLinesAdded(h, itemMap, mergedItems, { added: 0, merged, partial: true });
+      throw addLinesPartialRefusal(guard?.message ?? null);
+    };
     for (const [itemId, qty] of wanted) {
       const prior = existingByItem.get(itemId);
       if (prior) {
@@ -2073,15 +2123,17 @@ export class OrderRequestsService {
           .eq('order_request_id', h.id)
           .select('id')
           .maybeSingle();
-        if (uErr) throw new ServiceError('internal_error', uErr.message);
+        if (uErr) await failAfterWrite(uErr, 'merge');
         // Fail CLOSED: no row back means nothing changed, so never report success.
         if (!mergedRow) {
+          if (merged > 0) await failAfterWrite({ message: 'merge matched no row' }, 'merge');
           throw new ServiceError(
             'internal_error',
             'Could not update the existing line. Nothing was changed.',
           );
         }
         merged += 1;
+        mergedItems.push([itemId, qty]);
       } else {
         toInsert.push({
           order_request_id: h.id,
@@ -2096,39 +2148,50 @@ export class OrderRequestsService {
       const { error: insErr } = await this.ctx.supabase
         .from('order_request_lines')
         .insert(toInsert);
-      if (insErr) {
-        // The line guard's refusal (0365) is a sentence for the user, not a fault.
-        throw orderGuardRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
-      }
+      // The line guard's refusal (0365) is a sentence for the user, not a
+      // fault; busy only while no top-up was written (failAfterWrite).
+      if (insErr) await failAfterWrite(insErr, 'insert');
     }
 
     // A slip printed BEFORE this change no longer matches the order.
     const pickSlipStale = h.pick_slip_generated_at != null;
 
+    await this.auditLinesAdded(h, itemMap, [...wanted.entries()], { added, merged, partial: false });
+
+    // After the lines are written (and audited): hold them, when an approver
+    // added them at a hold status. Never undoes the add.
+    const hold = await this.topUpHolds(h, 'lines_added');
+    return { added, merged, pickSlipStale, hold };
+  }
+
+  /** The order's history row for Add items: what was added and topped up. */
+  private async auditLinesAdded(
+    h: { id: string; status: OrderRequestStatus; pick_slip_generated_at: string | null },
+    itemMap: Map<string, { name: string }>,
+    items: Array<[string, number]>,
+    counts: { added: number; merged: number; partial: boolean },
+  ): Promise<void> {
     await audit(
       {
         event: 'order_request.lines_added',
         entityType: 'order_request',
         entityId: h.id,
         after: {
-          added,
-          merged,
-          items: [...wanted.entries()].map(([itemId, qty]) => ({
+          added: counts.added,
+          merged: counts.merged,
+          // Only on a partial add: the top-ups were saved, the rest was not.
+          ...(counts.partial ? { partial: true } : {}),
+          items: items.map(([itemId, qty]) => ({
             itemId,
             name: itemMap.get(itemId)?.name ?? null,
             quantity: qty,
           })),
           statusWhenAdded: h.status,
-          pickSlipStale,
+          pickSlipStale: h.pick_slip_generated_at != null,
         },
       },
       this.ctx,
     );
-
-    // After the lines are written (and audited): hold them, when an approver
-    // added them at a hold status. Never undoes the add.
-    const hold = await this.topUpHolds(h, 'lines_added');
-    return { added, merged, pickSlipStale, hold };
   }
 
   /**
@@ -2608,7 +2671,8 @@ export class OrderRequestsService {
       .eq('order_request_id', h.id)
       .select('id')
       .maybeSingle();
-    if (uErr) throw new ServiceError('internal_error', uErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (uErr) throw orderBusyRefusal(uErr) ?? new ServiceError('internal_error', uErr.message);
     if (!changed) {
       throw new ServiceError(
         'conflict',
@@ -2773,7 +2837,8 @@ export class OrderRequestsService {
       .eq('order_request_id', h.id)
       .select('id')
       .maybeSingle();
-    if (dErr) throw new ServiceError('internal_error', dErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (dErr) throw orderBusyRefusal(dErr) ?? new ServiceError('internal_error', dErr.message);
     if (!deleted) {
       throw new ServiceError(
         'conflict',
@@ -2974,6 +3039,8 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'You can only cancel your own requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request can no longer be cancelled');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     // cancel_order_request restocks a picked-but-undelivered batch through
@@ -3075,6 +3142,8 @@ export class OrderRequestsService {
           'validation_error',
           'A line references an item from a different warehouse than the request.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
@@ -3602,6 +3671,8 @@ export class OrderRequestsService {
           'validation_error',
           'A line references an item from a different warehouse than the request.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
@@ -3662,6 +3733,9 @@ export class OrderRequestsService {
       // released it early; refused by its hint in core's words.
       const refusal = replacementRefusal(updErr);
       if (refusal) throw refusal;
+      // RX-2 review S4: a lock wait, a timeout or a deadlock is busy, not a fault.
+      const busy = orderBusyRefusal(updErr);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', updErr.message);
     }
     if (!updated)
@@ -3715,6 +3789,8 @@ export class OrderRequestsService {
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'Order is not in a pickable status.');
       // Don't leak the raw Postgres/RPC text to a Bearer caller.
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not record the pick.');
     }
   }
@@ -3782,6 +3858,8 @@ export class OrderRequestsService {
         );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Not allowed to complete picking on this order.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not complete picking.');
     }
     // complete_picking draws the picked batch off the shelf (adjust_stock).
@@ -3825,6 +3903,8 @@ export class OrderRequestsService {
       // them when the order moves on under the preview).
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', partialActionMovedOnCopy('resume'));
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not resume fulfillment.');
     }
     const row = data as OrderRequestRow;
@@ -3885,6 +3965,8 @@ export class OrderRequestsService {
         );
       // Covers the RPC's defensive unplaced_location_not_found (P0002) too —
       // an internal-configuration failure, not something the caller can fix.
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not reopen picking.');
     }
     // reopen_picking gives complete_picking's draw back to the shelf through
@@ -3933,6 +4015,8 @@ export class OrderRequestsService {
           'validation_error',
           'Only a backordered order can be closed as delivered-partial.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not close the order.');
     }
     const row = data as OrderRequestRow;
@@ -4016,6 +4100,8 @@ export class OrderRequestsService {
         );
       if (msg.includes('signer_name_required'))
         throw new ServiceError('validation_error', 'Signer name is required.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not record the signature.');
     }
     const row = data as OrderRequestRow;
@@ -4157,6 +4243,8 @@ export class OrderRequestsService {
         throw new ServiceError('not_found', 'Order not found.');
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'You do not have access to this order.');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not claim picking.');
     }
     await audit(
@@ -4202,6 +4290,8 @@ export class OrderRequestsService {
         // 0390: orders:approve (has_permission alone) plus write access to the
         // order's warehouse, which requireWarehouseAccess checked above.
         throw new ServiceError('forbidden', 'Missing permission: orders:approve');
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not assign the picker.');
     }
     const row = data as OrderRequestRow;
@@ -4241,6 +4331,8 @@ export class OrderRequestsService {
           'forbidden',
           'Only the assigned picker or a manager can release this claim.',
         );
+      const busy = orderBusyRefusal(error);
+      if (busy) throw busy;
       throw new ServiceError('internal_error', 'Could not release the claim.');
     }
     await audit(
@@ -4493,7 +4585,8 @@ export class OrderRequestsService {
       .eq('status', 'packing_slip_generated')
       .select('*')
       .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (updErr) throw orderBusyRefusal(updErr) ?? new ServiceError('internal_error', updErr.message);
     if (!updated)
       throw new ServiceError('conflict', 'Order status changed — refresh and try again.');
     await audit(
@@ -4700,7 +4793,8 @@ export class OrderRequestsService {
       .eq('status', 'pending_approval')
       .select('*')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
     if (!data)
       throw new ServiceError(
         'validation_error',
@@ -4775,7 +4869,8 @@ export class OrderRequestsService {
       .eq('id', id)
       .select('id')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // One statement, nothing written before it: busy is safe to send again.
+    if (error) throw orderBusyRefusal(error) ?? new ServiceError('internal_error', error.message);
     if (!updated) throw new ServiceError('not_found', 'Order request not found');
   }
 

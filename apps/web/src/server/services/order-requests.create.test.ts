@@ -515,6 +515,17 @@ describe('create: every raise mapped by its hint, then its code, specific before
       ORDER_BUSY_COPY,
       { reason: 'busy', retryable: true },
     ],
+    // Re-pinned on purpose by returns RX-3 (RX-2 review S4): a deadlock the
+    // server resolved rolled the whole placement back, the key's row with it,
+    // exactly as a lock wait does: busy, the same request and key safe to
+    // send again (was a fault, "never raised by the function").
+    [
+      '40P01 deadlock',
+      { message: 'deadlock detected', code: '40P01' },
+      'conflict',
+      ORDER_BUSY_COPY,
+      { reason: 'busy', retryable: true },
+    ],
   ];
   it.each(cases)('%s', async (_label, error, code, message, details) => {
     const stub = stubWith({ data: null, error });
@@ -535,10 +546,6 @@ describe('create: every raise mapped by its hint, then its code, specific before
     [
       'a 42501 hint it does not know',
       { message: 'forbidden', code: '42501', hint: 'something_else' },
-    ],
-    [
-      'a deadlock (never raised by the function, still not retried here)',
-      { message: 'deadlock detected', code: '40P01' },
     ],
     [
       'the internal hint',

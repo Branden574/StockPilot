@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 
 import {
-  exchangeLineStatusLabel,
   exchangeRailAccessibilityLabel,
   formatOrderNumber,
   qtyReturningLabel,
@@ -49,13 +48,16 @@ import {
   prepareOutcomeMessage,
   refusalRefreshesWorkbench,
   replacementCardLabel,
+  replacementCardStatus,
   replacementOrderHref,
   replacementPhotoUrl,
   replacementOrderLines,
   replacementSideLines,
   returnStatusTone,
   stepOutcomeMessage,
+  workbenchActionHint,
   workbenchActions,
+  workbenchStillWaiting,
 } from '@/lib/returns-view';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -156,6 +158,9 @@ export function ReturnWorkbenchView({
   // Review fix P18: what "Get replacement ready" does, under it and as its
   // hint, when it is one of the secondary buttons.
   const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;
+  // RX-2 review fix P17 (built in RX-3): from 14 days waiting for the
+  // returned item, the two buttons that end the wait, under the bar.
+  const stillWaiting = workbenchStillWaiting(wb, actions);
 
   // Review fix S2: after a refusal that means the screen is behind the
   // server, read the RMA again (and the iPad list beside it).
@@ -320,7 +325,7 @@ export function ReturnWorkbenchView({
               <Button
                 block
                 disabled={disabled}
-                accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}
+                accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}
                 onPress={() => onAction(actions.primary!)}
               >
                 {busy && (actions.primary === 'receive' || actions.primary === 'get_replacement_ready')
@@ -341,7 +346,7 @@ export function ReturnWorkbenchView({
                     size="sm"
                     variant={a === 'deny' ? 'destructive' : 'outline'}
                     disabled={disabled}
-                    accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}
+                    accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}
                     onPress={() => onAction(a)}
                   >
                     {actionLabel(a, { hasExchange, canApproveOrders: wb.viewer.canApproveOrders })}
@@ -352,6 +357,11 @@ export function ReturnWorkbenchView({
             {secondaryHelp ? (
               <Body size={12.5} muted>
                 {secondaryHelp}
+              </Body>
+            ) : null}
+            {stillWaiting ? (
+              <Body size={13} color={c.ink}>
+                {stillWaiting}
               </Body>
             ) : null}
             {actions.disabledReason ? (
@@ -466,7 +476,7 @@ export function ReturnWorkbenchView({
                   <View
                     style={{ flexDirection: cardsStacked ? 'column' : 'row', gap: 12 }}
                     accessible
-                    accessibilityLabel={replacementCardLabel(name, x)}
+                    accessibilityLabel={replacementCardLabel(name, x, ex.replacement)}
                   >
                     {photo ? (
                       <Image source={{ uri: photo }} style={[styles.photo, { backgroundColor: c.paper2 }]} accessibilityIgnoresInvertColors />
@@ -475,7 +485,7 @@ export function ReturnWorkbenchView({
                     )}
                     <View style={cardsStacked ? { gap: 4 } : { flex: 1, minWidth: 0, gap: 4 }}>
                       <Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>
-                      {replacementSideLines(x).map((t) => (
+                      {replacementSideLines(x, ex.replacement).map((t) => (
                         <Body
                           key={t.key}
                           size={t.tone === 'ink' ? 14.5 : 13}
@@ -486,7 +496,7 @@ export function ReturnWorkbenchView({
                         </Body>
                       ))}
                       <View style={{ alignSelf: 'flex-start' }}>
-                        <Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>
+                        <Pill dot={false}>{replacementCardStatus(x, ex.replacement)}</Pill>
                       </View>
                     </View>
                   </View>

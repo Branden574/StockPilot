@@ -1,5 +1,7 @@
 'use client';
 
+import { orderStatusLabelForFulfillment } from '@stockpilot/core';
+
 import { Badge } from '@/components/ui/badge';
 import { useOrderStatusMeta } from '@/components/orders/order-status-config-provider';
 
@@ -13,9 +15,19 @@ import type { OrderRequestStatus } from '@/server/services/order-requests';
  * badge is NEVER blank and NEVER throws. The status VALUE is unchanged; only
  * how it is labeled + colored varies per org.
  */
-export function OrderStatusBadge({ status }: { status: OrderRequestStatus }) {
+export function OrderStatusBadge({
+  status,
+  fulfillmentType = null,
+}: {
+  status: OrderRequestStatus;
+  /** The order's fulfilment: a completed pickup reads "Handed over", never
+   *  "Delivered", unless the organization renamed the status (core
+   *  orderStatusLabelForFulfillment, the phone's rule; returns RX-3 PR stage,
+   *  polish (c)). */
+  fulfillmentType?: string | null;
+}) {
   const meta = useOrderStatusMeta(status);
-  return <Badge variant={meta.color}>{meta.label}</Badge>;
+  return <Badge variant={meta.color}>{orderStatusLabelForFulfillment(status, meta.label, fulfillmentType)}</Badge>;
 }
 
 // NOTE: `summaryRequesterLabel` moved to ./requester-label (a server-safe,

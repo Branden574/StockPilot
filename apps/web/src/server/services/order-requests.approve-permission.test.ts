@@ -137,6 +137,8 @@ describe('assignDelivery writes through assign_order_delivery (0390)', () => {
     [{ code: 'P0002', message: 'order_request_not_found' }, 'not_found', 'Order not found'],
     [{ code: 'P0001', message: 'module_disabled', hint: 'module_disabled' }, 'module_disabled', 'Module not enabled for this organization: orders'],
     [{ code: '55P03', message: 'canceling statement due to lock timeout' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
+    // Returns RX-3 (RX-2 review S4): a deadlock the server resolved is busy too.
+    [{ code: '40P01', message: 'deadlock detected' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
     [{ code: '42501', message: 'unauthenticated' }, 'unauthenticated', 'Sign in again to change this order.'],
   ])('maps the function refusal %o to %s', async (error, code, message) => {
     const stub = assignStub({ data: null, error });
@@ -221,6 +223,8 @@ describe('markInTransit follows orders:approve and writes through mark_order_in_
     [{ code: '42501', message: 'forbidden', hint: 'orders_approve' }, 'forbidden', IN_TRANSIT_NOT_APPROVER_COPY],
     [{ code: '42501', message: 'forbidden', hint: 'warehouse_write' }, 'forbidden', "You don't have write access to this order's warehouse."],
     [{ code: '57014', message: 'canceling statement due to statement timeout' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
+    // Returns RX-3 (RX-2 review S4): a deadlock the server resolved is busy too.
+    [{ code: '40P01', message: 'deadlock detected' }, 'conflict', 'Someone else is changing this order right now. Try again.'],
   ])('maps the function refusal %o to %s, and notifies no one', async (error, code, message) => {
     const stub = transitStub({ data: null, error });
     await expect(svc(stub).markInTransit('ord-1')).rejects.toMatchObject({ code, message });

@@ -28,6 +28,163 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'returns-requester-exchange-2026-10',
+    revision: 1,
+    // Returns RX-3 (no migration: the requester tier and its predicate,
+    // return_exchange_options, shipped in RX-2's 0396). Held as a DRAFT until
+    // this slice's web deploy is live (RX-2's 0396 is already in production),
+    // the OTA with the phone's requester sheet is published and launched, and
+    // the Demo Co walk passed (returns plan 10.1 and 11); the follow-up that
+    // publishes it (RX-5) sets 'published' and the real publishedAt and
+    // re-reads these words against what shipped. Newest first: drafts sit
+    // above the newest published release, so it sits at the top, directly
+    // above RX-2's release (published by #345 at 2026-10-11T22:18Z), and is
+    // dated after every release (a placeholder; the publishing follow-up
+    // dates and orders it for real).
+    //
+    // What a person can see, and who is told:
+    // - Members who place orders, where Returns is on: their own handed-over
+    //   order's link now reads Return or exchange (web; Request a return while
+    //   the kill switch is off) and opens the requester sheet (the token
+    //   page; an order with no return token opens the same form over the
+    //   member routes, fix round 1 L6); the phone gets its own sheet on the
+    //   order (phone stage); the order lists Your requests on this order. A
+    //   returns manager keeps Create return on their own orders (no tracking
+    //   for them), and the entry says so (fix round 1 L9). The customer portal and the
+    //   emailed link get the same sheet, but their people never read What's
+    //   New, so the entry speaks to members and the summary names all three.
+    // - People who can open Returns: requests now arrive with an exchange
+    //   (the size asked for, or a note), with the staff ping New exchange
+    //   request (returns-notify.ts, requester-sourced only); and the 14-day
+    //   prompt on the workbench (RX-2 review fix P17), shown only to someone
+    //   offered Cancel replacement, so the words say so.
+    // - Order actions (deferred item b, 1c4aac16; fix round 1 F1/F2): a lock
+    //   wait, a timeout or a deadlock now answers Busy. Try again. where a
+    //   general error was said, on every order function call and every
+    //   single-statement order write (stage, deny, internal notes, a line's
+    //   quantity, removing a line, the pick slip); actions that had busy words
+    //   keep them. Busy is said only when nothing was written. Add items,
+    //   whose top-ups commit before its insert, says busy only before its
+    //   first top-up; after one it answers the non-retryable partial refusal
+    //   ("Part of this change was saved. Reload the order ..."). Server side,
+    //   so no update is needed for it.
+    // - A label fix found on the way: core returnLineLabel read the s of
+    //   Women's as the size S, so return and exchange sentences dropped the
+    //   size S for names with an apostrophe (staff workbench, order pages,
+    //   the phone, and the new tracking).
+    //
+    // Claims review, each checked against the code: requesters are told
+    // under the Order status changes setting as a member, by email otherwise
+    // (RX-1's words); "the sizes the warehouse offers" are the line's own
+    // product group's other sizes in the same warehouse (3.6.10), so the
+    // words never say "any size"; availability is two words, never a count
+    // (D6); the replacement is prepared once the item is back unless the
+    // warehouse releases it early (the gate), so the words say "usually"; the
+    // 14-day prompt never cancels anything. The words never say "book" for a
+    // recorded quantity and claim no inspection.
+    //
+    // PR-stage polish (2026-10-11, the RX-2 Demo Co walk's lows), two more
+    // entries, each claim checked against core (registry.test.ts pins them):
+    // - The exchange outcome words (polish a, b, d, e): the REPLACEMENT card
+    //   reads Handed over / Partly handed over / Not sent from the
+    //   replacement order's own lines (replacementCardStatusLabel; the
+    //   stored line status stays approved); a processed line's history names
+    //   its original rack from its own leg; on the original order a denied
+    //   or cancelled RMA's line reads not returned (describeReturnLine), a
+    //   declined or cancelled exchange is listed (originalExchangeLineFor),
+    //   and the note says a replacement is its own order
+    //   (ORDER_RETURN_SUMMARY_NOTE). Told to whoever opens Returns and to
+    //   order approvers (who meet the original order's returns section).
+    // - A completed pickup reads Handed over (polish c,
+    //   orderStatusLabelForFulfillment): the web badge on the order page and
+    //   the list, the phone's header and list pill; a delivery keeps
+    //   Delivered; on the web an organization's own word is kept (the phone
+    //   shows canonical words for every status). Emails, exports and reports
+    //   are unchanged.
+    status: 'draft',
+    title: 'Requesters can ask for an exchange themselves',
+    summary:
+      'People who placed an order can now ask for an exchange from their return link, the customer portal or their own order, in the mobile app after the latest update too: each item can be Return only or Exchange for another size, from the sizes the warehouse offers, and the request shows where it stands. The warehouse reviews every request first. Order actions that meet another change at the same moment now say Busy. Try again. A completed pickup order now reads Handed over.',
+    publishedAt: '2026-10-15T17:10:00Z',
+    entries: [
+      {
+        id: 'returns-requester-exchange',
+        category: 'new',
+        area: 'Orders',
+        title: 'Ask for another size on your own order',
+        whatChanged:
+          "On an order you placed that was handed over, Return or exchange now lets you choose Return only or Exchange for another size for each item. Exchange shows the item's other sizes, each with its photo when it has one and Available or Not in stock right now. An item with no other sizes offers Request a different replacement: warehouse will review, with a note. The order then lists Your requests on this order, with where each one stands. If you manage returns, your own orders keep Create return instead.",
+        whyItMatters: 'A wrong size used to take a return and a separate request for the right one, with nothing tying the two together.',
+        howItAffectsYou:
+          'The warehouse reviews every request, and nothing is sent until it is approved. The replacement is usually prepared once your item is back. You hear when the request arrives, when it is approved, when the replacement is ready and when the exchange is complete, unless you turned off Order status changes.',
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-requester-exchange-review',
+        category: 'new',
+        area: 'Returns',
+        title: 'Return requests can ask for an exchange',
+        whatChanged:
+          "A request from a return link, the customer portal or someone's own order can now ask for an exchange: one of the item's other sizes, or a different replacement for the warehouse to review from the requester's note. It arrives in Returns like a staff exchange, with the size asked for beside the returning item, and the people who manage returns get New exchange request.",
+        whyItMatters: 'The warehouse learns which size the requester wants when they ask, not later by phone or email.',
+        howItAffectsYou:
+          'Review it as any exchange: Approve as requested, Change replacement… or Decline the exchange, return only. The requester sees where it stands in plain words, never a rack, Staging, a cost, a reason or who did what. When a replacement has waited 14 days for the returned item, the return tells whoever can cancel the replacement how long it has waited and what Cancel replacement and Cancel return do. Nothing is cancelled on its own.',
+        whatToDo: 'No action needed. To stop these notifications, turn off New return and exchange requests in Notifications.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'order-actions-busy',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order actions say Busy. Try again. when another change is under way',
+        whatChanged:
+          'When an order action meets another change to the same order at the same moment, or the database is briefly busy, it now says Busy. Try again. instead of a general error. When it says this, nothing was changed, so pressing the same button again is safe. Actions that already said they were busy keep their own words. If Add items saved only part of a change, it says so and asks you to reload the order before adding again.',
+        whyItMatters: 'A general error left people unsure whether the order had changed.',
+        howItAffectsYou: 'If an order says Busy. Try again., wait a moment and press the same button again.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'returns-size-s-apostrophe',
+        category: 'fixed',
+        area: 'Returns',
+        title: "Return lines show size S for names like Women's Polo",
+        whatChanged:
+          "Return and exchange lines for an item whose name has an apostrophe, such as Women's Polo, now name the size S, as in Women's Polo, S. The s of Women's was read as the size, so the size S was left out.",
+        whyItMatters: "Women's Polo in size S and in size M read the same without it.",
+        howItAffectsYou: 'Returns, exchanges and replacement orders name the size S for these items, on the web and in the mobile app after the latest update.',
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-exchange-outcome-words',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Exchanges say how they ended, on the return and on the order',
+        whatChanged:
+          "Once its replacement order is handed over, a return's REPLACEMENT card says Handed over, with the quantity handed over, instead of Approved (or Partly handed over, or Not sent for an item never sent). The return's history names the original rack after the item is processed too. On the original order, a line of a denied or cancelled return reads not returned instead of pending, a declined or cancelled exchange is listed in its own words, and the returns note says a replacement from an exchange is its own order and is not counted in the net.",
+        whyItMatters: "After an exchange was complete the return still read Approved, and a cancelled return's line looked as if the item were still on its way.",
+        howItAffectsYou: 'Only the words change: what a return or an exchange does is the same. The mobile app shows them after the latest update.',
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['returns:read', 'returns:manage', 'orders:approve'], modules: ['returns'] },
+      },
+      {
+        id: 'order-pickup-handed-over',
+        category: 'improved',
+        area: 'Orders',
+        title: 'A completed pickup order says Handed over',
+        whatChanged:
+          'A pickup order that was handed over now reads Handed over instead of Delivered, on the order page and in the orders list, on the web and in the mobile app. A delivery still reads Delivered. If your organization renamed this status on the web, its own word is kept there.',
+        whyItMatters: 'Delivered read wrong for an order someone collected at the counter.',
+        howItAffectsYou: "Only the word changes: the order's status is the same, and order emails, exports and reports keep their words. The mobile app shows it after the latest update.",
+        whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'returns-exchange-2026-10',
     revision: 1,
     // Returns RX-2: exchanges for staff and the counter, the linked

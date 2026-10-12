@@ -12,8 +12,12 @@ import {
   exchangeReviewHeaderLabel,
   exchangeReviewProblem,
   noReplacementLine,
+  originalExchangeLineFor,
   parseExchangeCandidates,
   RAIL_STEP_STATE_WORDS,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
+  replacementLineHandOver,
   replacementSiteOptions,
   type ExchangeCandidate,
   type RailStep,
@@ -92,6 +96,35 @@ describe('exchangeRail (plan RX-2: the outbound rail)', () => {
     expect(
       states(exchangeRail({ ...base, returnStatus: 'received', releasedEarly: true, exchangeStatus: 'replacement_cancelled' })),
     ).toBe(
+      'Requested:done > Cancelled:stopped > Waiting for return:not_started > Picking:not_started > Ready for pickup:not_started > Handed over:not_started',
+    );
+  });
+
+  // RX-2 verification L12, carried to RX-3 and confirmed on the local stack in
+  // the RX-3 test stage: after an approval reserved the replacement, Cancel
+  // return leaves the view carrying the CANCELLED replacement (exchange
+  // cancelled, replacement_status cancelled, its hold released but on record).
+  // The replacement did reach Reserved and waited, so the rail keeps Reserved
+  // done and stops at the gate. A cancel before any hold (cancelled before
+  // approval, or a replacement that never held stock) keeps the stop at
+  // Reserved; a declined exchange and a replacement cancel are unchanged.
+  it('keeps Reserved done and stops at the gate when the RMA was cancelled after its replacement was reserved (L12)', () => {
+    const cancelled = { ...base, returnStatus: 'cancelled', exchangeStatus: 'cancelled' as const, replacementStatus: 'cancelled', replacementOwed: 1 };
+    expect(states(exchangeRail({ ...cancelled, replacementWasReserved: true }))).toBe(
+      'Requested:done > Reserved:done > Cancelled:stopped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(exchangeRailAccessibilityLabel(exchangeRail({ ...cancelled, replacementWasReserved: true }))).toBe(
+      'Replacement progress: Requested, done; Reserved, done; Cancelled, stopped; Picking, not reached; Ready for pickup, not reached; Handed over, not reached',
+    );
+    const atReserved =
+      'Requested:done > Cancelled:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped';
+    expect(states(exchangeRail({ ...cancelled, replacementWasReserved: false }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...cancelled }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...base, returnStatus: 'cancelled', exchangeStatus: 'cancelled', replacementWasReserved: null }))).toBe(atReserved);
+    expect(states(exchangeRail({ ...base, exchangeStatus: 'declined', replacementWasReserved: true }))).toBe(
+      'Requested:done > Declined:stopped > Waiting for return:skipped > Picking:skipped > Ready for pickup:skipped > Handed over:skipped',
+    );
+    expect(states(exchangeRail({ ...base, exchangeStatus: 'replacement_cancelled', replacementWasReserved: true }))).toBe(
       'Requested:done > Cancelled:stopped > Waiting for return:not_started > Picking:not_started > Ready for pickup:not_started > Handed over:not_started',
     );
   });
@@ -364,5 +397,102 @@ describe('exchangeLineStatusLabel (the REPLACEMENT card, web and phone)', () => 
       'Declined',
       'Cancelled',
     ]);
+  });
+});
+
+// Returns RX-3 PR stage, polish (a): the stored line status stays 'approved'
+// after the hand-over (0396 has no later line status), so the card reads the
+// outcome from the replacement order's own lines, which the workbench already
+// sends. One rule for the web card and the phone card.
+describe('the REPLACEMENT card after the hand-over (replacementLineHandOver and the card words)', () => {
+  const line = (over: Partial<{ status: 'requested' | 'approved' | 'declined' | 'cancelled'; approvedItemId: string | null; approvedQuantity: number | null; requestedQuantity: number }> = {}) => ({
+    status: 'approved' as const,
+    approvedItemId: 'L',
+    approvedQuantity: 1,
+    requestedQuantity: 1,
+    ...over,
+  });
+  const repl = (status: string, lines: Array<{ itemId: string; requested: number; fulfilled: number }>, live = true) => ({ live, status, lines });
+
+  it('reads all, part or none sent from the replacement line of the approved item', () => {
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }]))).toBe('all');
+    expect(replacementLineHandOver(line(), repl('backordered', [{ itemId: 'L', requested: 2, fulfilled: 1 }]))).toBe('part');
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 0 }, { itemId: 'XL', requested: 1, fulfilled: 1 }]))).toBe('none_sent');
+    // Still to be handed over, or nothing to read: no outcome.
+    expect(replacementLineHandOver(line(), repl('staged_for_pickup', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBeNull();
+    expect(replacementLineHandOver(line(), repl('cancelled', [{ itemId: 'L', requested: 1, fulfilled: 0 }], false))).toBeNull();
+    // A replacement that is not live (cancelled or denied) is never read as handed over.
+    expect(replacementLineHandOver(line(), repl('cancelled', [{ itemId: 'L', requested: 1, fulfilled: 1 }], false))).toBeNull();
+    expect(replacementLineHandOver(line(), null)).toBeNull();
+    expect(replacementLineHandOver(line({ approvedItemId: null }), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }]))).toBeNull();
+    expect(replacementLineHandOver(line(), repl('completed', [{ itemId: 'XL', requested: 1, fulfilled: 1 }]))).toBeNull();
+    // Only an approved line has a replacement to read.
+    for (const status of ['requested', 'declined', 'cancelled'] as const) {
+      expect(replacementLineHandOver(line({ status }), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 1 }])), status).toBeNull();
+    }
+  });
+
+  it('says Handed over with the quantity handed over, Partly handed over, Not sent, or the stored status', () => {
+    const all = repl('completed', [{ itemId: 'L', requested: 2, fulfilled: 2 }]);
+    expect(replacementCardStatusLabel(line({ approvedQuantity: 2 }), all)).toBe('Handed over');
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: 2 }), all)).toBe('Qty handed over: 2');
+    const part = repl('backordered', [{ itemId: 'L', requested: 2, fulfilled: 1 }]);
+    expect(replacementCardStatusLabel(line({ approvedQuantity: 2 }), part)).toBe('Partly handed over');
+    // Two lines asking for the same item share one order line: the count per
+    // line is not known, so the quantity asked for stays.
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: 2 }), part)).toBe('Qty requested: 2');
+    expect(replacementCardStatusLabel(line(), repl('completed', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBe('Not sent');
+    expect(replacementCardStatusLabel(line(), repl('approved', [{ itemId: 'L', requested: 1, fulfilled: 0 }]))).toBe('Approved');
+    expect(replacementCardQuantityLabel(line({ approvedQuantity: null, requestedQuantity: 3 }), null)).toBe('Qty requested: 3');
+    expect(replacementCardStatusLabel(line({ status: 'declined' }), all)).toBe('Declined');
+  });
+});
+
+// Returns RX-3 PR stage, polish (d), from the RX-2 Demo Co walk: a cancelled
+// RMA's card on the original order showed no exchange line at all (declined
+// and cancelled lines were left out), so the order did not say an exchange
+// had been asked for and ended. Each line now reads in its own words; the
+// SO number only beside an approved line (a cancelled replacement is listed
+// on its RMA).
+describe('originalExchangeLineFor (the original order\'s returns section, web and phone)', () => {
+  const base = { itemLabel: 'Walk Exchange Tee L', quantity: 1, replacementOrderNumber: 29 };
+  it('an approved line names its replacement order and the exchange status', () => {
+    expect(
+      originalExchangeLineFor({ ...base, status: 'approved', exchangeStatus: 'waiting_for_return', statusWords: 'Replacement reserved. Waiting for returned item' }),
+    ).toBe('Exchange: Walk Exchange Tee L ×1 → SO-000029 (Replacement reserved. Waiting for returned item)');
+    expect(originalExchangeLineFor({ ...base, status: 'requested', exchangeStatus: 'requested', statusWords: 'Exchange requested' })).toBe(
+      'Exchange: Walk Exchange Tee L ×1 (Exchange requested)',
+    );
+  });
+
+  it('a cancelled or declined line says so, without the cancelled order\'s number', () => {
+    expect(originalExchangeLineFor({ ...base, status: 'cancelled', exchangeStatus: 'cancelled', statusWords: 'Exchange cancelled' })).toBe(
+      'Exchange: Walk Exchange Tee L ×1 (Exchange cancelled)',
+    );
+    expect(
+      originalExchangeLineFor({
+        ...base,
+        status: 'cancelled',
+        exchangeStatus: 'replacement_cancelled',
+        statusWords: 'Replacement cancelled: issue a new one or close as return only',
+      }),
+    ).toBe('Exchange: Walk Exchange Tee L ×1 (Replacement cancelled: issue a new one or close as return only)');
+    // A declined line beside an approved one never takes the RMA's words.
+    expect(
+      originalExchangeLineFor({ ...base, status: 'declined', exchangeStatus: 'waiting_for_return', statusWords: 'Replacement reserved. Waiting for returned item' }),
+    ).toBe('Exchange: Walk Exchange Tee L ×1 (Exchange declined)');
+    expect(
+      originalExchangeLineFor({ ...base, status: 'cancelled', exchangeStatus: 'waiting_for_return', statusWords: 'Replacement reserved. Waiting for returned item' }),
+    ).toBe('Exchange: Walk Exchange Tee L ×1 (Exchange cancelled)');
+  });
+
+  it('a request made with a note reads Warehouse will review while requested, A different replacement once it ended', () => {
+    const note = { itemLabel: null, quantity: 1, replacementOrderNumber: null };
+    expect(originalExchangeLineFor({ ...note, status: 'requested', exchangeStatus: 'requested', statusWords: 'Exchange requested' })).toBe(
+      'Exchange: Warehouse will review (Exchange requested)',
+    );
+    expect(originalExchangeLineFor({ ...note, status: 'declined', exchangeStatus: 'declined', statusWords: 'Exchange declined' })).toBe(
+      'Exchange: A different replacement (Exchange declined)',
+    );
   });
 });

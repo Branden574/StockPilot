@@ -35,8 +35,14 @@ vi.mock('@/server/services/portal', () => ({
 vi.mock('@/server/services/returns', () => ({
   createPortalReturn: (...a: unknown[]) => createPortalReturn(...a),
 }));
+const exchangeOptionsForPortal = vi.fn();
+const loadPortalReturnSheet = vi.fn();
+vi.mock('@/server/services/returns-requester', () => ({
+  exchangeOptionsForPortal: (...a: unknown[]) => exchangeOptionsForPortal(...a),
+  loadPortalReturnSheet: (...a: unknown[]) => loadPortalReturnSheet(...a),
+}));
 
-import { requestPortalReturnAction } from './portal';
+import { portalReturnOptionsAction, portalReturnSheetAction, requestPortalReturnAction } from './portal';
 
 const ORDER_ID = '11111111-1111-4111-8111-111111111111';
 const OLINE_ID = '22222222-2222-4222-8222-222222222222';
@@ -99,10 +105,17 @@ describe('requestPortalReturnAction', () => {
 
   it('derives the service scope from the SERVER-resolved context, never the client', async () => {
     const res = await requestPortalReturnAction(VALID_INPUT);
-    expect(res).toEqual({ ok: true, data: { id: 'ret-1', status: 'requested' } });
+    // Re-pinned by returns RX-3: the answer also names the RMA and says
+    // whether the key replayed (the claim stands: scope from the server).
+    expect(res).toEqual({
+      ok: true,
+      data: { id: 'ret-1', status: 'requested', returnNumber: 'RMA-20260720-ABCDEF', replay: false },
+    });
 
     expect(createPortalReturn).toHaveBeenCalledTimes(1);
-    const [admin, scope, input] = createPortalReturn.mock.calls[0]!;
+    const [admin, scope, input, opts] = createPortalReturn.mock.calls[0]!;
+    // No key in the body: the service mints one (a body with one replays).
+    expect(opts).toEqual({ idempotencyKey: null });
     expect(admin).toEqual({ mocked: 'admin' });
     // org + customer come from resolvePortalContext — the ONLY client-supplied
     // part of the scope is the orderId, which the service can then only find
@@ -140,5 +153,70 @@ describe('requestPortalReturnAction', () => {
       ok: false,
       error: { code: 'validation_error', message: expect.stringContaining('only 2 of 10') },
     });
+  });
+});
+
+// ── Returns RX-3: the portal customer's own exchange ──────────────────────
+describe('portal exchange (returns RX-3)', () => {
+  const ITEM = '33333333-3333-4333-8333-333333333333';
+  const KEY = '44444444-4444-4444-8444-444444444444';
+
+  it('passes a line exchange and the form key through; scope still from the server', async () => {
+    const res = await requestPortalReturnAction({
+      ...VALID_INPUT,
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: ITEM, quantity: 1 } }],
+      idempotencyKey: KEY,
+    });
+    expect(res.ok).toBe(true);
+    const [, scope, input, opts] = createPortalReturn.mock.calls[0]!;
+    expect(scope).toMatchObject({ organizationId: 'org-1', customerId: 'cust-1', portalUserId: 'user-1' });
+    expect(input.lines).toEqual([{ orderRequestLineId: OLINE_ID, quantity: 2, exchange: { itemId: ITEM, quantity: 1 } }]);
+    expect(opts).toEqual({ idempotencyKey: KEY });
+  });
+
+  it('refuses a forged field inside the exchange before the service', async () => {
+    const res = await requestPortalReturnAction({
+      ...VALID_INPUT,
+      lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM, approvedItemId: ITEM } as never }],
+    });
+    expect(res).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+    expect(createPortalReturn).not.toHaveBeenCalled();
+  });
+
+  it('an ineligible item keeps the generic words and reason; a conflict keeps its words', async () => {
+    createPortalReturn.mockRejectedValueOnce(
+      new ServiceError('validation_error', "That item can't be used as a replacement.", { reason: 'exchange_item_not_eligible' }),
+    );
+    expect(await requestPortalReturnAction(VALID_INPUT)).toEqual({
+      ok: false,
+      error: { code: 'validation_error', message: "That item can't be used as a replacement.", details: { reason: 'exchange_item_not_eligible' } },
+    });
+    createPortalReturn.mockRejectedValueOnce(
+      new ServiceError('conflict', 'This request was already sent with different details. Reload and try again.', { reason: 'idempotency_conflict' }),
+    );
+    expect(await requestPortalReturnAction(VALID_INPUT)).toMatchObject({ ok: false, error: { code: 'conflict' } });
+  });
+
+  it('the options: the customer own order, a fail-closed read limit, not_found for anything else', async () => {
+    exchangeOptionsForPortal.mockResolvedValueOnce({ exchangesEnabled: true, lines: [] });
+    expect(await portalReturnOptionsAction(ORDER_ID)).toEqual({ ok: true, data: { exchangesEnabled: true, lines: [] } });
+    expect(exchangeOptionsForPortal).toHaveBeenCalledWith({ mocked: 'admin' }, { organizationId: 'org-1', customerId: 'cust-1', orderRequestId: ORDER_ID });
+    expect(checkRateLimit).toHaveBeenCalledWith('portal-return-read:user:user-1', 120, 60 * 60 * 1000, 'closed');
+
+    exchangeOptionsForPortal.mockResolvedValueOnce(null);
+    expect(await portalReturnOptionsAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'not_found' } });
+    expect(await portalReturnOptionsAction('not-an-id')).toMatchObject({ ok: false, error: { code: 'not_found' } });
+
+    resolvePortalContext.mockResolvedValueOnce(null);
+    expect(await portalReturnOptionsAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+  });
+
+  it('the sheet: the customer own order; a failure is reported and generic', async () => {
+    loadPortalReturnSheet.mockResolvedValueOnce({ orderNumber: 'SO-000007', requesterName: 'Casey', exchangesEnabled: true, lines: [], tracking: [] });
+    expect(await portalReturnSheetAction(ORDER_ID)).toMatchObject({ ok: true, data: { orderNumber: 'SO-000007' } });
+    loadPortalReturnSheet.mockRejectedValueOnce(new Error('boom'));
+    expect(await portalReturnSheetAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'internal_error' } });
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 121, resetAt: Date.now() + 1000 });
+    expect(await portalReturnSheetAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
   });
 });

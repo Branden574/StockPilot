@@ -19,6 +19,8 @@
 
 import type { ReturnStatus } from '../orders/order-returns-view';
 
+import { RETURNS_COPY } from './returns-copy';
+
 export const EXCHANGE_STATUSES = [
   'none',
   'handed_over_return_cancelled',
@@ -155,8 +157,99 @@ export function exchangeRequesterSentence(status: ExchangeStatus, facts: Exchang
     case 'waiting_for_return':
       return 'Replacement reserved. Waiting for your return.';
     case 'ready_to_pick':
-      return 'Return received. Your replacement is being prepared.';
+      // RX-3: ready to pick also means "released early" while the returned
+      // item is still out (the RMA approved): never "Return received" then.
+      return facts.returnStatus === 'approved'
+        ? 'Your replacement is being prepared.'
+        : 'Return received. Your replacement is being prepared.';
   }
+}
+
+/**
+ * The requester's words for the return's OWN status (RX-3 tracking): the
+ * token page, the B2B portal and a member's own order. Null for a status it
+ * does not know (a newer server). Never a rack, Staging, a disposition, a
+ * reason or a staff member.
+ */
+export function requesterReturnStatusSentence(status: ReturnStatus | string | null | undefined): string | null {
+  switch (status) {
+    case 'requested':
+      return RETURNS_COPY.requesterTrackRequested;
+    case 'approved':
+      return RETURNS_COPY.requesterTrackApproved;
+    case 'received':
+      return RETURNS_COPY.requesterTrackReceived;
+    case 'closed':
+      return RETURNS_COPY.requesterTrackClosed;
+    case 'denied':
+      return RETURNS_COPY.requesterTrackDenied;
+    case 'cancelled':
+      return RETURNS_COPY.requesterTrackCancelled;
+    default:
+      return null;
+  }
+}
+
+/** What the requester's tracking sentences read (one RMA). */
+export interface RequesterTrackingSentenceInput {
+  returnStatus: ReturnStatus | string;
+  exchangeStatus: ExchangeStatus;
+  /** The replacement shown (the view's newest, live first): its order status. */
+  replacementStatus?: string | null;
+  /** What that replacement still owes (requested minus handed over). */
+  replacementOwed?: number | null;
+}
+
+/**
+ * Exchange codes whose requester sentence already says where the return
+ * stands, for the return statuses it says it for. Elsewhere the return's own
+ * sentence goes first ("Return received." then "Replacement ready for
+ * pickup.", brief 28), so the two statuses stay side by side, never merged.
+ */
+const SENTENCE_SAYS_RETURN: Partial<Record<ExchangeStatus, 'any' | readonly string[]>> = {
+  requested: 'any',
+  // Not `cancelled` (RX-3 fix round 1, desk check M1): "Exchange request
+  // declined." says nothing about the return, so a declined or cancelled RMA
+  // reads "Return request declined." first, and an exchange cancelled while
+  // the return stands keeps the return's own words.
+  waiting_for_return: ['approved'],
+  ready_to_pick: ['received', 'closed'],
+  completed: ['closed'],
+  declined: ['approved'],
+};
+
+/**
+ * The requester's tracking sentences for one RMA (RX-3, plan 3.10 and brief
+ * 28): one or two short sentences. A return only reads its own status; an
+ * exchange reads the return's status (unless the exchange sentence already
+ * says it) and then the exchange's. Never a rack, Staging, a disposition, a
+ * quantity on record, a cost, a supplier, a reason or a staff member.
+ */
+export function requesterTrackingSentences(input: RequesterTrackingSentenceInput): string[] {
+  const returnSentence = requesterReturnStatusSentence(input.returnStatus);
+  if (input.exchangeStatus === 'none') return returnSentence ? [returnSentence] : [];
+  const facts: ExchangeStatusFacts = {
+    returnStatus: input.returnStatus,
+    denied: input.returnStatus === 'denied',
+    replacementStatus: input.replacementStatus ?? null,
+    replacementOwed: input.replacementOwed ?? null,
+  };
+  const exchangeSentence = exchangeRequesterSentence(input.exchangeStatus, facts);
+  const says = SENTENCE_SAYS_RETURN[input.exchangeStatus];
+  const covered =
+    !replacementPartlySent(facts) &&
+    (says === 'any' || (Array.isArray(says) && says.includes(String(input.returnStatus))));
+  const out: string[] = [];
+  if (!covered && returnSentence) out.push(returnSentence);
+  // Desk check L7: beside the return's own sentence (received, complete),
+  // "Exchange declined. Your return was approved." would repeat an older
+  // state; the short sentence says only what the exchange did.
+  if (exchangeSentence && input.exchangeStatus === 'declined' && !covered && returnSentence) {
+    out.push(RETURNS_COPY.requesterExchangeDeclinedShort);
+    return out;
+  }
+  if (exchangeSentence) out.push(exchangeSentence);
+  return out;
 }
 
 /**
@@ -253,6 +346,23 @@ export function returnListFilter(id: ReturnListFilterId): ReturnListFilter {
 
 /** From this many days waiting the workbench prompts (no auto-expiry, D28). */
 export const RETURN_WAITING_PROMPT_DAYS = 14;
+
+/**
+ * Whole days since approval while the RMA is approved: the rule of
+ * return_overview's waiting_days (floor of the elapsed seconds over 86,400),
+ * for a screen that holds the RMA's approvedAt (the workbench, web and
+ * phone). Null when not approved, or with no readable approval time.
+ */
+export function returnWaitingDays(
+  status: ReturnStatus | string | null | undefined,
+  approvedAt: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (status !== 'approved' || !approvedAt) return null;
+  const at = Date.parse(approvedAt);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.floor((now - at) / 86_400_000));
+}
 
 /** Rows per page on the list (web, phone and API). */
 export const RETURN_LIST_PAGE_SIZE = 25;

@@ -7,6 +7,8 @@ import {
   ORDER_STATUS_META,
   isOrderStatusColor,
   isOrderStatusKey,
+  orderStatusLabelForFulfillment,
+  PICKUP_COMPLETED_STATUS_LABEL,
   resolveOrderStatusConfig,
   type OrderStatusConfig,
 } from './order-status';
@@ -114,5 +116,27 @@ describe('resolveOrderStatusConfig', () => {
       approved: 'red' as never,
     });
     expect(resolved.approved).toEqual(ORDER_STATUS_META.approved);
+  });
+});
+
+// Returns RX-3 PR stage, polish (c), from the RX-2 Demo Co walk: the phone's
+// header read "ORDER SO-000027 · DELIVERED" for a completed PICKUP order.
+// 'completed' is one status for both fulfilments and its canonical word is
+// "Delivered"; a pickup is handed over at the counter, so it reads "Handed
+// over" (the word the order's returns and replacements already use). An
+// organization's own label for the status is kept as typed.
+describe('orderStatusLabelForFulfillment', () => {
+  it('says Handed over for a completed pickup and Delivered for a completed delivery', () => {
+    expect(PICKUP_COMPLETED_STATUS_LABEL).toBe('Handed over');
+    expect(orderStatusLabelForFulfillment('completed', ORDER_STATUS_META.completed.label, 'pickup')).toBe('Handed over');
+    expect(orderStatusLabelForFulfillment('completed', ORDER_STATUS_META.completed.label, 'delivery')).toBe('Delivered');
+    expect(orderStatusLabelForFulfillment('completed', ORDER_STATUS_META.completed.label, null)).toBe('Delivered');
+  });
+
+  it('keeps every other status and an organization\'s own word for completed', () => {
+    for (const key of ORDER_STATUS_KEYS.filter((k) => k !== 'completed')) {
+      expect(orderStatusLabelForFulfillment(key, ORDER_STATUS_META[key].label, 'pickup'), key).toBe(ORDER_STATUS_META[key].label);
+    }
+    expect(orderStatusLabelForFulfillment('completed', 'Closed out', 'pickup')).toBe('Closed out');
   });
 });

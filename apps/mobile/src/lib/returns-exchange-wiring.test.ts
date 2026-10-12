@@ -70,7 +70,9 @@ describe('the workbench', () => {
   it('shows the REPLACEMENT side beside the returning card (stacked when compact), with a text label', () => {
     expect(view).toContain("pair: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }");
     expect(view).toContain('<Eyebrow>→ {RETURNS_COPY.replacement}</Eyebrow>');
-    expect(view).toContain('replacementSideLines(x)');
+    // Re-pinned by returns RX-3 PR stage, polish (a) (was: replacementSideLines(x)):
+    // the side's lines also read the replacement block, for "Qty handed over".
+    expect(view).toContain('replacementSideLines(x, ex.replacement)');
     expect(view).toContain('replacementOrderLines(wb, wb.viewer.canReadDecisions)');
   });
 
@@ -88,8 +90,11 @@ describe('the workbench', () => {
   // what it does is shown under it and is its VoiceOver hint (offline, the
   // hint is why it is off).
   it('says what Get replacement ready does, under it and as its hint (review fix P18)', () => {
-    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(actions.primary) ?? undefined}');
-    expect(view).toContain('accessibilityHint={actions.disabledReason ?? actionHelp(a) ?? undefined}');
+    // Re-pinned on purpose (RX-3 fix round 1, L3): the hint goes through
+    // workbenchActionHint (why it is off, its help, then the 14-day prompt on
+    // the two cancel buttons); actionHelp stays its help.
+    expect(view).toContain('accessibilityHint={workbenchActionHint(actions.primary, { disabledReason: actions.disabledReason, stillWaiting })}');
+    expect(view).toContain('accessibilityHint={workbenchActionHint(a, { disabledReason: actions.disabledReason, stillWaiting })}');
     expect(view).toContain('{actionHelp(actions.primary) ? (');
     expect(view).toContain('const secondaryHelp = actions.secondary.map((a) => actionHelp(a)).find((h) => h !== null) ?? null;');
   });
@@ -115,11 +120,20 @@ describe('the workbench', () => {
   // RX-2 simulator finding SIM-1: VoiceOver reads the REPLACEMENT card's one
   // label, so the label carries the status the pill shows, and both come from
   // core's exchangeLineStatusLabel (the web pill's rule), never a local ternary.
+  // Re-pinned by returns RX-3 PR stage, polish (a) (was: the label and the
+  // pill from exchangeLineStatusLabel(x.status)): both now come from core's
+  // replacementCardStatusLabel over the line and the replacement block, which
+  // says Handed over, Partly handed over or Not sent once the replacement was
+  // handed over and the stored status otherwise. Claim kept: one rule for the
+  // pill, the label and the web.
   it("reads the REPLACEMENT card's status to VoiceOver, from the pill's own rule", () => {
-    expect(view).toContain('accessibilityLabel={replacementCardLabel(name, x)}');
-    expect(view).toContain('<Pill dot={false}>{exchangeLineStatusLabel(x.status)}</Pill>');
+    expect(view).toContain('accessibilityLabel={replacementCardLabel(name, x, ex.replacement)}');
+    expect(view).toContain('<Pill dot={false}>{replacementCardStatus(x, ex.replacement)}</Pill>');
     expect(view).not.toContain("'Declined'");
-    expect(code(read('src/lib/returns-view.ts'))).toContain('exchangeLineStatusLabel(x.status)');
+    expect(view).not.toContain("'Handed over'");
+    const lib = code(read('src/lib/returns-view.ts'));
+    expect(lib).toContain('return replacementCardStatusLabel(x, replacement);');
+    expect(lib).toContain('${replacementCardStatus(x, replacement)}');
   });
 });
 

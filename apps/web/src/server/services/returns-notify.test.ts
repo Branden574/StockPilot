@@ -277,3 +277,71 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
     expect(Object.keys(args)).not.toContain('reason');
   });
 });
+
+// Returns RX-3: the requester's own exchange request, and an approval that
+// declined every exchange line they asked for.
+describe("the requester's exchange messages (returns RX-3)", () => {
+  it('an exchange request is received in its own words; a member hears it in the app on their order', async () => {
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: 'req-1', requester_email: null, requester_name: 'R', order_number: 103 }],
+        error: null,
+      },
+      'notification_preferences.select': { data: [], error: null },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'exchange_request_received', source: 'requester', channel: 'member' });
+    expect(createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'return.exchange_request_received',
+        title: 'We received your exchange request.',
+        link: '/dashboard/orders/ord-1',
+      }),
+    );
+  });
+
+  it('an email-only requester gets one email linking their return page; a portal requester the portal', async () => {
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: null, requester_email: 'pat@example.com', requester_name: 'Pat', order_number: 103 }],
+        error: null,
+      },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'exchange_request_received', source: 'requester', channel: 'token' });
+    const [, args] = sendEmail.mock.calls[0]! as unknown as [unknown, Record<string, unknown>];
+    expect(args).toMatchObject({ event: 'exchange_request_received', to: 'pat@example.com' });
+    expect(String(args.viewUrl)).toMatch(/\/returns\/request\/tok-uuid$/);
+
+    vi.clearAllMocks();
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'portal', customer_id: 'c-1', requester_user_id: 'portal-user', requester_email: 'buyer@c.example.com', requester_name: 'B', order_number: 7 }],
+        error: null,
+      },
+    });
+    await notifyRequesterReturnEvent({ ...RMA, event: 'exchange_declined', source: 'requester', channel: 'staff' });
+    expect(createNotification).not.toHaveBeenCalled();
+    const [, portalArgs] = sendEmail.mock.calls[0]! as unknown as [unknown, Record<string, unknown>];
+    expect(portalArgs).toMatchObject({ event: 'exchange_declined' });
+    expect(String(portalArgs.viewUrl)).toMatch(/\/portal$/);
+  });
+
+  it('a declined exchange at a counter approval is silent (G11); elsewhere the requester hears it; staff returns never', () => {
+    expect(requesterHearsEvent('exchange_declined', { source: 'requester', channel: 'counter' })).toBe(false);
+    expect(requesterHearsEvent('exchange_declined', { source: 'requester', channel: 'staff' })).toBe(true);
+    expect(requesterHearsEvent('exchange_request_received', { source: 'requester', channel: 'portal' })).toBe(true);
+    expect(requesterHearsEvent('exchange_request_received', { source: 'internal' })).toBe(false);
+  });
+
+  it('the staff ping names an exchange request', async () => {
+    admin({
+      'order_requests.select': { data: [{ id: 'ord-1', warehouse_id: WH, order_number: 103, requester_name: 'Pat', requester_email: null }], error: null },
+      'organization_members.select': { data: [{ user_id: 'mgr', role: 'manager' }], error: null },
+      'role_permission_overrides.select': { data: [], error: null },
+      'user_permission_overrides.select': { data: [], error: null },
+      'user_warehouse_assignments.select': { data: [], error: null },
+      'notification_preferences.select': { data: [], error: null },
+    });
+    await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null, kind: 'exchange' });
+    expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({ title: 'New exchange request', type: 'return.requested' }));
+  });
+});

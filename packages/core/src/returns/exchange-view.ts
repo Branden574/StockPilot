@@ -14,12 +14,16 @@
  */
 
 import { sortBySizeOrder } from '../sports/size-order';
-import { replacementPartlySent, type ExchangeStatus } from './exchange-status';
+import { EXCHANGE_STATUS_STAFF_LABELS, replacementPartlySent, type ExchangeStatus } from './exchange-status';
 import {
   approveReplacementSentence,
   availableLabel,
   deliverToSiteLabel,
+  itemQuantityLabel,
+  originalExchangeLine,
   pickingWaitsSentence,
+  qtyHandedOverLabel,
+  qtyRequestedLabel,
   RETURNS_COPY,
   shortLabel,
   whenProcessedSentence,
@@ -42,6 +46,149 @@ export function exchangeLineStatusLabel(status: ExchangeLineStatus): string {
   if (status === 'approved') return RETURNS_COPY.replacementApproved;
   if (status === 'declined') return RETURNS_COPY.replacementDeclined;
   return RETURNS_COPY.replacementCancelled;
+}
+
+/**
+ * The replacement shown on the RMA, as far as the REPLACEMENT card reads it:
+ * the workbench's own replacement block (the live replacement, else the
+ * newest cancelled one), on the web and in the phone's API answer alike.
+ */
+export interface ReplacementCardReplacement {
+  /** Not cancelled or denied. */
+  live: boolean;
+  /** Its order status. */
+  status: string;
+  /** Its order lines: the item, how many were asked and how many were handed over. */
+  lines: ReadonlyArray<{ itemId: string; requested: number; fulfilled: number }>;
+}
+
+/** All of the line's replacement handed over, part of it, or the order closed with none of it sent. */
+export type ReplacementLineHandOver = 'all' | 'part' | 'none_sent';
+
+const n0 = (v: unknown): number => {
+  const x = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(x) ? x : 0;
+};
+
+/**
+ * What became of an APPROVED exchange line's replacement (returns RX-3 PR
+ * stage, polish (a), from the RX-2 Demo Co walk). return_exchange_lines.status
+ * stays 'approved' after the hand-over (0396 has no later line status), so the
+ * outcome is read from the live replacement order's line for the approved
+ * item: quantity_fulfilled is what was handed over. Two exchange lines asking
+ * for the same item share one order line (the replacement merges them), so
+ * the reading is per item.
+ *
+ * Null (show the stored status) for a line that is not approved, without an
+ * approved item, without a live replacement, or whose replacement is still
+ * to be handed over.
+ */
+export function replacementLineHandOver(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null },
+  replacement: ReplacementCardReplacement | null | undefined,
+): ReplacementLineHandOver | null {
+  if (line.status !== 'approved' || !line.approvedItemId || !replacement || !replacement.live) return null;
+  const rows = replacement.lines.filter((l) => l.itemId === line.approvedItemId);
+  if (rows.length === 0) return null;
+  const requested = rows.reduce((t, l) => t + n0(l.requested), 0);
+  const fulfilled = rows.reduce((t, l) => t + n0(l.fulfilled), 0);
+  if (requested > 0 && fulfilled >= requested) return 'all';
+  if (fulfilled > 0) return 'part';
+  // Closed (completed) with nothing of this item handed over: the rest of a
+  // part-sent replacement closed by a cancel or as delivered-partial.
+  if (replacement.status === 'completed') return 'none_sent';
+  return null;
+}
+
+/**
+ * The REPLACEMENT card's pill, web and phone: the outcome once the
+ * replacement was handed over (Handed over, Partly handed over, Not sent),
+ * else the stored status (Requested, Approved, Declined, Cancelled).
+ */
+export function replacementCardStatusLabel(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null },
+  replacement: ReplacementCardReplacement | null | undefined,
+): string {
+  switch (replacementLineHandOver(line, replacement)) {
+    case 'all':
+      return RETURNS_COPY.replacementHandedOver;
+    case 'part':
+      return RETURNS_COPY.replacementPartlyHandedOver;
+    case 'none_sent':
+      return RETURNS_COPY.replacementNotSent;
+    default:
+      return exchangeLineStatusLabel(line.status);
+  }
+}
+
+/**
+ * The REPLACEMENT card's quantity: "Qty handed over: 2" once all of it was
+ * handed over, else "Qty requested: 2" (the approved quantity, else the one
+ * asked for). Part handed over keeps the quantity asked for: lines that ask
+ * for the same item share one order line, so a per-line count is not known.
+ */
+export function replacementCardQuantityLabel(
+  line: { status: ExchangeLineStatus; approvedItemId: string | null; approvedQuantity: number | null; requestedQuantity: number },
+  replacement: ReplacementCardReplacement | null | undefined,
+): string {
+  const qty = line.approvedQuantity ?? line.requestedQuantity;
+  return replacementLineHandOver(line, replacement) === 'all' ? qtyHandedOverLabel(qty) : qtyRequestedLabel(qty);
+}
+
+// ── The original order's returns section ───────────────────────────────────
+
+/**
+ * One exchange line of the original order's returns section, the web order
+ * page and the phone's order screen (returns RX-3 PR stage, polish (d), from
+ * the RX-2 Demo Co walk: a cancelled RMA's card showed no exchange line,
+ * because declined and cancelled lines were left out). Each line reads in its
+ * own words:
+ *
+ *   approved   "Exchange: Large ×1 → SO-000104 (<the RMA's exchange status>)"
+ *   requested  "Exchange: Large ×1 (Exchange requested)"
+ *   declined   "Exchange: Large ×1 (Exchange declined)"
+ *   cancelled  the RMA's words when the whole exchange was cancelled or its
+ *              replacement was ("Exchange cancelled", "Replacement cancelled:
+ *              …"), else "Exchange cancelled"
+ *
+ * Only an approved line names the replacement order: a cancelled replacement
+ * is listed on its RMA. A request made with a note names no item until one is
+ * approved: "Warehouse will review" while requested, "A different
+ * replacement" once it ended (the requester tracking's words).
+ */
+export function originalExchangeLineFor(input: {
+  /** return_exchange_lines.status. */
+  status: string;
+  /** "Walk Exchange Tee, L" (the approved item, else the one asked for); null for a note. */
+  itemLabel: string | null;
+  quantity: number;
+  /** The RMA's replacement order (the live one). */
+  replacementOrderNumber: number | null;
+  /** The RMA's exchange status and its staff words (exchangeStatusStaffLabel). */
+  exchangeStatus: ExchangeStatus;
+  statusWords: string;
+}): string {
+  const what = input.itemLabel
+    ? itemQuantityLabel(input.itemLabel, input.quantity)
+    : input.status === 'requested'
+      ? RETURNS_COPY.replacementWarehouseReview
+      : RETURNS_COPY.replacementAskedByNote;
+  switch (input.status) {
+    case 'approved':
+      return originalExchangeLine(what, input.replacementOrderNumber, input.statusWords);
+    case 'declined':
+      return originalExchangeLine(what, null, EXCHANGE_STATUS_STAFF_LABELS.declined);
+    case 'cancelled':
+      return originalExchangeLine(
+        what,
+        null,
+        input.exchangeStatus === 'cancelled' || input.exchangeStatus === 'replacement_cancelled'
+          ? input.statusWords
+          : EXCHANGE_STATUS_STAFF_LABELS.cancelled,
+      );
+    default:
+      return originalExchangeLine(what, null, input.statusWords);
+  }
 }
 
 // ── The outbound rail ──────────────────────────────────────────────────────
@@ -84,6 +231,14 @@ export interface ExchangeRailInput {
   replacementStatus?: string | null;
   /** What that replacement still owes (requested minus handed over). */
   replacementOwed?: number | null;
+  /**
+   * The replacement shown held stock at some point (its holds, released or
+   * not). Read for a cancelled exchange only: after Cancel return following an
+   * approval the replacement had reached Reserved and waited, so the rail
+   * keeps Reserved done and stops at the gate (RX-2 verification L12). Null
+   * or false: unknown or never held, the stop stays at Reserved.
+   */
+  replacementWasReserved?: boolean | null;
 }
 
 const RAIL_ORDER: readonly RailStepId[] = ['requested', 'reserved', 'gate', 'picking', 'ready', 'handed_over'];
@@ -128,9 +283,16 @@ export function exchangeRail(input: ExchangeRailInput): RailStep[] {
     case 'declined':
     case 'cancelled':
     case 'replacement_cancelled':
-      current = 1;
       stopped = true;
       after = ex === 'replacement_cancelled' ? 'not_started' : 'skipped';
+      if (ex === 'cancelled' && input.returnStatus !== 'denied' && input.replacementWasReserved === true) {
+        // L12: the RMA was cancelled after its replacement was reserved and
+        // waited for the return: Reserved stays done, the stop is the gate.
+        current = 2;
+        labels.gate = RETURNS_COPY.railCancelled;
+        break;
+      }
+      current = 1;
       labels.reserved = ex === 'declined' || input.returnStatus === 'denied' ? RETURNS_COPY.railDeclined : RETURNS_COPY.railCancelled;
       // The replacement never reached the gate: its plain name, never
       // "Return received" or "Released early".
@@ -418,9 +580,30 @@ export function exchangeReviewOptions(
   ];
 }
 
-/** Where the review starts: as requested, or the decline for a viewer who can only decline. */
-export function defaultExchangeReviewState(viewer: ExchangeReviewViewer): ExchangeReviewState {
-  return viewer.canApproveOrders ? { kind: 'as_requested' } : { kind: 'decline', reason: '' };
+/** The fields of an exchange line where the review starts reads. */
+export interface ExchangeReviewStartLine {
+  requestedItemId: string | null;
+  /** The replacement quantity asked for. */
+  requestedQuantity: number;
+  /** How many of the returned item come back (the return line's quantity). */
+  returnedQuantity?: number | null;
+}
+
+/**
+ * Where the review starts: the decline for a viewer who can only decline;
+ * else "Approve as requested", except for a request made with a note
+ * ("warehouse will review"), which has nothing to approve as requested and
+ * opens at "Change replacement…" with nothing chosen yet, at the quantity
+ * coming back (RX-3 fix round 1, desk check M3; RX-2 verify C-4). Without the
+ * line (an older caller) it starts as requested.
+ */
+export function defaultExchangeReviewState(viewer: ExchangeReviewViewer, line?: ExchangeReviewStartLine): ExchangeReviewState {
+  if (!viewer.canApproveOrders) return { kind: 'decline', reason: '' };
+  if (line && !line.requestedItemId) {
+    const returned = typeof line.returnedQuantity === 'number' && line.returnedQuantity > 0 ? line.returnedQuantity : line.requestedQuantity;
+    return { kind: 'change', itemId: null, label: null, free: null, quantity: Math.max(1, Math.min(line.requestedQuantity, returned)), reason: '' };
+  }
+  return { kind: 'as_requested' };
 }
 
 /** Why the approval cannot be sent yet for this line, or null. With the

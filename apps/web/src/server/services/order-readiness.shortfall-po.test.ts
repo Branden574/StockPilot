@@ -373,6 +373,9 @@ describe("draft_order_shortfall_pos's refusals, in core words (pattern #28: exac
     // Review: a timeout is not "being changed at the same time"; it rolled back.
     ['a statement timeout', { message: 'canceling statement due to statement timeout', code: '57014' }, 'conflict', SHORTFALL_PO_TIMEOUT_COPY, { reason: 'busy', retryable: true }],
     ['a PO number taken meanwhile', { message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"', code: '23505' }, 'conflict', SHORTFALL_PO_BUSY_COPY, { reason: 'busy', retryable: true }],
+    // Returns RX-3 (RX-2 review S4): a deadlock the server resolved rolled the
+    // whole call back, key included: busy, the same request safe to resend.
+    ['a deadlock', { message: 'deadlock detected', code: '40P01' }, 'conflict', SHORTFALL_PO_BUSY_COPY, { reason: 'busy', retryable: true }],
   ];
 
   it.each(CASES)('%s', async (_label, error, code, message, details) => {

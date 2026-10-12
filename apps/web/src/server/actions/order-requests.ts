@@ -32,7 +32,17 @@ import {
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
-  if (error instanceof ServiceError) return err(error.code, error.message);
+  // `details` go through for every refusal (returns RX-3 fix round 2): the
+  // screen picks its behaviour by `details.reason`, never by message text
+  // (pattern 28). Add items needs it most: busy wrote nothing and keeps the
+  // picks, a partial answer saved the top-ups and must close and reload, or
+  // the same picks sent again add them twice. An internal error carries none:
+  // its public message is already generic and its details are the server's.
+  if (error instanceof ServiceError) {
+    return error.code !== 'internal_error' && error.details
+      ? err(error.code, error.message, error.details)
+      : err(error.code, error.message);
+  }
   // The order service refuses a change outside the caller's warehouses with
   // assertWarehouseAccess's ForbiddenError (every route answers it 403), not a
   // ServiceError. It is a refusal with a sentence for people, never a fault:

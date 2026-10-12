@@ -35,7 +35,19 @@ describe('the order screen header (L83a)', () => {
   const screen = codeOnly(readFileSync(path.join(ROOT, 'app/order/[id].tsx'), 'utf8'));
   // Mutation caught: the raw key printed again ("PICKING IN PROGRESS").
   it('names the status through the tested helper, never its raw key', () => {
-    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status)}</Eyebrow>');
+    // Re-pinned by returns RX-3 PR stage, polish (c) (was: without the
+    // fulfilment): a completed pickup's header says HANDED OVER.
+    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>');
     expect(screen).not.toContain("order.status.replace(/_/g, ' ')");
+  });
+});
+
+describe("the order screen's returns cards (returns RX-3 PR stage, polish (d))", () => {
+  const screen = codeOnly(readFileSync(path.join(ROOT, 'app/order/[id].tsx'), 'utf8'));
+  // From the RX-2 Demo Co walk: a cancelled RMA's card read "Restock ·
+  // pending". Mutation caught: the RMA's status not passed, so a denied or
+  // cancelled RMA's unapplied line reads pending again.
+  it("passes each RMA's status to the line row, so a denied or cancelled RMA's line reads not returned", () => {
+    expect(screen).toMatch(/describeReturnLine\(\{[^}]*applied: rl\.applied,\s*returnStatus: r\.status,\s*\}\)/);
   });
 });

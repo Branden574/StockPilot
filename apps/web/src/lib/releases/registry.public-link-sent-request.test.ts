@@ -124,16 +124,26 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // newest published release, directly below returns RX-2's draft"): RX-2's
   // release is published, in the same place, so it is the newest published
   // release. Claim kept: directly below it, dated after every release below.
-  it('sits directly below returns RX-2\'s release (published later), dated after every release below it', () => {
-    expect(RELEASES[0]?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe(ID);
+  // Re-pinned by returns RX-3 (2026-10-11; was: "sits directly below returns
+  // RX-2's release", at 1, with no draft): RX-3's draft, dated later still,
+  // sits at the top above RX-2's published release. Claim kept: directly
+  // below RX-2's release, the newest published one, dated after every
+  // release below it.
+  it('sits directly below returns RX-2\'s release (published later) and RX-3\'s draft above it, dated after every release below it', () => {
+    expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe(ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-exchange-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
-    for (const r of RELEASES.slice(2)) {
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'returns-requester-exchange-2026-10',
+    ]);
+    for (const r of RELEASES.slice(3)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the Public requests settings page, and links there', () => {

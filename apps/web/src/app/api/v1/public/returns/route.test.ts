@@ -124,4 +124,118 @@ describe('POST /api/v1/public/returns', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'validation_error', message: 'Check the items and quantities, then try again.' });
   });
+
+  // ── Returns RX-3: the requester's exchange ─────────────────────────────
+  it('passes a line exchange through to the service, and strips every forged field around it', async () => {
+    const res = await POST(
+      req({
+        ...good,
+        idempotencyKey: KEY,
+        organizationId: 'o',
+        replacementOrderId: KEY,
+        lines: [
+          {
+            orderRequestLineId: LINE,
+            quantity: 1,
+            disposition: 'scrap',
+            approvedItemId: KEY,
+            status: 'approved',
+            warehouseId: 'w',
+            locationId: 'l',
+            replacementOrderId: KEY,
+            exchange: { itemId: KEY, quantity: 1 },
+          },
+        ],
+      }),
+    );
+    expect(res.status).toBe(200);
+    const [, , input, opts] = createRequesterReturn.mock.calls[0]!;
+    expect(input).toEqual({
+      reasonCode: 'damaged',
+      notes: undefined,
+      lines: [{ orderRequestLineId: LINE, quantity: 1, exchange: { itemId: KEY, quantity: 1 } }],
+    });
+    expect(opts).toEqual({ idempotencyKey: KEY });
+  });
+
+  it.each([
+    ['a quantity of 0', 0],
+    ['a fractional quantity', 1.5],
+    ['more than 10,000 on a line', 10_001],
+  ])('refuses %s with the one generic 400 before the service', async (_label, quantity) => {
+    const res = await POST(req({ ...good, lines: [{ orderRequestLineId: LINE, quantity }] }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'validation_error', message: 'Check the items and quantities, then try again.' });
+    expect(createRequesterReturn).not.toHaveBeenCalled();
+  });
+
+  it('no oracle: an unknown item and another group item answer the same 400 (the database hint, the same words)', async () => {
+    const refusal = () =>
+      new ServiceError('validation_error', "That item can't be used as a replacement.", { reason: 'exchange_item_not_eligible' });
+    createRequesterReturn.mockRejectedValueOnce(refusal()).mockRejectedValueOnce(refusal());
+    const unknown = await POST(req({ ...good, lines: [{ orderRequestLineId: LINE, quantity: 1, exchange: { itemId: KEY } }] }));
+    const sibling = await POST(
+      req({ ...good, lines: [{ orderRequestLineId: LINE, quantity: 1, exchange: { itemId: '44444444-4444-4444-8444-444444444444' } }] }),
+    );
+    expect(unknown.status).toBe(400);
+    expect(sibling.status).toBe(400);
+    const a = await unknown.json();
+    const b = await sibling.json();
+    expect(a).toEqual(b);
+    expect(a).toEqual({
+      error: 'validation_error',
+      message: "That item can't be used as a replacement.",
+      details: { reason: 'exchange_item_not_eligible' },
+    });
+  });
+
+  it('the kill switch refusal keeps its words', async () => {
+    createRequesterReturn.mockRejectedValueOnce(
+      new ServiceError('validation_error', 'Exchanges are turned off right now. Request a return only.', { reason: 'exchange_not_available' }),
+    );
+    const res = await POST(req({ ...good, lines: [{ orderRequestLineId: LINE, quantity: 1, exchange: { note: 'L please' } }] }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ details: { reason: 'exchange_not_available' } });
+  });
+});
+
+// RX-3 fix round 1 (security review low; handoff L8): only the 200 carried
+// Cache-Control: no-store. Every answer of this public route now does,
+// the 429 with its retry-after too, as the options route does.
+describe('POST /api/v1/public/returns: no-store on every answer', () => {
+  const noStore = (res: Response) => expect(res.headers.get('cache-control')).toBe('no-store');
+
+  it('the bad JSON, the malformed body and the unit cap', async () => {
+    const badJson = new Request('https://test.local/api/v1/public/returns', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{not json',
+    }) as unknown as Parameters<typeof POST>[0];
+    noStore(await POST(badJson));
+    noStore(await POST(req({ token: 'nope' })));
+    noStore(await POST(req({ ...good, lines: [{ orderRequestLineId: LINE, quantity: 6000 }, { orderRequestLineId: KEY, quantity: 6000 }] })));
+  });
+
+  it('the honeypot', async () => {
+    noStore(await POST(req({ ...good, hp: 'x' })));
+  });
+
+  it('the 429 keeps its retry-after', async () => {
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 11, resetAt: Date.now() + 60_000 });
+    const res = await POST(req(good));
+    expect(res.status).toBe(429);
+    noStore(res);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('the one 404, a refusal with its reason, and the generic 500s', async () => {
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('not_found', 'x'));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('validation_error', 'Too many.', { reason: 'return_exceeds_fulfilled' }));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new ServiceError('internal_error', 'boom'));
+    noStore(await POST(req(good)));
+    createRequesterReturn.mockRejectedValueOnce(new Error('unknown'));
+    noStore(await POST(req(good)));
+  });
 });

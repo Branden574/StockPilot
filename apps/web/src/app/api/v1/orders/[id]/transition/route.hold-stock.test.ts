@@ -100,10 +100,12 @@ describe('POST /api/v1/orders/[id]/transition — hold_stock', () => {
     [{ message: 'hold_not_applicable', code: 'P0001', hint: 'hold_not_applicable', details: 'in_transit' }, 409, 'conflict', HOLD_NOT_APPLICABLE_COPY],
     [{ message: 'canceling statement due to lock timeout', code: '55P03' }, 409, 'conflict', HOLD_BUSY_COPY],
     [{ message: 'canceling statement due to statement timeout', code: '57014' }, 409, 'conflict', HOLD_BUSY_COPY],
+    // Re-pinned on purpose by returns RX-3 (RX-2 review S4): a deadlock the
+    // database resolved rolled this call back; busy, try again (was 500).
+    [{ message: 'deadlock detected', code: '40P01' }, 409, 'conflict', HOLD_BUSY_COPY],
     // Anything else: core's hold sentence (never the database's text), and
     // reported with its cause by the service.
     [{ message: 'permission denied for function hold_order_stock', code: '42501' }, 500, 'internal_error', HOLD_FAILED_COPY],
-    [{ message: 'deadlock detected', code: '40P01' }, 500, 'internal_error', HOLD_FAILED_COPY],
   ] as const)('%o -> %i %s', async (error, status, code, message) => {
     asCaller({ data: null, error: { ...error } });
     const res = await POST(req({ action: 'hold_stock' }), { params });

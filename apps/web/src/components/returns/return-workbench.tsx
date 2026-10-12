@@ -1,6 +1,6 @@
 'use client';
 
-import { ExternalLink, FileDown, Loader2, Truck } from 'lucide-react';
+import { Clock, ExternalLink, FileDown, Loader2, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useHydrated } from '@/lib/use-hydrated';
 import { cn, formatCurrency, formatRelative } from '@/lib/utils';
 import {
   buyReturnLabelAction,
@@ -74,6 +75,7 @@ import {
   replacementCancelledLines,
   returnActionLabel,
   returnLineLabel,
+  returnWaitingDays,
   replacementShortItems,
   replacementShortLine,
   RETURN_ACTION_LABELS,
@@ -82,6 +84,7 @@ import {
   RETURNS_COPY,
   returnReasonLabel,
   sameChoice,
+  stillWaitingPrompt,
   unreadDestinationChoice,
   whenProcessedSentence,
   type ReplacementFulfilment,
@@ -224,7 +227,18 @@ export function ReturnWorkbench({
   // (core exchangeReviewOptions / defaultExchangeReviewState). Adding a
   // replacement creates an order, so it needs order approval.
   const reviewViewer = { canApproveOrders: wb.viewer.canApproveOrders };
-  const reviewFor = (lineId: string): ExchangeReviewState => reviews[lineId] ?? defaultExchangeReviewState(reviewViewer);
+  // RX-3 fix round 1 (M3): a note-only request starts at Change replacement…,
+  // never at "Approve as requested" (off for it); core decides from the line.
+  const reviewFor = (lineId: string): ExchangeReviewState => {
+    const chosen = reviews[lineId];
+    if (chosen) return chosen;
+    const x = ex.lines.find((l) => l.id === lineId);
+    const returned = x ? wb.lines.find((l) => l.id === x.returnLineId)?.quantity ?? null : null;
+    return defaultExchangeReviewState(
+      reviewViewer,
+      x ? { requestedItemId: x.requestedItemId, requestedQuantity: x.requestedQuantity, returnedQuantity: returned } : undefined,
+    );
+  };
   const exchangeByReturnLine = new Map(ex.lines.map((x) => [x.returnLineId, x]));
   const canDecideExchange = r.status === 'requested' && wb.viewer.canManageReturns;
   const canAddReplacement = canDecideExchange && wb.viewer.canApproveOrders;
@@ -691,6 +705,9 @@ export function ReturnWorkbench({
   const cancelReturnWords = exchangeActionConsequences('cancel', replacementFacts).map((c) => c.text);
 
   const showPickers = r.status === 'requested' || r.status === 'received' || mode === 'change_destination';
+  // "When processed, … goes back to 31-C." only while the return can still be
+  // processed (RX-3 fix round 1, L8): never on a cancelled or denied RMA.
+  const planCanHappen = r.status === 'requested' || r.status === 'approved' || r.status === 'received';
   const editable = wb.viewer.canManageReturns && busy === null;
   const processLabel =
     r.status === 'received' && openLines.length === 1 && openLines[0]!.restock
@@ -711,7 +728,29 @@ export function ReturnWorkbench({
   // so what it does is said under it first (nothing prints).
   const readyHelpId = React.useId();
   const offersReady = actions.primary === 'get_replacement_ready' || actions.secondary.includes('get_replacement_ready');
-  const describedBy = (a: ReturnAction): string | undefined => (a === 'get_replacement_ready' ? readyHelpId : undefined);
+  // RX-2 review fix P17 (built in RX-3; plan 3.10, D28): from 14 days after
+  // approval, while the returned item is still out and the replacement waits
+  // for it, a viewer offered Cancel replacement is told how long it has waited
+  // and what the two buttons that end the wait do (core stillWaitingPrompt:
+  // nothing expires on its own). The days come from this browser's clock once
+  // hydrated, so the server's render never disagrees with it (React #418).
+  const hydrated = useHydrated();
+  const stillWaitingId = React.useId();
+  const stillWaiting = hydrated
+    ? stillWaitingPrompt({
+        status: r.status,
+        exchangeStatus: ex.status,
+        waitingDays: returnWaitingDays(r.status, r.approvedAt),
+        offered: [actions.primary, ...actions.secondary],
+        held: liveReplacement ? liveReplacement.held : null,
+      })
+    : null;
+  const describedBy = (a: ReturnAction): string | undefined =>
+    a === 'get_replacement_ready'
+      ? readyHelpId
+      : stillWaiting && (a === 'cancel_replacement' || a === 'cancel')
+        ? stillWaitingId
+        : undefined;
 
   return (
     <div className="space-y-6">
@@ -766,6 +805,12 @@ export function ReturnWorkbench({
         {offersReady ? (
           <p id={readyHelpId} className="text-muted-foreground basis-full text-xs">
             {RETURNS_COPY.getReplacementReadyHelp}
+          </p>
+        ) : null}
+        {stillWaiting ? (
+          <p id={stillWaitingId} className="flex basis-full items-start gap-1.5 text-sm" data-testid="still-waiting">
+            <Clock className="text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>{stillWaiting}</span>
           </p>
         ) : null}
         {r.status === 'requested' && wb.viewer.canManageReturns ? (
@@ -923,7 +968,7 @@ export function ReturnWorkbench({
                     reasonCode={r.reasonCode}
                     itemLabel={name}
                   />
-                ) : l.restock ? (
+                ) : l.restock && planCanHappen ? (
                   <p className="text-muted-foreground text-sm">{plannedSentence(l.restock, lineLabel(l))}</p>
                 ) : null}
                 {r.status === 'received' && l.restock ? (
@@ -944,6 +989,7 @@ export function ReturnWorkbench({
             {x ? (
               <ReplacementSide
                 line={x}
+                replacement={ex.replacement}
                 returnedLabel={lineLabel(l)}
                 returnedQty={l.quantity}
                 review={canDecideExchange && x.status === 'requested' ? reviewFor(x.id) : undefined}

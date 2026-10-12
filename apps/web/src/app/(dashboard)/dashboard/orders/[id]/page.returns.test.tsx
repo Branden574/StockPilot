@@ -129,6 +129,29 @@ vi.mock('@/server/services/returns', () => ({
   loadOrderReturns: (...args: unknown[]) => loadOrderReturnsMock(...args),
 }));
 
+// Returns RX-3 (section h): the requester's own order reads its return link
+// and its requests' progress through the admin client. With no admin client
+// configured (createAdminClient throws: the default) the page renders with
+// neither, as before.
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => {
+    if (!adminHolder.client) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    return adminHolder.client;
+  },
+}));
+const resolveReturnTokenMock = vi.fn(async (..._args: unknown[]): Promise<string | null> => null);
+vi.mock('@/server/lib/order-secrets', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/order-secrets')>()),
+  resolveReturnToken: (...args: unknown[]) => resolveReturnTokenMock(...args),
+}));
+const trackingForOrderMock = vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []);
+vi.mock('@/server/services/returns-requester', () => ({
+  trackingForOrder: (...args: unknown[]) => trackingForOrderMock(...args),
+}));
+const exchangeSwitch = vi.hoisted(() => ({ on: true }));
+vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => exchangeSwitch.on }));
+
 import OrderDetailPage from './page';
 
 const ORDER_ID = '11111111-1111-1111-1111-111111111111';
@@ -295,6 +318,10 @@ beforeEach(() => {
   loadOrderReturnsMock.mockResolvedValue([]);
   checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
   setViewer([]);
+  adminHolder.client = null;
+  resolveReturnTokenMock.mockResolvedValue(null);
+  trackingForOrderMock.mockResolvedValue([]);
+  exchangeSwitch.on = true;
 });
 
 describe('(c) golden — an order with no returns renders exactly as before', () => {
@@ -378,7 +405,11 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     expect(strip.textContent).toContain('3 provided · 1 returned · net 2 with requester');
     const figure = strip.querySelector('[title]') as HTMLElement;
     expect(figure.getAttribute('title')).toContain('not counted');
-    expect(figure.getAttribute('title')).toContain('return notes');
+    // Re-pinned by returns RX-3 PR stage, polish (e) (was: 'return notes',
+    // the pre-RX-2 words): the caveat now says the replacement is its own
+    // order and still names one recorded only in a return's notes.
+    expect(figure.getAttribute('title')).toContain('its own order');
+    expect(figure.getAttribute('title')).toContain('a return’s notes');
     expect(strip.querySelector('a[href="#order-returns"]')?.textContent).toBe('See returns');
   });
 
@@ -391,12 +422,17 @@ describe('(a) a line with an applied return shows the returned qty and the RMA; 
     const strip = container.querySelector('[data-testid="order-return-summary"]') as HTMLElement;
     const note = strip.querySelector('[data-testid="order-return-summary-note"]') as HTMLElement;
     expect(note).not.toBeNull();
+    // Re-pinned by returns RX-3 PR stage, polish (e) (was the pre-RX-2
+    // sentence: "A replacement handed over in person and recorded only in a
+    // return’s notes is not counted — read the return notes below."): an
+    // exchange's replacement is its own order since RX-2. Claim kept: the
+    // caveat is printed, verbatim, in the phone's words.
     expect(note.textContent).toBe(
-      'Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+      'Net is provided minus returned, counting only returns that were received and closed. A replacement from an exchange is its own order, listed with its return below, and is not counted here; nor is one recorded only in a return’s notes.',
     );
     // It is real rendered text, not an attribute: the strip's textContent
     // carries it, and it is not hidden from anyone.
-    expect(strip.textContent).toContain('is not counted — read the return notes below.');
+    expect(strip.textContent).toContain('and is not counted here; nor is one recorded only in a return’s notes.');
     expect(note.getAttribute('aria-hidden')).toBeNull();
     expect(note.hasAttribute('hidden')).toBe(false);
     expect(note.getAttribute('title')).toBeNull();
@@ -546,7 +582,11 @@ describe('(d) an unapplied return counts for nothing in the returned figure — 
       expect(container.querySelector('[data-testid="order-return-summary"]')).toBeNull();
       const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
       expect(panel.textContent).toContain(mobile.RETURN_STATUS_LABELS[status]);
-      expect(panel.textContent).toContain("1 × Women's Polo S — Scrap · pending");
+      // Re-pinned by returns RX-3 PR stage, polish (d) (was: "Scrap ·
+      // pending"): a denied or cancelled RMA waits for nothing, so its
+      // unapplied line reads "not returned". Claim kept: nothing returned.
+      expect(panel.textContent).toContain("1 × Women's Polo S — Scrap · not returned");
+      expect(panel.textContent).not.toContain('· pending');
     },
   );
 
@@ -609,7 +649,8 @@ describe('(d) an unapplied return counts for nothing in the returned figure — 
       // aria-label, literally.
       const figure = container.querySelector('[data-testid="order-return-summary"] [title]') as HTMLElement;
       expect(figure.getAttribute('aria-label')).toBe(
-        '3 provided · 1 returned · net 2 with requester. Net is provided minus returned, counting only returns that were received and closed. A replacement handed over in person and recorded only in a return’s notes is not counted — read the return notes below.',
+        // Re-pinned by returns RX-3 PR stage, polish (e): the caveat's new words.
+        '3 provided · 1 returned · net 2 with requester. Net is provided minus returned, counting only returns that were received and closed. A replacement from an exchange is its own order, listed with its return below, and is not counted here; nor is one recorded only in a return’s notes.',
       );
     } finally {
       vi.useRealTimers();
@@ -715,6 +756,7 @@ describe('(e) the phone says what the web page renders — pinned against the MO
       itemName: mobile.returnLineItemName(rl, MOBILE_LINES),
       disposition: rl.disposition,
       applied: rl.applied,
+      returnStatus: rma.status,
     });
     expect(row.textContent).toContain(phoneLine);
     expect(row.textContent).toContain(mobile.returnStatusLabel('closed'));
@@ -764,5 +806,164 @@ describe('(e) the phone says what the web page renders — pinned against the MO
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/[^\n]*/g, '');
     expect(code).not.toMatch(/(?<![.\w])returned(?![\w])(?!\s*[:,}])/);
+  });
+});
+
+describe("(h) the requester's own order: Return or exchange, and their requests in their words (returns RX-3)", () => {
+  const ADMIN = { tag: 'service-role' };
+  // A placeholder for the return link's token: a valid v4 UUID with low entropy,
+  // so it never reads as a secret, and no other id in this file shares it.
+  const LINK_ID = '22222222-2222-4222-8222-222222222222';
+  const REQUEST = {
+    returnNumber: 'RMA-20261011-ABC123',
+    createdAt: '2026-10-11T17:00:00.000Z',
+    returnStatus: 'approved',
+    exchangeStatus: 'waiting_for_return',
+    sentences: ['Replacement reserved. Waiting for your return.'],
+    replacementOrderNumber: 'SO-000104',
+    lines: [
+      {
+        returning: { name: "Women's Polo", sizeLabel: 'Size S', quantity: 1 },
+        exchange: { state: 'approved', replacement: { name: "Women's Polo", sizeLabel: 'Size M', quantity: 1 }, substituted: false },
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    adminHolder.client = ADMIN;
+    // The requester's own completed order, in an organization with Returns on.
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'u1' }) }));
+    checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
+    resolveReturnTokenMock.mockResolvedValue(LINK_ID);
+    trackingForOrderMock.mockResolvedValue([REQUEST]);
+  });
+
+  it('labels the link Return or exchange, and lists their requests with the sentences, the items and the replacement SO', async () => {
+    const { container } = await renderPage();
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${LINK_ID}`);
+    expect(link?.textContent).toBe('Return or exchange');
+    expect(resolveReturnTokenMock).toHaveBeenCalledWith(ADMIN, ORDER_ID);
+    expect(trackingForOrderMock).toHaveBeenCalledTimes(1);
+    expect(trackingForOrderMock).toHaveBeenCalledWith(ADMIN, 'org-1', ORDER_ID);
+    const section = container.querySelector('#your-requests') as HTMLElement;
+    expect(section).not.toBeNull();
+    expect(section.querySelector('h2')?.textContent).toBe('Your requests on this order');
+    expect(section.textContent).toContain('RMA-20261011-ABC123');
+    expect(section.textContent).toContain('Replacement reserved. Waiting for your return.');
+    expect(section.textContent).toContain("Women's Polo, S ×1");
+    expect(section.textContent).toContain("Women's Polo, M ×1");
+    expect(section.textContent).toContain('SO-000104');
+  });
+
+  // RX-3 fix round 1 (desk checks L6): a handed-over member order with no
+  // return token (9 in production at 0395) had no web entry while the phone's
+  // member routes served it. The page opens the requester form over the
+  // member routes instead of a link.
+  it('an order with no return token opens the form over the member routes: a button, never a token link', async () => {
+    resolveReturnTokenMock.mockResolvedValue(null);
+    const { container } = await renderPage();
+    expect(Array.from(container.querySelectorAll('a')).some((a) => (a.getAttribute('href') ?? '').startsWith('/returns/request/'))).toBe(false);
+    const button = Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Return or exchange');
+    expect(button).toBeDefined();
+    // The requests still show.
+    expect(container.querySelector('#your-requests')).not.toBeNull();
+  });
+
+  it('says Request a return while exchanges are switched off', async () => {
+    exchangeSwitch.on = false;
+    const { container } = await renderPage();
+    const link = Array.from(container.querySelectorAll('a')).find((a) => a.getAttribute('href') === `/returns/request/${LINK_ID}`);
+    expect(link?.textContent).toBe('Request a return');
+  });
+
+  it('shows no section when the requester has no requests on the order', async () => {
+    trackingForOrderMock.mockResolvedValue([]);
+    const { container } = await renderPage();
+    expect(container.querySelector('#your-requests')).toBeNull();
+    expect(container.textContent).not.toContain('Your requests on this order');
+  });
+
+  it("never reads another member's requests: someone else's order pays no read and shows no section", async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'other-user' }) }));
+    const { container } = await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(container.querySelector('#your-requests')).toBeNull();
+  });
+
+  it('a viewer who manages returns gets the staff dialog instead, and pays no requester read', async () => {
+    setViewer(['returns:manage']);
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(resolveReturnTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing while Returns is switched off, or before the order is handed over', async () => {
+    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'u1', status: 'approved' }) }));
+    await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+  });
+
+  it('renders without the section when no admin client is configured', async () => {
+    adminHolder.client = null;
+    const { container } = await renderPage();
+    expect(trackingForOrderMock).not.toHaveBeenCalled();
+    expect(container.querySelector('#your-requests')).toBeNull();
+  });
+
+  // RX-3 fix round 1 (desk checks H1, M1 and M2): the staff "Returns (N)"
+  // panel renders for every member (RLS), so the requester's own request
+  // showed twice, the second time in staff words (the reason, "Restock ·
+  // pending", "Waiting for returned item", the staff notes). One core rule
+  // with the phone (requesterReturnsView): a requester who cannot read
+  // returns sees it once, as their tracking.
+  describe("each own request once, in the requester's words", () => {
+    const ownRma = closedRma({
+      id: 'rma-own',
+      returnNumber: REQUEST.returnNumber,
+      status: 'approved',
+      reasonCode: 'wrong_size',
+      notes: 'Staff note: customer called twice',
+      closedAt: null,
+      lines: [{ orderRequestLineId: S_LINE, itemId: `item-${S_LINE}`, quantity: 1, disposition: 'restock', applied: false }],
+      exchangeLines: ["Exchange: Women's Polo, M ×1 → SO-000104 (Waiting for returned item)"],
+    });
+    const staffRma = closedRma({ id: 'rma-staff', returnNumber: 'RMA-STAFF-1' });
+
+    it('a requester without returns:read: the tracking only, no staff panel and no staff words', async () => {
+      loadOrderReturnsMock.mockResolvedValue([ownRma]);
+      const { container } = await renderPage();
+      const text = container.textContent ?? '';
+      expect(text.split(REQUEST.returnNumber).length - 1).toBe(1);
+      expect(container.querySelector('#your-requests')?.textContent).toContain(REQUEST.returnNumber);
+      expect(container.querySelector('[data-testid="order-returns"]')).toBeNull();
+      expect(text).not.toContain('Restock');
+      expect(text).not.toContain('Waiting for returned item');
+      expect(text).not.toContain('Staff note: customer called twice');
+      expect(text).not.toMatch(/Returns \(\d+\)/);
+    });
+
+    it('a return staff made on their order keeps its card beside the tracking (D15)', async () => {
+      loadOrderReturnsMock.mockResolvedValue([ownRma, staffRma]);
+      const { container } = await renderPage();
+      const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
+      expect(panel).not.toBeNull();
+      expect(panel.textContent).toContain('Returns (1)');
+      expect(panel.textContent).toContain('RMA-STAFF-1');
+      expect(panel.textContent).not.toContain(REQUEST.returnNumber);
+    });
+
+    it('a requester who can read returns (not manage) gets the tracking and keeps the card that opens the RMA, as on the phone', async () => {
+      setViewer(['returns:read']);
+      loadOrderReturnsMock.mockResolvedValue([ownRma]);
+      const { container } = await renderPage();
+      expect(trackingForOrderMock).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('#your-requests')?.textContent).toContain(REQUEST.returnNumber);
+      const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
+      expect(panel.querySelector('a[href="/dashboard/returns/rma-own"]')).not.toBeNull();
+    });
   });
 });

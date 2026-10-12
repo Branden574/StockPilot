@@ -384,40 +384,117 @@ describe('AddItemsDialog', () => {
     });
   });
 
-  it('keeps the dialog and the staged tray intact when the action fails', async () => {
+  // ── A refused add ────────────────────────────────────────────────
+  // What the dialog does with a refusal turns on whether anything was written
+  // (returns RX-3 fix round 2, F1 on the web). Busy and a sentence to act on
+  // in place (an item that cannot be ordered here) wrote nothing, so the picks
+  // stay and the same Add is safe. A partial answer means the top-ups of
+  // items already on the order were SAVED: the same picks sent again would
+  // add those quantities a second time, and the holds and the pick would
+  // follow. So the dialog closes, drops the picks and reloads the order, as
+  // the phone does for every 409.
+
+  const PARTIAL = 'Part of this change was saved. Reload the order to see it before adding again.';
+  const BUSY = 'Busy. Try again.';
+
+  async function stageTwoAndAdd() {
     fetchSpy.mockResolvedValue(
       jsonResponse([
         row({ id: 'a', name: 'Widget' }),
         row({ id: 'b', name: 'Gadget' }),
       ]),
     );
+    const user = await open();
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: 'Select Gadget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+    return user;
+  }
+
+  function expectPicksIntact() {
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('spinbutton', { name: 'Quantity for Widget' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('spinbutton', { name: 'Quantity for Gadget' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /add to order/i })).toBeEnabled();
+  }
+
+  it('keeps the dialog and the staged tray intact for a refusal that wrote nothing and can be fixed in place', async () => {
+    addLines.mockResolvedValue({
+      ok: false,
+      error: { code: 'validation_error', message: "Gadget isn't stocked at this order's warehouse." },
+    });
+    await stageTwoAndAdd();
+
+    await vi.waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith("Gadget isn't stocked at this order's warehouse.");
+    });
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expectPicksIntact();
+  });
+
+  it('keeps the picks on busy (nothing was written), and the same Add may be pressed again', async () => {
+    addLines.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: BUSY, details: { reason: 'busy', retryable: true } },
+    });
+    const user = await stageTwoAndAdd();
+
+    await vi.waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith(BUSY);
+    });
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expectPicksIntact();
+
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+    await vi.waitFor(() => {
+      expect(addLines).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('after a partial answer, closes the dialog, drops the picks and reloads the order, so nothing saved is added twice', async () => {
+    addLines.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: PARTIAL, details: { reason: 'partial', retryable: false } },
+    });
+    const user = await stageTwoAndAdd();
+
+    await vi.waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledWith(PARTIAL);
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(addLines).toHaveBeenCalledTimes(1);
+
+    // Opening it again starts empty: there is no armed Add with the same picks.
+    await user.click(screen.getByRole('button', { name: /add items/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Selected (0)')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /add to order/i })).toBeDisabled();
+    expect(addLines).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes and reloads on any other conflict (the order went out for delivery in another tab), as the phone does', async () => {
     addLines.mockResolvedValue({
       ok: false,
       error: {
         code: 'conflict',
-        message:
-          'This order is already out for delivery — create a new order for the extra items.',
+        message: 'This order is already out for delivery — create a new order for the extra items.',
       },
     });
-    const user = await open();
-
-    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
-    await user.click(screen.getByRole('button', { name: 'Select Gadget' }));
-    await user.click(screen.getByRole('button', { name: /add to order/i }));
+    await stageTwoAndAdd();
 
     await vi.waitFor(() => {
       expect(toastMock.error).toHaveBeenCalledWith(
         'This order is already out for delivery — create a new order for the extra items.',
       );
     });
-    expect(refreshSpy).not.toHaveBeenCalled();
-    const dialog = screen.getByRole('dialog');
-    expect(
-      within(dialog).getByRole('spinbutton', { name: 'Quantity for Widget' }),
-    ).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole('spinbutton', { name: 'Quantity for Gadget' }),
-    ).toBeInTheDocument();
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
   });
 
   // ── Paging ───────────────────────────────────────────────────────

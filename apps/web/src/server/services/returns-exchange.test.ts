@@ -7,8 +7,8 @@ import type { ModuleId } from '@stockpilot/core';
 /**
  * RMAService's exchange (returns RX-2, migration 0396): the approval that
  * creates the linked replacement order, changing, cancelling, releasing and
- * preparing it, the candidates search, the kill switch and the requester
- * paths held back until RX-3. Every write is one database function; the
+ * preparing it, the candidates search, the kill switch, and (RX-3) the
+ * requester paths letting an exchange through to the database. Every write is one database function; the
  * replacement order's own trail (audit, events) and every message run only
  * for the call that answered `changed: true`.
  */
@@ -56,7 +56,14 @@ vi.mock('./order-requests', () => ({
 }));
 
 import { ServiceError } from './context';
-import { createPortalReturn, createRequesterReturn, parseReplacementSummary, RMAService, returnRpcError } from './returns';
+import {
+  createMemberReturn,
+  createPortalReturn,
+  createRequesterReturn,
+  parseReplacementSummary,
+  RMAService,
+  returnRpcError,
+} from './returns';
 
 const MODULES = new Set<ModuleId>(['returns', 'orders']);
 const ORDER_ID = '11111111-1111-4111-8111-111111111111';
@@ -392,20 +399,67 @@ describe('the kill switch (RETURNS_EXCHANGE_CREATE=off, plan 10.2)', () => {
   });
 });
 
-describe('the requester paths hold exchanges back until RX-3', () => {
-  it('a token or portal body naming an exchange is refused before any read or call', async () => {
+// Re-pinned on purpose by returns RX-3 (2026-10-11). RX-2 refused every
+// requester exchange "until RX-3"; RX-3 lets it through to the database
+// (the requester tier decides) and keeps only the kill switch's refusal.
+describe('the requester paths: the kill switch holds an exchange back; otherwise it reaches the database (RX-3)', () => {
+  const TOKEN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const body = { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_L } }] };
+
+  it('with RETURNS_EXCHANGE_CREATE=off a token, portal or member body naming an exchange is refused before any read or call', async () => {
+    vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
     const admin = makeSupabaseStub({});
-    const body = { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_L } }] };
-    const a = await createRequesterReturn(admin.client, 'a'.repeat(8) + '-aaaa-4aaa-8aaa-' + 'a'.repeat(12), body).catch((x: unknown) => x);
+    const a = await createRequesterReturn(admin.client, TOKEN, body).catch((x: unknown) => x);
     expect((a as ServiceError).details?.reason).toBe('exchange_not_available');
+    expect((a as ServiceError).message).toBe('Exchanges are turned off right now. Request a return only.');
     const b = await createPortalReturn(
       admin.client,
       { organizationId: 'org-test', customerId: 'c1', orderRequestId: ORDER_ID, portalUserId: 'u1' },
       body,
     ).catch((x: unknown) => x);
     expect((b as ServiceError).details?.reason).toBe('exchange_not_available');
+    const c = await createMemberReturn(
+      admin.client,
+      { organizationId: 'org-test', userId: 'u1', orderRequestId: ORDER_ID },
+      body,
+    ).catch((x: unknown) => x);
+    expect((c as ServiceError).details?.reason).toBe('exchange_not_available');
     expect(admin.fromCalls).toEqual([]);
     expect(admin.rpcCalls).toEqual([]);
+  });
+
+  it('switched on, the exchange reaches create_requester_return_request as sent (the database decides)', async () => {
+    const admin = makeSupabaseStub({
+      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+      'order_requests.select': { data: [{ id: ORDER_ID, organization_id: 'org-test', status: 'completed', order_number: 103 }], error: null },
+      'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
+      'rpc:create_requester_return_request': {
+        data: { changed: false, replay: true, organizationId: 'org-test', returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested' },
+        error: null,
+      },
+    } as never);
+    await createRequesterReturn(admin.client, TOKEN, body);
+    expect(admin.rpcCalls).toHaveLength(1);
+    expect(admin.rpcCalls[0]!.args).toMatchObject({
+      p_order_id: ORDER_ID,
+      p_request: { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_L } }] },
+      p_actor: { channel: 'token', userId: null },
+    });
+  });
+
+  it('a return-only body still goes through with the switch off', async () => {
+    vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
+    const admin = makeSupabaseStub({
+      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+      'order_requests.select': { data: [{ id: ORDER_ID, organization_id: 'org-test', status: 'completed' }], error: null },
+      'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
+      'rpc:create_requester_return_request': {
+        data: { changed: false, replay: true, organizationId: 'org-test', returnId: RET_ID, returnNumber: 'RMA-1', status: 'requested' },
+        error: null,
+      },
+    } as never);
+    await createRequesterReturn(admin.client, TOKEN, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1 }] });
+    expect(admin.rpcCalls.map((c) => c.name)).toEqual(['create_requester_return_request']);
   });
 });
 
@@ -726,6 +780,35 @@ describe('cancel with a live replacement (X-2)', () => {
     });
     await cancelled.svc.cancel(RET_ID, { reason: 'Customer kept it' });
     expect(returnPromptMock).not.toHaveBeenCalled();
+  });
+
+  // RX-3 fix round 1 (desk check F7, RX-2 code): the order service's
+  // close-partial sends order.completed { closedPartial: true }, writes
+  // order.closed_partial and broadcasts the order, for the same database edge;
+  // the RMA cancel's close sent only the email, so accounting exports and
+  // webhooks showed the replacement open or backordered forever.
+  it('a part-handed-over replacement the cancel closed gets the close-partial trail: order.completed, its audit and the broadcast', async () => {
+    const { svc } = svcFor({
+      'order_requests.select': orderReads({ live: { id: REPL_ID, status: 'backordered', order_number: 104 }, after: 'completed' }),
+      'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+    });
+    await svc.cancel(RET_ID, { reason: 'Customer kept it' });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'order.completed', { id: REPL_ID, orderNumber: 'SO-000104', closedPartial: true });
+    const closedAudit = auditMock.mock.calls.map((c) => c[0] as { event: string; entityId: string; extra?: Record<string, unknown> }).find((a) => a.event === 'order.closed_partial');
+    expect(closedAudit).toMatchObject({ entityId: REPL_ID, extra: { via: 'return.cancelled', replacementForReturnId: RET_ID } });
+    expect(broadcastMock).toHaveBeenCalledWith('org-test', REPL_ID);
+  });
+
+  it('a replacement the cancel cancelled, or one already completed, sends no order.completed', async () => {
+    for (const [status, after] of [['approved', 'cancelled'], ['completed', 'completed']] as const) {
+      vi.clearAllMocks();
+      const { svc } = svcFor({
+        'order_requests.select': orderReads({ live: { id: REPL_ID, status, order_number: 104 }, after }),
+        'rpc:cancel_return': { data: { changed: true, status: 'cancelled' }, error: null },
+      });
+      await svc.cancel(RET_ID, { reason: 'Customer kept it' });
+      expect(dispatchMock.mock.calls.filter((c) => c[1] === 'order.completed'), `${status} -> ${after}`).toEqual([]);
+    }
   });
 });
 

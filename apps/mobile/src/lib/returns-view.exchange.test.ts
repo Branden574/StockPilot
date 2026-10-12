@@ -24,6 +24,7 @@ import {
   orderReplacementLines,
   prepareOutcomeMessage,
   replacementCardLabel,
+  replacementCardStatus,
   replacementGateLine,
   replacementOrderHref,
   replacementPhotoUrl,
@@ -218,6 +219,25 @@ describe('the approval review', () => {
     ]);
     // An approver still starts at "Approve as requested".
     expect(exchangeReviewStateFor(wb('requested', exchange()), {}, 'x1')).toEqual({ kind: 'as_requested' });
+  });
+
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // opened at "Approve as requested", which is off for it, and the pinned line
+  // then read "Choose the replacement". It opens at Change replacement with
+  // nothing chosen, at the quantity coming back.
+  it('a note-only request opens at Change replacement for an approver, at the decline for a decline-only viewer', () => {
+    const noteOnly = exchange({ lines: [xline({ requestedItemId: null, requestedItem: null, requestedFree: null, requestNote: 'A bigger one', requestedByKind: 'requester' })] });
+    expect(exchangeReviewStateFor(wb('requested', noteOnly), {}, 'x1')).toEqual({
+      kind: 'change',
+      itemId: null,
+      label: null,
+      free: null,
+      quantity: 1,
+      reason: '',
+    });
+    expect(
+      exchangeReviewStateFor(wb('requested', noteOnly, { canManageReturns: true, canApproveOrders: false, canReadDecisions: true }), {}, 'x1'),
+    ).toEqual({ kind: 'decline', reason: '' });
   });
 
   // Review fix P7: after a short refusal the sheet offered only "Approve,
@@ -914,5 +934,48 @@ describe('fix round 1 on the phone', () => {
     expect(orderReplacementLines(info, 'pickup').find((l) => l.key === 'rma_link')?.text).toBe('Open RMA-1');
     expect(changeInRmaLabel(info)).toBe('Open RMA-1');
     expect(changeInRmaLabel({ ...info, canChangeReplacement: true })).toBe('Change or cancel in RMA-1');
+  });
+});
+
+// Returns RX-3 PR stage, polish (a), from the RX-2 Demo Co walk (iPad and
+// iPhone): after the exchange completed the card read "Requested: Walk
+// Exchange Tee L, Qty requested: 1, Approved". The line's stored status stays
+// approved; the replacement block the workbench already sends says what was
+// handed over, so the card says the outcome (core's rule, the web's too).
+describe('the REPLACEMENT card once its replacement was handed over', () => {
+  const approved = (qty: number) => xline({ status: 'approved', approvedItemId: 'item-l', approvedQuantity: qty, approvedItem: L });
+  const repl = (status: string, requested: number, fulfilled: number): MobileReplacement => ({
+    orderId: 'repl',
+    orderNumber: 104,
+    status,
+    fulfillmentType: 'pickup',
+    live: true,
+    class: fulfilled > 0 ? 'handed_over' : 'undrawn',
+    owed: requested - fulfilled,
+    held: 0,
+    short: false,
+    lines: [{ orderLineId: 'ol9', itemId: 'item-l', label: 'Walk New Hire Shirt, L', item: L, requested, fulfilled, held: 0, take: null }],
+  });
+
+  it('says Handed over and how many once all of it was handed over, in the pill and in the VoiceOver label', () => {
+    const r = repl('completed', 1, 1);
+    expect(replacementCardStatus(approved(1), r)).toBe('Handed over');
+    expect(replacementSideLines(approved(1), r).map((l) => l.text)).toEqual(['Requested: Walk New Hire Shirt, L', 'Qty handed over: 1']);
+    expect(replacementCardLabel('Walk New Hire Shirt, M', approved(1), r)).toBe(
+      'REPLACEMENT for Walk New Hire Shirt, M: Requested: Walk New Hire Shirt, L, Qty handed over: 1, Handed over',
+    );
+  });
+
+  it('says Partly handed over while the rest is on backorder, and Not sent for an item closed with none handed over', () => {
+    expect(replacementCardStatus(approved(2), repl('backordered', 2, 1))).toBe('Partly handed over');
+    expect(replacementSideLines(approved(2), repl('backordered', 2, 1)).map((l) => l.text)).toContain('Qty requested: 2');
+    expect(replacementCardStatus(approved(1), repl('completed', 1, 0))).toBe('Not sent');
+  });
+
+  it('keeps Approved while the replacement is still to be handed over, and for a cancelled replacement', () => {
+    expect(replacementCardStatus(approved(1), repl('approved', 1, 0))).toBe('Approved');
+    expect(replacementCardStatus(approved(1), { ...repl('cancelled', 1, 0), live: false })).toBe('Approved');
+    expect(replacementCardStatus(approved(1), null)).toBe('Approved');
+    expect(replacementCardStatus(xline({ status: 'declined' }), repl('completed', 1, 1))).toBe('Declined');
   });
 });

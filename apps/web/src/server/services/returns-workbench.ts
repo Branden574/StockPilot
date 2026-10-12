@@ -5,6 +5,7 @@ import {
   can,
   DELETED_USER_LABEL,
   exchangeStatusStaffLabel,
+  formatRackHoldings,
   parseExchangeStatus,
   inboundStateLabel,
   isDeletedPerson,
@@ -33,6 +34,7 @@ import {
   exchangeItemIds,
   readDeliverySites,
   readExchangeTier2,
+  readReplacementEverHeld,
   readFreeStock,
   readReplacementDetail,
   type RawExchangeLine,
@@ -580,7 +582,12 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         ),
       ]
     : [];
-  const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems] = await Promise.all([
+  // Item 2 (RX-2 verification L12): an exchange cancelled with its RMA shows
+  // the cancelled replacement; whether it had held stock decides the rail's
+  // stop (one read, beside the others, only for a cancelled exchange).
+  const cancelledShown =
+    !liveReplacement && exchangeTier2.overview?.exchange_status === 'cancelled' ? (exchangeTier2.replacements[0] ?? null) : null;
+  const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems, shownReplacementEverHeld] = await Promise.all([
     readImages(ctx, allItemIds, 'returns.workbench.images'),
     readNames(ctx, [
       h.requested_by,
@@ -620,6 +627,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
         )
       : Promise.resolve([]),
     readItems(ctx, decisionItemIds, 'returns.workbench.decision_items'),
+    cancelledShown ? readReplacementEverHeld(ctx, cancelledShown.id) : Promise.resolve(null),
   ]);
   for (const [iid, row] of decisionItems) exchangeLabels.set(iid, returnLineLabel(row.name, variantOf(row)));
   const locationName = new Map<string, string>(sourceNames);
@@ -700,12 +708,29 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   }));
   // The chain names each destination's line and, for the original rack, its
   // rack(s): from the destination read while the line is open, else from the
-  // line's own legs once it closed.
+  // line's own legs once it closed (returns RX-3 PR stage, polish (b): the
+  // destination read has no sources for a processed line, so the counter
+  // RMA's history named no rack). The legs are the original rack only when
+  // the line's LAST plan was the original rack; an earlier plan another one
+  // replaced keeps the bare words, never the later destination's rack.
   const lineLabels = new Map(lines.map((l) => [l.id, returnLineLabel(l.item.name, l.item.variant)]));
+  const lastPlanTarget = new Map<string, { seq: number; target: string | null }>();
+  for (const d of decisionRows) {
+    if (d.kind !== 'disposition_planned' || !d.return_line_id) continue;
+    const prev = lastPlanTarget.get(d.return_line_id);
+    if (!prev || d.seq > prev.seq) lastPlanTarget.set(d.return_line_id, { seq: d.seq, target: d.restock_target });
+  }
   const originalRacks = new Map<string, string>();
   for (const l of lines) {
     if (l.restock && (l.restock.case === 'single_source' || l.restock.case === 'full_remainder') && l.restock.sources.length > 0) {
       originalRacks.set(l.id, originalRowLabel(l.restock).replace(/^Return to original racks?: /, ''));
+    } else if (l.applied && lastPlanTarget.get(l.id)?.target === 'original') {
+      const racks = l.legs.filter((g) => g.rack && g.quantity > 0 && g.locationName);
+      if (racks.length === 1) originalRacks.set(l.id, racks[0]!.locationName!);
+      else if (racks.length > 1) {
+        const legs = formatRackHoldings(racks.map((g) => ({ name: g.locationName!, quantity: g.quantity })));
+        if (legs) originalRacks.set(l.id, legs);
+      }
     }
   }
   const chain = buildReturnChainEvents({
@@ -764,6 +789,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       orderRequestId: d.orderRequestId,
     })),
     deliverySites,
+    shownReplacementEverHeld,
   });
 
   const warehouse = (warehouseRes as { data: { name?: string } | null }).data;

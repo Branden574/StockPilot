@@ -228,6 +228,11 @@ describe('OrderRequestsService.holdStock', () => {
     // waited on the order row and then an item (5 s lock_timeout each): the
     // same "someone else is changing it" as a lock timeout.
     [{ message: 'canceling statement due to statement timeout', code: '57014' }, 'conflict', HOLD_BUSY_COPY, 'busy'],
+    // Re-pinned on purpose by returns RX-3 (RX-2 review S4): a deadlock the
+    // database resolved by rolling this call back (an RMA create with an
+    // exchange beside the hold's item locks) wrote nothing; it is the same
+    // "someone else is changing it" as a lock wait, never an internal error.
+    [{ message: 'deadlock detected', code: '40P01' }, 'conflict', HOLD_BUSY_COPY, 'busy'],
   ] as const)('maps %o to %s', async (error, code, message, reason) => {
     const stub = stubWith({ data: null, error: { ...error } });
     const e = await svc(stub).holdStock(ORDER).catch((x: unknown) => x);
@@ -236,13 +241,13 @@ describe('OrderRequestsService.holdStock', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('anything else is internal_error, never shows the raw text, and is reported with its cause (a revoked grant, a deadlock, a fault, an unreadable answer)', async () => {
+  // Re-pinned by returns RX-3: a deadlock left this list (it is busy, above).
+  it('anything else is internal_error, never shows the raw text, and is reported with its cause (a revoked grant, a fault, an unreadable answer)', async () => {
     for (const [rpc, cause] of [
       [
         { data: null, error: { message: 'permission denied for function hold_order_stock', code: '42501' } },
         '42501: permission denied for function hold_order_stock',
       ],
-      [{ data: null, error: { message: 'deadlock detected', code: '40P01' } }, '40P01: deadlock detected'],
       [{ data: null, error: { message: 'boom', code: 'XX000' } }, 'XX000: boom'],
       [{ data: { held: 'nope' }, error: null }, 'held is not a list'],
       [{ data: null, error: null }, 'the answer is not an object'],

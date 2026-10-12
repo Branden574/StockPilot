@@ -313,6 +313,32 @@ export async function readReplacementDetail(
   return { lines, heldByItem, racksByItem };
 }
 
+/**
+ * Whether a (cancelled) replacement order ever held stock: one read of its
+ * holds, released or not (a cancel releases them and keeps the rows). For the
+ * rail of an RMA cancelled after its approval (RX-2 verification L12). A
+ * failed read answers null (unknown: the rail keeps its stop at Reserved).
+ */
+export async function readReplacementEverHeld(ctx: ServiceContext, orderId: string): Promise<boolean | null> {
+  try {
+    const { data, error } = await ctx.supabase
+      .from('stock_reservations')
+      .select('id')
+      .eq('organization_id', ctx.organizationId)
+      .eq('order_request_id', orderId)
+      .gt('quantity', 0)
+      .limit(1);
+    if (error) {
+      reportDegradedRead('returns.workbench.replacement_ever_held', error, { orderId });
+      return null;
+    }
+    return ((data as unknown[] | null) ?? []).length > 0;
+  } catch (err) {
+    reportDegradedRead('returns.workbench.replacement_ever_held', err, { orderId });
+    return null;
+  }
+}
+
 type Decision = {
   kind: string;
   reason: string | null;
@@ -332,6 +358,8 @@ export function buildExchangeView(input: {
   freeOf: (itemId: string | null) => number | null;
   decisions: Decision[];
   deliverySites?: ReplacementDeliverySite[];
+  /** readReplacementEverHeld for the cancelled replacement shown (a cancelled exchange only). */
+  shownReplacementEverHeld?: boolean | null;
 }): ReturnWorkbenchExchange {
   const lines: ReturnWorkbenchExchangeLine[] = [...input.rawLines]
     .sort((a, b) => (a.created_at === b.created_at ? a.id.localeCompare(b.id) : a.created_at.localeCompare(b.created_at)))
@@ -444,6 +472,8 @@ export function buildExchangeView(input: {
         input.overview?.replacement_owed === undefined || input.overview?.replacement_owed === null
           ? null
           : num(input.overview.replacement_owed),
+      // Item 2 (L12): a cancelled replacement that had held stock.
+      replacementWasReserved: shown && shown !== liveRow ? (input.shownReplacementEverHeld ?? null) : null,
     }),
     hasApprovedExchange: lines.some((l) => l.approvedItemId !== null) || input.replacements.length > 0,
     createEnabled: exchangeCreateEnabled(),

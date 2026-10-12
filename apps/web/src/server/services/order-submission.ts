@@ -25,6 +25,7 @@ import {
 } from '@stockpilot/core';
 
 import { ServiceError } from './context';
+import { isOrderBusyError } from './lib/order-busy';
 
 /**
  * place_order_request, withdraw_order_submission and order_submission_status
@@ -41,7 +42,8 @@ import { ServiceError } from './context';
  *   22023 order_invalid / delivery_needs_site            -> validation_error (400), core's reason
  *   22023 idempotency_key_*                              -> validation_error, invalid / idempotencyKey
  *   P0001 idempotency_conflict                           -> conflict (409), orderId / orderNumber
- *   55P03 (lock_timeout) / 57014 (statement timeout)     -> conflict, busy, retryable
+ *   55P03 (lock_timeout) / 57014 (statement timeout) /
+ *     40P01 (a deadlock rolled back, RX-2 review S4)     -> conflict, busy, retryable
  *   recorded module_disabled                             -> module_disabled (403), settled
  *   recorded permission / on_behalf_not_permitted        -> forbidden (403), settled
  *   recorded warehouse_not_available                     -> not_found (404), settled
@@ -112,7 +114,10 @@ export function orderSubmissionRpcError(fn: string, error: RpcError): ServiceErr
     default:
       break;
   }
-  if (code === '55P03' || code === '57014') {
+  // A lock wait, a timeout, or a deadlock the database resolved by rolling
+  // the placement back (key included; RX-2 review S4): the same request and
+  // key are safe to send again.
+  if (isOrderBusyError(error)) {
     return refusal('conflict', ORDER_BUSY_COPY, { reason: 'busy', retryable: true });
   }
   return new ServiceError(

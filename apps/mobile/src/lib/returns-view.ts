@@ -21,12 +21,13 @@ import {
   defaultExchangeReviewState,
   earlierReplacementsLine,
   exchangeActionConsequences,
-  exchangeLineStatusLabel,
   exchangeReviewDecision,
   exchangeReviewProblem,
   formatOrderNumber as formatSo,
   releasedBeforeReturnLine,
   replacementBannerLines,
+  replacementCardQuantityLabel,
+  replacementCardStatusLabel,
   replacementChipState,
   replacementLineSummary,
   replacementRmaLinkLabel,
@@ -56,7 +57,9 @@ import {
   RETURNS_COPY,
   returnLineLabel,
   returnStatusLabel,
+  returnWaitingDays,
   sameChoice,
+  stillWaitingPrompt,
   unreadDestinationChoice,
   waitingForReturnLine,
   whenProcessedSentence,
@@ -70,6 +73,7 @@ import {
 import type {
   MobileExchangeLine,
   MobilePrepareAnswer,
+  MobileReplacement,
   MobileReturnExchange,
   MobileReturnListRow,
   MobileReturnStepResult,
@@ -207,6 +211,50 @@ export function shortBackorderLabel(mode: string): string {
  */
 export function actionHelp(action: ReturnAction | null): string | null {
   return action === 'get_replacement_ready' ? RETURNS_COPY.getReplacementReadyHelp : null;
+}
+
+/**
+ * A workbench button's VoiceOver hint: why it is off, else its own help,
+ * else, for Cancel replacement and Cancel return, the 14-day prompt (the
+ * web's aria-describedby on both; RX-3 fix round 1, desk check L3).
+ */
+export function workbenchActionHint(
+  action: ReturnAction | null,
+  ctx: { disabledReason: string | null | undefined; stillWaiting: string | null },
+): string | undefined {
+  if (ctx.disabledReason) return ctx.disabledReason;
+  const help = actionHelp(action);
+  if (help) return help;
+  if (ctx.stillWaiting && (action === 'cancel_replacement' || action === 'cancel')) return ctx.stillWaiting;
+  return undefined;
+}
+
+/**
+ * The 14-day prompt under the next-step bar (RX-2 review fix P17, built in
+ * RX-3; plan 3.10, D28): from 14 whole days after approval, while the
+ * returned item is still out and the replacement waits for it (reserved, or
+ * not in stock), for a viewer offered Cancel replacement, core's words name
+ * the two buttons that end the wait ("Waiting 15 days. Still waiting for the
+ * returned item? Cancel replacement frees the reserved items; Cancel return
+ * ends the return too."), and say nothing is freed when nothing is held.
+ * Nothing expires on its own. The days follow the list's rule (the view's
+ * waiting_days, core returnWaitingDays) from the workbench's approval time;
+ * the buttons are the ones this workbench offers (the same core
+ * availableReturnActions the server runs). Null otherwise.
+ */
+export function workbenchStillWaiting(
+  wb: Pick<MobileReturnWorkbench, 'return'> & { exchange?: MobileReturnExchange | null },
+  actions: Pick<ReturnActions, 'primary' | 'secondary'>,
+  now: number = Date.now(),
+): string | null {
+  const ex = exchangeOf(wb);
+  return stillWaitingPrompt({
+    status: wb.return.status,
+    exchangeStatus: ex.status,
+    waitingDays: returnWaitingDays(wb.return.status, wb.return.approvedAt, now),
+    offered: [actions.primary, ...actions.secondary],
+    held: ex.replacement ? ex.replacement.held : null,
+  });
 }
 
 // ── Destinations ───────────────────────────────────────────────────────────
@@ -373,8 +421,16 @@ export function replacementLabel(x: MobileExchangeLine): string {
   return it ? returnLineLabel(it.name, it.variant) : RETURNS_COPY.replacementWarehouseReview;
 }
 
-/** The REPLACEMENT side's lines: what was asked, what the warehouse chose, how many, availability. */
-export function replacementSideLines(x: MobileExchangeLine): { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] {
+/**
+ * The REPLACEMENT side's lines: what was asked, what the warehouse chose, how
+ * many, availability. `replacement` is the workbench's replacement block:
+ * once it was handed over the quantity says so (core's rule, the web card's
+ * too; returns RX-3 PR stage, polish (a)).
+ */
+export function replacementSideLines(
+  x: MobileExchangeLine,
+  replacement: MobileReplacement | null = null,
+): { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] {
   const out: { key: string; text: string; tone: 'ink' | 'muted' | 'crit' }[] = [];
   const requested = x.requestedItem ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant) : RETURNS_COPY.replacementWarehouseReview;
   out.push({ key: 'requested', text: `${RETURNS_COPY.replacementRequested}: ${requested}`, tone: 'ink' });
@@ -386,7 +442,7 @@ export function replacementSideLines(x: MobileExchangeLine): { key: string; text
       tone: 'ink',
     });
   }
-  out.push({ key: 'qty', text: qtyRequestedText(x.approvedQuantity ?? x.requestedQuantity), tone: 'muted' });
+  out.push({ key: 'qty', text: replacementCardQuantityLabel(x, replacement), tone: 'muted' });
   if (x.status === 'requested' && x.requestedFree !== null) {
     const short = x.requestedFree < x.requestedQuantity;
     out.push({
@@ -416,19 +472,29 @@ export function replacementPhotoUrl(x: MobileExchangeLine): string | null {
  * pill. RX-2 simulator finding SIM-1: a declined line read like a pending
  * request because the status was missing.
  */
-export function replacementCardLabel(returnedName: string, x: MobileExchangeLine): string {
-  const lines = replacementSideLines(x)
+export function replacementCardLabel(returnedName: string, x: MobileExchangeLine, replacement: MobileReplacement | null = null): string {
+  const lines = replacementSideLines(x, replacement)
     .map((t) => t.text)
     .join(', ');
-  return `${RETURNS_COPY.replacement} for ${returnedName}: ${lines}, ${exchangeLineStatusLabel(x.status)}`;
+  return `${RETURNS_COPY.replacement} for ${returnedName}: ${lines}, ${replacementCardStatus(x, replacement)}`;
 }
 
-function qtyRequestedText(n: number): string {
-  return `Qty requested: ${n}`;
+/**
+ * The REPLACEMENT card's pill: Handed over, Partly handed over or Not sent
+ * once the replacement was handed over or closed, else the line's stored
+ * status (core replacementCardStatusLabel, the web pill's rule).
+ */
+export function replacementCardStatus(x: MobileExchangeLine, replacement: MobileReplacement | null = null): string {
+  return replacementCardStatusLabel(x, replacement);
 }
 
 /** The workbench as the review reads it: its exchange half and who is reviewing. */
-type ReviewWorkbench = { exchange?: MobileReturnExchange | null; viewer?: { canApproveOrders: boolean } | null };
+type ReviewWorkbench = {
+  exchange?: MobileReturnExchange | null;
+  viewer?: { canApproveOrders: boolean } | null;
+  /** The return lines (how many come back), for where a note-only review starts. */
+  lines?: readonly { id: string; quantity: number }[];
+};
 
 /** Who reviews (server-computed order approval; a workbench without a viewer reads as before). */
 function reviewerOf(wb: ReviewWorkbench): ExchangeReviewViewer {
@@ -445,7 +511,16 @@ export function exchangeReviewStateFor(
   reviews: Record<string, ExchangeReviewState>,
   exchangeLineId: string,
 ): ExchangeReviewState {
-  return reviews[exchangeLineId] ?? defaultExchangeReviewState(reviewerOf(wb));
+  const chosen = reviews[exchangeLineId];
+  if (chosen) return chosen;
+  // RX-3 fix round 1 (M3): a note-only request starts at Change replacement,
+  // never at "Approve as requested" (off for it); core decides from the line.
+  const x = exchangeOf(wb).lines.find((l) => l.id === exchangeLineId);
+  const returned = x ? (wb.lines ?? []).find((l) => l.id === x.returnLineId)?.quantity ?? null : null;
+  return defaultExchangeReviewState(
+    reviewerOf(wb),
+    x ? { requestedItemId: x.requestedItemId, requestedQuantity: x.requestedQuantity, returnedQuantity: returned } : undefined,
+  );
 }
 
 /** Why the approval cannot be sent yet: one sentence per exchange line or add

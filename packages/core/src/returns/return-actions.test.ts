@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RETURN_STATUS_LABELS, type ReturnStatus } from '../orders/order-returns-view';
-import { EXCHANGE_STATUSES, type ExchangeStatus } from './exchange-status';
+import { EXCHANGE_STATUSES, returnWaitingDays, type ExchangeStatus } from './exchange-status';
 import { defaultExchangeReviewState, exchangeReviewDecision, exchangeReviewOptions, exchangeReviewProblem } from './exchange-view';
 import {
   availableReturnActions,
@@ -11,6 +11,7 @@ import {
   RETURN_ACTION_LABELS,
   returnActionLabel,
   stepsForAction,
+  stillWaitingPrompt,
   type ReplacementClass,
   type ReturnAction,
   type ReturnActions,
@@ -210,6 +211,27 @@ describe('availableReturnActions (exchange rows, plan 3.9)', () => {
     });
     // A return without an exchange says nothing about it.
     expect(availableReturnActions({ status: 'requested', viewerCanManageReturns: true, viewerCanApproveOrders: false }).readOnlyReason).toBeNull();
+  });
+
+  // RX-3 fix round 1 (desk check M3; RX-2 verify C-4): a note-only request
+  // ("warehouse will review", the common case at launch) opened at "Approve as
+  // requested", a choice that is off for it, and Approve then answered
+  // "Choose the replacement". It opens at Change replacement… with nothing
+  // chosen yet, at the quantity coming back; a decline-only viewer still
+  // starts at the decline.
+  it('a note-only request opens at Change replacement, never at the choice that is off', () => {
+    const noteOnly = { requestedItemId: null, requestedQuantity: 2, returnedQuantity: 3 };
+    const start = defaultExchangeReviewState({ canApproveOrders: true }, noteOnly);
+    expect(start).toEqual({ kind: 'change', itemId: null, label: null, free: null, quantity: 2, reason: '' });
+    const options = exchangeReviewOptions(noteOnly, { canApproveOrders: true });
+    expect(options.find((o) => o.kind === start.kind)?.disabled).toBe(false);
+    expect(exchangeReviewProblem({ id: 'x1', requestedItemId: null, requestNote: 'Needs a bigger one' }, start)).toBe('Choose the replacement');
+    // Fewer coming back than asked: the quantity follows what comes back.
+    expect(defaultExchangeReviewState({ canApproveOrders: true }, { ...noteOnly, returnedQuantity: 1 })).toMatchObject({ kind: 'change', quantity: 1 });
+    // A decline-only viewer starts at the decline, as for any request.
+    expect(defaultExchangeReviewState({ canApproveOrders: false }, noteOnly)).toEqual({ kind: 'decline', reason: '' });
+    // A request for a size still starts as requested.
+    expect(defaultExchangeReviewState({ canApproveOrders: true }, { ...noteOnly, requestedItemId: 'item-l' })).toEqual({ kind: 'as_requested' });
   });
 
   it('a viewer who cannot manage returns sees the exchange read-only', () => {
@@ -441,5 +463,76 @@ describe('RX-2 fix round 1: what a viewer without order approval is offered and 
       const receivedWithout = availableReturnActions({ ...base, status: 'received', exchangeStatus: ex, viewerCanApproveOrders: false });
       expect([receivedWithout.primary, ...receivedWithout.secondary]).not.toContain('hand_over');
     }
+  });
+});
+
+// RX-2 review fix P17, built in RX-3: the 14-day "still waiting" prompt (plan
+// 3.10, D28). Nothing expires; the prompt only names the buttons that end the
+// wait, for a viewer who has them.
+describe('the still-waiting prompt (review fix P17)', () => {
+  const offered = (input: Parameters<typeof availableReturnActions>[0]): ReturnAction[] => {
+    const a = availableReturnActions(input);
+    return [a.primary, ...a.secondary].filter((x): x is ReturnAction => x !== null);
+  };
+  const approver = { viewerCanManageReturns: true, viewerCanApproveOrders: true, hasExchange: true, hasApprovedExchange: true };
+
+  it('from 14 days after approval, reserved or not in stock, for a viewer offered Cancel replacement', () => {
+    const waiting = offered({ ...approver, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: waiting, held: 1 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items; Cancel return ends the return too.',
+    );
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 14, offered: waiting })).toMatch(
+      /^Waiting 14 days\. Still waiting for the returned item\?/,
+    );
+    const short = offered({ ...approver, status: 'approved', exchangeStatus: 'unavailable', replacementClass: 'undrawn' });
+    // Nothing held (not in stock): nothing is said to be freed.
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'unavailable', waitingDays: 20, offered: short, held: 0 })).toBe(
+      'Waiting 20 days. Still waiting for the returned item? Cancel replacement cancels the replacement order; Cancel return ends the return too.',
+    );
+  });
+
+  // RX-3 fix round 1 (desk check L5): the words name only buttons the viewer
+  // is offered. RX-2's fix round 1 changes the offered sets, so Cancel return
+  // can be missing beside Cancel replacement.
+  it('names Cancel return only when it is offered', () => {
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: ['cancel_replacement'], held: 1 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement frees the reserved items.',
+    );
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'unavailable', waitingDays: 15, offered: ['cancel_replacement', null], held: 0 })).toBe(
+      'Waiting 15 days. Still waiting for the returned item? Cancel replacement cancels the replacement order.',
+    );
+    expect(
+      stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 15, offered: ['cancel_replacement', 'cancel'], held: 1 }),
+    ).toMatch(/; Cancel return ends the return too\.$/);
+  });
+
+  it('not before 14 days, not once the item is in, not for another exchange state, and not for a viewer without the button', () => {
+    const waiting = offered({ ...approver, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 13, offered: waiting })).toBeNull();
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: null, offered: waiting })).toBeNull();
+    expect(stillWaitingPrompt({ status: 'received', exchangeStatus: 'ready_to_pick', waitingDays: 30, offered: waiting })).toBeNull();
+    for (const ex of EXCHANGE_STATUSES.filter((s) => s !== 'waiting_for_return' && s !== 'unavailable')) {
+      expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: ex, waitingDays: 30, offered: waiting }), ex).toBeNull();
+    }
+    // Manage returns without order approval: no Cancel replacement, no prompt.
+    const noOrders = offered({ ...approver, viewerCanApproveOrders: false, status: 'approved', exchangeStatus: 'waiting_for_return', replacementClass: 'undrawn' });
+    expect(noOrders).not.toContain('cancel_replacement');
+    expect(stillWaitingPrompt({ status: 'approved', exchangeStatus: 'waiting_for_return', waitingDays: 30, offered: noOrders })).toBeNull();
+  });
+});
+
+describe('returnWaitingDays: the view rule for a screen holding approvedAt (P17)', () => {
+  const approvedAt = '2026-10-01T12:00:00.000Z';
+  const at = (iso: string) => Date.parse(iso);
+  it('whole days since approval while approved', () => {
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-01T12:00:00.000Z'))).toBe(0);
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-15T11:59:59.000Z'))).toBe(13);
+    expect(returnWaitingDays('approved', approvedAt, at('2026-10-15T12:00:00.000Z'))).toBe(14);
+  });
+  it('null when not approved, or with no readable approval time; never negative', () => {
+    expect(returnWaitingDays('received', approvedAt, at('2026-10-20T00:00:00Z'))).toBeNull();
+    expect(returnWaitingDays('approved', null)).toBeNull();
+    expect(returnWaitingDays('approved', 'not a date')).toBeNull();
+    expect(returnWaitingDays('approved', approvedAt, at('2026-09-30T00:00:00Z'))).toBe(0);
   });
 });

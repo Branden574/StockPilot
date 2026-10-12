@@ -841,7 +841,12 @@ export type ReturnUpdateEvent =
   // its replacement was cancelled. Sent once the web wires them.
   | 'return_approved_replacement_added'
   | 'return_approved_replacement_added_short'
-  | 'replacement_closed_return_only';
+  | 'replacement_closed_return_only'
+  // RX-3: the requester's own exchange request, received; and an approval
+  // that declined every exchange line the requester asked for (the return
+  // goes on).
+  | 'exchange_request_received'
+  | 'exchange_declined';
 
 export interface ReturnUpdateParams {
   event: ReturnUpdateEvent;
@@ -1015,6 +1020,20 @@ const RETURN_UPDATE_WORDS: Record<
     badge: 'Return only',
     lead: 'No replacement will be sent.',
     sentence: 'Your return goes on as a return only.',
+  },
+  // RX-3 (core RETURNS_COPY requesterReceivedExchangeRequest and
+  // requesterExchangeDeclined).
+  exchange_request_received: {
+    summary: 'exchange request received',
+    badge: 'Request received',
+    lead: 'We received your exchange request.',
+    sentence: 'The warehouse will review it and let you know.',
+  },
+  exchange_declined: {
+    summary: 'exchange declined',
+    badge: 'Return approved',
+    lead: 'Exchange declined. Your return was approved.',
+    sentence: 'Bring or send the item back as arranged with the warehouse.',
   },
 };
 

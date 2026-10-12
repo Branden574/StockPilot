@@ -69,6 +69,36 @@ function view(input: Partial<Parameters<typeof buildExchangeView>[0]> = {}) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('buildExchangeView', () => {
+  // RX-3 test stage, item 2 (RX-2 verification L12): Cancel return after the
+  // approval reserved the replacement. The view carries the cancelled
+  // replacement; the read of its holds (released, still on record) tells the
+  // rail it was reserved: Reserved done, the stop at the gate.
+  it('an RMA cancelled after its replacement was reserved: the rail keeps Reserved done and stops at the gate (item 2)', () => {
+    const input = {
+      returnStatus: 'cancelled',
+      rawLines: [line({ status: 'cancelled', approved_item_id: 'l', approved_quantity: 1, replacement_order_request_id: 'o-new' })],
+      overview: { kind: 'exchange', exchange_status: 'cancelled', replacement_order_id: 'o-new', released_early: false, counter: false, replacement_status: 'cancelled', replacement_owed: 1 },
+      replacements: [repl({ status: 'cancelled' })],
+    } as const;
+    const held = view({ ...input, shownReplacementEverHeld: true } as never);
+    expect(held.rail.map((s) => `${s.label}:${s.state}`)).toEqual([
+      'Requested:done',
+      'Reserved:done',
+      'Cancelled:stopped',
+      'Picking:skipped',
+      'Ready for pickup:skipped',
+      'Handed over:skipped',
+    ]);
+    // Never held (or the read failed): the stop stays at Reserved.
+    for (const ever of [false, null]) {
+      expect(view({ ...input, shownReplacementEverHeld: ever } as never).rail.slice(0, 3).map((s) => `${s.label}:${s.state}`)).toEqual([
+        'Requested:done',
+        'Cancelled:stopped',
+        'Waiting for return:skipped',
+      ]);
+    }
+  });
+
   it('a plain return: kind return, status none, no rail, nothing approved', () => {
     const v = view();
     expect(v).toMatchObject({ kind: 'return', status: 'none', lines: [], replacement: null, rail: [], hasApprovedExchange: false });

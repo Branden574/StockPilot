@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { returnTokenBucketKey } from '@/lib/returns/public-limits';
+import { publicRequestIp, returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { createRequesterReturn } from '@/server/services/returns';
@@ -22,7 +22,17 @@ export const dynamic = 'force-dynamic';
  * demand, the cap trigger), the item is stamped from the source line, the
  * disposition is always restock, and the requester's name and email come
  * from the order. zod strips everything else a client might send
- * (disposition, status, warehouse, organization, location, item).
+ * (disposition, status, warehouse, organization, location, item, an
+ * approved item, a replacement order id).
+ *
+ * Returns RX-3: a line may carry `exchange` { itemId?, quantity?, note? }
+ * ("Exchange for another size", or "warehouse will review" with a note).
+ * The service validates it with core's requester schema (strict: any other
+ * key inside it is refused, whole units at most the line's return quantity,
+ * a note up to 500 characters), and the database re-checks it in the same
+ * transaction against the line's own eligible sizes: any other item, known
+ * or not, answers the same generic 400 (no oracle). With
+ * RETURNS_EXCHANGE_CREATE=off an exchange is refused; a return goes through.
  *
  * Defenses on this surface:
  *   • HONEYPOT: a non-empty `hp` answers a fake success and writes nothing.
@@ -42,6 +52,8 @@ export const dynamic = 'force-dynamic';
 const lineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().int().positive().max(10_000),
+  // Shape-checked by core's requester schema in the service (strict).
+  exchange: z.unknown().optional(),
 });
 
 const bodySchema = z.object({
@@ -65,16 +77,25 @@ const CLOSED_DOOR = {
   message: 'This return link is invalid or has expired.',
 };
 
+/**
+ * Every answer of this public route is no-store (RX-3 fix round 1, security
+ * review low): the 200 had it alone. Headers given (the 429's retry-after)
+ * are kept beside it.
+ */
+function answer(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}): NextResponse {
+  return NextResponse.json(body, { status: init.status, headers: { ...init.headers, 'Cache-Control': 'no-store' } });
+}
+
 export async function POST(req: NextRequest) {
   let raw: unknown;
   try {
     raw = await req.json();
   } catch {
-    return NextResponse.json({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
+    return answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
   }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) {
-    return NextResponse.json(
+    return answer(
       { error: 'validation_error', message: 'Check the items and quantities, then try again.' },
       { status: 400 },
     );
@@ -82,21 +103,19 @@ export async function POST(req: NextRequest) {
   const body: Body = parsed.data;
 
   if (typeof body.hp === 'string' && body.hp.trim().length > 0) {
-    return NextResponse.json({ id: 'ok' });
+    return answer({ id: 'ok' });
   }
 
   const totalQty = body.lines.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
   if (totalQty > MAX_TOTAL_QTY) {
-    return NextResponse.json(
+    return answer(
       { error: 'too_many_units', message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.` },
       { status: 400 },
     );
   }
 
-  // Only trust x-forwarded-for on Vercel (elsewhere a client could rotate it).
-  const onVercel = process.env.VERCEL === '1';
-  const xff = onVercel ? req.headers.get('x-forwarded-for') : null;
-  const ip = xff?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
+  // Only trusts x-forwarded-for on Vercel (elsewhere a client could rotate it).
+  const ip = publicRequestIp(req.headers);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-return-request:${ip}`, RATE_LIMIT_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
     checkRateLimit(returnTokenBucketKey(body.token), RATE_LIMIT_PER_TOKEN_PER_HOUR, ONE_HOUR_MS, 'closed'),
@@ -110,7 +129,7 @@ export async function POST(req: NextRequest) {
       level: 'warning',
       extra: { bucket: trippedBucket, count: denied.count, retryAfterSeconds: retryAfter },
     });
-    return NextResponse.json(
+    return answer(
       {
         error: 'rate_limited',
         message: "You've hit the request limit. Please wait an hour and try again, or contact the warehouse directly.",
@@ -123,7 +142,7 @@ export async function POST(req: NextRequest) {
   try {
     admin = createAdminClient();
   } catch {
-    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+    return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 
   try {
@@ -133,30 +152,31 @@ export async function POST(req: NextRequest) {
       {
         reasonCode: body.reasonCode,
         notes: body.notes ?? undefined,
-        lines: body.lines.map((l) => ({ orderRequestLineId: l.orderRequestLineId, quantity: l.quantity })),
+        lines: body.lines.map((l) => ({
+          orderRequestLineId: l.orderRequestLineId,
+          quantity: l.quantity,
+          ...(l.exchange !== undefined && l.exchange !== null ? { exchange: l.exchange } : {}),
+        })),
       },
       { idempotencyKey: body.idempotencyKey ?? null },
     );
-    return NextResponse.json(
-      { id: result.id, returnNumber: result.returnNumber, replay: result.replay },
-      { headers: { 'Cache-Control': 'no-store' } },
-    );
+    return answer({ id: result.id, returnNumber: result.returnNumber, replay: result.replay });
   } catch (e) {
     if (e instanceof ServiceError) {
       if (e.code === 'not_found' || e.code === 'module_disabled' || e.code === 'forbidden') {
-        return NextResponse.json(CLOSED_DOOR, { status: 404 });
+        return answer(CLOSED_DOOR, { status: 404 });
       }
       if (e.code === 'internal_error') {
         await reportError(e, { tag: 'public.returns.create' });
-        return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+        return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
       }
       const reason = typeof e.details?.reason === 'string' ? e.details.reason : undefined;
-      return NextResponse.json(
+      return answer(
         { error: e.code, message: e.message, ...(reason ? { details: { reason } } : {}) },
         { status: serviceErrorStatus(e.code) },
       );
     }
     await reportError(e, { tag: 'public.returns.create.unknown' });
-    return NextResponse.json({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
+    return answer({ error: 'internal_error', message: 'Something went wrong. Try again.' }, { status: 500 });
   }
 }
