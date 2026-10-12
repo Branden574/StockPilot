@@ -58,6 +58,10 @@ const ALLOWED: Record<'web' | 'mobile' | 'core', Record<string, string>> = {
       "the Items and Books tables' server search attaches each hit's group",
     'app/api/v1/items/grouping/route.ts': "the phone's Save (apply_item_grouping)",
     'app/api/v1/items/grouping/preview/route.ts': "the phone's review (item_grouping_preview)",
+    'app/api/v1/items/ungroup-selected/route.ts':
+      "the phone's Ungroup Save (a record leaves its display group, among the steps)",
+    'app/api/v1/items/ungroup-selected/preview/route.ts':
+      "the phone's Ungroup review (item_grouping_preview names each record's group)",
     'components/inventory/activity-feed.tsx': 'Activity labels for grouping events',
     'components/inventory/bulk-actions.tsx': 'the bulk bar opens Group selected',
     'components/inventory/display-group-dialogs.tsx': 'the review, Remove and Rename dialogs',
@@ -71,6 +75,8 @@ const ALLOWED: Record<'web' | 'mobile' | 'core', Record<string, string>> = {
     'server/loaders/inventory-list.ts': "the list loaders' membership reads",
     'server/services/audit.ts': 'Activity for grouping events',
     'server/services/item-grouping.ts': 'the grouping service',
+    'server/services/ungroup-selected.ts':
+      'Ungroup anything: a record leaves its display group through apply_item_grouping',
     'server/services/lib/display-groups.ts': 'the membership readers',
   },
   mobile: {

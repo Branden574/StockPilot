@@ -656,6 +656,10 @@ export const UNGROUP_COPY = {
   /** Nothing in the selection can be ungrouped by this person. */
   selectedNothing: 'None of the selected records has a grouping you can undo.',
   familyChanged: "A record's size family changed since you opened this. Review it again.",
+  /** Taking records out of their families stopped and where each one is
+   *  now could not be read back: say so, never guess. */
+  unlinkUnknown:
+    'Some of these records may have left their size family before this stopped. Review again to see where each one is now.',
   familyPermission:
     'Taking a record out of a size family needs permission to manage sports products.',
   /** The audit row's reason for an unlink made by Ungroup. */

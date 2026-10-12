@@ -158,6 +158,12 @@ function gate(ctx: ServiceContext): void {
   }
 }
 
+/** The same gate, for Ungroup anything's service (ungroup-selected.ts), which
+ *  runs it first, before any read, as every entry point here does. */
+export function assertGroupingPermission(ctx: ServiceContext): void {
+  gate(ctx);
+}
+
 export class ItemGroupingService {
   private readonly sleep: (ms: number) => Promise<void>;
 

@@ -837,6 +837,17 @@ WEB_TESTS=(
   src/app/api/v1/items/grouping/route.test.ts
   src/server/services/item-grouping.group.test.ts
   src/server/services/display-groups-consumers.guard.test.ts
+  # Ungroup anything (owner 2026-10-12, with 0400): the phone's two bearer
+  # routes authenticate, then rate-limit, and map a refusal before any write
+  # by reason (a 403 keeps its MFA reason); the service runs the items:update
+  # gate first, refuses another organization or actor, asks sports:manage
+  # with the sports module on before a family step writes anything, reuses
+  # the existing writes in a fixed order, and names every step's records
+  # (never a half-applied Save without saying so); the web actions keep the
+  # same buckets and never send a raw message.
+  src/app/api/v1/items/ungroup-selected/route.test.ts
+  src/server/services/ungroup-selected.test.ts
+  src/server/actions/item-grouping.ungroup-selected.test.ts
   src/app/api/orders/[id]/signature/route.test.ts
   src/server/actions/po-imports.gates.test.ts
   src/server/actions/purchase-orders.gates.test.ts
