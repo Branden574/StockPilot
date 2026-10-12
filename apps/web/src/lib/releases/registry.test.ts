@@ -55,6 +55,7 @@ import {
   returnLineLabel,
   returnToRackButton,
   stagingReturnedSourceLabel,
+  UNGROUP_COPY,
   VERIFICATION_SESSION_ENDED_COPY,
   type CountConfirmBlock,
   type ModuleId,
@@ -8895,13 +8896,18 @@ describe('the Group selected release (G2, 0400)', () => {
     }
   });
 
-  it('tells Group selected to whoever can edit items, with the link to Items, and the headers and the fix to every member', () => {
+  // Re-pinned by Ungroup anything (owner 2026-10-12; was: three entries):
+  // Ungroup for any ticked records is told in its own entry, to the same
+  // audience as Group selected (items:update, the bulk bar's gate), with the
+  // link to Items. Claim kept: the headers and the fix go to every member.
+  it('tells Group selected and Ungroup to whoever can edit items, with the link to Items, and the headers and the fix to every member', () => {
     const r = release();
     // No release-level audience: every member who opens Items or Books sees
     // grouped records under one header.
     expect(r.audience).toBeUndefined();
     expect(r.entries.map((e) => [e.id, e.category, e.audience?.anyPermission ?? null, e.link?.href ?? null])).toEqual([
       ['group-selected', 'new', ['items:update'], '/dashboard/inventory'],
+      ['ungroup-any-records', 'new', ['items:update'], '/dashboard/inventory'],
       ['groups-show-under-one-header', 'improved', null, null],
       ['sku-header-rows-stay-under-it', 'fixed', null, null],
     ]);
@@ -8912,6 +8918,7 @@ describe('the Group selected release (G2, 0400)', () => {
       visibleReleases([published], { role, permissions, enabledModules: [] })[0]?.entries.map((e) => e.id) ?? [];
     expect(entriesFor('manager', ['items:read', 'items:update'])).toEqual([
       'group-selected',
+      'ungroup-any-records',
       'groups-show-under-one-header',
       'sku-header-rows-stay-under-it',
     ]);
@@ -8920,7 +8927,9 @@ describe('the Group selected release (G2, 0400)', () => {
 
   it("says the brief's sentence and the screens' own words, on both platforms", () => {
     const r = release();
-    const [group, headers] = r.entries;
+    // Re-pinned by Ungroup anything (owner 2026-10-12; was: [group, headers]):
+    // the Ungroup entry sits second. Claims kept.
+    const [group, , headers] = r.entries;
     expect(r.summary).toContain(GROUP_COPY.intro);
     expect(r.summary).toMatch(/on the web, or .* on the mobile app/);
     expect(group!.howItAffectsYou).toContain(GROUP_COPY.intro);
@@ -8941,7 +8950,9 @@ describe('the Group selected release (G2, 0400)', () => {
   // more than the screens do.
   it("names the phone's control as it reads, says where automatic same-SKU grouping still applies, and offers Group them only where it is offered", () => {
     const r = release();
-    const [group, headers, fixed] = r.entries;
+    // Re-pinned by Ungroup anything (owner 2026-10-12; was: [group, headers,
+    // fixed]): the Ungroup entry sits second. Claims kept.
+    const [group, , headers, fixed] = r.entries;
     // P7 (a): the phone's select bar says "Group".
     expect(r.summary).toContain(
       `${GROUP_COPY.bulkAction} on the web, or ${GROUP_COPY.bulkActionShort} on the mobile app's select bar`,
@@ -8965,6 +8976,39 @@ describe('the Group selected release (G2, 0400)', () => {
     // P7 (c): the fix is about a size run, by name or by product family.
     expect(fixed!.whatChanged).toContain('next to a size run');
     expect(fixed!.whatChanged).not.toMatch(/in a product family of linked sizes/);
+  });
+
+  // Ungroup anything (owner 2026-10-12, verbatim: "im supposed to be able to
+  // check box whatever item and then group or ungroup it that was the
+  // point."): the release tells the owner and members to tick any records and
+  // Group or Ungroup, what Ungroup does for each kind of grouping, and the
+  // Returns consequence for the sizes of a family, in the screens' words.
+  it('says to tick any records, then Group or Ungroup, what Ungroup does for each kind, and the Returns consequence for sizes', () => {
+    const r = release();
+    expect(r.title).toBe('Group or ungroup any records');
+    expect(r.summary).toContain('tick any records');
+    expect(r.summary).toContain(UNGROUP_COPY.bulkAction);
+    expect(r.summary).toContain(GROUP_COPY.intro);
+    const ungroup = r.entries.find((e) => e.id === 'ungroup-any-records')!;
+    expect(ungroup.whatChanged).toContain('tick any records and choose Ungroup');
+    // Each kind, in the review's own words.
+    expect(ungroup.whatChanged).toContain(UNGROUP_COPY.getsOwnSku);
+    expect(ungroup.whatChanged).toContain('Leaves group');
+    expect(ungroup.whatChanged).toContain('Leaves the');
+    expect(ungroup.whatChanged).toContain('size family');
+    expect(ungroup.whatChanged).toContain('the grouping it shows under on the list');
+    // The Returns consequence for a family's sizes, as the review says it.
+    expect(ungroup.howItAffectsYou).toContain(
+      'In Returns, a size taken out of its size family is no longer listed under Other sizes for an exchange',
+    );
+    expect(UNGROUP_COPY.familyNote).toContain('no longer listed under Other sizes for an exchange');
+    expect(ungroup.howItAffectsYou).toContain('permission to manage sports products');
+    expect(ungroup.howItAffectsYou).toContain('Stock, charter, rack, barcode/ISBN and history stay as they are');
+    // Remove from group stays where it is: a group's header and the item page.
+    const [group] = r.entries;
+    expect(group!.whatChanged).toContain(
+      `${GROUP_COPY.removeAction} takes a record out from a group's header on the web or from the item page on both`,
+    );
   });
 
   it('says only a manager renames a group (security review SEC-1: apply_item_grouping refuses anyone else on the role alone)', () => {

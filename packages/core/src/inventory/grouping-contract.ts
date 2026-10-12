@@ -621,10 +621,12 @@ export const UNGROUP_COPY = {
   leavesFamily: (name: string | null) =>
     name ? `Leaves the ${name} size family` : 'Leaves its size family',
   /** Said once when any record leaves a size family: the Returns exchange
-   *  consequence, in plain words (exchanges offer a family's sizes for one
-   *  another: 0396 exchange options and requester sizes read group_id). */
+   *  consequence, in plain words. An exchange lists the family's sizes under
+   *  Other sizes (RETURNS_COPY.replacementSiblings): 0396's exchange options
+   *  and the requester's sizes read group_id; staff can still search any item
+   *  by name, so the words claim the list, not the search. */
   familyNote:
-    "A record taken out of its size family is no longer offered in Returns as an exchange for the family's other sizes, and they are no longer offered for it. Its SKU, stock, charter, rack and history stay as they are.",
+    "In Returns, a record taken out of its size family is no longer listed under Other sizes for an exchange, and the family's sizes are no longer listed for it. Its SKU, stock, charter, rack and history stay as they are.",
   /** Why a ticked record is left out of an Ungroup. */
   selectedLeftOutReason: {
     kit: 'is a kit (kits keep their SKU and are never in a group)',
