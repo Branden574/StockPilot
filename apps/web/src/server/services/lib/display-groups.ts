@@ -111,6 +111,40 @@ export async function readDisplayGroupsByItemIds(
 }
 
 /**
+ * Every membership of an organization the MEMBER can read, with each group's
+ * name and version, through the member's own client (RLS decides; never the
+ * admin client). Phase 2 of the grouping brief: a staff member's or viewer's
+ * page is planned group-aware over the whole filtered view, so the plan needs
+ * every record's group, and one paged read can run beside the view's scan
+ * (the phone reads its memberships the same way). A failed read renders the
+ * records ungrouped, as readDisplayGroupsByItemIds does.
+ */
+export async function readDisplayGroupsForOrgAsMember(
+  clientOrPromise: ReadClient | PromiseLike<ReadClient>,
+  organizationId: string,
+): Promise<Map<string, DisplayGroupRef>> {
+  try {
+    const client = await clientOrPromise;
+    const rows = await fetchAllRows<DisplayGroupMembershipRow>(
+      (from, to) =>
+        client
+          .from('item_display_group_members')
+          .select(MEMBERSHIP_SELECT)
+          .eq('organization_id', organizationId)
+          .order('item_id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<PageResult>,
+    );
+    return indexDisplayGroupMemberships(rows);
+  } catch (err) {
+    console.warn(
+      '[display-groups] membership read failed; rows render ungrouped:',
+      err instanceof Error ? err.message : String(err),
+    );
+    return new Map();
+  }
+}
+
+/**
  * Every membership of an organization, with its open group's name and
  * version (admin client, the manager's cached loaders only). Two plain reads in
  * parallel (no embed), joined here: a membership whose group row is not open
