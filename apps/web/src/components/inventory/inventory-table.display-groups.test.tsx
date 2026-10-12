@@ -430,6 +430,40 @@ describe('InventoryTable: Group selected in the bulk bar', () => {
     expect(spy.groupItemIds ?? []).toEqual([]);
   });
 
+  // People review P3: server mode keeps a selection across pages, so the
+  // records picked on an earlier page are not among the loaded rows.
+  it('Books in server mode: a selection across two pages is still offered Group selected (P3)', async () => {
+    const book = (id: string) => row(id, `BK-${id}`, { item_type: 'book', name: `Book ${id}` });
+    const { rerender } = render(
+      <InventoryTable
+        items={[book('a'), book('b')] as never}
+        lookups={LOOKUPS}
+        total={60}
+        initialQuery=""
+        pageSize={30}
+        showBookFields
+        canUngroup
+      />,
+    );
+    await selectAll();
+    rerender(
+      <InventoryTable
+        items={[book('c'), book('d')] as never}
+        lookups={LOOKUPS}
+        total={60}
+        initialQuery=""
+        pageSize={30}
+        page={2}
+        showBookFields
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect([...spy.selectedIds].sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect([...(spy.groupItemIds ?? [])].sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(spy.groupingView).toBe('books');
+  });
+
   it('mixed Items and Books are not offered; nor is anything without items:update', async () => {
     const mixed = [row('a', 'A'), row('b', 'B', { item_type: 'book' })];
     const { unmount } = render(

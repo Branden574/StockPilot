@@ -1572,13 +1572,17 @@ export function InventoryTable({
   const groupFacts = React.useMemo(() => {
     if (!canUngroup || selectedItemIds.length === 0) return null;
     const pool = [...(effectiveInstant?.items ?? items), ...(serverHits ?? [])];
+    const viewType = showBookFields ? 'book' : 'product';
+    // A selected record not loaded here (another page, a cleared search) is
+    // of this view's type (P3): Books never read it as a product.
     return groupingSelectionFacts(
       selectedItemIds,
       pool.map((r) => ({
         id: r.id,
-        item_type: r.item_type ?? (showBookFields ? 'book' : 'product'),
+        item_type: r.item_type ?? viewType,
         display_group_id: r.display_group_id ?? null,
       })),
+      viewType,
     );
   }, [canUngroup, selectedItemIds, effectiveInstant, items, serverHits, showBookFields]);
 

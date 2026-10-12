@@ -709,6 +709,23 @@ describe('book editions', () => {
 });
 
 describe('the bulk bar facts (from loaded rows only)', () => {
+  // People review P3: a selection kept across pages (or after a search was
+  // cleared) holds ids no loaded row describes; they are of the view's type,
+  // never "product" on Books.
+  it("types a selected record that is not loaded as the view's own type (P3)", () => {
+    const rows = [{ id: C, item_type: 'book', display_group_id: null }];
+    expect(groupingSelectionFacts([A, B, C], rows, 'book')).toEqual({
+      count: 3,
+      mixedTypes: false,
+      canGroup: true,
+      groupedIds: [],
+    });
+    // Items keeps its default.
+    expect(groupingSelectionFacts([A, B, C], [{ id: C, item_type: 'product' }]).canGroup).toBe(
+      true,
+    );
+  });
+
   it('counts distinct records, refuses mixed types, and lists the grouped ones', () => {
     const rows = [
       { id: A, item_type: 'product', display_group_id: G },

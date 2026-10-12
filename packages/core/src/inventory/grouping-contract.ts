@@ -1655,15 +1655,23 @@ export function suggestGroupName(
  * count once), whether they mix item types, whether Group selected is offered
  * (two or more of one type), and which of them are in a group now (Remove
  * from group).
+ *
+ * A selected id no loaded row describes (picked on another page, or among
+ * search hits before the search was cleared: the table keeps such a
+ * selection) is of the view's own type, `defaultType` ('book' on Books), so
+ * a Books selection across pages is not read as mixed (people review P3).
+ * The review then reads each record's real type, and the server refuses a
+ * mixed request on its own.
  */
 export function groupingSelectionFacts(
   selectedItemIds: readonly string[],
   rows: ReadonlyArray<{ id: string; item_type?: string | null; display_group_id?: string | null }>,
+  defaultType: string = 'product',
 ): { count: number; mixedTypes: boolean; canGroup: boolean; groupedIds: string[] } {
   const byId = new Map<string, { item_type?: string | null; display_group_id?: string | null }>();
   for (const r of rows) if (!byId.has(r.id)) byId.set(r.id, r);
   const distinct = [...new Set(selectedItemIds)];
-  const types = new Set(distinct.map((id) => byId.get(id)?.item_type ?? 'product'));
+  const types = new Set(distinct.map((id) => byId.get(id)?.item_type ?? defaultType));
   const mixedTypes = types.size > 1;
   return {
     count: distinct.length,
