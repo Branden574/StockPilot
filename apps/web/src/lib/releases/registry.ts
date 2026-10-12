@@ -38,12 +38,20 @@ export const RELEASES: Release[] = [
     // walk needs seeded records, a production write that waits for the
     // owner's go); the follow-up that publishes it sets 'published' and the
     // real publishedAt and re-reads these words against what shipped. Newest
-    // first: drafts sit above the newest published release, and this one is
-    // dated after returns RX-4's draft (returns-close-rest-2026-10, itself a
-    // placeholder), so it sits at the top, directly above it (a placeholder;
-    // the publishing follow-up dates and orders it for real). Re-placed at
-    // the rebase onto RX-4 (2026-10-12; was: dated after RX-2's draft, at
-    // the top above it; RX-2 and RX-3 are published now).
+    // first: drafts sit above the newest published release, so this one, the
+    // only draft, sits at the top, directly above the return history
+    // hand-over release (returns-history-hand-over-2026-10, published by #354
+    // at 2026-10-12T08:06Z), which sits directly above returns RX-4's release
+    // (returns-close-rest-2026-10, published by #350 at 2026-10-12T06:13Z).
+    // It is dated after every release (a placeholder, 2026-10-20T17:00Z; the
+    // publishing follow-up dates it for real, after the hand-over release).
+    // Re-placed at the rebase onto RX-4 (2026-10-12; was: dated after RX-2's
+    // draft, at the top above it), again at the rebase onto main 24dbb08db
+    // (2026-10-12; was: dated after returns RX-4's draft, itself a
+    // placeholder, directly above it; #350 published RX-4's release and #353
+    // added its draft since), and again at the rebase onto main 502845a31
+    // (2026-10-12; was: directly above the return history hand-over draft;
+    // #354 published that release in place).
     // Who is told: whoever can edit items (items:update), the gate of the
     // bulk bar's Ungroup, the item page's button and the server; Items is a
     // core page, so no module. The fixed entry adds items:create (the same
