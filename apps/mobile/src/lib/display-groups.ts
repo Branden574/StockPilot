@@ -208,6 +208,29 @@ export function reviewAnnouncement(prev: ReviewLoadState, next: ReviewLoadState)
   return null;
 }
 
+// ── A header's count (people review P5) ────────────────────────────────────
+
+/** Whether the list is narrowed: a search or a filter (a stock view, a
+ *  category, a location, a charter). A sort does not narrow. One rule with
+ *  the web's: an explicit header then says "N matching". */
+export function listIsNarrowed(
+  query: string,
+  filter: {
+    status: string;
+    categoryIds: readonly string[];
+    locationIds: readonly string[];
+    charterIds: readonly string[];
+  },
+): boolean {
+  return (
+    query.trim() !== '' ||
+    filter.status !== 'all' ||
+    filter.categoryIds.length > 0 ||
+    filter.locationIds.length > 0 ||
+    filter.charterIds.length > 0
+  );
+}
+
 // ── The select bar ─────────────────────────────────────────────────────────
 
 /**

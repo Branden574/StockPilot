@@ -1061,6 +1061,17 @@ export function InventoryTable({
   }
 
   const activeFilterCount = categoryIds.size + locationIds.size + charterIds.size;
+  // People review P5: an explicit group's header says "N matching" whenever
+  // anything narrows the list (a search, a filter, a stock view, Expected,
+  // Archived or a rack), as the phone does: its count is then the records
+  // listed, not the group's.
+  const listNarrowed =
+    !!q.trim() ||
+    activeFilterCount > 0 ||
+    !!params.get('stock') ||
+    !!params.get('rack') ||
+    !!params.get('status') ||
+    params.get('expected') === '1';
   function clearAllFilters() {
     setQ('');
     // One navigation clears the three filter keys (the override) plus
@@ -2362,7 +2373,7 @@ export function InventoryTable({
                     explicit={{
                       groupId: entry.groupId,
                       name: groupName,
-                      matching: !!q.trim() || activeFilterCount > 0,
+                      matching: listNarrowed,
                       onRename:
                         canUngroup && canRenameGroups
                           ? () =>
@@ -3378,7 +3389,7 @@ function SkuGroupHeaderRow({
             aria-expanded={expanded}
             aria-label={
               explicit
-                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${GROUP_COPY.headerRecords(distinctItems.length)})`
+                ? `${expanded ? 'Collapse' : 'Expand'} group ${explicit.name} (${GROUP_COPY.headerCount(distinctItems.length, explicit.matching)})`
                 : `${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`
             }
             className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
@@ -3388,15 +3399,20 @@ function SkuGroupHeaderRow({
             />
           </button>
           <ImageHoverPreview
-            src={first.image_url ?? null}
+            // A group's header shows no cover (P5): its records can be
+            // different products or editions, so one record's picture would
+            // speak for the rest (the phone shows none either).
+            src={explicit ? null : (first.image_url ?? null)}
             srcLoader={
-              !first.image_url && first.image_thumb_url
+              !explicit && !first.image_url && first.image_thumb_url
                 ? () => loadMasterImageUrl(first.id)
                 : undefined
             }
-            alt={first.name}
+            alt={explicit ? explicit.name : first.name}
             title={explicit ? explicit.name : first.name}
-            subtitle={explicit ? GROUP_COPY.headerRecords(distinctItems.length) : group.sku}
+            subtitle={
+              explicit ? GROUP_COPY.headerCount(distinctItems.length, explicit.matching) : group.sku
+            }
             meta={
               <span>
                 On hand{' '}
@@ -3421,7 +3437,7 @@ function SkuGroupHeaderRow({
             }
             className="shrink-0"
           >
-            {rowThumbSrc ? (
+            {rowThumbSrc && !explicit ? (
               <Image
                 src={rowThumbSrc}
                 unoptimized={!!first.image_thumb_url}
@@ -3449,9 +3465,7 @@ function SkuGroupHeaderRow({
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <span className="font-medium">{explicit.name}</span>
               <span className="text-[11px] text-[var(--ed-ink-4)]">
-                {explicit.matching
-                  ? GROUP_COPY.headerMatching(distinctItems.length)
-                  : GROUP_COPY.headerRecords(distinctItems.length)}
+                {GROUP_COPY.headerCount(distinctItems.length, explicit.matching)}
               </span>
               {explicit.onRename ? (
                 <button

@@ -10,12 +10,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // size run), and the bulk bar's facts (distinct records, one type, from the
 // loaded rows only).
 
-const { routerMock } = vi.hoisted(() => ({
+const { routerMock, urlState } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() },
+  // The list's URL (a test sets ?stock=low to put the list in a stock view).
+  urlState: { params: new URLSearchParams('') },
 }));
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
-  useSearchParams: () => new URLSearchParams(''),
+  useSearchParams: () => urlState.params,
   usePathname: () => '/dashboard/inventory',
 }));
 vi.mock('next/link', () => ({
@@ -149,6 +151,7 @@ function bodyRows(container: HTMLElement) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  urlState.params = new URLSearchParams('');
   spy.selectedIds = [];
   spy.groupItemIds = undefined;
   spy.groupedItemIds = undefined;
@@ -304,6 +307,38 @@ describe('InventoryTable: explicit display group headers', () => {
     // Staff who can edit items still remove; only the name is a manager's.
     expect(screen.getByRole('button', { name: /^Remove from group/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Rename group/ })).not.toBeInTheDocument();
+  });
+
+  // People review P5: "N matching" whenever anything narrows the list (a
+  // search, a filter, a stock view, Expected or Archived), the same words in
+  // the chevron's name, and no cover on a group's header (its records can be
+  // different products or editions; the phone shows none either).
+  it('a stock view counts the header as matching, in its words and its button name; a group header shows no cover (P5)', () => {
+    urlState.params = new URLSearchParams('stock=low');
+    const items = [
+      row('a', 'A', {
+        ...inGroup('g', 'Pads'),
+        quantity_on_hand: 0,
+        reorder_point: 5,
+        image_thumb_url: 'https://img.test/a.png',
+      }),
+      row('b', 'B', { ...inGroup('g', 'Pads'), quantity_on_hand: 0, reorder_point: 5 }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    const header = bodyRows(container)[0] as HTMLElement;
+    expect(within(header).getByText('2 matching')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Expand group Pads (2 matching)' }),
+    ).toBeInTheDocument();
+    expect(header.querySelector('img')).toBeNull();
   });
 
   it('server mode on a multi-page result marks the group header partial', () => {

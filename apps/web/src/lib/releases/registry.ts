@@ -64,11 +64,16 @@ export const RELEASES: Release[] = [
     // for a manager only (security review SEC-1: the function refuses anyone
     // else on the role alone).
     // The words never say "book" for a recorded quantity and never tell
-    // anyone to change a charter or a rack.
+    // anyone to change a charter or a rack. Fix round 1: the phone's control
+    // is named as it reads ("Group", GROUP_COPY.bulkActionShort, P7); the
+    // same-SKU sentence says where automatic grouping still applies (P2); Group
+    // them is offered only when a record's SKU is changed on the web (P7, C4);
+    // a header counts the records listed (P5); the fix is about a size run
+    // by name or product family (P7).
     status: 'draft',
     title: 'Show records together in a group',
     summary:
-      "Records on Items and Books can now be shown together in a group, under one header with the group's name. Whoever can edit items selects them and chooses Group selected, on the web or in the mobile app after the latest update. Grouping organizes these records together. It does not combine stock, change ownership, or move items.",
+      "Records on Items and Books can now be shown together in a group, under one header with the group's name. Whoever can edit items selects them and chooses Group selected on the web, or Group on the mobile app's select bar after the latest update. Grouping organizes these records together. It does not combine stock, change ownership, or move items.",
     publishedAt: '2026-10-24T17:00:00Z',
     entries: [
       {
@@ -77,11 +82,11 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Group selected',
         whatChanged:
-          'On Items or Books, select two or more records and choose Group selected, on the web or in the mobile app. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out, from the list on the web or from the item page on both. On the web, a manager can rename a group from its header.',
+          "On Items or Books, select two or more records and choose Group selected on the web, or Group on the mobile app's select bar. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out, from the list on the web or from the item page on both. On the web, a manager can rename a group from its header.",
         whyItMatters:
           'Records showed together only when they shared a SKU, so putting them under one header meant copying a SKU onto another record, and sometimes changing its charter or rack as well.',
         howItAffectsYou:
-          'Grouping organizes these records together. It does not combine stock, change ownership, or move items. Each record keeps its own SKU, barcode/ISBN, charter, rack, stock and history, and orders, exchanges, purchase orders and reports still treat each record on its own. Kits and rentals cannot be grouped. Records that share a SKU still show together automatically, and a new record with a SKU that is in a group stays outside the group until you choose Add to group. When a SKU you save is already used by another record in the same charter and rack, the message now also offers Group them.',
+          "Grouping organizes these records together. It does not combine stock, change ownership, or move items. Each record keeps its own SKU, barcode/ISBN, charter, rack, stock and history; orders, exchanges, purchase orders and reports treat each one on its own. Kits and rentals cannot be grouped. Records in no group that share a SKU still show together automatically; one sharing a SKU with a group's records, a new one included, stays outside it, marked Same SKU, until you choose Add to group. Editing a record's SKU on the web to one already used in its charter and rack offers Group them.",
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
@@ -93,7 +98,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Grouped records show under one header',
         whatChanged:
-          "On Items and Books, records in a group show under one header with the group's name, how many records it holds and their stock on hand together. Open the header to see each record. A record whose group has no other record in the list, for example in a search, shows In group with the group's name.",
+          "On Items and Books, records in a group show under one header with the group's name, how many of its records are listed and their stock on hand together. Open the header to see each record. A record whose group has no other record in the list, for example in a search, shows In group with the group's name.",
         whyItMatters: 'Records that belong together read as one line on the list, while each stays its own record.',
         howItAffectsYou:
           'Nothing about any record changes. The stock on hand in a header is the stock of the records under it, each counted once.',
@@ -105,9 +110,9 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Opening a SKU header next to a size run keeps its rows under it',
         whatChanged:
-          'On the web Items list, opening the header of a SKU kept in more than one rack, in a product family of linked sizes, now shows its rows under that header.',
+          'On the web Items list, opening the header of a SKU kept on more than one rack, next to a size run (sizes shown together by name or by product family), now shows its rows under that header.',
         whyItMatters:
-          "Those rows used to move into the family's size run instead, so the header lost them and the run counted their stock as well.",
+          'Those rows used to move into the size run instead, so the header lost them and the run counted their stock as well.',
         howItAffectsYou: 'Each row shows once, under its own header.',
         whatToDo: 'No action needed.',
       },

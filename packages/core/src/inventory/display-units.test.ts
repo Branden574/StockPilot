@@ -261,6 +261,46 @@ describe('chips', () => {
   });
 });
 
+// People review P2: "records that share a SKU still show together
+// automatically" is not true once a group takes some of a SKU's records.
+// What IS true (and what the words now say): records in a group show under
+// its header; records in NO group that share a SKU still show together; a
+// record sharing a SKU with grouped records is marked Same SKU.
+describe('a SKU split by a group (the words GROUP_COPY.skuNote describe, P2)', () => {
+  it('a record left outside its SKU is NOT shown with the grouped records of that SKU; it carries the Same SKU chip', () => {
+    const rows = [
+      item('a', 'X', 'Tee', { display_group_id: 'g' }),
+      item('b', 'X', 'Tee', { display_group_id: 'g' }),
+      item('c', 'X', 'Tee'),
+    ];
+    const list = composeDisplayList(rows, { ...itemAccess, expanded: NO_EXPANSION });
+    expect(list.map((e) => (e.kind === 'row' ? `row:${e.row.id}` : e.kind))).toEqual([
+      'explicit',
+      'row:c',
+    ]);
+    expect(displayGroupChips(rows, itemAccess).get('c')).toEqual({
+      kind: 'same-sku',
+      groupId: 'g',
+    });
+  });
+
+  it('records in no group that share a SKU still show together, each marked Same SKU', () => {
+    const rows = [
+      item('a', 'X', 'Tee', { display_group_id: 'g' }),
+      item('b', 'Y', 'Tee', { display_group_id: 'g' }),
+      item('c', 'X', 'Tee'),
+      item('d', 'X', 'Tee'),
+    ];
+    const list = composeDisplayList(rows, { ...itemAccess, expanded: NO_EXPANSION });
+    expect(
+      list.map((e) => (e.kind === 'sku' ? `sku:${e.rows.map((r) => r.id).join('')}` : e.kind)),
+    ).toEqual(['explicit', 'sku:cd']);
+    const chips = displayGroupChips(rows, itemAccess);
+    expect(chips.get('c')).toEqual({ kind: 'same-sku', groupId: 'g' });
+    expect(chips.get('d')).toEqual({ kind: 'same-sku', groupId: 'g' });
+  });
+});
+
 describe('composeDisplayList (the one render composition, web and phone)', () => {
   it('renders every row exactly once, collapsed or expanded', () => {
     const rows = [

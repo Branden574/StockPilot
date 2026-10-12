@@ -757,7 +757,32 @@ describe('the words', () => {
       'Grouping organizes these records together. It does not combine stock, change ownership, or move items.',
     );
     expect(GROUP_COPY.bulkAction).toBe('Group selected');
-    expect(GROUP_COPY.skuNote).toBe('Records that share a SKU still show together automatically.');
+  });
+
+  // People review P2: say where automatic same-SKU grouping still applies
+  // (display-units.test.ts pins the behaviour these words describe).
+  it('says where automatic same-SKU grouping still applies (P2)', () => {
+    expect(GROUP_COPY.skuNote).toBe(
+      'Records in a group show under its header. Records in no group that share a SKU still show together automatically, and one that shares a SKU with records in a group is marked Same SKU as records in that group, with Add to group.',
+    );
+    expect(GROUP_COPY.removeIntro).toBe(
+      "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Out of the group, a record shows together automatically with records in no group that share its SKU.",
+    );
+    expect(GROUP_COPY.skuNote).not.toMatch(/^Records that share a SKU still show together/);
+  });
+
+  // People review P5: one rule on both platforms: "N matching" whenever a
+  // search, a filter or a stock view narrows the list.
+  it('counts a header as matching whenever the list is narrowed (P5)', () => {
+    expect(GROUP_COPY.headerCount(3, false)).toBe('3 records');
+    expect(GROUP_COPY.headerCount(1, false)).toBe('1 record');
+    expect(GROUP_COPY.headerCount(2, true)).toBe('2 matching');
+  });
+
+  // People review P7: the phone's select bar says "Group" (it fits at large
+  // Dynamic Type); the words name it as the phone shows it.
+  it("names the phone's select-bar control as it reads (P7)", () => {
+    expect(GROUP_COPY.bulkActionShort).toBe('Group');
   });
 });
 

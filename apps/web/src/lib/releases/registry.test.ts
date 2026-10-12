@@ -8922,7 +8922,7 @@ describe('the Group selected release (G2, 0400)', () => {
     const r = release();
     const [group, headers] = r.entries;
     expect(r.summary).toContain(GROUP_COPY.intro);
-    expect(r.summary).toMatch(/on the web or in the mobile app/);
+    expect(r.summary).toMatch(/on the web, or .* on the mobile app/);
     expect(group!.howItAffectsYou).toContain(GROUP_COPY.intro);
     expect(group!.whatChanged).toContain(GROUP_COPY.bulkAction);
     expect(group!.whatChanged).toContain(GROUP_COPY.moveOne);
@@ -8935,6 +8935,36 @@ describe('the Group selected release (G2, 0400)', () => {
     expect(group!.howItAffectsYou).toContain('Kits and rentals cannot be grouped');
     expect(headers!.whatChanged).toContain('In group');
     expect(headers!.howItAffectsYou).toContain('Nothing about any record changes');
+  });
+
+  // People review P2, P5 and P7, completeness review C4: the words claim no
+  // more than the screens do.
+  it("names the phone's control as it reads, says where automatic same-SKU grouping still applies, and offers Group them only where it is offered", () => {
+    const r = release();
+    const [group, headers, fixed] = r.entries;
+    // P7 (a): the phone's select bar says "Group".
+    expect(r.summary).toContain(
+      `${GROUP_COPY.bulkAction} on the web, or ${GROUP_COPY.bulkActionShort} on the mobile app's select bar`,
+    );
+    expect(group!.whatChanged).toContain(
+      `${GROUP_COPY.bulkAction} on the web, or ${GROUP_COPY.bulkActionShort} on the mobile app's select bar`,
+    );
+    expect(r.summary).not.toMatch(/Group selected, on the web or in the mobile app/);
+    // P2: where automatic same-SKU grouping still applies.
+    expect(group!.howItAffectsYou).toContain(
+      'Records in no group that share a SKU still show together automatically;',
+    );
+    expect(group!.howItAffectsYou).not.toMatch(/Records that share a SKU still show together/);
+    // P7 (b), C4: Group them is offered when a record's SKU is edited on the web.
+    expect(group!.howItAffectsYou).toContain(
+      "Editing a record's SKU on the web to one already used in its charter and rack offers Group them.",
+    );
+    expect(group!.howItAffectsYou).not.toMatch(/When a SKU you save is already used/);
+    // P5: the header counts the records listed.
+    expect(headers!.whatChanged).toContain('how many of its records are listed');
+    // P7 (c): the fix is about a size run, by name or by product family.
+    expect(fixed!.whatChanged).toContain('next to a size run');
+    expect(fixed!.whatChanged).not.toMatch(/in a product family of linked sizes/);
   });
 
   it('says only a manager renames a group (security review SEC-1: apply_item_grouping refuses anyone else on the role alone)', () => {

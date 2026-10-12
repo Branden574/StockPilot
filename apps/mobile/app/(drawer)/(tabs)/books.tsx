@@ -59,6 +59,7 @@ import {
   attachDisplayGroups,
   groupRowAccessibilityActions,
   groupSelectedHref,
+  listIsNarrowed,
   onDisplayGroupsChanged,
   readDisplayGroups,
   runGroupRowAccessibilityAction,
@@ -757,6 +758,9 @@ export default function BooksScreen() {
   // no image, so resolve it here.
   const firstImageBySku = React.useMemo(() => firstCoverBySku(pageRows), [pageRows]);
 
+  // P5: an explicit header says "N matching" under a search or a filter.
+  const narrowed = listIsNarrowed(q, filter);
+
   const renderBookItem = React.useCallback(
     ({ item: row }: { item: BookGroupedRow }) => {
       if (row.kind === 'explicit-header') {
@@ -769,7 +773,7 @@ export default function BooksScreen() {
             total={row.total}
             reorderPoint={row.reorderPoint}
             placementCount={row.recordCount}
-            countLabel={GROUP_COPY.headerRecords(row.recordCount)}
+            countLabel={GROUP_COPY.headerCount(row.recordCount, narrowed)}
             partial={row.partial}
             lifecycle={row.status}
             imageUrl={null}
@@ -831,6 +835,7 @@ export default function BooksScreen() {
       onAddToGroup,
       firstImageBySku,
       stackRows,
+      narrowed,
     ],
   );
 

@@ -55,6 +55,7 @@ import {
   attachDisplayGroups,
   groupRowAccessibilityActions,
   groupSelectedHref,
+  listIsNarrowed,
   onDisplayGroupsChanged,
   readDisplayGroups,
   runGroupRowAccessibilityAction,
@@ -813,6 +814,9 @@ export default function Inventory() {
     [pageRows, expandedGroups, expandedSkuGroups, expandedExplicitGroups, placementLabelFor, truncated],
   );
 
+  // P5: an explicit header says "N matching" under a search or a filter.
+  const narrowed = listIsNarrowed(q, filter);
+
   const renderItem = React.useCallback(
     ({ item: row, index }: { item: GroupedRow; index: number }) => {
       if (row.kind === 'header') {
@@ -839,7 +843,7 @@ export default function Inventory() {
             total={row.total}
             reorderPoint={row.reorderPoint}
             placementCount={row.recordCount}
-            countLabel={GROUP_COPY.headerRecords(row.recordCount)}
+            countLabel={GROUP_COPY.headerCount(row.recordCount, narrowed)}
             partial={row.partial}
             lifecycle={row.status}
             expected={row.expected}
@@ -906,6 +910,7 @@ export default function Inventory() {
       selectMode,
       onToggleSelect,
       stackRows,
+      narrowed,
     ],
   );
 

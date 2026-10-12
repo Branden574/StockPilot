@@ -1184,6 +1184,9 @@ export function groupingPreviewKey(
 /** The words of Group selected, on the web and the phone. */
 export const GROUP_COPY = {
   bulkAction: 'Group selected',
+  /** The phone's select bar says "Group" (it fits at large Dynamic Type; its
+   *  accessibility label is bulkAction). What's New names it this way (P7). */
+  bulkActionShort: 'Group',
   removeAction: 'Remove from group',
   renameAction: 'Rename group',
   /** Accessible names that start with the visible words and name the group
@@ -1194,7 +1197,11 @@ export const GROUP_COPY = {
   /** The brief's sentence, verbatim. */
   intro:
     'Grouping organizes these records together. It does not combine stock, change ownership, or move items.',
-  skuNote: 'Records that share a SKU still show together automatically.',
+  /** Where automatic same-SKU grouping still applies (people review P2: a
+   *  record left outside a group is NOT shown with the grouped records of
+   *  its SKU; display-units.test.ts pins the behaviour). */
+  skuNote:
+    'Records in a group show under its header. Records in no group that share a SKU still show together automatically, and one that shares a SKU with records in a group is marked Same SKU as records in that group, with Add to group.',
   targetNew: 'New group',
   targetExisting: 'Add to an existing group',
   nameLabel: 'Group name',
@@ -1254,7 +1261,7 @@ export const GROUP_COPY = {
   reviewReady: (n: number) => `${n} record${n === 1 ? '' : 's'} to review.`,
   removeTitle: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'} from the group`,
   removeIntro:
-    "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Records that share a SKU still show together automatically.",
+    "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Out of the group, a record shows together automatically with records in no group that share its SKU.",
   /** Why a selected record is not removed (people review P9). */
   removeLeftOutReason: {
     not_in_group: 'is in no group',
@@ -1281,6 +1288,11 @@ export const GROUP_COPY = {
   addToGroupFor: (group: string, record: string) => `Add to group ${group}: ${record}`,
   headerRecords: (n: number) => `${n} record${n === 1 ? '' : 's'}`,
   headerMatching: (n: number) => `${n} matching`,
+  /** An explicit header's count, on the web and the phone (people review
+   *  P5): "N matching" whenever a search, a filter or a stock view narrows
+   *  the list, else "N records". */
+  headerCount: (n: number, narrowed: boolean) =>
+    narrowed ? `${n} matching` : `${n} record${n === 1 ? '' : 's'}`,
   itemPageInGroup: (name: string) => `In group ${name}`,
 } as const;
 

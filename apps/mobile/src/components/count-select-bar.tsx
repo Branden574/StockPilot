@@ -97,7 +97,7 @@ export function CountSelectBar({
               color={count === 0 ? c.ink4 : c.ink}
               maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.control)}
             >
-              Group
+              {GROUP_COPY.bulkActionShort}
             </Mono>
           </Pressable>
         ) : null}

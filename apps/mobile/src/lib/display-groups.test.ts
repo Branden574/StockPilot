@@ -11,6 +11,7 @@ import {
   ADD_TO_GROUP_ACTION,
   attachDisplayGroups,
   describeGroupingError,
+  listIsNarrowed,
   groupSelectedHref,
   keyedGroupingBody,
   notifyDisplayGroupsChanged,
@@ -504,12 +505,29 @@ describe('reviewAnnouncement (P11)', () => {
   });
 });
 
+// People review P5: one rule with the web, "N matching" whenever a search
+// or a filter narrows the list (a sort does not).
+describe('listIsNarrowed (P5)', () => {
+  const none = { status: 'all', categoryIds: [], locationIds: [], charterIds: [] };
+  it('is true for a search, a stock view or any filter, and false for a sort alone', () => {
+    expect(listIsNarrowed('', none)).toBe(false);
+    expect(listIsNarrowed('   ', none)).toBe(false);
+    expect(listIsNarrowed('tee', none)).toBe(true);
+    expect(listIsNarrowed('', { ...none, status: 'low' })).toBe(true);
+    expect(listIsNarrowed('', { ...none, categoryIds: ['c'] })).toBe(true);
+    expect(listIsNarrowed('', { ...none, locationIds: ['l'] })).toBe(true);
+    expect(listIsNarrowed('', { ...none, charterIds: ['h'] })).toBe(true);
+  });
+});
+
 describe('screen pins', () => {
   const read = (p: string) => readFileSync(resolve(__dirname, p), 'utf8');
 
   it('the select bar offers Group, gated by the edit permission, online only', () => {
     const bar = read('../components/count-select-bar.tsx');
     expect(bar).toContain('GROUP_COPY.bulkAction');
+    // P7: the label the phone shows is core's word, the one What's New names.
+    expect(bar).toContain('{GROUP_COPY.bulkActionShort}');
     expect(bar).toContain("'items:update'");
     expect(bar).toContain('phoneGroupingCheck');
     expect(bar).toContain('isOnline');
@@ -585,6 +603,9 @@ describe('screen pins', () => {
       expect(src).toContain('readDisplayGroups');
       expect(src).toContain("'explicit-header'");
       expect(src).toContain('expandedExplicitGroups');
+      // P5: "N matching" under a search or a filter, as on the web.
+      expect(src).toContain('GROUP_COPY.headerCount(row.recordCount, narrowed)');
+      expect(src).toContain('listIsNarrowed(');
     }
   });
 });
