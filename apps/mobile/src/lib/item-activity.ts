@@ -255,6 +255,12 @@ function titleCase(s: string): string {
 const EVENT_LABELS: Record<string, string> = {
   // Ungroup (0399): this record got a SKU of its own.
   'inventory.item.ungrouped': 'Made its own item',
+  // Group selected (0400): the record joined, moved to, or left a display
+  // group (display only: nothing else about it changed).
+  'inventory.group.members_added': 'Added to group',
+  'inventory.group.members_removed': 'Removed from group',
+  'inventory.group.created': 'Group created',
+  'inventory.group.renamed': 'Group renamed',
 };
 
 /**

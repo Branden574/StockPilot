@@ -27,7 +27,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
-import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
+import {
+  GROUP_COPY,
+  formatPlacementLabel,
+  resolvePlacement,
+  type DisplayGroupRef,
+  type RackHoldingLike,
+} from '@stockpilot/core';
 
 import {
   ActiveFilterPill,
@@ -48,6 +54,13 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { showWriteCtaForRole } from '@/lib/cta-gating';
+import {
+  attachDisplayGroups,
+  groupSelectedHref,
+  onDisplayGroupsChanged,
+  readDisplayGroups,
+} from '@/lib/display-groups';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
   listStatusPredicate,
@@ -73,6 +86,8 @@ import {
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { inventoryViewPredicate } from '@stockpilot/core';
@@ -106,9 +121,16 @@ interface BookRow {
    *  filter sheet's Expected option, where they wear an EXPECTED pill
    *  instead of the misleading OUT. */
   awaiting_first_receipt: boolean;
+  /** Group selected (0400): the record's explicit display group, read from
+   *  item_display_group_members next to the list and attached (never a column
+   *  of the item). Display only. */
+  display_group_id?: string | null;
+  display_group_name?: string | null;
+  display_group_version?: number | null;
 }
 
-/** One flattened Books-list entry: a collapsed same-SKU header or a book row. */
+/** One flattened Books-list entry: an explicit display group's header, a
+ *  collapsed same-SKU header, or a book row. */
 type BookGroupedRow = GroupedRow<BookRow>;
 
 const groupedKeyExtractor = (r: BookGroupedRow): string => r.key;
@@ -192,6 +214,20 @@ export default function BooksScreen() {
   // title splits into several rows exactly like a Chromebook does on Items.
   // Collapse those into one header and track which are expanded.
   const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
+  // Group selected (0400): the organization's explicit display groups by
+  // record id, read under the member's RLS with every load (in parallel with
+  // the rows) and again after a Save elsewhere; and the groups expanded here.
+  const [displayGroups, setDisplayGroups] = React.useState<ReadonlyMap<string, DisplayGroupRef>>(
+    new Map(),
+  );
+  const [expandedExplicitGroups, setExpandedExplicitGroups] = React.useState<Set<string>>(
+    new Set(),
+  );
+  // "Add to group" is offered to someone who can edit items. Cosmetic only:
+  // the review screen and POST /api/v1/items/grouping decide.
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
   // True ONLY when the read hit PostgREST's cap, i.e. the rows in hand are a
   // prefix of the filtered set. At current volumes (111 books on the largest
   // org, cap 1000) this never fires; when it does it is disclosed above the
@@ -399,10 +435,16 @@ export default function BooksScreen() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
+      // Group selected (0400): the memberships, read beside the rows (never a
+      // column of them). It never fails the list: a failed read groups
+      // nothing, and the cards render as they always did.
+      const groupsRead = readDisplayGroups(supabase, orgId);
       const { data, count, error, status: listStatus } = await scoped(BOOK_COLUMNS, { count: 'exact' })
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
         .limit(POSTGREST_MAX_ROWS);
+      if (!isCurrent()) return;
+      const nextDisplayGroups = await groupsRead;
       if (!isCurrent()) return;
       // FAIL LOUD: a refused read used to be a console.warn and "No books
       // match.", a claim about the org's shelves made from an error.
@@ -436,6 +478,7 @@ export default function BooksScreen() {
         !readIsComplete({ returned, serverCount: count ?? null, limit: POSTGREST_MAX_ROWS }),
       );
       setRows(bookRows);
+      setDisplayGroups(nextDisplayGroups);
       setServerRowCount(count ?? null);
       setLoadedRowCount(returned);
 
@@ -481,7 +524,25 @@ export default function BooksScreen() {
   React.useEffect(() => {
     setPage(1); // eslint-disable-line react-hooks/set-state-in-effect -- result-set reset: page/expansion are per-result-set display state and must drop when q/filter/workspace change; one-shot synchronous resets, no cascade (trailing form: inventory-list-wiring.test.ts pins `{ setPage(1);` verbatim)
     setExpandedSkuGroups(new Set());
+    setExpandedExplicitGroups(new Set());
   }, [q, filter, activeWarehouseId]);
+
+  // A grouping saved elsewhere (the review screen, the item screen): re-read
+  // the memberships only. A display group changes nothing on a record, so the
+  // rows in hand stay right.
+  React.useEffect(() => {
+    if (!orgId) return;
+    let live = true;
+    const off = onDisplayGroupsChanged(() => {
+      void readDisplayGroups(supabase, orgId).then((next) => {
+        if (live) setDisplayGroups(next);
+      });
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [orgId]);
 
   // NOT keyed on `page` any more: a page flip is a client-side slice of the
   // set already in memory, so it costs no request and no skeleton.
@@ -500,6 +561,7 @@ export default function BooksScreen() {
   const onPageChange = React.useCallback((p: number) => {
     setPage(p);
     setExpandedSkuGroups(new Set());
+    setExpandedExplicitGroups(new Set());
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
@@ -532,6 +594,24 @@ export default function BooksScreen() {
       return next;
     });
   }, []);
+
+  const toggleExplicitGroup = React.useCallback((groupId: string) => {
+    setExpandedExplicitGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  // "Add to group" on a book that shares a SKU with a group here: the review
+  // opens on that group for this one book. Nothing joins a group by itself.
+  const onAddToGroup = React.useCallback(
+    (itemId: string, groupId: string) => {
+      router.push(groupSelectedHref({ itemIds: [itemId], view: 'books', groupId }));
+    },
+    [router],
+  );
 
   // Secondary line for an expanded placement. Books split by charter/rack
   // (mig 0234), so the PLACEMENT is the most concrete differentiator staff
@@ -578,7 +658,16 @@ export default function BooksScreen() {
   // on ONE page, all three behind the chevron, whatever the sort or page size.
   // Size runs stay OFF — a book is never sized, which is why the web table
   // gates that pass behind `showBookFields`.
-  const units = React.useMemo(() => buildGroupUnits(rows, { enableSizeRuns: false }), [rows]);
+  // Each record wears its display group (0400) before grouping, so core's one
+  // rule (explicit group, then same SKU) decides the units.
+  const groupedBookRows = React.useMemo(
+    () => attachDisplayGroups(rows, displayGroups),
+    [rows, displayGroups],
+  );
+  const units = React.useMemo(
+    () => buildGroupUnits(groupedBookRows, { enableSizeRuns: false }),
+    [groupedBookRows],
+  );
   const pageView = React.useMemo(
     () => paginateGroups(units, { page, groupsPerPage: GROUPS_PER_PAGE }),
     [units, page],
@@ -651,11 +740,12 @@ export default function BooksScreen() {
       buildGroupedRows<BookRow>(pageRows, {
         expandedSizeRuns: EMPTY_SET,
         expandedSkuGroups,
+        expandedExplicitGroups,
         placementLabelFor,
         enableSizeRuns: false,
         datasetIsTruncated: truncated,
       }),
-    [pageRows, expandedSkuGroups, placementLabelFor, truncated],
+    [pageRows, expandedSkuGroups, expandedExplicitGroups, placementLabelFor, truncated],
   );
 
   // A collapsed header shows the group's cover. A SKU is one product identity
@@ -667,6 +757,27 @@ export default function BooksScreen() {
 
   const renderBookItem = React.useCallback(
     ({ item: row }: { item: BookGroupedRow }) => {
+      if (row.kind === 'explicit-header') {
+        // Group selected (0400): a group with two or more of its books here.
+        // Same card as a SKU group; it counts records, not placements, and
+        // shows no cover (its books can be different titles or editions).
+        return (
+          <BookGroupHeaderCard
+            name={row.name}
+            total={row.total}
+            reorderPoint={row.reorderPoint}
+            placementCount={row.recordCount}
+            countLabel={GROUP_COPY.headerRecords(row.recordCount)}
+            partial={row.partial}
+            lifecycle={row.status}
+            imageUrl={null}
+            expected={row.expected}
+            expanded={expandedExplicitGroups.has(row.groupId)}
+            onToggle={() => toggleExplicitGroup(row.groupId)}
+            stacked={stackRows}
+          />
+        );
+      }
       if (row.kind === 'sku-header') {
         return (
           <BookGroupHeaderCard
@@ -696,6 +807,9 @@ export default function BooksScreen() {
         <BookCard
           book={row.item}
           placementLabel={row.placementLabel}
+          groupChip={row.groupChip ?? null}
+          addToGroupId={canEditItems && !selectMode ? (row.addToGroupId ?? null) : null}
+          onAddToGroup={onAddToGroup}
           onBookPress={onBookPress}
           selectMode={selectMode}
           onToggleSelect={onToggleSelect}
@@ -709,6 +823,10 @@ export default function BooksScreen() {
       onToggleSelect,
       expandedSkuGroups,
       toggleSkuGroup,
+      expandedExplicitGroups,
+      toggleExplicitGroup,
+      canEditItems,
+      onAddToGroup,
       firstImageBySku,
       stackRows,
     ],
@@ -906,6 +1024,9 @@ export default function BooksScreen() {
 const BookCard = React.memo(function BookCard({
   book,
   placementLabel,
+  groupChip,
+  addToGroupId,
+  onAddToGroup,
   onBookPress,
   selectMode,
   onToggleSelect,
@@ -916,6 +1037,13 @@ const BookCard = React.memo(function BookCard({
    *  the rack/charter/site that tells the three "Into Algebra 1" rows apart.
    *  null for every standalone book, which renders exactly as before. */
   placementLabel?: string | null;
+  /** Group selected (0400): "In group <name>" (its group has only it here) or
+   *  "Same SKU as records in <name>"; null otherwise. */
+  groupChip?: string | null;
+  /** With the second chip, for an editor: the group "Add to group" opens the
+   *  review on. Null hides the button. */
+  addToGroupId?: string | null;
+  onAddToGroup?: (itemId: string, groupId: string) => void;
   onBookPress: (id: string) => void;
   selectMode: boolean;
   onToggleSelect: (book: BookRow) => void;
@@ -985,6 +1113,30 @@ const BookCard = React.memo(function BookCard({
                   {placementLabel}
                 </Mono>
               ) : null}
+              {groupChip ? (
+                // Content, so uncapped: it wraps under the title at any size.
+                <View style={styles.chipLine}>
+                  <Mono size={10.5} color={c.ink4} tracking={0.02}>
+                    {groupChip}
+                  </Mono>
+                  {addToGroupId && onAddToGroup ? (
+                    <Pressable
+                      onPress={() => onAddToGroup(book.id, addToGroupId)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${GROUP_COPY.addToGroup}: ${book.name}`}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.addToGroup,
+                        { borderColor: c.hair, opacity: pressed ? 0.6 : 1 },
+                      ]}
+                    >
+                      <Mono size={10.5} color={c.ink} tracking={0.02}>
+                        {GROUP_COPY.addToGroup}
+                      </Mono>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
             </View>
             <View style={[styles.trailingCol, stacked && styles.trailingColStacked]}>
               <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
@@ -1031,6 +1183,7 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
   total,
   reorderPoint,
   placementCount,
+  countLabel,
   partial,
   lifecycle,
   imageUrl,
@@ -1044,6 +1197,9 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
   reorderPoint: number;
   /** Placements in the group — i.e. exactly the rows the chevron reveals. */
   placementCount: number;
+  /** Group selected (0400): an explicit group's header counts RECORDS ("3
+   *  records"), not placements. Absent: "N placement(s)". */
+  countLabel?: string;
   /** True when the figures cover the loaded rows only — disclosed, never hidden. */
   partial: boolean;
   lifecycle: LifecycleStatus;
@@ -1068,9 +1224,8 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
   });
   // Two honest shapes: exact ("3 placements"), and page-local, where the
   // count covers only the rows loaded here.
-  const placements = partial
-    ? `${placementCount} placement${placementCount === 1 ? '' : 's'} shown`
-    : `${placementCount} placement${placementCount === 1 ? '' : 's'}`;
+  const counted = countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`;
+  const placements = partial ? `${counted} shown` : counted;
   return (
     <Pressable
       onPress={onToggle}
@@ -1235,5 +1390,21 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
     maxWidth: '100%',
+  },
+  // Group selected (0400): the chip line under a book's details, wrapping.
+  chipLine: {
+    marginTop: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  // 32pt tall plus the 6pt hit slop each way: a 44pt target in a dense card.
+  addToGroup: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 999,
   },
 });

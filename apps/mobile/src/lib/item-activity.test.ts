@@ -285,6 +285,16 @@ describe('formatAuditEventLabel', () => {
     expect(formatAuditEventLabel('inventory.item.ungrouped')).toBe('Made its own item');
   });
 
+  // Group selected (0400): the web item feed words each display-group event
+  // (activity-feed.tsx specFor); the phone says the same, never the generic
+  // "Inventory Group · Members Added".
+  it('words Group selected events as the web item feed does', () => {
+    expect(formatAuditEventLabel('inventory.group.members_added')).toBe('Added to group');
+    expect(formatAuditEventLabel('inventory.group.members_removed')).toBe('Removed from group');
+    expect(formatAuditEventLabel('inventory.group.created')).toBe('Group created');
+    expect(formatAuditEventLabel('inventory.group.renamed')).toBe('Group renamed');
+  });
+
   it('falls back to plain title-casing for events with no subject override (e.g. tag.*)', () => {
     expect(formatAuditEventLabel('tag.applied')).toBe('Tag · Applied');
     expect(formatAuditEventLabel('tag.removed')).toBe('Tag · Removed');
