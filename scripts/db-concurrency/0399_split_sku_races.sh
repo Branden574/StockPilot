@@ -47,13 +47,18 @@
 #      EXIT trap.
 #   8. No session ever sees 40001 or 40P01, and 0234 holds at the end.
 #
+# After the races (PR stage, evidence review EV-2) the log records what the run
+# left: the md5 of every 0399 function's body (to compare with the kit's), that
+# no planted function is left, the fixture rows left after cleanup (0), and the
+# run's wall time.
+#
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0399 applied. Fixtures are committed under the 03991111-... namespace
 # and removed at the start, at the end and by the EXIT trap. Exit status 0 =
 # every check passed.
 #
-# NOT RUN at the authoring stage (desk only; the local stack is held by
-# another job). It runs at the test stage.
+# First run at the test stage (2026-10-12, all checks passed); run again at
+# the PR stage.
 #
 # Usage: bash scripts/db-concurrency/0399_split_sku_races.sh
 
@@ -178,6 +183,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+T_START=$(now_ms)
 cleanup || exit 1
 
 if [ "$(q "select count(*) from pg_proc where proname = 'split_item_sku' and pronamespace = 'public'::regnamespace")" != "1" ]; then
@@ -400,6 +406,16 @@ else
   ok "8: no session saw 40001 or 40P01"
 fi
 check "8: 0234 holds" "$(q "select count(*) from (select sku, charter_id, bin_location from public.inventory_items where organization_id = '$ORG' and deleted_at is null group by 1, 2, 3 having count(*) > 1) d")" "0"
+
+# ═══ After: what the run left (PR stage, EV-2) ═════════════════════════════
+wait
+unplant || bad "after: unplant failed"
+echo "after: 0399 function md5s: $(q "select string_agg(p.proname || '=' || md5(p.prosrc), ' ' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace and (p.proname like '\_item\_grouping\_%' or p.proname in ('split_item_sku', 'caller_can_write_item'))")"
+check "after: no planted function is left" "$(q "select count(*) from pg_proc where proname like '\_zz0399\_%'")" "0"
+if cleanup; then ok "after: cleanup removed every fixture"; else bad "after: cleanup failed"; fi
+check "after: fixture rows left (items, requests, audit rows, the organization, the users)" \
+  "$(q "select (select count(*) from public.inventory_items where organization_id = '$ORG') + (select count(*) from public.item_grouping_requests where organization_id = '$ORG') + (select count(*) from public.audit_logs where organization_id = '$ORG') + (select count(*) from public.organizations where id = '$ORG') + (select count(*) from auth.users where id in ('$MGR', '$MGR2', '$STF'))")" "0"
+echo "wall time: $(( ($(now_ms) - T_START) / 1000 )) s"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "all checks passed"; else echo "$FAILS check(s) failed"; fi
