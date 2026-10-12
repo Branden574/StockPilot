@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./schemas": "./src/schemas/index.ts",
     "./types": "./src/types/index.ts",
-    "./constants": "./src/constants/index.ts"
+    "./constants": "./src/constants/index.ts",
+    "./testing/display-units": "./src/testing/display-units.ts"
   },
   "scripts": {
     "lint": "tsc --noEmit",

@@ -2,8 +2,10 @@
  * The grouping contract, as the web, the phone and the database speak it
  * (design-merged.md sections 3 and 6). Slice G1 carries Ungroup (split_sku):
  * give a record that shares its SKU a fresh SKU of its own, changing that
- * record only (migration 0399, split_item_sku). Group selected (G2) adds its
- * actions here without changing these.
+ * record only (migration 0399, split_item_sku). Slice G2 (Group selected,
+ * migration 0400, apply_item_grouping and item_grouping_preview) adds the
+ * actions group, remove and rename below, with the same key space, error map
+ * and words; nothing of G1's changed.
  *
  *   - the request body (camelCase, what the bearer route and the action
  *     accept), parsed with exactly the database's shape rules, and its
@@ -20,6 +22,10 @@
  *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
+
+import { isbnSearchKeys } from '../books/isbn';
+
+import { stripSizeSuffix } from './size-run';
 
 /** Every grouping request names at most this many records (one `.in()`). */
 export const GROUPING_MAX_ITEMS = 100;
@@ -228,6 +234,23 @@ export const GROUPING_ERROR_WORDS = {
   busy: 'Someone is changing these records right now. Try again in a moment.',
   rateLimited: 'Too many requests. Wait a minute and try again.',
   internal: 'Something went wrong. Try again.',
+  // Group selected (0400). None asks anyone to change a charter or a rack.
+  groupTooMany:
+    'Group selected works on at most 100 records at a time. Select fewer and try again.',
+  groupNotFound: "This group isn't available any more. Reload and try again.",
+  groupChanged: 'This group changed since you opened this. Review it again.',
+  membershipChanged: "A record's group changed since you opened this. Review it again.",
+  membershipConflict:
+    'One or more of these records are already in another group. Choose to move them, or leave them out.',
+  familyConflict:
+    'One or more of these records are in a product family of linked sizes. Confirm that the list may show them in this group.',
+  mixedTypes: 'Group books and items separately.',
+  groupTooLarge: 'A group can hold at most 200 records.',
+  renameNotPermitted: 'Only a manager can rename this group.',
+  groupKit: "Kits can't be grouped: a kit keeps its own items.",
+  groupRental: "Rentals can't be grouped.",
+  groupNotGroupable: "One or more of these records can't be grouped.",
+  groupItemChanged: 'A record changed since you opened this. Review it again.',
 } as const;
 
 const W = GROUPING_ERROR_WORDS;
@@ -256,6 +279,15 @@ export const GROUPING_ERROR_TABLE: Readonly<Record<string, GroupingErrorEntry>> 
     retryable: true,
   },
   busy: { code: 'conflict', status: 503, message: W.busy, retryable: true },
+  // Group selected (0400).
+  group_not_found: { code: 'not_found', status: 404, message: W.groupNotFound },
+  group_changed: { code: 'conflict', status: 409, message: W.groupChanged },
+  membership_changed: { code: 'conflict', status: 409, message: W.membershipChanged },
+  membership_conflict: { code: 'conflict', status: 409, message: W.membershipConflict },
+  product_family_conflict: { code: 'conflict', status: 409, message: W.familyConflict },
+  mixed_item_types: { code: 'conflict', status: 409, message: W.mixedTypes },
+  group_too_large: { code: 'conflict', status: 409, message: W.groupTooLarge },
+  rename_not_permitted: { code: 'forbidden', status: 403, message: W.renameNotPermitted },
 };
 
 const BUSY: GroupingErrorEntry = GROUPING_ERROR_TABLE.busy!;
@@ -296,12 +328,42 @@ function parseDetail(details: string | null | undefined): Record<string, unknown
 }
 
 /**
+ * The words for a hint when the action matters: the same refusal reads
+ * differently for Ungroup (split_sku) and for grouping (a kit "keeps its SKU"
+ * against "keeps its own items"; a changed record is a changed SKU for a
+ * split, any change for a grouping).
+ */
+function messageFor(
+  key: string,
+  detail: Record<string, unknown> | null,
+  action: GroupingAction,
+): string {
+  const entry = GROUPING_ERROR_TABLE[key]!;
+  if (action === 'split_sku') {
+    return key === 'not_groupable' && detail?.reason === 'kit' ? W.kit : entry.message;
+  }
+  if (key === 'not_groupable') {
+    return detail?.reason === 'kit'
+      ? W.groupKit
+      : detail?.reason === 'rental'
+        ? W.groupRental
+        : W.groupNotGroupable;
+  }
+  if (key === 'item_changed') return W.groupItemChanged;
+  return entry.message;
+}
+
+/**
  * One refusal -> its entry. Specific before general: a hint wins; 55P03 (a
  * held row, or the grouping lock's lock_timeout) and 57014 (statement
  * timeout) are busy only when no hint matched; anything else is internal,
- * with the generic sentence (the raw text stays server-side).
+ * with the generic sentence (the raw text stays server-side). `action` picks
+ * the words where Ungroup and grouping differ (default: Ungroup's).
  */
-export function mapGroupingError(err: GroupingDbError | null | undefined): MappedGroupingError {
+export function mapGroupingError(
+  err: GroupingDbError | null | undefined,
+  action: GroupingAction = 'split_sku',
+): MappedGroupingError {
   const key = groupingErrorKey(err);
   const detail = parseDetail(err?.details);
   const itemIds = Array.isArray(detail?.itemIds)
@@ -309,7 +371,7 @@ export function mapGroupingError(err: GroupingDbError | null | undefined): Mappe
     : [];
   if (key) {
     const entry = GROUPING_ERROR_TABLE[key]!;
-    const message = key === 'not_groupable' && detail?.reason === 'kit' ? W.kit : entry.message;
+    const message = messageFor(key, detail, action);
     const field = key === 'grouping_invalid' ? (err?.details ?? '').trim() || null : null;
     return { ...entry, message, reason: key, itemIds, field };
   }
@@ -589,4 +651,872 @@ export function sharedSkuNoteCopy(othersVisible: number, sku: string): string | 
   if (!Number.isFinite(othersVisible) || othersVisible < 1) return null;
   const n = Math.floor(othersVisible);
   return `SKU ${sku} is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Editing ${SHARED_SKU_FIELDS_WORDS} changes all of them.`;
+}
+
+// ═══ Group selected (slice G2, migration 0400) ═════════════════════════════
+//
+// apply_item_grouping(p_request, p_key) takes one of three actions:
+//   group   put records in a NEW group (two or more) or an EXISTING one;
+//   remove  take records out of the group they are in;
+//   rename  rename a group.
+// A display group only shows records together: it never changes a SKU,
+// barcode/ISBN, charter, rack, stock or product family, and is never a kit, a
+// substitute or an identity anything else reads (design 1a, owner decisions).
+
+/** The longest group name (the database trims and checks the same). */
+export const GROUP_NAME_MAX_LENGTH = 120;
+
+/** Where the records go: a new group with a name, or an existing group at the
+ *  version the screen saw. */
+export type GroupTarget =
+  { kind: 'new'; name: string } | { kind: 'existing'; groupId: string; expectedVersion: number };
+
+export interface GroupBody {
+  action: 'group';
+  idempotencyKey: string;
+  organizationId: string;
+  actorUserId: string;
+  /** Distinct records (two rack rows of one record are ONE id), 1 to 100; at
+   *  least 2 for a new group. */
+  itemIds: string[];
+  target: GroupTarget;
+  /** Each record's group as the screen saw it (null: none). */
+  expectedGroups: Record<string, string | null>;
+  /** Records the person explicitly chose to move out of another group. */
+  moveItemIds: string[];
+  /** The person confirmed that product-family members may show in the group. */
+  acknowledgeProductFamily: boolean;
+}
+
+export interface RemoveFromGroupBody {
+  action: 'remove';
+  idempotencyKey: string;
+  organizationId: string;
+  actorUserId: string;
+  itemIds: string[];
+  /** The group each record is in, as the screen saw it. */
+  expectedGroups: Record<string, string>;
+}
+
+export interface RenameGroupBody {
+  action: 'rename';
+  idempotencyKey: string;
+  organizationId: string;
+  actorUserId: string;
+  groupId: string;
+  expectedVersion: number;
+  name: string;
+}
+
+export type GroupingBody = GroupBody | RemoveFromGroupBody | RenameGroupBody;
+
+export type GroupingField =
+  | 'body'
+  | 'action'
+  | 'idempotency_key'
+  | 'organization_id'
+  | 'actor_user_id'
+  | 'item_ids'
+  | 'target'
+  | 'name'
+  | 'expected_version'
+  | 'expected_groups'
+  | 'move_item_ids'
+  | 'acknowledge_product_family'
+  | 'group_id';
+
+export type GroupingParse =
+  | { ok: true; body: GroupingBody }
+  | { ok: false; refusal: { reason: 'invalid'; field: GroupingField; message: string } };
+
+const GROUPING_KEYS: Record<GroupingBody['action'], Set<string>> = {
+  group: new Set([
+    'action',
+    'idempotencyKey',
+    'organizationId',
+    'actorUserId',
+    'itemIds',
+    'target',
+    'expectedGroups',
+    'moveItemIds',
+    'acknowledgeProductFamily',
+  ]),
+  remove: new Set([
+    'action',
+    'idempotencyKey',
+    'organizationId',
+    'actorUserId',
+    'itemIds',
+    'expectedGroups',
+  ]),
+  rename: new Set([
+    'action',
+    'idempotencyKey',
+    'organizationId',
+    'actorUserId',
+    'groupId',
+    'expectedVersion',
+    'name',
+  ]),
+};
+
+function refuseGrouping(field: GroupingField): GroupingParse {
+  return {
+    ok: false,
+    refusal: { reason: 'invalid', field, message: GROUPING_ERROR_WORDS.invalid },
+  };
+}
+
+/** A version the database accepts: an integer from 1 to 2147483647. */
+function isVersion(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 2147483647;
+}
+
+/** A group name the database accepts, trimmed; null when it would refuse it. */
+export function normalizeGroupName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const name = raw.trim();
+  return name.length >= 1 && [...name].length <= GROUP_NAME_MAX_LENGTH ? name : null;
+}
+
+function parseIdList(raw: unknown, min: number): string[] | null {
+  if (!Array.isArray(raw) || raw.length < min || raw.length > GROUPING_MAX_ITEMS) return null;
+  if (!raw.every((id) => typeof id === 'string' && UUID.test(id))) return null;
+  const ids = (raw as string[]).map((id) => id.toLowerCase());
+  return new Set(ids).size === ids.length ? ids : null;
+}
+
+/**
+ * The body, with exactly apply_item_grouping's shape rules (0400
+ * _display_grouping_request), so the app refuses what the database would,
+ * naming the same field. Ids come back lower case, in the order sent; the
+ * name trimmed; the decisions defaulted. A duplicate id is refused (the app
+ * sends each record once, however many rack rows it has on screen).
+ */
+export function parseGroupingBody(raw: unknown): GroupingParse {
+  if (!isRecord(raw)) return refuseGrouping('body');
+  const action = raw.action;
+  if (action !== 'group' && action !== 'remove' && action !== 'rename')
+    return refuseGrouping('action');
+  for (const k of Object.keys(raw))
+    if (!GROUPING_KEYS[action].has(k)) return refuseGrouping('body');
+  const { idempotencyKey, organizationId, actorUserId } = raw;
+  if (typeof idempotencyKey !== 'string' || !UUID.test(idempotencyKey))
+    return refuseGrouping('idempotency_key');
+  if (typeof organizationId !== 'string' || !UUID.test(organizationId))
+    return refuseGrouping('organization_id');
+  if (typeof actorUserId !== 'string' || !UUID.test(actorUserId))
+    return refuseGrouping('actor_user_id');
+  const base = {
+    idempotencyKey: idempotencyKey.toLowerCase(),
+    organizationId: organizationId.toLowerCase(),
+    actorUserId: actorUserId.toLowerCase(),
+  };
+
+  if (action === 'rename') {
+    if (typeof raw.groupId !== 'string' || !UUID.test(raw.groupId))
+      return refuseGrouping('group_id');
+    if (!isVersion(raw.expectedVersion)) return refuseGrouping('expected_version');
+    const name = normalizeGroupName(raw.name);
+    if (!name) return refuseGrouping('name');
+    return {
+      ok: true,
+      body: {
+        action,
+        ...base,
+        groupId: raw.groupId.toLowerCase(),
+        expectedVersion: raw.expectedVersion,
+        name,
+      },
+    };
+  }
+
+  const ids = parseIdList(raw.itemIds, 1);
+  if (!ids) return refuseGrouping('item_ids');
+  if (!isRecord(raw.expectedGroups)) return refuseGrouping('expected_groups');
+  const expected: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(raw.expectedGroups)) {
+    if (!UUID.test(k)) return refuseGrouping('expected_groups');
+    if (v === null) {
+      if (action === 'remove') return refuseGrouping('expected_groups');
+      expected[k.toLowerCase()] = null;
+    } else if (typeof v === 'string' && UUID.test(v)) {
+      expected[k.toLowerCase()] = v.toLowerCase();
+    } else {
+      return refuseGrouping('expected_groups');
+    }
+  }
+  if (
+    Object.keys(raw.expectedGroups).length !== ids.length ||
+    Object.keys(expected).length !== ids.length ||
+    !ids.every((id) => Object.prototype.hasOwnProperty.call(expected, id))
+  ) {
+    return refuseGrouping('expected_groups');
+  }
+
+  if (action === 'remove') {
+    return {
+      ok: true,
+      body: { action, ...base, itemIds: ids, expectedGroups: expected as Record<string, string> },
+    };
+  }
+
+  const t = raw.target;
+  if (!isRecord(t)) return refuseGrouping('target');
+  let target: GroupTarget;
+  if (t.kind === 'new') {
+    const name = normalizeGroupName(t.name);
+    if (!name) return refuseGrouping('name');
+    if (ids.length < 2) return refuseGrouping('item_ids');
+    target = { kind: 'new', name };
+  } else if (t.kind === 'existing') {
+    if (typeof t.groupId !== 'string' || !UUID.test(t.groupId)) return refuseGrouping('target');
+    if (!isVersion(t.expectedVersion)) return refuseGrouping('expected_version');
+    target = {
+      kind: 'existing',
+      groupId: t.groupId.toLowerCase(),
+      expectedVersion: t.expectedVersion,
+    };
+  } else {
+    return refuseGrouping('target');
+  }
+
+  let move: string[] = [];
+  if (raw.moveItemIds !== undefined && raw.moveItemIds !== null) {
+    const m = parseIdList(raw.moveItemIds, 0);
+    if (!m || !m.every((id) => ids.includes(id))) return refuseGrouping('move_item_ids');
+    move = m;
+  }
+  const ack = raw.acknowledgeProductFamily;
+  if (ack !== undefined && ack !== null && typeof ack !== 'boolean') {
+    return refuseGrouping('acknowledge_product_family');
+  }
+
+  return {
+    ok: true,
+    body: {
+      action,
+      ...base,
+      itemIds: ids,
+      target,
+      expectedGroups: expected,
+      moveItemIds: move,
+      acknowledgeProductFamily: ack === true,
+    },
+  };
+}
+
+/** The arguments of apply_item_grouping(p_request, p_key) for a parsed body. */
+export function toGroupingRpcRequest(
+  body: GroupingBody,
+  surface: GroupingSurface,
+): { p_request: Record<string, unknown>; p_key: string } {
+  const head = {
+    action: body.action,
+    organization_id: body.organizationId,
+    actor_user_id: body.actorUserId,
+    surface,
+  };
+  if (body.action === 'rename') {
+    return {
+      p_key: body.idempotencyKey,
+      p_request: {
+        ...head,
+        group_id: body.groupId,
+        expected_version: body.expectedVersion,
+        name: body.name,
+      },
+    };
+  }
+  if (body.action === 'remove') {
+    return {
+      p_key: body.idempotencyKey,
+      p_request: { ...head, item_ids: body.itemIds, expected_groups: body.expectedGroups },
+    };
+  }
+  return {
+    p_key: body.idempotencyKey,
+    p_request: {
+      ...head,
+      item_ids: body.itemIds,
+      target:
+        body.target.kind === 'new'
+          ? { kind: 'new', name: body.target.name }
+          : {
+              kind: 'existing',
+              group_id: body.target.groupId,
+              expected_version: body.target.expectedVersion,
+            },
+      expected_groups: body.expectedGroups,
+      move_item_ids: body.moveItemIds,
+      acknowledge_product_family: body.acknowledgeProductFamily,
+    },
+  };
+}
+
+// ── The answer ─────────────────────────────────────────────────────────────
+
+export interface GroupingOutcomeGroup {
+  id: string;
+  name: string;
+  version: number;
+  itemType: string;
+  closed: boolean;
+}
+
+export interface GroupingOutcome {
+  action: 'group' | 'remove' | 'rename';
+  /** 'noop': nothing needed writing (a repeat, or records already there). */
+  outcome: 'applied' | 'noop';
+  /** True when the key had already applied: nothing was written this time. */
+  replay: boolean;
+  /** A new group was made by this request. */
+  created: boolean;
+  /** The group the records are in afterwards (group, rename); null for remove. */
+  group: GroupingOutcomeGroup | null;
+  changes: Array<{ itemId: string; fromGroupId: string | null; toGroupId: string | null }>;
+  /** Groups left with no live record, closed by this request. */
+  closedGroupIds: string[];
+}
+
+/** apply_item_grouping's answer, or null when it is not one. */
+export function parseGroupingOutcome(raw: unknown): GroupingOutcome | null {
+  if (!isRecord(raw)) return null;
+  const { action, outcome, group, changes, closed_group_ids } = raw;
+  if (action !== 'group' && action !== 'remove' && action !== 'rename') return null;
+  if (outcome !== 'applied' && outcome !== 'noop') return null;
+  if (!Array.isArray(changes) || !Array.isArray(closed_group_ids)) return null;
+  let g: GroupingOutcomeGroup | null = null;
+  if (group !== null && group !== undefined) {
+    if (!isRecord(group) || typeof group.id !== 'string' || typeof group.name !== 'string')
+      return null;
+    g = {
+      id: group.id,
+      name: group.name,
+      version: typeof group.version === 'number' ? group.version : 0,
+      itemType: typeof group.item_type === 'string' ? group.item_type : 'product',
+      closed: group.closed === true,
+    };
+  }
+  const out: GroupingOutcome['changes'] = [];
+  for (const c of changes) {
+    if (!isRecord(c) || typeof c.item_id !== 'string') return null;
+    out.push({
+      itemId: c.item_id,
+      fromGroupId: typeof c.from_group_id === 'string' ? c.from_group_id : null,
+      toGroupId: typeof c.to_group_id === 'string' ? c.to_group_id : null,
+    });
+  }
+  return {
+    action,
+    outcome,
+    replay: raw.replay === true,
+    created: raw.created === true,
+    group: g,
+    changes: out,
+    closedGroupIds: closed_group_ids.filter((v): v is string => typeof v === 'string'),
+  };
+}
+
+// ── The preview (item_grouping_preview, read as the caller) ────────────────
+
+export interface GroupingPreviewRecord {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  isbnFields: { isbn?: string | null; isbn13?: string | null; isbn10?: string | null } | null;
+  itemType: string;
+  isBundle: boolean;
+  isRental: boolean;
+  /** The certified product family (sports), never changed by grouping. */
+  productGroupId: string | null;
+  productGroupName: string | null;
+  variantSize: string | null;
+  charterId: string | null;
+  warehouseId: string | null;
+  binLocation: string | null;
+  quantityOnHand: number;
+  createdAt: string | null;
+  /** The group the record is in now, as the caller may see it. */
+  displayGroup: { id: string; name: string; version: number } | null;
+  /** The caller may edit this record (caller_can_write_item). */
+  writable: boolean;
+}
+
+export interface GroupingPreview {
+  records: GroupingPreviewRecord[];
+  /** Selected ids the caller cannot read (or that are gone): a count only. */
+  unavailableCount: number;
+  /** Readable records that share a selected record's SKU and are not selected. */
+  sameSkuSiblings: Array<{
+    id: string;
+    name: string;
+    sku: string;
+    itemType: string;
+    displayGroupId: string | null;
+  }>;
+  /** Readable open groups of the selected records' type: holding a selected
+   *  record first. Suggestions only, never picked by a name. */
+  candidateGroups: Array<{
+    id: string;
+    name: string;
+    version: number;
+    itemType: string;
+    memberCount: number;
+    holdsSelected: boolean;
+  }>;
+  /** The named target group with its readable records. */
+  targetGroup: {
+    id: string;
+    name: string;
+    version: number;
+    itemType: string;
+    members: Array<{ id: string; name: string; sku: string; quantityOnHand: number }>;
+  } | null;
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+const num = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0;
+
+/** item_grouping_preview's answer, or null when it is not one. */
+export function parseGroupingPreview(raw: unknown): GroupingPreview | null {
+  if (!isRecord(raw) || !Array.isArray(raw.records)) return null;
+  const records: GroupingPreviewRecord[] = [];
+  for (const r of raw.records) {
+    if (!isRecord(r) || typeof r.id !== 'string') return null;
+    const dg =
+      isRecord(r.display_group) && typeof r.display_group.id === 'string' ? r.display_group : null;
+    const isbn = isRecord(r.isbn_fields) ? r.isbn_fields : null;
+    records.push({
+      id: r.id,
+      name: str(r.name) ?? '',
+      sku: str(r.sku) ?? '',
+      barcode: str(r.barcode),
+      isbnFields: isbn
+        ? { isbn: str(isbn.isbn), isbn13: str(isbn.isbn13), isbn10: str(isbn.isbn10) }
+        : null,
+      itemType: str(r.item_type) ?? 'product',
+      isBundle: r.is_bundle === true,
+      isRental: r.is_rental === true,
+      productGroupId: str(r.product_group_id),
+      productGroupName: str(r.product_group_name),
+      variantSize: str(r.variant_size),
+      charterId: str(r.charter_id),
+      warehouseId: str(r.warehouse_id),
+      binLocation: str(r.bin_location),
+      quantityOnHand: num(r.quantity_on_hand),
+      createdAt: str(r.created_at),
+      displayGroup: dg
+        ? { id: dg.id as string, name: str(dg.name) ?? '', version: num(dg.version) }
+        : null,
+      writable: r.writable === true,
+    });
+  }
+  const list = (v: unknown): Record<string, unknown>[] =>
+    Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => isRecord(x)) : [];
+  const t =
+    isRecord(raw.target_group) && typeof raw.target_group.id === 'string' ? raw.target_group : null;
+  return {
+    records,
+    unavailableCount: Math.max(0, num(raw.unavailable_count)),
+    sameSkuSiblings: list(raw.same_sku_siblings)
+      .filter((s) => typeof s.id === 'string')
+      .map((s) => ({
+        id: s.id as string,
+        name: str(s.name) ?? '',
+        sku: str(s.sku) ?? '',
+        itemType: str(s.item_type) ?? 'product',
+        displayGroupId: str(s.display_group_id),
+      })),
+    candidateGroups: list(raw.candidate_groups)
+      .filter((g) => typeof g.id === 'string')
+      .map((g) => ({
+        id: g.id as string,
+        name: str(g.name) ?? '',
+        version: num(g.version),
+        itemType: str(g.item_type) ?? 'product',
+        memberCount: num(g.member_count),
+        holdsSelected: g.holds_selected === true,
+      })),
+    targetGroup: t
+      ? {
+          id: t.id as string,
+          name: str(t.name) ?? '',
+          version: num(t.version),
+          itemType: str(t.item_type) ?? 'product',
+          members: list(t.members)
+            .filter((m) => typeof m.id === 'string')
+            .map((m) => ({
+              id: m.id as string,
+              name: str(m.name) ?? '',
+              sku: str(m.sku) ?? '',
+              quantityOnHand: num(m.quantity_on_hand),
+            })),
+        }
+      : null,
+  };
+}
+
+// ── What the screens need ──────────────────────────────────────────────────
+
+/** The words of Group selected, on the web and the phone. */
+export const GROUP_COPY = {
+  bulkAction: 'Group selected',
+  removeAction: 'Remove from group',
+  renameAction: 'Rename group',
+  title: (n: number) => `Group ${n} record${n === 1 ? '' : 's'}`,
+  /** The brief's sentence, verbatim. */
+  intro:
+    'Grouping organizes these records together. It does not combine stock, change ownership, or move items.',
+  skuNote: 'Records that share a SKU still show together automatically.',
+  targetNew: 'New group',
+  targetExisting: 'Add to an existing group',
+  nameLabel: 'Group name',
+  defaultName: 'New group',
+  existingLabel: 'Group',
+  noCandidates: 'No group you can see holds records of this type yet.',
+  previewLabel: 'How it will show',
+  previewHeader: (name: string, records: number, onHand: number) =>
+    `${name} · ${records} record${records === 1 ? '' : 's'} · ${onHand} on hand`,
+  unavailable: (n: number) =>
+    `${n} selected record${n === 1 ? ' is' : 's are'} no longer available to you.`,
+  leftOutReason: {
+    kit: "is a kit (kits can't be grouped)",
+    rental: "is a rental (rentals can't be grouped)",
+    not_writable: "is in a warehouse you can't change",
+  } as Record<GroupLeftOutReason, string>,
+  otherGroup: (name: string) => `Already in group ${name}.`,
+  moveOne: 'Move it into this group',
+  family: (name: string | null) =>
+    `In the product family ${name ?? 'of linked sizes'}. Its sizes stay linked for exchanges and imports; only the list shows it in this group.`,
+  acknowledgeFamily: 'Show product-family records in this group',
+  sameSku: (n: number, sku: string) =>
+    `${n} other record${n === 1 ? '' : 's'} you can see share${n === 1 ? 's' : ''} SKU ${sku} and ${n === 1 ? 'is' : 'are'} not selected. ${n === 1 ? 'It stays' : 'They stay'} outside this group.`,
+  addSiblings: 'Add them to the selection',
+  editions: (n: number) =>
+    `These are ${n} different editions (ISBNs). Grouping shows them together; they stay separate books for ordering and Book Order Totals.`,
+  editionsUnknown:
+    'Not every one of these books has an ISBN, so they may be different editions. They stay separate books for ordering and Book Order Totals.',
+  blocked: {
+    tooFew: 'Choose at least two records for a new group.',
+    tooFewExisting: 'Choose at least one record to add.',
+    name: 'Give the group a name.',
+    otherGroup: 'Decide for each record already in another group: move it, or deselect it.',
+    family: 'Confirm the product-family records, or deselect them.',
+    noTarget: 'Choose a group to add to.',
+    targetType: 'This group holds records of another type.',
+  },
+  confirmNew: (n: number) => `Group ${n} record${n === 1 ? '' : 's'}`,
+  confirmExisting: (n: number, name: string) => `Add ${n} record${n === 1 ? '' : 's'} to ${name}`,
+  done: (name: string) => `Grouped in ${name}.`,
+  noop: (name: string) => `These records are already in ${name}.`,
+  cancel: 'Cancel',
+  offline: 'Grouping needs a connection. Try again when you are online.',
+  removeTitle: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'} from the group`,
+  removeIntro:
+    "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Records that share a SKU still show together automatically.",
+  removeLast:
+    'This removes the last records in the group you can see. A group with no records left closes.',
+  removeConfirm: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'}`,
+  removeDone: (n: number) => `${n} record${n === 1 ? '' : 's'} removed from the group.`,
+  renameDone: (name: string) => `Renamed to ${name}.`,
+  chipInGroup: (name: string) => `In group ${name}`,
+  chipSameSku: (name: string) => `Same SKU as records in ${name}`,
+  addToGroup: 'Add to group',
+  headerRecords: (n: number) => `${n} record${n === 1 ? '' : 's'}`,
+  headerMatching: (n: number) => `${n} matching`,
+  itemPageInGroup: (name: string) => `In group ${name}`,
+} as const;
+
+export type GroupLeftOutReason = 'kit' | 'rental' | 'not_writable';
+
+/** What the review plan decided about one Save. */
+export interface GroupingDecisions {
+  /** Records the person chose to move out of another group. */
+  moveIds?: ReadonlySet<string>;
+  /** The person confirmed the product-family records. */
+  acknowledgeFamily?: boolean;
+}
+
+/** The target as the dialog holds it (the version comes from the preview). */
+export type GroupDialogTarget =
+  { kind: 'new'; name: string } | { kind: 'existing'; groupId: string | null };
+
+export interface GroupingPlan {
+  /** Readable selected records, in the order selected. */
+  records: GroupingPreviewRecord[];
+  unavailableCount: number;
+  /** Selected records that will not be sent, with the reason. */
+  leftOut: Array<{ id: string; reason: GroupLeftOutReason }>;
+  /** The records the request names. */
+  send: GroupingPreviewRecord[];
+  conflicts: {
+    /** Sent records in another group than the target: each needs a move. */
+    otherGroup: GroupingPreviewRecord[];
+    /** Sent product-family members (not already in the target). */
+    family: GroupingPreviewRecord[];
+    /** Readable unselected records of a selected SKU (informational). */
+    sameSkuSiblings: GroupingPreview['sameSkuSiblings'];
+    /** Books: distinct editions, and books with no ISBN. */
+    editions: { editions: number; unknown: number } | null;
+  };
+  /** Nothing would change: every record is already where the request puts it. */
+  noop: { groupId: string; name: string } | null;
+  /** "<name> · N records · Q on hand", as the list will show the group. */
+  previewHeader: string | null;
+  /** The existing target's version as the preview read it (sent back as
+   *  expected_version); null for a new group or an unknown target. */
+  targetVersion: number | null;
+  canSave: boolean;
+  /** Why Save is disabled, in plain words; null when it is not. */
+  blockedReason: string | null;
+}
+
+/** Distinct editions among books (ISBN-10 and ISBN-13 of one book are one),
+ *  and how many have no ISBN at all. */
+export function bookEditionCount(
+  books: ReadonlyArray<{ barcode: string | null; isbnFields: GroupingPreviewRecord['isbnFields'] }>,
+): { editions: number; unknown: number } {
+  const editions = new Set<string>();
+  let unknown = 0;
+  for (const b of books) {
+    const candidates = [b.barcode, b.isbnFields?.isbn13, b.isbnFields?.isbn, b.isbnFields?.isbn10];
+    let key: string | null = null;
+    for (const c of candidates) {
+      const keys = isbnSearchKeys(c ?? null);
+      if (keys) {
+        key = keys.find((k) => k.length === 13) ?? keys[0]!;
+        break;
+      }
+    }
+    if (key) editions.add(key);
+    else unknown++;
+  }
+  return { editions: editions.size, unknown };
+}
+
+/**
+ * The review dialog's plan: which selected records will be sent, which are
+ * left out (kits, rentals, records the caller cannot edit), the conflicts
+ * that need an explicit decision (a record in another group: move it or
+ * deselect it; a product-family member: confirm), and whether Save is
+ * allowed. The database decides again under its locks; this only shows the
+ * person what will happen.
+ */
+export function planGrouping(
+  selectedIds: readonly string[],
+  preview: GroupingPreview,
+  target: GroupDialogTarget,
+  decisions: GroupingDecisions,
+): GroupingPlan {
+  const byId = new Map(preview.records.map((r) => [r.id, r]));
+  const seen = new Set<string>();
+  const records: GroupingPreviewRecord[] = [];
+  for (const id of selectedIds) {
+    const r = byId.get(id.toLowerCase()) ?? byId.get(id);
+    if (r && !seen.has(r.id)) {
+      seen.add(r.id);
+      records.push(r);
+    }
+  }
+  const leftOut: GroupingPlan['leftOut'] = [];
+  const send: GroupingPreviewRecord[] = [];
+  for (const r of records) {
+    if (r.isBundle) leftOut.push({ id: r.id, reason: 'kit' });
+    else if (r.isRental) leftOut.push({ id: r.id, reason: 'rental' });
+    else if (!r.writable) leftOut.push({ id: r.id, reason: 'not_writable' });
+    else send.push(r);
+  }
+  const targetId = target.kind === 'existing' ? target.groupId : null;
+  const tg = targetId && preview.targetGroup?.id === targetId ? preview.targetGroup : null;
+  const cand = targetId ? preview.candidateGroups.find((g) => g.id === targetId) : undefined;
+  const targetName =
+    target.kind === 'new' ? normalizeGroupName(target.name) : (tg?.name ?? cand?.name ?? null);
+
+  const changing = send.filter((r) => !(targetId && r.displayGroup?.id === targetId));
+  const otherGroup = changing.filter((r) => r.displayGroup !== null);
+  const family = changing.filter((r) => r.productGroupId !== null);
+  const books = send.filter((r) => r.itemType === 'book');
+  const editions = books.length >= 2 ? bookEditionCount(books) : null;
+  const types = new Set(send.map((r) => r.itemType));
+
+  // No-op: the database would answer it (and does, for a repeat).
+  let noop: GroupingPlan['noop'] = null;
+  if (send.length > 0 && target.kind === 'existing' && targetId && changing.length === 0) {
+    noop = { groupId: targetId, name: targetName ?? send[0]!.displayGroup?.name ?? '' };
+  } else if (target.kind === 'new' && send.length >= 2 && (decisions.moveIds?.size ?? 0) === 0) {
+    const first = send[0]!.displayGroup;
+    if (first && send.every((r) => r.displayGroup?.id === first.id)) {
+      noop = { groupId: first.id, name: first.name };
+    }
+  }
+
+  // The header the list will show: every record in the group afterwards.
+  let previewHeader: string | null = null;
+  if (targetName) {
+    const after = new Map<string, number>();
+    if (tg) for (const m of tg.members) after.set(m.id, m.quantityOnHand);
+    for (const r of send) after.set(r.id, r.quantityOnHand);
+    const onHand = [...after.values()].reduce((a, b) => a + b, 0);
+    previewHeader = GROUP_COPY.previewHeader(targetName, after.size, onHand);
+  }
+
+  let blockedReason: string | null = null;
+  const unresolvedMove = otherGroup.some((r) => !decisions.moveIds?.has(r.id));
+  if (types.size > 1) blockedReason = GROUPING_ERROR_WORDS.mixedTypes;
+  else if (target.kind === 'new' && send.length < 2) blockedReason = GROUP_COPY.blocked.tooFew;
+  else if (target.kind === 'existing' && send.length < 1)
+    blockedReason = GROUP_COPY.blocked.tooFewExisting;
+  else if (target.kind === 'new' && !normalizeGroupName(target.name))
+    blockedReason = GROUP_COPY.blocked.name;
+  else if (target.kind === 'existing' && (!targetId || (!tg && !cand)))
+    blockedReason = GROUP_COPY.blocked.noTarget;
+  else if (
+    target.kind === 'existing' &&
+    (tg ?? cand) &&
+    types.size === 1 &&
+    !types.has((tg ?? cand)!.itemType)
+  )
+    blockedReason = GROUP_COPY.blocked.targetType;
+  else if (send.length > GROUPING_MAX_ITEMS) blockedReason = GROUPING_ERROR_WORDS.groupTooMany;
+  else if (!noop && unresolvedMove) blockedReason = GROUP_COPY.blocked.otherGroup;
+  else if (!noop && family.length > 0 && !decisions.acknowledgeFamily)
+    blockedReason = GROUP_COPY.blocked.family;
+
+  return {
+    records,
+    unavailableCount: preview.unavailableCount,
+    leftOut,
+    send,
+    conflicts: { otherGroup, family, sameSkuSiblings: preview.sameSkuSiblings, editions },
+    noop,
+    previewHeader,
+    targetVersion: target.kind === 'existing' ? (tg?.version ?? cand?.version ?? null) : null,
+    canSave: blockedReason === null,
+    blockedReason,
+  };
+}
+
+/** The request for a plan (only when `plan.canSave`). The version of an
+ *  existing target is the one the preview read. */
+export function groupBodyForPlan(
+  plan: GroupingPlan,
+  target: GroupDialogTarget,
+  decisions: GroupingDecisions,
+  ids: { idempotencyKey: string; organizationId: string; actorUserId: string },
+  targetVersion?: number,
+): GroupBody {
+  const expectedGroups: Record<string, string | null> = {};
+  for (const r of plan.send) expectedGroups[r.id] = r.displayGroup?.id ?? null;
+  const moveItemIds = plan.conflicts.otherGroup
+    .filter((r) => decisions.moveIds?.has(r.id))
+    .map((r) => r.id);
+  const versionFromPlan = (): number => {
+    if (target.kind !== 'existing') return 1;
+    const inRecords = plan.send.find((r) => r.displayGroup?.id === target.groupId)?.displayGroup
+      ?.version;
+    return targetVersion ?? plan.targetVersion ?? inRecords ?? 1;
+  };
+  return {
+    action: 'group',
+    ...ids,
+    itemIds: plan.send.map((r) => r.id),
+    target:
+      target.kind === 'new'
+        ? { kind: 'new', name: normalizeGroupName(target.name) ?? '' }
+        : { kind: 'existing', groupId: target.groupId ?? '', expectedVersion: versionFromPlan() },
+    expectedGroups,
+    moveItemIds,
+    acknowledgeProductFamily:
+      decisions.acknowledgeFamily === true && plan.conflicts.family.length > 0,
+  };
+}
+
+/** Remove these records from the group each is in (as the screen saw it). */
+export function removeBodyFor(
+  records: ReadonlyArray<{ id: string; displayGroupId: string }>,
+  ids: { idempotencyKey: string; organizationId: string; actorUserId: string },
+): RemoveFromGroupBody {
+  const expectedGroups: Record<string, string> = {};
+  for (const r of records) expectedGroups[r.id] = r.displayGroupId;
+  return { action: 'remove', ...ids, itemIds: records.map((r) => r.id), expectedGroups };
+}
+
+/** A shared start for a name: words the names have in common, from the
+ *  start, cut back to a whole word. */
+function commonWordPrefix(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  let prefix = names[0]!;
+  for (const n of names.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < n.length && prefix[i]!.toLowerCase() === n[i]!.toLowerCase())
+      i++;
+    prefix = prefix.slice(0, i);
+  }
+  const whole = names.every((n) => n.length === prefix.length);
+  if (!whole) {
+    // Cut back to the last word boundary unless every name continues with a
+    // boundary right here.
+    const atBoundary = names.every(
+      (n) => n.length === prefix.length || /[\s\-–—:,/]/.test(n[prefix.length]!),
+    );
+    if (!atBoundary) {
+      const cut = prefix.search(/[\s\-–—:,/][^\s\-–—:,/]*$/);
+      prefix = cut >= 0 ? prefix.slice(0, cut) : '';
+    }
+  }
+  return prefix.replace(/[\s\-–—:,/]+$/, '').trim();
+}
+
+/**
+ * A suggested name for a new group (an editable field: a suggestion, never a
+ * link made on a name). Items: the base name the records share without a size
+ * suffix ("Limits Tee - XS" and "Limits Tee - S" give "Limits Tee"; records
+ * that all carry one name keep it whole). Books:
+ * the title they share, with no size parsing and no edition claim. Falls back
+ * to the first record's name, then to a plain default.
+ */
+export function suggestGroupName(
+  records: ReadonlyArray<{ name: string }>,
+  view: 'items' | 'books',
+): string {
+  const full = records.map((r) => (r.name ?? '').trim()).filter((n) => n.length > 0);
+  if (full.length === 0) return GROUP_COPY.defaultName;
+  // Records with one and the same name keep it whole (two "Polo XXXL"
+  // records are XXXL polos; dropping the size would misname them).
+  const same = full.every((n) => n.toLowerCase() === full[0]!.toLowerCase());
+  const names =
+    same || view === 'books'
+      ? full
+      : full.map((n) => stripSizeSuffix(n)).filter((n) => n.length > 0);
+  if (names.length === 0) return GROUP_COPY.defaultName;
+  const shared = commonWordPrefix(names);
+  const pick = shared.length >= 3 ? shared : names[0]!;
+  return [...pick].slice(0, GROUP_NAME_MAX_LENGTH).join('').trim() || GROUP_COPY.defaultName;
+}
+
+/**
+ * The bulk bar's facts for Group selected, from the rows on screen only (no
+ * query per row): the DISTINCT records selected (two rack rows of one record
+ * count once), whether they mix item types, whether Group selected is offered
+ * (two or more of one type), and which of them are in a group now (Remove
+ * from group).
+ */
+export function groupingSelectionFacts(
+  selectedItemIds: readonly string[],
+  rows: ReadonlyArray<{ id: string; item_type?: string | null; display_group_id?: string | null }>,
+): { count: number; mixedTypes: boolean; canGroup: boolean; groupedIds: string[] } {
+  const byId = new Map<string, { item_type?: string | null; display_group_id?: string | null }>();
+  for (const r of rows) if (!byId.has(r.id)) byId.set(r.id, r);
+  const distinct = [...new Set(selectedItemIds)];
+  const types = new Set(distinct.map((id) => byId.get(id)?.item_type ?? 'product'));
+  const mixedTypes = types.size > 1;
+  return {
+    count: distinct.length,
+    mixedTypes,
+    canGroup: distinct.length >= 2 && !mixedTypes,
+    groupedIds: distinct.filter((id) => !!byId.get(id)?.display_group_id),
+  };
 }
