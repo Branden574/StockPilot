@@ -977,7 +977,9 @@ function stockCalls(
 }
 
 /** The call's promise is dropped: `void x()` or `x();` as a statement, also
- *  through .then/.catch/.finally chains. */
+ *  through .then/.catch/.finally chains, or handed to keepAlive(), which
+ *  keeps the invocation up but still lets the write land after the handler
+ *  returned. */
 function isFloating(call: ts.CallExpression): boolean {
   let n: ts.Node = call;
   for (;;) {
@@ -994,6 +996,15 @@ function isFloating(call: ts.CallExpression): boolean {
     ) {
       n = p.parent;
       continue;
+    }
+    if (ts.isCallExpression(p) && p.expression !== n) {
+      const callee = unwrap(p.expression);
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      return name === 'keepAlive';
     }
     return ts.isVoidExpression(p) || ts.isExpressionStatement(p);
   }
@@ -1062,6 +1073,20 @@ describe('the outside-services scan machinery', () => {
       }
     `);
     expect(found.map((f) => isFloating(f.call))).toEqual([false, true, true, false]);
+  });
+
+  // keepAlive (lib/defer.ts) keeps the invocation up until a promise settles,
+  // but a write handed to it still lands after the handler returned, where
+  // Next drops the tag it records: as dropped as `void`, for this check.
+  it('counts a call handed to keepAlive() as dropped', () => {
+    const found = calls(`
+      async function a(ctx) {
+        const svc = new InventoryService(ctx);
+        keepAlive(svc.adjustStock({}));
+        keepAlive(svc.adjustStock({}).catch(() => {}));
+      }
+    `);
+    expect(found.map((f) => isFloating(f.call))).toEqual([true, true]);
   });
 
   it('finds calls inside after()/defer() and unstable_cache callbacks', () => {

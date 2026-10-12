@@ -7,6 +7,7 @@ import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { withContext, type ServiceContext } from './context';
+import { keepAlive } from './lib/defer';
 
 export type AuditEvent =
   | 'user.invited'
@@ -558,6 +559,14 @@ type InsertFailure = {
   code?: string | null;
   thrown?: string;
   timedOut: boolean;
+  /**
+   * Set when the deadline aborted the request: how long it had been waiting,
+   * by the wall clock. AUDIT_INSERT_TIMEOUT_MS when the deadline fired on
+   * time; far more when the instance was suspended and the deadline fired only
+   * once a later request resumed it. The 2026-09 reports would have read about
+   * 584,000 here instead of looking like a slow database.
+   */
+  elapsedMs?: number;
 };
 
 /** Thrown into the race when an INSERT passes its deadline. */
@@ -580,6 +589,7 @@ async function insertAuditRows(
   admin: ReturnType<typeof createAdminClient>,
   rows: AuditRowInsert | AuditRowInsert[],
 ): Promise<InsertFailure | null> {
+  const startedAt = Date.now();
   const controller = new AbortController();
   const deadline = new Promise<never>((_, reject) => {
     controller.signal.addEventListener('abort', () => reject(new AuditInsertTimeout()), {
@@ -587,6 +597,11 @@ async function insertAuditRows(
     });
   });
   const timer = setTimeout(() => controller.abort(), AUDIT_INSERT_TIMEOUT_MS);
+  /** timedOut, and for a request the deadline aborted, how long it waited. */
+  const timing = () =>
+    controller.signal.aborted
+      ? { timedOut: true, elapsedMs: Date.now() - startedAt }
+      : { timedOut: false };
   try {
     const res = await Promise.race([
       admin.from('audit_logs').insert(rows).abortSignal(controller.signal),
@@ -597,12 +612,12 @@ async function insertAuditRows(
       status: typeof res.status === 'number' ? res.status : null,
       statusText: res.statusText || null,
       code: res.error.code || null,
-      timedOut: controller.signal.aborted,
+      ...timing(),
     };
   } catch (e) {
     return {
       thrown: e instanceof Error ? e.name : typeof e,
-      timedOut: controller.signal.aborted,
+      ...timing(),
     };
   } finally {
     clearTimeout(timer);
@@ -635,17 +650,24 @@ type LostRows = {
   cause?: unknown;
 };
 
+/**
+ * Send one loss report. Its webhook POST is held like the write it reports
+ * (keepAlive): on a suspended instance the alert was cut off too, and failed
+ * with a TimeoutError when a later request resumed it.
+ */
 function sendLossReport(
   cause: unknown,
   organizationId: string | null,
   extra: Record<string, string | number | boolean | null | undefined>,
 ) {
-  void reportError(cause ?? new Error('Audit rows were not written'), {
-    tag: 'audit.write_failed',
-    level: 'warning',
-    organizationId,
-    extra,
-  });
+  keepAlive(
+    reportError(cause ?? new Error('Audit rows were not written'), {
+      tag: 'audit.write_failed',
+      level: 'warning',
+      organizationId,
+      extra,
+    }),
+  );
 }
 
 function openLossWindow(key: string, organizationId: string | null): void {
@@ -683,9 +705,11 @@ function closeLossWindow(key: string, w: LossWindow): void {
  * organization in the current window, otherwise counted into the report that
  * goes out when the window closes. Counts, events and status only.
  *
- * The count report runs on a timer. On a serverless instance that is frozen
- * or recycled before the window closes it can be late or lost, the same risk
- * any fire-and-forget report has; the first report of an incident never
+ * The count report runs on a timer. Its POST is held (sendLossReport) only
+ * while the request that opened the window is still running, a bulk action
+ * awaiting its rows for one; on a serverless instance that is frozen or
+ * recycled before the window closes it can still be late or lost, the same
+ * risk any fire-and-forget report has. The first report of an incident never
  * waits for it.
  */
 function reportLostAuditRows(r: LostRows): void {
@@ -731,9 +755,28 @@ export function resetAuditLossReportsForTests(): void {
  * failed request as `{ error }` instead of throwing, so the result is read;
  * the catch only sees what throws (no context, no request headers).
  *
+ * KEPT ALIVE PAST THE RESPONSE. Many callers do not wait (`void audit(...)`
+ * at 68 call sites in 22 files on 2026-10-12). The write starts here, as it
+ * always did, and is handed to after() (lib/defer.ts keepAlive), so the
+ * platform keeps the invocation running until the INSERT has answered.
+ * Without it, Vercel suspended the instance once the response was sent, with
+ * the INSERT in flight, and the next request resumed it with the 5 s deadline
+ * long past: 35 reports from 2026-09-24 to 10-12, 33 of them rows that had
+ * committed but whose reply was never read (17 from the nightly restore-points
+ * cron), and 2 Learn4Life item-create rows that were never sent. The returned
+ * promise is that same write, so a caller that awaits sees no change.
+ * auditMany and insertAuditRowReported do the same.
+ *
  * For one row per item over a selection or a list, use `auditMany`.
  */
-export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
+export function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
+  const write = writeAudit(payload, ctx);
+  keepAlive(write);
+  return write;
+}
+
+/** The body of `audit()`. Never rejects: a lost row is reported instead. */
+async function writeAudit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
   let c: ServiceContext | undefined = ctx;
   try {
     c ??= await withContext();
@@ -777,9 +820,17 @@ export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promis
  * returns a failed INSERT as `{ error }` instead of throwing, so a
  * `try { await insert } catch` around it never saw a lost row.
  *
- * Never throws. Resolves to whether the row was written.
+ * Never throws. Resolves to whether the row was written. Kept alive past the
+ * response like `audit()`.
  */
-export async function insertAuditRowReported(row: AuditRowInsert): Promise<boolean> {
+export function insertAuditRowReported(row: AuditRowInsert): Promise<boolean> {
+  const write = writeAuditRowReported(row);
+  keepAlive(write);
+  return write;
+}
+
+/** The body of `insertAuditRowReported()`. Never rejects. */
+async function writeAuditRowReported(row: AuditRowInsert): Promise<boolean> {
   const entityType =
     typeof row.metadata.entity_type === 'string' ? row.metadata.entity_type : null;
   try {
@@ -822,9 +873,20 @@ export async function insertAuditRowReported(row: AuditRowInsert): Promise<boole
  * times out is counted, and when any row is lost ONE report says which events
  * and how many rows, never their contents (folded into the organization's
  * open report window when there is one). Returns the counts so a caller or a
- * test can see them; callers are free to ignore them.
+ * test can see them; callers are free to ignore them. Kept alive past the
+ * response like `audit()`, every chunk included.
  */
-export async function auditMany(
+export function auditMany(
+  payloads: readonly AuditPayload[],
+  ctx?: ServiceContext,
+): Promise<{ written: number; lost: number }> {
+  const write = writeAuditMany(payloads, ctx);
+  keepAlive(write);
+  return write;
+}
+
+/** The body of `auditMany()`. Never rejects. */
+async function writeAuditMany(
   payloads: readonly AuditPayload[],
   ctx?: ServiceContext,
 ): Promise<{ written: number; lost: number }> {

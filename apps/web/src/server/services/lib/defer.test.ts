@@ -4,7 +4,7 @@ import path from 'node:path';
 import { after } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { defer } from './defer';
+import { defer, keepAlive } from './defer';
 
 /**
  * The one after()/fire-and-forget helper (see defer.ts).
@@ -82,6 +82,44 @@ describe('defer', () => {
     } finally {
       process.off('unhandledRejection', unhandled);
     }
+  });
+});
+
+/**
+ * keepAlive is the promise form: the work has ALREADY STARTED inside the
+ * request (an audit INSERT), and the invocation must not be suspended until
+ * it settles. `void audit(...)` left it to chance: Vercel suspended the
+ * instance with the INSERT in flight, and the next request resumed it with the
+ * 5 s deadline long past (33 committed rows reported lost, 2 never sent).
+ */
+describe('keepAlive', () => {
+  // Mutation caught: not handing the work to after() (the `void` shape), or
+  // handing it a callback that starts something new after the response
+  // (defer's form) instead of the promise that is already running.
+  it('inside a request: hands the same, already started promise to after() once', () => {
+    const work = new Promise<void>(() => {});
+
+    keepAlive(work);
+
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    expect(afterMock.mock.calls[0]![0]).toBe(work);
+  });
+
+  // Mutation caught: dropping the try/catch. audit() is also called from
+  // scripts and tests that run outside a request scope; a throw there would
+  // turn a written row into a failed action.
+  it('outside a request: never throws, and the work still settles', async () => {
+    afterMock.mockImplementation(() => {
+      throw new Error('`after` was called outside a request scope.');
+    });
+    let settled = false;
+    const work = Promise.resolve().then(() => {
+      settled = true;
+    });
+
+    expect(() => keepAlive(work)).not.toThrow();
+    await work;
+    expect(settled).toBe(true);
   });
 });
 
