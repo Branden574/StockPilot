@@ -1188,8 +1188,12 @@ select is(
   'F4: a failure while closing the emptied source group leaves both records in it, the source open at its version, and no new group, audit or request row');
 drop trigger trg_aa_0400_probe_close on public.item_display_groups;
 drop function public._zz0400_probe_close();
+-- The apply runs in its own statement: a SELECT that both calls the apply and
+-- counts its rows reads the count from the snapshot taken before the call, so
+-- it saw 0 members although the apply had inserted 3 (test stage 2026-10-12).
+insert into ans select 'f5', pg_temp.ap(:mgr, (select r from reqs where tag = 'f1'), pg_temp.k(80));
 select is(
-  pg_temp.brief(pg_temp.ap(:mgr, (select r from reqs where tag = 'f1'), pg_temp.k(80)))
+  pg_temp.brief((select r from ans where tag = 'f5'))
   || '|' || (select count(*) from public.item_display_group_members where item_id in (:j1, :j2, :j3))::text,
   'applied/new/3/false|3',
   'F5: with the probes gone the first key applies (a rolled-back call recorded nothing under it)');
