@@ -416,6 +416,31 @@ export function composeDisplayList<R>(
 }
 
 /**
+ * The record an explicit group's header takes its picture from: the first of
+ * `rows`, in the order the header lists them (a composed entry's `rows`, which
+ * is also the order it expands in), whose picture is a non-blank URL; null
+ * when none has one, and the header keeps its placeholder. The web and the
+ * phone both pick through this, so a group shows the same record's picture on
+ * both.
+ *
+ * WHY a group shows one record's picture at all: the people review (P5) had
+ * the header show none, since its records can be different products. The
+ * owner overruled that on 2026-10-12 ("it should just use the first picture of
+ * whatever was chosen for the grouping"): a header with no picture read as the
+ * picture having disappeared.
+ */
+export function groupCoverRow<R>(
+  rows: readonly R[],
+  pictureOf: (row: R) => string | null | undefined,
+): R | null {
+  for (const row of rows) {
+    const url = pictureOf(row);
+    if (typeof url === 'string' && url.trim() !== '') return row;
+  }
+  return null;
+}
+
+/**
  * Which grouping each record is SHOWN under in a composed list (Ungroup
  * anything, owner 2026-10-12: Ungroup undoes the header a record appears
  * beneath): an explicit group's header ('group'), a same-SKU header ('sku'),

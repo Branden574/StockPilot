@@ -858,10 +858,13 @@ export default function Inventory() {
       }
       if (row.kind === 'explicit-header') {
         // Group selected (0400): a group with two or more of its records
-        // here. Same card as a SKU group; it counts records, not placements.
+        // here. Same card as a SKU group; it counts records, not placements,
+        // and shows the first picture among its records (owner 2026-10-12,
+        // overruling P5's "no cover"; none keeps the placeholder).
         return (
           <SkuGroupHeaderRow
             name={row.name}
+            imageUrl={row.coverUrl}
             total={row.total}
             reorderPoint={row.reorderPoint}
             placementCount={row.recordCount}
@@ -1238,6 +1241,7 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
  */
 const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   name,
+  imageUrl,
   total,
   reorderPoint,
   placementCount,
@@ -1252,6 +1256,12 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   stacked,
 }: {
   name: string;
+  /**
+   * Group selected (0400): an explicit group's picture, the first among its
+   * records (null: none, the placeholder glyph). Owner 2026-10-12: a group's
+   * header shows it. Absent (a SKU header): no thumb, as before.
+   */
+  imageUrl?: string | null;
   total: number;
   reorderPoint: number;
   placementCount: number;
@@ -1312,6 +1322,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         strokeWidth={2}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
+      {imageUrl !== undefined ? <Thumb size={56} imageUrl={imageUrl} /> : null}
       <View style={stacked ? rowStyles.bodyStacked : [rowStyles.bodyRow, rowStyles.bodyRowTight]}>
         <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
           {/* Dynamic Type: unbounded, like the placement rows this header

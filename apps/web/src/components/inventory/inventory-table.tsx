@@ -36,6 +36,7 @@ import {
   resolvePlacement,
   composeDisplayList,
   displayGroupChips,
+  groupCoverRow,
   shownUnderByRecord,
   ungroupableItemIds,
   DISPLAY_GROUP_FALLBACK_NAME,
@@ -3404,7 +3405,19 @@ function SkuGroupHeaderRow({
   const location =
     locationRollup.kind === 'same' ? lookups.locations.get(locationRollup.value) : null;
   const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
-  const rowThumbSrc = first.image_thumb_url ?? first.image_url;
+  // The picture. A SKU header shows its first placement's (one product
+  // identity, see above). A group's header shows the FIRST record, in the
+  // order it lists them (`items`, the rows it expands to), that has a picture,
+  // and its hover preview shows that same record's master. The people review
+  // (P5) had it show none; the owner overruled that on 2026-10-12 ("it should
+  // just use the first picture of whatever was chosen for the grouping"): an
+  // empty header read as the picture having disappeared. No picture anywhere
+  // in the group keeps the placeholder. core groupCoverRow is the phone's
+  // rule too.
+  const cover: Item | null = explicit
+    ? groupCoverRow(items, (it) => it.image_thumb_url ?? it.image_url)
+    : first;
+  const rowThumbSrc = cover ? (cover.image_thumb_url ?? cover.image_url) : null;
   // `status` is a PER-PLACEMENT field — placements of one SKU can
   // legitimately differ (e.g. one discontinued at a site while others stay
   // active). Never take just the first placement's status here: that can
@@ -3451,13 +3464,14 @@ function SkuGroupHeaderRow({
             />
           </button>
           <ImageHoverPreview
-            // A group's header shows no cover (P5): its records can be
-            // different products or editions, so one record's picture would
-            // speak for the rest (the phone shows none either).
-            src={explicit ? null : (first.image_url ?? null)}
+            // `cover`: the first placement's picture on a SKU header, the
+            // first record's with a picture on a group's (owner 2026-10-12,
+            // overruling P5's "no cover"). A thumb-only row fetches its
+            // master on hover, from that same record.
+            src={cover?.image_url ?? null}
             srcLoader={
-              !explicit && !first.image_url && first.image_thumb_url
-                ? () => loadMasterImageUrl(first.id)
+              cover && !cover.image_url && cover.image_thumb_url
+                ? () => loadMasterImageUrl(cover.id)
                 : undefined
             }
             alt={explicit ? explicit.name : first.name}
@@ -3489,17 +3503,17 @@ function SkuGroupHeaderRow({
             }
             className="shrink-0"
           >
-            {rowThumbSrc && !explicit ? (
+            {cover && rowThumbSrc ? (
               <Image
                 src={rowThumbSrc}
-                unoptimized={!!first.image_thumb_url}
+                unoptimized={!!cover.image_thumb_url}
                 alt=""
                 width={56}
                 height={56}
                 sizes="28px"
                 priority={rowIdx < 12}
-                placeholder={first.image_lqip ? 'blur' : 'empty'}
-                blurDataURL={first.image_lqip ?? undefined}
+                placeholder={cover.image_lqip ? 'blur' : 'empty'}
+                blurDataURL={cover.image_lqip ?? undefined}
                 className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
               />
             ) : (
