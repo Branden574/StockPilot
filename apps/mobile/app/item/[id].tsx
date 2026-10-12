@@ -88,6 +88,7 @@ import { isOnline, syncNow } from '@/lib/sync';
 import {
   confirmOneMessage,
   describeUngroupError,
+  doneOneMessage,
   postUngroup,
   readSkuSiblingCount,
   singleUngroupBody,
@@ -855,18 +856,21 @@ export default function ItemDetail() {
   // One record, ONLINE ONLY (never queued: the answer is the point). One key
   // per attempt, kept with its body for "Try again" after a busy or lost
   // answer: the server replays the first outcome instead of splitting twice.
-  async function sendUngroup(body: ReturnType<typeof singleUngroupBody>) {
+  async function sendUngroup(
+    body: ReturnType<typeof singleUngroupBody>,
+    barcode: string | null | undefined,
+  ) {
     setUngroupBusy(true);
     try {
       const answer = await postUngroup(body);
-      Alert.alert(UNGROUP_COPY.done(1), `SKU ${answer.newSku}. ${UNGROUP_COPY.labelsHint}`);
+      Alert.alert(UNGROUP_COPY.done(1), doneOneMessage(answer.newSku, barcode));
       void load();
     } catch (e) {
       const { message, retrySame } = describeUngroupError(e);
       if (retrySame) {
         Alert.alert(UNGROUP_COPY.makeOwnItem, message, [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Try again', onPress: () => void sendUngroup(body) },
+          { text: 'Try again', onPress: () => void sendUngroup(body, barcode) },
         ]);
       } else {
         Alert.alert(UNGROUP_COPY.makeOwnItem, message);
@@ -898,6 +902,7 @@ export default function ItemDetail() {
               actorUserId,
               key: randomRequestUuid(),
             }),
+            target.barcode,
           ),
       },
     ]);

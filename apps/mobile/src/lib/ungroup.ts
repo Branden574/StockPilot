@@ -94,6 +94,15 @@ export function confirmOneMessage(barcode: string | null | undefined): string {
   return `${UNGROUP_COPY.confirmOne} ${tail}`;
 }
 
+/**
+ * The words after a one-record split (test stage, iOS simulator walk): the new
+ * SKU, and the reprint hint only for a record without a barcode, whose label
+ * prints the SKU. The web's result shows the hint by the same rule.
+ */
+export function doneOneMessage(newSku: string, barcode: string | null | undefined): string {
+  return (barcode ?? '').trim() ? `SKU ${newSku}.` : `SKU ${newSku}. ${UNGROUP_COPY.labelsHint}`;
+}
+
 export interface UngroupAnswer {
   /** True when the key had already applied (a retry of a lost answer). */
   replay: boolean;

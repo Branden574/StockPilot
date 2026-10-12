@@ -14,6 +14,7 @@ import {
 import {
   confirmOneMessage,
   describeUngroupError,
+  doneOneMessage,
   postUngroup,
   readSkuSiblingCount,
   singleUngroupBody,
@@ -177,6 +178,24 @@ describe('confirmOneMessage', () => {
   });
 });
 
+// Test stage (iOS simulator walk): after a split of a book with an ISBN the
+// phone said "Labels without a barcode print the SKU. Reprint them for the
+// records that changed." The web's result shows that hint only when a changed
+// record has no barcode; the phone's done words follow the same rule.
+describe('doneOneMessage', () => {
+  it('a record without a barcode is told to reprint its SKU label', () => {
+    expect(doneOneMessage('SP-ABCDE-1234567', null)).toBe(
+      `SKU SP-ABCDE-1234567. ${UNGROUP_COPY.labelsHint}`,
+    );
+    expect(doneOneMessage('SP-ABCDE-1234567', '  ')).toBe(
+      `SKU SP-ABCDE-1234567. ${UNGROUP_COPY.labelsHint}`,
+    );
+  });
+  it('a record with a barcode is only told its new SKU', () => {
+    expect(doneOneMessage('SP-ABCDE-1234567', '9780000000002')).toBe('SKU SP-ABCDE-1234567.');
+  });
+});
+
 describe('readSkuSiblingCount', () => {
   it('counts the OTHER live records with the same raw SKU the member can read (head count)', async () => {
     const filters: [string, string, unknown][] = [];
@@ -234,6 +253,11 @@ describe('the item screen’s wiring (source pins: the screen is not rendered un
   });
   it('confirms with the label-aware words for this record', () => {
     expect(src).toMatch(/confirmOneMessage\(target\.barcode\)/);
+  });
+  it('says the new SKU in the label-aware words, on the first answer and after Try again', () => {
+    expect(src).toMatch(/doneOneMessage\(answer\.newSku, barcode\)/);
+    expect(src).toMatch(/sendUngroup\(body, barcode\)/);
+    expect(src).not.toMatch(/SKU \$\{answer\.newSku\}\. \$\{UNGROUP_COPY\.labelsHint\}/);
   });
   it('keeps one key per attempt and sends the same body again on a retry', () => {
     expect(src).toMatch(/randomRequestUuid\(\)/);
