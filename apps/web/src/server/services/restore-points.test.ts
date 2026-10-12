@@ -16,6 +16,9 @@
 // re-creates nothing; the warning names only SKU edits that are not splits;
 // and an admin who cannot view the audit log is told the check could not run,
 // never shown an empty list as an all-clear.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ROLE_PERMISSIONS, type Permission } from '@stockpilot/core';
@@ -218,6 +221,17 @@ const row = (id: string, sku: string, bin: string | null, qty: number) => ({
   status: 'active',
 });
 
+/** The first patch the restore sent InventoryService.update for a record. */
+const patchFor = (id: string) =>
+  h.update.mock.calls.find((c) => c[0] === id)?.[1] as Record<string, unknown>;
+/**
+ * PR stage fix round 1 (review F3-restore-fanout): all a record whose SKU now
+ * belongs to another product gets back besides its stock. None of them is in
+ * InventoryService's SHARED_ITEM_FIELDS (pinned below), so update() copies
+ * nothing to the other records.
+ */
+const PLACEMENT_PATCH_KEYS = ['primaryLocationId', 'status', 'supplierId', 'unitOfMeasure'];
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.inserted.length = 0;
@@ -380,6 +394,88 @@ describe('restoreSnapshot after an Ungroup', () => {
       quantityOnHand: 5,
     });
     expect(res).toMatchObject({ updated: 1, recreated: 1 });
+  });
+
+  // PR stage fix round 1 (review F3-restore-fanout): the restore reconciles a
+  // record with InventoryService.update, which copies the shared product
+  // fields it is given (name, barcode, cost, price, ...) to every other live
+  // record holding the record's CURRENT SKU (Model B). Matching by id finds a
+  // record whose SKU changed after the point; when that SKU now belongs to
+  // records that did not share the point's SKU (here A was edited to Desk
+  // Lamp's SKU), those fields overwrote the other product's records. Such a
+  // record gets its stock and its own placement fields back, never the shared
+  // ones.
+  it("version 2: never copies the point's shared fields onto another product's records when a record's SKU now belongs to that product", async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 2,
+        capturedAt: '2026-10-12T00:00:00.000Z',
+        items: [
+          item({ id: A, sku: 'SP-PAIR', unitCost: 5, binLocation: '22-A', quantityOnHand: 9 }),
+          item({
+            id: C,
+            sku: 'SP-LAMP',
+            name: 'Desk Lamp',
+            unitCost: 30,
+            binLocation: '7-B',
+            quantityOnHand: 2,
+          }),
+        ],
+      },
+      // After the point A's SKU was edited to SP-LAMP, Desk Lamp's SKU.
+      active: [row(A, 'SP-LAMP', '22-A', 4), row(C, 'SP-LAMP', '7-B', 2)],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, C]);
+    expect(Object.keys(patchFor(A)).sort()).toEqual(PLACEMENT_PATCH_KEYS);
+    expect(patchFor(A)).toMatchObject({ status: 'active', unitOfMeasure: 'unit' });
+    // Its stock still comes back, on that same record.
+    expect(h.adjustStock.mock.calls[0]?.[0]).toMatchObject({ itemId: A, quantityChange: 5 });
+    // Desk Lamp still holds its SKU from the point: it gets every field back.
+    expect(patchFor(C)).toMatchObject({ name: 'Desk Lamp', unitCost: 30 });
+    expect(res).toMatchObject({ updated: 2, recreated: 0, extrasFlagged: 0 });
+    expect(h.audit.mock.calls.at(-1)?.[0].extra).toMatchObject({ sharedFieldsKept: 1 });
+  });
+
+  it("version 2: a record whose SKU now belongs only to records the point does not hold keeps that product's shared fields too", async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 2,
+        capturedAt: '2026-10-12T00:00:00.000Z',
+        items: [item({ id: A, sku: 'SP-PAIR', binLocation: '22-A', quantityOnHand: 9 })],
+      },
+      // D was created after the point; A's SKU was then edited to D's.
+      active: [row(A, 'SP-DESK', '22-A', 9), row(D, 'SP-DESK', '8-A', 1)],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A]);
+    expect(Object.keys(patchFor(A)).sort()).toEqual(PLACEMENT_PATCH_KEYS);
+    expect(res).toMatchObject({ updated: 1, extrasFlagged: 1, extrasSample: ['SP-DESK'] });
+  });
+
+  it('version 2: records whose SKU changed together, as one product, get every field back', async () => {
+    const { ctx } = harness({
+      snapshot: {
+        version: 2,
+        capturedAt: '2026-10-12T00:00:00.000Z',
+        items: [
+          item({ id: A, sku: 'SP-PAIR', binLocation: '22-A', quantityOnHand: 9 }),
+          item({ id: B, sku: 'SP-PAIR', binLocation: '22-C', quantityOnHand: 4 }),
+        ],
+      },
+      // A's SKU was edited to SP-PAD3 and B followed it (Model B).
+      active: [row(A, 'SP-PAD3', '22-A', 9), row(B, 'SP-PAD3', '22-C', 4)],
+    });
+    await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, B]);
+    for (const id of [A, B]) {
+      expect(patchFor(id)).toMatchObject({
+        name: 'Black Mouse Pad',
+        unitCost: 0,
+        status: 'active',
+      });
+    }
+    expect(h.audit.mock.calls.at(-1)?.[0].extra).not.toHaveProperty('sharedFieldsKept');
   });
 
   // PR stage, DATA-1: this is now the SKU-EDIT case (no inventory.item.ungrouped
@@ -585,6 +681,40 @@ describe('restoreSnapshot: a version 1 point after an Ungroup (PR stage, DATA-1)
     expect(h.create).toHaveBeenCalledTimes(1);
     expect(h.create.mock.calls[0]?.[0]).toMatchObject({ sku: 'SP-PAIR', binLocation: '22-C' });
     expect(res).toMatchObject({ updated: 2, recreated: 1, extrasFlagged: 0 });
+  });
+
+  // PR stage fix round 1 (review F3-restore-fanout): a split record found
+  // through its split whose SKU was later edited to another product's SKU gets
+  // its stock and placement fields back, never the point's shared fields,
+  // which update() would copy onto that product's records.
+  it("never copies the point's shared fields onto another product's records when the split record's SKU was later edited to that product's SKU", async () => {
+    // B was split from SP-PAIR on 22-C, then edited to SP-LAMP, the SKU of
+    // Desk Lamp (on 7-B, in the point).
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: {
+        ...POINT_V1,
+        items: [
+          ...POINT_V1.items,
+          item({ sku: 'SP-LAMP', name: 'Desk Lamp', binLocation: '7-B', quantityOnHand: 2 }),
+        ],
+      },
+      active: [
+        row(A, 'SP-PAIR', '22-A', 9),
+        row(B, 'SP-LAMP', '22-C', 4),
+        row(C, 'SP-LAMP', '7-B', 2),
+      ],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, B, C]);
+    expect(Object.keys(patchFor(B)).sort()).toEqual(PLACEMENT_PATCH_KEYS);
+    expect(patchFor(A)).toMatchObject({ name: 'Black Mouse Pad' });
+    expect(patchFor(C)).toMatchObject({ name: 'Desk Lamp' });
+    expect(res).toMatchObject({ updated: 3, recreated: 0, extrasFlagged: 0 });
+    expect(h.audit.mock.calls.at(-1)?.[0].extra).toMatchObject({
+      matchedBySplit: 1,
+      sharedFieldsKept: 1,
+    });
   });
 
   it('says in the restore audit row how many records it found through a split; a version 1 restore with none says nothing new', async () => {
@@ -1053,5 +1183,27 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
     await expect(restorePointSkuChanges(ctx, POINT)).rejects.toMatchObject({
       code: 'internal_error',
     });
+  });
+});
+
+describe('what a restore gives back to a record whose SKU now belongs to another product (PR stage fix round 1)', () => {
+  // The placement patch must never carry a shared product field: update()
+  // copies those to every record with the record's SKU. Read from the source,
+  // so a field moved into SHARED_ITEM_FIELDS later fails here.
+  it("sends none of InventoryService's SHARED_ITEM_FIELDS", () => {
+    const src = readFileSync(join(__dirname, 'inventory.ts'), 'utf8');
+    const block = /const SHARED_ITEM_FIELDS = \[([\s\S]*?)\] as const;/.exec(src)?.[1] ?? '';
+    const shared = [...block.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    // The list was found: the fields an edit copies to every record of a SKU.
+    expect(shared).toEqual(expect.arrayContaining(['name', 'sku', 'unit_cost', 'barcode']));
+    for (const col of ['primary_location_id', 'status', 'supplier_id', 'unit_of_measure']) {
+      expect(shared, col).not.toContain(col);
+    }
+    expect(PLACEMENT_PATCH_KEYS).toEqual([
+      'primaryLocationId',
+      'status',
+      'supplierId',
+      'unitOfMeasure',
+    ]);
   });
 });

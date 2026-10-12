@@ -361,6 +361,41 @@ export async function restoreSnapshot(
     return other;
   };
 
+  // PR stage fix round 1 (review F3-restore-fanout): update() copies the
+  // shared product fields it is given (name, barcode, cost, price, ...) to
+  // every other live record holding the record's CURRENT SKU (Model B). A
+  // record matched by id (version 2) or through its split (version 1) can hold
+  // a SKU now that it did not hold at the point. When records outside its
+  // product at the point hold that SKU too (it was edited to another
+  // product's SKU since), the point's shared fields would overwrite theirs, so
+  // such a record gets back its stock and its placement fields only. Records
+  // whose SKU changed together, as one product, get every field back.
+  const pointSkuOf = new Map<string, string>();
+  if (byIdFirst) {
+    for (const it of items) {
+      if (it.id && byId.has(it.id)) pointSkuOf.set(it.id, (it.sku ?? '').trim());
+    }
+  } else {
+    for (const [it, m] of splitMatch) pointSkuOf.set(m.id, (it.sku ?? '').trim());
+  }
+  const pointSkus = new Set(items.map((it) => (it.sku ?? '').trim()));
+  const holdersBySku = new Map<string, string[]>();
+  for (const r of byId.values()) {
+    holdersBySku.set(r.sku, [...(holdersBySku.get(r.sku) ?? []), r.id]);
+  }
+  const keepsSharedFields = (it: SnapshotItem, recordId: string): boolean => {
+    const then = (it.sku ?? '').trim();
+    const now = byId.get(recordId)?.sku;
+    if (!now || now === then) return false;
+    // Another product's SKU in the point (its records are reconciled, or
+    // re-created, under it in this same restore).
+    if (pointSkus.has(now)) return true;
+    return (holdersBySku.get(now) ?? []).some(
+      (other) => other !== recordId && pointSkuOf.get(other) !== then,
+    );
+  };
+  let sharedFieldsKept = 0;
+
   const svc = new InventoryService(ctx);
   let updated = 0;
   let recreated = 0;
@@ -384,20 +419,27 @@ export async function restoreSnapshot(
         claimed.add(existing.id);
         // Reconcile fields, forcing 'active' first so the quantity reset (which
         // adjust_stock rejects on archived items) always works regardless of the
-        // snapshot's final status.
+        // snapshot's final status. A record whose SKU now belongs to another
+        // product gets its placement fields only (keepsSharedFields).
+        const keepShared = keepsSharedFields(it, existing.id);
+        if (keepShared) sharedFieldsKept++;
         await svc.update(existing.id, {
-          name: it.name,
-          barcode: it.barcode,
-          description: it.description,
-          categoryId,
+          ...(keepShared
+            ? {}
+            : {
+                name: it.name,
+                barcode: it.barcode,
+                description: it.description,
+                categoryId,
+                unitCost: it.unitCost,
+                retailPrice: it.retailPrice,
+                reorderPoint: it.reorderPoint,
+                reorderQuantity: it.reorderQuantity,
+                itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
+              }),
           supplierId,
           primaryLocationId,
-          unitCost: it.unitCost,
-          retailPrice: it.retailPrice,
-          reorderPoint: it.reorderPoint,
-          reorderQuantity: it.reorderQuantity,
           unitOfMeasure: it.unitOfMeasure,
-          itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
           status: 'active',
         });
         const delta = it.quantityOnHand - existing.qty;
@@ -469,6 +511,7 @@ export async function restoreSnapshot(
         preRestoreId: pre.id,
         snapshotVersion: byIdFirst ? SNAPSHOT_VERSION : 1,
         ...(splitMatch.size > 0 ? { matchedBySplit: splitMatch.size } : {}),
+        ...(sharedFieldsKept > 0 ? { sharedFieldsKept } : {}),
       },
     },
     ctx,
