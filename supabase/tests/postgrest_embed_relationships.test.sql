@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 401 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 404 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -166,6 +166,9 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('item_attachments', 'item_attachments_created_by_fkey', 'user_profiles', 'created_by', 'id'),
   ('item_attachments', 'item_attachments_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('item_attachments', 'item_attachments_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('item_display_group_members', 'item_display_group_members_group_fk', 'item_display_groups', 'organization_id,group_id', 'organization_id,id'),
+  ('item_display_group_members', 'item_display_group_members_item_id_fkey', 'inventory_items', 'item_id', 'id'),
+  ('item_display_groups', 'item_display_groups_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('item_grouping_requests', 'item_grouping_requests_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('item_grouping_requests', 'item_grouping_requests_user_id_fkey', 'user_profiles', 'user_id', 'id'),
   ('item_images', 'item_images_item_id_fkey', 'inventory_items', 'item_id', 'id'),

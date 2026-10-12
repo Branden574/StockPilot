@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-10-12",
+  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-10-12, migrations through 0399, plus migration 0400 (item_display_groups and item_display_group_members: three foreign keys and two primary keys) added by hand from the migration text; regenerate from the local stack at the test stage",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
@@ -121,6 +121,9 @@
     ["item_attachments","item_attachments_created_by_fkey","user_profiles",["created_by"],["id"]],
     ["item_attachments","item_attachments_item_id_fkey","inventory_items",["item_id"],["id"]],
     ["item_attachments","item_attachments_organization_id_fkey","organizations",["organization_id"],["id"]],
+    ["item_display_group_members","item_display_group_members_group_fk","item_display_groups",["organization_id","group_id"],["organization_id","id"]],
+    ["item_display_group_members","item_display_group_members_item_id_fkey","inventory_items",["item_id"],["id"]],
+    ["item_display_groups","item_display_groups_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["item_grouping_requests","item_grouping_requests_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["item_grouping_requests","item_grouping_requests_user_id_fkey","user_profiles",["user_id"],["id"]],
     ["item_images","item_images_item_id_fkey","inventory_items",["item_id"],["id"]],
@@ -445,6 +448,8 @@
     "inventory_items": ["id"],
     "inventory_stock": ["id"],
     "item_attachments": ["id"],
+    "item_display_group_members": ["item_id"],
+    "item_display_groups": ["id"],
     "item_grouping_requests": ["organization_id","user_id","key"],
     "item_images": ["id"],
     "item_import_batches": ["id"],

@@ -728,6 +728,17 @@ PGTAP_TESTS=(
   # scope move between the checks and the lock) are
   # scripts/db-concurrency/0399_split_sku_races.sh.
   supabase/tests/0399_ungroup_shared_sku.test.sql
+  # Group selected (0400, slice G2): explicit display groups. The two tables
+  # have RLS on with SELECT only (a membership is readable exactly when its
+  # record is; a group only through a readable live record) and no write
+  # privilege for any API role; apply_item_grouping is SECURITY DEFINER with
+  # EXECUTE to authenticated only, checks items:update and each record's read
+  # and write scope (again under the NOWAIT locks), refuses a hidden id like
+  # an unknown one, never moves a record out of another group without an
+  # explicit per-record decision, and writes no item row, stock or product
+  # family; the INVOKER preview never names item_stock_levels (INV-33). The
+  # two-session proofs are scripts/db-concurrency/0400_item_display_groups_races.sh.
+  supabase/tests/0400_item_display_groups.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
