@@ -148,6 +148,10 @@ interface BulkActionsProps {
   groupingView?: 'items' | 'books';
   /** Add records (same-SKU siblings the review found) to the selection. */
   onAddToSelection?: (ids: string[]) => void;
+  /** Called when the review closes after a grouping applied, with the group
+   *  the records are in, so the list opens it (design 5; completeness review
+   *  C3). */
+  onGrouped?: (groupId: string) => void;
 }
 
 type ActiveDialog =
@@ -198,6 +202,7 @@ export function BulkActions({
   groupedItemIds = [],
   groupingView = 'items',
   onAddToSelection,
+  onGrouped,
 }: BulkActionsProps) {
   const router = useRouter();
   // Group selected / Remove from group review the ids they were OPENED with
@@ -206,6 +211,8 @@ export function BulkActions({
   const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
   const [removeIds, setRemoveIds] = React.useState<string[] | null>(null);
   const groupingDone = React.useRef(false);
+  // The group a grouping put the records in, opened on the list on close.
+  const groupedId = React.useRef<string | null>(null);
   // Ungroup's dialog reviews the ids it was OPENED with: a refresh after the
   // split can change the selection under it, and its result must stay on
   // screen until it is closed. The selection is cleared on that close.
@@ -591,6 +598,7 @@ export function BulkActions({
               type="button"
               onClick={() => {
                 groupingDone.current = false;
+                groupedId.current = null;
                 setGroupIds([...groupItemIds]);
               }}
               title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
@@ -766,6 +774,7 @@ export function BulkActions({
           onDone={(o) => {
             if (o.outcome === 'applied') {
               groupingDone.current = true;
+              groupedId.current = o.group?.id ?? null;
               router.refresh();
             }
           }}
@@ -775,6 +784,8 @@ export function BulkActions({
             if (groupingDone.current) {
               groupingDone.current = false;
               onClear();
+              if (groupedId.current) onGrouped?.(groupedId.current);
+              groupedId.current = null;
             }
           }}
         />

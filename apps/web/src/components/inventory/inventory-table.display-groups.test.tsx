@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -88,6 +88,7 @@ const { spy } = vi.hoisted(() => ({
     groupItemIds: undefined as string[] | undefined,
     groupedItemIds: undefined as string[] | undefined,
     groupingView: undefined as string | undefined,
+    onGrouped: undefined as ((groupId: string) => void) | undefined,
   },
 }));
 vi.mock('@/components/inventory/bulk-actions', () => ({
@@ -96,11 +97,13 @@ vi.mock('@/components/inventory/bulk-actions', () => ({
     groupItemIds?: string[];
     groupedItemIds?: string[];
     groupingView?: string;
+    onGrouped?: (groupId: string) => void;
   }) => {
     spy.selectedIds = props.selectedIds;
     spy.groupItemIds = props.groupItemIds;
     spy.groupedItemIds = props.groupedItemIds;
     spy.groupingView = props.groupingView;
+    spy.onGrouped = props.onGrouped;
     return <div data-testid="bulk-actions" />;
   },
 }));
@@ -444,6 +447,29 @@ describe('InventoryTable: Group selected in the bulk bar', () => {
     expect([...(spy.groupItemIds ?? [])].sort()).toEqual(['a', 'b', 'c']);
     expect(spy.groupedItemIds).toEqual(['a']);
     expect(spy.groupingView).toBe('items');
+  });
+
+  // Completeness review C3: on success the list opens the new group, so the
+  // person sees the records they grouped under its header.
+  it('after a grouping the table opens the group it was told about', async () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    expect(bodyRows(container)).toHaveLength(1);
+    act(() => spy.onGrouped?.('g'));
+    expect(bodyRows(container)).toHaveLength(3);
+    expect(screen.getByRole('button', { name: /collapse group pads/i })).toBeInTheDocument();
   });
 
   it('two rack rows of ONE record are one record: not enough to group', async () => {

@@ -1781,6 +1781,11 @@ export function InventoryTable({
     });
   }
 
+  /** Opens an explicit group's header (after a grouping put records in it). */
+  function openExplicitGroup(groupId: string) {
+    setExpandedExplicitGroups((prev) => (prev.has(groupId) ? prev : new Set(prev).add(groupId)));
+  }
+
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
       const next = new Set(prev);
@@ -1819,7 +1824,12 @@ export function InventoryTable({
           itemIds={groupAction.ids}
           initialGroupId={groupAction.groupId}
           view={showBookFields ? 'books' : 'items'}
-          onDone={(o) => (o.outcome === 'applied' ? router.refresh() : undefined)}
+          onDone={(o) => {
+            if (o.outcome !== 'applied') return;
+            router.refresh();
+            // The record joined: show the group open (C3).
+            if (o.group?.id) openExplicitGroup(o.group.id);
+          }}
           onOpenChange={(v) => (v ? null : setGroupAction(null))}
         />
       ) : null}
@@ -2116,6 +2126,8 @@ export function InventoryTable({
             groupItemIds={groupFacts?.canGroup ? selectedItemIds : []}
             groupedItemIds={groupFacts?.groupedIds ?? []}
             groupingView={showBookFields ? 'books' : 'items'}
+            // C3 (design 5): after a grouping the list opens the group.
+            onGrouped={openExplicitGroup}
             onAddToSelection={(ids) =>
               // An explicit choice in the review: add those records (their
               // rows on screen when loaded, else the record itself).

@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   group: [] as Array<{
     itemIds: readonly string[];
     view: string;
-    onDone: (o: { outcome: string }) => void;
+    onDone: (o: { outcome: string; group?: { id: string } | null }) => void;
     onOpenChange: (v: boolean) => void;
     onAddToSelection?: (ids: string[]) => void;
   }>,
@@ -60,6 +60,7 @@ function bar(p: {
   groupedItemIds?: string[];
   onClear?: () => void;
   onAddToSelection?: (ids: string[]) => void;
+  onGrouped?: (groupId: string) => void;
 }) {
   return (
     <BulkActions
@@ -68,6 +69,7 @@ function bar(p: {
       groupedItemIds={p.groupedItemIds}
       groupingView="books"
       onAddToSelection={p.onAddToSelection}
+      onGrouped={p.onGrouped}
       categories={[]}
       suppliers={[]}
       locations={[]}
@@ -102,6 +104,22 @@ describe('BulkActions: Group selected and Remove from group', () => {
     expect(onClear).not.toHaveBeenCalled();
     h.group.at(-1)!.onOpenChange(false);
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  // Completeness review C3 (design 5: on success the list opens the group):
+  // after the review closes on a grouping, the table is told which group to
+  // open; a no-op or a plain close tells it nothing.
+  it('after a grouping, closing the review tells the table which group to open', async () => {
+    const onGrouped = vi.fn();
+    render(bar({ selectedIds: ['a', 'b'], groupItemIds: ['a', 'b'], onGrouped }));
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    h.group.at(-1)!.onDone({ outcome: 'noop', group: { id: 'g0' } });
+    h.group.at(-1)!.onOpenChange(false);
+    expect(onGrouped).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    h.group.at(-1)!.onDone({ outcome: 'applied', group: { id: 'g1' } });
+    h.group.at(-1)!.onOpenChange(false);
+    expect(onGrouped).toHaveBeenCalledWith('g1');
   });
 
   it('"Add them to the selection" adds the records to the table\'s selection and to what the review covers', async () => {
