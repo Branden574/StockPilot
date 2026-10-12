@@ -38,10 +38,12 @@ import {
   postGrouping,
   previewGrouping,
   readGroupSelectedParams,
+  reviewAnnouncement,
   reviewRecordDetail,
   type GroupingIdentity,
   type PendingGroupingBody,
   type PhoneGroupingReview,
+  type ReviewLoadState,
 } from '@/lib/display-groups';
 import { isOnline } from '@/lib/sync';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -72,6 +74,13 @@ import { useWorkspace } from '@/lib/use-workspace';
 /** How many of an existing group's other records the review lists by name
  *  (the header above counts them all), as on the web. */
 const TARGET_MEMBERS_SHOWN = 20;
+
+/** Says a message to VoiceOver or TalkBack now. iOS ignores
+ *  accessibilityLiveRegion, so the review announces what changed itself
+ *  (people review P11). */
+function announce(message: string) {
+  AccessibilityInfo.announceForAccessibility(message);
+}
 
 export default function GroupSelectedScreen() {
   const router = useRouter();
@@ -185,9 +194,28 @@ export default function GroupSelectedScreen() {
     });
   }
 
-  function announce(message: string) {
-    AccessibilityInfo.announceForAccessibility(message);
-  }
+  // P11: announce the review's load outcome (records ready, a failure's own
+  // words, offline) once per change, and each new reason Save is off.
+  const loadAnnounced = React.useRef<ReviewLoadState>({ kind: 'loading' });
+  React.useEffect(() => {
+    const next: ReviewLoadState =
+      loadState.kind === 'ready'
+        ? { kind: 'ready', records: loadState.review.records.length }
+        : loadState.kind === 'failed'
+          ? { kind: 'failed', message: loadState.message }
+          : loadState.kind === 'offline'
+            ? { kind: 'offline' }
+            : { kind: 'loading' };
+    const message = reviewAnnouncement(loadAnnounced.current, next);
+    loadAnnounced.current = next;
+    if (message) announce(message);
+  }, [loadState]);
+  const blocked = plan && !plan.noop ? plan.blockedReason : null;
+  const blockedAnnounced = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (blocked && blocked !== blockedAnnounced.current) announce(blocked);
+    blockedAnnounced.current = blocked;
+  }, [blocked]);
 
   async function save() {
     if (!plan || !identity || phase === 'saving') return;

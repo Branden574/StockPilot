@@ -2554,6 +2554,7 @@ export function InventoryTable({
                         <DisplayGroupChipView
                           chip={entry.chip}
                           name={groupNames.get(entry.chip.groupId) ?? DISPLAY_GROUP_FALLBACK_NAME}
+                          recordName={item.name}
                           onAddToGroup={
                             canUngroup && entry.chip.kind === 'same-sku'
                               ? () =>
@@ -3456,6 +3457,7 @@ function SkuGroupHeaderRow({
                 <button
                   type="button"
                   onClick={explicit.onRename}
+                  aria-label={GROUP_COPY.renameFor(explicit.name)}
                   className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
                 >
                   {GROUP_COPY.renameAction}
@@ -3465,6 +3467,7 @@ function SkuGroupHeaderRow({
                 <button
                   type="button"
                   onClick={explicit.onRemove}
+                  aria-label={GROUP_COPY.removeFor(explicit.name)}
                   className="text-[11px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
                 >
                   {GROUP_COPY.removeAction}
@@ -4690,10 +4693,13 @@ function SparkModeToggle({
 function DisplayGroupChipView({
   chip,
   name,
+  recordName,
   onAddToGroup,
 }: {
   chip: DisplayGroupChip;
   name: string;
+  /** The row's record: each chip's button names it (P11). */
+  recordName: string;
   onAddToGroup?: () => void;
 }) {
   return (
@@ -4705,6 +4711,7 @@ function DisplayGroupChipView({
         <button
           type="button"
           onClick={onAddToGroup}
+          aria-label={GROUP_COPY.addToGroupFor(name, recordName)}
           className="text-[var(--ed-ink-2)] underline-offset-2 hover:underline"
         >
           {GROUP_COPY.addToGroup}

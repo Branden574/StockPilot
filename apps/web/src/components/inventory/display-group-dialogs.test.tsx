@@ -228,6 +228,8 @@ describe('GroupSelectedDialog', () => {
     const save = screen.getByRole('button', { name: 'Group 2 records' });
     expect(save).toBeDisabled();
     expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
+    // P11: the disabled Save says why (its description is the blocked reason).
+    expect(save).toHaveAccessibleDescription(GROUP_COPY.blocked.otherGroup);
     const choice = within(screen.getByTestId(`group-row-${A}`)).getByRole('group', {
       name: GROUP_COPY.otherGroup('Old shirts'),
     });

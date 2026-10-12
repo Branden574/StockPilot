@@ -57,9 +57,11 @@ import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import {
   attachDisplayGroups,
+  groupRowAccessibilityActions,
   groupSelectedHref,
   onDisplayGroupsChanged,
   readDisplayGroups,
+  runGroupRowAccessibilityAction,
 } from '@/lib/display-groups';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
@@ -1065,6 +1067,18 @@ const BookCard = React.memo(function BookCard({
   return (
     <Pressable
       onPress={() => (selectMode ? onToggleSelect(book) : onBookPress(book.id))}
+      // Add to group sits inside this Pressable, so VoiceOver cannot reach it
+      // as its own element (P4): the card carries it as an action, and
+      // 'activate' keeps a double tap doing what a tap does.
+      accessibilityActions={groupRowAccessibilityActions(!!(addToGroupId && onAddToGroup))}
+      onAccessibilityAction={(e) =>
+        runGroupRowAccessibilityAction(e.nativeEvent.actionName, {
+          activate: () => (selectMode ? onToggleSelect(book) : onBookPress(book.id)),
+          addToGroup: () => {
+            if (addToGroupId && onAddToGroup) onAddToGroup(book.id, addToGroupId);
+          },
+        })
+      }
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
       <Card padding={14}>

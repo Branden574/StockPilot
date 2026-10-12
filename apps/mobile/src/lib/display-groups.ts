@@ -157,6 +157,57 @@ export function notifyDisplayGroupsChanged(): void {
   for (const l of [...changeListeners]) l();
 }
 
+// ── A row's accessibility actions (people review P4) ──────────────────────
+// A Pressable nested inside the row's Pressable is not its own element for
+// VoiceOver (RN's Pressable is accessible), so "Add to group" could not be
+// reached. The row carries it as an action instead: swipe up or down to it,
+// double tap to run it. 'activate' is listed and handled explicitly, so a
+// double tap on the row still does exactly what a tap on the row does.
+
+export const ADD_TO_GROUP_ACTION = 'addToGroup';
+
+/** The row's accessibility actions, or undefined when it offers no Add to
+ *  group (the row then behaves as it always did). */
+export function groupRowAccessibilityActions(
+  canAddToGroup: boolean,
+): { name: string; label?: string }[] | undefined {
+  return canAddToGroup
+    ? [{ name: 'activate' }, { name: ADD_TO_GROUP_ACTION, label: GROUP_COPY.addToGroup }]
+    : undefined;
+}
+
+/** Runs the row action VoiceOver or TalkBack asked for; nothing for another. */
+export function runGroupRowAccessibilityAction(
+  actionName: string,
+  on: { activate: () => void; addToGroup: () => void },
+): void {
+  if (actionName === ADD_TO_GROUP_ACTION) on.addToGroup();
+  else if (actionName === 'activate') on.activate();
+}
+
+// ── The review's announcements (people review P11) ────────────────────────
+
+export type ReviewLoadState =
+  | { kind: 'loading' }
+  | { kind: 'offline' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; records: number };
+
+/**
+ * What the review announces when its load state changes (iOS ignores
+ * accessibilityLiveRegion, so VoiceOver heard nothing when the review loaded
+ * or failed): the records ready to review, the failure's own words, or the
+ * offline words; nothing when nothing changed or while loading.
+ */
+export function reviewAnnouncement(prev: ReviewLoadState, next: ReviewLoadState): string | null {
+  if (next.kind === 'failed')
+    return prev.kind === 'failed' && prev.message === next.message ? null : next.message;
+  if (next.kind === 'offline') return prev.kind === 'offline' ? null : GROUP_COPY.offline;
+  if (next.kind === 'ready')
+    return prev.kind === 'ready' ? null : GROUP_COPY.reviewReady(next.records);
+  return null;
+}
+
 // ── The select bar ─────────────────────────────────────────────────────────
 
 /**

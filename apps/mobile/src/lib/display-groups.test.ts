@@ -8,6 +8,7 @@ import { GROUP_COPY, GROUPING_ERROR_WORDS, groupingPreviewKey } from '@stockpilo
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 // vi.mock below is hoisted above every import by vitest.
 import {
+  ADD_TO_GROUP_ACTION,
   attachDisplayGroups,
   describeGroupingError,
   groupSelectedHref,
@@ -20,7 +21,10 @@ import {
   readDisplayGroups,
   readGroupSelectedParams,
   readItemDisplayGroup,
+  reviewAnnouncement,
   reviewRecordDetail,
+  groupRowAccessibilityActions,
+  runGroupRowAccessibilityAction,
   type PhoneGroupingRecord,
 } from './display-groups';
 
@@ -459,6 +463,47 @@ describe('reviewRecordDetail', () => {
   });
 });
 
+// People review P4: a Pressable nested in the row's Pressable is not its own
+// element for VoiceOver (RN's Pressable is accessible), so the row itself
+// carries "Add to group" as an action; 'activate' keeps a double tap doing
+// what a tap on the row does.
+describe('the row accessibility actions (P4)', () => {
+  it('offers Add to group as an action on the row only when the row offers it', () => {
+    expect(groupRowAccessibilityActions(true)).toEqual([
+      { name: 'activate' },
+      { name: ADD_TO_GROUP_ACTION, label: GROUP_COPY.addToGroup },
+    ]);
+    expect(groupRowAccessibilityActions(false)).toBeUndefined();
+  });
+
+  it('runs the action asked for, and nothing for an unknown one', () => {
+    const on = { activate: vi.fn(), addToGroup: vi.fn() };
+    runGroupRowAccessibilityAction(ADD_TO_GROUP_ACTION, on);
+    expect(on.addToGroup).toHaveBeenCalledTimes(1);
+    expect(on.activate).not.toHaveBeenCalled();
+    runGroupRowAccessibilityAction('activate', on);
+    expect(on.activate).toHaveBeenCalledTimes(1);
+    runGroupRowAccessibilityAction('magicTap', on);
+    expect(on.activate).toHaveBeenCalledTimes(1);
+    expect(on.addToGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+// People review P11: iOS ignores accessibilityLiveRegion, so the review
+// announces its loading outcome itself.
+describe('reviewAnnouncement (P11)', () => {
+  it('announces a review that loaded, failed or found no connection, once per change', () => {
+    const ready = { kind: 'ready' as const, records: 2 };
+    expect(reviewAnnouncement({ kind: 'loading' }, ready)).toBe(GROUP_COPY.reviewReady(2));
+    expect(reviewAnnouncement(ready, ready)).toBeNull();
+    expect(reviewAnnouncement({ kind: 'loading' }, { kind: 'failed', message: 'No luck.' })).toBe(
+      'No luck.',
+    );
+    expect(reviewAnnouncement({ kind: 'loading' }, { kind: 'offline' })).toBe(GROUP_COPY.offline);
+    expect(reviewAnnouncement(ready, { kind: 'loading' })).toBeNull();
+  });
+});
+
 describe('screen pins', () => {
   const read = (p: string) => readFileSync(resolve(__dirname, p), 'utf8');
 
@@ -508,6 +553,27 @@ describe('screen pins', () => {
     expect(item).toContain('GROUP_COPY.itemPageInGroup');
     expect(item).toContain('GROUP_COPY.removeAction');
     expect(item).toContain('removeBodyFor');
+  });
+
+  it('both lists put Add to group on the row as an accessibility action (P4)', () => {
+    for (const p of [
+      '../../app/(drawer)/(tabs)/inventory.tsx',
+      '../../app/(drawer)/(tabs)/books.tsx',
+    ]) {
+      const src = read(p);
+      expect(src).toContain('accessibilityActions={groupRowAccessibilityActions(');
+      expect(src).toContain('runGroupRowAccessibilityAction(e.nativeEvent.actionName');
+    }
+  });
+
+  it('the review announces its load and its blocked reason on iOS, and the select bar Group is a 44pt target (P11)', () => {
+    const screen = read('../../app/group-selected.tsx');
+    expect(screen).toContain('reviewAnnouncement(');
+    expect(screen).toMatch(/announce\(plan\.blockedReason\)|announce\(blocked\)/);
+    const bar = read('../components/count-select-bar.tsx');
+    expect(bar).toContain('hitSlop={GROUP_HIT_SLOP}');
+    // 12.5pt text sits on a line of about 16pt; 14pt above and below make 44.
+    expect(bar).toMatch(/GROUP_HIT_SLOP = \{ top: 14, bottom: 14, left: 8, right: 8 \}/);
   });
 
   it('both lists read memberships and render the explicit header', () => {

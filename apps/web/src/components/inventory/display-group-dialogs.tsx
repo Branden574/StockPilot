@@ -233,6 +233,8 @@ export function GroupSelectedDialog({
   const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
   const doneRef = React.useRef<HTMLButtonElement>(null);
   const keyed = useKeyedSave();
+  // P11: a disabled Save is described by the reason it is off.
+  const blockedId = React.useId();
 
   /** One record's choice when it is in another group (P10): move it here, or
    *  leave it out (not sent; it stays where it is). */
@@ -584,7 +586,12 @@ export function GroupSelectedDialog({
                 {GROUP_COPY.noop(plan.noop.name)}
               </p>
             ) : plan?.blockedReason ? (
-              <p className="text-muted-foreground text-xs" data-testid="group-blocked">
+              <p
+                id={blockedId}
+                className="text-muted-foreground text-xs"
+                data-testid="group-blocked"
+                aria-live="polite"
+              >
                 {plan.blockedReason}
               </p>
             ) : null}
@@ -627,6 +634,7 @@ export function GroupSelectedDialog({
                 <Button
                   onClick={() => void save()}
                   disabled={phase === 'saving' || !identity || (!plan.noop && !plan.canSave)}
+                  aria-describedby={!plan.noop && plan.blockedReason ? blockedId : undefined}
                 >
                   {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   {plan.noop

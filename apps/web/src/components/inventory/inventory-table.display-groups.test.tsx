@@ -237,7 +237,8 @@ describe('InventoryTable: explicit display group headers', () => {
       />,
     );
     expect(screen.getByText('Same SKU as records in Pads')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Add to group' }));
+    // P11: the button names its group and its record (one per chip).
+    await userEvent.click(screen.getByRole('button', { name: 'Add to group Pads: Item c' }));
     expect(screen.getByTestId('group-dialog')).toHaveTextContent('add c to g');
   });
 
@@ -256,9 +257,9 @@ describe('InventoryTable: explicit display group headers', () => {
         pageSize={30}
       />,
     );
-    expect(screen.queryByRole('button', { name: 'Add to group' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Rename group' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Remove from group' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Add to group/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Rename group/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove from group/ })).not.toBeInTheDocument();
   });
 
   it('the header offers Rename and Remove for the records on screen', async () => {
@@ -277,9 +278,11 @@ describe('InventoryTable: explicit display group headers', () => {
         canRenameGroups
       />,
     );
-    await userEvent.click(screen.getByRole('button', { name: /^Remove from group/ }));
+    // P11: each header's buttons name their group, so two headers' buttons
+    // never share one accessible name.
+    await userEvent.click(screen.getByRole('button', { name: 'Remove from group Pads' }));
     expect(screen.getByTestId('remove-dialog')).toHaveTextContent('remove a,b');
-    await userEvent.click(screen.getByRole('button', { name: /^Rename group/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Rename group Pads' }));
     expect(screen.getByTestId('rename-dialog')).toHaveTextContent('rename g');
   });
 

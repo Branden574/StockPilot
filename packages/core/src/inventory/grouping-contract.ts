@@ -1186,6 +1186,10 @@ export const GROUP_COPY = {
   bulkAction: 'Group selected',
   removeAction: 'Remove from group',
   renameAction: 'Rename group',
+  /** Accessible names that start with the visible words and name the group
+   *  (people review P11: every header's buttons shared one name). */
+  removeFor: (group: string) => `Remove from group ${group}`,
+  renameFor: (group: string) => `Rename group ${group}`,
   title: (n: number) => `Group ${n} record${n === 1 ? '' : 's'}`,
   /** The brief's sentence, verbatim. */
   intro:
@@ -1246,6 +1250,8 @@ export const GROUP_COPY = {
   noop: (name: string) => `These records are already in ${name}.`,
   cancel: 'Cancel',
   offline: 'Grouping needs a connection. Try again when you are online.',
+  /** Announced when the review has loaded (iOS ignores live regions, P11). */
+  reviewReady: (n: number) => `${n} record${n === 1 ? '' : 's'} to review.`,
   removeTitle: (n: number) => `Remove ${n} record${n === 1 ? '' : 's'} from the group`,
   removeIntro:
     "Removing records from a group doesn't delete them or change their SKU, stock, charter or rack. Records that share a SKU still show together automatically.",
@@ -1271,6 +1277,8 @@ export const GROUP_COPY = {
   chipInGroup: (name: string) => `In group ${name}`,
   chipSameSku: (name: string) => `Same SKU as records in ${name}`,
   addToGroup: 'Add to group',
+  /** A chip's Add to group, named for its group and its record (P11). */
+  addToGroupFor: (group: string, record: string) => `Add to group ${group}: ${record}`,
   headerRecords: (n: number) => `${n} record${n === 1 ? '' : 's'}`,
   headerMatching: (n: number) => `${n} matching`,
   itemPageInGroup: (name: string) => `In group ${name}`,

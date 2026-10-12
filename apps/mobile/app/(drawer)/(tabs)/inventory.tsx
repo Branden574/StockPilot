@@ -53,9 +53,11 @@ import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import {
   attachDisplayGroups,
+  groupRowAccessibilityActions,
   groupSelectedHref,
   onDisplayGroupsChanged,
   readDisplayGroups,
+  runGroupRowAccessibilityAction,
 } from '@/lib/display-groups';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
@@ -1373,6 +1375,18 @@ const ItemRow = React.memo(function ItemRow({
     >
       <Pressable
         onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
+        // Add to group sits inside this Pressable, so VoiceOver cannot reach
+        // it as its own element (P4): the row carries it as an action, and
+        // 'activate' keeps a double tap doing what a tap does.
+        accessibilityActions={groupRowAccessibilityActions(!!(addToGroupId && onAddToGroup))}
+        onAccessibilityAction={(e) =>
+          runGroupRowAccessibilityAction(e.nativeEvent.actionName, {
+            activate: () => (selectMode ? onToggleSelect(item) : onItemPress(item.id)),
+            addToGroup: () => {
+              if (addToGroupId && onAddToGroup) onAddToGroup(item.id, addToGroupId);
+            },
+          })
+        }
         style={({ pressed }) => [rowStyles.row, { opacity: pressed ? 0.7 : 1 }]}
       >
         <Thumb

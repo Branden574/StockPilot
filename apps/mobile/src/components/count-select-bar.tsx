@@ -88,7 +88,7 @@ export function CountSelectBar({
           <Pressable
             onPress={() => void openGroup()}
             disabled={count === 0}
-            hitSlop={8}
+            hitSlop={GROUP_HIT_SLOP}
             accessibilityRole="button"
             accessibilityLabel={GROUP_COPY.bulkAction}
           >
@@ -121,6 +121,11 @@ export function CountSelectBar({
     </View>
   );
 }
+
+/** Group's touch target (people review P11): its 12.5pt label sits on a line
+ *  of about 16pt, and 14pt above and below make 44pt, the minimum, without
+ *  making the bar taller (8pt on each side keeps it clear of its neighbours). */
+const GROUP_HIT_SLOP = { top: 14, bottom: 14, left: 8, right: 8 };
 
 const styles = StyleSheet.create({
   wrap: {
