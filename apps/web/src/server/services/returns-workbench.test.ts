@@ -670,6 +670,35 @@ describe('buildReturnWorkbench', () => {
     expect(String(replacementRead?.[0]?.[0] ?? '')).toMatch(/\bsigned_at\b/);
   });
 
+  // D-H1 fix round 1 (review): the walk's original was completed at its
+  // signature, so the test above passes whichever stamp the workbench hands
+  // on for it. Here the original was handed over in part at 16:00 and closed
+  // at 18:30, which stamped its completion: on the path the web page and GET
+  // /api/v1/returns/[id] (the phone) use, its line is the signature.
+  it("the original order's Handed over line is its signature from the RMA's order embed, not a later completion (D-H1)", async () => {
+    const SIGNED = '2026-10-10T16:00:00.5+00:00';
+    const CLOSED = '2026-10-10T18:30:00.25+00:00';
+    const { ctx } = ctxFor({
+      'returns.select': {
+        data: [
+          header([LINE], {
+            order_request: { order_number: 32, warehouse_id: WH, requester_name: null, requester_email: null, signed_at: SIGNED, completed_at: CLOSED },
+          }),
+        ],
+        error: null,
+      },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.filter((e) => e.kind === 'handed_over')).toEqual([
+      { at: SIGNED, kind: 'handed_over', label: 'Handed over (SO-000032)', actorName: null },
+    ]);
+    expect(wb.chain.map((e) => e.at)).not.toContain(CLOSED);
+  });
+
   it('a destination read that fails leaves the destinations out and is reported (actions are refused in the database anyway)', async () => {
     const { ctx } = ctxFor({
       'returns.select': { data: [header([LINE])], error: null },

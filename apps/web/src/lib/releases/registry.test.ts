@@ -8019,9 +8019,10 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
 /**
  * A return's history shows the replacement's hand-over at its signature (D-H1,
  * from the independent audit of the returns RX-4 Demo Co walk; web server
- * only, no migration): held as a DRAFT until its web deploy is live and the
+ * only, no migration): held as a DRAFT until its web deploy is live, the
  * Demo Co RMA's history (RMA-20261012-D36F7F) was re-read on the web and the
- * phone. Pinned by id.
+ * phone, and returns RX-4's release, which announces Close the rest, is
+ * published. Pinned by id.
  */
 describe("a return's history shows when the replacement was handed over (D-H1) is held as a draft", () => {
   const ID = 'returns-history-hand-over-2026-10';
@@ -8051,6 +8052,16 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
     for (const r of RELEASES.filter((x) => x.id !== ID)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
+  });
+
+  // Fix round 1 (review): its whyItMatters opens with Close the rest, which
+  // returns RX-4's release announces, so it is never published before that
+  // release is: nobody is told about a fix to a feature they were not told of.
+  it("is published only once returns RX-4's release, which announces Close the rest, is published", () => {
+    const rx4 = RELEASES.find((r) => r.id === 'returns-close-rest-2026-10');
+    expect(rx4?.entries.map((e) => e.title)).toContain('Close the rest of a replacement on backorder');
+    expect(release().entries[0]!.whyItMatters).toMatch(/^After Close the rest, /);
+    expect(release().status !== 'published' || rx4?.status === 'published', `${ID} is published while ${rx4?.id} is ${rx4?.status}`).toBe(true);
   });
 
   it('is told to whoever can open Returns, where Returns is on, and links there', () => {
@@ -8088,7 +8099,7 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
     // The phone draws the server's lines as sent (the mobile
     // returns-screen-wiring test pins it), so no update is needed.
     expect(r.summary).toContain('on the web and in the mobile app');
-    expect(entry.whatToDo).toBe('No action needed. The mobile app shows the same history without an update.');
+    expect(entry.whatToDo).toBe('No action needed. The mobile app shows the same history as the web, with no app update needed.');
     // The original order's line moves only when it was signed for (a row
     // completed with no signature keeps its completion time).
     expect(entry.whatChanged).toContain("The original order's Handed over line also uses the time it was signed for, when there is one.");
