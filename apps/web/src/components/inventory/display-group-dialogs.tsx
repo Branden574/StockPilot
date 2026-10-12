@@ -77,7 +77,31 @@ const TARGET_MEMBERS_SHOWN = 20;
 
 type Identity = { organizationId: string; actorUserId: string };
 
-/** The newest preview for these ids (and target), ignoring overtaken answers. */
+/**
+ * Whether a failed review may answer differently when it is read again: a
+ * server error, a rate limit or a busy read (recheck R2-2). A refusal that the
+ * same request cannot change (more records than one request takes, no
+ * permission, a record or group that is gone, signed out) is not offered
+ * again: its own words say what to do instead.
+ */
+function reviewMayRetry(error: { code: string; details?: Record<string, unknown> }): boolean {
+  const reason = typeof error.details?.reason === 'string' ? error.details.reason : error.code;
+  return error.code === 'internal_error' || RETRY_SAME.has(error.code) || RETRY_SAME.has(reason);
+}
+
+/** The words for a review that got no answer at all: the connection when the
+ *  browser says it is offline, else core's generic sentence. Never the raw
+ *  error (a network failure, or "Failed to find Server Action" in a tab left
+ *  open across a deploy). */
+function reviewFailureWords(): string {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
+    ? GROUP_COPY.offline
+    : GROUPING_ERROR_WORDS.internal;
+}
+
+/** The newest preview for these ids (and target), ignoring overtaken answers.
+ *  A failed one (no answer, or a refusal) never leaves the dialog loading: it
+ *  sets the words to show and whether Try again may help (recheck R2-2). */
 function useGroupingReview(
   open: boolean,
   itemIds: readonly string[],
@@ -88,32 +112,55 @@ function useGroupingReview(
     review: GroupingReview | null;
     identity: Identity | null;
     error: string | null;
+    /** A second look may answer differently (Try again). */
+    retry: boolean;
     loading: boolean;
-  }>({ review: null, identity: null, error: null, loading: true });
+  }>({ review: null, identity: null, error: null, retry: false, loading: true });
   const seq = React.useRef(0);
   const idsKey = itemIds.join(',');
   React.useEffect(() => {
     if (!open) return;
     const mine = ++seq.current;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open / re-preview
-    setState((s) => ({ ...s, loading: true, error: null }));
+    setState((s) => ({ ...s, loading: true, error: null, retry: false }));
     const ids = idsKey ? idsKey.split(',') : [];
-    void previewGroupingAction(ids, groupId).then((r) => {
-      if (mine !== seq.current) return;
-      if (!r.ok) {
-        setState({ review: null, identity: null, error: r.error.message, loading: false });
-        return;
-      }
-      // An answer for another selection or target than this one is stale.
-      if (r.data.review.previewKey !== groupingPreviewKey(r.data.organizationId, ids, groupId))
-        return;
-      setState({
-        review: r.data.review,
-        identity: { organizationId: r.data.organizationId, actorUserId: r.data.actorUserId },
-        error: null,
-        loading: false,
-      });
-    });
+    void previewGroupingAction(ids, groupId).then(
+      (r) => {
+        if (mine !== seq.current) return;
+        if (!r.ok) {
+          setState({
+            review: null,
+            identity: null,
+            error: r.error.message || GROUPING_ERROR_WORDS.internal,
+            retry: reviewMayRetry(r.error),
+            loading: false,
+          });
+          return;
+        }
+        // An answer for another selection or target than this one is stale.
+        if (r.data.review.previewKey !== groupingPreviewKey(r.data.organizationId, ids, groupId))
+          return;
+        setState({
+          review: r.data.review,
+          identity: { organizationId: r.data.organizationId, actorUserId: r.data.actorUserId },
+          error: null,
+          retry: false,
+          loading: false,
+        });
+      },
+      () => {
+        // No answer at all: offline, a platform error, or a deployment that
+        // no longer has this action. Reads only, so a second look is safe.
+        if (mine !== seq.current) return;
+        setState({
+          review: null,
+          identity: null,
+          error: reviewFailureWords(),
+          retry: true,
+          loading: false,
+        });
+      },
+    );
   }, [open, idsKey, groupId, nonce]);
   return state;
 }
@@ -256,6 +303,7 @@ export function GroupSelectedDialog({
     review,
     identity,
     error: previewError,
+    retry: previewRetry,
     loading,
   } = useGroupingReview(open, itemIds, targetGroupId, nonce);
 
@@ -635,6 +683,13 @@ export function GroupSelectedDialog({
                   Review again
                 </Button>
               ) : null}
+              {previewError && previewRetry ? (
+                // A failed review that a second look may answer differently
+                // (recheck R2-2): read it again.
+                <Button variant="outline" onClick={() => setNonce((n) => n + 1)}>
+                  Try again
+                </Button>
+              ) : null}
               {!loading && !previewError && !error?.stale && plan ? (
                 <Button
                   onClick={() => void save()}
@@ -686,6 +741,7 @@ export function RemoveFromGroupDialog({
     review,
     identity,
     error: previewError,
+    retry: previewRetry,
     loading,
   } = useGroupingReview(open, reviewIds, null, nonce);
   const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
@@ -814,6 +870,13 @@ export function RemoveFromGroupDialog({
                   Review again
                 </Button>
               ) : null}
+              {previewError && previewRetry ? (
+                // A failed review that a second look may answer differently
+                // (recheck R2-2): read it again.
+                <Button variant="outline" onClick={() => setNonce((n) => n + 1)}>
+                  Try again
+                </Button>
+              ) : null}
               {!loading && !previewError && !error?.stale && grouped.length > 0 ? (
                 <Button onClick={() => void save()} disabled={phase === 'saving' || !identity}>
                   {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -853,6 +916,7 @@ export function RenameGroupDialog({
     review,
     identity,
     error: previewError,
+    retry: previewRetry,
     loading,
   } = useGroupingReview(open, memberIds.slice(0, 1), groupId, nonce);
   const [name, setName] = React.useState<string | null>(null);
@@ -900,7 +964,13 @@ export function RenameGroupDialog({
           <div role="status" className="text-muted-foreground flex items-center gap-2 py-4 text-sm">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the group…
           </div>
-        ) : current ? (
+        ) : previewError ? null : !current ? (
+          // The review found no such group: it closed or is not readable any
+          // more (recheck R2-2). Said like any refusal; Save stays off.
+          <p role="alert" className="text-destructive text-sm">
+            {GROUPING_ERROR_WORDS.groupNotFound}
+          </p>
+        ) : (
           <label className="block space-y-1 text-sm">
             <span className="text-xs">{GROUP_COPY.nameLabel}</span>
             <input
@@ -911,7 +981,7 @@ export function RenameGroupDialog({
               onChange={(e) => setName(e.target.value)}
             />
           </label>
-        ) : null}
+        )}
         {previewError || error ? (
           <p role="alert" className="text-destructive text-sm">
             {previewError ?? error?.message}
@@ -936,6 +1006,11 @@ export function RenameGroupDialog({
               }}
             >
               Review again
+            </Button>
+          ) : previewError && previewRetry ? (
+            // A failed review that a second look may answer differently (R2-2).
+            <Button variant="outline" onClick={() => setNonce((n) => n + 1)}>
+              Try again
             </Button>
           ) : (
             <Button

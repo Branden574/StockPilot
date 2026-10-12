@@ -945,3 +945,129 @@ describe('RemoveFromGroupDialog and RenameGroupDialog', () => {
     });
   });
 });
+
+// Recheck R2-2: a review whose server action rejects (offline, a platform
+// error, a tab left open across a deploy) or answers an error never spins
+// forever. It says what happened in core's words, never the raw error, and
+// offers Try again whenever a second look may answer differently; a refusal
+// the same request cannot change shows only its own words.
+describe('a failed review (recheck R2-2)', () => {
+  const groupDialog = (ids: string[] = [A, B]) => (
+    <GroupSelectedDialog
+      open
+      onOpenChange={() => {}}
+      itemIds={ids}
+      view="items"
+      onDone={() => {}}
+    />
+  );
+
+  it('a rejected preview says so in plain words and offers Try again, which reviews again', async () => {
+    h.preview
+      .mockRejectedValueOnce(new Error('Failed to find Server Action "7f3a"'))
+      .mockResolvedValueOnce(review([A, B], [rec(A), rec(B)]));
+    render(groupDialog());
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.internal);
+    expect(screen.queryByText(/Server Action/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Loading the records/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await screen.findByTestId(`group-row-${A}`);
+    expect(h.preview).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Group 2 records' })).toBeEnabled();
+  });
+
+  it('offline, a rejected preview says grouping needs a connection', async () => {
+    const online = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      h.preview.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      render(groupDialog());
+      expect(await screen.findByRole('alert')).toHaveTextContent(GROUP_COPY.offline);
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    } finally {
+      online.mockRestore();
+    }
+  });
+
+  it('a server error answer offers Try again; a refusal a retry cannot change does not', async () => {
+    h.preview.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'internal_error', message: GROUPING_ERROR_WORDS.internal },
+    });
+    const first = render(groupDialog());
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.internal);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    first.unmount();
+    h.preview.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: GROUPING_ERROR_WORDS.groupTooMany,
+        details: { reason: 'invalid', field: 'item_ids' },
+      },
+    });
+    render(groupDialog());
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.groupTooMany);
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  });
+
+  it('Remove from group and Rename recover from a rejected preview the same way', async () => {
+    h.preview
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(
+        review([A], [rec(A, { displayGroup: { id: G, name: 'Pads', version: 2 } })]),
+      );
+    const remove = render(
+      <RemoveFromGroupDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.internal);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Remove 1 record' })).toBeEnabled();
+    remove.unmount();
+    h.preview
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(
+        review(
+          [A],
+          [rec(A)],
+          { targetGroup: { id: G, name: 'Pads', version: 7, itemType: 'product', members: [] } },
+          G,
+        ),
+      );
+    render(
+      <RenameGroupDialog
+        open
+        onOpenChange={() => {}}
+        groupId={G}
+        memberIds={[A]}
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.internal);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByDisplayValue('Pads')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save name' })).toBeEnabled();
+  });
+
+  it('Rename says the group is not available when the review finds no such group', async () => {
+    h.preview.mockResolvedValueOnce(review([A], [rec(A)], { targetGroup: null }, G));
+    render(
+      <RenameGroupDialog
+        open
+        onOpenChange={() => {}}
+        groupId={G}
+        memberIds={[A]}
+        onDone={() => {}}
+      />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.groupNotFound);
+    expect(screen.getByRole('button', { name: 'Save name' })).toBeDisabled();
+  });
+});
