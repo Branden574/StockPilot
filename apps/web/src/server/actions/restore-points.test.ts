@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The restore point actions (PR stage, security review SEC-T2). An internal
- * error's text is database or network detail (a PostgREST message, a socket
- * error), so it stays in the server log and the browser gets fixed words, as
- * the Ungroup actions do. Every other refusal keeps its own words, and the
+ * Security invariant (S13): the restore point actions (Ungroup PR stage,
+ * security review SEC-T2). An internal error's text is database or network
+ * detail (a PostgREST message, a socket error), so it stays in the server log
+ * and the browser gets fixed words, as the Ungroup actions do. Every other refusal keeps its own words, and the
  * reason the screens act on (the MFA step-up, the audit log the SKU-change
  * check cannot read).
  */
