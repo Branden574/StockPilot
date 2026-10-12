@@ -1312,6 +1312,12 @@ MOBILE_TESTS=(
   src/lib/requester-returns.test.ts
   src/lib/requester-returns-api.test.ts
   src/lib/requester-returns-wiring.test.ts
+  # Group selected (0400): every grouping write (Group, Remove from group) is
+  # online only (no outbox kind) and sent under the record's organization and
+  # only the signed-in account; a review or an outcome for another
+  # organization, account or selection is refused, never shown; memberships
+  # are read as the member (RLS), and a failed read groups nothing.
+  src/lib/display-groups.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
