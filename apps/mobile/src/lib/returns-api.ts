@@ -388,6 +388,19 @@ export function declineReturnReplacement(
 }
 
 /**
+ * "Close the rest" (returns RX-4, 0397): the rest of a replacement handed
+ * over in part, on backorder, is closed from the RMA once the returned item
+ * is in. The revision and the replacement status the sheet shows are sent;
+ * anything newer is refused (return_changed, replacement_not_backordered).
+ */
+export function closeReturnReplacementRest(
+  id: string,
+  body: { expectedRevision: number; reason: string; shownStatus?: string | null },
+): Promise<ReplacementAnswer<{ changed: boolean; replay: boolean; status: string; revision: number | null; closedOrderId: string | null }>> {
+  return replacementCall(id, '/close-rest', body);
+}
+
+/**
  * Release the replacement order the screen shows (desk check F7): after a
  * substitution or a re-issue the server answers return_changed rather than
  * releasing an order the user has not seen.

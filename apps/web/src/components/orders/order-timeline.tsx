@@ -110,6 +110,9 @@ function eventLabel(event: string, metadata: Record<string, unknown> | null): st
     }
     if (event === 'order_request.approved') return `Approved with the exchange${rma ? ` (${rma})` : ''}`;
     if (event === 'order_request.cancelled') return `Cancelled from ${rma ?? 'its RMA'}`;
+    // RX-4 fix round 1 (desk check people L3): "Close the rest", and the RMA
+    // cancel's close of a part-handed-over backorder, end the rest from the RMA.
+    if (event === 'order.closed_partial') return `Rest closed from ${rma ?? 'its RMA'}`;
   }
   if (event === 'order.stock_held') {
     const after = (metadata?.after ?? {}) as Record<string, unknown>;
@@ -172,6 +175,13 @@ function humanDetails(
       break;
     case 'order_request.cancelled':
       lines.push('Reserved stock was released back to availability.');
+      break;
+    case 'order.closed_partial':
+      // RX-4 fix round 1 (desk check people L3): a replacement's rest closed
+      // from its RMA. An ordinary close-partial keeps no detail line.
+      if (typeof md.replacementForReturnId === 'string') {
+        lines.push('What was handed over stays. The rest will not be sent.');
+      }
       break;
     case 'order_request.status_changed':
       if (before.status || after.status) {

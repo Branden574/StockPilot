@@ -284,4 +284,25 @@ describe('OrderTimeline — an exchange replacement (returns RX-2)', () => {
     await renderTimeline([row('a', 'order_request.created', { replacementForReturnId: 'rma-1', returnNumber: 'RMA-1', revision: 1 })]);
     expect(screen.getByText('Created as exchange replacement for RMA-1')).toBeInTheDocument();
   });
+
+  // RX-4 fix round 1 (desk check people L3): "Close the rest" and the RMA
+  // cancel's close write order.closed_partial on the replacement; it names
+  // its RMA like the other entries, and says what the close means.
+  it('a rest closed from the RMA names it and says what was kept; an ordinary close-partial is unchanged', async () => {
+    const link = { replacementForReturnId: 'rma-1', returnNumber: 'RMA-20261005-ABC123' };
+    await renderTimeline([
+      row('a', 'order.closed_partial', { ...link, via: 'return.replacement_closed' }),
+      row('b', 'order.closed_partial', { replacementForReturnId: 'rma-2', via: 'return.cancelled' }),
+    ]);
+    expect(screen.getByText('Rest closed from RMA-20261005-ABC123')).toBeInTheDocument();
+    expect(screen.getByText('Rest closed from its RMA')).toBeInTheDocument();
+    expect(screen.getAllByText('What was handed over stays. The rest will not be sent.')).toHaveLength(2);
+    expect(screen.queryByText('Closed partial')).toBeNull();
+  });
+
+  it('an ordinary order closed as delivered-partial keeps its label and no exchange words', async () => {
+    await renderTimeline([row('a', 'order.closed_partial', {})]);
+    expect(screen.getByText('Closed partial')).toBeInTheDocument();
+    expect(screen.queryByText('What was handed over stays. The rest will not be sent.')).toBeNull();
+  });
 });

@@ -97,6 +97,9 @@ export const RETURN_ERROR_WORDS = {
   // refusal's detail (exchangeAlreadySentWords); these are the nothing-left
   // words and the fallback for a detail that cannot be read.
   exchangeAlreadySent: 'This item already got a replacement on an earlier return, so it can only be returned now.',
+  // RX-4: "Close the rest" when the replacement has nothing on backorder any
+  // more (resumed into picking, completed, or none). The workbenches reload.
+  replacementNotBackordered: 'There is nothing on backorder to close.',
   internal: 'Something went wrong. Try again.',
 } as const;
 
@@ -164,6 +167,9 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   // is worded from it in mapReturnError).
   replacement_in_progress: { code: 'conflict', status: 409, message: W.replacementInProgress },
   exchange_already_sent: { code: 'validation_error', status: 400, message: W.exchangeAlreadySent },
+  // RX-4 (0397): close_return_replacement_rest found no backorder handed over
+  // in part (detail: the replacement's status, or 'none').
+  replacement_not_backordered: { code: 'conflict', status: 409, message: W.replacementNotBackordered },
 };
 
 const BUSY: ReturnErrorEntry = { code: 'conflict', status: 409, message: W.busy, retryable: true };

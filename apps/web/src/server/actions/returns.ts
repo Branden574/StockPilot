@@ -6,6 +6,7 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError } from '@/server/services/context';
 import {
   RMAService,
+  type ReturnCloseReplacementRestAnswer,
   type ReturnDeclineReplacementAnswer,
   type ReturnPlanAnswer,
   type ReturnPrepareAnswer,
@@ -253,6 +254,29 @@ export async function declineReturnReplacementAction(input: {
     const svc = await RMAService.forCurrentUser();
     const answer = await svc.declineReplacement(input.id, parsed.value);
     revalidateReplacement(input.id, []);
+    return ok({ answer, workbench: await svc.workbench(input.id) });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * "Close the rest" of a replacement handed over in part whose rest is on
+ * backorder, once the returned item is in (returns RX-4, 0397):
+ * /replacement/close-rest's twin.
+ */
+export async function closeReturnReplacementRestAction(input: {
+  id: string;
+  body: unknown;
+}): Promise<ActionResult<{ answer: ReturnCloseReplacementRestAnswer; workbench: ReturnWorkbench }>> {
+  if (!UUID_RE.test(input?.id ?? '')) return badId();
+  const parsed = parseReturnBody('closeReplacementRest', input.body);
+  if (!parsed.ok) return err('validation_error', parsed.message, { reason: 'reason_required' });
+  try {
+    const svc = await RMAService.forCurrentUser();
+    const answer = await svc.closeReplacementRest(input.id, parsed.value);
+    revalidateReplacement(input.id, [answer.closedOrderId]);
+    if (answer.changed) await revalidateInventoryListForCurrentOrg();
     return ok({ answer, workbench: await svc.workbench(input.id) });
   } catch (e) {
     return toResult(e);

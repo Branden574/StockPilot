@@ -51,6 +51,11 @@
 #      the approval waits, then sees a line its decision does not cover and is
 #      refused return_decision_incomplete: nothing approved.
 #      (Checks 8 run last, over every session's output.)
+#      Pre-contract proofs: since returns RX-4's contract (0398, renumbered
+#      at its push) an API role holds no INSERT on returns or return_lines,
+#      so the old tab's raw path 9 races no longer exists (0398's pgTAP K2
+#      proves it refused). On a stack at or past the contract, 9a and 9b are
+#      SKIPPED, said so, and count as no failure.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
 # with 0394 applied. Fixtures are committed under the 03951111-... namespace
@@ -472,6 +477,9 @@ $(raw_line_sql "$1" "$L9" "$IT9")" > "$TMP/raw.$1.out"
 lines_of() { q "select count(*) from public.return_lines where return_id = '$1'"; }
 all_decided() { q "select count(*) from public.return_lines rl where rl.return_id = '$1' and not exists (select 1 from public.return_decisions d where d.return_line_id = rl.id and d.kind = 'disposition_planned')"; }
 
+if [ "$(q "select has_table_privilege('authenticated', 'public.returns', 'INSERT') and has_table_privilege('authenticated', 'public.return_lines', 'INSERT')")" != "t" ]; then
+  echo "== 9. SKIPPED: the returns contract is installed (authenticated holds no INSERT on returns or return_lines), so the old tab's raw path no longer exists"
+else
 echo "== 9a. an approval holds; the old tab's raw line insert waits, then is refused"
 check "9a: set up (the old tab's raw RMA, one line)" "$(raw_rma "$R9A")/$(status_of "$R9A")/$(lines_of "$R9A")" "0/requested/1"
 race appline "$MGR" "$(approve_sql "$R9A" 0 "$(dec_one "$(rl_of "$R9A")" staging)")" commit "$MGR" "$(raw_line_sql "$R9A" "$L9B" "$IT9B")"
@@ -488,6 +496,7 @@ check "9b: A's raw line went in" "$(grep -c ERROR "$TMP/lineapp.A.out")/$(lines_
 check "9b: the approval is refused return_decision_incomplete" "$(refused lineapp B P0001 return_decision_incomplete)" "1/1"
 waited lineapp "9b"
 check "9b: nothing approved, no decision, no approval key left behind" "$(status_of "$R9B")/$(decisions "$R9B" approved)/$(approve_keys "$R9B")" "requested/0/0"
+fi
 
 # ═══ 8. No retryable SQLSTATE; holdings equal on hand ═════════════════════
 echo "== 8. no 40001 / 40P01, no deadlock; on hand = the sum of holdings"

@@ -47,6 +47,8 @@ export type ReturnChainKind =
   | 'replacement_changed'
   | 'replacement_cancelled'
   | 'released_early'
+  // RX-4: "Close the rest" (a non-head decision: no revision).
+  | 'replacement_closed'
   | 'replacement_picked'
   | 'replacement_handed_over';
 
@@ -138,6 +140,11 @@ function decisionLabel(
       return d.reason ? `Replacement cancelled: ${d.reason}` : 'Replacement cancelled';
     case 'released_early':
       return d.reason ? `Released before the return: ${d.reason}` : 'Released before the return';
+    case 'replacement_closed': {
+      // RX-4 (0397): "Close the rest" of a replacement handed over in part.
+      const head = so ? `Rest of replacement ${so} closed` : 'Rest of the replacement closed';
+      return d.reason ? `${head}: ${d.reason}` : head;
+    }
     case 'created':
       return d.actorKind === 'staff' ? `Return created by staff${counter}` : 'Return requested by the requester';
     case 'disposition_planned': {

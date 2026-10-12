@@ -16,6 +16,7 @@ import {
   type ReturnAction,
   type ReturnActions,
 } from './return-actions';
+import { RETURNS_COPY } from './returns-copy';
 
 const STATUSES = Object.keys(RETURN_STATUS_LABELS) as ReturnStatus[];
 const NO_MANAGE = "You don't have permission to manage returns.";
@@ -23,6 +24,9 @@ const NO_ORDERS = 'Approving the replacement needs order approval permission.';
 // Fix round 1 (verification L3): once the exchange was approved nothing is
 // being approved; the words say what the viewer cannot do.
 const NO_ORDERS_AFTER = 'Changing, cancelling, releasing, preparing or issuing the replacement needs order approval permission.';
+// RX-4 fix round 1 (desk check people L1): when Close the rest is the only
+// action order approval takes away, the words name it.
+const NO_ORDERS_CLOSE_REST = 'Closing the rest of the replacement needs order approval permission.';
 const NO_ORDERS_AFTER_CANCEL =
   'Changing, cancelling, releasing, preparing or issuing the replacement, and cancelling this return, need order approval permission.';
 
@@ -91,6 +95,9 @@ const TABLE: Row[] = [
   ['received', 'in_progress', 'drawn', 'process', ['change_destination', 'open_replacement', 'cancel_replacement']],
   ['received', 'ready_for_pickup', 'drawn', 'process', ['change_destination', 'hand_over', 'cancel_replacement']],
   ['received', 'handed_over_return_open', 'handed_over', 'process', ['change_destination', 'open_replacement']],
+  // RX-4 (verification V3): handed over in part, the rest on backorder, the
+  // returned item in: the rest can be closed from the RMA.
+  ['received', 'partly_handed_over', 'handed_over', 'process', ['change_destination', 'open_replacement', 'close_replacement_rest']],
   // RX-2 review fix P16: a replacement not in stock can be changed at
   // received too (approved and closed offer it; the database allows it).
   ['received', 'unavailable', 'undrawn', 'process', ['change_replacement', 'change_destination', 'open_replacement', 'cancel_replacement']],
@@ -99,7 +106,7 @@ const TABLE: Row[] = [
   ['closed', 'in_progress', 'undrawn', 'open_replacement', ['cancel_replacement']],
   ['closed', 'ready_for_pickup', 'drawn', 'hand_over', ['cancel_replacement']],
   ['closed', 'out_for_delivery', 'drawn', 'hand_over', ['cancel_replacement']],
-  ['closed', 'partly_handed_over', 'handed_over', 'open_replacement', []],
+  ['closed', 'partly_handed_over', 'handed_over', 'open_replacement', ['close_replacement_rest']],
   ['closed', 'replacement_cancelled', 'none', 'issue_replacement', ['close_as_return_only']],
   ['closed', 'completed', 'handed_over', null, []],
   ['closed', 'declined', 'none', null, []],
@@ -349,6 +356,71 @@ describe('replacementClassOf (the SQL _return_replacement_class)', () => {
       const all = [a.primary, ...a.secondary];
       expect(all, status).not.toContain('cancel_replacement');
       expect(all, status).not.toContain('change_replacement');
+    }
+  });
+});
+
+// RX-4 (RX-2 verification V3; RX3-NOTES option (i)): "Close the rest" ends a
+// replacement handed over in part whose rest is on backorder, once the
+// returned item is in (received or closed). An approved RMA keeps its own
+// path (Cancel return closes the backorder there); a rest resumed into
+// picking is out of scope.
+describe('Close the rest (RX-4)', () => {
+  const base = {
+    exchangeStatus: 'partly_handed_over' as const,
+    hasExchange: true,
+    replacementClass: 'handed_over' as const,
+    hasApprovedExchange: true,
+    viewerCanManageReturns: true,
+    viewerCanApproveOrders: true,
+  };
+
+  it('is a replacement action labelled "Close the rest"', () => {
+    expect(RETURN_ACTION_LABELS.close_replacement_rest).toBe('Close the rest');
+    expect(returnActionLabel('close_replacement_rest')).toBe('Close the rest');
+    expect(REPLACEMENT_ACTIONS).toContain('close_replacement_rest');
+  });
+
+  it('is offered once the returned item is in, never while the RMA is approved', () => {
+    expect(availableReturnActions({ ...base, status: 'received' }).secondary).toContain('close_replacement_rest');
+    expect(availableReturnActions({ ...base, status: 'closed' }).secondary).toEqual(['close_replacement_rest']);
+    expect(availableReturnActions({ ...base, status: 'approved' })).toEqual({
+      primary: 'receive',
+      secondary: ['open_replacement', 'cancel'],
+      readOnlyReason: null,
+    });
+  });
+
+  it('needs order approval: without it the rest stays as it is and the screen says why, naming Close the rest', () => {
+    // Re-pinned by fix round 1 (desk check people L1; was the generic list,
+    // which names five actions the viewer could not take here anyway and
+    // not the one they lack).
+    expect(availableReturnActions({ ...base, status: 'received', viewerCanApproveOrders: false })).toEqual({
+      primary: 'process',
+      secondary: ['change_destination', 'open_replacement'],
+      readOnlyReason: NO_ORDERS_CLOSE_REST,
+    });
+    expect(availableReturnActions({ ...base, status: 'closed', viewerCanApproveOrders: false })).toEqual({
+      primary: 'open_replacement',
+      secondary: [],
+      readOnlyReason: NO_ORDERS_CLOSE_REST,
+    });
+    expect(RETURNS_COPY.noOrdersApproveCloseRest).toBe(NO_ORDERS_CLOSE_REST);
+  });
+
+  it('only for a backorder that handed something over: one that handed nothing over is cancelled instead', () => {
+    const undrawn = availableReturnActions({ ...base, status: 'received', replacementClass: replacementClassOf('backordered', false) });
+    expect(undrawn.secondary).not.toContain('close_replacement_rest');
+    expect(undrawn.secondary).toContain('cancel_replacement');
+    const handedOver = availableReturnActions({ ...base, status: 'received', replacementClass: replacementClassOf('backordered', true) });
+    expect(handedOver.secondary).toContain('close_replacement_rest');
+    expect(handedOver.secondary).not.toContain('cancel_replacement');
+  });
+
+  it('a rest resumed into picking is out of scope (the order\'s own paths end it)', () => {
+    for (const status of ['received', 'closed'] as const) {
+      const a = availableReturnActions({ ...base, status, exchangeStatus: 'in_progress', replacementClass: replacementClassOf('pick_slip_generated', true) });
+      expect([a.primary, ...a.secondary], status).not.toContain('close_replacement_rest');
     }
   });
 });

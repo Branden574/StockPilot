@@ -121,6 +121,17 @@ begin;
 
 select plan(126);
 
+-- Returns RX-4 (0398, the contract, 2026-10-11) revoked what A2 and A3 pin
+-- and what the old tabs' raw edges in B and K send: INSERT on returns and
+-- return_lines and UPDATE on the eight returns columns. This file proves RX-1,
+-- including the two API guards and the four write policies 0398 keeps as
+-- defence in depth, so it puts 0394's grants back inside its own transaction
+-- (rolled back at the end, like everything here). The contract itself is
+-- proven by 0398_returns_contract.test.sql (K1, K2, K5).
+grant insert on public.returns, public.return_lines to authenticated;
+grant update (status, approved_by, approved_at, received_by, received_at, denied_by, denied_at, denial_reason)
+  on public.returns to authenticated;
+
 \set orgA      '\'03950000-0000-0000-0000-00000000000a\''
 \set orgZ      '\'03950000-0000-0000-0000-00000000000b\''
 \set own       '\'03950000-0000-0000-0000-0000000000a0\''

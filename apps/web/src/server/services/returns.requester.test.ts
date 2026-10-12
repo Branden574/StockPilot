@@ -67,10 +67,12 @@ const RETURNS_MODULE_ENABLED = {
 };
 
 /** A fully-wired stub for a valid token → returnable order with one line. The
- *  token lives in order_request_secrets (every return token since 0392). */
+ *  token lives in order_request_secrets (every return token since 0392) and
+ *  is looked up by POST through order_id_for_return_token (returns RX-4,
+ *  0397, RX-3 security finding 1). */
 function makeStub(overrides: Record<string, unknown> = {}) {
   return makeSupabaseStub({
-    'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+    'rpc:order_id_for_return_token': { data: ORDER_ID, error: null },
     'order_requests.select': { data: [COMPLETED_ORDER], error: null },
     'organization_modules.select': RETURNS_MODULE_ENABLED,
     'order_request_lines.select': { data: [ORDER_LINE], error: null },
@@ -193,13 +195,14 @@ describe('loadRequesterReturnContext (token validation)', () => {
 // same value, and nulled order_requests.return_token). It opens exactly its
 // order; the order column is never asked.
 describe('loadRequesterReturnContext (where the token is found, 0389 and 0392)', () => {
-  it('a side-table token resolves its order by id, without asking the order column', async () => {
-    const stub = makeStub({
-      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
-    });
+  // Re-pinned by returns RX-4 (0397; was: a PostgREST GET filtered on
+  // return_token): one POST to the lookup function, no table read for it.
+  it('a side-table token resolves its order by id through the lookup function (a POST), without asking the order column', async () => {
+    const stub = makeStub();
     const ctx = await loadRequesterReturnContext(stub.client, TOKEN);
     expect(ctx?.orderRequestId).toBe(ORDER_ID);
-    expect(stub.chainArgsAll.get('order_request_secrets.select')?.[0]).toContainEqual(['return_token', TOKEN]);
+    expect(stub.rpcCalls[0]).toEqual({ name: 'order_id_for_return_token', args: { p_token: TOKEN } });
+    expect(stub.fromCalls).not.toContain('order_request_secrets');
     const orderReads = stub.chainArgsAll.get('order_requests.select') ?? [];
     expect(orderReads).toHaveLength(1);
     expect(orderReads[0]).toContainEqual(['id', ORDER_ID]);
@@ -207,14 +210,14 @@ describe('loadRequesterReturnContext (where the token is found, 0389 and 0392)',
   });
 
   it('0392: a token the side table does not hold is a 404 (null), and the order column is never asked', async () => {
-    const stub = makeStub({ 'order_request_secrets.select': { data: [], error: null } });
+    const stub = makeStub({ 'rpc:order_id_for_return_token': { data: null, error: null } });
     expect(await loadRequesterReturnContext(stub.client, TOKEN)).toBeNull();
     expect(stub.fromCalls).not.toContain('order_requests');
   });
 
   it('0392: a failed side read is a 404 (null), never a column lookup', async () => {
     const stub = makeStub({
-      'order_request_secrets.select': { data: null, error: { message: 'down' } },
+      'rpc:order_id_for_return_token': { data: null, error: { message: 'down' } },
     });
     expect(await loadRequesterReturnContext(stub.client, TOKEN)).toBeNull();
     expect(stub.fromCalls).not.toContain('order_requests');
@@ -239,10 +242,11 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'request_received', channel: 'token' }));
   });
 
-  it('rejects an unknown token with not_found (never calls the function)', async () => {
-    const stub = makeStub({ 'order_request_secrets.select': { data: [], error: null } });
+  it('rejects an unknown token with not_found (never calls the create function)', async () => {
+    const stub = makeStub({ 'rpc:order_id_for_return_token': { data: null, error: null } });
     await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
-    expect(stub.rpcCalls).toHaveLength(0);
+    // Only the token lookup ran (RX-4).
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['order_id_for_return_token']);
   });
 
   it('rejects a malformed token with not_found', async () => {
@@ -282,7 +286,7 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     await createRequesterReturn(stub.client, TOKEN, {
       lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'scrap' } as never],
     });
-    const body = (stub.rpcCalls[0]!.args as { p_request: { lines: Array<Record<string, unknown>> } }).p_request;
+    const body = (stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!.args as { p_request: { lines: Array<Record<string, unknown>> } }).p_request;
     expect(body.lines[0]).toEqual({ orderRequestLineId: OLINE_ID, quantity: 1 });
   });
 
@@ -296,7 +300,7 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     const key = '44444444-4444-4444-8444-444444444444';
     const result = await createRequesterReturn(stub.client, TOKEN, VALID_INPUT, { idempotencyKey: key });
     expect(result.replay).toBe(true);
-    expect((stub.rpcCalls[0]!.args as { p_key: string }).p_key).toBe(key);
+    expect((stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!.args as { p_key: string }).p_key).toBe(key);
     expect(auditRow).not.toHaveBeenCalled();
     expect(notifyRequester).not.toHaveBeenCalled();
   });
@@ -375,7 +379,7 @@ describe('RX-3: an exchange on the token path (the database decides, one generic
       organizationId: 'org-forged',
       status: 'approved',
     } as never);
-    const body = (stub.rpcCalls[0]!.args as { p_request: Record<string, unknown> }).p_request;
+    const body = (stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!.args as { p_request: Record<string, unknown> }).p_request;
     expect(body).toEqual({
       reasonCode: null,
       notes: null,

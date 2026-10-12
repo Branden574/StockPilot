@@ -145,19 +145,26 @@ describe('the public order link release (a sent request leaves nothing behind)',
   // release is published, in the same place, so it is the newest published
   // release and no draft is left. Claim kept: directly below RX-2's release,
   // with RX-3's above that, dated after every release below it.
-  it('sits directly below returns RX-2\'s release, with returns RX-3\'s above that (both published later), dated after every release below it', () => {
-    expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES[0]?.status).toBe('published');
-    expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
+  // Re-pinned by returns RX-4 (2026-10-12; was: at 2, RX-3's release at 0,
+  // "no draft is left"): RX-4's draft, dated later still, sits at the top
+  // above RX-3's published release, and it is the only draft. Claim kept:
+  // directly below RX-2's release, with RX-3's above that, dated after every
+  // release below it.
+  it('sits directly below returns RX-2\'s release, with returns RX-3\'s above that (both published later) and the returns RX-4 draft at the top, dated after every release below it', () => {
+    expect(RELEASES[0]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[2]?.status).toBe('published');
+    expect(RELEASES[3]?.id).toBe(ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
-    for (const r of RELEASES.slice(3)) {
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual(['returns-close-rest-2026-10']);
+    for (const r of RELEASES.slice(4)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
     expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
   });
 
   it('is told to whoever can open the Public requests settings page, and links there', () => {

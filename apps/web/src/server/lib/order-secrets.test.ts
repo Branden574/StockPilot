@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -203,23 +206,31 @@ describe('return and track tokens: the side table only (0392 moved every column 
     expect(failed.fromCalls).not.toContain('order_requests');
   });
 
-  it('orderIdForReturnToken: a side token opens its order; an order column value opens nothing (0392)', async () => {
-    const stub = (sideRows: unknown[], orderRows: unknown[]) =>
-      makeSupabaseStub({
-        'order_request_secrets.select': servedLikePostgrest(sideRows as Record<string, unknown>[]),
-        'order_requests.select': servedLikePostgrest(orderRows as Record<string, unknown>[]),
-      });
+  // Returns RX-4 (0397; RX-3 security review, finding 1): the lookup is the
+  // service-role function order_id_for_return_token, called with .rpc() (a
+  // POST), so the raw token never travels in a PostgREST query string the API
+  // gateway logs. No table is read for it, the side table included.
+  it('orderIdForReturnToken: one POST to order_id_for_return_token; never a query string, never an order column (RX-4, 0392)', async () => {
     const TOK = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    expect(await orderIdForReturnToken(stub([{ order_request_id: ORDER, return_token: TOK }], []).client, TOK)).toBe(ORDER);
-    const columnOnly = stub([], [{ id: 'legacy-order', return_token: TOK }]);
-    expect(await orderIdForReturnToken(columnOnly.client, TOK)).toBeNull();
-    expect(columnOnly.fromCalls).not.toContain('order_requests');
-    expect(await orderIdForReturnToken(stub([{ order_request_id: 'other', return_token: 'x' }], []).client, TOK)).toBeNull();
-    const failed = makeSupabaseStub({
-      'order_request_secrets.select': { data: null, error: { message: 'down' } },
-      'order_requests.select': servedLikePostgrest([{ id: 'legacy-order', return_token: TOK }]),
-    });
+    const found = makeSupabaseStub({ 'rpc:order_id_for_return_token': { data: ORDER, error: null } });
+    expect(await orderIdForReturnToken(found.client, TOK)).toBe(ORDER);
+    expect(found.rpcCalls).toEqual([{ name: 'order_id_for_return_token', args: { p_token: TOK } }]);
+    expect(found.fromCalls).toEqual([]);
+    const unknown = makeSupabaseStub({ 'rpc:order_id_for_return_token': { data: null, error: null } });
+    expect(await orderIdForReturnToken(unknown.client, TOK)).toBeNull();
+    const failed = makeSupabaseStub({ 'rpc:order_id_for_return_token': { data: null, error: { message: 'down' } } });
     expect(await orderIdForReturnToken(failed.client, TOK)).toBeNull();
+    expect(failed.fromCalls).toEqual([]);
+    // Not a uuid: nothing is asked at all.
+    const junk = makeSupabaseStub({});
+    expect(await orderIdForReturnToken(junk.client, '-'.repeat(36))).toBeNull();
+    expect(junk.rpcCalls).toEqual([]);
+  });
+
+  it('no product file looks a return token up by a query-string filter (RX-4)', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'order-secrets.ts'), 'utf8');
+    expect(src).not.toMatch(/\.eq\(\s*['"`]return_token['"`]/);
+    expect(src).toMatch(/rpc\(\s*'order_id_for_return_token'/);
   });
 });
 

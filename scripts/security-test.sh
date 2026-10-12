@@ -700,6 +700,22 @@ PGTAP_TESTS=(
   # early release races are scripts/db-concurrency/0396_exchange_races.sh;
   # the lock footprint is scripts/db-concurrency/0396_migration_lock_footprint.sh.
   supabase/tests/0396_returns_exchange_staff.test.sql
+  # Returns RX-4 (0397, INV-C7): "Close the rest" closes a part-handed-over
+  # replacement's backorder only from its RMA (received or closed), gated in
+  # the 3.3.1 order (returns:manage, orders:approve, write access to both the
+  # original's and the replacement's warehouse), under the transaction-bound
+  # flag, with a non-head decision and a replay; the requester token lookup
+  # is a service-role POST; a requester create key-shares only its line's own
+  # options; a used-up line offers no sizes. The two-session proofs are
+  # scripts/db-concurrency/0397_returns_followups_races.sh; the lock
+  # footprint is scripts/db-concurrency/0397_migration_lock_footprint.sh.
+  supabase/tests/0397_returns_followups.test.sql
+  # Returns RX-4 (0398, INV-C6, the contract): authenticated holds SELECT only
+  # on returns and return_lines; every direct PostgREST write is refused by
+  # privilege, every function path still passes, and the guards stay as
+  # defence in depth. The lock footprint is
+  # scripts/db-concurrency/0398_migration_lock_footprint.sh.
+  supabase/tests/0398_returns_contract.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1079,6 +1095,12 @@ WEB_TESTS=(
   src/server/services/returns.test.ts
   src/server/services/returns.portal.test.ts
   src/server/services/returns-migration.guard.test.ts
+  # Returns RX-4: 0397 restates two 0396 bodies by adding lines only and
+  # touches no policy; 0398 only revokes the old tabs' INSERT and UPDATE.
+  src/server/services/returns-rx4-migrations.guard.test.ts
+  # Returns RX-4 (0398, the contract): no product code writes returns or
+  # return_lines through a client, or calls the frozen disposition wrapper.
+  src/server/services/returns-raw-writes.guard.test.ts
   src/server/services/returns-workbench.test.ts
   src/app/api/v1/returns/routes.test.ts
   'src/app/api/v1/orders/[id]/returns/route.test.ts'

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cancelReturn,
+  closeReturnReplacementRest,
   denyReturn,
   describeReturnError,
   getReturnWorkbench,
@@ -78,6 +79,21 @@ describe('writes (online only)', () => {
     const lines = [{ returnLineId: LINE, disposition: 'restock' as const, restock: { target: 'staging' as const } }];
     await planReturnDispositions(RET, lines);
     expect(apiMock.api).toHaveBeenLastCalledWith(`/api/v1/returns/${RET}/dispositions`, { method: 'POST', body: { lines } });
+  });
+
+  // Returns RX-4 (0397): "Close the rest" posts the shown revision, a reason
+  // and the shown status to its own route, and answers the workbench.
+  it('Close the rest posts to /replacement/close-rest and normalizes the returned workbench', async () => {
+    apiMock.api.mockResolvedValueOnce({
+      answer: { changed: true, replay: false, status: 'received', revision: 1, closedOrderId: 'o-1' },
+      workbench: { return: { id: RET }, lines: [] },
+    });
+    const body = { expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered' };
+    const res = await closeReturnReplacementRest(RET, body);
+    expect(apiMock.api).toHaveBeenCalledWith(`/api/v1/returns/${RET}/replacement/close-rest`, { method: 'POST', body });
+    expect(res.answer).toEqual({ changed: true, replay: false, status: 'received', revision: 1, closedOrderId: 'o-1' });
+    expect(res.workbench.return.id).toBe(RET);
+    expect(res.workbench.chain).toEqual([]);
   });
 
   it('mints a v4 key per sheet', () => {

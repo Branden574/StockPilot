@@ -123,7 +123,8 @@ insert into public.inventory_items
 -- A returns test doesn't care about delivery, so 'pickup' (which the check
 -- requires to have NO charter) is the minimal valid choice.
 -- RX-1 (0394, review fix): a raw RMA (the old tab's create, which INVARIANTS
--- 3 to 5 use as authenticated) is accepted only for a handed-over order, the
+-- 3 to 5 used as authenticated until RX-4's contract, 0398; the owner writes
+-- them since) is accepted only for a handed-over order, the
 -- create functions' and the old service's rule, so the returns' own order is
 -- 'completed' (the cancel test keeps its separate 'in_transit' order). Every
 -- assertion is unchanged.
@@ -274,7 +275,13 @@ insert into public.returns (id, organization_id, order_request_id, status)
 insert into public.return_lines
   (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
   values (:ret_over_a, :org_id, :line_over, :item_over, 5, 'restock');
-set local role to 'authenticated';
+
+-- RX-4 (0398, the contract): an API role may no longer insert into returns
+-- or return_lines, so the requested RMAs and the line attempts of INVARIANTS
+-- 3 to 5 are written by the owner, as every RMA function writes them. The
+-- fulfilled cap and the item check are a constraint trigger that fires for
+-- every role (0153), so every assertion is unchanged; the disposition and the
+-- DELETE attempt stay the manager's.
 
 -- A single line over the whole fulfilled qty is rejected outright.
 insert into public.returns (id, organization_id, order_request_id, status)
@@ -293,6 +300,7 @@ select throws_ok(
 
 -- Now APPLY the first return (consumes the budget durably), then prove a fresh
 -- return for even 1 unit is still rejected — budget is gone.
+set local role to 'authenticated';
 do $$ begin perform public.process_return_disposition('a3333331-3333-3333-3333-333333333333'); end $$;
 
 select is(
@@ -301,6 +309,7 @@ select is(
   'Over-return setup: applied return consumed the full fulfilled budget'
 );
 
+reset role;
 select throws_ok(
   $$insert into public.return_lines
       (return_id, organization_id, order_request_line_id, item_id, quantity, disposition)
@@ -386,6 +395,7 @@ select is(
 
 -- A fresh full return for the same source line is still rejected — budget is
 -- durable on the immutable source line, not freed by deleting/flipping a return.
+reset role;
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_durable2, :org_id, :order_id, 'requested');
 select throws_ok(

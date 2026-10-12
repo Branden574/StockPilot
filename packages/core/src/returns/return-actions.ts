@@ -30,7 +30,8 @@
  *   approved    in_progress, ready_for_pickup, out_for_delivery
  *                                       Receive | Open replacement (Hand over when
  *                                                 ready), Cancel replacement
- *   approved    partly_handed_over      Receive | Open replacement, Cancel
+ *   approved    partly_handed_over      Receive | Open replacement, Cancel (its own
+ *                                                 close of the backorder)
  *   approved    handed_over_return_open Receive | Cancel (a reason)
  *   approved    replacement_cancelled   Receive | Issue a new replacement, Close as return
  *                                                 only, Cancel
@@ -38,6 +39,8 @@
  *                                                 Change replacement, Cancel replacement
  *   received    replacement_cancelled   Process return | Issue a new replacement, Close
  *                                                 as return only
+ *   received    partly_handed_over      Process return | Change destination, Open
+ *                                                 replacement, Close the rest (RX-4)
  *   received    unavailable             Process return | Change replacement, Change
  *                                                 destination, Open replacement, Cancel
  *                                                 replacement (review fix P16)
@@ -51,6 +54,7 @@
  *   closed      in_progress, ready_for_pickup, out_for_delivery
  *                                       Open replacement (Hand over when ready) |
  *                                                 Cancel replacement
+ *   closed      partly_handed_over      Open replacement | Close the rest (RX-4)
  *   closed      replacement_cancelled   Issue a new replacement | Close as return only
  *   closed, denied, cancelled: anything else (none)
  *
@@ -59,6 +63,13 @@
  * nothing more is offered. It touches no order, so it needs returns:manage
  * only, like declining an exchange at approval; without order approval it
  * becomes the primary action of a closed RMA.
+ *
+ * "Close the rest" (RX-4; RX-2 verification V3) ends a replacement handed
+ * over in part whose rest is on backorder once the returned item is in (the
+ * database's close_return_replacement_rest; an approved RMA keeps Cancel
+ * return's own close of the backorder). It needs order approval like every
+ * replacement action, and only a backorder that handed something over has a
+ * rest to close; a rest resumed into picking is out of scope.
  *
  * Every replacement action needs order approval (viewerCanApproveOrders);
  * without it the exchange is read-only with "Changing, cancelling, releasing,
@@ -99,7 +110,10 @@ export type ReturnAction =
   | 'open_replacement'
   | 'hand_over'
   | 'get_replacement_ready'
-  | 'close_as_return_only';
+  | 'close_as_return_only'
+  // RX-4 (RX-2 verification V3): end a replacement handed over in part whose
+  // rest is on backorder, once the returned item is in.
+  | 'close_replacement_rest';
 
 /**
  * What a live replacement is (plan 3.3.5), the SQL `_return_replacement_class`:
@@ -164,6 +178,7 @@ export const REPLACEMENT_ACTIONS: readonly ReturnAction[] = [
   'cancel_replacement',
   'issue_replacement',
   'get_replacement_ready',
+  'close_replacement_rest',
 ];
 
 /** Navigation to the replacement order (its own page decides its buttons). */
@@ -233,6 +248,14 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
           // database allows a change at received), instead of a cancel and a
           // re-issue with two reasons.
           return { primary: 'process', secondary: ['change_replacement', 'change_destination', 'open_replacement', 'cancel_replacement'] };
+        case 'partly_handed_over':
+          // RX-4: the rest on backorder can be closed from the RMA once the
+          // returned item is in. A backorder that handed nothing over is
+          // cancelled instead (the class rule keeps one of the two).
+          return {
+            primary: 'process',
+            secondary: ['change_destination', 'open_replacement', 'close_replacement_rest', 'cancel_replacement'],
+          };
         default:
           return { primary: 'process', secondary: ['change_destination', openOrHand(), 'cancel_replacement'] };
       }
@@ -247,7 +270,7 @@ function exchangeRows(input: ReturnActionsInput, ex: ExchangeStatus): { primary:
         case 'out_for_delivery':
           return { primary: openOrHand(), secondary: ['cancel_replacement'] };
         case 'partly_handed_over':
-          return { primary: 'open_replacement', secondary: [] };
+          return { primary: 'open_replacement', secondary: ['close_replacement_rest'] };
         case 'replacement_cancelled':
           return { primary: 'issue_replacement', secondary: ['close_as_return_only'] };
         default:
@@ -279,17 +302,21 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
   const canOrders = input.viewerCanApproveOrders === true;
   let dropped = false;
   let droppedCancel = false;
+  let droppedOtherThanCloseRest = false;
   const allowed = (a: ReturnAction): boolean => {
     // The class rules (the database refuses the rest with its own words).
     if (cls !== undefined) {
       if (a === 'change_replacement' && cls !== 'undrawn') return false;
       if (a === 'cancel_replacement' && cls !== 'undrawn' && cls !== 'drawn') return false;
       if ((a === 'open_replacement' || a === 'hand_over') && cls === 'none') return false;
+      // RX-4: only a backorder that handed something over has a rest to close.
+      if (a === 'close_replacement_rest' && cls !== 'handed_over') return false;
     }
     const needsOrders = REPLACEMENT_ACTIONS.includes(a) || (a === 'cancel' && input.hasApprovedExchange === true);
     if (needsOrders && !canOrders) {
       dropped = true;
       if (a === 'cancel') droppedCancel = true;
+      if (a !== 'close_replacement_rest') droppedOtherThanCloseRest = true;
       return false;
     }
     return true;
@@ -317,14 +344,17 @@ export function availableReturnActions(input: ReturnActionsInput): ReturnActions
   // with the exchange declined (the review offers only that). After the
   // approval nothing is approved any more: the words say what needs order
   // approval, and that cancelling the return does when it was dropped (fix
-  // round 1, verification L3).
+  // round 1, verification L3). RX-4 fix round 1 (desk check people L1): when
+  // Close the rest was the only action dropped, the words name it.
   const readOnlyReason =
     input.status === 'requested' && !canOrders
       ? RETURNS_COPY.noOrdersApproveDeclineOnly
       : dropped
         ? droppedCancel
           ? RETURNS_COPY.noOrdersApproveReplacementAndCancel
-          : RETURNS_COPY.noOrdersApproveReplacement
+          : droppedOtherThanCloseRest
+            ? RETURNS_COPY.noOrdersApproveReplacement
+            : RETURNS_COPY.noOrdersApproveCloseRest
         : null;
   return { primary, secondary, readOnlyReason };
 }
@@ -346,6 +376,7 @@ export const RETURN_ACTION_LABELS: Record<ReturnAction, string> = {
   hand_over: RETURNS_COPY.handOver,
   get_replacement_ready: RETURNS_COPY.getReplacementReady,
   close_as_return_only: RETURNS_COPY.closeAsReturnOnly,
+  close_replacement_rest: RETURNS_COPY.closeReplacementRest,
 };
 
 /** The label in context: an exchange's approval reads "Approve return & exchange",

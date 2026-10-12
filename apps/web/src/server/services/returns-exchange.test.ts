@@ -430,7 +430,9 @@ describe('the requester paths: the kill switch holds an exchange back; otherwise
 
   it('switched on, the exchange reaches create_requester_return_request as sent (the database decides)', async () => {
     const admin = makeSupabaseStub({
-      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+      // Re-pinned by returns RX-4 (0397, RX-3 security finding 1): the token is
+      // looked up by POST (order_id_for_return_token), never a query string.
+      'rpc:order_id_for_return_token': { data: ORDER_ID, error: null },
       'order_requests.select': { data: [{ id: ORDER_ID, organization_id: 'org-test', status: 'completed', order_number: 103 }], error: null },
       'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
       'rpc:create_requester_return_request': {
@@ -439,8 +441,8 @@ describe('the requester paths: the kill switch holds an exchange back; otherwise
       },
     } as never);
     await createRequesterReturn(admin.client, TOKEN, body);
-    expect(admin.rpcCalls).toHaveLength(1);
-    expect(admin.rpcCalls[0]!.args).toMatchObject({
+    expect(admin.rpcCalls.map((c) => c.name)).toEqual(['order_id_for_return_token', 'create_requester_return_request']);
+    expect(admin.rpcCalls[1]!.args).toMatchObject({
       p_order_id: ORDER_ID,
       p_request: { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, exchange: { itemId: ITEM_L } }] },
       p_actor: { channel: 'token', userId: null },
@@ -450,7 +452,7 @@ describe('the requester paths: the kill switch holds an exchange back; otherwise
   it('a return-only body still goes through with the switch off', async () => {
     vi.stubEnv('RETURNS_EXCHANGE_CREATE', 'off');
     const admin = makeSupabaseStub({
-      'order_request_secrets.select': { data: [{ order_request_id: ORDER_ID }], error: null },
+      'rpc:order_id_for_return_token': { data: ORDER_ID, error: null },
       'order_requests.select': { data: [{ id: ORDER_ID, organization_id: 'org-test', status: 'completed' }], error: null },
       'organization_modules.select': { data: [{ module_id: 'returns' }], error: null },
       'rpc:create_requester_return_request': {
@@ -459,7 +461,7 @@ describe('the requester paths: the kill switch holds an exchange back; otherwise
       },
     } as never);
     await createRequesterReturn(admin.client, TOKEN, { lines: [{ orderRequestLineId: OLINE_ID, quantity: 1 }] });
-    expect(admin.rpcCalls.map((c) => c.name)).toEqual(['create_requester_return_request']);
+    expect(admin.rpcCalls.map((c) => c.name)).toEqual(['order_id_for_return_token', 'create_requester_return_request']);
   });
 });
 
@@ -809,6 +811,72 @@ describe('cancel with a live replacement (X-2)', () => {
       await svc.cancel(RET_ID, { reason: 'Customer kept it' });
       expect(dispatchMock.mock.calls.filter((c) => c[1] === 'order.completed'), `${status} -> ${after}`).toEqual([]);
     }
+  });
+});
+
+// RX-4 (0397; RX-2 verification V3): "Close the rest" closes a
+// part-handed-over replacement's backorder from its RMA. The replacement gets
+// the order service's close-partial trail (one helper with the RMA cancel's
+// close, RX-3 desk check F7): order.closed_partial, order.completed
+// { closedPartial }, the broadcast and the completion email; the RMA gets its
+// own audit. A replay sends nothing.
+describe('closeReplacementRest (close_return_replacement_rest, RX-4)', () => {
+  const ANSWER = { changed: true, replay: false, returnId: RET_ID, status: 'received', revision: 1, closedOrderId: REPL_ID, orderNumber: 104 };
+
+  it('calls the database function once with the revision, the reason and the shown status, and answers what it did', async () => {
+    const { stub, svc } = svcFor({ 'rpc:close_return_replacement_rest': { data: ANSWER, error: null } });
+    const answer = await svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered' });
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'close_return_replacement_rest',
+        args: { p_return_id: RET_ID, p_expected_revision: 1, p_reason: 'Rest no longer needed', p_shown_status: 'backordered' },
+      },
+    ]);
+    expect(answer).toEqual({ changed: true, replay: false, status: 'received', revision: 1, closedOrderId: REPL_ID });
+  });
+
+  it('a close writes the replacement\'s close-partial trail and the RMA\'s own audit, and sends the completion email', async () => {
+    const { svc } = svcFor({ 'rpc:close_return_replacement_rest': { data: ANSWER, error: null } });
+    await svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: 'Rest no longer needed' });
+    const audits = auditMock.mock.calls.map((c) => c[0] as { event: string; entityId: string; reason?: string; extra?: Record<string, unknown> });
+    expect(audits.map((a) => [a.event, a.entityId])).toEqual([
+      ['order.closed_partial', REPL_ID],
+      ['return.replacement_closed', RET_ID],
+    ]);
+    expect(audits[0]).toMatchObject({ extra: { via: 'return.replacement_closed', replacementForReturnId: RET_ID } });
+    expect(audits[1]).toMatchObject({ reason: 'Rest no longer needed', extra: { closedOrderId: REPL_ID } });
+    expect(dispatchMock).toHaveBeenCalledWith('org-test', 'order.completed', { id: REPL_ID, orderNumber: 'SO-000104', closedPartial: true });
+    expect(broadcastMock).toHaveBeenCalledWith('org-test', REPL_ID);
+    expect(returnPromptMock).toHaveBeenCalledTimes(1);
+    expect(returnPromptMock.mock.calls[0]![1]).toBe(REPL_ID);
+    expect(invalidateMock).toHaveBeenCalled();
+  });
+
+  it('a replay (an earlier close of the same rest) writes and sends nothing', async () => {
+    const { svc } = svcFor({
+      'rpc:close_return_replacement_rest': { data: { ...ANSWER, changed: false, replay: true }, error: null },
+    });
+    expect(await svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: 'x' })).toMatchObject({ changed: false, replay: true });
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(returnPromptMock).not.toHaveBeenCalled();
+  });
+
+  it('maps a refusal by its hint (nothing on backorder, a stale screen) and refuses a bad body before the database', async () => {
+    for (const [hint, code] of [['replacement_not_backordered', 'conflict'], ['return_changed', 'conflict'], ['orders_approve', 'forbidden']] as const) {
+      const { svc } = svcFor({
+        'rpc:close_return_replacement_rest': { data: null, error: { code: hint === 'orders_approve' ? '42501' : 'P0001', hint, message: hint } },
+      });
+      const e = await svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: 'x' }).catch((x: unknown) => x);
+      expect(e, hint).toBeInstanceOf(ServiceError);
+      expect((e as ServiceError).code, hint).toBe(code);
+      expect((e as ServiceError).details, hint).toMatchObject({ reason: hint });
+    }
+    const { stub, svc } = svcFor({});
+    const bad = await svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: '  ' }).catch((x: unknown) => x);
+    expect((bad as ServiceError).code).toBe('validation_error');
+    expect(stub.rpcCalls).toEqual([]);
   });
 });
 

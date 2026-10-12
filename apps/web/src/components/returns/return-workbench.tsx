@@ -10,6 +10,7 @@ import {
   AddReplacement,
   CancelReplacementDialog,
   CloseAsReturnOnlyDialog,
+  CloseReplacementRestDialog,
   SiteChoiceDialog,
   ChangeReplacementDialog,
   ReleaseEarlyDialog,
@@ -41,6 +42,7 @@ import {
   buyReturnLabelAction,
   cancelReturnAction,
   cancelReturnReplacementAction,
+  closeReturnReplacementRestAction,
   changeReturnReplacementAction,
   declineReturnReplacementAction,
   denyReturnAction,
@@ -204,6 +206,7 @@ export function ReturnWorkbench({
   const [releaseOpen, setReleaseOpen] = React.useState(false);
   const [cancelReplacementOpen, setCancelReplacementOpen] = React.useState(false);
   const [returnOnlyOpen, setReturnOnlyOpen] = React.useState(false);
+  const [closeRestOpen, setCloseRestOpen] = React.useState(false);
   // Desk check F6: an approval, change or re-issue refused because the
   // delivery site is not one the warehouse serves asks where it goes instead.
   const [siteChoiceFor, setSiteChoiceFor] = React.useState<
@@ -494,6 +497,24 @@ export function ReturnWorkbench({
     if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly)) setReturnOnlyOpen(false);
   }
 
+  // RX-4 (0397; RX-2 verification V3): "Close the rest" of a replacement
+  // handed over in part, from the RMA, once the returned item is in. It names
+  // the status the screen showed; a rest resumed or closed since is refused
+  // (return_changed or replacement_not_backordered) and the page redraws.
+  async function closeReplacementRest(reason: string) {
+    const shownStatus = replacementFacts.replacementStatus;
+    const res = await guarded('close_replacement_rest', () =>
+      closeReturnReplacementRestAction({ id: r.id, body: { expectedRevision: wb.revision, reason, shownStatus } }),
+    );
+    if (res && res.ok && !res.data.answer.changed) {
+      adopt(res.data.workbench as Workbench);
+      toast.message(RETURNS_COPY.closedReplacementRestAlready);
+      setCloseRestOpen(false);
+      return;
+    }
+    if (afterReplacement(res, RETURNS_COPY.closedReplacementRest)) setCloseRestOpen(false);
+  }
+
   async function changeReplacement(body: ChangeBody, site: ReplacementFulfilment | null = null) {
     setChangeShort(null);
     const res = await guarded('change_replacement', () =>
@@ -651,6 +672,9 @@ export function ReturnWorkbench({
         return;
       case 'close_as_return_only':
         setReturnOnlyOpen(true);
+        return;
+      case 'close_replacement_rest':
+        setCloseRestOpen(true);
         return;
       case 'change_replacement':
         setChangeShort(null);
@@ -1209,6 +1233,16 @@ export function ReturnWorkbench({
             busy={busy === 'close_as_return_only'}
             error={dialogError}
             onConfirm={closeAsReturnOnly}
+          />
+          <CloseReplacementRestDialog
+            open={closeRestOpen}
+            onOpenChange={(v) => {
+              setCloseRestOpen(v);
+              setDialogError(null);
+            }}
+            busy={busy === 'close_replacement_rest'}
+            error={dialogError}
+            onConfirm={closeReplacementRest}
           />
           <ChangeReplacementDialog
             key={changeMode ? `change-replacement-${changeMode}` : 'change-replacement-closed'}
