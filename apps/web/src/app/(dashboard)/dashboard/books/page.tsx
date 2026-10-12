@@ -137,11 +137,15 @@ export default async function BooksPage({
   // because a gate that says no returns before anything awaits it.
   const contextStarted = withContext();
   contextStarted.catch(() => {});
-  const [moduleAccess, { enabled: priceTrackingEnabled }, params] = await Promise.all([
-    checkModuleAccess('books'),
-    checkModuleAccess('price_tracking'),
-    searchParams,
-  ]);
+  // Ungroup anything (owner 2026-10-12): the sports gate joins them, for
+  // Ungroup on a size family (request-cached, no round trip of its own).
+  const [moduleAccess, { enabled: priceTrackingEnabled }, { enabled: sportsEnabled }, params] =
+    await Promise.all([
+      checkModuleAccess('books'),
+      checkModuleAccess('price_tracking'),
+      checkModuleAccess('sports'),
+      searchParams,
+    ]);
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
   }
@@ -175,7 +179,7 @@ export default async function BooksPage({
     InventoryService.forCurrentUser().then((svc) =>
       svc.listDistinctRacks({ scope: 'books' }),
     ),
-    booksTableSection({ params, lifecycleStatus }),
+    booksTableSection({ params, lifecycleStatus, sportsEnabled }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -268,9 +272,12 @@ type SectionData = {
 async function booksTableSection({
   params,
   lifecycleStatus,
+  sportsEnabled,
 }: {
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
+  /** The sports module is on (Ungroup on a size family). */
+  sportsEnabled: boolean;
 }): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
   // Saved views are strictly per-user — they never enter the shared
@@ -305,13 +312,9 @@ async function booksTableSection({
   const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
   // Ungroup anything (owner 2026-10-12): Ungroup also takes a record out of
   // its size family for a viewer who may unlink one (unlinkItems' gate:
-  // sports:manage with the sports module on). The module set is
-  // request-cached (checkModuleAccess, as the gates above), so this costs no
-  // extra round trip.
-  const canUnlinkFamilies =
-    canUngroup &&
-    can(sessionCtx, 'sports:manage') &&
-    (await checkModuleAccess('sports')).enabled;
+  // sports:manage with the sports module on; the page asked the module gate
+  // with the others).
+  const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
