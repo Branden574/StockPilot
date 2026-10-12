@@ -30,82 +30,125 @@ export const RELEASES: Release[] = [
   {
     id: 'returns-requester-exchange-2026-10',
     revision: 1,
-    // Returns RX-3 (no migration: the requester tier and its predicate,
-    // return_exchange_options, shipped in RX-2's 0396). Held as a DRAFT until
-    // this slice's web deploy is live (RX-2's 0396 is already in production),
-    // the OTA with the phone's requester sheet is published and launched, and
-    // the Demo Co walk passed (returns plan 10.1 and 11); the follow-up that
-    // publishes it (RX-5) sets 'published' and the real publishedAt and
-    // re-reads these words against what shipped. Newest first: drafts sit
-    // above the newest published release, so it sits at the top, directly
-    // above RX-2's release (published by #345 at 2026-10-11T22:18Z), and is
-    // dated after every release (a placeholder; the publishing follow-up
-    // dates and orders it for real).
+    // Returns RX-3: the requester's own exchange (the return link, the
+    // customer portal and a member's own order, on the web and the phone),
+    // the 14-day prompt, Busy. Try again. on order actions, the size S label
+    // fix and the PR-stage polish (#346, bd37d5a30, merged 2026-10-12
+    // 00:52:26Z; no migration: the requester tier and return_exchange_options
+    // shipped in RX-2's 0396). PUBLISHED by RX-5. Production's head stayed
+    // 0396 (391 applied, read 00:52:02Z). Web build 3dbc11a7ebb5 (the first
+    // 12 hex of the sha256 of bd37d5a30, built 00:52:49Z) was live at
+    // 00:54:50Z. The phone part is OTA group baf22731 (iOS update 01a12d9b,
+    // from main bd37d5a30): its served launch asset equals the local export,
+    // and its source map holds requester-return-sheet.tsx,
+    // requester-tracking-card.tsx, core replacementLineHandOver and
+    // orderStatusLabelForFulfillment. eas update:insights, read 2026-10-12
+    // 01:47Z: 1 iOS launch for 1 user, 0 failed. Android was not checked.
     //
-    // What a person can see, and who is told:
-    // - Members who place orders, where Returns is on: their own handed-over
-    //   order's link now reads Return or exchange (web; Request a return while
-    //   the kill switch is off) and opens the requester sheet (the token
-    //   page; an order with no return token opens the same form over the
-    //   member routes, fix round 1 L6); the phone gets its own sheet on the
-    //   order (phone stage); the order lists Your requests on this order. A
-    //   returns manager keeps Create return on their own orders (no tracking
-    //   for them), and the entry says so (fix round 1 L9). The customer portal and the
-    //   emailed link get the same sheet, but their people never read What's
-    //   New, so the entry speaks to members and the summary names all three.
-    // - People who can open Returns: requests now arrive with an exchange
-    //   (the size asked for, or a note), with the staff ping New exchange
-    //   request (returns-notify.ts, requester-sourced only); and the 14-day
-    //   prompt on the workbench (RX-2 review fix P17), shown only to someone
-    //   offered Cancel replacement, so the words say so.
-    // - Order actions (deferred item b, 1c4aac16; fix round 1 F1/F2): a lock
-    //   wait, a timeout or a deadlock now answers Busy. Try again. where a
-    //   general error was said, on every order function call and every
-    //   single-statement order write (stage, deny, internal notes, a line's
-    //   quantity, removing a line, the pick slip); actions that had busy words
-    //   keep them. Busy is said only when nothing was written. Add items,
-    //   whose top-ups commit before its insert, says busy only before its
-    //   first top-up; after one it answers the non-retryable partial refusal
-    //   ("Part of this change was saved. Reload the order ..."). Server side,
-    //   so no update is needed for it.
-    // - A label fix found on the way: core returnLineLabel read the s of
-    //   Women's as the size S, so return and exchange sentences dropped the
-    //   size S for names with an apostrophe (staff workbench, order pages,
-    //   the phone, and the new tracking).
+    // The Demo Co production walk (walk-rx3, 01:02:51-01:38:44Z; independent
+    // audit CONFIRMED) on the web: SO-000030 (a pickup, M x1) was handed over;
+    // its return link (the emailed link's path, opened by its URL) read Return
+    // or exchange, started the only line ticked and offered L as Available
+    // (no count; the walk items have no photo); RMA-20261012-676AC1 arrived
+    // Requested by the requester, with New exchange request to the three
+    // people who manage returns and We received your exchange request. to the
+    // requester; Approve return & exchange (Approve as requested, Leave in
+    // Staging) created replacement SO-000031 and reserved L, and the
+    // requester's view read Replacement reserved. Waiting for your return.; a
+    // pick slip for SO-000031 was refused (409 Waiting for the returned
+    // item.); Receive, Process return (into Staging), Get replacement ready
+    // and Hand over completed the exchange (Your exchange is complete;
+    // Exchange completed.), and the requester's view never named a rack,
+    // Staging, a warehouse, a SKU, a cost, a note, a reason or a staff name.
+    // Polish (a)-(e) read as these words say on RX-2's walk records and on
+    // this walk's, on the web and on the iPhone 17 and iPad simulators on the
+    // published bundle: the REPLACEMENT card Handed over with Qty handed
+    // over: 1, the history's Return to original rack 31-B, Handed over for a
+    // completed pickup on the order pages and in the lists (HANDED OVER on
+    // the phone), Restock · not returned and Exchange: ... (Exchange
+    // cancelled) on the original order, and the new returns note.
+    // NOT walked in production: demo manages returns, so the web order
+    // page's requester entry (requesterReturnEligible), the phone's Return or
+    // exchange sheet and its Your requests on this order card
+    // (requester-returns.ts requesterReturnGate) are hidden from demo by
+    // design (RX-3 flows F7); the walk saw demo keep Create return on the web
+    // and the member route answer demo's own order. Their evidence is RX-3's
+    // test stage on the code that merged (the phone's sheet, card and gate are
+    // unchanged since ce1e0085e; the web sheet ran again at the PR stage on
+    // 1055532b0): browser flow F (the own order's link and the tokenless
+    // dialog over the member routes, Your requests on this order, a returns
+    // manager keeps Create return), flow A (the sizes with photos and
+    // Available or Not in stock right now), flow B (the warehouse review with
+    // its required note; a note-only review starts on Change replacement…),
+    // flow E (the portal), flow G (Women's Polo, S; Busy. Try again.), flow H
+    // (the 14-day prompt), flow I (Add items' partial words), the integration
+    // harness (the member routes; B1 and Z, busy and F8), and the simulator
+    // as a member (QA Staff) on the iPhone 17 and the iPad: the sheet, the
+    // sizes, the alert, the card and the note.
+    // Walk observations these words do not contradict: the requester's
+    // per-line state still reads Approved under Exchange completed., and the
+    // phone's RETURNING card reads In Staging after the put-away; no line here
+    // names either.
     //
-    // Claims review, each checked against the code: requesters are told
-    // under the Order status changes setting as a member, by email otherwise
-    // (RX-1's words); "the sizes the warehouse offers" are the line's own
-    // product group's other sizes in the same warehouse (3.6.10), so the
-    // words never say "any size"; availability is two words, never a count
-    // (D6); the replacement is prepared once the item is back unless the
-    // warehouse releases it early (the gate), so the words say "usually"; the
-    // 14-day prompt never cancels anything. The words never say "book" for a
-    // recorded quantity and claim no inspection.
+    // Corrected at publish (re-read against bd37d5a30, the walk and the test
+    // stage):
+    // - "On an order you placed that was handed over": the entry is offered
+    //   on a completed order, a pickup or a delivery (the web page's
+    //   orderIsReturnable, the phone's RETURNABLE_ORDER_STATUSES), and Handed
+    //   over is now a pickup's own word, so it says "handed over or
+    //   delivered".
+    // - "Exchange shows the item's other sizes": the options are the line's
+    //   own group's other sizes orderable in the order's warehouse
+    //   (return_exchange_options, plan 3.6.10), so it says "the other sizes
+    //   the warehouse offers for that item", as the summary does.
+    // - "An item with no other sizes offers ...": the warehouse review shows
+    //   whenever a line has no size to offer, and its note is required
+    //   (requester-return-sheet.tsx on both platforms), so it says so.
+    // - "nothing is sent until it is approved" read as "no message is sent":
+    //   it says no replacement goes out until then.
+    // - "You hear ..., unless you turned off Order status changes": the
+    //   hand-over's message is not gated by that setting (0396
+    //   _notify_replacement_order_changes sends completed ungated), and with
+    //   the item at the counter the approval and ready for pickup messages
+    //   are not sent (returns-notify.ts requesterHearsEvent; the trigger's
+    //   counter rule), so the words say both.
+    // - The review entry said "with the size asked for beside the returning
+    //   item": the two sides stack on an iPhone (RX-2's correction), so it
+    //   says "shown with the item it replaces"; the ping goes to the people
+    //   who manage returns for the order's warehouse
+    //   (resolveReturnStaffAudience), so it says so; a request with only a
+    //   note names no item (Approve as requested refuses it: core
+    //   exchangeReviewProblem), so it says to choose one with Change
+    //   replacement…; "The requester sees where it stands" now names their
+    //   view of it.
+    // - The review entry's What to do said "No action needed." alone: the
+    //   phone's 14-day prompt came in this update (returns-view.ts
+    //   workbenchStillWaiting), so it names the update too.
+    // - The busy entry said "another change to the same order": a lock on the
+    //   same items (an RMA create with an exchange beside approve_partial,
+    //   F8) answers busy too (order-busy.ts), so it says "the same order or
+    //   its items".
     //
-    // PR-stage polish (2026-10-11, the RX-2 Demo Co walk's lows), two more
-    // entries, each claim checked against core (registry.test.ts pins them):
-    // - The exchange outcome words (polish a, b, d, e): the REPLACEMENT card
-    //   reads Handed over / Partly handed over / Not sent from the
-    //   replacement order's own lines (replacementCardStatusLabel; the
-    //   stored line status stays approved); a processed line's history names
-    //   its original rack from its own leg; on the original order a denied
-    //   or cancelled RMA's line reads not returned (describeReturnLine), a
-    //   declined or cancelled exchange is listed (originalExchangeLineFor),
-    //   and the note says a replacement is its own order
-    //   (ORDER_RETURN_SUMMARY_NOTE). Told to whoever opens Returns and to
-    //   order approvers (who meet the original order's returns section).
-    // - A completed pickup reads Handed over (polish c,
-    //   orderStatusLabelForFulfillment): the web badge on the order page and
-    //   the list, the phone's header and list pill; a delivery keeps
-    //   Delivered; on the web an organization's own word is kept (the phone
-    //   shows canonical words for every status). Emails, exports and reports
-    //   are unchanged.
-    status: 'draft',
+    // Who is told: members who place orders, where Returns is on, the
+    // requester entry (its last sentence tells a returns manager they keep
+    // Create return); whoever can open Returns, the review entry (the only
+    // link, Open Returns, the page's own gate); members who place or approve
+    // orders, where Orders is on, the busy and the pickup entries; whoever
+    // can open Returns or approves orders, where Returns is on, the size
+    // label and the outcome words (order approvers meet the original order's
+    // returns section and a replacement's banner). The customer portal's and
+    // the return link's people never read What's New, so the summary names
+    // all three ways in. No release-level audience: a reader no entry reaches
+    // is not told. Newest first: published after every release below it, it
+    // sits at the top, above returns RX-2's release (2026-10-11 22:18Z), and
+    // no draft is left. The words name the screens' own labels, give no count
+    // (availability is two words, D6), never say "any size", never say
+    // "book" for a recorded quantity and claim no inspection.
+    status: 'published',
     title: 'Requesters can ask for an exchange themselves',
     summary:
       'People who placed an order can now ask for an exchange from their return link, the customer portal or their own order, in the mobile app after the latest update too: each item can be Return only or Exchange for another size, from the sizes the warehouse offers, and the request shows where it stands. The warehouse reviews every request first. Order actions that meet another change at the same moment now say Busy. Try again. A completed pickup order now reads Handed over.',
-    publishedAt: '2026-10-15T17:10:00Z',
+    publishedAt: '2026-10-12T02:07:00Z',
     entries: [
       {
         id: 'returns-requester-exchange',
@@ -113,10 +156,10 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Ask for another size on your own order',
         whatChanged:
-          "On an order you placed that was handed over, Return or exchange now lets you choose Return only or Exchange for another size for each item. Exchange shows the item's other sizes, each with its photo when it has one and Available or Not in stock right now. An item with no other sizes offers Request a different replacement: warehouse will review, with a note. The order then lists Your requests on this order, with where each one stands. If you manage returns, your own orders keep Create return instead.",
+          "On an order you placed that was handed over or delivered, Return or exchange now lets you choose Return only or Exchange for another size for each item. Exchange shows the other sizes the warehouse offers for that item, each with its photo when it has one and Available or Not in stock right now. When there is no other size to offer, it shows Request a different replacement: warehouse will review, with a note to say what you need. The order then lists Your requests on this order, with where each one stands. If you manage returns, your own orders keep Create return instead.",
         whyItMatters: 'A wrong size used to take a return and a separate request for the right one, with nothing tying the two together.',
         howItAffectsYou:
-          'The warehouse reviews every request, and nothing is sent until it is approved. The replacement is usually prepared once your item is back. You hear when the request arrives, when it is approved, when the replacement is ready and when the exchange is complete, unless you turned off Order status changes.',
+          'The warehouse reviews every request, and no replacement goes out until it is approved. The replacement is usually prepared once your item is back. You hear when the request arrives, when it is approved, when the replacement is ready and when it is handed over. If the warehouse approves it with you and the item at the counter, the approval and ready for pickup messages are not sent. Turning off Order status changes stops all of these but the hand-over.',
         whatToDo: 'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['orders:request'], modules: ['returns'] },
       },
@@ -126,11 +169,12 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'Return requests can ask for an exchange',
         whatChanged:
-          "A request from a return link, the customer portal or someone's own order can now ask for an exchange: one of the item's other sizes, or a different replacement for the warehouse to review from the requester's note. It arrives in Returns like a staff exchange, with the size asked for beside the returning item, and the people who manage returns get New exchange request.",
+          "A request from a return link, the customer portal or someone's own order can now ask for an exchange: one of the other sizes the warehouse offers for the item, or a different replacement for the warehouse to review from the requester's note. It arrives in Returns like a staff exchange, marked Requested by the requester, with the size asked for shown with the item it replaces, and the people who manage returns for its warehouse get New exchange request.",
         whyItMatters: 'The warehouse learns which size the requester wants when they ask, not later by phone or email.',
         howItAffectsYou:
-          'Review it as any exchange: Approve as requested, Change replacement… or Decline the exchange, return only. The requester sees where it stands in plain words, never a rack, Staging, a cost, a reason or who did what. When a replacement has waited 14 days for the returned item, the return tells whoever can cancel the replacement how long it has waited and what Cancel replacement and Cancel return do. Nothing is cancelled on its own.',
-        whatToDo: 'No action needed. To stop these notifications, turn off New return and exchange requests in Notifications.',
+          "Review it as any exchange: Approve as requested, Change replacement… or Decline the exchange, return only. A request with only a note names no item, so choose one with Change replacement… or decline the exchange. The requester's view of it says where it stands in plain words, never a rack, Staging, a cost, a reason or who did what. When a replacement has waited 14 days for the returned item, the return tells whoever can cancel the replacement how long it has waited and what Cancel replacement and Cancel return do. Nothing is cancelled on its own.",
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update. To stop these notifications, turn off New return and exchange requests in Notifications.',
         link: { href: '/dashboard/returns', label: 'Open Returns' },
         audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
       },
@@ -140,7 +184,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Order actions say Busy. Try again. when another change is under way',
         whatChanged:
-          'When an order action meets another change to the same order at the same moment, or the database is briefly busy, it now says Busy. Try again. instead of a general error. When it says this, nothing was changed, so pressing the same button again is safe. Actions that already said they were busy keep their own words. If Add items saved only part of a change, it says so and asks you to reload the order before adding again.',
+          'When an order action runs into another change to the same order or its items at the same moment, or the database is briefly busy, it now says Busy. Try again. instead of a general error. When it says this, nothing was changed, so pressing the same button again is safe. Actions that already said they were busy keep their own words. If Add items saved only part of a change, it says so and asks you to reload the order before adding again.',
         whyItMatters: 'A general error left people unsure whether the order had changed.',
         howItAffectsYou: 'If an order says Busy. Try again., wait a moment and press the same button again.',
         whatToDo: 'No action needed.',

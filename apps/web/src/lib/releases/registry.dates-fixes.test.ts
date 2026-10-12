@@ -65,8 +65,12 @@ describe('the dates fixes release is published', () => {
     // public-link-sent-request-2026-10): returns RX-2's release is published
     // later still, and an owner with every module is told it first. Claim
     // kept: a member the public link release does not reach is told this one.
+    // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was:
+    // returns-exchange-2026-10): returns RX-3's release is published later
+    // still, and an owner with every module is told it first. Claim kept: a
+    // member the public link release does not reach is told this one.
     expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
-      'returns-exchange-2026-10',
+      'returns-requester-exchange-2026-10',
     );
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
     // An old phone build lists it first for a member, with the notification
@@ -102,10 +106,12 @@ describe('the dates fixes release is published', () => {
     // later still, sits at the top above RX-2's published release. Claim
     // kept: the public link release, published a minute later, sits directly
     // above.
+    // Re-pinned by docs/whats-new-returns-requester (2026-10-12; was: RX-3's
+    // release at the top as a draft): it is published, in the same place.
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBe(3);
     expect(RELEASES[0]?.id).toBe('returns-requester-exchange-2026-10');
-    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[0]?.status).toBe('published');
     expect(RELEASES[1]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[1]?.status).toBe('published');
     expect(RELEASES[2]?.id).toBe('public-link-sent-request-2026-10');
