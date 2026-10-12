@@ -134,6 +134,48 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     await waitFor(() => expect(screen.queryByText(RESTORE_SKU_COPY.checking)).toBeNull());
   });
 
+  // PR stage, data review DATA-1 (1): the warning is the only guard a version 1
+  // point has, so RESTORE typed (or pasted) before the check answers must not
+  // restore past it. Confirm stays off until the check is done or has failed.
+  it('keeps Confirm off while the check is on its way, even with RESTORE typed, and turns it on once the check answers', async () => {
+    let resolve: (v: unknown) => void = () => undefined;
+    h.changes.mockReturnValue(new Promise((r) => (resolve = r)));
+    const user = await open();
+    await user.type(screen.getByPlaceholderText('RESTORE'), 'RESTORE');
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(h.restore).not.toHaveBeenCalled();
+    resolve(
+      answer({
+        version: 1,
+        changes: [
+          {
+            itemId: B,
+            name: 'Black Mouse Pad',
+            before: 'SP-PAIR',
+            after: 'SP-NEW1',
+            shared: false,
+          },
+        ],
+        more: 0,
+        truncated: false,
+      }),
+    );
+    // The warning is on screen before Confirm turns on.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Black Mouse Pad: SP-PAIR to SP-NEW1',
+    );
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  });
+
+  it('turns Confirm on after a failed check too, below the words that say it failed', async () => {
+    h.changes.mockResolvedValue({ ok: false, error: { code: 'internal_error', message: 'x' } });
+    const user = await open();
+    expect(await screen.findByText(RESTORE_SKU_COPY.failed)).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText('RESTORE'), 'RESTORE');
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  });
+
   it('never says "book" for a recorded quantity, and never tells anyone to change a charter or rack', () => {
     const text = [
       RESTORE_SKU_COPY.checking,

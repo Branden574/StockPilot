@@ -46,7 +46,13 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
     }
   }
 
+  // The warning is a version 1 point's only guard, so Confirm waits for the
+  // check: on only once it answered (the warning, or nothing to warn about) or
+  // failed (which says so). Never while it is still on its way.
+  const checkSettled = skuCheck.state === 'done' || skuCheck.state === 'failed';
+
   async function run() {
+    if (!checkSettled) return;
     setBusy(true);
     const payload = { id, confirm };
     let r = await restoreFromPointAction(payload);
@@ -134,7 +140,7 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
         <button
           type="button"
           onClick={run}
-          disabled={busy || confirm !== 'RESTORE'}
+          disabled={busy || !checkSettled || confirm !== 'RESTORE'}
           className="bg-destructive text-destructive-foreground rounded-md px-2 py-1 text-xs font-semibold disabled:opacity-50"
         >
           {busy ? 'Restoring…' : 'Confirm'}
