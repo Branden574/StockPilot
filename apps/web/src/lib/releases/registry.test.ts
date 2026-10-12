@@ -8701,7 +8701,17 @@ describe('the Ungroup release (G1, 0399)', () => {
   it('says what changes and what does not, in the screens\' own words, on both platforms', () => {
     const r = release();
     const [ungroup] = r.entries;
-    expect(r.summary).toMatch(/web and in the mobile app/);
+    // Fix round 1, P3: the bulk Ungroup is on the web only (the phone's select
+    // bar gets it in G3); the phone has the item screen's action.
+    expect(r.summary).toContain('On the web, select them on Items or Books and choose Ungroup.');
+    expect(r.summary).toContain(
+      'On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
+    );
+    expect(r.summary).not.toMatch(/Items or Books[^.]*mobile app/);
+    // Fix round 1, D2: what an old SKU label does until it is reprinted.
+    expect(ungroup!.howItAffectsYou).toContain(
+      'until you reprint them for the records that changed, scanning one finds the records that keep the old SKU',
+    );
     expect(ungroup!.whatChanged).toContain('Ungroup');
     expect(ungroup!.whatChanged).toContain('Make this its own item');
     expect(ungroup!.howItAffectsYou).toContain(

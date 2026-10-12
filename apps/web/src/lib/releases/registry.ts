@@ -53,7 +53,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'Give records that share a SKU a SKU of their own',
     summary:
-      'Records that share a SKU can now be separated: Ungroup gives the records you choose a new SKU of their own and changes nothing else, so stock, charter, rack, barcode/ISBN and history stay as they are. Select them on Items or Books and choose Ungroup, or open one and use Make this its own item, on the web and in the mobile app after the latest update.',
+      'Records that share a SKU can now be separated: Ungroup gives the records you choose a new SKU of their own and changes nothing else, so stock, charter, rack, barcode/ISBN and history stay as they are. On the web, select them on Items or Books and choose Ungroup. On an item page, on the web or in the mobile app after the latest update, use Make this its own item.',
     publishedAt: '2026-10-20T17:00:00Z',
     audience: { anyPermission: ['items:update', 'items:create'] },
     entries: [
@@ -67,7 +67,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Editing the SKU on one record changed it on every record with that SKU, so records that should not share a SKU could not be separated.',
         howItAffectsYou:
-          'Only the records you choose change, and only their SKU. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU, so reprint them for the records that changed; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
+          'Only the records you choose change, and only their SKU. Stock, charter, rack, barcode/ISBN and history stay as they are, so two records can now share a barcode: scanning it asks which one you mean. Kits and records in a product family keep their SKU. Labels without a barcode print the SKU: until you reprint them for the records that changed, scanning one finds the records that keep the old SKU; the review links to Print labels. The item edit form now says how many other records share the SKU and that saving the shared fields changes all of them.',
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
