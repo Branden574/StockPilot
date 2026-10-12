@@ -7,8 +7,12 @@
 --
 -- Personas (real `authenticated` calls with request.jwt.claim.sub):
 --   own    owner                 mgr    manager
---   stf    staff, whA (no charter: reads whA's no-charter records)
+--   stf    staff, whA with NO charter on the assignment: that means every
+--          charter at whA (0229 "all charters here"; 0310
+--          rls_inv_read_full_warehouse_ids), so it reads t1, t2 and t3
 --   stfCh  staff, whA + charter chA (reads no-charter and chA records of whA)
+--   stfC   staff, whA + charter chC, which no TRIO record carries (reads whA's
+--          no-charter records and chC's: of TRIO, only t1)
 --   stfNo  staff, whA, items:update revoked (user override false)
 --   vwr    viewer, whA (no items:update by default)
 --   vwrUp  viewer, whA, items:update granted (reads, cannot write whA)
@@ -31,10 +35,12 @@
 --     no anchor the oldest (created_at, then id) keeps it; an anchor named
 --     for a SKU that still has unselected readable records is
 --     sku_siblings_changed.
--- H.  Hidden siblings never change the answer: staff who sees one record of
---     a three-charter SKU gets not_shared; charter staff who sees two of
---     three gets the same answer as on a SKU with no hidden record; a hidden
---     id is item_not_found, the same answer as an unknown id.
+-- H.  Hidden siblings never change the answer: first a control that each
+--     persona reads what 0229/0310 say (fix round 2, R2-2); charter staff
+--     (stfC) who sees one record of a three-charter SKU gets not_shared;
+--     charter staff (stfCh) who sees two of three gets the same answer as on
+--     a SKU with no hidden record; a hidden id is item_not_found, the same
+--     answer as an unknown id.
 -- R.  Refusals: not_shared (alone; a deleted sibling and another
 --     organization's row do not count), family_member_sku, not_groupable
 --     (kit), item_changed, item_not_found (unknown, deleted, other org),
@@ -64,7 +70,7 @@
 
 begin;
 
-select plan(51);
+select plan(52);
 
 \set orgA   '\'03990000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03990000-0000-0000-0000-00000000000b\''
@@ -72,6 +78,7 @@ select plan(51);
 \set mgr    '\'03990000-0000-0000-0000-0000000000a1\''
 \set stf    '\'03990000-0000-0000-0000-0000000000a2\''
 \set stfCh  '\'03990000-0000-0000-0000-0000000000a3\''
+\set stfC   '\'03990000-0000-0000-0000-0000000000a8\''
 \set stfNo  '\'03990000-0000-0000-0000-0000000000a4\''
 \set vwr    '\'03990000-0000-0000-0000-0000000000a5\''
 \set vwrUp  '\'03990000-0000-0000-0000-0000000000a6\''
@@ -82,6 +89,8 @@ select plan(51);
 \set whB    '\'03990000-0000-0000-0000-0000000000d2\''
 \set chA    '\'03990000-0000-0000-0000-0000000000e1\''
 \set chB    '\'03990000-0000-0000-0000-0000000000e2\''
+-- A charter no TRIO record carries: stfC's assignment (fix round 2, R2-2).
+\set chC    '\'03990000-0000-0000-0000-0000000000e3\''
 \set catA   '\'03990000-0000-0000-0000-0000000000e8\''
 \set grp    '\'03990000-0000-0000-0000-0000000000e9\''
 -- The owner's case: one product on two racks, no charter.
@@ -144,6 +153,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:mgr,    '0399-mgr@test.local',    '{}'::jsonb),
   (:stf,    '0399-stf@test.local',    '{}'::jsonb),
   (:stfCh,  '0399-stfch@test.local',  '{}'::jsonb),
+  (:stfC,   '0399-stfc@test.local',   '{}'::jsonb),
   (:stfNo,  '0399-stfno@test.local',  '{}'::jsonb),
   (:vwr,    '0399-vwr@test.local',    '{}'::jsonb),
   (:vwrUp,  '0399-vwrup@test.local',  '{}'::jsonb),
@@ -159,6 +169,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :mgr,   'manager', now()),
   (:orgA, :stf,   'staff',   now()),
   (:orgA, :stfCh, 'staff',   now()),
+  (:orgA, :stfC,  'staff',   now()),
   (:orgA, :stfNo, 'staff',   now()),
   (:orgA, :vwr,   'viewer',  now()),
   (:orgA, :vwrUp, 'viewer',  now()),
@@ -169,16 +180,19 @@ insert into public.warehouses (id, organization_id, name, code, status) values
   (:whB, :orgB, '0399 Other', 'WH-0399B', 'active');
 insert into public.charters (id, organization_id, name, code, status) values
   (:chA, :orgA, '0399 North', 'C0399N', 'active'),
-  (:chB, :orgA, '0399 South', 'C0399S', 'active');
+  (:chB, :orgA, '0399 South', 'C0399S', 'active'),
+  (:chC, :orgA, '0399 East',  'C0399E', 'active');
 insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
   (:orgA, :whA, :chA),
-  (:orgA, :whA, :chB);
+  (:orgA, :whA, :chB),
+  (:orgA, :whA, :chC);
 insert into public.categories (id, organization_id, name) values (:catA, :orgA, '0399 Gear');
 insert into public.product_groups (id, organization_id, name, group_key, default_counting_unit)
   values (:grp, :orgA, '0399 Family', '0399|family', 'each');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
   (:orgA, :stf,   :whA, null, true),
   (:orgA, :stfCh, :whA, :chA, true),
+  (:orgA, :stfC,  :whA, :chC, true),
   (:orgA, :stfNo, :whA, null, true),
   (:orgA, :vwr,   :whA, null, true),
   (:orgA, :vwrUp, :whA, null, true);
@@ -288,6 +302,17 @@ $$;
 create function pg_temp.ids_of(p text) returns text language sql as $$
   select string_agg(right(v, 3), ',' order by v)
     from jsonb_array_elements_text(substr(p, length(split_part(p, ':', 1) || split_part(p, ':', 2) || split_part(p, ':', 3)) + 4)::jsonb->'itemIds') x(v)
+$$;
+-- What a persona reads of a SKU's live records, as id suffixes: first through
+-- the inventory_items SELECT policy, then through caller_can_read_item (the
+-- split's visible-sibling test) over every live record of the SKU.
+create function pg_temp.sees(p_sub uuid, p_sku text) returns text language sql as $$
+  select pg_temp.run('authenticated', p_sub, format(
+           'select string_agg(right(i.id::text, 3), %L order by i.id) from public.inventory_items i where i.sku = %L and i.deleted_at is null',
+           ',', p_sku))
+         || ';' || pg_temp.run('authenticated', p_sub, format(
+           'select string_agg(right(x.id::text, 3), %L order by x.id) from unnest(%L::uuid[]) x(id) where public.caller_can_read_item(x.id)',
+           ',', (select array_agg(i.id) from public.inventory_items i where i.sku = p_sku and i.deleted_at is null)))
 $$;
 -- The real RLS update answer for a persona: rows an inventory_items UPDATE
 -- reaches (rolled back: the probe raises its count).
@@ -489,11 +514,18 @@ select is(
   'A4: an anchor named for a SKU that still has unselected readable records is sku_siblings_changed (never silently ignored), and nothing changes');
 
 -- ═══ H. Hidden siblings never change the answer ═══════════════════════════
+-- Fix round 2, R2-2: an assignment with no charter is every charter at that
+-- warehouse, so the hidden-sibling cases need charter-scoped personas. This
+-- control pins the persona model before any case relies on it.
 select is(
-  pg_temp.brief(pg_temp.split(:stf, pg_temp.req(:stf, array[:t1]::uuid[]), pg_temp.k(20)))
+  pg_temp.sees(:stf, 'X0399-TRIO') || '|' || pg_temp.sees(:stfCh, 'X0399-TRIO') || '|' || pg_temp.sees(:stfC, 'X0399-TRIO'),
+  '111,112,113;111,112,113|111,112;111,112|111;111',
+  'H0: the personas read what 0229/0310 say, through RLS and caller_can_read_item alike: stf (no charter on the assignment = every charter at whA) reads all three TRIO records, stfCh (chA) the no-charter and chA ones, stfC (chC) only the no-charter one');
+select is(
+  pg_temp.brief(pg_temp.split(:stfC, pg_temp.req(:stfC, array[:t1]::uuid[]), pg_temp.k(20)))
   || '|' || (select string_agg(sku, ',' order by id) from public.inventory_items where id in (:t1, :t2, :t3)),
   'P0001:not_shared|X0399-TRIO,X0399-TRIO,X0399-TRIO',
-  'H1: staff who reads only the no-charter record of a three-charter SKU gets not_shared, as if the other two did not exist');
+  'H1: charter staff (chC) who reads only the no-charter record of a three-charter SKU gets not_shared, as if the other two did not exist');
 insert into ans select 'h2', pg_temp.split(:stfCh, pg_temp.req(:stfCh, array[:q1, :q2]::uuid[]), pg_temp.k(21));
 insert into ans select 'h3', pg_temp.split(:stfCh, pg_temp.req(:stfCh, array[:c1, :c2]::uuid[]), pg_temp.k(22));
 select is(

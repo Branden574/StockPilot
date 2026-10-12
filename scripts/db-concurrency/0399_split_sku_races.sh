@@ -30,16 +30,21 @@
 #      split, both orders: the split waits for nobody; the target write waits
 #      for the split and then applies to the split row with its new SKU.
 #   7. A record leaves the caller's scope between the first checks and the
-#      row lock (fix round 1, SEC-1). A staff member who reads only the
-#      warehouse's no-charter records splits one record of a three-record
-#      SKU; the split pauses right after its first scope check (a planted
-#      pause in caller_can_write_item, this race only); another session
-#      commits a move of that record into a charter the staff member cannot
-#      read; the split then takes its lock and is refused item_changed,
+#      row lock (fix round 1, SEC-1). A staff member assigned to the
+#      warehouse for charter CHB only (so it reads the warehouse's no-charter
+#      records and CHB's, never CHA's, and may write the warehouse) splits
+#      one no-charter record of a three-record SKU; the split pauses right
+#      after its first scope check (a planted pause in caller_can_write_item,
+#      this race only); another session commits a move of that record into
+#      CHA; the split then takes its lock and is refused item_changed,
 #      because the scope is checked again under the lock. Without that
 #      recheck the split would write the moved record: its two siblings are
-#      still readable, so not_shared does not fire. The plant is removed
-#      right after, by cleanup at the start and end, and by the EXIT trap.
+#      still readable, so not_shared does not fire. The staff member's reads
+#      are checked before and after the move (fix round 2, R2-1: an
+#      assignment with NO charter means every charter at the warehouse,
+#      0229/0310, and would never lose the moved record). The plant is
+#      removed right after, by cleanup at the start and end, and by the
+#      EXIT trap.
 #   8. No session ever sees 40001 or 40P01, and 0234 holds at the end.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot)
@@ -63,6 +68,7 @@ MGR='03991111-0000-0000-0000-0000000000a1'
 MGR2='03991111-0000-0000-0000-0000000000a2'
 STF='03991111-0000-0000-0000-0000000000a3'
 CHA='03991111-0000-0000-0000-0000000000c1'
+CHB='03991111-0000-0000-0000-0000000000c2'
 WH='03991111-0000-0000-0000-0000000000b1'
 # One pair per race, so each starts from a known state.
 P1A='03991111-0000-0000-0000-000000000101'; P1B='03991111-0000-0000-0000-000000000102'
@@ -215,12 +221,22 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   ('$ORG', '$MGR2', 'manager', now()),
   ('$ORG', '$STF', 'staff', now());
 insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0399 2S Main', 'WH-0399-2S', 'active');
--- Race 7: staff of the warehouse with no charter reads only its no-charter
--- records; CHA is the charter a record is moved into.
-insert into public.charters (id, organization_id, name, code, status) values ('$CHA', '$ORG', '0399 2S North', 'C0399-2S', 'active');
-insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values ('$ORG', '$WH', '$CHA');
+-- Race 7: the staff member is assigned to the warehouse for charter CHB
+-- only. That reads the warehouse's no-charter records
+-- (rls_inv_read_assigned_warehouse_ids) and CHB's (rls_inv_read_warehouse_
+-- charter_ids), never CHA's, and still writes the warehouse
+-- (user_can_access_warehouse needs only an assignment row). An assignment
+-- with NO charter would read every charter here (0229/0310
+-- rls_inv_read_full_warehouse_ids) and never lose the moved record (fix
+-- round 2, R2-1). CHA is the charter a record is moved into.
+insert into public.charters (id, organization_id, name, code, status) values
+  ('$CHA', '$ORG', '0399 2S North', 'C0399-2S', 'active'),
+  ('$CHB', '$ORG', '0399 2S South', 'C0399-2S-S', 'active');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
+  ('$ORG', '$WH', '$CHA'),
+  ('$ORG', '$WH', '$CHB');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
-  ('$ORG', '$STF', '$WH', null, true);
+  ('$ORG', '$STF', '$WH', '$CHB', true);
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, unit_cost, quantity_on_hand, status, bin_location, created_at) values
   ('$P1A', '$ORG', '$WH', 'X0399-R1', 'Race one',   1, 3, 'active', '1-A', now() - interval '2 days'),
@@ -264,6 +280,12 @@ for path in sys.argv[1:]:
     out.append("-" if v is None else json.dumps(v) if isinstance(v, bool) else str(v))
 print("/".join(out))
 ' "$@"
+}
+# stf_sees <sku>: the id suffixes of that SKU's live records the staff member
+# reads, through RLS and through caller_can_read_item, as "rls;ccri".
+stf_sees() {
+  as_user - "$STF" "select 'V=' || coalesce((select string_agg(right(i.id::text, 3), ',' order by i.id) from public.inventory_items i where i.sku = '$1' and i.deleted_at is null), '-') || ';' || coalesce((select string_agg(right(i.id::text, 3), ',' order by i.id) from public.inventory_items i where i.sku = '$1' and i.deleted_at is null and public.caller_can_read_item(i.id)), '-');" rollback \
+    | sed -n 's/^V=//p'
 }
 refused() { # refused <tag> <sqlstate> <hint>: 1/1 when that output carries both
   printf '%s/%s' "$(grep -c "ERROR:  $2" "$TMP/$1.out")" "$(grep -c "HINT:  $3" "$TMP/$1.out")"
@@ -343,6 +365,7 @@ check "6b: the target write then applies to the split row, with its new SKU" \
   "$(ans r7s | jget items.0.after_sku)/Race seven renamed"
 
 # ═══ 7. A record leaves the caller's scope between the checks and the lock ═
+check "7: before the move the staff member reads all three records (no-charter)" "$(stf_sees X0399-R8)" "801,802,803;801,802,803"
 if plant 2>"$TMP/plant.err"; then
   ( as_user rscope "$STF" "$(split_sql "$STF" "$P8B" X0399-R8 "$(key 9)")" > "$TMP/rscope.out" ) &
   if wait_for rscope Timeout PgSleep; then
@@ -358,6 +381,7 @@ if plant 2>"$TMP/plant.err"; then
   if [ $((T1 - T0)) -lt 1000 ]; then ok "7: the move committed at once ($((T1 - T0)) ms)"; else bad "7: the move waited $((T1 - T0)) ms"; fi
   wait
   unplant || bad "7: unplant failed"
+  check "7: after the move the staff member no longer reads P8B (it is in CHA)" "$(stf_sees X0399-R8)" "801,803;801,803"
   check "7: the split is refused item_changed under the lock (the scope is checked again)" "$(refused rscope P0001 item_changed)" "1/1"
   check "7: nothing written: P8B keeps its SKU, no audit row, no request row; the siblings are untouched" \
     "$(sku_of "$P8B")/$(audits_of "$P8B")/$(q "select count(*) from public.item_grouping_requests where organization_id = '$ORG' and key = '$(key 9)'")/$(sku_of "$P8A")/$(sku_of "$P8C")" \
