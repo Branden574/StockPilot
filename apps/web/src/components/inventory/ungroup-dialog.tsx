@@ -44,6 +44,13 @@ import type { UngroupCandidate } from '@/server/services/item-grouping';
  * or a new preview ("Review again") mints a new one. The Save sends back the
  * organization and the account the preview answered for, so a Save from a tab
  * whose session moved since is refused instead of applied under it.
+ *
+ * Save counts the records that CHANGE: when every record of a SKU the viewer
+ * can see is selected, the one that keeps it is not counted (owner,
+ * 2026-10-12). A preview that gets no answer (offline, a deploy that no longer
+ * has the action) or a refusal a second look may answer differently says so in
+ * core's words and offers Try again, never the raw error (Group selected's
+ * recheck R2-2, carried here at the rebase onto main).
  */
 
 type Phase =
@@ -65,6 +72,22 @@ interface Props {
 /** Retry the same body only for these refusals; anything else needs a new look. */
 const RETRY_SAME = new Set(['busy', 'sku_generation_failed', 'rate_limited']);
 
+/** A refused preview a second look may answer differently: a server error, a
+ *  rate limit or a busy read. A refusal the same request cannot change (too
+ *  many records, no permission, signed out) says what to do instead. */
+function previewMayRetry(error: { code: string; details?: Record<string, unknown> }): boolean {
+  const reason = typeof error.details?.reason === 'string' ? error.details.reason : error.code;
+  return error.code === 'internal_error' || error.code === 'rate_limited' || reason === 'busy';
+}
+
+/** The words for a preview with no answer at all: the connection when the
+ *  browser says it is offline, else core's generic sentence. */
+function previewFailureWords(): string {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
+    ? UNGROUP_COPY.offline
+    : GROUPING_ERROR_WORDS.internal;
+}
+
 export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
   const [phase, setPhase] = React.useState<Phase>({ kind: 'loading' });
   const [candidates, setCandidates] = React.useState<UngroupCandidate[]>([]);
@@ -73,7 +96,12 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     actorUserId: string;
   } | null>(null);
   const [anchorBySku, setAnchorBySku] = React.useState<Record<string, string>>({});
-  const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
+  const [error, setError] = React.useState<{
+    message: string;
+    stale: boolean;
+    /** The preview failed and reading it again may help (Try again). */
+    retryPreview?: boolean;
+  } | null>(null);
   // The preview itself was refused (too many records, a permission, the
   // network): there is nothing to review, so only its words show, never every
   // selected record as "isn't available any more" (test stage, walk W10).
@@ -97,20 +125,35 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     setPreviewRefused(false);
     setAnchorBySku({});
     /* eslint-enable react-hooks/set-state-in-effect */
-    void previewUngroupAction(idsKey ? idsKey.split(',') : []).then((r) => {
-      if (mine !== seq.current) return;
-      if (!r.ok) {
+    void previewUngroupAction(idsKey ? idsKey.split(',') : []).then(
+      (r) => {
+        if (mine !== seq.current) return;
+        if (!r.ok) {
+          setCandidates([]);
+          setIdentity(null);
+          setPreviewRefused(true);
+          setError({
+            message: r.error.message || GROUPING_ERROR_WORDS.internal,
+            stale: false,
+            retryPreview: previewMayRetry(r.error),
+          });
+          setPhase({ kind: 'ready' });
+          return;
+        }
+        setCandidates(r.data.candidates);
+        setIdentity({ organizationId: r.data.organizationId, actorUserId: r.data.actorUserId });
+        setPhase({ kind: 'ready' });
+      },
+      () => {
+        // No answer at all: reads only, so a second look is safe.
+        if (mine !== seq.current) return;
         setCandidates([]);
         setIdentity(null);
         setPreviewRefused(true);
-        setError({ message: r.error.message, stale: false });
+        setError({ message: previewFailureWords(), stale: false, retryPreview: true });
         setPhase({ kind: 'ready' });
-        return;
-      }
-      setCandidates(r.data.candidates);
-      setIdentity({ organizationId: r.data.organizationId, actorUserId: r.data.actorUserId });
-      setPhase({ kind: 'ready' });
-    });
+      },
+    );
   }, [open, idsKey, previewNonce]);
 
   const plan = React.useMemo(
@@ -124,6 +167,12 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
     const chosen = anchorBySku[sku];
     return chosen ?? fallback;
   };
+  // The records that get a new SKU: the record that keeps a fully selected
+  // SKU is sent (as its anchor) but does not change, so Save never counts it.
+  const changing = plan.groups.reduce(
+    (n, g) => n + g.selected.length - (g.allSelected && anchorOf(g.sku, g.defaultAnchorId) ? 1 : 0),
+    0,
+  );
 
   async function save() {
     if (!identity || count === 0) return;
@@ -335,10 +384,15 @@ export function UngroupDialog({ open, onOpenChange, itemIds, onDone }: Props) {
                   Review again
                 </Button>
               ) : null}
-              {count > 0 && phase.kind !== 'loading' && !error?.stale ? (
+              {error?.retryPreview ? (
+                <Button variant="outline" onClick={() => setPreviewNonce((n) => n + 1)}>
+                  Try again
+                </Button>
+              ) : null}
+              {count > 0 && changing > 0 && phase.kind !== 'loading' && !error?.stale ? (
                 <Button onClick={() => void save()} disabled={phase.kind === 'saving' || !identity}>
                   {phase.kind === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {UNGROUP_COPY.confirm(count)}
+                  {UNGROUP_COPY.confirm(changing)}
                 </Button>
               ) : null}
             </>

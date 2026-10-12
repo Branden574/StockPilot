@@ -144,11 +144,26 @@ describe('UngroupDialog', () => {
     expect(
       within(screen.getByTestId(`ungroup-row-${B}`)).getByText(UNGROUP_COPY.keepsSku('SP-PAIR')),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) }));
+    // Re-pinned by Ungroup anything (owner 2026-10-12; was: confirm(2)): Save
+    // counts the records that CHANGE. With every record selected one keeps
+    // the SKU, so two selected records change one.
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
     expect(vi.mocked(ungroupItemsAction).mock.calls[0]![0]).toMatchObject({
       itemIds: [A, B],
       anchorItemIds: [B],
     });
+  });
+
+  // Owner 2026-10-12: "Ungroup 2 records" was offered when two records sharing
+  // a SKU were selected and only one would change (the other keeps the SKU).
+  it('counts on Save only the records that get a new SKU, never the one that keeps it', async () => {
+    preview([cand(A), cand(B), cand(C, { sku: 'SP-OTHER' }), cand(K, { sku: 'SP-OTHER' })]);
+    render(<UngroupDialog open itemIds={[A, B, C]} onOpenChange={() => {}} onDone={() => {}} />);
+    await screen.findByTestId(`ungroup-row-${A}`);
+    // SP-PAIR: A and B both selected, one keeps it (1 changes); SP-OTHER: C
+    // selected, K not (C changes). Three selected, two change.
+    expect(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: UNGROUP_COPY.confirm(3) })).toBeNull();
   });
 
   it('a busy answer keeps the key: Try again sends the SAME body and key', async () => {
@@ -259,7 +274,9 @@ describe('UngroupDialog', () => {
     const radios = screen.getAllByRole('radio');
     expect(radios[0]).toHaveAccessibleDescription(UNGROUP_COPY.keepsSku('SP-PAIR'));
     expect(radios[1]).toHaveAccessibleDescription(UNGROUP_COPY.getsNewSku);
-    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) }));
+    // Re-pinned by Ungroup anything (owner 2026-10-12; was: confirm(2)): Save
+    // counts the one record that changes, as the result line below does.
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(1) }));
     const status = await screen.findByRole('status');
     expect(status).toHaveTextContent(UNGROUP_COPY.done(1));
     expect(status).toHaveTextContent('SP-ABCDE-1234567');
@@ -313,6 +330,60 @@ describe('UngroupDialog', () => {
     render(<UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />);
     await screen.findByTestId(`ungroup-row-${B}`);
     expect(screen.queryByText(UNGROUP_COPY.labelsBefore)).toBeNull();
+  });
+
+  // Rebase onto main (G2 TEST-STAGE TODO 1+, recheck R2-2 carried into
+  // Ungroup): a preview that gets no answer (offline, a deploy that no longer
+  // has the action) used to leave the dialog loading for good. It now says
+  // what happened, in core's words, never the raw error, and offers Try again.
+  it('a preview with no answer says so in core words, never the raw error, and Try again reads it again', async () => {
+    vi.mocked(previewUngroupAction)
+      .mockRejectedValueOnce(new Error('Failed to find Server Action "abc"'))
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { candidates: [cand(A), cand(B)], organizationId: ORG, actorUserId: ME },
+      } as never);
+    render(<UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.internal);
+    expect(screen.queryByText(/Failed to find Server Action/)).toBeNull();
+    expect(screen.queryByText('Loading the records…')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Ungroup \d+ records?$/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByTestId(`ungroup-row-${B}`)).toBeInTheDocument();
+    expect(previewUngroupAction).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a preview with no answer while the browser is offline says the connection words', async () => {
+    const spy = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      vi.mocked(previewUngroupAction).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      render(<UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />);
+      expect(await screen.findByRole('alert')).toHaveTextContent(UNGROUP_COPY.offline);
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('offers Try again after a refused preview only when a second look may help', async () => {
+    vi.mocked(previewUngroupAction).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'rate_limited', message: GROUPING_ERROR_WORDS.rateLimited },
+    } as never);
+    const { unmount } = render(
+      <UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.rateLimited);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    unmount();
+    vi.mocked(previewUngroupAction).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'forbidden', message: GROUPING_ERROR_WORDS.permission },
+    } as never);
+    render(<UngroupDialog open itemIds={[B]} onOpenChange={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.permission);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('a preview refusal is said inside the dialog', async () => {
