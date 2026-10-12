@@ -13,7 +13,9 @@ import { readDisplayGroupsForOrgAsMember } from './display-groups';
 // in one paged read that can run beside the view's scan.
 
 const arg = (call: MockCall, method: string, col?: string) => {
-  const i = call.methods.findIndex((m, k) => m === method && (col === undefined || call.args[k]![0] === col));
+  const i = call.methods.findIndex(
+    (m, k) => m === method && (col === undefined || call.args[k]![0] === col),
+  );
   return i >= 0 ? call.args[i] : undefined;
 };
 
@@ -27,8 +29,16 @@ describe('readDisplayGroupsForOrgAsMember', () => {
         if (from > 0) return { data: [], error: null };
         return {
           data: [
-            { item_id: 'a', group_id: 'g1', item_display_groups: { id: 'g1', name: 'Tees', version: 3 } },
-            { item_id: 'b', group_id: 'g1', item_display_groups: { id: 'g1', name: 'Tees', version: 3 } },
+            {
+              item_id: 'a',
+              group_id: 'g1',
+              item_display_groups: { id: 'g1', name: 'Tees', version: 3 },
+            },
+            {
+              item_id: 'b',
+              group_id: 'g1',
+              item_display_groups: { id: 'g1', name: 'Tees', version: 3 },
+            },
           ],
           error: null,
         };
@@ -38,7 +48,9 @@ describe('readDisplayGroupsForOrgAsMember', () => {
     expect([...map.keys()].sort()).toEqual(['a', 'b']);
     expect(map.get('a')).toMatchObject({ id: 'g1', name: 'Tees', version: 3 });
     expect(arg(calls[0]!, 'eq', 'organization_id')).toEqual(['organization_id', 'org-1']);
-    expect(String(arg(calls[0]!, 'select')![0])).toContain('item_display_groups!item_display_group_members_group_fk');
+    expect(String(arg(calls[0]!, 'select')![0])).toContain(
+      'item_display_groups!item_display_group_members_group_fk',
+    );
     expect(calls[0]!.methods).toContain('range');
   });
 

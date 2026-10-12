@@ -695,7 +695,9 @@ describe('Items page: a staff page is planned group-aware', () => {
     render(await callPage({ page: '2' }));
     expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ limit: 30, offset: 30 });
     expect(m.inventoryList.mock.calls[0]![0]).not.toHaveProperty('plannedTotals');
-    expect((m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null).toBeNull();
+    expect(
+      (m.tableProps.mock.calls[0]![0] as { plannedPage?: unknown }).plannedPage ?? null,
+    ).toBeNull();
   });
 
   it('a planned page that runs long to keep a group whole is read in at most 100 ids per read', async () => {
