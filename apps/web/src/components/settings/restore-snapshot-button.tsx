@@ -32,7 +32,9 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
   const [confirm, setConfirm] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [skuCheck, setSkuCheck] = React.useState<
-    { state: 'idle' | 'checking' | 'failed' } | { state: 'done'; data: RestorePointSkuChanges }
+    | { state: 'idle' | 'checking' }
+    | { state: 'failed'; noAuditAccess?: boolean }
+    | { state: 'done'; data: RestorePointSkuChanges }
   >({ state: 'idle' });
 
   async function openRow() {
@@ -40,7 +42,15 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
     setSkuCheck({ state: 'checking' });
     try {
       const r = await restorePointSkuChangesAction({ id });
-      setSkuCheck(r.ok ? { state: 'done', data: r.data } : { state: 'failed' });
+      setSkuCheck(
+        r.ok
+          ? { state: 'done', data: r.data }
+          : {
+              state: 'failed',
+              // The admin cannot view the audit log the check reads (DATA-1 (2)).
+              noAuditAccess: r.error.details?.reason === 'audit_log_hidden',
+            },
+      );
     } catch {
       setSkuCheck({ state: 'failed' });
     }
@@ -105,7 +115,7 @@ export function RestoreSnapshotButton({ id, when }: { id: string; when: string }
       ) : null}
       {skuCheck.state === 'failed' ? (
         <p className="mb-2 text-left text-[11px] text-amber-700 dark:text-amber-400">
-          {RESTORE_SKU_COPY.failed}
+          {skuCheck.noAuditAccess ? RESTORE_SKU_COPY.noAuditAccess : RESTORE_SKU_COPY.failed}
         </p>
       ) : null}
       {skuCheck.state === 'done' && changes.length > 0 ? (

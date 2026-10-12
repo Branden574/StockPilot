@@ -9,7 +9,16 @@
 // or re-create a record whose id no longer exists. A version 1 point still
 // restores exactly as before, and the restore screen warns first when a SKU
 // changed after it was taken (restorePointSkuChanges).
+//
+// PR stage, data review DATA-1: a version 1 point restored after an Ungroup
+// finds the split record through the split's own audit row (read with the
+// service role, scoped to the organization) and reconciles it by id, so it
+// re-creates nothing; the warning names only SKU edits that are not splits;
+// and an admin who cannot view the audit log is told the check could not run,
+// never shown an empty list as an all-clear.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { ROLE_PERMISSIONS, type Permission } from '@stockpilot/core';
 
 const h = vi.hoisted(() => ({
   update: vi.fn(async (..._a: unknown[]) => ({})),
@@ -19,6 +28,16 @@ const h = vi.hoisted(() => ({
   assertPermission: vi.fn(),
   assertCurrentAal2: vi.fn(async () => undefined),
   inserted: [] as Array<Record<string, unknown>>,
+  /** Every read the service-role client was asked for. */
+  adminReads: [] as Array<{
+    table: string;
+    select: string;
+    filters: unknown[][];
+    order: unknown[][];
+  }>,
+  /** inventory.item.ungrouped rows as the service-role read returns them. */
+  splits: [] as Array<{ id: string; item_id: string | null; left_sku: string | null }>,
+  splitsError: null as { message: string } | null,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -49,13 +68,20 @@ vi.mock('./inventory', () => ({
 }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
-    from: () => {
+    from: (table: string) => {
+      const r = { table, select: '', filters: [] as unknown[][], order: [] as unknown[][] };
+      h.adminReads.push(r);
       const q: Record<string, unknown> = {};
       q.insert = (v: Record<string, unknown>) => (h.inserted.push(v), q);
-      q.select = () => q;
-      q.eq = () => q;
-      q.order = () => q;
-      q.range = async () => ({ data: [], error: null });
+      q.select = (cols: string) => ((r.select = cols), q);
+      for (const op of ['eq', 'gt', 'in', 'is']) {
+        q[op] = (...args: unknown[]) => (r.filters.push([op, ...args]), q);
+      }
+      q.order = (...args: unknown[]) => (r.order.push(args), q);
+      q.range = async () =>
+        table === 'audit_logs'
+          ? { data: h.splitsError ? null : h.splits, error: h.splitsError }
+          : { data: [], error: null };
       q.single = async () => ({ data: { id: 'pre-restore-id' }, error: null });
       return q;
     },
@@ -106,7 +132,7 @@ interface World {
   auditError?: { message: string } | null;
 }
 
-function harness(world: World) {
+function harness(world: World, who: { role?: string; permissions?: Set<Permission> } = {}) {
   const reads: Read[] = [];
   const answer = (r: Read): { data: unknown; error: unknown } => {
     if (r.table === 'organizations') return { data: { plan: 'business' }, error: null };
@@ -148,7 +174,8 @@ function harness(world: World) {
   const ctx = {
     organizationId: ORG,
     userId: ME,
-    role: 'owner',
+    role: who.role ?? 'owner',
+    ...(who.permissions ? { permissions: who.permissions } : {}),
     supabase,
     enabledModules: new Set<string>(),
     mfaRequired: false,
@@ -190,6 +217,19 @@ const row = (id: string, sku: string, bin: string | null, qty: number) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   h.inserted.length = 0;
+  h.adminReads.length = 0;
+  h.splits = [];
+  h.splitsError = null;
+});
+
+/** An admin's permissions with the audit-log view revoked (an override). */
+const adminWithout = (p: Permission): Set<Permission> =>
+  new Set(ROLE_PERMISSIONS.admin.filter((x) => x !== p));
+/** An inventory.item.ungrouped row as the restore's service-role read returns it. */
+const splitRow = (itemId: string, leftSku: string) => ({
+  id: `audit-${itemId}`,
+  item_id: itemId,
+  left_sku: leftSku,
 });
 
 describe('createSnapshot (version 2 carries each record id)', () => {
@@ -338,7 +378,12 @@ describe('restoreSnapshot after an Ungroup', () => {
     expect(res).toMatchObject({ updated: 1, recreated: 1 });
   });
 
-  it('version 1 (no ids) restores exactly as before: by SKU and rack, so the split record is re-created under its old SKU and flagged', async () => {
+  // PR stage, DATA-1: this is now the SKU-EDIT case (no inventory.item.ungrouped
+  // row records the change). A version 1 point restores it exactly as before:
+  // the record is re-created under its old SKU and the one with the new SKU is
+  // flagged, which the warning names before the typed confirm. The split case
+  // is in the next describe block.
+  it('version 1 (no ids) after a SKU edit restores exactly as before: by SKU and rack, so the record is re-created under its old SKU and flagged', async () => {
     const { ctx } = harness({
       snapshot: {
         version: 1,
@@ -386,6 +431,208 @@ describe('restoreSnapshot after an Ungroup', () => {
   });
 });
 
+describe('restoreSnapshot: a version 1 point after an Ungroup (PR stage, DATA-1)', () => {
+  // Before the split: A on 22-A (9) and B on 22-C (4) shared SP-PAIR, and the
+  // version 1 point (no ids) remembers both by SKU and rack. The split gave B
+  // SP-NEW1 and wrote an inventory.item.ungrouped row naming B and SP-PAIR.
+  const POINT_V1: RestoreSnapshot = {
+    version: 1,
+    capturedAt: '2026-10-12T00:00:00.000Z',
+    items: [
+      item({ sku: 'SP-PAIR', binLocation: '22-A', quantityOnHand: 9 }),
+      item({ sku: 'SP-PAIR', binLocation: '22-C', quantityOnHand: 4 }),
+    ],
+  };
+  const AFTER_SPLIT = [row(A, 'SP-PAIR', '22-A', 9), row(B, 'SP-NEW1', '22-C', 4)];
+
+  it('finds the split record through its Ungroup row and reconciles it by id: nothing re-created, nothing flagged, its stock once', async () => {
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx } = harness({ snapshot: POINT_V1, active: AFTER_SPLIT });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.adjustStock).not.toHaveBeenCalled();
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, B]);
+    // The restore still never writes a SKU: B keeps SP-NEW1.
+    for (const c of h.update.mock.calls) expect(c[1]).not.toHaveProperty('sku');
+    expect(res).toMatchObject({
+      updated: 2,
+      recreated: 0,
+      quantityAdjusted: 0,
+      failures: 0,
+      extrasFlagged: 0,
+      extrasSample: [],
+    });
+  });
+
+  it("puts the point's stock back on the split record, whatever its SKU is now", async () => {
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: POINT_V1,
+      active: [row(A, 'SP-PAIR', '22-A', 9), row(B, 'SP-NEW1', '22-C', 1)],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.adjustStock).toHaveBeenCalledTimes(1);
+    expect(h.adjustStock.mock.calls[0]?.[0]).toMatchObject({ itemId: B, quantityChange: 3 });
+    expect(h.create).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ updated: 2, recreated: 0, quantityAdjusted: 1, extrasFlagged: 0 });
+  });
+
+  it("reads only the organization's Ungroup rows written after the point, with the service role, and never through the caller's audit-log access", async () => {
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx, reads } = harness(
+      { snapshot: POINT_V1, active: AFTER_SPLIT },
+      { role: 'admin', permissions: adminWithout('activity_logs:read') },
+    );
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    const splitRead = h.adminReads.filter((r) => r.table === 'audit_logs');
+    expect(splitRead).toHaveLength(1);
+    expect(splitRead[0]!.filters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'organization_id', ORG],
+        ['eq', 'event', 'inventory.item.ungrouped'],
+        ['gt', 'created_at', POINT_V1.capturedAt],
+      ]),
+    );
+    expect(splitRead[0]!.select.split(',').map((x) => x.trim())).toEqual([
+      'id',
+      'item_id:metadata->>entity_id',
+      'left_sku:metadata->>left_sku',
+    ]);
+    expect(reads.some((r) => r.table === 'audit_logs')).toBe(false);
+    // An admin whose audit-log view was revoked gets the same restore.
+    expect(res).toMatchObject({ updated: 2, recreated: 0, extrasFlagged: 0 });
+  });
+
+  it('never takes a split record that is on another rack now, or gone: the old record is re-created as before', async () => {
+    h.splits = [splitRow(B, 'SP-PAIR'), splitRow(C, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: {
+        ...POINT_V1,
+        items: [
+          ...POINT_V1.items,
+          item({ sku: 'SP-PAIR', binLocation: '22-E', quantityOnHand: 2 }),
+        ],
+      },
+      // B moved from 22-C to 22-D after its split; C (split from 22-E) is gone.
+      active: [row(A, 'SP-PAIR', '22-A', 9), row(B, 'SP-NEW1', '22-D', 4)],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A]);
+    expect(
+      h.create.mock.calls.map((c) => [
+        (c[0] as SnapshotItem).sku,
+        (c[0] as SnapshotItem).binLocation,
+      ]),
+    ).toEqual([
+      ['SP-PAIR', '22-C'],
+      ['SP-PAIR', '22-E'],
+    ]);
+    expect(res).toMatchObject({
+      updated: 1,
+      recreated: 2,
+      extrasFlagged: 1,
+      extrasSample: ['SP-NEW1'],
+    });
+  });
+
+  it('takes each split record once: two records the point held on one rack get the two records split from there, in the order they were split', async () => {
+    // Two charters' records shared SP-PAIR on 22-C (the point has no charter);
+    // both were split, B first.
+    h.splits = [splitRow(B, 'SP-PAIR'), splitRow(C, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: {
+        ...POINT_V1,
+        items: [
+          item({ sku: 'SP-PAIR', binLocation: '22-A', quantityOnHand: 9 }),
+          item({ sku: 'SP-PAIR', binLocation: '22-C', quantityOnHand: 4 }),
+          item({ sku: 'SP-PAIR', binLocation: '22-C', quantityOnHand: 5 }),
+        ],
+      },
+      active: [
+        row(A, 'SP-PAIR', '22-A', 9),
+        row(B, 'SP-NEW1', '22-C', 4),
+        row(C, 'SP-NEW2', '22-C', 5),
+      ],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, B, C]);
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.adjustStock).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ updated: 3, recreated: 0, extrasFlagged: 0 });
+  });
+
+  it('never takes a record that the point already reconciles by its own SKU and rack', async () => {
+    // D was split from SP-PAIR on 22-C and later edited to SP-LAMP, a SKU the
+    // point remembers on 22-C: the point's SP-LAMP record reconciles D, so the
+    // SP-PAIR record on 22-C is re-created rather than reconciling D twice.
+    h.splits = [splitRow(D, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: {
+        ...POINT_V1,
+        items: [
+          ...POINT_V1.items,
+          item({ sku: 'SP-LAMP', binLocation: '22-C', quantityOnHand: 1 }),
+        ],
+      },
+      active: [row(A, 'SP-PAIR', '22-A', 9), row(D, 'SP-LAMP', '22-C', 1)],
+    });
+    const res = await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.update.mock.calls.map((c) => c[0])).toEqual([A, D]);
+    expect(h.create).toHaveBeenCalledTimes(1);
+    expect(h.create.mock.calls[0]?.[0]).toMatchObject({ sku: 'SP-PAIR', binLocation: '22-C' });
+    expect(res).toMatchObject({ updated: 2, recreated: 1, extrasFlagged: 0 });
+  });
+
+  it('says in the restore audit row how many records it found through a split; a version 1 restore with none says nothing new', async () => {
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx } = harness({ snapshot: POINT_V1, active: AFTER_SPLIT });
+    await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.audit.mock.calls.at(-1)?.[0]).toMatchObject({
+      event: 'restore_point.restored',
+      extra: { snapshotVersion: 1, recreated: 0, extras: 0, matchedBySplit: 1 },
+    });
+    vi.clearAllMocks();
+    h.splits = [];
+    const again = harness({
+      snapshot: POINT_V1,
+      active: [row(A, 'SP-PAIR', '22-A', 9), row(B, 'SP-PAIR', '22-C', 4)],
+    });
+    await restoreSnapshot(again.ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.audit.mock.calls.at(-1)?.[0].extra).not.toHaveProperty('matchedBySplit');
+  });
+
+  it('a version 2 point reads no Ungroup row: it matches by id', async () => {
+    h.splits = [splitRow(B, 'SP-PAIR')];
+    const { ctx } = harness({
+      snapshot: {
+        version: 2,
+        capturedAt: '2026-10-12T00:00:00.000Z',
+        items: [
+          item({ id: A, sku: 'SP-PAIR', binLocation: '22-A', quantityOnHand: 9 }),
+          item({ id: B, sku: 'SP-PAIR', binLocation: '22-C', quantityOnHand: 4 }),
+        ],
+      },
+      active: AFTER_SPLIT,
+    });
+    await restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' });
+    expect(h.adminReads.some((r) => r.table === 'audit_logs')).toBe(false);
+    expect(h.audit.mock.calls.at(-1)?.[0].extra).not.toHaveProperty('matchedBySplit');
+  });
+
+  it('refuses before writing anything when the Ungroup rows cannot be read', async () => {
+    h.splitsError = { message: 'gateway timeout' };
+    const { ctx } = harness({ snapshot: POINT_V1, active: AFTER_SPLIT });
+    await expect(restoreSnapshot(ctx, { id: POINT, confirm: 'RESTORE' })).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    // No pre-restore point, no record touched.
+    expect(h.inserted).toHaveLength(0);
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.adjustStock).not.toHaveBeenCalled();
+  });
+});
+
 describe('restorePointSkuChanges (the warning before restoring a version 1 point)', () => {
   const V1 = {
     version: 1,
@@ -393,13 +640,13 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
     created_at: '2026-10-10T08:00:01.000Z',
   };
 
-  it('names each record that changed SKU after the point was taken, oldest first, with its old and new SKU', async () => {
+  it('names each record whose SKU was edited after the point was taken, oldest first, with its old and new SKU', async () => {
     const { ctx, reads } = harness({
       point: V1,
       audit: [
         {
           entity_id: B,
-          event: 'inventory.item.ungrouped',
+          event: 'inventory.item.updated',
           before_sku: 'SP-PAIR',
           after_sku: 'SP-NEW1',
           propagated: null,
@@ -484,7 +731,7 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
       point: V1,
       audit: ids.map((id, i) => ({
         entity_id: id,
-        event: 'inventory.item.ungrouped',
+        event: 'inventory.item.updated',
         before_sku: 'SP-PAIR',
         after_sku: `SP-N${i}`,
         propagated: null,
@@ -508,7 +755,7 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
       point: V1,
       audit: ids.map((id) => ({
         entity_id: id,
-        event: 'inventory.item.ungrouped',
+        event: 'inventory.item.updated',
         before_sku: 'SP-PAIR',
         after_sku: 'SP-X',
         propagated: null,
@@ -537,6 +784,102 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
     expect((await restorePointSkuChanges(ctx, POINT)).changes).toEqual([
       { itemId: D, name: null, before: 'SP-A', after: 'SP-B', shared: false },
     ]);
+  });
+
+  // PR stage, DATA-1: a record Ungroup split is found through its split when
+  // the point is restored (restoreSnapshot's version 1 path), so it is never
+  // added again and the warning leaves it out, a later SKU edit of it
+  // included. Only SKU edits of records that were not split are named.
+  it('leaves out records that Ungroup split, even when their new SKU was edited later; a SKU edit of another record is still named', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        {
+          entity_id: B,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'SP-PAIR',
+          after_sku: 'SP-NEW1',
+          propagated: null,
+        },
+        {
+          entity_id: C,
+          event: 'inventory.item.updated',
+          before_sku: 'SP-OLD',
+          after_sku: 'SP-MID',
+          propagated: null,
+        },
+        {
+          entity_id: B,
+          event: 'inventory.item.updated',
+          before_sku: 'SP-NEW1',
+          after_sku: 'SP-NEW2',
+          propagated: null,
+        },
+      ],
+      names: [{ id: C, name: 'Hoodie', sku: 'SP-MID' }],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 1,
+      changes: [{ itemId: C, name: 'Hoodie', before: 'SP-OLD', after: 'SP-MID', shared: false }],
+      more: 0,
+      truncated: false,
+    });
+  });
+
+  it('a version 1 point with only splits since gives an empty list: the restore finds them', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        {
+          entity_id: B,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'SP-PAIR',
+          after_sku: 'SP-NEW1',
+          propagated: null,
+        },
+      ],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toMatchObject({ changes: [], more: 0 });
+  });
+
+  // PR stage, DATA-1 (2): the audit log's read policy (0279) needs
+  // activity_logs:read, which an override can take from an admin while
+  // Backups & restore stays open to them (organization:update). Reading through
+  // their RLS answered an empty list, which the screen showed as no warning.
+  // The check now says it could not run, and reads nothing: the warning shows
+  // audit facts (which record had which SKU), so it is not read past the
+  // permission; the restore itself finds split records with the service role
+  // and shows nothing of what it read.
+  it('says the check cannot run, never an empty all-clear, for an admin who cannot view the audit log, and reads no audit row', async () => {
+    const { ctx, reads } = harness(
+      { point: V1, audit: [] },
+      { role: 'admin', permissions: adminWithout('activity_logs:read') },
+    );
+    await expect(restorePointSkuChanges(ctx, POINT)).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'audit_log_hidden' },
+    });
+    expect(reads.some((r) => r.table === 'audit_logs')).toBe(false);
+    expect(h.adminReads.some((r) => r.table === 'audit_logs')).toBe(false);
+  });
+
+  it('a version 2 point needs no audit log, so that admin gets no warning there either', async () => {
+    const { ctx } = harness(
+      {
+        point: {
+          version: 2,
+          captured_at: '2026-10-12T08:00:00.000Z',
+          created_at: '2026-10-12T08:00:01.000Z',
+        },
+      },
+      { role: 'admin', permissions: adminWithout('activity_logs:read') },
+    );
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 2,
+      changes: [],
+      more: 0,
+      truncated: false,
+    });
   });
 
   it('checks the same owner/admin gate as the restore itself, and refuses a point that is not there', async () => {

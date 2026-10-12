@@ -8718,6 +8718,24 @@ describe('the Ungroup release (G1, 0399)', () => {
     expect(entry.whatToDo).toContain('Backups & restore');
   });
 
+  // PR stage, data review DATA-1: an older (version 1) point restored after an
+  // Ungroup finds the split record when it is still on the same rack
+  // (restore-points.ts planSplitMatches), so only SKU edits are named before the
+  // typed confirm; an admin who cannot view the audit log is told the check
+  // could not run (restore-sku-warning-copy.ts noAuditAccess).
+  it('says an older point finds a record that got its own SKU, names only edited SKUs, and says when it cannot check', () => {
+    const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
+    expect(entry.whatChanged).toContain(
+      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack.',
+    );
+    expect(entry.whatChanged).toContain(
+      'Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.',
+    );
+    expect(entry.howItAffectsYou).toContain(
+      'If you cannot view the audit log, Backups & restore says it could not check for SKU changes.',
+    );
+  });
+
   it('says what changes and what does not, in the screens\' own words, on both platforms', () => {
     const r = release();
     const [ungroup] = r.entries;

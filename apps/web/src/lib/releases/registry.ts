@@ -97,16 +97,21 @@ export const RELEASES: Release[] = [
         // never writes a SKU. Told to whoever can open Backups & restore
         // (organization:update; the page also needs the Business plan, so no
         // link). Web only: restore points are not in the mobile app.
+        // PR stage, data review DATA-1 (2026-10-12): an older point restored
+        // after an Ungroup finds the split record through the split's audit
+        // row when it is still on the same rack (restore-points.ts
+        // planSplitMatches), so the warning names only SKU edits; an admin
+        // whose audit-log view was revoked is told the check could not run.
         id: 'restore-points-follow-records',
         category: 'fixed',
         area: 'Settings',
         title: "Restoring a restore point keeps each record's stock in one place after a SKU change",
         whatChanged:
-          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point now first names the records that changed SKU since it was taken, before you type RESTORE.",
+          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
         whyItMatters:
           'Restore points matched records by SKU and rack, so restoring one taken before a record got a new SKU added that record again under its old SKU, with the stock it had then, while the record with the new SKU kept its stock too.',
         howItAffectsYou:
-          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. Restore points are on the web, for owners and admins on the Business plan or above.",
+          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. If you cannot view the audit log, Backups & restore says it could not check for SKU changes. Restore points are on the web, for owners and admins on the Business plan or above.",
         whatToDo:
           'If Backups & restore names records that changed SKU, check them before you type RESTORE, or restore a newer point.',
         audience: { anyPermission: ['organization:update'] },

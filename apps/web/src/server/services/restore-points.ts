@@ -16,7 +16,7 @@ import {
 } from './context';
 import { InventoryService } from './inventory';
 
-import { planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
+import { can, planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
 
 /**
  * Inventory Restore Points (migration 0178). Snapshots of an org's items +
@@ -288,6 +288,14 @@ export async function restoreSnapshot(
   const snapshot = (row as { snapshot: RestoreSnapshot }).snapshot;
   const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
 
+  // A version 1 point (no ids) and the records Ungroup split after it (PR
+  // stage, data review DATA-1): read before anything is written, so a failed
+  // read refuses the restore instead of re-creating a split record.
+  const splits =
+    snapshot?.version !== SNAPSHOT_VERSION && typeof snapshot?.capturedAt === 'string'
+      ? await readSplitsSince(ctx.organizationId, snapshot.capturedAt)
+      : [];
+
   // Auto-snapshot current state FIRST so this restore is itself undoable.
   const pre = await createSnapshot(ctx, { kind: 'pre_restore', label: 'Before restore' });
 
@@ -341,8 +349,9 @@ export async function restoreSnapshot(
     byIdFirst ? items.flatMap((it) => (it.id && byId.has(it.id) ? [it.id] : [])) : [],
   );
   const claimed = new Set<string>();
+  const splitMatch = planSplitMatches(items, activeRows, byKey, splits);
   const matchFor = (it: SnapshotItem, key: string): { id: string; qty: number } | undefined => {
-    if (!byIdFirst) return byKey.get(key);
+    if (!byIdFirst) return byKey.get(key) ?? splitMatch.get(it);
     const own = it.id ? byId.get(it.id) : undefined;
     if (own) return own;
     const other = byKey.get(key);
@@ -436,11 +445,13 @@ export async function restoreSnapshot(
   }
 
   // Extras: active records the snapshot did not reconcile — flagged, never
-  // deleted. Version 1: (sku,bin) keys not present in the snapshot. Version 2:
-  // records not matched by id or by key (each listed by its SKU).
+  // deleted. Version 1: (sku,bin) keys not present in the snapshot, except the
+  // records found through their split. Version 2: records not matched by id or
+  // by key (each listed by its SKU).
+  const splitKeys = new Set([...splitMatch.values()].map((m) => m.key));
   const extras = byIdFirst
     ? [...byId.values()].filter((r) => !claimed.has(r.id)).map((r) => itemKey(r.sku, null))
-    : [...activeKeys].filter((k) => !snapshotKeys.has(k));
+    : [...activeKeys].filter((k) => !snapshotKeys.has(k) && !splitKeys.has(k));
 
   void audit(
     {
@@ -455,6 +466,7 @@ export async function restoreSnapshot(
         extras: extras.length,
         preRestoreId: pre.id,
         snapshotVersion: byIdFirst ? SNAPSHOT_VERSION : 1,
+        ...(splitMatch.size > 0 ? { matchedBySplit: splitMatch.size } : {}),
       },
     },
     ctx,
@@ -470,6 +482,100 @@ export async function restoreSnapshot(
     extrasSample: extras.slice(0, 50).map((k) => k.split('␟')[0] ?? k),
     preRestoreId: pre.id,
   };
+}
+
+/** A record Ungroup split after a restore point, and the SKU it left. */
+interface SplitSince {
+  itemId: string;
+  leftSku: string;
+}
+
+/**
+ * The records Ungroup split after a version 1 restore point was taken (PR
+ * stage, data review DATA-1): each inventory.item.ungrouped audit row names the
+ * record and the SKU it left (written in the same transaction as the SKU
+ * change, migration 0399), oldest first.
+ *
+ * Read with the service role, scoped to the caller's organization: the
+ * restore's own gate (owner/admin floor, Business, a fresh MFA step-up and the
+ * typed confirm) has already run, and audit_logs' read policy needs
+ * activity_logs:read, which an override can take from an admin who may still
+ * restore. Reading through their RLS would hand them back the double count.
+ * Nothing read here is shown: the restore answers counts only.
+ */
+async function readSplitsSince(organizationId: string, since: string): Promise<SplitSince[]> {
+  const admin = createAdminClient();
+  const rows = await fetchAllRows<{ id: string; item_id: string | null; left_sku: string | null }>(
+    (from, to) =>
+      admin
+        .from('audit_logs')
+        .select('id, item_id:metadata->>entity_id, left_sku:metadata->>left_sku')
+        .eq('organization_id', organizationId)
+        .eq('event', 'inventory.item.ungrouped')
+        .gt('created_at', since)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+  );
+  return rows.flatMap((r) => {
+    const leftSku = (r.left_sku ?? '').trim();
+    return r.item_id && leftSku ? [{ itemId: r.item_id, leftSku }] : [];
+  });
+}
+
+/**
+ * Version 1 restore points only (PR stage, data review DATA-1): a snapshot item
+ * with no live record at its (SKU, bin) may be a record Ungroup split after the
+ * point. It takes the record that left that SKU, when that record is still live
+ * on that same rack, so the restore reconciles it by id instead of re-creating
+ * it under its old SKU (the restore never writes a SKU: it keeps the new one).
+ * Decided before the restore writes anything, so a record is taken once: never
+ * one the point already reconciles by its own (SKU, bin), never one another
+ * item took, and the earliest split first. Version 2 points pass no splits.
+ */
+function planSplitMatches(
+  items: SnapshotItem[],
+  activeRows: Array<{
+    id: string;
+    sku: string | null;
+    bin_location: string | null;
+    quantity_on_hand: number | null;
+  }>,
+  byKey: Map<string, { id: string; qty: number }>,
+  splits: SplitSince[],
+): Map<SnapshotItem, { id: string; qty: number; key: string }> {
+  const out = new Map<SnapshotItem, { id: string; qty: number; key: string }>();
+  if (splits.length === 0) return out;
+  const live = new Map(
+    activeRows.map((r) => [
+      r.id,
+      {
+        id: r.id,
+        qty: Number(r.quantity_on_hand ?? 0),
+        bin: (r.bin_location ?? '').trim(),
+        key: itemKey((r.sku ?? '').trim(), r.bin_location),
+      },
+    ]),
+  );
+  const taken = new Set<string>();
+  for (const it of items) {
+    const sku = (it.sku ?? '').trim();
+    const direct = sku ? byKey.get(itemKey(sku, it.binLocation)) : undefined;
+    if (direct) taken.add(direct.id);
+  }
+  for (const it of items) {
+    const sku = (it.sku ?? '').trim();
+    if (!sku || byKey.has(itemKey(sku, it.binLocation))) continue;
+    const bin = (it.binLocation ?? '').trim();
+    for (const s of splits) {
+      const rec = s.leftSku === sku && !taken.has(s.itemId) ? live.get(s.itemId) : undefined;
+      if (!rec || rec.bin !== bin) continue;
+      taken.add(rec.id);
+      out.set(it, { id: rec.id, qty: rec.qty, key: rec.key });
+      break;
+    }
+  }
+  return out;
 }
 
 /** How many records the restore screen names before it counts the rest. */
@@ -501,15 +607,17 @@ export interface RestorePointSkuChanges {
 /**
  * Ungroup D1 (b): what the restore screen says BEFORE the typed confirm. A
  * version 1 snapshot (no record ids) restores by (SKU, bin), so a record whose
- * SKU changed after it was taken (an Ungroup, or a SKU edit) is re-created
- * under its old SKU with the stock it had then, while the record with the new
- * SKU stays and is flagged as an extra. This names those records from the
- * audit log: inventory.item.ungrouped rows and SKU edits (changed_keys has
- * 'sku'; a Model B edit's siblings followed it, propagated_to_sku). A version 2
+ * SKU was edited after it was taken is re-created under its old SKU with the
+ * stock it had then, while the record with the new SKU stays and is flagged as
+ * an extra. This names those records from the audit log: SKU edits
+ * (changed_keys has 'sku'; a Model B edit's siblings followed it,
+ * propagated_to_sku). A record Ungroup split is left out (PR stage, DATA-1):
+ * the restore finds it through its inventory.item.ungrouped row. A version 2
  * snapshot matches by id, so it needs no warning and reads no audit log.
  *
  * Same gate as the restore (owner/admin floor + Business). Reads through the
- * caller's RLS. A failed audit read throws: an error, never an all-clear.
+ * caller's RLS. A failed audit read throws, and so does a caller who cannot
+ * view the audit log (activity_logs:read): an error, never an all-clear.
  */
 export async function restorePointSkuChanges(
   ctx: ServiceContext,
@@ -528,6 +636,22 @@ export async function restorePointSkuChanges(
   if (Number(p.version) === SNAPSHOT_VERSION) {
     return { version: SNAPSHOT_VERSION, changes: [], more: 0, truncated: false };
   }
+  // PR stage, data review DATA-1 (2): audit_logs' read policy (0279) needs
+  // activity_logs:read, which an override can take from an admin who can still
+  // open Backups & restore. Read through their RLS, the audit rows came back
+  // empty and the screen showed no warning: an all-clear nobody checked. The
+  // warning shows audit facts (which record had which SKU, and that a shared
+  // SKU was carried along), so it is not read past that permission: the
+  // check says it cannot run (the restore row says so, and Confirm still
+  // works). The restore itself finds split records with the service role
+  // (readSplitsSince) and shows nothing of what it read.
+  if (!can(ctx, 'activity_logs:read')) {
+    throw new ServiceError(
+      'forbidden',
+      'Checking for SKU changes reads the audit log, which you cannot view.',
+      { reason: 'audit_log_hidden' },
+    );
+  }
   const since = p.captured_at ?? p.created_at;
 
   const { data: rows, error: auditErr } = await ctx.supabase
@@ -543,14 +667,28 @@ export async function restorePointSkuChanges(
     .limit(SKU_CHANGES_SCAN);
   if (auditErr) throw new ServiceError('internal_error', auditErr.message);
 
-  // One line per record: its SKU before the first change and after the last.
-  const byItem = new Map<string, RestorePointSkuChange>();
-  for (const r of (rows ?? []) as Array<{
+  // PR stage, data review DATA-1 (3): a record Ungroup split is found through
+  // its split when the point is restored (restoreSnapshot), so it is never
+  // added again: leave it out, a later SKU edit of it included. What is named
+  // is SKU edits of records that were not split.
+  type Row = {
     entity_id: string | null;
+    event: string;
     before_sku: string | null;
     after_sku: string | null;
     propagated: string | null;
-  }>) {
+  };
+  const scanned = (rows ?? []) as Row[];
+  const split = new Set(
+    scanned.flatMap((r) =>
+      r.event === 'inventory.item.ungrouped' && r.entity_id ? [r.entity_id] : [],
+    ),
+  );
+
+  // One line per record: its SKU before the first change and after the last.
+  const byItem = new Map<string, RestorePointSkuChange>();
+  for (const r of scanned) {
+    if (r.entity_id && split.has(r.entity_id)) continue;
     const key = r.entity_id ?? `${r.before_sku}\u0000${r.after_sku}`;
     const seen = byItem.get(key);
     if (seen) {
@@ -585,7 +723,7 @@ export async function restorePointSkuChanges(
     version: 1,
     changes: named,
     more: all.length - named.length,
-    truncated: (rows ?? []).length >= SKU_CHANGES_SCAN,
+    truncated: scanned.length >= SKU_CHANGES_SCAN,
   };
 }
 

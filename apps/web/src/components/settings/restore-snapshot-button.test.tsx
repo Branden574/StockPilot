@@ -125,6 +125,28 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     expect(screen.getByPlaceholderText('RESTORE')).toBeInTheDocument();
   });
 
+  // PR stage, DATA-1 (2): an admin whose audit-log view was revoked is told why
+  // the check cannot run (never shown an empty list as an all-clear), and can
+  // still confirm.
+  it('tells an admin who cannot view the audit log that the check cannot run, and still lets them confirm', async () => {
+    h.changes.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Checking for SKU changes reads the audit log, which you cannot view.',
+        details: { reason: 'audit_log_hidden' },
+      },
+    });
+    const user = await open();
+    await waitFor(() => expect(screen.queryByText(RESTORE_SKU_COPY.checking)).toBeNull());
+    expect(document.body.textContent).toContain(
+      'Could not check whether any record changed SKU since this restore point: that check reads the audit log, which you cannot view.',
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.type(screen.getByPlaceholderText('RESTORE'), 'RESTORE');
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  });
+
   it('says it is checking while the answer is on its way', async () => {
     let resolve: (v: unknown) => void = () => undefined;
     h.changes.mockReturnValue(new Promise((r) => (resolve = r)));
