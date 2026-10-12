@@ -135,9 +135,10 @@ describe('linkFamily with 150 members', () => {
 });
 
 describe('unlinkItems with 150 items', () => {
-  it('reads the targets in batches of at most 100', async () => {
+  it('reads and writes the targets in batches of at most 100', async () => {
     const ids = Array.from({ length: 150 }, (_, i) => uuid(i, 'u'));
     const lists: string[][] = [];
+    const writes: string[][] = [];
     const stub = makeSupabaseStub({
       'inventory_items.select': (call) => {
         const byId = inList(call, 'id') ?? [];
@@ -147,13 +148,21 @@ describe('unlinkItems with 150 items', () => {
           error: null,
         };
       },
-      'inventory_items.update': { data: [{ id: 'ok' }], error: null },
+      // Re-pinned 2026-10-12 (G2 security review LOW): the write is set-based,
+      // so it answers the ids it wrote (every id of its in-list here).
+      'inventory_items.update': (call) => {
+        const byId = inList(call, 'id') ?? [];
+        writes.push(byId);
+        return { data: byId.map((id) => ({ id })), error: null };
+      },
     });
     const out = await unlinkItems(
       { supabase: stub.client, ctx: makeServiceContext(stub.client, { enabledModules: SPORTS }) },
       { itemIds: ids, reason: 'Wrong family' },
     );
     expect(lists.map((l) => l.length)).toEqual([100, 50]);
+    // One family: written in batches of at most 100 too, never one per record.
+    expect(writes.map((l) => l.length)).toEqual([100, 50]);
     expect(out.unlinked).toBe(150);
   });
 });

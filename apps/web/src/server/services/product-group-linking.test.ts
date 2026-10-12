@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildVariantKey, type ModuleId } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import { ServiceError } from './context';
 import { linkFamily, suggestFamilies, unlinkItems } from './product-group-linking';
@@ -584,6 +584,53 @@ describe('linkFamily — refuses a duplicate variant_key in the destination grou
   });
 });
 
+/**
+ * inventory_items as a tiny database for the unlink tests: a read answers the
+ * current family of the ids in its in-list; an update takes out of the family
+ * only the ids in its in-list whose family equals its group_id filter (as
+ * PostgREST would), and answers those ids. `refuse` ids are never written
+ * (an RLS write refusal); `beforeWrite` runs once before the first update
+ * (another session acting between the read and the write).
+ */
+function familyDb(
+  start: Record<string, string | null>,
+  opts: { refuse?: string[]; beforeWrite?: (rows: Map<string, string | null>) => void } = {},
+) {
+  const rows = new Map<string, string | null>(Object.entries(start));
+  const updates: Array<{ family: unknown; ids: string[] }> = [];
+  let wrote = false;
+  const arg = (call: MockCall, method: string, col: string) => {
+    const i = call.methods.findIndex((m, k) => m === method && call.args[k]![0] === col);
+    return i >= 0 ? call.args[i]![1] : undefined;
+  };
+  const stub = makeSupabaseStub({
+    'inventory_items.select': (call) => {
+      const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
+      return {
+        data: ids
+          .filter((id) => rows.has(id))
+          .map((id) => ({ id, group_id: rows.get(id), variant_key: rows.get(id) ? 'size=L' : null })),
+        error: null,
+      };
+    },
+    'inventory_items.update': (call) => {
+      if (!wrote) {
+        wrote = true;
+        opts.beforeWrite?.(rows);
+      }
+      const ids = (arg(call, 'in', 'id') as string[] | undefined) ?? [];
+      const family = arg(call, 'eq', 'group_id');
+      updates.push({ family, ids });
+      const hit = ids.filter(
+        (id) => rows.has(id) && rows.get(id) === family && !(opts.refuse ?? []).includes(id),
+      );
+      for (const id of hit) rows.set(id, null);
+      return { data: hit.map((id) => ({ id })), error: null };
+    },
+  });
+  return { stub, rows, updates };
+}
+
 describe('unlinkItems — the undo', () => {
   it('restores group_id to null and clears the now-meaningless variant_key', async () => {
     const stub = makeSupabaseStub({
@@ -654,27 +701,112 @@ describe('unlinkItems — the undo', () => {
     expect(ungroup!.event).toBe('sports.item.group_unlinked');
   });
 
-  it('still audits the items unlinked before a later item refuses', async () => {
-    let n = 0;
-    const stub = makeSupabaseStub({
-      'inventory_items.select': {
-        data: [
-          { id: 'i-l', group_id: 'grp-1', variant_key: 'size=L' },
-          { id: 'i-xl', group_id: 'grp-1', variant_key: 'size=XL' },
-        ],
-        error: null,
-      },
-      'inventory_items.update': () => {
-        n += 1;
-        return n === 2 ? { data: null, error: null } : { data: [{ id: 'ok' }], error: null };
-      },
-    });
+  // Re-pinned 2026-10-12 (G2 security review LOW): the write is one UPDATE
+  // per family (per batch), so the refusal is per family, not per record.
+  it('still audits the records unlinked before a later family refuses', async () => {
+    const db = familyDb({ 'i-l': 'grp-1', 'i-xl': 'grp-2' }, { refuse: ['i-xl'] });
     await expect(
       unlinkItems(
-        { supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
         { itemIds: ['i-l', 'i-xl'], reason: 'Wrong family' },
       ),
     ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
+    expect(db.rows.get('i-l')).toBeNull();
+    expect(db.rows.get('i-xl')).toBe('grp-2');
+  });
+
+  // G2 security review LOW (2026-10-12): one UPDATE per family, filtered on
+  // the family each record must still be in, then one audit write; the old
+  // row-at-a-time loop made a round trip per record and audited last.
+  it("writes each family's records in one update filtered on that family, then audits them all", async () => {
+    const db = familyDb({ 'i-s': 'grp-1', 'i-x': 'grp-2', 'i-m': 'grp-1' });
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['i-s', 'i-x', 'i-m'], reason: 'Wrong family' },
+    );
+    expect(out).toEqual({ unlinked: 3 });
+    expect(db.updates).toEqual([
+      { family: 'grp-1', ids: ['i-s', 'i-m'] },
+      { family: 'grp-2', ids: ['i-x'] },
+    ]);
+    expect(
+      auditedRows().map((r) => [r.entityId, (r.before as Record<string, unknown>).group_id]),
+    ).toEqual([
+      ['i-s', 'grp-1'],
+      ['i-m', 'grp-1'],
+      ['i-x', 'grp-2'],
+    ]);
+    expect(auditManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never takes a record out of a family it was moved into after the read: it stops with family_changed', async () => {
+    const db = familyDb(
+      { 'i-l': 'grp-1', 'i-m': 'grp-1' },
+      // Another session re-links i-m into grp-9 between the read and the write.
+      { beforeWrite: (rows) => rows.set('i-m', 'grp-9') },
+    );
+    await expect(
+      unlinkItems(
+        { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+        { itemIds: ['i-l', 'i-m'], reason: 'Wrong family' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      details: { reason: 'family_changed', itemIds: ['i-m'] },
+    });
+    expect(db.rows.get('i-m')).toBe('grp-9');
+    // The record that did leave is audited; the moved one is not.
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
+  });
+
+  it("Ungroup's expected family: a record read in another family than the caller saw is refused before any write", async () => {
+    const db = familyDb({ 'i-l': 'grp-1', 'i-m': 'grp-2' });
+    await expect(
+      unlinkItems(
+        { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+        {
+          itemIds: ['i-l', 'i-m'],
+          reason: 'Taken out of its size family with Ungroup (web)',
+          source: 'ungroup',
+          surface: 'web',
+          expectedFamilies: { 'i-l': 'grp-1', 'i-m': 'grp-1' },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'conflict',
+      details: { reason: 'family_changed', itemIds: ['i-m'] },
+    });
+    expect(db.updates).toEqual([]);
+    expect(db.rows.get('i-l')).toBe('grp-1');
+  });
+
+  it("Ungroup's expected family is the filter of the write", async () => {
+    const db = familyDb({ 'i-l': 'grp-1' });
+    await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      {
+        itemIds: ['i-l'],
+        reason: 'Taken out of its size family with Ungroup (app)',
+        source: 'ungroup',
+        surface: 'app',
+        expectedFamilies: { 'i-l': 'grp-1' },
+      },
+    );
+    expect(db.updates).toEqual([{ family: 'grp-1', ids: ['i-l'] }]);
+  });
+
+  it('a record someone else took out between the read and the write is done, not a refusal', async () => {
+    const db = familyDb(
+      { 'i-l': 'grp-1', 'i-m': 'grp-1' },
+      { beforeWrite: (rows) => rows.set('i-m', null) },
+    );
+    const out = await unlinkItems(
+      { supabase: db.stub.client, ctx: sportsCtx(db.stub.client) },
+      { itemIds: ['i-l', 'i-m'], reason: 'Wrong family' },
+    );
+    // Only the record this call wrote is counted and audited.
+    expect(out).toEqual({ unlinked: 1 });
     expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
   });
 

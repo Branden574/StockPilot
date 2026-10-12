@@ -117,6 +117,9 @@ function unlinkWords(e: unknown): { message: string; reason: string; retryable: 
       return { message: GROUPING_ERROR_WORDS.notFound, reason: 'not_found', retryable: false };
     if (e.code === 'validation_error')
       return { message: GROUPING_ERROR_WORDS.invalid, reason: 'invalid', retryable: false };
+    // A record moved to another family between the check and the write.
+    if (e.code === 'conflict' && reason === 'family_changed')
+      return { message: UNGROUP_COPY.familyChanged, reason, retryable: false };
   }
   console.error('[ungroup-selected] unlink failed:', e instanceof Error ? e.message : String(e));
   return { message: GROUPING_ERROR_WORDS.internal, reason: 'internal_error', retryable: false };
@@ -374,6 +377,8 @@ export class UngroupSelectedService {
               reason: UNGROUP_COPY.unlinkReason(surface),
               source: 'ungroup',
               surface,
+              // The write is filtered on the family each record was reviewed in.
+              expectedFamilies: body.unlink.expectedFamilies,
             },
           );
           parts.push({

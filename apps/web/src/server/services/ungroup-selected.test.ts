@@ -175,11 +175,14 @@ describe('UngroupSelectedService.apply', () => {
       idempotencyKey: K2,
       anchorItemIds: [id(2)],
     });
+    // Re-pinned 2026-10-12 (G2 security review LOW): the family each record
+    // was reviewed in goes with it, and the write is filtered on it.
     expect(unlink.mock.calls[0]![1]).toEqual({
       itemIds: [id(4), id(5)],
       reason: UNGROUP_COPY.unlinkReason('web'),
       source: 'ungroup',
       surface: 'web',
+      expectedFamilies: { [id(4)]: FAM, [id(5)]: FAM },
     });
     expect(r.outcome.complete).toBe(true);
     expect(r.outcome.parts.map((p) => [p.kind, p.status, p.changedItemIds])).toEqual([
@@ -247,6 +250,39 @@ describe('UngroupSelectedService.apply', () => {
       },
     ]);
     expect(r.outcome.complete).toBe(false);
+  });
+
+  // G2 security review LOW (2026-10-12): a record moved into another family
+  // between the check and the write is refused at the write, in Ungroup's
+  // words, and the read-back names the records that did leave.
+  it('a record moved to another family at the write is refused in Ungroup words; the ones that left are named', async () => {
+    const { svc, unlink } = harness({
+      families: [
+        inFam,
+        [
+          { id: id(4), group_id: null },
+          { id: id(5), group_id: FAM2 },
+        ],
+      ],
+    });
+    unlink.mockRejectedValueOnce(
+      new ServiceError('conflict', 'One of the selected items moved to another family.', {
+        reason: 'family_changed',
+        itemIds: [id(5)],
+      }),
+    );
+    const r = await svc.apply(body({ remove: null, split: null }), 'web');
+    expect(r.outcome.parts).toEqual([
+      {
+        kind: 'unlink',
+        status: 'partial',
+        changedItemIds: [id(4)],
+        notChangedItemIds: [id(5)],
+        message: UNGROUP_COPY.familyChanged,
+        reason: 'family_changed',
+        retryable: false,
+      },
+    ]);
   });
 
   it('says so when where each record is cannot be read back after an unlink stopped', async () => {

@@ -11,6 +11,8 @@ import {
   type CreateProductGroupInput,
 } from '@stockpilot/core';
 
+import { chunkInFilterValues } from '@/lib/supabase/in-filter';
+
 import { auditMany, type AuditPayload } from './audit';
 import {
   assertModuleEnabled,
@@ -617,6 +619,56 @@ async function assertNoVariantKeyCollision(args: {
   );
 }
 
+/** A record is no longer in the family the unlink was to take it out of. */
+function familyChanged(itemIds: string[]): ServiceError {
+  return new ServiceError(
+    'conflict',
+    'One of the selected items moved to another family since it was read. Nothing further was unlinked.',
+    { reason: 'family_changed', itemIds },
+  );
+}
+
+/**
+ * Why an unlink batch wrote fewer records than it asked for, read back under
+ * the caller's RLS. A record now out of any family was taken out by someone
+ * else: done, nothing to refuse. One now in another family is refused as
+ * family_changed; one still in the family, gone or unreadable could not be
+ * written (a write the caller's access refuses).
+ */
+async function refuseUnwritten(
+  deps: { supabase: ServiceContext['supabase']; ctx: ServiceContext },
+  ids: string[],
+  family: string,
+): Promise<void> {
+  const { data, error } = await deps.supabase
+    .from('inventory_items')
+    .select('id, group_id')
+    .eq('organization_id', deps.ctx.organizationId)
+    // in-list-bound: one unlink batch's ids, at most IN_FILTER_MAX_VALUES (chunkInFilterValues)
+    .in('id', ids)
+    .is('deleted_at', null);
+  const now = new Map(
+    ((error ? [] : (data ?? [])) as Array<{ id: string; group_id: string | null }>).map((r) => [
+      r.id.toLowerCase(),
+      r.group_id,
+    ]),
+  );
+  const moved = ids.filter((id) => {
+    const g = now.get(id.toLowerCase());
+    return typeof g === 'string' && g !== family;
+  });
+  if (moved.length > 0) throw familyChanged(moved);
+  const refused = ids.filter(
+    (id) => !now.has(id.toLowerCase()) || now.get(id.toLowerCase()) !== null,
+  );
+  if (refused.length > 0) {
+    throw new ServiceError(
+      'forbidden',
+      'One of the selected items could not be updated. Nothing further was unlinked.',
+    );
+  }
+}
+
 /**
  * Undo. A link is reversible precisely because nothing else depends on it.
  *
@@ -638,6 +690,10 @@ export async function unlinkItems(
     source?: 'group_linking_review' | 'ungroup';
     /** The app it came from, when the caller says (Ungroup). */
     surface?: 'web' | 'app';
+    /** The family each record was in when the caller reviewed it (Ungroup):
+     *  a record now in another family is refused, never taken out of it.
+     *  Without it, the family read here is the one the write must find. */
+    expectedFamilies?: Readonly<Record<string, string>>;
   },
 ): Promise<{ unlinked: number }> {
   const { ctx, supabase } = deps;
@@ -685,45 +741,73 @@ export async function unlinkItems(
     );
   }
 
+  // The family each record must still be in when it is written: the one the
+  // caller reviewed (Ungroup) or the one just read. A record moved to another
+  // family is refused before any write (G2 security review LOW).
+  const familyOf = (id: string): string | null => byId.get(id)!.group_id;
+  if (input.expectedFamilies) {
+    const expected = input.expectedFamilies;
+    const unknown = ids.filter((id) => typeof expected[id] !== 'string');
+    if (unknown.length > 0) {
+      throw new ServiceError('validation_error', 'Each item to unlink needs the family it is in.');
+    }
+    const moved = ids.filter((id) => familyOf(id) !== null && familyOf(id) !== expected[id]);
+    if (moved.length > 0) throw familyChanged(moved);
+  }
+
+  // Each family's records in one UPDATE per batch, filtered on that family,
+  // so a record moved to another family meanwhile matches nothing; the audit
+  // is written right after (it used to wait for a row-at-a-time loop).
+  const byFamily = new Map<string, string[]>();
+  for (const id of ids) {
+    const family = familyOf(id);
+    // Already ungrouped: nothing to undo, and no audit noise for a no-op.
+    if (!family) continue;
+    byFamily.set(family, [...(byFamily.get(family) ?? []), id]);
+  }
+
   let unlinked = 0;
-  // Same batching and finally as linkFamily.
+  // Same finally as linkFamily: the records written are audited even when a
+  // later batch refuses.
   const auditRows: AuditPayload[] = [];
   try {
-    for (const id of ids) {
-      const before = byId.get(id)!;
-      // Already ungrouped — nothing to undo, and no audit noise for a no-op.
-      if (!before.group_id) continue;
-
-      const { data: updated, error: updErr } = await supabase
-        .from('inventory_items')
-        .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
-        .eq('organization_id', ctx.organizationId)
-        .eq('id', id)
-        .is('deleted_at', null)
-        .select('id')
-        .maybeSingle();
-      if (updErr) throw new ServiceError('internal_error', updErr.message);
-      if (!updated) {
-        throw new ServiceError(
-          'forbidden',
-          'One of the selected items could not be updated. Nothing further was unlinked.',
+    for (const [family, familyIds] of byFamily) {
+      for (const batch of chunkInFilterValues(familyIds)) {
+        const { data: updated, error: updErr } = await supabase
+          .from('inventory_items')
+          .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
+          .eq('organization_id', ctx.organizationId)
+          .eq('group_id', family)
+          .in('id', batch)
+          .is('deleted_at', null)
+          .select('id');
+        if (updErr) throw new ServiceError('internal_error', updErr.message);
+        const written = new Set(
+          ((updated ?? []) as Array<{ id: string }>).map((r) => r.id.toLowerCase()),
         );
+        if (written.size > 0) {
+          invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
+        }
+        for (const id of batch) {
+          if (!written.has(id.toLowerCase())) continue;
+          unlinked += 1;
+          const before = byId.get(id)!;
+          auditRows.push({
+            event: 'sports.item.group_unlinked',
+            entityType: 'inventory_item',
+            entityId: id,
+            reason,
+            before: { group_id: before.group_id, variant_key: before.variant_key },
+            after: { group_id: null, variant_key: null },
+            extra: {
+              source: input.source ?? 'group_linking_review',
+              ...(input.surface ? { surface: input.surface } : {}),
+            },
+          });
+        }
+        const short = batch.filter((id) => !written.has(id.toLowerCase()));
+        if (short.length > 0) await refuseUnwritten(deps, short, family);
       }
-      invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
-      unlinked += 1;
-
-      auditRows.push({
-        event: 'sports.item.group_unlinked',
-        entityType: 'inventory_item',
-        entityId: id,
-        reason,
-        before: { group_id: before.group_id, variant_key: before.variant_key },
-        after: { group_id: null, variant_key: null },
-        extra: {
-          source: input.source ?? 'group_linking_review',
-          ...(input.surface ? { surface: input.surface } : {}),
-        },
-      });
     }
   } finally {
     await auditMany(auditRows, ctx);
