@@ -45,7 +45,7 @@
 
 import { compareSizeValues } from '../sports/size-order';
 
-import { sharedSkuKey } from './grouping-contract';
+import { sharedSkuKey, type UngroupKind } from './grouping-contract';
 import {
   groupBySizeRun,
   sizeRunStyleKey,
@@ -411,6 +411,30 @@ export function composeDisplayList<R>(
     const expanded = options.expanded.runs.has(run.styleKey);
     out.push({ kind: 'run', run, expanded });
     if (expanded) for (const row of members) out.push({ kind: 'row', row, nested: true });
+  }
+  return out;
+}
+
+/**
+ * Which grouping each record is SHOWN under in a composed list (Ungroup
+ * anything, owner 2026-10-12: Ungroup undoes the header a record appears
+ * beneath): an explicit group's header ('group'), a same-SKU header ('sku'),
+ * or a size run of a stored product family ('family'). A record that renders
+ * as a plain row, or under a size run the name heuristic made (no stored
+ * family: nothing to undo), is absent. A SKU header over one record's two
+ * rack rows still says 'sku'; Ungroup then finds no other record sharing the
+ * SKU and falls back to the record's own groupings (chooseUngroupKind).
+ */
+export function shownUnderByRecord<R>(
+  list: readonly DisplayListEntry<R>[],
+  itemIdOf: (row: R) => string,
+): Map<string, UngroupKind> {
+  const out = new Map<string, UngroupKind>();
+  for (const e of list) {
+    if (e.kind === 'explicit') for (const row of e.rows) out.set(itemIdOf(row), 'group');
+    else if (e.kind === 'sku') for (const row of e.rows) out.set(itemIdOf(row), 'sku');
+    else if (e.kind === 'run' && e.run.groupId)
+      for (const row of e.run.members) out.set(itemIdOf(row), 'family');
   }
   return out;
 }

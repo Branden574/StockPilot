@@ -606,6 +606,61 @@ export const UNGROUP_COPY = {
   offline: 'Making a record its own item needs a connection. Try again when you are online.',
   confirmOne:
     'This record gets its own new SKU. Only this record changes. Stock, charter, rack, barcode/ISBN and history stay as they are.',
+
+  // ── Ungroup anything (owner 2026-10-12): the bulk bar's Ungroup for any
+  // ticked records, on the web and the phone. Each record leaves the grouping
+  // it shows under on the list (planUngroupSelected).
+  selectedTitle: 'Ungroup the selected records',
+  selectedIntro:
+    'Each record leaves the grouping it shows under on the list: its group, the SKU it shares, or its size family. Stock, charter, rack, barcode/ISBN and history stay as they are.',
+  /** What happens to a record that shares its SKU (split_item_sku). */
+  getsOwnSku: 'Gets its own SKU',
+  /** What happens to a record in a display group (apply_item_grouping remove). */
+  leavesGroup: (name: string) => `Leaves group ${name}`,
+  /** What happens to a record in a size family (unlinkItems). */
+  leavesFamily: (name: string | null) =>
+    name ? `Leaves the ${name} size family` : 'Leaves its size family',
+  /** Said once when any record leaves a size family: the Returns exchange
+   *  consequence, in plain words (exchanges offer a family's sizes for one
+   *  another: 0396 exchange options and requester sizes read group_id). */
+  familyNote:
+    "A record taken out of its size family is no longer offered in Returns as an exchange for the family's other sizes, and they are no longer offered for it. Its SKU, stock, charter, rack and history stay as they are.",
+  /** Why a ticked record is left out of an Ungroup. */
+  selectedLeftOutReason: {
+    kit: 'is a kit (kits keep their SKU and are never in a group)',
+    nothing:
+      'has nothing to ungroup: it is in no group or size family, and no other record you can see shares its SKU',
+    not_writable: "is in a warehouse you can't change",
+    family_permission:
+      'is in a size family, and taking a record out of one needs permission to manage sports products',
+    family_sku:
+      'shares its SKU but is in a size family of linked sizes, so it keeps its SKU. Unlink it under Product groups first',
+  } as Record<UngroupSelectedLeftOutReason, string>,
+  /** The result lines, one per kind, counting the records that changed. */
+  leftGroups: (n: number) =>
+    `${n} record${n === 1 ? '' : 's'} left ${n === 1 ? 'its' : 'their'} group.`,
+  leftFamilies: (n: number) =>
+    `${n} record${n === 1 ? '' : 's'} left ${n === 1 ? 'its' : 'their'} size family.`,
+  /** A step that was refused or not tried, after an earlier one applied. */
+  partWhat: (kind: UngroupPartKind, n: number) => {
+    const records = `${n} record${n === 1 ? '' : 's'}`;
+    return kind === 'remove'
+      ? `${records} leaving ${n === 1 ? 'its' : 'their'} group`
+      : kind === 'split'
+        ? `${records} getting ${n === 1 ? 'its' : 'their'} own SKU`
+        : `${records} leaving ${n === 1 ? 'its' : 'their'} size family`;
+  },
+  partNotDone: (what: string, message: string) => `Not done: ${what}. ${message}`,
+  partNotTried: (what: string) =>
+    `Not tried: ${what}, because the step before it was not done. Review again to see where each record is now.`,
+  /** Nothing in the selection can be ungrouped by this person. */
+  selectedNothing: 'None of the selected records has a grouping you can undo.',
+  familyChanged: "A record's size family changed since you opened this. Review it again.",
+  familyPermission:
+    'Taking a record out of a size family needs permission to manage sports products.',
+  /** The audit row's reason for an unlink made by Ungroup. */
+  unlinkReason: (surface: GroupingSurface) =>
+    `Taken out of its size family with Ungroup (${surface === 'web' ? 'web' : 'mobile app'})`,
 } as const;
 
 /**
@@ -1811,4 +1866,636 @@ export function groupingSelectionFacts(
     canGroup: distinct.length >= 2 && !mixedTypes,
     groupedIds: distinct.filter((id) => !!byId.get(id)?.display_group_id),
   };
+}
+
+// ═══ Ungroup anything (owner 2026-10-12) ══════════════════════════════════
+//
+// "im supposed to be able to check box whatever item and then group or
+// ungroup it that was the point." The bulk bar's Ungroup takes ANY ticked
+// records, and each one leaves the grouping it has, by kind:
+//   sku     it shares its SKU with another record the person can see: it gets
+//           its own SKU (split_item_sku, 0399; the oldest keeps the SKU when
+//           every record of it is ticked);
+//   group   it is in a display group (0400): it leaves that group
+//           (apply_item_grouping remove);
+//   family  it is in a size family (a certified product group): it leaves
+//           the family (unlinkItems, as Product groups > Unlink: SKU, stock,
+//           rack, charter and history unchanged).
+// A record with more than one leaves the one it is SHOWN under on the list
+// (the header it appears beneath: core composeDisplayList, shownUnderByRecord
+// in display-units.ts), since that is what the person sees as grouped. When
+// the list shows it under none of them (a lone search hit, another page),
+// the list's own precedence decides: group, then SKU, then family
+// (UNGROUP_KIND_PRECEDENCE, the order composeDisplayList claims rows in).
+
+/** The groupings Ungroup undoes. */
+export type UngroupKind = 'group' | 'sku' | 'family';
+
+/** The list's precedence (composeDisplayList: E, then K, then R). */
+export const UNGROUP_KIND_PRECEDENCE: readonly UngroupKind[] = ['group', 'sku', 'family'];
+
+/** Why a ticked record is left out of an Ungroup. */
+export type UngroupSelectedLeftOutReason =
+  'kit' | 'nothing' | 'not_writable' | 'family_permission' | 'family_sku';
+
+/** The three steps of one Ungroup, in the order the server runs them. */
+export type UngroupPartKind = 'remove' | 'split' | 'unlink';
+export const UNGROUP_PART_ORDER: readonly UngroupPartKind[] = ['remove', 'split', 'unlink'];
+
+/**
+ * The kind a record leaves: the one it is shown under, when it has that kind;
+ * else the first of its kinds in the list's precedence; null when it has none.
+ */
+export function chooseUngroupKind(
+  kinds: ReadonlySet<UngroupKind>,
+  shownUnder: UngroupKind | null | undefined,
+): UngroupKind | null {
+  if (shownUnder && kinds.has(shownUnder)) return shownUnder;
+  for (const k of UNGROUP_KIND_PRECEDENCE) if (kinds.has(k)) return k;
+  return null;
+}
+
+/** The facts the bulk bar holds for a loaded row. */
+export interface UngroupRowFacts {
+  id: string;
+  sku: string | null;
+  display_group_id?: string | null;
+  /** The record's size family (inventory_items.group_id). */
+  group_id?: string | null;
+  is_bundle?: boolean | null;
+}
+
+/**
+ * The bulk bar's Ungroup: the ticked records that have something to leave
+ * that this person may undo, from the LOADED rows only (no query per row): a
+ * display group or a shared SKU for someone who can edit items, a size family
+ * for someone who can also manage sports products (with the sports module on).
+ * A record is judged on the kind it would leave (chooseUngroupKind), so a
+ * family member shown under its family is not offered to someone who cannot
+ * unlink it. Empty: no Ungroup button. The review reads every record again.
+ */
+export function ungroupableItemIds(
+  selectedIds: readonly string[],
+  rows: readonly UngroupRowFacts[],
+  options: {
+    canEditItems: boolean;
+    canUnlinkFamilies: boolean;
+    /** Distinct records per raw SKU over the whole view, when known. */
+    fullSkuCounts?: ReadonlyMap<string, number> | null;
+    shownUnder?: ReadonlyMap<string, UngroupKind> | null;
+  },
+): string[] {
+  if (!options.canEditItems) return [];
+  const byId = new Map<string, UngroupRowFacts>();
+  for (const r of rows) if (!byId.has(r.id)) byId.set(r.id, r);
+  const shared = new Set(
+    sharedSkuItemIds(
+      selectedIds,
+      rows.map((r) => ({ id: r.id, sku: r.sku })),
+      options.fullSkuCounts,
+    ),
+  );
+  const out: string[] = [];
+  for (const id of new Set(selectedIds)) {
+    const r = byId.get(id);
+    if (!r || r.is_bundle) continue;
+    const kinds = new Set<UngroupKind>();
+    if (r.display_group_id) kinds.add('group');
+    if (shared.has(id)) kinds.add('sku');
+    if (r.group_id) kinds.add('family');
+    const kind = chooseUngroupKind(kinds, options.shownUnder?.get(id));
+    if (!kind) continue;
+    if (kind === 'family' && !options.canUnlinkFamilies) continue;
+    if (kind === 'sku' && r.group_id) continue; // split refuses a family member
+    out.push(id);
+  }
+  return out;
+}
+
+/** A ticked record as the Ungroup review reads it (item_grouping_preview). */
+export type UngroupSelectedRecord = Pick<
+  GroupingPreviewRecord,
+  | 'id'
+  | 'name'
+  | 'sku'
+  | 'isBundle'
+  | 'writable'
+  | 'displayGroup'
+  | 'productGroupId'
+  | 'productGroupName'
+>;
+
+export interface UngroupSelectedPlan<
+  T extends UngroupSelectedRecord = UngroupSelectedRecord,
+  C extends SplitCandidate = SplitCandidate,
+> {
+  /** The readable ticked records, in the order ticked. */
+  records: T[];
+  /** Ticked ids the person cannot read (or that are gone): a count only. */
+  unavailableCount: number;
+  /** The kind each planned record leaves. */
+  kindOf: Map<string, UngroupKind>;
+  /** Ticked records left out, with the reason. */
+  leftOut: Array<{ id: string; reason: UngroupSelectedLeftOutReason }>;
+  /** Records leaving their display group. */
+  leaveGroup: T[];
+  /** The SKU split for the records that share their SKU (planSkuSplit). */
+  split: SplitPlan<C>;
+  /** Records leaving their size family. */
+  leaveFamily: T[];
+  /** Per display group losing records: how many leave, how many records the
+   *  person can see stay (null when not counted). */
+  groups: RemovalPlan['groups'];
+}
+
+/**
+ * The Ungroup review's plan for the ticked ids. `records` and
+ * `unavailableCount` come from item_grouping_preview (read as the person),
+ * `candidates` from the SKU preview (every live record of the ticked records'
+ * SKUs the person can read, oldest first), `shownUnder` from the list's own
+ * composition (shownUnderByRecord). A record is left out when it is a kit,
+ * has nothing to ungroup, cannot be edited by the person, is in a size family
+ * the person may not unlink, or would get its own SKU while in a family (the
+ * database refuses that split).
+ */
+export function planUngroupSelected<T extends UngroupSelectedRecord, C extends SplitCandidate>(
+  selectedIds: readonly string[],
+  review: {
+    records: readonly T[];
+    unavailableCount: number;
+    candidateGroups?: GroupingPreview['candidateGroups'];
+  },
+  candidates: readonly C[],
+  options: {
+    canUnlinkFamilies: boolean;
+    shownUnder?: ReadonlyMap<string, UngroupKind> | null;
+  },
+): UngroupSelectedPlan<T, C> {
+  const byId = new Map(review.records.map((r) => [r.id.toLowerCase(), r]));
+  const skuCount = new Map<string, number>();
+  for (const c of candidates) {
+    const k = sharedSkuKey(c.sku);
+    if (k) skuCount.set(k, (skuCount.get(k) ?? 0) + 1);
+  }
+  const seen = new Set<string>();
+  const records: T[] = [];
+  const kindOf = new Map<string, UngroupKind>();
+  const leftOut: UngroupSelectedPlan['leftOut'] = [];
+  const leaveGroup: T[] = [];
+  const splitIds: string[] = [];
+  const leaveFamily: T[] = [];
+  for (const raw of selectedIds) {
+    const r = byId.get(raw.toLowerCase());
+    if (!r || seen.has(r.id)) continue;
+    seen.add(r.id);
+    records.push(r);
+    if (r.isBundle) {
+      leftOut.push({ id: r.id, reason: 'kit' });
+      continue;
+    }
+    const kinds = new Set<UngroupKind>();
+    if (r.displayGroup) kinds.add('group');
+    const k = sharedSkuKey(r.sku);
+    if (k && (skuCount.get(k) ?? 0) >= 2) kinds.add('sku');
+    if (r.productGroupId) kinds.add('family');
+    const kind = chooseUngroupKind(
+      kinds,
+      options.shownUnder?.get(r.id) ?? options.shownUnder?.get(raw),
+    );
+    if (!kind) leftOut.push({ id: r.id, reason: 'nothing' });
+    else if (!r.writable) leftOut.push({ id: r.id, reason: 'not_writable' });
+    else if (kind === 'family' && !options.canUnlinkFamilies)
+      leftOut.push({ id: r.id, reason: 'family_permission' });
+    else if (kind === 'sku' && r.productGroupId) leftOut.push({ id: r.id, reason: 'family_sku' });
+    else {
+      kindOf.set(r.id, kind);
+      if (kind === 'group') leaveGroup.push(r);
+      else if (kind === 'sku') splitIds.push(r.id);
+      else leaveFamily.push(r);
+    }
+  }
+  const split = planSkuSplit(splitIds, candidates);
+  // A planned split the SKU preview could not confirm (the record changed
+  // between the two reads) is left out as nothing to ungroup, never sent.
+  for (const l of split.leftOut) {
+    kindOf.delete(l.id);
+    leftOut.push({ id: l.id, reason: l.reason === 'family' ? 'family_sku' : 'nothing' });
+  }
+  const removal = planRemoval(
+    leaveGroup.map((r) => r.id),
+    {
+      records: leaveGroup as unknown as GroupingPreviewRecord[],
+      unavailableCount: 0,
+      sameSkuSiblings: [],
+      candidateGroups: review.candidateGroups ?? [],
+      targetGroup: null,
+    },
+  );
+  return {
+    records,
+    unavailableCount: review.unavailableCount,
+    kindOf,
+    leftOut,
+    leaveGroup,
+    split,
+    leaveFamily,
+    groups: removal.groups,
+  };
+}
+
+/** The record that keeps a fully ticked SKU: the person's choice, else the
+ *  oldest (the database's rule); null when not every record is ticked. */
+export function ungroupAnchorFor(
+  g: SplitPlanGroup,
+  anchorBySku: Readonly<Record<string, string>>,
+): string | null {
+  if (!g.allSelected) return null;
+  const chosen = anchorBySku[g.sku];
+  return chosen && g.selected.some((r) => r.id === chosen) ? chosen : g.defaultAnchorId;
+}
+
+/** What happens to one ticked record, for its line in the review. */
+export type UngroupRecordOutcome =
+  | { kind: 'split'; keeps: false }
+  | { kind: 'split'; keeps: true; sku: string }
+  | { kind: 'group'; groupName: string }
+  | { kind: 'family'; familyName: string | null }
+  | { kind: 'left_out'; reason: UngroupSelectedLeftOutReason };
+
+export function ungroupRecordOutcome(
+  plan: UngroupSelectedPlan,
+  id: string,
+  anchorBySku: Readonly<Record<string, string>>,
+): UngroupRecordOutcome | null {
+  const out = plan.leftOut.find((l) => l.id === id);
+  if (out) return { kind: 'left_out', reason: out.reason };
+  const kind = plan.kindOf.get(id);
+  if (kind === 'group') {
+    const r = plan.leaveGroup.find((x) => x.id === id);
+    return { kind: 'group', groupName: r?.displayGroup?.name ?? DISPLAY_GROUP_NAME_FALLBACK };
+  }
+  if (kind === 'family') {
+    const r = plan.leaveFamily.find((x) => x.id === id);
+    return { kind: 'family', familyName: r?.productGroupName ?? null };
+  }
+  if (kind === 'sku') {
+    const g = plan.split.groups.find((x) => x.selected.some((r) => r.id === id));
+    if (!g) return null;
+    return ungroupAnchorFor(g, anchorBySku) === id
+      ? { kind: 'split', keeps: true, sku: g.sku }
+      : { kind: 'split', keeps: false };
+  }
+  return null;
+}
+
+/** The words of a record's outcome (web and phone). */
+export function ungroupOutcomeWords(o: UngroupRecordOutcome): string {
+  switch (o.kind) {
+    case 'split':
+      return o.keeps ? UNGROUP_COPY.keepsSku(o.sku) : UNGROUP_COPY.getsOwnSku;
+    case 'group':
+      return UNGROUP_COPY.leavesGroup(o.groupName);
+    case 'family':
+      return UNGROUP_COPY.leavesFamily(o.familyName);
+    case 'left_out':
+      return `Left out: ${UNGROUP_COPY.selectedLeftOutReason[o.reason]}`;
+  }
+}
+
+/** A group name that could not be read (display-units' header word). */
+const DISPLAY_GROUP_NAME_FALLBACK = 'Group';
+
+/**
+ * How many ticked records CHANGE on Save: those leaving a group or a family,
+ * and those getting their own SKU (never the record that keeps a fully ticked
+ * SKU). Save's label and the result line count the same records.
+ */
+export function ungroupChangeCount(
+  plan: UngroupSelectedPlan,
+  anchorBySku: Readonly<Record<string, string>>,
+): number {
+  let split = 0;
+  for (const g of plan.split.groups) {
+    split += g.selected.length - (ungroupAnchorFor(g, anchorBySku) ? 1 : 0);
+  }
+  return plan.leaveGroup.length + split + plan.leaveFamily.length;
+}
+
+// ── The request ────────────────────────────────────────────────────────────
+
+/** One Ungroup Save. Each step names its own records (no record in two), with
+ *  what the screen saw; the keyed steps carry their own idempotency key, kept
+ *  for every retry of the same body. */
+export interface UngroupSelectedBody {
+  organizationId: string;
+  actorUserId: string;
+  /** Records leaving their display group (apply_item_grouping remove). */
+  remove: {
+    idempotencyKey: string;
+    itemIds: string[];
+    expectedGroups: Record<string, string>;
+  } | null;
+  /** Records getting their own SKU (split_item_sku), anchors included. */
+  split: {
+    idempotencyKey: string;
+    itemIds: string[];
+    expectedSkus: Record<string, string>;
+    anchorItemIds: string[];
+  } | null;
+  /** Records leaving their size family (unlinkItems), each with the family
+   *  the screen saw. Unkeyed: a record already out of it is done. */
+  unlink: { itemIds: string[]; expectedFamilies: Record<string, string> } | null;
+}
+
+export type UngroupSelectedField =
+  'body' | 'organization_id' | 'actor_user_id' | 'remove' | 'split' | 'unlink' | 'item_ids';
+
+export type UngroupSelectedParse =
+  | { ok: true; body: UngroupSelectedBody }
+  | { ok: false; refusal: { reason: 'invalid'; field: UngroupSelectedField; message: string } };
+
+function refuseUngroup(field: UngroupSelectedField): UngroupSelectedParse {
+  return {
+    ok: false,
+    refusal: { reason: 'invalid', field, message: GROUPING_ERROR_WORDS.invalid },
+  };
+}
+
+const UNGROUP_BODY_KEYS = new Set(['organizationId', 'actorUserId', 'remove', 'split', 'unlink']);
+
+/**
+ * The body, checked with each step's own rules (parseGroupingBody for the
+ * removal, parseSplitSkuBody for the split, the same id rules for the
+ * unlink), plus: at least one step, no record in two steps, at most
+ * GROUPING_MAX_ITEMS records in all.
+ */
+export function parseUngroupSelectedBody(raw: unknown): UngroupSelectedParse {
+  if (!isRecord(raw)) return refuseUngroup('body');
+  for (const k of Object.keys(raw)) if (!UNGROUP_BODY_KEYS.has(k)) return refuseUngroup('body');
+  const { organizationId, actorUserId } = raw;
+  if (typeof organizationId !== 'string' || !UUID.test(organizationId))
+    return refuseUngroup('organization_id');
+  if (typeof actorUserId !== 'string' || !UUID.test(actorUserId))
+    return refuseUngroup('actor_user_id');
+  const head = { organizationId, actorUserId };
+
+  let remove: UngroupSelectedBody['remove'] = null;
+  if (raw.remove !== undefined && raw.remove !== null) {
+    if (!isRecord(raw.remove)) return refuseUngroup('remove');
+    const keys = Object.keys(raw.remove);
+    if (!keys.every((k) => ['idempotencyKey', 'itemIds', 'expectedGroups'].includes(k)))
+      return refuseUngroup('remove');
+    const p = parseGroupingBody({ action: 'remove', ...head, ...raw.remove });
+    if (!p.ok || p.body.action !== 'remove') return refuseUngroup('remove');
+    remove = {
+      idempotencyKey: p.body.idempotencyKey,
+      itemIds: p.body.itemIds,
+      expectedGroups: p.body.expectedGroups,
+    };
+  }
+
+  let split: UngroupSelectedBody['split'] = null;
+  if (raw.split !== undefined && raw.split !== null) {
+    if (!isRecord(raw.split)) return refuseUngroup('split');
+    const p = parseSplitSkuBody({ ...head, ...raw.split });
+    if (!p.ok) return refuseUngroup('split');
+    split = {
+      idempotencyKey: p.body.idempotencyKey,
+      itemIds: p.body.itemIds,
+      expectedSkus: p.body.expectedSkus,
+      anchorItemIds: p.body.anchorItemIds,
+    };
+  }
+
+  let unlink: UngroupSelectedBody['unlink'] = null;
+  if (raw.unlink !== undefined && raw.unlink !== null) {
+    if (!isRecord(raw.unlink)) return refuseUngroup('unlink');
+    if (!Object.keys(raw.unlink).every((k) => k === 'itemIds' || k === 'expectedFamilies'))
+      return refuseUngroup('unlink');
+    const ids = parseIdList(raw.unlink.itemIds, 1);
+    const fams = raw.unlink.expectedFamilies;
+    if (!ids || !isRecord(fams)) return refuseUngroup('unlink');
+    const expectedFamilies: Record<string, string> = {};
+    for (const [k, v] of Object.entries(fams)) {
+      if (!UUID.test(k) || typeof v !== 'string' || !UUID.test(v)) return refuseUngroup('unlink');
+      expectedFamilies[k.toLowerCase()] = v.toLowerCase();
+    }
+    if (
+      Object.keys(fams).length !== ids.length ||
+      Object.keys(expectedFamilies).length !== ids.length ||
+      !ids.every((id) => Object.prototype.hasOwnProperty.call(expectedFamilies, id))
+    )
+      return refuseUngroup('unlink');
+    unlink = { itemIds: ids, expectedFamilies };
+  }
+
+  if (!remove && !split && !unlink) return refuseUngroup('body');
+  const all = [...(remove?.itemIds ?? []), ...(split?.itemIds ?? []), ...(unlink?.itemIds ?? [])];
+  if (new Set(all).size !== all.length || all.length > GROUPING_MAX_ITEMS)
+    return refuseUngroup('item_ids');
+  return {
+    ok: true,
+    body: {
+      organizationId: organizationId.toLowerCase(),
+      actorUserId: actorUserId.toLowerCase(),
+      remove,
+      split,
+      unlink,
+    },
+  };
+}
+
+/** The Save for a plan: each step's records with what the screen saw. The
+ *  keys come from the caller (minted once per body, kept for its retries). */
+export function ungroupSelectedBodyForPlan(
+  plan: UngroupSelectedPlan,
+  anchorBySku: Readonly<Record<string, string>>,
+  ids: { organizationId: string; actorUserId: string; removeKey: string; splitKey: string },
+): UngroupSelectedBody {
+  const leave = plan.leaveGroup.filter((r) => r.displayGroup);
+  const removal =
+    leave.length > 0
+      ? removeBodyFor(
+          leave.map((r) => ({ id: r.id, displayGroupId: r.displayGroup!.id })),
+          {
+            idempotencyKey: ids.removeKey,
+            organizationId: ids.organizationId,
+            actorUserId: ids.actorUserId,
+          },
+        )
+      : null;
+  const sku =
+    plan.split.splitIds.length > 0
+      ? splitSkuBodyForPlan(plan.split, anchorBySku, {
+          idempotencyKey: ids.splitKey,
+          organizationId: ids.organizationId,
+          actorUserId: ids.actorUserId,
+        })
+      : null;
+  const fam = plan.leaveFamily.filter((r) => r.productGroupId);
+  return {
+    organizationId: ids.organizationId,
+    actorUserId: ids.actorUserId,
+    remove: removal
+      ? {
+          idempotencyKey: removal.idempotencyKey,
+          itemIds: removal.itemIds,
+          expectedGroups: removal.expectedGroups,
+        }
+      : null,
+    split: sku
+      ? {
+          idempotencyKey: sku.idempotencyKey,
+          itemIds: sku.itemIds,
+          expectedSkus: sku.expectedSkus,
+          anchorItemIds: sku.anchorItemIds,
+        }
+      : null,
+    unlink:
+      fam.length > 0
+        ? {
+            itemIds: fam.map((r) => r.id),
+            expectedFamilies: Object.fromEntries(fam.map((r) => [r.id, r.productGroupId!])),
+          }
+        : null,
+  };
+}
+
+/**
+ * The body to send: the pending one when the draft (without its keys) is
+ * unchanged, so a retry keeps both keys and the database replays; else the
+ * draft with fresh keys.
+ */
+export function keyedUngroupSelectedBody(
+  pending: { json: string; body: UngroupSelectedBody } | null,
+  draft: UngroupSelectedBody,
+  mint: () => string,
+): { json: string; body: UngroupSelectedBody } {
+  const strip = (b: UngroupSelectedBody) => ({
+    ...b,
+    remove: b.remove ? { ...b.remove, idempotencyKey: undefined } : null,
+    split: b.split ? { ...b.split, idempotencyKey: undefined } : null,
+  });
+  const json = JSON.stringify(strip(draft));
+  if (pending && pending.json === json) return pending;
+  return {
+    json,
+    body: {
+      ...draft,
+      remove: draft.remove ? { ...draft.remove, idempotencyKey: mint() } : null,
+      split: draft.split ? { ...draft.split, idempotencyKey: mint() } : null,
+    },
+  };
+}
+
+// ── The answer ─────────────────────────────────────────────────────────────
+
+export type UngroupPartStatus = 'applied' | 'partial' | 'refused' | 'not_attempted';
+
+/** One step's answer. A step runs only when every step before it applied. */
+export interface UngroupPartResult {
+  kind: UngroupPartKind;
+  status: UngroupPartStatus;
+  /** Records this step left in the asked state (out of the group or the
+   *  family, or with their own SKU): never the record that kept a SKU. */
+  changedItemIds: string[];
+  /** Records this step named that it did not change (refused, or not tried). */
+  notChangedItemIds: string[];
+  /** The refusal's words (core's), or null. */
+  message: string | null;
+  reason: string | null;
+  /** The SAME body may be sent again (busy, a rate limit). */
+  retryable: boolean;
+  /** The split's before and after SKUs (the split step only). */
+  splitItems?: SplitSkuOutcomeItem[];
+}
+
+export interface UngroupSelectedOutcome {
+  parts: UngroupPartResult[];
+  /** Every step that ran applied. */
+  complete: boolean;
+}
+
+/** The server's answer, or null when it is not one. */
+export function parseUngroupSelectedOutcome(raw: unknown): UngroupSelectedOutcome | null {
+  if (!isRecord(raw) || !Array.isArray(raw.parts)) return null;
+  const parts: UngroupPartResult[] = [];
+  const strs = (v: unknown): string[] | null =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+  for (const p of raw.parts) {
+    if (!isRecord(p)) return null;
+    if (p.kind !== 'remove' && p.kind !== 'split' && p.kind !== 'unlink') return null;
+    if (
+      p.status !== 'applied' &&
+      p.status !== 'partial' &&
+      p.status !== 'refused' &&
+      p.status !== 'not_attempted'
+    )
+      return null;
+    const changed = strs(p.changedItemIds);
+    const notChanged = strs(p.notChangedItemIds);
+    if (!changed || !notChanged) return null;
+    let splitItems: SplitSkuOutcomeItem[] | undefined;
+    if (p.splitItems !== undefined) {
+      if (!Array.isArray(p.splitItems)) return null;
+      splitItems = [];
+      for (const it of p.splitItems) {
+        if (
+          !isRecord(it) ||
+          typeof it.id !== 'string' ||
+          typeof it.beforeSku !== 'string' ||
+          typeof it.afterSku !== 'string' ||
+          typeof it.kept !== 'boolean'
+        )
+          return null;
+        splitItems.push({
+          id: it.id,
+          beforeSku: it.beforeSku,
+          afterSku: it.afterSku,
+          kept: it.kept,
+          anchorItemId: typeof it.anchorItemId === 'string' ? it.anchorItemId : null,
+        });
+      }
+    }
+    parts.push({
+      kind: p.kind,
+      status: p.status,
+      changedItemIds: changed,
+      notChangedItemIds: notChanged,
+      message: typeof p.message === 'string' ? p.message : null,
+      reason: typeof p.reason === 'string' ? p.reason : null,
+      retryable: p.retryable === true,
+      ...(splitItems ? { splitItems } : {}),
+    });
+  }
+  return { parts, complete: raw.complete === true };
+}
+
+/** The done screen's lines: what applied, one line per step that changed
+ *  records, then what was not done or not tried, in the server's order. */
+export function ungroupResultLines(outcome: UngroupSelectedOutcome): {
+  done: string[];
+  notDone: string[];
+} {
+  const done: string[] = [];
+  const notDone: string[] = [];
+  for (const p of outcome.parts) {
+    const n = p.changedItemIds.length;
+    if (n > 0) {
+      done.push(
+        p.kind === 'remove'
+          ? UNGROUP_COPY.leftGroups(n)
+          : p.kind === 'split'
+            ? UNGROUP_COPY.done(n)
+            : UNGROUP_COPY.leftFamilies(n),
+      );
+    }
+    const m = p.notChangedItemIds.length;
+    if (m === 0) continue;
+    const what = UNGROUP_COPY.partWhat(p.kind, m);
+    if (p.status === 'not_attempted') notDone.push(UNGROUP_COPY.partNotTried(what));
+    else if (p.status === 'refused' || p.status === 'partial')
+      notDone.push(UNGROUP_COPY.partNotDone(what, p.message ?? GROUPING_ERROR_WORDS.internal));
+  }
+  return { done, notDone };
 }
