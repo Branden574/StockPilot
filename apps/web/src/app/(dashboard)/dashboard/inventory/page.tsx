@@ -681,11 +681,12 @@ async function inventoryTableSection({
     // gate as the cached default view) the filter-independent pieces —
     // the five lookup tables and the org-wide trend buckets — are read
     // from the org-shared caches instead of re-queried live. valueOnHand
-    // deliberately stays live: list()'s footer sum mirrors the active
-    // filters (and runs in parallel with the rows query — no serial
-    // cost). Staff/viewer run EVERYTHING live through their RLS-scoped
-    // clients, exactly as before — useSharedCaches is false for them,
-    // so no cached branch below is reachable.
+    // deliberately stays live and mirrors the active filters: summed by
+    // the plan's scan of the whole view (listPlanRows) when the page is
+    // planned, else by list()'s scan beside the rows query. Staff/viewer
+    // run EVERYTHING live through their RLS-scoped clients, the plan
+    // included — useSharedCaches is false for them, so no cached branch
+    // below is reachable.
     const [inventorySvc, imagesSvc] = await Promise.all([
       InventoryService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),

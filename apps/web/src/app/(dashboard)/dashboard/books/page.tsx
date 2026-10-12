@@ -460,10 +460,10 @@ async function booksTableSection({
     // LIVE (filtered) branch — same hybrid as the Items page: rows +
     // covers always live; for manager+ with items:read the lookup
     // tables and org-wide trend buckets come from the org-shared
-    // caches. valueOnHand stays live (list()'s footer sum mirrors the
-    // active filters, computed in parallel with the rows query).
-    // Staff/viewer run everything live through their RLS-scoped
-    // clients, exactly as before.
+    // caches. valueOnHand stays live and mirrors the active filters (the
+    // plan's scan of the whole view when the page is planned, else
+    // list()'s scan beside the rows query). Staff/viewer run everything
+    // live through their RLS-scoped clients, the plan included.
     const [inventorySvc, imagesSvc] = await Promise.all([
       InventoryService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),

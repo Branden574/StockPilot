@@ -458,7 +458,8 @@ export interface InventoryTableProps {
       null, a note to refresh replaces the pager: a server page 2 would be
       a fixed 30-row slice that skips or repeats rows of this page. Ignored
       in instant mode and while a server-mode search is on screen. Absent →
-      server mode as before (staff/viewer, over-cap orgs, deep links). */
+      server mode (staff/viewer, over-cap orgs, deep links), whose page may
+      be planned too (`plannedPage`, below). */
   firstPage?: InstantFirstPage | null;
   /** Phase 2 of the grouping brief (staff and viewers, and anyone on the live
       path within the instant-mode cap): this server page was planned
@@ -1354,15 +1355,20 @@ export function InventoryTable({
   //                       group-by-sku.ts). Always ≤ item rows.
   //
   // WHO USES WHICH:
-  //   • footer "N SKUs"        → 3 (instant mode, and the planned first
-  //                              page, whose counts the server took over
-  //                              the whole view; plain server mode holds one
-  //                              page and cannot count SKUs set-wide, so
-  //                              it labels its number "items" — 1).
+  //   • footer "N SKUs"        → 3 (instant mode, and a planned page — the
+  //                              streamed first page or a staff member's
+  //                              planned server page — whose counts the
+  //                              server took over the whole view; fixed-slice
+  //                              server mode holds one page and cannot count
+  //                              SKUs set-wide, so it labels its number
+  //                              "items" — 1).
   //   • footer "N rows"        → 2, because "rows" must mean the rows on
   //                              screen. Shown only when it differs from
   //                              the SKU count (that difference IS the
-  //                              collapsing the list just did).
+  //                              collapsing the list just did). A planned
+  //                              server page knows no rack rows set-wide, so
+  //                              on Items it prints its records as "items"
+  //                              (1) instead; on Books a record is one row.
   //   • "$X on hand"           → whole filtered set, unaffected.
   //   • Pagination / "Page X of Y" / "Showing X–Y of N" → 1, matching the
   //                              derivation, which paginates ITEM rows.
@@ -1636,9 +1642,7 @@ export function InventoryTable({
     if (planned) {
       return new Map(
         planned.unitItemRowCounts ??
-          planned.skuItemRowCounts.map(
-            ([sku, n]) => [`sku:${sku}`, n] as [string, number],
-          ),
+          planned.skuItemRowCounts.map(([sku, n]) => [`sku:${sku}`, n] as [string, number]),
       );
     }
     return null;

@@ -38,12 +38,15 @@
 //      (pages can come up short); the client filters THEN paginates, so
 //      every page is full and consistent with `total`.
 //   6. Page boundaries — this module paginates GROUP-AWARE (runAwarePages:
-//      a SKU family or size run is never cut), the live server path slices
-//      a fixed 30 rows. That divergence is confined to the views that never
-//      switch modes (staff, viewers, orgs over the cap): each pages one way
-//      only. The CACHED default Items view, which paints first and is then
-//      re-derived here once the full dataset streams in, plans its page 1
-//      with planInstantFirstPage below, so both paints show the same page.
+//      a SKU family or size run is never cut). The live server path plans
+//      its pages with the same rule over the whole filtered view
+//      (planGroupAwarePage, Phase 2), so a staff member's pages hold the
+//      units a manager's do; only a view over the cap (and a server-mode
+//      search) still slices a fixed 30 rows, and such a view never switches
+//      modes, so it pages one way only. The CACHED default Items view,
+//      which paints first and is then re-derived here once the full
+//      dataset streams in, plans its page 1 with planInstantFirstPage
+//      below, so both paints show the same page.
 //      If that dataset fails, the table keeps the planned page 1 and offers
 //      no page 2 (a fixed-slice page 2 would skip or repeat its rows), only
 //      a note to refresh (inventory-table.tsx, plannedPageStranded).
@@ -638,10 +641,11 @@ export function deriveInstantView<T extends InstantModeRow>(
   // The group is the unit of display, so the group must be the unit of
   // pagination. Size-run clustering stays Items-only: books are never
   // sized and the table gates that grouping off for them.
-  // The LIVE server path slices a fixed 30 rows instead (divergence #6 in
-  // the parity block above). The cached default Items view does not: it
-  // runs this function at cache-fill time (planInstantFirstPage), so its
-  // first paint is this page.
+  // The LIVE server path plans its pages with this same rule within the cap
+  // (planGroupAwarePage) and slices a fixed 30 rows past it (divergence #6
+  // in the parity block above). The cached default Items view runs this
+  // function at cache-fill time (planInstantFirstPage), so its first paint
+  // is this page.
   const pages = runAwarePages(sorted, pageSize, { sizeRuns: view === 'items' });
   const pageCount = Math.max(1, pages.length);
   const page = Math.min(Math.max(1, state.page), pageCount);

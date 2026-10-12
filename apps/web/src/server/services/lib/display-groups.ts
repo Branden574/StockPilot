@@ -37,9 +37,9 @@ import { fetchAllRows } from './paginate';
  *                               record: canUseSharedInventoryCaches). Throws,
  *                               so a failed read is never cached.
  *
- * All three embed or join the group through the one key between the tables
- * (item_display_group_members_group_fk), named so the embed can never become
- * ambiguous (PGRST201).
+ * The two member reads embed the group through the one key between the
+ * tables (item_display_group_members_group_fk), named so the embed can never
+ * become ambiguous (PGRST201); the admin read joins the two tables here.
  */
 
 const MEMBERSHIP_SELECT =
