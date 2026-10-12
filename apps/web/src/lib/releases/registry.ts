@@ -28,6 +28,90 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'group-selected-2026-10',
+    revision: 1,
+    // Group selected, slice G2 of the grouping work (migration 0400, a
+    // placeholder number fixed at the PR stage; owner brief 2026-10-11, phase
+    // 1). Held as a DRAFT until migration 0400 is pushed and verified (after
+    // Ungroup's 0399), the web deploy is READY, the OTA with the phone's Group
+    // and Remove from group is published and launched, and a Demo Co walk
+    // passed (a production write that waits for the owner's go); the
+    // follow-up that publishes it sets 'published' and the real publishedAt
+    // and re-reads these words against what shipped. Newest first: drafts sit
+    // above the newest published release, and Group selected ships after
+    // Ungroup (it builds on Ungroup's contract), so it is dated after
+    // Ungroup's draft (ungroup-2026-10, itself a placeholder) and sits at the
+    // top, directly above it (a placeholder; the publishing follow-up dates
+    // and orders it for real). Checked again at the rebase onto main
+    // 640812e08 (2026-10-12, Ungroup merged as #351, its draft still a
+    // draft at the top of main): unchanged, directly above Ungroup's draft.
+    // Who is told: no release-level audience, because every member who
+    // opens Items or Books sees grouped records under one header (the second
+    // entry). Group selected itself is told to whoever can edit items
+    // (items:update), the gate of the bulk bar, the phone's Group, Remove
+    // from group and the server; Items is a core page, so no module. The
+    // fixed entry is for anyone who reads the web Items list.
+    // Claims review, each checked against the code: the brief's sentence is
+    // the review's own words (GROUP_COPY.intro); a display group never
+    // changes a SKU, barcode/ISBN, charter, rack, stock or product family
+    // (apply_item_grouping writes item_display_group_members and audit rows
+    // only), and nothing else reads it (orders, exchanges, PO matching, Book
+    // Order Totals, reports and exports: the consumers guard); kits and
+    // rentals are refused (not_groupable); a record in another group moves
+    // only with Move it into this group (membership_conflict otherwise); a
+    // new record with a grouped SKU stays outside (owner decision) and
+    // shows Add to group. Rename is on the web only (the group's header).
+    // The words never say "book" for a recorded quantity and never tell
+    // anyone to change a charter or a rack.
+    status: 'draft',
+    title: 'Show records together in a group',
+    summary:
+      "Records on Items and Books can now be shown together in a group, under one header with the group's name. Whoever can edit items selects them and chooses Group selected, on the web or in the mobile app after the latest update. Grouping organizes these records together. It does not combine stock, change ownership, or move items.",
+    publishedAt: '2026-10-24T17:00:00Z',
+    entries: [
+      {
+        id: 'group-selected',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Group selected',
+        whatChanged:
+          'On Items or Books, select two or more records and choose Group selected, on the web or in the mobile app. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out, from the list on the web or from the item page on both. On the web, a group can be renamed from its header.',
+        whyItMatters:
+          'Records showed together only when they shared a SKU, so putting them under one header meant copying a SKU onto another record, and sometimes changing its charter or rack as well.',
+        howItAffectsYou:
+          'Grouping organizes these records together. It does not combine stock, change ownership, or move items. Each record keeps its own SKU, barcode/ISBN, charter, rack, stock and history, and orders, exchanges, purchase orders and reports still treat each record on its own. Kits and rentals cannot be grouped. Records that share a SKU still show together automatically, and a new record with a SKU that is in a group stays outside the group until you choose Add to group. When a SKU you save is already used by another record in the same charter and rack, the message now also offers Group them.',
+        whatToDo:
+          'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:update'] },
+      },
+      {
+        id: 'groups-show-under-one-header',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Grouped records show under one header',
+        whatChanged:
+          "On Items and Books, records in a group show under one header with the group's name, how many records it holds and their stock on hand together. Open the header to see each record. A record whose group has no other record in the list, for example in a search, shows In group with the group's name.",
+        whyItMatters: 'Records that belong together read as one line on the list, while each stays its own record.',
+        howItAffectsYou:
+          'Nothing about any record changes. The stock on hand in a header is the stock of the records under it, each counted once.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'sku-header-rows-stay-under-it',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Opening a SKU header next to a size run keeps its rows under it',
+        whatChanged:
+          'On the web Items list, opening the header of a SKU kept in more than one rack, in a product family of linked sizes, now shows its rows under that header.',
+        whyItMatters:
+          "Those rows used to move into the family's size run instead, so the header lost them and the run counted their stock as well.",
+        howItAffectsYou: 'Each row shows once, under its own header.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'ungroup-2026-10',
     revision: 1,
     // Ungroup, slice G1 of the grouping work (migration 0399, the number
