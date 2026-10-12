@@ -343,7 +343,9 @@ export async function restoreSnapshot(
   // to find a live record now holding that SKU and bin, or else to re-create
   // it. A key match never takes a record that the snapshot reconciles by its
   // own id, and never takes one record twice, so a record whose SKU changed
-  // after the snapshot keeps its stock once. Version 1 (no ids) is unchanged.
+  // after the snapshot keeps its stock once. Version 1 (no ids) matches by
+  // (SKU, bin) as before, and a record Ungroup split after the point is found
+  // through its split (planSplitMatches, PR stage DATA-1).
   const byIdFirst = snapshot?.version === SNAPSHOT_VERSION;
   const reconciledById = new Set<string>(
     byIdFirst ? items.flatMap((it) => (it.id && byId.has(it.id) ? [it.id] : [])) : [],
