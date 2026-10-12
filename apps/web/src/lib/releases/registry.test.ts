@@ -8729,13 +8729,24 @@ describe('the Ungroup release (G1, 0399)', () => {
   // SKU changed between the point and the Ungroup is not found that way; the
   // warning names it instead (an edited SKU). Claim kept: an older point
   // finds a split record on the same rack, and edited SKUs are named.
-  it('says an older point finds a record that got its own SKU, names only edited SKUs, and says when it cannot check', () => {
+  // Re-pinned by the final round (2026-10-12, review DR2-1; was: "... names
+  // only edited SKUs ...", the first sentence ending "... between the restore
+  // point and the Ungroup."): the restore skips the split when another record
+  // now has the split record's old SKU on its rack (it gives that record the
+  // stock instead), so the first sentence says so, and how it affects you
+  // says the warning names such a record too (whatChanged holds 600
+  // characters). Claim kept: an older point finds a split record on the same
+  // rack, edited SKUs are named, and it says when it cannot check.
+  it('says an older point finds a record that got its own SKU unless another record has its old SKU on that rack now, names edited SKUs and such records, and says when it cannot check', () => {
     const entry = release().entries.find((e) => e.id === 'restore-points-follow-records')!;
     expect(entry.whatChanged).toContain(
-      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack and its SKU was not changed between the restore point and the Ungroup.',
+      'Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack, its SKU was not changed between the restore point and the Ungroup, and no other record has its old SKU on that rack now.',
     );
     expect(entry.whatChanged).toContain(
       'Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.',
+    );
+    expect(entry.howItAffectsYou).toContain(
+      'For an older point, Backups & restore also names a record that got its own SKU when another record now has its old SKU on the same rack, since restoring can give that record the stock this one had then.',
     );
     expect(entry.howItAffectsYou).toContain(
       'If you cannot view the audit log, Backups & restore says it could not check for SKU changes.',

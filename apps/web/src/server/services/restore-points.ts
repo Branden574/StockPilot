@@ -6,7 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
-import { writeInIdBatches } from './lib/fetch-by-ids';
+import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 import {
   assertCurrentAal2,
@@ -640,6 +640,12 @@ export interface RestorePointSkuChange {
   after: string | null;
   /** True when a SKU edit carried the records that shared it along (Model B). */
   shared: boolean;
+  /**
+   * Final round (review DR2-1): a record Ungroup split whose old SKU another
+   * live record now has on its rack. The restore gives that record this one's
+   * stock at the point instead of finding this one. Set only when true.
+   */
+  oldSkuOnItsRack?: boolean;
 }
 
 export interface RestorePointSkuChanges {
@@ -660,11 +666,13 @@ export interface RestorePointSkuChanges {
  * (changed_keys has 'sku'; a Model B edit's siblings followed it,
  * propagated_to_sku). A record Ungroup split straight from its SKU at the
  * point is left out (PR stage, DATA-1): the restore finds it through its
- * inventory.item.ungrouped row. One whose SKU was edited before its split is
- * named, and an edit whose followers left its SKU through an Ungroup keeps
- * "with the records that shared it" (PR stage fix round 1, F2): the restore
- * finds neither. A version 2 snapshot matches by id, so it needs no warning
- * and reads no audit log.
+ * inventory.item.ungrouped row, unless another live record now has that SKU on
+ * its rack (final round, review DR2-1): the restore then gives that record its
+ * stock, so it is named, and its line says so. One whose SKU was edited
+ * before its split is named, and an edit whose followers left its SKU through
+ * an Ungroup keeps "with the records that shared it" (PR stage fix round 1,
+ * F2): the restore finds neither. A version 2 snapshot matches by id, so it
+ * needs no warning and reads no audit log.
  *
  * Same gate as the restore (owner/admin floor + Business). Reads through the
  * caller's RLS. A failed audit read throws, and so does a caller who cannot
@@ -736,9 +744,16 @@ export async function restorePointSkuChanges(
   // was edited and then split is not found that way: it is named, from its SKU
   // at the point to its newest.
   const firstEvent = new Map<string, string>();
+  /** The SKU each record whose first row is its Ungroup row left. */
+  const leftAtSplit = new Map<string, string>();
   for (const r of scanned) {
-    if (r.entity_id && !firstEvent.has(r.entity_id)) firstEvent.set(r.entity_id, r.event);
+    if (!r.entity_id || firstEvent.has(r.entity_id)) continue;
+    firstEvent.set(r.entity_id, r.event);
+    if (r.event === UNGROUPED_EVENT && r.before_sku) leftAtSplit.set(r.entity_id, r.before_sku);
   }
+  // Final round (review DR2-1): even then, the restore finds it only when no
+  // other live record has that SKU on its rack. Such a split record is named.
+  const oldSkuOnItsRack = await splitRecordsWithOldSkuOnTheirRack(ctx, leftAtSplit);
 
   // One line per record: its SKU before the first change and after the last.
   // carried: an edit of it carried the records sharing its SKU along (Model B
@@ -762,7 +777,8 @@ export async function restorePointSkuChanges(
         if (line.change.itemId !== r.entity_id) line.leftBySplit = true;
       }
     }
-    if (r.entity_id && firstEvent.get(r.entity_id) === UNGROUPED_EVENT) continue;
+    const heldOnItsRack = r.entity_id !== null && oldSkuOnItsRack.has(r.entity_id);
+    if (r.entity_id && firstEvent.get(r.entity_id) === UNGROUPED_EVENT && !heldOnItsRack) continue;
     const key = r.entity_id ?? `${r.before_sku}\u0000${r.after_sku}`;
     let line = byItem.get(key);
     if (line) {
@@ -775,6 +791,7 @@ export async function restorePointSkuChanges(
           before: r.before_sku,
           after: r.after_sku,
           shared: false,
+          ...(heldOnItsRack ? { oldSkuOnItsRack: true } : {}),
         },
         carried: false,
         lastCarriedTo: null,
@@ -847,6 +864,78 @@ export async function restorePointSkuChanges(
     more: all.length - named.length,
     truncated: scanned.length >= SKU_CHANGES_SCAN,
   };
+}
+
+/**
+ * Final round (review DR2-1): the records Ungroup split straight from their SKU
+ * at a version 1 point that the restore still does not find through their
+ * split, because another live record now has the SKU the split left on the
+ * rack the split record is on. planSplitMatches skips a point record whose SKU
+ * and rack a live record holds, so restoreSnapshot reconciles THAT record with
+ * the split record's stock at the point, and the split record keeps its own
+ * stock as an extra: a record in another charter on the same rack (a version 1
+ * point carries no charter), or one put there with the old SKU after the split
+ * (a Duplicate of the record that kept it).
+ *
+ * Racks are compared the way the restore keys them (trimmed, a blank rack one
+ * key). The split record's rack is read as it is now; one moved to another
+ * rack since is not found through its split either way (a version 1 residual).
+ * Two reads through the caller's RLS (owners and admins read every record),
+ * their id and SKU lists batched. A failed read throws, so the screen says the
+ * check could not run instead of leaving a record out.
+ */
+async function splitRecordsWithOldSkuOnTheirRack(
+  ctx: ServiceContext,
+  leftAtSplit: Map<string, string>,
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (leftAtSplit.size === 0) return out;
+  const splitRows = await fetchAllRowsByIds<{ id: string; bin_location: string | null }>(
+    [...leftAtSplit.keys()],
+    (batch) => (from, to) =>
+      ctx.supabase
+        .from('inventory_items')
+        .select('id, bin_location')
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .in('id', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
+  );
+  const leftSkus = [...new Set(splitRows.map((s) => leftAtSplit.get(s.id) ?? ''))].filter(Boolean);
+  if (leftSkus.length === 0) return out;
+  const holders = await fetchAllRowsByIds<{
+    id: string;
+    sku: string | null;
+    bin_location: string | null;
+  }>(
+    leftSkus,
+    (batch) => (from, to) =>
+      ctx.supabase
+        .from('inventory_items')
+        .select('id, sku, bin_location')
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .in('sku', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
+  );
+  const holdersByKey = new Map<string, string[]>();
+  for (const h of holders) {
+    const sku = (h.sku ?? '').trim();
+    if (!sku) continue;
+    const k = itemKey(sku, h.bin_location);
+    holdersByKey.set(k, [...(holdersByKey.get(k) ?? []), h.id]);
+  }
+  for (const s of splitRows) {
+    const left = (leftAtSplit.get(s.id) ?? '').trim();
+    if (!left) continue;
+    const others = (holdersByKey.get(itemKey(left, s.bin_location)) ?? []).filter(
+      (id) => id !== s.id,
+    );
+    if (others.length > 0) out.add(s.id);
+  }
+  return out;
 }
 
 function uniqueNames(items: SnapshotItem[], key: 'categoryName' | 'supplierName' | 'locationName'): string[] {

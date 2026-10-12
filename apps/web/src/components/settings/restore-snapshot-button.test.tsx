@@ -82,6 +82,46 @@ describe('RestoreSnapshotButton: SKU changes since the point', () => {
     expect(h.restore).not.toHaveBeenCalled();
   });
 
+  // Final round (review DR2-1): a record Ungroup split is named when another
+  // record now has the SKU it left on its rack, because the restore then gives
+  // that record this one's stock at the point instead of finding this one. The
+  // line says so, before the typed confirm.
+  it('says, for a record whose old SKU another record now has on the same rack, that restoring can give that record the stock this one had then', async () => {
+    h.changes.mockResolvedValue(
+      answer({
+        version: 1,
+        changes: [
+          {
+            itemId: B,
+            name: 'Restore Lamp',
+            before: 'UG-REST',
+            after: 'SP-NEWB',
+            shared: false,
+            oldSkuOnItsRack: true,
+          },
+        ],
+        more: 0,
+        truncated: false,
+      }),
+    );
+    await open();
+    const warning = await screen.findByRole('alert');
+    expect(warning).toHaveTextContent(
+      'Restore Lamp: UG-REST to SP-NEWB; another record now has UG-REST on the same rack, so restoring can give that record the stock this one had then',
+    );
+    const input = screen.getByPlaceholderText('RESTORE');
+    expect(warning.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const words = RESTORE_SKU_COPY.line({
+      name: 'Restore Lamp',
+      before: 'UG-REST',
+      after: 'SP-NEWB',
+      shared: true,
+      oldSkuOnItsRack: true,
+    });
+    expect(words).not.toMatch(/\bbook\b/i);
+    expect(words).not.toMatch(/change (the |a )?(charter|rack)/i);
+  });
+
   it('says the count is a floor when the check stopped at its limit', async () => {
     h.changes.mockResolvedValue(
       answer({

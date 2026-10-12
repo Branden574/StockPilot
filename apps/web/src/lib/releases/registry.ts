@@ -115,16 +115,22 @@ export const RELEASES: Release[] = [
         // between the point and the Ungroup is not found that way; the
         // warning names it (an edited SKU), and the first sentence about
         // older points says when a split record is found.
+        // Final round (2026-10-12, review DR2-1): the restore finds a split
+        // record through its split only when no other live record has its old
+        // SKU on its rack (otherwise it gives that record the split record's
+        // stock), so the first sentence says so, and how it affects you says
+        // the warning names such a record too, with what restoring does to
+        // that record's stock (whatChanged holds 600 characters).
         id: 'restore-points-follow-records',
         category: 'fixed',
         area: 'Settings',
         title: "Restoring a restore point keeps each record's stock in one place after a SKU change",
         whatChanged:
-          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack and its SKU was not changed between the restore point and the Ungroup. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
+          "Restore points taken after this update remember each record, not only its SKU and rack, so restoring one after an Ungroup or a SKU edit puts each record's stock back on that same record. Restoring an older restore point after an Ungroup finds each record that got its own SKU, when it is still on the same rack, its SKU was not changed between the restore point and the Ungroup, and no other record has its old SKU on that rack now. For an older point, Backups & restore names the records whose SKU was edited since it was taken, before you type RESTORE.",
         whyItMatters:
           'Restore points matched records by SKU and rack, so restoring one taken before a record got a new SKU added that record again under its old SKU, with the stock it had then, while the record with the new SKU kept its stock too.',
         howItAffectsYou:
-          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. If you cannot view the audit log, Backups & restore says it could not check for SKU changes. Restore points are on the web, for owners and admins on the Business plan or above.",
+          "A restore keeps each record's current SKU. An older restore point with no SKU change since it was taken restores as before. For an older point, Backups & restore also names a record that got its own SKU when another record now has its old SKU on the same rack, since restoring can give that record the stock this one had then. If you cannot view the audit log, Backups & restore says it could not check for SKU changes. Restore points are on the web, for owners and admins on the Business plan or above.",
         whatToDo:
           'If Backups & restore names records that changed SKU, check them before you type RESTORE, or restore a newer point.',
         audience: { anyPermission: ['organization:update'] },

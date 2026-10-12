@@ -135,6 +135,12 @@ interface World {
   /** live records holding the named records' new SKUs (the shared check) */
   holders?: Array<{ id?: string; sku: string }>;
   auditError?: { message: string } | null;
+  /** split records' racks now (final round, review DR2-1) */
+  splitRacks?: Array<{ id: string; bin_location: string | null }>;
+  splitRacksError?: { message: string } | null;
+  /** live records holding the SKUs split records left (final round, DR2-1) */
+  oldSkuHolders?: Array<{ id: string; sku: string; bin_location: string | null }>;
+  oldSkuHoldersError?: { message: string } | null;
 }
 
 function harness(world: World, who: { role?: string; permissions?: Set<Permission> } = {}) {
@@ -148,8 +154,12 @@ function harness(world: World, who: { role?: string; permissions?: Set<Permissio
     if (r.table === 'audit_logs')
       return { data: world.audit ?? [], error: world.auditError ?? null };
     if (r.table === 'inventory_items') {
-      if (r.select.startsWith('id, sku, bin_location'))
+      if (r.select === 'id, sku, bin_location, quantity_on_hand, status')
         return { data: world.active ?? [], error: null };
+      if (r.select === 'id, bin_location')
+        return { data: world.splitRacks ?? [], error: world.splitRacksError ?? null };
+      if (r.select === 'id, sku, bin_location')
+        return { data: world.oldSkuHolders ?? [], error: world.oldSkuHoldersError ?? null };
       if (r.select === 'id, name, sku') return { data: world.names ?? [], error: null };
       if (r.select === 'sku' || r.select === 'id, sku')
         return { data: world.holders ?? [], error: null };
@@ -1130,6 +1140,198 @@ describe('restorePointSkuChanges (the warning before restoring a version 1 point
       ],
     });
     expect(await restorePointSkuChanges(ctx, POINT)).toMatchObject({ changes: [], more: 0 });
+  });
+
+  // Final round (review DR2-1): the restore finds a split record through its
+  // split only when no live record holds the SKU it left on its rack.
+  // planSplitMatches skips a point record whose SKU and rack a live record
+  // holds, and restoreSnapshot reconciles THAT record with the split record's
+  // stock at the point instead, while the split record keeps its own stock as
+  // an extra. A record in another charter on the same rack (case a), or one put
+  // there with the old SKU after the split (case b, a Duplicate of the record
+  // that kept it), does exactly that, and the warning left every split record
+  // out: a double count, or a record's stock overwritten, with no warning line.
+  const SPLIT_B = {
+    entity_id: B,
+    event: 'inventory.item.ungrouped',
+    before_sku: 'UG-REST',
+    after_sku: 'SP-NEWB',
+    propagated: null,
+  };
+
+  it("names a split record when a record put on its rack after the split has the SKU it left there (case b), and says what restoring does to that record's stock", async () => {
+    const { ctx, reads } = harness({
+      point: V1,
+      audit: [SPLIT_B],
+      // B is still on 6-B. A kept UG-REST on 6-A; D, a Duplicate of A put on
+      // 6-B after the split, has UG-REST there (the restore trims both racks).
+      splitRacks: [{ id: B, bin_location: '6-B' }],
+      oldSkuHolders: [
+        { id: A, sku: 'UG-REST', bin_location: '6-A' },
+        { id: D, sku: 'UG-REST', bin_location: ' 6-B ' },
+      ],
+      names: [{ id: B, name: 'Restore Lamp', sku: 'SP-NEWB' }],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 1,
+      changes: [
+        {
+          itemId: B,
+          name: 'Restore Lamp',
+          before: 'UG-REST',
+          after: 'SP-NEWB',
+          shared: false,
+          oldSkuOnItsRack: true,
+        },
+      ],
+      more: 0,
+      truncated: false,
+    });
+    // Two reads through the caller's RLS, never the service role: the split
+    // records' racks now, by id, and the live records with the SKUs they left.
+    const racks = reads.find(
+      (r) => r.table === 'inventory_items' && r.select === 'id, bin_location',
+    );
+    expect(racks?.filters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'organization_id', ORG],
+        ['is', 'deleted_at', null],
+        ['in', 'id', [B]],
+      ]),
+    );
+    const holders = reads.find(
+      (r) => r.table === 'inventory_items' && r.select === 'id, sku, bin_location',
+    );
+    expect(holders?.filters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'organization_id', ORG],
+        ['is', 'deleted_at', null],
+        ['in', 'sku', ['UG-REST']],
+      ]),
+    );
+    expect(h.adminReads).toEqual([]);
+  });
+
+  it('names a split record when a record in another charter has the SKU it left on the same rack (case a), from that SKU to its newest', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        SPLIT_B,
+        {
+          entity_id: B,
+          event: 'inventory.item.updated',
+          before_sku: 'SP-NEWB',
+          after_sku: 'SP-NEWB2',
+          propagated: null,
+        },
+      ],
+      // A (one charter) and B (another) shared UG-REST on 6-B at the point. A
+      // version 1 point carries no charter, so both point records match A.
+      splitRacks: [{ id: B, bin_location: '6-B' }],
+      oldSkuHolders: [{ id: A, sku: 'UG-REST', bin_location: '6-B' }],
+      names: [{ id: B, name: 'Restore Lamp', sku: 'SP-NEWB2' }],
+    });
+    expect((await restorePointSkuChanges(ctx, POINT)).changes).toEqual([
+      {
+        itemId: B,
+        name: 'Restore Lamp',
+        before: 'UG-REST',
+        after: 'SP-NEWB2',
+        shared: false,
+        oldSkuOnItsRack: true,
+      },
+    ]);
+  });
+
+  it('still leaves a split record out when no other live record has the SKU it left on its rack: only on other racks, only itself (its SKU edited back), or the record is gone', async () => {
+    const { ctx } = harness({
+      point: V1,
+      audit: [
+        SPLIT_B,
+        {
+          entity_id: C,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'UG-MAT',
+          after_sku: 'SP-NEWC',
+          propagated: null,
+        },
+        {
+          entity_id: C,
+          event: 'inventory.item.updated',
+          before_sku: 'SP-NEWC',
+          after_sku: 'UG-MAT',
+          propagated: null,
+        },
+        {
+          entity_id: D,
+          event: 'inventory.item.ungrouped',
+          before_sku: 'UG-HOOD',
+          after_sku: 'SP-NEWD',
+          propagated: null,
+        },
+      ],
+      // UG-REST is on 6-A only; C, edited back to UG-MAT, is the record with it
+      // on 7-D; D has no live row.
+      splitRacks: [
+        { id: B, bin_location: '6-B' },
+        { id: C, bin_location: '7-D' },
+      ],
+      oldSkuHolders: [
+        { id: A, sku: 'UG-REST', bin_location: '6-A' },
+        { id: C, sku: 'UG-MAT', bin_location: '7-D' },
+      ],
+    });
+    expect(await restorePointSkuChanges(ctx, POINT)).toEqual({
+      version: 1,
+      changes: [],
+      more: 0,
+      truncated: false,
+    });
+  });
+
+  it("a failed read of the split records' racks, or of the records with the SKUs they left, is an error, never an all-clear", async () => {
+    for (const failed of [
+      { splitRacksError: { message: 'boom' } },
+      { oldSkuHoldersError: { message: 'boom' } },
+    ]) {
+      const { ctx } = harness({
+        point: V1,
+        audit: [SPLIT_B],
+        splitRacks: [{ id: B, bin_location: '6-B' }],
+        ...failed,
+      });
+      await expect(restorePointSkuChanges(ctx, POINT)).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+    }
+  });
+
+  it('counts such split records against the same cap: at most ten named, the rest counted', async () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `eeeeeeee-eeee-4eee-8eee-${String(i).padStart(12, '0')}`,
+    );
+    const { ctx } = harness({
+      point: V1,
+      audit: ids.map((id, i) => ({
+        entity_id: id,
+        event: 'inventory.item.ungrouped',
+        before_sku: `UG-${i}`,
+        after_sku: `SP-N${i}`,
+        propagated: null,
+      })),
+      splitRacks: ids.map((id) => ({ id, bin_location: '6-B' })),
+      oldSkuHolders: ids.map((_, i) => ({
+        id: `ffffffff-ffff-4fff-8fff-${String(i).padStart(12, '0')}`,
+        sku: `UG-${i}`,
+        bin_location: '6-B',
+      })),
+      names: [],
+    });
+    const res = await restorePointSkuChanges(ctx, POINT);
+    expect(res.changes).toHaveLength(10);
+    expect(res.changes.every((c) => c.oldSkuOnItsRack === true)).toBe(true);
+    expect(res.more).toBe(2);
   });
 
   // PR stage, DATA-1 (2): the audit log's read policy (0279) needs
