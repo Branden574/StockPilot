@@ -2,7 +2,9 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GROUP_COPY } from '@stockpilot/core';
+import { toast } from 'sonner';
+
+import { GROUP_COPY, GROUPING_ERROR_WORDS } from '@stockpilot/core';
 
 import { BulkActions } from './bulk-actions';
 
@@ -91,6 +93,24 @@ describe('BulkActions: Group selected and Remove from group', () => {
     render(bar({ selectedIds: ['a', 'b'], groupItemIds: ['a', 'b'] }));
     await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
     expect(screen.getByTestId('group-dialog')).toHaveTextContent('books:a,b');
+  });
+
+  // PR #360 review (2026-10-12): one review takes at most 100 records, so a
+  // larger selection is told so at the button, as on the phone
+  // (display-groups.ts), instead of opening a review that refuses it.
+  it('more than 100 records: says so at the button and opens no review; 100 opens it', async () => {
+    const many = Array.from({ length: 101 }, (_, i) => `r${i}`);
+    const { unmount } = render(bar({ selectedIds: many, groupItemIds: many }));
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    expect(toast.error).toHaveBeenCalledWith(GROUPING_ERROR_WORDS.groupTooMany);
+    expect(screen.queryByTestId('group-dialog')).toBeNull();
+    unmount();
+    vi.mocked(toast.error).mockClear();
+    const hundred = many.slice(0, 100);
+    render(bar({ selectedIds: hundred, groupItemIds: hundred }));
+    await userEvent.click(screen.getByRole('button', { name: new RegExp(GROUP_COPY.bulkAction) }));
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByTestId('group-dialog')).toBeInTheDocument();
   });
 
   it('a grouping refreshes at once and clears the selection on close; a no-op or a plain close clears nothing', async () => {

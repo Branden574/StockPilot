@@ -2,6 +2,10 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { toast } from 'sonner';
+
+import { GROUPING_ERROR_WORDS } from '@stockpilot/core';
+
 import { BulkActions } from './bulk-actions';
 
 const h = vi.hoisted(() => ({
@@ -142,6 +146,24 @@ describe('BulkActions: Ungroup', () => {
     expect(h.refresh).toHaveBeenCalledTimes(1);
     props.onOpenChange(false);
     expect(onClear).not.toHaveBeenCalled();
+  });
+
+  // G2 security review LOW (2026-10-12): one review takes at most 100
+  // records, so a larger selection is told so at the button, as on the phone,
+  // instead of opening a review that refuses it.
+  it('more than 100 selected records: says so at the button and opens no review; 100 opens it', async () => {
+    const many = Array.from({ length: 101 }, (_, i) => `r${i}`);
+    const { unmount } = render(bar({ selectedIds: [...many, 'r0'], ungroupItemIds: ['r0'] }));
+    await userEvent.click(screen.getByRole('button', { name: /Ungroup/ }));
+    expect(toast.error).toHaveBeenCalledWith(GROUPING_ERROR_WORDS.tooMany);
+    expect(screen.queryByTestId('ungroup-dialog')).toBeNull();
+    unmount();
+    vi.mocked(toast.error).mockClear();
+    // Exactly 100 distinct records (a duplicate tick counts once) still opens.
+    render(bar({ selectedIds: [...many.slice(0, 100), 'r0'], ungroupItemIds: ['r0'] }));
+    await userEvent.click(screen.getByRole('button', { name: /Ungroup/ }));
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByTestId('ungroup-dialog')).toBeInTheDocument();
   });
 
   it('closing without a split clears nothing', async () => {
