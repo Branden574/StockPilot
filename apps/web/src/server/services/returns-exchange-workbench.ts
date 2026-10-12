@@ -169,6 +169,8 @@ export type ReplacementRow = {
   fulfillment_type: 'pickup' | 'delivery' | null;
   warehouse_id: string | null;
   completed_at: string | null;
+  /** Its latest hand-over, for the RMA's history (return-history handOverOf). */
+  signed_at: string | null;
   created_at: string;
 };
 
@@ -188,7 +190,7 @@ export async function readExchangeTier2(
       .maybeSingle(),
     ctx.supabase
       .from('order_requests')
-      .select('id, order_number, status, fulfillment_type, warehouse_id, completed_at, created_at')
+      .select('id, order_number, status, fulfillment_type, warehouse_id, completed_at, signed_at, created_at')
       .eq('organization_id', ctx.organizationId)
       .eq('replacement_for_return_id', returnId)
       .order('created_at', { ascending: false })

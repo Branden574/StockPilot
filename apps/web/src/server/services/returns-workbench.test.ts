@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
-import { inFilters, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { inFilters, makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
 
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
@@ -336,7 +336,7 @@ describe('buildReturnWorkbench', () => {
         error: null,
       },
       'order_requests.select': {
-        data: [{ id: REPL, order_number: 31, status: 'cancelled', fulfillment_type: 'pickup', warehouse_id: WH, completed_at: null, created_at: '2026-10-02T00:00:00Z' }],
+        data: [{ id: REPL, order_number: 31, status: 'cancelled', fulfillment_type: 'pickup', warehouse_id: WH, signed_at: null, completed_at: null, created_at: '2026-10-02T00:00:00Z' }],
         error: null,
       },
       'stock_reservations.select': (call: MockCall) =>
@@ -442,6 +442,7 @@ describe('buildReturnWorkbench', () => {
   it('the history says a replacement order was created, never that it was reserved', () => {
     const events = buildReturnChainEvents({
       orderNumber: 3,
+      signedAt: null,
       completedAt: null,
       picks: [],
       decisions: [
@@ -474,6 +475,7 @@ describe('buildReturnWorkbench', () => {
   it('the history names a closed rest: its order and its reason', () => {
     const events = buildReturnChainEvents({
       orderNumber: 3,
+      signedAt: null,
       completedAt: null,
       picks: [],
       decisions: [
@@ -501,6 +503,200 @@ describe('buildReturnWorkbench', () => {
       label: 'Rest of replacement SO-000019 closed: Customer no longer needs the rest',
       actorName: 'Dana',
     });
+  });
+
+  // D-H1 (the audit of the RX-4 Demo Co walk, RMA-20261012-D36F7F): the
+  // replacement SO-000033 was handed over 1 of 2 on paper at 04:13:50Z and
+  // its rest closed from the RMA at 04:28:45Z, which stamped its completion.
+  // The history listed the hand-over at the close, after the close line; it
+  // reads each order's signature now (the replacement's own row, and the
+  // original's through the RMA's order embed).
+  it("the walk's RMA: the replacement handed over in part reads at its signature, before Close the rest (D-H1)", async () => {
+    const REPL = '66666666-6666-4666-8666-666666666666';
+    const M = itemId(1);
+    const L = itemId(2);
+    const SO32_SIGNED = '2026-10-12T04:00:01.952199+00:00';
+    const PROCESSED = '2026-10-12T04:06:17.99933+00:00';
+    const REPL_PICKED = '2026-10-12T04:12:17.841855+00:00';
+    const SO33_SIGNED = '2026-10-12T04:13:50.37339+00:00';
+    const REST_CLOSED = '2026-10-12T04:28:45.798289+00:00';
+    const item = (id: string, name: string, size: string) => ({
+      id,
+      organization_id: 'org-test',
+      name,
+      sku: null,
+      deleted_at: null,
+      variant_size: size,
+      variant_width: null,
+      variant_color: null,
+      jersey_number: null,
+      quantity_on_hand: 5,
+    });
+    const decision = (seq: number, kind: string, at: string, over: Record<string, unknown> = {}) => ({
+      seq,
+      kind,
+      channel: 'staff',
+      revision: null,
+      return_line_id: null,
+      exchange_line_id: null,
+      item_id: null,
+      previous_item_id: null,
+      quantity: null,
+      order_request_id: null,
+      disposition: null,
+      restock_target: null,
+      location_id: null,
+      basis: null,
+      reason: null,
+      actor_user_id: null,
+      actor_kind: 'staff',
+      created_at: at,
+      ...over,
+    });
+    const exchangeLine = {
+      id: 'x1',
+      return_line_id: lineId(1),
+      status: 'approved',
+      requested_item_id: L,
+      requested_quantity: 2,
+      request_note: null,
+      requested_by_kind: 'staff',
+      approved_item_id: L,
+      approved_quantity: 2,
+      replacement_order_request_id: REPL,
+      revision: 1,
+      created_at: '2026-10-12T04:01:10.5+00:00',
+    };
+    const movement = (id: string, referenceType: string, referenceId: string, itemIdOf: string, quantity: number, at: string) => ({
+      id,
+      organization_id: 'org-test',
+      reference_type: referenceType,
+      reference_id: referenceId,
+      movement_type: referenceType === 'return' ? 'return' : 'transfer',
+      via_ledger: true,
+      item_id: itemIdOf,
+      quantity_change: quantity,
+      to_location_id: referenceType === 'return' ? R31 : null,
+      created_at: at,
+    });
+    const { ctx, stub } = ctxFor({
+      'returns.select': {
+        data: [
+          header([{ ...LINE, quantity: 2, applied: true }], {
+            status: 'closed',
+            closed_at: PROCESSED,
+            order_request: { order_number: 32, warehouse_id: WH, requester_name: null, requester_email: null, completed_at: SO32_SIGNED, signed_at: SO32_SIGNED },
+            exchange_lines: [exchangeLine],
+          }),
+        ],
+        error: null,
+      },
+      'rpc:return_restock_options': { data: { ...OPTIONS, status: 'closed', lines: [] }, error: null },
+      'return_decisions.select': {
+        data: [
+          decision(30, 'created', '2026-10-12T04:01:00.25+00:00', { channel: 'counter' }),
+          decision(31, 'exchange_requested', '2026-10-12T04:01:10.5+00:00', { item_id: L, quantity: 2 }),
+          decision(32, 'disposition_planned', '2026-10-12T04:01:20.5+00:00', { return_line_id: lineId(1), disposition: 'restock', restock_target: 'original' }),
+          decision(33, 'exchange_approved', '2026-10-12T04:01:30.5+00:00', { item_id: L, quantity: 2, revision: 1 }),
+          decision(34, 'replacement_issued', '2026-10-12T04:01:30.5+00:00', { order_request_id: REPL, revision: 1 }),
+          decision(35, 'approved', '2026-10-12T04:01:30.5+00:00', { revision: 1 }),
+          decision(36, 'received', '2026-10-12T04:05:59.5+00:00', { channel: 'counter' }),
+          decision(37, 'closed', PROCESSED),
+          decision(38, 'replacement_closed', REST_CLOSED, { order_request_id: REPL, reason: 'Demo walk: close the rest' }),
+        ],
+        error: null,
+      },
+      'inventory_items.select': servedLikePostgrest([item(M, 'Walk Exchange Tee M', 'M'), item(L, 'Walk Exchange Tee L', 'L')]),
+      // Every read of movements answers by its own filters: the RMA's leg,
+      // the original's pick and the replacement's.
+      'stock_movements.select': servedLikePostgrest([
+        movement('mv-leg', 'return', RET, M, 2, PROCESSED),
+        movement('mv-32', 'order_request', ORDER, M, -2, '2026-10-12T03:58:40.25+00:00'),
+        movement('mv-33', 'order_request', REPL, L, -1, REPL_PICKED),
+      ]),
+      'stock_movement_holdings.select': servedLikePostgrest([
+        { organization_id: 'org-test', movement_id: 'mv-32', location_id: R31, quantity: -2 },
+        { organization_id: 'org-test', movement_id: 'mv-33', location_id: R31, quantity: -1 },
+      ]),
+      'locations.select': servedLikePostgrest([{ id: R31, organization_id: 'org-test', name: '31-B' }]),
+      'item_stock_levels.select': { data: [], error: null },
+      'return_overview.select': {
+        data: { kind: 'exchange', exchange_status: 'completed', replacement_order_id: REPL, released_early: false, counter: true, replacement_status: 'completed', replacement_owed: 1 },
+        error: null,
+      },
+      'order_requests.select': {
+        data: [
+          {
+            id: REPL,
+            order_number: 33,
+            status: 'completed',
+            fulfillment_type: 'pickup',
+            warehouse_id: WH,
+            signed_at: SO33_SIGNED,
+            completed_at: REST_CLOSED,
+            created_at: '2026-10-12T04:01:30.5+00:00',
+          },
+        ],
+        error: null,
+      },
+      'order_request_lines.select': { data: [{ id: 'ol-33', item_id: L, quantity_requested: 2, quantity_fulfilled: 1 }], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.map((e) => e.label)).toEqual([
+      'Picked: Walk Exchange Tee M ×2 from 31-B ×2 (SO-000032)',
+      'Handed over (SO-000032)',
+      'Return created by staff at the counter',
+      'Exchange requested by staff: Walk Exchange Tee L ×2',
+      'Destination for Walk Exchange Tee M: Return to original rack 31-B',
+      'Exchange approved: Walk Exchange Tee L ×2',
+      'Replacement order SO-000033 created',
+      'Approved',
+      'Received at the counter',
+      'Processed',
+      'Returned to 31-B: Walk Exchange Tee M ×2',
+      'Replacement picked: Walk Exchange Tee L ×1 from 31-B ×1 (SO-000033)',
+      'Replacement partly handed over (SO-000033)',
+      'Rest of replacement SO-000033 closed: Demo walk: close the rest',
+    ]);
+    expect(wb.chain.filter((e) => e.kind === 'replacement_handed_over').map((e) => e.at)).toEqual([SO33_SIGNED]);
+    expect(wb.chain.find((e) => e.kind === 'handed_over')!.at).toBe(SO32_SIGNED);
+    expect(reportError).not.toHaveBeenCalled();
+    // The two reads carry the signature: the RMA's order embed and the replacement's row.
+    const header0 = String(stub.chainArgsAll.get('returns.select')?.[0]?.[0]?.[0] ?? '');
+    expect(header0).toMatch(/order_request:order_requests!order_request_id \([^)]*\bsigned_at\b[^)]*\)/);
+    const replacementRead = (stub.chainArgsAll.get('order_requests.select') ?? []).find((args) =>
+      args.some((a) => a[0] === 'replacement_for_return_id' && a[1] === RET),
+    );
+    expect(String(replacementRead?.[0]?.[0] ?? '')).toMatch(/\bsigned_at\b/);
+  });
+
+  // D-H1 fix round 1 (review): the walk's original was completed at its
+  // signature, so the test above passes whichever stamp the workbench hands
+  // on for it. Here the original was handed over in part at 16:00 and closed
+  // at 18:30, which stamped its completion: on the path the web page and GET
+  // /api/v1/returns/[id] (the phone) use, its line is the signature.
+  it("the original order's Handed over line is its signature from the RMA's order embed, not a later completion (D-H1)", async () => {
+    const SIGNED = '2026-10-10T16:00:00.5+00:00';
+    const CLOSED = '2026-10-10T18:30:00.25+00:00';
+    const { ctx } = ctxFor({
+      'returns.select': {
+        data: [
+          header([LINE], {
+            order_request: { order_number: 32, warehouse_id: WH, requester_name: null, requester_email: null, signed_at: SIGNED, completed_at: CLOSED },
+          }),
+        ],
+        error: null,
+      },
+      'rpc:return_restock_options': { data: OPTIONS, error: null },
+      'return_decisions.select': { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const wb = await buildReturnWorkbench(ctx as never, RET);
+    expect(wb.chain.filter((e) => e.kind === 'handed_over')).toEqual([
+      { at: SIGNED, kind: 'handed_over', label: 'Handed over (SO-000032)', actorName: null },
+    ]);
+    expect(wb.chain.map((e) => e.at)).not.toContain(CLOSED);
   });
 
   it('a destination read that fails leaves the destinations out and is reported (actions are refused in the database anyway)', async () => {

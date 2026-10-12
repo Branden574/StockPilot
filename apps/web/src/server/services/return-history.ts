@@ -12,7 +12,7 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
  *
  *   picked       the original order's pick of each returned item, with the
  *                racks its recorded draw took from (0373 provenance)
- *   handed_over  the original order's completion
+ *   handed_over  the original order's hand-over: its signature (handOverOf)
  *   the RMA's decisions (created, planned, approved, received, closed,
  *                denied, cancelled), from the append-only log
  *   the inbound legs (returned to a rack, into Staging, scrapped), from the
@@ -21,7 +21,8 @@ import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
  * RX-2 adds the exchange to the same list: the exchange requested, approved
  * (with the item chosen and, for a substitution, the item it replaced),
  * declined, the replacement order issued (its SO number), changed, cancelled
- * and released early, and the live replacement's pick and hand-over.
+ * and released early, and the live replacement's pick and hand-over (at its
+ * signature, "partly" when that signature left some of it owed: D-H1).
  * Staff-only words (reasons, racks): the requester tracking page never reads
  * this (RX-3 has its own redacted payload).
  */
@@ -176,9 +177,31 @@ function decisionLabel(
   }
 }
 
+/**
+ * When an order was handed over, and whether that hand-over completed it
+ * (D-H1, the audit of the RX-4 walk). Both signature RPCs stamp signed_at at
+ * every hand-over, in full or in part, and set completed_at to the same now()
+ * only when nothing is still owed (0395 confirm_physical_signature, 0248
+ * confirm_order_signature). A part hand-over leaves completed_at null until
+ * close_partial stamps it in its own, later transaction (the order page's
+ * Close partial, the RMA's Close the rest or its cancel), so completed_at is
+ * never the hand-over's time then. A row completed with no signature (legacy)
+ * has only completed_at. Null: not handed over, or a resumed rest not yet
+ * signed for (resume_fulfillment clears both; the row keeps only the latest
+ * hand-over).
+ */
+export function handOverOf(o: { signedAt: string | null; completedAt: string | null }): { at: string; whole: boolean } | null {
+  if (o.signedAt) {
+    return { at: o.signedAt, whole: o.completedAt !== null && Date.parse(o.completedAt) === Date.parse(o.signedAt) };
+  }
+  return o.completedAt ? { at: o.completedAt, whole: true } : null;
+}
+
 /** Pure: the chain from what was read (sorted by time, then a stable order). */
 export function buildReturnChainEvents(input: {
   orderNumber: number | null;
+  /** The original order's signature and completion (handOverOf). */
+  signedAt: string | null;
   completedAt: string | null;
   picks: Array<{ at: string; itemName: string | null; quantity: number; racks: Array<{ name: string; quantity: number }> }>;
   decisions: ChainDecision[];
@@ -192,7 +215,7 @@ export function buildReturnChainEvents(input: {
   exchangeNames?: ChainExchangeNames;
   /** RX-2: the live replacement's picks (its recorded draw) and hand-over. */
   replacementPicks?: Array<{ at: string; itemName: string | null; quantity: number; racks: Array<{ name: string; quantity: number }> }>;
-  replacement?: { orderNumber: number | null; completedAt: string | null } | null;
+  replacement?: { orderNumber: number | null; signedAt: string | null; completedAt: string | null } | null;
 }): ReturnChainEvent[] {
   const so = formatOrderNumber(input.orderNumber);
   const events: Array<ReturnChainEvent & { order: number }> = [];
@@ -207,8 +230,9 @@ export function buildReturnChainEvents(input: {
       order: order++,
     });
   }
-  if (input.completedAt) {
-    events.push({ at: input.completedAt, kind: 'handed_over', label: `Handed over${so ? ` (${so})` : ''}`, actorName: null, order: order++ });
+  const handedOver = handOverOf(input);
+  if (handedOver) {
+    events.push({ at: handedOver.at, kind: 'handed_over', label: `Handed over${so ? ` (${so})` : ''}`, actorName: null, order: order++ });
   }
   for (const d of input.decisions) {
     const label = decisionLabel(d, input.lineLabels, input.originalRacks, input.exchangeNames);
@@ -227,11 +251,15 @@ export function buildReturnChainEvents(input: {
       order: order++,
     });
   }
-  if (input.replacement?.completedAt) {
+  // At its signature, so a part handed over sorts before the decision that
+  // closed the rest (Close the rest, the RMA's cancel), whose transaction also
+  // stamped the order's completion.
+  const replacementHandedOver = input.replacement ? handOverOf(input.replacement) : null;
+  if (replacementHandedOver) {
     events.push({
-      at: input.replacement.completedAt,
+      at: replacementHandedOver.at,
       kind: 'replacement_handed_over',
-      label: `Replacement handed over${rso ? ` (${rso})` : ''}`,
+      label: `${replacementHandedOver.whole ? 'Replacement handed over' : 'Replacement partly handed over'}${rso ? ` (${rso})` : ''}`,
       actorName: null,
       order: order++,
     });
@@ -352,16 +380,17 @@ export class ReturnHistoryService {
     const { data: header, error } = await ctx.supabase
       .from('returns')
       .select(
-        'id, order_request_id, order_request:order_requests!order_request_id (order_number, completed_at), lines:return_lines (id, item_id)',
+        'id, order_request_id, order_request:order_requests!order_request_id (order_number, completed_at, signed_at), lines:return_lines (id, item_id)',
       )
       .eq('organization_id', ctx.organizationId)
       .eq('id', returnId)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!header) throw new ServiceError('not_found', "This return isn't available.");
+    type OrderEmbed = { order_number: number | null; completed_at: string | null; signed_at: string | null };
     const h = header as {
       order_request_id: string;
-      order_request?: { order_number: number | null; completed_at: string | null } | Array<{ order_number: number | null; completed_at: string | null }> | null;
+      order_request?: OrderEmbed | OrderEmbed[] | null;
       lines?: Array<{ id: string; item_id: string }> | null;
     };
     const order = Array.isArray(h.order_request) ? (h.order_request[0] ?? null) : (h.order_request ?? null);
@@ -428,6 +457,7 @@ export class ReturnHistoryService {
 
     return buildReturnChainEvents({
       orderNumber: order?.order_number ?? null,
+      signedAt: order?.signed_at ?? null,
       completedAt: order?.completed_at ?? null,
       picks,
       itemNames,

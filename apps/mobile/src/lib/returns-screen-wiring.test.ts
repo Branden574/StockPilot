@@ -95,6 +95,27 @@ describe('the action sheet names lines and reasons (returns review)', () => {
   });
 });
 
+// D-H1 (the audit of the RX-4 Demo Co walk): a hand-over's time and words in
+// the history are the server's (GET /api/v1/returns/[id] builds the same chain
+// as the web), so a fix there reaches every installed bundle with the web
+// deploy. Pinned so the phone never re-sorts, filters or relabels the lines.
+describe('the history card draws the chain as the server sent it', () => {
+  it('maps wb.chain in order, showing each label and its time, and the client keeps the chain untouched', () => {
+    const view = code(read('src/components/return-workbench-view.tsx'));
+    const start = view.indexOf('HISTORY</Eyebrow>');
+    const card = view.slice(start, view.indexOf('</Card>', start));
+    expect(card).toContain('wb.chain.map((e, i) => (');
+    expect(card).toContain('{e.label}');
+    expect(card).toContain('{new Date(e.at).toLocaleString(');
+    expect(card).not.toMatch(/\.(sort|filter|reverse|toSorted|toReversed)\(/);
+    // The card is the only reader of the chain on the screen.
+    expect(view.match(/\bchain\b/g)).toEqual(['chain', 'chain']);
+    const client = code(read('src/lib/returns-api.ts'));
+    expect(client).toContain('chain: raw.chain ?? [],');
+    expect(client.match(/\bchain\b/g)).toEqual(['chain', 'chain', 'chain']);
+  });
+});
+
 describe('online only', () => {
   const view = code(read('src/components/return-workbench-view.tsx'));
   const sheet = code(read('src/components/return-action-sheet.tsx'));

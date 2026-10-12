@@ -28,6 +28,74 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'returns-history-hand-over-2026-10',
+    revision: 1,
+    // D-H1 (Low), from the independent audit of the returns RX-4 Demo Co walk
+    // (walk-rx4): after Close the rest, RMA-20261012-D36F7F's history listed
+    // Replacement handed over (SO-000033) at the close (04:28:45Z), after the
+    // close's own line, though that part was handed over at 04:13:50Z, and
+    // before the close it listed no hand-over at all. The history took each
+    // hand-over from the order's completed_at, which a signature sets only
+    // when nothing is still owed and close_partial sets at the close, in the
+    // transaction that also writes the close's decision (the two tied, and
+    // the decision was listed first). It now reads signed_at, which both
+    // signature RPCs stamp at every hand-over (return-history.ts
+    // handOverOf); completed_at only tells whether that signature completed
+    // the order, and stands in for a row completed with no signature. Web
+    // server only: no migration, no phone change. Held as a DRAFT until this
+    // fix's web deploy is live, the Demo Co RMA's history was re-read on the
+    // web and the phone (the part's line at 04:13:50Z, before the close), and
+    // returns RX-4's release (returns-close-rest-2026-10) is published: its
+    // whyItMatters opens with Close the rest, which that release announces
+    // (fix round 1, review; #350 published it at 2026-10-12T06:13Z, and a
+    // registry test still checks the order). The follow-up that publishes it
+    // sets 'published' and the real publishedAt and re-reads these words
+    // against what shipped. Newest first: drafts sit above the newest
+    // published release, so it sits at the top, directly above returns RX-4's
+    // release, and is dated after every release (a placeholder; the
+    // publishing follow-up dates it).
+    //
+    // Who is told: whoever can open Returns (returns:read or returns:manage,
+    // with Returns on), the people who read a return's history; the link is
+    // that page's own gate. The phone draws the server's lines in the
+    // server's order (GET /api/v1/returns/[id] builds the same history; the
+    // mobile returns-screen-wiring test pins it), so no update is needed and
+    // the words say so.
+    //
+    // Claims review, each checked against the code: only the history
+    // changes (nothing is written: stock, the order and the return are
+    // untouched); a replacement handed over in full reads Replacement handed
+    // over at the same time as before (its signature is its completion); a
+    // part reads Replacement partly handed over at its signature, while the
+    // rest is on backorder and once Close the rest or the return's cancel
+    // closed it, before that line; the original order's Handed over line
+    // moves to its signature only when it has one. Not claimed: a line for
+    // each of several hand-overs (the order keeps only its latest signature;
+    // owner question 1). The words never say "book" for a recorded quantity.
+    status: 'draft',
+    title: "A return's history shows when the replacement was handed over",
+    summary:
+      "A return's history now shows the replacement's hand-over at the time it was signed for, on the web and in the mobile app. When only part of it was handed over, the line reads Replacement partly handed over and comes before any line that says the rest was closed.",
+    publishedAt: '2026-10-17T17:00:00Z',
+    entries: [
+      {
+        id: 'returns-history-hand-over-time',
+        category: 'fixed',
+        area: 'Returns',
+        title: "The replacement's hand-over is listed at the time it was signed for",
+        whatChanged:
+          "A return's history now shows the replacement's hand-over at the time it was signed for. When only part of the replacement was handed over, the line reads Replacement partly handed over: it is listed while the rest is on backorder, and it comes before the line that says the rest was closed or the return was cancelled. The original order's Handed over line also uses the time it was signed for, when there is one.",
+        whyItMatters:
+          'After Close the rest, the history showed the hand-over at the time of the close and listed it after the close, and while the rest was on backorder it showed no hand-over at all.',
+        howItAffectsYou:
+          'Only the history changes. Nothing in stock, on the order or on the return changes. A replacement handed over in full reads Replacement handed over at the same time as before.',
+        whatToDo: 'No action needed. The mobile app shows the same history as the web, with no app update needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
     id: 'returns-close-rest-2026-10',
     revision: 1,
     // Returns RX-4: Close the rest of a replacement handed over in part, and
