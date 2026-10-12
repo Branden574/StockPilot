@@ -1,0 +1,833 @@
+'use client';
+
+import { Loader2 } from 'lucide-react';
+import * as React from 'react';
+
+import {
+  GROUP_COPY,
+  GROUPING_ERROR_WORDS,
+  groupBodyForPlan,
+  groupingPreviewKey,
+  normalizeGroupName,
+  planGrouping,
+  randomRequestUuid,
+  removeBodyFor,
+  suggestGroupName,
+  type GroupDialogTarget,
+  type GroupingBody,
+  type GroupingOutcome,
+} from '@stockpilot/core';
+
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { applyGroupingAction, previewGroupingAction } from '@/server/actions/item-grouping';
+import type { GroupingReview, GroupingReviewRecord } from '@/server/services/item-grouping';
+
+/**
+ * Group selected (design-merged.md section 5, migration 0400): the review
+ * dialog for the Items and Books bulk bar, plus Remove from group and Rename
+ * for a group's header and the item page.
+ *
+ * Every dialog reads a preview first (item_grouping_preview, as the viewer):
+ * the selected records the viewer can read (the rest are a count), each with
+ * its picture, name, SKU (and ISBN for a book), size or edition, charter,
+ * rack and on hand, its current group and product family, and whether the
+ * viewer can edit it. Nothing is written until Save; Cancel writes nothing.
+ *
+ * THE KEY: minted at the first Save of a body and kept, with that body, for
+ * every retry of it (busy, a lost answer): the database replays the first
+ * outcome instead of making a second group. A different body or a new
+ * preview mints a new one. A repeat with a new key is a no-op the database
+ * answers with the group the records are already in.
+ *
+ * A record already in another group is never moved silently: Save stays off
+ * until the person ticks "Move it into this group" for that record, or
+ * deselects it. A product-family member needs the confirmation; its family is
+ * not changed either way. A preview that answers for another selection than
+ * the dialog now holds is ignored (its key differs).
+ */
+
+/** Retry the same body only for these refusals; anything else needs a new look. */
+const RETRY_SAME = new Set(['busy', 'rate_limited']);
+
+type Identity = { organizationId: string; actorUserId: string };
+
+/** The newest preview for these ids (and target), ignoring overtaken answers. */
+function useGroupingReview(
+  open: boolean,
+  itemIds: readonly string[],
+  groupId: string | null,
+  nonce: number,
+) {
+  const [state, setState] = React.useState<{
+    review: GroupingReview | null;
+    identity: Identity | null;
+    error: string | null;
+    loading: boolean;
+  }>({ review: null, identity: null, error: null, loading: true });
+  const seq = React.useRef(0);
+  const idsKey = itemIds.join(',');
+  React.useEffect(() => {
+    if (!open) return;
+    const mine = ++seq.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open / re-preview
+    setState((s) => ({ ...s, loading: true, error: null }));
+    const ids = idsKey ? idsKey.split(',') : [];
+    void previewGroupingAction(ids, groupId).then((r) => {
+      if (mine !== seq.current) return;
+      if (!r.ok) {
+        setState({ review: null, identity: null, error: r.error.message, loading: false });
+        return;
+      }
+      // An answer for another selection or target than this one is stale.
+      if (r.data.review.previewKey !== groupingPreviewKey(r.data.organizationId, ids, groupId))
+        return;
+      setState({
+        review: r.data.review,
+        identity: { organizationId: r.data.organizationId, actorUserId: r.data.actorUserId },
+        error: null,
+        loading: false,
+      });
+    });
+  }, [open, idsKey, groupId, nonce]);
+  return state;
+}
+
+/** Save with a key kept for retries of the same body. */
+function useKeyedSave() {
+  const pending = React.useRef<{ json: string; body: GroupingBody } | null>(null);
+  return {
+    reset: () => {
+      pending.current = null;
+    },
+    bodyFor: (draft: GroupingBody): GroupingBody => {
+      const json = JSON.stringify({ ...draft, idempotencyKey: undefined });
+      if (!pending.current || pending.current.json !== json) {
+        pending.current = { json, body: { ...draft, idempotencyKey: randomRequestUuid() } };
+      }
+      return pending.current.body;
+    },
+  };
+}
+
+async function sendGrouping(
+  body: GroupingBody,
+): Promise<
+  { ok: true; outcome: GroupingOutcome } | { ok: false; message: string; stale: boolean }
+> {
+  let r: Awaited<ReturnType<typeof applyGroupingAction>>;
+  try {
+    r = await applyGroupingAction(body);
+  } catch {
+    // No answer: it may or may not have applied. The SAME body and key stay
+    // pending, so Save replays it if it did. Never the raw error.
+    return { ok: false, message: GROUPING_ERROR_WORDS.internal, stale: false };
+  }
+  if (!r.ok) {
+    const reason =
+      typeof r.error.details?.reason === 'string' ? r.error.details.reason : r.error.code;
+    return {
+      ok: false,
+      message: r.error.message || GROUPING_ERROR_WORDS.internal,
+      stale: !RETRY_SAME.has(reason),
+    };
+  }
+  return { ok: true, outcome: r.data.outcome };
+}
+
+/** One record line: picture, name, identifiers, size or edition, charter, rack, on hand. */
+function RecordLine({ r, view }: { r: GroupingReviewRecord; view: 'items' | 'books' }) {
+  const isbn =
+    r.itemType === 'book'
+      ? (r.barcode ?? r.isbnFields?.isbn13 ?? r.isbnFields?.isbn ?? null)
+      : null;
+  const detail = [
+    r.sku ? `SKU ${r.sku}` : null,
+    isbn ? `ISBN ${isbn}` : null,
+    view === 'items' && r.variantSize ? `Size ${r.variantSize}` : null,
+    r.charterName ?? 'No charter',
+    r.placementLabel ?? 'No rack',
+    r.warehouseName,
+    `${r.quantityOnHand} on hand`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <span className="flex min-w-0 items-start gap-2">
+      {r.imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element -- a signed thumbnail in a dialog
+        <img
+          src={r.imageUrl}
+          alt=""
+          width={28}
+          height={28}
+          className="border-border h-7 w-7 shrink-0 rounded-[5px] border object-cover"
+        />
+      ) : (
+        <span
+          aria-hidden
+          className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border"
+        />
+      )}
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{r.name}</span>
+        <span className="text-muted-foreground block text-xs">{detail}</span>
+      </span>
+    </span>
+  );
+}
+
+interface GroupSelectedDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The selected records (distinct item ids: two rack rows of one record are one). */
+  itemIds: readonly string[];
+  view: 'items' | 'books';
+  /** Open on "Add to an existing group" with this group chosen ("Add to group"). */
+  initialGroupId?: string | null;
+  /** Add these readable same-SKU records to the selection (the dialog then
+   *  reviews the larger selection). Absent: no button. */
+  onAddToSelection?: (ids: string[]) => void;
+  /** Called once after a grouping applied or answered no-op. */
+  onDone: (outcome: GroupingOutcome) => void;
+}
+
+export function GroupSelectedDialog({
+  open,
+  onOpenChange,
+  itemIds,
+  view,
+  initialGroupId = null,
+  onAddToSelection,
+  onDone,
+}: GroupSelectedDialogProps) {
+  const [mode, setMode] = React.useState<'new' | 'existing'>(initialGroupId ? 'existing' : 'new');
+  const [name, setName] = React.useState('');
+  const [nameTouched, setNameTouched] = React.useState(false);
+  const [groupId, setGroupId] = React.useState<string | null>(initialGroupId);
+  const [moveIds, setMoveIds] = React.useState<Set<string>>(new Set());
+  const [ackFamily, setAckFamily] = React.useState(false);
+  const [nonce, setNonce] = React.useState(0);
+  const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
+  const [outcome, setOutcome] = React.useState<GroupingOutcome | null>(null);
+  const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
+  const doneRef = React.useRef<HTMLButtonElement>(null);
+  const keyed = useKeyedSave();
+
+  const targetGroupId = mode === 'existing' ? groupId : null;
+  const {
+    review,
+    identity,
+    error: previewError,
+    loading,
+  } = useGroupingReview(open, itemIds, targetGroupId, nonce);
+
+  // The name: a suggestion from the records (an editable field, never a link
+  // made on a name) until the person types one.
+  const nameValue = nameTouched ? name : review ? suggestGroupName(review.records, view) : '';
+
+  const target: GroupDialogTarget =
+    mode === 'new' ? { kind: 'new', name: nameValue } : { kind: 'existing', groupId };
+  const plan = React.useMemo(
+    () =>
+      review
+        ? planGrouping(itemIds, { ...review, records: review.records }, target, {
+            moveIds,
+            acknowledgeFamily: ackFamily,
+          })
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- target is derived from mode/nameValue/groupId
+    [review, itemIds, mode, nameValue, groupId, moveIds, ackFamily],
+  );
+
+  React.useEffect(() => {
+    if (phase === 'done') doneRef.current?.focus();
+  }, [phase]);
+
+  async function save() {
+    if (!plan || !identity) return;
+    if (plan.noop) {
+      setOutcome({
+        action: 'group',
+        outcome: 'noop',
+        replay: false,
+        created: false,
+        group: {
+          id: plan.noop.groupId,
+          name: plan.noop.name,
+          version: 0,
+          itemType: '',
+          closed: false,
+        },
+        changes: [],
+        closedGroupIds: [],
+      });
+      setPhase('done');
+      return;
+    }
+    if (!plan.canSave) return;
+    const body = keyed.bodyFor(
+      groupBodyForPlan(
+        plan,
+        target,
+        { moveIds, acknowledgeFamily: ackFamily },
+        {
+          idempotencyKey: 'pending',
+          ...identity,
+        },
+      ),
+    );
+    setError(null);
+    setPhase('saving');
+    const r = await sendGrouping(body);
+    if (!r.ok) {
+      setError({ message: r.message, stale: r.stale });
+      setPhase('ready');
+      return;
+    }
+    keyed.reset();
+    setOutcome(r.outcome);
+    setPhase('done');
+    onDone(r.outcome);
+  }
+
+  // The plan holds the preview's records; the review's carry the names,
+  // rack line and picture too.
+  const reviewById = new Map((review?.records ?? []).map((r) => [r.id, r]));
+  const records = (plan?.records ?? []).flatMap((r) => {
+    const full = reviewById.get(r.id);
+    return full ? [full] : [];
+  });
+  const leftOutReason = new Map((plan?.leftOut ?? []).map((l) => [l.id, l.reason]));
+  const siblings = plan?.conflicts.sameSkuSiblings ?? [];
+  const editions = plan?.conflicts.editions ?? null;
+  const showEditions = editions !== null && (editions.editions > 1 || editions.unknown > 0);
+  const candidates = review?.candidateGroups ?? [];
+  const sendCount = plan?.send.length ?? 0;
+  const targetName =
+    mode === 'existing'
+      ? (review?.targetGroup?.name ?? candidates.find((c) => c.id === groupId)?.name ?? '')
+      : (normalizeGroupName(nameValue) ?? '');
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (phase === 'saving' ? null : onOpenChange(v))}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{GROUP_COPY.title(itemIds.length)}</DialogTitle>
+          <DialogDescription>{GROUP_COPY.intro}</DialogDescription>
+        </DialogHeader>
+
+        {phase === 'done' && outcome ? (
+          <div role="status" className="space-y-2 text-sm">
+            <p className="font-medium">
+              {outcome.outcome === 'noop'
+                ? GROUP_COPY.noop(outcome.group?.name ?? '')
+                : GROUP_COPY.done(outcome.group?.name ?? '')}
+            </p>
+            <p className="text-muted-foreground text-xs">{GROUP_COPY.skuNote}</p>
+          </div>
+        ) : loading ? (
+          <div role="status" className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the records…
+          </div>
+        ) : previewError ? null : (
+          <div className="space-y-4 text-sm">
+            <ul className="space-y-2" aria-label="Selected records">
+              {records.map((r) => {
+                const reason = leftOutReason.get(r.id);
+                const other =
+                  r.displayGroup && r.displayGroup.id !== targetGroupId ? r.displayGroup : null;
+                return (
+                  <li
+                    key={r.id}
+                    data-testid={`group-row-${r.id}`}
+                    className="border-border space-y-1 rounded-md border p-2"
+                  >
+                    <RecordLine r={r} view={view} />
+                    {reason ? (
+                      <p className="text-muted-foreground text-xs">
+                        Left out: {r.name} {GROUP_COPY.leftOutReason[reason]}.
+                      </p>
+                    ) : null}
+                    {!reason && other ? (
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={moveIds.has(r.id)}
+                          disabled={phase === 'saving'}
+                          onChange={(e) =>
+                            setMoveIds((s) => {
+                              const n = new Set(s);
+                              if (e.target.checked) n.add(r.id);
+                              else n.delete(r.id);
+                              return n;
+                            })
+                          }
+                        />
+                        <span>
+                          {GROUP_COPY.otherGroup(other.name)} {GROUP_COPY.moveOne}
+                        </span>
+                      </label>
+                    ) : null}
+                    {!reason &&
+                    r.productGroupId &&
+                    !(targetGroupId && r.displayGroup?.id === targetGroupId) ? (
+                      <p className="text-muted-foreground text-xs">
+                        {GROUP_COPY.family(r.productGroupName)}
+                      </p>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {plan && plan.unavailableCount > 0 ? (
+              <p className="text-muted-foreground text-xs">
+                {GROUP_COPY.unavailable(plan.unavailableCount)}
+              </p>
+            ) : null}
+
+            {(plan?.conflicts.family.length ?? 0) > 0 ? (
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={ackFamily}
+                  disabled={phase === 'saving'}
+                  onChange={(e) => setAckFamily(e.target.checked)}
+                />
+                <span>{GROUP_COPY.acknowledgeFamily}</span>
+              </label>
+            ) : null}
+
+            {siblings.length > 0 ? (
+              <div className="space-y-1 text-xs">
+                {[...new Set(siblings.map((s) => s.sku))].map((sku) => (
+                  <p key={sku} className="text-muted-foreground">
+                    {GROUP_COPY.sameSku(siblings.filter((s) => s.sku === sku).length, sku)}
+                  </p>
+                ))}
+                {onAddToSelection ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={phase === 'saving'}
+                    onClick={() => onAddToSelection(siblings.map((s) => s.id))}
+                  >
+                    {GROUP_COPY.addSiblings}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {showEditions && editions ? (
+              <p className="text-muted-foreground text-xs">
+                {editions.unknown > 0
+                  ? GROUP_COPY.editionsUnknown
+                  : GROUP_COPY.editions(editions.editions)}
+              </p>
+            ) : null}
+
+            <fieldset className="border-border space-y-2 rounded-md border p-3">
+              <legend className="px-1 text-xs font-medium">Where they go</legend>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="group-target"
+                  checked={mode === 'new'}
+                  disabled={phase === 'saving'}
+                  onChange={() => setMode('new')}
+                />
+                <span>{GROUP_COPY.targetNew}</span>
+              </label>
+              {mode === 'new' ? (
+                <label className="block space-y-1 pl-6">
+                  <span className="text-xs">{GROUP_COPY.nameLabel}</span>
+                  <input
+                    className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+                    value={nameValue}
+                    maxLength={120}
+                    disabled={phase === 'saving'}
+                    onChange={(e) => {
+                      setNameTouched(true);
+                      setName(e.target.value);
+                    }}
+                  />
+                </label>
+              ) : null}
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="group-target"
+                  checked={mode === 'existing'}
+                  disabled={phase === 'saving'}
+                  onChange={() => setMode('existing')}
+                />
+                <span>{GROUP_COPY.targetExisting}</span>
+              </label>
+              {mode === 'existing' ? (
+                <label className="block space-y-1 pl-6">
+                  <span className="text-xs">{GROUP_COPY.existingLabel}</span>
+                  {candidates.length === 0 && !groupId ? (
+                    <span className="text-muted-foreground block text-xs">
+                      {GROUP_COPY.noCandidates}
+                    </span>
+                  ) : (
+                    <select
+                      className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+                      value={groupId ?? ''}
+                      disabled={phase === 'saving'}
+                      onChange={(e) => setGroupId(e.target.value || null)}
+                    >
+                      <option value="">Choose a group</option>
+                      {candidates.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name} ({GROUP_COPY.headerRecords(g.memberCount)})
+                        </option>
+                      ))}
+                      {groupId &&
+                      !candidates.some((g) => g.id === groupId) &&
+                      review?.targetGroup ? (
+                        <option value={groupId}>{review.targetGroup.name}</option>
+                      ) : null}
+                    </select>
+                  )}
+                </label>
+              ) : null}
+            </fieldset>
+
+            {plan?.previewHeader ? (
+              <div className="space-y-1">
+                <p className="text-xs font-medium">{GROUP_COPY.previewLabel}</p>
+                <p
+                  className="bg-muted/40 rounded-md px-2 py-1 font-medium"
+                  data-testid="group-preview-header"
+                >
+                  {plan.previewHeader}
+                </p>
+              </div>
+            ) : null}
+            <p className="text-muted-foreground text-xs">{GROUP_COPY.skuNote}</p>
+            {plan?.noop ? (
+              <p role="status" className="text-xs">
+                {GROUP_COPY.noop(plan.noop.name)}
+              </p>
+            ) : plan?.blockedReason ? (
+              <p className="text-muted-foreground text-xs" data-testid="group-blocked">
+                {plan.blockedReason}
+              </p>
+            ) : null}
+          </div>
+        )}
+
+        {previewError || error ? (
+          <p role="alert" className="text-destructive text-sm">
+            {previewError ?? error?.message}
+          </p>
+        ) : null}
+
+        <DialogFooter>
+          {phase === 'done' ? (
+            <Button ref={doneRef} onClick={() => onOpenChange(false)}>
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                disabled={phase === 'saving'}
+                onClick={() => onOpenChange(false)}
+              >
+                {GROUP_COPY.cancel}
+              </Button>
+              {error?.stale ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    keyed.reset();
+                    setError(null);
+                    setNonce((n) => n + 1);
+                  }}
+                >
+                  Review again
+                </Button>
+              ) : null}
+              {!loading && !previewError && !error?.stale && plan ? (
+                <Button
+                  onClick={() => void save()}
+                  disabled={phase === 'saving' || !identity || (!plan.noop && !plan.canSave)}
+                >
+                  {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {mode === 'existing' && targetName
+                    ? GROUP_COPY.confirmExisting(sendCount, targetName)
+                    : GROUP_COPY.confirmNew(sendCount)}
+                </Button>
+              ) : null}
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface RemoveFromGroupDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The records to take out of their group (distinct item ids). */
+  itemIds: readonly string[];
+  view: 'items' | 'books';
+  onDone: (outcome: GroupingOutcome) => void;
+}
+
+/** Remove from group: deletes only the memberships. Records, SKUs, stock,
+ *  charters and racks stay exactly as they are. */
+export function RemoveFromGroupDialog({
+  open,
+  onOpenChange,
+  itemIds,
+  view,
+  onDone,
+}: RemoveFromGroupDialogProps) {
+  const [nonce, setNonce] = React.useState(0);
+  const {
+    review,
+    identity,
+    error: previewError,
+    loading,
+  } = useGroupingReview(open, itemIds, null, nonce);
+  const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
+  const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
+  const [outcome, setOutcome] = React.useState<GroupingOutcome | null>(null);
+  const doneRef = React.useRef<HTMLButtonElement>(null);
+  const keyed = useKeyedSave();
+  const grouped = (review?.records ?? []).filter((r) => r.displayGroup && r.writable);
+
+  React.useEffect(() => {
+    if (phase === 'done') doneRef.current?.focus();
+  }, [phase]);
+
+  async function save() {
+    if (!identity || grouped.length === 0) return;
+    const body = keyed.bodyFor(
+      removeBodyFor(
+        grouped.map((r) => ({ id: r.id, displayGroupId: r.displayGroup!.id })),
+        { idempotencyKey: 'pending', ...identity },
+      ),
+    );
+    setError(null);
+    setPhase('saving');
+    const r = await sendGrouping(body);
+    if (!r.ok) {
+      setError({ message: r.message, stale: r.stale });
+      setPhase('ready');
+      return;
+    }
+    keyed.reset();
+    setOutcome(r.outcome);
+    setPhase('done');
+    onDone(r.outcome);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (phase === 'saving' ? null : onOpenChange(v))}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{GROUP_COPY.removeTitle(grouped.length || itemIds.length)}</DialogTitle>
+          <DialogDescription>{GROUP_COPY.removeIntro}</DialogDescription>
+        </DialogHeader>
+        {phase === 'done' && outcome ? (
+          <p role="status" className="text-sm font-medium">
+            {GROUP_COPY.removeDone(outcome.changes.length)}
+          </p>
+        ) : loading ? (
+          <div role="status" className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the records…
+          </div>
+        ) : previewError ? null : (
+          <ul className="space-y-2 text-sm" aria-label="Records to remove from their group">
+            {grouped.map((r) => (
+              <li key={r.id} className="space-y-0.5">
+                <RecordLine r={r} view={view} />
+                <p className="text-muted-foreground pl-9 text-xs">
+                  {GROUP_COPY.itemPageInGroup(r.displayGroup!.name)}
+                </p>
+              </li>
+            ))}
+            {grouped.length === 0 ? (
+              <li className="text-muted-foreground text-xs">
+                None of these records is in a group you can change.
+              </li>
+            ) : null}
+          </ul>
+        )}
+        {previewError || error ? (
+          <p role="alert" className="text-destructive text-sm">
+            {previewError ?? error?.message}
+          </p>
+        ) : null}
+        <DialogFooter>
+          {phase === 'done' ? (
+            <Button ref={doneRef} onClick={() => onOpenChange(false)}>
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                disabled={phase === 'saving'}
+                onClick={() => onOpenChange(false)}
+              >
+                {GROUP_COPY.cancel}
+              </Button>
+              {error?.stale ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    keyed.reset();
+                    setError(null);
+                    setNonce((n) => n + 1);
+                  }}
+                >
+                  Review again
+                </Button>
+              ) : null}
+              {!loading && !previewError && !error?.stale && grouped.length > 0 ? (
+                <Button onClick={() => void save()} disabled={phase === 'saving' || !identity}>
+                  {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {GROUP_COPY.removeConfirm(grouped.length)}
+                </Button>
+              ) : null}
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface RenameGroupDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  groupId: string;
+  /** Records of the group on screen (to read the group and its version). */
+  memberIds: readonly string[];
+  onDone: (outcome: GroupingOutcome) => void;
+}
+
+/** Rename a group: only its name changes. */
+export function RenameGroupDialog({
+  open,
+  onOpenChange,
+  groupId,
+  memberIds,
+  onDone,
+}: RenameGroupDialogProps) {
+  const [nonce, setNonce] = React.useState(0);
+  const {
+    review,
+    identity,
+    error: previewError,
+    loading,
+  } = useGroupingReview(open, memberIds, groupId, nonce);
+  const [name, setName] = React.useState<string | null>(null);
+  const [phase, setPhase] = React.useState<'ready' | 'saving' | 'done'>('ready');
+  const [error, setError] = React.useState<{ message: string; stale: boolean } | null>(null);
+  const keyed = useKeyedSave();
+  const current = review?.targetGroup ?? null;
+  const value = name ?? current?.name ?? '';
+  const normalized = normalizeGroupName(value);
+
+  async function save() {
+    if (!identity || !current || !normalized) return;
+    const body = keyed.bodyFor({
+      action: 'rename',
+      idempotencyKey: 'pending',
+      ...identity,
+      groupId,
+      expectedVersion: current.version,
+      name: normalized,
+    });
+    setError(null);
+    setPhase('saving');
+    const r = await sendGrouping(body);
+    if (!r.ok) {
+      setError({ message: r.message, stale: r.stale });
+      setPhase('ready');
+      return;
+    }
+    keyed.reset();
+    setPhase('done');
+    onDone(r.outcome);
+    onOpenChange(false);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (phase === 'saving' ? null : onOpenChange(v))}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{GROUP_COPY.renameAction}</DialogTitle>
+          <DialogDescription>
+            Only the group&apos;s name changes. Its records stay as they are.
+          </DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div role="status" className="text-muted-foreground flex items-center gap-2 py-4 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading the group…
+          </div>
+        ) : current ? (
+          <label className="block space-y-1 text-sm">
+            <span className="text-xs">{GROUP_COPY.nameLabel}</span>
+            <input
+              className="border-input bg-background w-full rounded-md border px-2 py-1 text-sm"
+              value={value}
+              maxLength={120}
+              disabled={phase === 'saving'}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+        ) : null}
+        {previewError || error ? (
+          <p role="alert" className="text-destructive text-sm">
+            {previewError ?? error?.message}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={phase === 'saving'}
+            onClick={() => onOpenChange(false)}
+          >
+            {GROUP_COPY.cancel}
+          </Button>
+          {error?.stale ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                keyed.reset();
+                setError(null);
+                setName(null);
+                setNonce((n) => n + 1);
+              }}
+            >
+              Review again
+            </Button>
+          ) : (
+            <Button
+              onClick={() => void save()}
+              disabled={phase === 'saving' || !identity || !current || !normalized}
+            >
+              {phase === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save name
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

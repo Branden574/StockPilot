@@ -7,6 +7,7 @@ import {
   Download,
   FolderTree,
   Globe,
+  Group,
   Layers,
   Loader2,
   MapPin,
@@ -20,6 +21,8 @@ import {
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
+
+import { GROUP_COPY } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -59,6 +62,7 @@ import {
   ExportBuilderDialog,
   type ExportBuilderDialogProps,
 } from './export-builder/export-builder-dialog';
+import { GroupSelectedDialog, RemoveFromGroupDialog } from './display-group-dialogs';
 import { UngroupDialog } from './ungroup-dialog';
 
 export interface BulkActionsCategory {
@@ -132,6 +136,18 @@ interface BulkActionsProps {
       loaded record (core sharedSkuItemIds), already narrowed to viewers who
       can edit items. Empty or absent: no Ungroup button. */
   ungroupItemIds?: string[];
+  /** Group selected (0400): the selected records (distinct ids) when two or
+      more of one item type are selected by a viewer who can edit items (core
+      groupingSelectionFacts). Empty or absent: no Group selected button. The
+      server decides again on what the viewer can read and edit. */
+  groupItemIds?: string[];
+  /** The selected records that are in a display group now (from the loaded
+      rows): Remove from group. Empty or absent: no button. */
+  groupedItemIds?: string[];
+  /** Items or Books: the review shows a book's ISBN and never a size. */
+  groupingView?: 'items' | 'books';
+  /** Add records (same-SKU siblings the review found) to the selection. */
+  onAddToSelection?: (ids: string[]) => void;
 }
 
 type ActiveDialog =
@@ -178,8 +194,18 @@ export function BulkActions({
   canSetPublicVisibility = false,
   itemType = 'all',
   ungroupItemIds = [],
+  groupItemIds = [],
+  groupedItemIds = [],
+  groupingView = 'items',
+  onAddToSelection,
 }: BulkActionsProps) {
   const router = useRouter();
+  // Group selected / Remove from group review the ids they were OPENED with
+  // (except when the review itself adds same-SKU records to the selection),
+  // and clear the selection on close after a change, like Ungroup.
+  const [groupIds, setGroupIds] = React.useState<string[] | null>(null);
+  const [removeIds, setRemoveIds] = React.useState<string[] | null>(null);
+  const groupingDone = React.useRef(false);
   // Ungroup's dialog reviews the ids it was OPENED with: a refresh after the
   // split can change the selection under it, and its result must stay on
   // screen until it is closed. The selection is cleared on that close.
@@ -558,6 +584,40 @@ export function BulkActions({
           <ClipboardCheck className="h-3 w-3" /> Cycle count
         </button>
 
+        {groupItemIds.length > 0 ? (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                groupingDone.current = false;
+                setGroupIds([...groupItemIds]);
+              }}
+              title="Show the selected records together as one group (stock, charters and SKUs stay as they are)"
+              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+            >
+              <Group className="h-3 w-3" /> {GROUP_COPY.bulkAction}
+            </button>
+          </>
+        ) : null}
+
+        {groupedItemIds.length > 0 ? (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            <button
+              type="button"
+              onClick={() => {
+                groupingDone.current = false;
+                setRemoveIds([...groupedItemIds]);
+              }}
+              title="Take the selected records out of their group (nothing else changes)"
+              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+            >
+              <Group className="h-3 w-3" /> {GROUP_COPY.removeAction}
+            </button>
+          </>
+        ) : null}
+
         {ungroupItemIds.length > 0 ? (
           <>
             <span className="text-[var(--ed-ink-4)]">·</span>
@@ -689,6 +749,58 @@ export function BulkActions({
           <X className="h-3 w-3" /> Clear
         </button>
       </div>
+
+      {groupIds ? (
+        <GroupSelectedDialog
+          open
+          itemIds={groupIds}
+          view={groupingView}
+          onAddToSelection={
+            onAddToSelection
+              ? (ids) => {
+                  onAddToSelection(ids);
+                  setGroupIds((cur) => [...new Set([...(cur ?? []), ...ids])]);
+                }
+              : undefined
+          }
+          onDone={(o) => {
+            if (o.outcome === 'applied') {
+              groupingDone.current = true;
+              router.refresh();
+            }
+          }}
+          onOpenChange={(v) => {
+            if (v) return;
+            setGroupIds(null);
+            if (groupingDone.current) {
+              groupingDone.current = false;
+              onClear();
+            }
+          }}
+        />
+      ) : null}
+
+      {removeIds ? (
+        <RemoveFromGroupDialog
+          open
+          itemIds={removeIds}
+          view={groupingView}
+          onDone={(o) => {
+            if (o.outcome === 'applied') {
+              groupingDone.current = true;
+              router.refresh();
+            }
+          }}
+          onOpenChange={(v) => {
+            if (v) return;
+            setRemoveIds(null);
+            if (groupingDone.current) {
+              groupingDone.current = false;
+              onClear();
+            }
+          }}
+        />
+      ) : null}
 
       {ungroupIds ? (
         <UngroupDialog

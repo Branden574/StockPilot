@@ -1,0 +1,488 @@
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import * as React from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { GROUP_COPY, GROUPING_ERROR_WORDS, groupingPreviewKey } from '@stockpilot/core';
+
+// Group selected's review (design 5, migration 0400): the brief's sentence
+// verbatim; each selected record with its picture, name, SKU (and ISBN for a
+// book), size, charter, rack and on hand; Cancel writes nothing; a record in
+// another group needs an explicit per-record move before Save; a product-
+// family member needs the confirmation; Save sends one body under a key kept
+// for its retries; a repeat is a no-op; an answer for another selection is
+// ignored. Remove from group and Rename send their own bodies.
+
+const h = vi.hoisted(() => ({ preview: vi.fn(), apply: vi.fn() }));
+vi.mock('@/server/actions/item-grouping', () => ({
+  previewGroupingAction: h.preview,
+  applyGroupingAction: h.apply,
+}));
+
+import {
+  GroupSelectedDialog,
+  RemoveFromGroupDialog,
+  RenameGroupDialog,
+} from './display-group-dialogs';
+
+const ORG = '11111111-1111-4111-8111-111111111111';
+const ME = '22222222-2222-4222-8222-222222222222';
+const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const G = '99999999-9999-4999-8999-999999999999';
+const H = '88888888-8888-4888-8888-888888888888';
+
+function rec(id: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    name: 'Polo XXXL',
+    sku: `SKU-${id.slice(0, 1).toUpperCase()}`,
+    barcode: null,
+    isbnFields: null,
+    itemType: 'product',
+    isBundle: false,
+    isRental: false,
+    productGroupId: null,
+    productGroupName: null,
+    variantSize: null,
+    charterId: null,
+    warehouseId: 'wh',
+    binLocation: '15-A',
+    customFields: null,
+    quantityOnHand: 2,
+    createdAt: '2026-01-01T00:00:00Z',
+    displayGroup: null,
+    writable: true,
+    charterName: 'North',
+    warehouseName: 'DC4',
+    placementLabel: '15-A',
+    imageUrl: null,
+    ...over,
+  };
+}
+
+function review(
+  ids: string[],
+  records: unknown[],
+  over: Record<string, unknown> = {},
+  groupId: string | null = null,
+) {
+  return {
+    ok: true,
+    data: {
+      organizationId: ORG,
+      actorUserId: ME,
+      review: {
+        records,
+        unavailableCount: 0,
+        sameSkuSiblings: [],
+        candidateGroups: [],
+        targetGroup: null,
+        previewKey: groupingPreviewKey(ORG, ids, groupId),
+        ...over,
+      },
+    },
+  };
+}
+
+const APPLIED = {
+  ok: true,
+  data: {
+    outcome: {
+      action: 'group',
+      outcome: 'applied',
+      replay: false,
+      created: true,
+      group: { id: G, name: 'Polo XXXL', version: 1, itemType: 'product', closed: false },
+      changes: [],
+      closedGroupIds: [],
+    },
+  },
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('GroupSelectedDialog', () => {
+  it("says the brief's sentence and lists exactly the selected records with their details", async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B],
+        [rec(A), rec(B, { charterName: null, placementLabel: null, quantityOnHand: 5 })],
+        {
+          unavailableCount: 1,
+        },
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Grouping organizes these records together. It does not combine stock, change ownership, or move items.',
+      ),
+    ).toBeInTheDocument();
+    const rowA = await screen.findByTestId(`group-row-${A}`);
+    expect(
+      within(rowA).getByText(/SKU SKU-A · North · 15-A · DC4 · 2 on hand/),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId(`group-row-${B}`)).getByText(
+        /No charter · No rack · DC4 · 5 on hand/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(GROUP_COPY.unavailable(1))).toBeInTheDocument();
+    // The name is a suggestion, editable; the header previews the result.
+    expect(screen.getByDisplayValue('Polo XXXL')).toBeInTheDocument();
+    expect(screen.getByTestId('group-preview-header')).toHaveTextContent(
+      'Polo XXXL · 2 records · 7 on hand',
+    );
+    expect(screen.getByText(GROUP_COPY.skuNote)).toBeInTheDocument();
+    expect(h.preview).toHaveBeenCalledWith([A, B], null);
+  });
+
+  it('Cancel writes nothing', async () => {
+    const onOpenChange = vi.fn();
+    h.preview.mockResolvedValueOnce(review([A, B], [rec(A), rec(B)]));
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={onOpenChange}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it('Save sends one body under a key, and a busy retry sends the SAME body and key', async () => {
+    h.preview.mockResolvedValueOnce(review([A, B], [rec(A), rec(B)]));
+    h.apply
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'conflict',
+          message: GROUPING_ERROR_WORDS.busy,
+          details: { reason: 'busy', retryable: true },
+        },
+      })
+      .mockResolvedValueOnce(APPLIED);
+    const onDone = vi.fn();
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={onDone}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(GROUPING_ERROR_WORDS.busy);
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    const [first, second] = h.apply.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      action: 'group',
+      organizationId: ORG,
+      actorUserId: ME,
+      itemIds: [A, B],
+      target: { kind: 'new', name: 'Polo XXXL' },
+      expectedGroups: { [A]: null, [B]: null },
+      moveItemIds: [],
+      acknowledgeProductFamily: false,
+    });
+    // The result is announced and focus moves to Done.
+    expect(screen.getByRole('status')).toHaveTextContent(GROUP_COPY.done('Polo XXXL'));
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('a record in another group blocks Save until it is explicitly moved, then the move is sent for that record only', async () => {
+    h.preview.mockResolvedValueOnce(
+      review([A, B], [rec(A, { displayGroup: { id: H, name: 'Old shirts', version: 3 } }), rec(B)]),
+    );
+    h.apply.mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    const save = screen.getByRole('button', { name: 'Group 2 records' });
+    expect(save).toBeDisabled();
+    expect(screen.getByTestId('group-blocked')).toHaveTextContent(GROUP_COPY.blocked.otherGroup);
+    await userEvent.click(
+      screen.getByRole('checkbox', {
+        name: /Already in group Old shirts\. Move it into this group/,
+      }),
+    );
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
+    expect(h.apply.mock.calls[0]![0]).toMatchObject({
+      moveItemIds: [A],
+      expectedGroups: { [A]: H, [B]: null },
+    });
+  });
+
+  it('a product-family member needs the confirmation (its family is never changed)', async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B],
+        [
+          rec(A, { productGroupId: 'fam', productGroupName: 'Limits Tee', variantSize: 'XS' }),
+          rec(B),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    expect(screen.getByText(GROUP_COPY.family('Limits Tee'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Group 2 records' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: GROUP_COPY.acknowledgeFamily }));
+    expect(screen.getByRole('button', { name: 'Group 2 records' })).toBeEnabled();
+    // XS shows as its own size: it stays a distinct record.
+    expect(within(screen.getByTestId(`group-row-${A}`)).getByText(/Size XS/)).toBeInTheDocument();
+  });
+
+  it('kits are left out with the reason, and the rest is planned without them', async () => {
+    h.preview.mockResolvedValueOnce(
+      review([A, B, C], [rec(A), rec(B), rec(C, { isBundle: true, name: 'Starter kit' })]),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B, C]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${C}`);
+    expect(
+      screen.getByText(`Left out: Starter kit ${GROUP_COPY.leftOutReason.kit}.`),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Group 2 records' })).toBeEnabled();
+  });
+
+  it('a repeat of a completed grouping says so and writes nothing (never a second group)', async () => {
+    const inG = { displayGroup: { id: G, name: 'Polo XXXL', version: 1 } };
+    h.preview.mockResolvedValueOnce(review([A, B], [rec(A, inG), rec(B, inG)]));
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    expect(screen.getAllByText(GROUP_COPY.noop('Polo XXXL')).length).toBeGreaterThan(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Group 2 records' }));
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it('books show their ISBN and the editions notice; no size is parsed from a title', async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B],
+        [
+          rec(A, { itemType: 'book', name: 'Earth Science - S', barcode: '9780306406157' }),
+          rec(B, { itemType: 'book', name: 'Earth Science - S', barcode: '9781861972712' }),
+        ],
+      ),
+    );
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="books"
+        onDone={() => {}}
+      />,
+    );
+    const rowA = await screen.findByTestId(`group-row-${A}`);
+    expect(within(rowA).getByText(/ISBN 9780306406157/)).toBeInTheDocument();
+    expect(screen.getByText(GROUP_COPY.editions(2))).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Earth Science - S')).toBeInTheDocument();
+  });
+
+  it('ignores an answer for another selection than the one on screen', async () => {
+    h.preview.mockResolvedValueOnce(review([A, C], [rec(A), rec(C)]));
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId(`group-row-${C}`)).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/Loading the records/);
+  });
+
+  it('adding to an existing group re-reads that group and sends its version', async () => {
+    h.preview
+      .mockResolvedValueOnce(
+        review([A], [rec(A)], {
+          candidateGroups: [
+            {
+              id: G,
+              name: 'Polo XXXL',
+              version: 4,
+              itemType: 'product',
+              memberCount: 2,
+              holdsSelected: false,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        review(
+          [A],
+          [rec(A)],
+          {
+            candidateGroups: [
+              {
+                id: G,
+                name: 'Polo XXXL',
+                version: 4,
+                itemType: 'product',
+                memberCount: 2,
+                holdsSelected: false,
+              },
+            ],
+            targetGroup: {
+              id: G,
+              name: 'Polo XXXL',
+              version: 4,
+              itemType: 'product',
+              members: [{ id: B, name: 'Polo', sku: 'S', quantityOnHand: 3 }],
+            },
+          },
+          G,
+        ),
+      );
+    h.apply.mockResolvedValueOnce(APPLIED);
+    render(
+      <GroupSelectedDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`group-row-${A}`);
+    await userEvent.click(screen.getByRole('radio', { name: GROUP_COPY.targetExisting }));
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: GROUP_COPY.existingLabel }),
+      G,
+    );
+    await waitFor(() => expect(h.preview).toHaveBeenLastCalledWith([A], G));
+    await screen.findByText('Polo XXXL · 2 records · 5 on hand');
+    await userEvent.click(screen.getByRole('button', { name: 'Add 1 record to Polo XXXL' }));
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
+    expect(h.apply.mock.calls[0]![0]).toMatchObject({
+      itemIds: [A],
+      target: { kind: 'existing', groupId: G, expectedVersion: 4 },
+    });
+  });
+});
+
+describe('RemoveFromGroupDialog and RenameGroupDialog', () => {
+  it('Remove sends the group each record is in, as the review read it; it deletes nothing else', async () => {
+    h.preview.mockResolvedValueOnce(
+      review([A, B], [rec(A, { displayGroup: { id: G, name: 'Pads', version: 2 } }), rec(B)]),
+    );
+    h.apply.mockResolvedValueOnce({
+      ...APPLIED,
+      data: {
+        outcome: {
+          ...APPLIED.data.outcome,
+          action: 'remove',
+          group: null,
+          changes: [{ itemId: A, fromGroupId: G, toGroupId: null }],
+        },
+      },
+    });
+    render(
+      <RemoveFromGroupDialog
+        open
+        onOpenChange={() => {}}
+        itemIds={[A, B]}
+        view="items"
+        onDone={() => {}}
+      />,
+    );
+    expect(screen.getByText(GROUP_COPY.removeIntro)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove 1 record' }));
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
+    expect(h.apply.mock.calls[0]![0]).toMatchObject({
+      action: 'remove',
+      itemIds: [A],
+      expectedGroups: { [A]: G },
+    });
+  });
+
+  it('Rename sends the group, its version and the trimmed name', async () => {
+    h.preview.mockResolvedValueOnce(
+      review(
+        [A, B],
+        [rec(A), rec(B)],
+        { targetGroup: { id: G, name: 'Pads', version: 7, itemType: 'product', members: [] } },
+        G,
+      ),
+    );
+    h.apply.mockResolvedValueOnce(APPLIED);
+    render(
+      <RenameGroupDialog
+        open
+        onOpenChange={() => {}}
+        groupId={G}
+        memberIds={[A, B]}
+        onDone={() => {}}
+      />,
+    );
+    const input = await screen.findByDisplayValue('Pads');
+    await userEvent.clear(input);
+    await userEvent.type(input, '  Mouse pads ');
+    await userEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() => expect(h.apply).toHaveBeenCalledTimes(1));
+    expect(h.apply.mock.calls[0]![0]).toMatchObject({
+      action: 'rename',
+      groupId: G,
+      expectedVersion: 7,
+      name: 'Mouse pads',
+    });
+  });
+});

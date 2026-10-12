@@ -61,6 +61,10 @@ vi.mock('@/components/inventory/duplicate-item-dialog', () => ({ DuplicateItemDi
 // Ungroup's host (0399) is mounted for every editor since fix round 1 (P1: it
 // must outlive the refresh after a split); a client island like the others.
 vi.mock('@/components/inventory/make-own-item-button', () => ({ MakeOwnItemButton: () => null }));
+// Group selected (0400): the group line's client island (it needs a router).
+vi.mock('@/components/inventory/group-membership-control', () => ({
+  GroupMembershipControl: () => null,
+}));
 vi.mock('@/components/dashboard/charts/cost-trend-island', () => ({ CostTrendIsland: () => null }));
 vi.mock('@/components/inventory/item-detail-tabs', () => ({ ItemDetailTabs: () => null }));
 vi.mock('@/components/inventory/item-serials-panel', () => ({ ItemSerialsPanel: () => null }));

@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCcw,
   Trash2,
+  Group,
   Ungroup,
   type LucideIcon,
 } from 'lucide-react';
@@ -85,6 +86,17 @@ function specFor(e: ActivityEvent): VisualSpec {
     // it with before/after SKU; the diff below shows both).
     case 'inventory.item.ungrouped':
       return { Icon: Ungroup, label: 'Made its own item', tone: 'neutral' };
+    // Group selected (0400): the record joined, moved to, or left a display
+    // group (apply_item_grouping writes these with the group's name before and
+    // after; the diff below shows both). Display only: nothing else changed.
+    case 'inventory.group.members_added':
+      return { Icon: Group, label: 'Added to group', tone: 'neutral' };
+    case 'inventory.group.members_removed':
+      return { Icon: Group, label: 'Removed from group', tone: 'neutral' };
+    case 'inventory.group.created':
+      return { Icon: Group, label: 'Group created', tone: 'neutral' };
+    case 'inventory.group.renamed':
+      return { Icon: Group, label: 'Group renamed', tone: 'neutral' };
     default:
       // Ported from the (now-removed) item-detail AuditTimeline: every
       // audit event type gets the same "Subject · Action" formatting

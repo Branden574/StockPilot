@@ -14,6 +14,7 @@ import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown
 import { StockAvailabilityLine } from '@/components/inventory/stock-availability-line';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
+import { GroupMembershipControl } from '@/components/inventory/group-membership-control';
 import { MakeOwnItemButton } from '@/components/inventory/make-own-item-button';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
 // ImageLightbox) and only renders on the Photos tab — lazy-load
@@ -54,6 +55,7 @@ import { isModuleEnabled, ServiceError, withContext } from '@/server/services/co
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemGroupingService } from '@/server/services/item-grouping';
+import { readDisplayGroupsByItemIds } from '@/server/services/lib/display-groups';
 import { ItemImagesService } from '@/server/services/item-images';
 import {
   toDestinationOption,
@@ -73,6 +75,7 @@ import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 import {
   can,
+  DISPLAY_GROUP_FALLBACK_NAME,
   GROUPING_ERROR_WORDS,
   holdingsContradictRack,
   isCountableItem,
@@ -338,6 +341,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     marketPriceObs,
     writableWarehouseIds,
     skuSiblings,
+    displayGroups,
   ] = await Promise.all([
     categoryIdForFetch
       ? ctx.supabase
@@ -398,6 +402,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     new ItemGroupingService(ctx)
       .countSkuSiblings(id, (item.sku as string | null) ?? null)
       .catch(() => null),
+    // Group selected (0400): the record's display group, read as the viewer
+    // (RLS). Never fails the page: a failed read shows no group line.
+    readDisplayGroupsByItemIds(ctx.supabase, ctx.organizationId, [id]),
   ]);
 
   // ── Stock in warehouses the caller cannot see (0371) ────────────────
@@ -646,6 +653,24 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     <p className="text-muted-foreground text-xs">{GROUPING_ERROR_WORDS.family}</p>
                   ) : null}
                   {host ? <MakeOwnItemButton itemId={id} offer={note !== null} /> : null}
+                </div>
+              );
+            })()}
+            {(() => {
+              // Group selected (0400): the record's explicit display group and,
+              // for an editor, Remove from group. Mounted for every editor at
+              // this place (see GroupMembershipControl), shown when in a group.
+              const group = displayGroups.get(id) ?? null;
+              const groupName = group ? (group.name ?? DISPLAY_GROUP_FALLBACK_NAME) : null;
+              if (!groupName && !canEditItem) return null;
+              return (
+                <div className={groupName ? 'mt-1.5' : 'contents'}>
+                  <GroupMembershipControl
+                    itemId={id}
+                    groupName={groupName}
+                    canEdit={canEditItem}
+                    view={(item.item_type as string) === 'book' ? 'books' : 'items'}
+                  />
                 </div>
               );
             })()}

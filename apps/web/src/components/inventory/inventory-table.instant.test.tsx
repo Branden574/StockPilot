@@ -2427,7 +2427,16 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
   // Every placement row of an item carries the item's TOTAL on hand (the rack's
   // own qty is `line_quantity`), so expanding a multi-placement SKU inside a run
   // added that total once per rack.
-  it('counts a multi-placement variant ONCE in the run header total', async () => {
+  // Re-pinned by Group selected (2026-10-12; was: "counts a multi-placement
+  // variant ONCE in the run header total", which expanded PEG-10 and expected
+  // the run to read "2 variants · 52 pairs total"). That run only formed
+  // BECAUSE expanding the SKU header handed its two rack rows to the size-run
+  // pass (the V3 defect, design-merged.md 4: the header lost its children and
+  // the run's total jumped by the family's stock). Rows under any header are
+  // now nested and never offered to a run, so expanding PEG-10 shows its rows
+  // under PEG-10 and no run claims them. The run's once-per-record count
+  // stays pinned in core (size-run, display-units "totals").
+  it('an expanded multi-placement variant stays under its own SKU header, never pulled into a run (V3)', async () => {
     const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
@@ -2454,12 +2463,16 @@ describe('InventoryTable — size runs keyed on a stored product group', () => {
       />,
     );
 
+    // Collapsed: PEG-10's header ("2 locations") and PEG-9's row; the family
+    // has only one free member, so no run forms (as before).
+    expect(screen.queryByText(/2 variants/)).not.toBeInTheDocument();
     // Expand the SKU group so both placement rows are rendered — the state in
-    // which the run used to read 3 variants / 72 pairs.
+    // which the run used to pull them in (3 variants / 72 pairs, later 2 / 52).
     await user.click(screen.getByRole('button', { name: /expand .*PEG-10/i }));
-    expect(screen.getAllByText('2 variants · 52 pairs total').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/3 variants/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /collapse .*PEG-10/i })).toBeInTheDocument();
+    expect(screen.queryByText(/variants/)).not.toBeInTheDocument();
     expect(screen.queryByText(/72 pairs/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/52 pairs/)).not.toBeInTheDocument();
   });
 
   it('does NOT fold two same-base names carrying DIFFERENT group ids together', () => {

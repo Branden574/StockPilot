@@ -1,0 +1,437 @@
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import * as React from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Group selected (migration 0400) on the Items and Books tables: explicit
+// display group headers (core composeDisplayList: two or more records present,
+// else the record shows an "In group" chip and falls back to its SKU family),
+// the chips, the V3 fix (an expanded header's rows are never pulled into a
+// size run), and the bulk bar's facts (distinct records, one type, from the
+// loaded rows only).
+
+const { routerMock } = vi.hoisted(() => ({
+  routerMock: { replace: vi.fn(), push: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() },
+}));
+vi.mock('next/navigation', () => ({
+  useRouter: () => routerMock,
+  useSearchParams: () => new URLSearchParams(''),
+  usePathname: () => '/dashboard/inventory',
+}));
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: React.ReactNode } & Record<string, unknown>) => {
+    const { prefetch: _p, scroll: _s, replace: _r, ...anchor } = rest;
+    return (
+      <a
+        href={typeof href === 'string' ? href : '#'}
+        {...(anchor as React.AnchorHTMLAttributes<HTMLAnchorElement>)}
+      >
+        {children}
+      </a>
+    );
+  },
+}));
+vi.mock('next/image', () => ({
+  // eslint-disable-next-line @next/next/no-img-element
+  default: (props: { src: string; alt?: string }) => <img src={props.src} alt={props.alt ?? ''} />,
+}));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('@/server/actions/saved-views', () => ({
+  createSavedViewAction: vi.fn(),
+  deleteSavedViewAction: vi.fn(),
+  setActiveWarehouseAction: vi.fn(),
+  toggleSavedViewShareAction: vi.fn(),
+}));
+vi.mock('@/lib/download-export', () => ({ downloadInventoryExport: vi.fn() }));
+vi.mock('@/components/ui/image-hover-preview', () => ({
+  // The hover card's meta (where a header's "partial" mark lives) renders too.
+  ImageHoverPreview: ({
+    children,
+    meta,
+  }: {
+    children: React.ReactNode;
+    meta?: React.ReactNode;
+  }) => (
+    <span>
+      {children}
+      {meta}
+    </span>
+  ),
+  prewarmPreviewImages: vi.fn(),
+}));
+vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
+  useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
+}));
+vi.mock('@/components/inventory/display-group-dialogs', () => ({
+  GroupSelectedDialog: (p: { itemIds: readonly string[]; initialGroupId?: string | null }) => (
+    <div data-testid="group-dialog">
+      add {p.itemIds.join(',')} to {p.initialGroupId}
+    </div>
+  ),
+  RemoveFromGroupDialog: (p: { itemIds: readonly string[] }) => (
+    <div data-testid="remove-dialog">remove {p.itemIds.join(',')}</div>
+  ),
+  RenameGroupDialog: (p: { groupId: string }) => (
+    <div data-testid="rename-dialog">rename {p.groupId}</div>
+  ),
+}));
+
+const { spy } = vi.hoisted(() => ({
+  spy: {
+    selectedIds: [] as string[],
+    groupItemIds: undefined as string[] | undefined,
+    groupedItemIds: undefined as string[] | undefined,
+    groupingView: undefined as string | undefined,
+  },
+}));
+vi.mock('@/components/inventory/bulk-actions', () => ({
+  BulkActions: (props: {
+    selectedIds: string[];
+    groupItemIds?: string[];
+    groupedItemIds?: string[];
+    groupingView?: string;
+  }) => {
+    spy.selectedIds = props.selectedIds;
+    spy.groupItemIds = props.groupItemIds;
+    spy.groupedItemIds = props.groupedItemIds;
+    spy.groupingView = props.groupingView;
+    return <div data-testid="bulk-actions" />;
+  },
+}));
+
+import { InventoryTable } from './inventory-table';
+
+const LOOKUPS = {
+  categories: new Map<string, { name: string; color: string | null }>(),
+  locations: new Map<string, { name: string }>(),
+  charters: new Map<string, { name: string; code: string | null }>(),
+};
+
+function row(id: string, sku: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    name: `Item ${id}`,
+    sku,
+    status: 'active' as const,
+    quantity_on_hand: 4,
+    reorder_point: 0,
+    unit_cost: 2,
+    retail_price: 5,
+    category_id: null,
+    charter_id: null,
+    primary_location_id: null,
+    barcode: null,
+    model_number: null,
+    custom_fields: null,
+    item_type: 'product',
+    display_group_id: null,
+    display_group_name: null,
+    display_group_version: null,
+    created_at: '2026-01-01T00:00:00+00:00',
+    updated_at: '2026-01-02T00:00:00+00:00',
+    ...over,
+  };
+}
+
+const inGroup = (g: string, name: string) => ({
+  display_group_id: g,
+  display_group_name: name,
+  display_group_version: 1,
+});
+
+function bodyRows(container: HTMLElement) {
+  return Array.from(container.querySelectorAll('tbody tr'));
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  spy.selectedIds = [];
+  spy.groupItemIds = undefined;
+  spy.groupedItemIds = undefined;
+  spy.groupingView = undefined;
+});
+
+describe('InventoryTable: explicit display group headers', () => {
+  it('two records with different SKUs on one rack show as ONE header named for the group; each keeps its SKU', async () => {
+    const items = [
+      row('a', 'POLO-A', { name: 'Polo XXXL', quantity_on_hand: 3, ...inGroup('g', 'Polo XXXL') }),
+      row('b', 'POLO-B', { name: 'Polo XXXL', quantity_on_hand: 2, ...inGroup('g', 'Polo XXXL') }),
+      row('c', 'OTHER', { name: 'Other' }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    // Header + the other row; the members are hidden until expanded.
+    expect(bodyRows(container)).toHaveLength(2);
+    const header = bodyRows(container)[0]!;
+    expect(within(header as HTMLElement).getByText('Polo XXXL')).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText('2 records')).toBeInTheDocument();
+    // The SKUs differ by design: the SKU cell says so instead of picking one.
+    expect(within(header as HTMLElement).getByText('Multiple')).toBeInTheDocument();
+    // On hand counts each record once: 3 + 2.
+    expect(within(header as HTMLElement).getAllByText('5').length).toBeGreaterThan(0);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /expand group polo xxxl \(2 records\)/i }),
+    );
+    expect(bodyRows(container)).toHaveLength(4);
+    expect(screen.getByText('POLO-A')).toBeInTheDocument();
+    expect(screen.getByText('POLO-B')).toBeInTheDocument();
+  });
+
+  it('a group with ONE record on screen does not form: the record keeps its SKU family and shows "In group <name>"', () => {
+    const items = [row('a', 'SKU-X', { ...inGroup('g', 'Polo XXXL') }), row('b', 'SKU-X')];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    // The SKU family header (two records of SKU-X) is what forms.
+    expect(screen.getByRole('button', { name: /expand SKU-X/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /expand group/i })).not.toBeInTheDocument();
+  });
+
+  it('a lone member outside any SKU family wears "In group <name>"', () => {
+    const items = [row('a', 'SKU-A', { ...inGroup('g', 'Polo XXXL') }), row('b', 'SKU-B')];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    expect(screen.getByText('In group Polo XXXL')).toBeInTheDocument();
+  });
+
+  it('a record in no group sharing a SKU with a group here is offered Add to group (an explicit choice, never automatic)', async () => {
+    const items = [
+      row('a', 'PAD', { ...inGroup('g', 'Pads') }),
+      row('b', 'DESK', { ...inGroup('g', 'Pads') }),
+      row('c', 'PAD'),
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    expect(screen.getByText('Same SKU as records in Pads')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Add to group' }));
+    expect(screen.getByTestId('group-dialog')).toHaveTextContent('add c to g');
+  });
+
+  it('no Add to group, Rename or Remove for a viewer who cannot edit items', () => {
+    const items = [
+      row('a', 'PAD', { ...inGroup('g', 'Pads') }),
+      row('b', 'DESK', { ...inGroup('g', 'Pads') }),
+      row('c', 'PAD'),
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Add to group' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rename group' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove from group' })).not.toBeInTheDocument();
+  });
+
+  it('the header offers Rename and Remove for the records on screen', async () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Remove from group' }));
+    expect(screen.getByTestId('remove-dialog')).toHaveTextContent('remove a,b');
+  });
+
+  it('server mode on a multi-page result marks the group header partial', () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={45}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    const header = bodyRows(container)[0] as HTMLElement;
+    expect(
+      within(header).getByTitle(/other pages may hold more of this group/i),
+    ).toBeInTheDocument();
+  });
+
+  it('Books: one header for two editions of one title, no size runs', () => {
+    const items = [
+      row('e1', 'BK-1', {
+        name: 'Earth Science - S',
+        item_type: 'book',
+        barcode: '9780306406157',
+        ...inGroup('g', 'Earth Science'),
+      }),
+      row('e2', 'BK-2', {
+        name: 'Earth Science - S',
+        item_type: 'book',
+        barcode: '9781861972712',
+        ...inGroup('g', 'Earth Science'),
+      }),
+      row('x', 'BK-3', { name: 'Hoodie - M', item_type: 'book' }),
+      row('y', 'BK-4', { name: 'Hoodie - L', item_type: 'book' }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={4}
+        initialQuery=""
+        pageSize={30}
+        showBookFields
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: /expand group earth science \(2 records\)/i }),
+    ).toBeInTheDocument();
+    // The two sized-looking books stay rows: Books never get size runs.
+    expect(bodyRows(container)).toHaveLength(3);
+  });
+});
+
+describe('InventoryTable: the V3 fix (an expanded header never feeds a size run)', () => {
+  it('A and B (SKU X, "Tee - S"), C "Tee - M", D "Tee - L": the run is C and D, collapsed or with X expanded', async () => {
+    const items = [
+      row('A', 'X', { name: 'Tee - S', quantity_on_hand: 4 }),
+      row('B', 'X', { name: 'Tee - S', quantity_on_hand: 4 }),
+      row('C', 'Y', { name: 'Tee - M', quantity_on_hand: 2 }),
+      row('D', 'Z', { name: 'Tee - L', quantity_on_hand: 4 }),
+    ];
+    const { container } = render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={4}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /expand tee \(2 sizes\)/i })).toBeInTheDocument();
+    expect(bodyRows(container)).toHaveLength(2); // SKU X header, the run
+    await userEvent.click(screen.getByRole('button', { name: /expand X \(2 placements\)/i }));
+    // X's two rows render under X; the run still holds exactly C and D.
+    expect(bodyRows(container)).toHaveLength(4);
+    expect(screen.getByRole('button', { name: /expand tee \(2 sizes\)/i })).toBeInTheDocument();
+    expect(screen.queryByText(/4 sizes|3 sizes/)).not.toBeInTheDocument();
+  });
+});
+
+describe('InventoryTable: Group selected in the bulk bar', () => {
+  async function selectAll() {
+    await userEvent.click(screen.getAllByRole('checkbox')[0]!);
+  }
+
+  it('offers Group selected for two or more DISTINCT records of one type, and Remove for the grouped ones', async () => {
+    const items = [row('a', 'A', { ...inGroup('g', 'Pads') }), row('b', 'B'), row('c', 'C')];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={3}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect([...(spy.groupItemIds ?? [])].sort()).toEqual(['a', 'b', 'c']);
+    expect(spy.groupedItemIds).toEqual(['a']);
+    expect(spy.groupingView).toBe('items');
+  });
+
+  it('two rack rows of ONE record are one record: not enough to group', async () => {
+    const items = [row('a', 'A')];
+    render(
+      <InventoryTable
+        items={
+          [
+            { ...row('a', 'A'), rowKey: 'a:L1', line_quantity: 1 },
+            { ...row('a', 'A'), rowKey: 'a:L2', line_quantity: 3 },
+          ] as never
+        }
+        lookups={LOOKUPS}
+        total={items.length}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect(spy.selectedIds).toEqual(['a']);
+    expect(spy.groupItemIds ?? []).toEqual([]);
+  });
+
+  it('mixed Items and Books are not offered; nor is anything without items:update', async () => {
+    const mixed = [row('a', 'A'), row('b', 'B', { item_type: 'book' })];
+    const { unmount } = render(
+      <InventoryTable
+        items={mixed as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    await selectAll();
+    expect(spy.groupItemIds ?? []).toEqual([]);
+    unmount();
+    render(
+      <InventoryTable
+        items={[row('a', 'A'), row('b', 'B')] as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+      />,
+    );
+    await selectAll();
+    expect(spy.groupItemIds ?? []).toEqual([]);
+  });
+});
