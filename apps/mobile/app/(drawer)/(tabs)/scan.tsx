@@ -53,7 +53,7 @@ import {
   elsewhereUnavailableNote,
   holdingsKnownInFull,
 } from '@/lib/placement-rows';
-import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
+import { resolveScanMatches, sanitizeScanCode, scanPickerSubtitle } from '@/lib/scan-resolve';
 import { readSignatureOrder, scanSignatureDeparture } from '@/lib/scan-signature-departure';
 import { supabase } from '@/lib/supabase';
 import {
@@ -1257,9 +1257,7 @@ export default function Scan() {
         <View style={styles.sheet}>
           <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
             <Text style={styles.pickerTitle}>Multiple placements found</Text>
-            <Text style={styles.pickerSubtitle}>
-              This SKU is stocked in more than one place. Choose which one to adjust.
-            </Text>
+            <Text style={styles.pickerSubtitle}>{scanPickerSubtitle(placementChoices)}</Text>
             {placementChoices.map((c) => (
               <Pressable
                 key={c.id}
@@ -1269,6 +1267,9 @@ export default function Scan() {
               >
                 <Text style={styles.pickerRowTitle} numberOfLines={1}>
                   {c.charterName ?? 'Unassigned charter'}
+                </Text>
+                <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
+                  SKU {c.sku}
                 </Text>
                 <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
                   {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
