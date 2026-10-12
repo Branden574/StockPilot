@@ -432,6 +432,9 @@ async function inventoryTableSection({
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
   // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
   const canUngroup = can(sessionCtx, 'items:update');
+  // Group selected (0400): a group's header offers Rename to a manager only
+  // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
+  const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
   // "Start an order" bulk shortcut: viewer can place order requests AND the
   // (optional) orders module is on. getModulesForRequest is request-cached and
   // shared with the layout, so this costs no extra round trip.
@@ -597,6 +600,7 @@ async function inventoryTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -910,6 +914,7 @@ async function inventoryTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

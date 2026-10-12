@@ -74,7 +74,6 @@ const OUTCOME = {
   created: true,
   group: { id: 'g', name: 'Polo', version: 1, itemType: 'product', closed: false },
   changes: [{ itemId: A, fromGroupId: null, toGroupId: 'g' }],
-  closedGroupIds: [],
 };
 
 beforeEach(() => {

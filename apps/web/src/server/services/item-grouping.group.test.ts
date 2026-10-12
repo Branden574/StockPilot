@@ -146,7 +146,6 @@ const APPLIED = {
     { item_id: A, from_group_id: null, to_group_id: G },
     { item_id: B, from_group_id: null, to_group_id: G },
   ],
-  closed_group_ids: [],
   created: true,
   replay: false,
 };

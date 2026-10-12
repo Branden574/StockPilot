@@ -8937,6 +8937,14 @@ describe('the Group selected release (G2, 0400)', () => {
     expect(headers!.howItAffectsYou).toContain('Nothing about any record changes');
   });
 
+  it('says only a manager renames a group (security review SEC-1: apply_item_grouping refuses anyone else on the role alone)', () => {
+    const [group] = release().entries;
+    expect(group!.whatChanged).toContain(
+      'On the web, a manager can rename a group from its header.',
+    );
+    expect(group!.whatChanged).not.toMatch(/a group can be renamed/);
+  });
+
   it('never calls a recorded quantity "the book", and never tells anyone to change a charter or rack to get around a rule', () => {
     const text = [
       release().title,

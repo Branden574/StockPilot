@@ -975,17 +975,19 @@ export interface GroupingOutcome {
   /** The group the records are in afterwards (group, rename); null for remove. */
   group: GroupingOutcomeGroup | null;
   changes: Array<{ itemId: string; fromGroupId: string | null; toGroupId: string | null }>;
-  /** Groups left with no live record, closed by this request. */
-  closedGroupIds: string[];
+  // No closed group ids (security review SEC-2): whether a group closed
+  // depends on records the caller may not see (a group stays open while a
+  // hidden record is in it), so the answer never says. The audit rows keep
+  // group_closed for whoever may read the activity log.
 }
 
 /** apply_item_grouping's answer, or null when it is not one. */
 export function parseGroupingOutcome(raw: unknown): GroupingOutcome | null {
   if (!isRecord(raw)) return null;
-  const { action, outcome, group, changes, closed_group_ids } = raw;
+  const { action, outcome, group, changes } = raw;
   if (action !== 'group' && action !== 'remove' && action !== 'rename') return null;
   if (outcome !== 'applied' && outcome !== 'noop') return null;
-  if (!Array.isArray(changes) || !Array.isArray(closed_group_ids)) return null;
+  if (!Array.isArray(changes)) return null;
   let g: GroupingOutcomeGroup | null = null;
   if (group !== null && group !== undefined) {
     if (!isRecord(group) || typeof group.id !== 'string' || typeof group.name !== 'string')
@@ -1014,7 +1016,6 @@ export function parseGroupingOutcome(raw: unknown): GroupingOutcome | null {
     created: raw.created === true,
     group: g,
     changes: out,
-    closedGroupIds: closed_group_ids.filter((v): v is string => typeof v === 'string'),
   };
 }
 

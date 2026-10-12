@@ -15,7 +15,7 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
   deriveInstantView,
@@ -300,6 +300,9 @@ async function booksTableSection({
   const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
   // Ungroup (0399): the bulk bar offers it only to a viewer who can edit items.
   const canUngroup = can(sessionCtx, 'items:update');
+  // Group selected (0400): a group's header offers Rename to a manager only
+  // (apply_item_grouping refuses anyone else on the role alone, SEC-1).
+  const canRenameGroups = canUngroup && isManagerOrAbove(sessionCtx.role as Role);
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -381,6 +384,7 @@ async function booksTableSection({
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
+        canRenameGroups={canRenameGroups}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -622,6 +626,7 @@ async function booksTableSection({
       canCreate={canCreate}
       canSetPublicVisibility={canSetPublicVisibility}
       canUngroup={canUngroup}
+      canRenameGroups={canRenameGroups}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

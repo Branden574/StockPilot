@@ -337,6 +337,8 @@ describe('previewGrouping and postGrouping', () => {
       moveItemIds: [],
       acknowledgeProductFamily: false,
     };
+    // No closedGroupIds (security review SEC-2): the answer no longer says
+    // which groups closed.
     const outcome = {
       action: 'group',
       outcome: 'applied',
@@ -344,7 +346,6 @@ describe('previewGrouping and postGrouping', () => {
       created: true,
       group: { id: G, name: 'Polos', version: 1, itemType: 'product', closed: false },
       changes: [],
-      closedGroupIds: [],
     };
     api.mockResolvedValueOnce({ organizationId: ORG, result: outcome });
     expect(await postGrouping(body)).toEqual(outcome);

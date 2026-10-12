@@ -383,6 +383,11 @@ export interface InventoryTableProps {
    *  Ungroup for selected records that share a SKU with another loaded
    *  record. Default false: never offered. The server re-checks everything. */
   canUngroup?: boolean;
+  /** Group selected (0400): the viewer is a manager (or above) who can edit
+   *  items, so an explicit group's header offers Rename. Only a manager may
+   *  rename a group (security review SEC-1: apply_item_grouping answers on the
+   *  role alone, never on which records the caller can see). Default false. */
+  canRenameGroups?: boolean;
   /**
    * When provided, renders a small camera button inside the search
    * input on the right edge. Click invokes the callback so the
@@ -689,6 +694,7 @@ export function InventoryTable({
   canSetPublicVisibility = false,
   canStartOrder = false,
   canUngroup = false,
+  canRenameGroups = false,
   onScanRequest,
   page = 1,
   pageSize = 50,
@@ -2353,10 +2359,11 @@ export function InventoryTable({
                       groupId: entry.groupId,
                       name: groupName,
                       matching: !!q.trim() || activeFilterCount > 0,
-                      onRename: canUngroup
-                        ? () =>
-                            setGroupAction({ kind: 'rename', groupId: entry.groupId, memberIds })
-                        : undefined,
+                      onRename:
+                        canUngroup && canRenameGroups
+                          ? () =>
+                              setGroupAction({ kind: 'rename', groupId: entry.groupId, memberIds })
+                          : undefined,
                       onRemove: canUngroup
                         ? () => setGroupAction({ kind: 'remove', ids: memberIds })
                         : undefined,

@@ -179,7 +179,6 @@ export default function GroupSelectedScreen() {
           closed: false,
         },
         changes: [],
-        closedGroupIds: [],
       });
       setPhase('done');
       announce(GROUP_COPY.noop(plan.noop.name));

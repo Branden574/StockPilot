@@ -96,7 +96,6 @@ const APPLIED = {
       created: true,
       group: { id: G, name: 'Polo XXXL', version: 1, itemType: 'product', closed: false },
       changes: [],
-      closedGroupIds: [],
     },
   },
 };

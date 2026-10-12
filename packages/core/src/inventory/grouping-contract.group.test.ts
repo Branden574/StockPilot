@@ -220,7 +220,6 @@ describe('the answer', () => {
         outcome: 'applied',
         group: { id: G, name: 'Polo', version: 1, item_type: 'product', closed: false },
         changes: [{ item_id: A, from_group_id: null, to_group_id: G }],
-        closed_group_ids: [H],
         created: true,
         replay: false,
       }),
@@ -231,7 +230,6 @@ describe('the answer', () => {
       created: true,
       group: { id: G, name: 'Polo', version: 1, itemType: 'product', closed: false },
       changes: [{ itemId: A, fromGroupId: null, toGroupId: G }],
-      closedGroupIds: [H],
     });
     expect(
       parseGroupingOutcome({
@@ -239,7 +237,6 @@ describe('the answer', () => {
         outcome: 'noop',
         group: null,
         changes: [],
-        closed_group_ids: [],
         created: false,
         replay: true,
       }),
@@ -249,6 +246,42 @@ describe('the answer', () => {
       group: null,
     });
     expect(parseGroupingOutcome({ items: [] })).toBeNull();
+  });
+
+  it('carries no closed group ids (security review SEC-2): which groups closed depends on records the caller may not see', () => {
+    // apply_item_grouping no longer answers closed_group_ids: whether a group
+    // closed tells a member whether hidden records were left in it. The
+    // audit rows keep group_closed for those who may read the log.
+    const o = parseGroupingOutcome({
+      action: 'remove',
+      outcome: 'applied',
+      group: null,
+      changes: [{ item_id: A, from_group_id: G, to_group_id: null }],
+      created: false,
+      replay: false,
+    });
+    expect(o).not.toBeNull();
+    expect(Object.keys(o!).sort()).toEqual([
+      'action',
+      'changes',
+      'created',
+      'group',
+      'outcome',
+      'replay',
+    ]);
+    // An answer that still carries the field (an older stored outcome) reads
+    // the same, without it.
+    expect(
+      parseGroupingOutcome({
+        action: 'remove',
+        outcome: 'applied',
+        group: null,
+        changes: [],
+        closed_group_ids: [H],
+        created: false,
+        replay: true,
+      }),
+    ).not.toHaveProperty('closedGroupIds');
   });
 });
 

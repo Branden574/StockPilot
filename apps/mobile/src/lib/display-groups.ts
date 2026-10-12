@@ -344,8 +344,7 @@ export async function postGrouping(body: GroupingBody): Promise<GroupingOutcome>
   if (
     (o.action !== 'group' && o.action !== 'remove' && o.action !== 'rename') ||
     (o.outcome !== 'applied' && o.outcome !== 'noop') ||
-    !Array.isArray(o.changes) ||
-    !Array.isArray(o.closedGroupIds)
+    !Array.isArray(o.changes)
   )
     throw new Error(UNREADABLE);
   return o as unknown as GroupingOutcome;

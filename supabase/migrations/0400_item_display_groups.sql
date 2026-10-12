@@ -120,16 +120,19 @@
 --        the target afterwards is P0001 group_too_large.
 --      remove: a record no longer in any group is left as it is; one in
 --        another group than the caller saw is P0001 membership_changed.
---      rename: the group as above (group_not_found, group_changed); only a
---        manager, or someone who can edit every live record in the group, may
---        rename it (42501 rename_not_permitted, worded "Only a manager can
---        rename this group", which says nothing about hidden records); the
---        same name is a no-op.
+--      rename: only a manager may rename a group (42501
+--        rename_not_permitted, "Only a manager can rename this group"),
+--        checked FIRST, on the caller's role alone (security review SEC-1: a
+--        rule that read the group's records would tell staff whether it holds
+--        a record hidden from them); then the group as above
+--        (group_not_found, group_changed); the same name is a no-op.
 --  11. Writes, set-based, to these two tables only: a new group row; one
 --      upsert of the changing memberships; one delete of the removed ones;
 --      every group that lost or gained a record gets version + 1, and a group
 --      left with no live record is closed (closed_at) and its remaining rows
---      (records deleted earlier) are dropped, so a closed group is empty.
+--      (records deleted earlier) are dropped, each with its own audit row
+--      (data review D1), so a closed group is empty and every membership that
+--      ended is in the record's Activity.
 --      Never an item row, a SKU, barcode/ISBN, name, category, price, charter,
 --      rack, warehouse, stock, reservation, order, return or product_groups
 --      row; no fan-out.
@@ -137,14 +140,19 @@
 --      the 0345 precedent, design R9): inventory.group.created (the group),
 --      inventory.group.members_added (one per record that joined or moved,
 --      with the group it left, if any), inventory.group.members_removed (one
---      per record that left, with whether the group closed),
+--      per record that left, with whether the group closed; and one, reason
+--      group_closed, per row of a record deleted earlier that a closing group
+--      drops),
 --      inventory.group.renamed (the group, before and after). Item rows carry
 --      entity_type inventory_item and the record id, so each record's
 --      Activity shows them.
 --  13. Record the outcome under the key (0399's _item_grouping_record) and
 --      answer it: {action, outcome 'applied' | 'noop', group {id, name,
 --      version, item_type, closed} | null, changes [{item_id, from_group_id,
---      to_group_id}] (id order), closed_group_ids, created, replay}.
+--      to_group_id}] (id order), created, replay}. It never names the groups
+--      that closed (security review SEC-2): a group stays open while a record
+--      hidden from the caller is in it, so the answer would tell. The audit
+--      rows keep group_closed (readable with activity_logs:read only).
 --
 -- ── LOCK ORDER ─────────────────────────────────────────────────────────────
 -- The organization's grouping advisory lock (0399), then the selected item
@@ -578,6 +586,12 @@ begin
   if v_action = 'rename' then
     v_target_id := (p_req->>'group_id')::uuid;
     v_name := p_req->>'name';
+    -- A manager only (security review SEC-1), FIRST: the answer depends on
+    -- the caller's role alone, never on the group or on which of its records
+    -- the caller can read or edit.
+    if not public.has_org_role(p_org, 'manager') then
+      raise exception 'rename_not_permitted' using errcode = '42501', hint = 'rename_not_permitted';
+    end if;
     -- The group: in this organization, open, with a live record the caller
     -- can read. Every other case is the same answer.
     if not exists (select 1 from public.item_display_groups g
@@ -599,19 +613,11 @@ begin
     if v_target.version <> (p_req->>'expected_version')::integer then
       raise exception 'group_changed' using errcode = 'P0001', hint = 'group_changed';
     end if;
-    -- A manager, or someone who can edit every live record in the group.
-    if not public.has_org_role(p_org, 'manager')
-       and exists (select 1 from public.item_display_group_members m
-                     join public.inventory_items i on i.id = m.item_id
-                    where m.group_id = v_target_id and i.deleted_at is null
-                      and not public.caller_can_write_item(i.id)) then
-      raise exception 'rename_not_permitted' using errcode = '42501', hint = 'rename_not_permitted';
-    end if;
     if v_target.name = v_name then
       return jsonb_build_object('action', 'rename', 'outcome', 'noop',
                'group', jsonb_build_object('id', v_target.id, 'name', v_target.name, 'version', v_target.version,
                                            'item_type', v_target.item_type, 'closed', false),
-               'changes', '[]'::jsonb, 'closed_group_ids', '[]'::jsonb, 'created', false);
+               'changes', '[]'::jsonb, 'created', false);
     end if;
     v_old_name := v_target.name;
     update public.item_display_groups g
@@ -636,7 +642,7 @@ begin
     return jsonb_build_object('action', 'rename', 'outcome', 'applied',
              'group', jsonb_build_object('id', v_target.id, 'name', v_target.name, 'version', v_target.version,
                                          'item_type', v_target.item_type, 'closed', false),
-             'changes', '[]'::jsonb, 'closed_group_ids', '[]'::jsonb, 'created', false);
+             'changes', '[]'::jsonb, 'created', false);
   end if;
 
   -- ── group and remove: 8. Records ─────────────────────────────────────────
@@ -715,7 +721,7 @@ begin
                        where jsonb_typeof(v_cur -> u.id::text) = 'string' order by u.id);
     if cardinality(v_change) = 0 then
       return jsonb_build_object('action', 'remove', 'outcome', 'noop', 'group', null,
-                                'changes', '[]'::jsonb, 'closed_group_ids', '[]'::jsonb, 'created', false);
+                                'changes', '[]'::jsonb, 'created', false);
     end if;
     v_src := array(select distinct (v_cur ->> c.id::text)::uuid from unnest(v_change) c(id) order by 1);
     select jsonb_object_agg(g.id::text, g.name) into v_names from public.item_display_groups g where g.id = any (v_src);
@@ -732,8 +738,32 @@ begin
      where g.id = any (v_src);
     v_closed := array(select g.id from public.item_display_groups g
                        where g.id = any (v_src) and g.closed_at is not null order by g.id);
-    -- A closed group is empty: drop the rows of records deleted earlier.
-    delete from public.item_display_group_members m where m.group_id = any (v_closed);
+    -- A closed group is empty: drop the rows of records deleted earlier, each
+    -- with its own audit row (data review D1), so a record's Activity shows
+    -- that it left the group even though it was deleted at the time.
+    with dropped as (
+      delete from public.item_display_group_members m where m.group_id = any (v_closed)
+      returning m.item_id, m.group_id)
+    insert into public.audit_logs (organization_id, user_id, event, metadata)
+    select p_org, p_uid, 'inventory.group.members_removed',
+           jsonb_build_object(
+             'entity_type',  'inventory_item',
+             'entity_id',    d.item_id,
+             'warehouse_id', i.warehouse_id,
+             'before',       jsonb_build_object('display_group_id', d.group_id, 'display_group_name', g.name),
+             'after',        jsonb_build_object('display_group_id', null, 'display_group_name', null),
+             'reason',       'group_closed',
+             'changed_keys', jsonb_build_array('display_group'),
+             'group_id',     d.group_id,
+             'group_closed', true,
+             'request_key',  p_key,
+             'request_hash', p_hash,
+             'surface',      p_surface,
+             'source',       'apply_item_grouping')
+      from dropped d
+      join public.inventory_items i on i.id = d.item_id
+      join public.item_display_groups g on g.id = d.group_id
+     order by d.item_id;
 
     -- ── 12. Audit, one row per record that left ────────────────────────────
     insert into public.audit_logs (organization_id, user_id, event, metadata)
@@ -761,7 +791,7 @@ begin
                                                  'to_group_id', null) order by c.id), '[]'::jsonb)
       into v_changes from unnest(v_change) c(id);
     return jsonb_build_object('action', 'remove', 'outcome', 'applied', 'group', null,
-                              'changes', v_changes, 'closed_group_ids', to_jsonb(v_closed), 'created', false);
+                              'changes', v_changes, 'created', false);
   end if;
 
   -- ── 10. Rules: group ─────────────────────────────────────────────────────
@@ -823,7 +853,7 @@ begin
     select jsonb_build_object('action', 'group', 'outcome', 'noop',
              'group', jsonb_build_object('id', g.id, 'name', g.name, 'version', g.version,
                                          'item_type', g.item_type, 'closed', false),
-             'changes', '[]'::jsonb, 'closed_group_ids', '[]'::jsonb, 'created', false)
+             'changes', '[]'::jsonb, 'created', false)
       into v_outcome
       from public.item_display_groups g where g.id = v_noop_gid;
     return v_outcome;
@@ -907,7 +937,31 @@ begin
      where g.id = any (v_src);
     v_closed := array(select g.id from public.item_display_groups g
                        where g.id = any (v_src) and g.closed_at is not null order by g.id);
-    delete from public.item_display_group_members m where m.group_id = any (v_closed);
+    -- As for remove: a closed group is empty, and each row it drops (a record
+    -- deleted earlier) gets its audit row (data review D1).
+    with dropped as (
+      delete from public.item_display_group_members m where m.group_id = any (v_closed)
+      returning m.item_id, m.group_id)
+    insert into public.audit_logs (organization_id, user_id, event, metadata)
+    select p_org, p_uid, 'inventory.group.members_removed',
+           jsonb_build_object(
+             'entity_type',  'inventory_item',
+             'entity_id',    d.item_id,
+             'warehouse_id', i.warehouse_id,
+             'before',       jsonb_build_object('display_group_id', d.group_id, 'display_group_name', g.name),
+             'after',        jsonb_build_object('display_group_id', null, 'display_group_name', null),
+             'reason',       'group_closed',
+             'changed_keys', jsonb_build_array('display_group'),
+             'group_id',     d.group_id,
+             'group_closed', true,
+             'request_key',  p_key,
+             'request_hash', p_hash,
+             'surface',      p_surface,
+             'source',       'apply_item_grouping')
+      from dropped d
+      join public.inventory_items i on i.id = d.item_id
+      join public.item_display_groups g on g.id = d.group_id
+     order by d.item_id;
   else
     v_closed := '{}';
   end if;
@@ -959,7 +1013,7 @@ begin
   return jsonb_build_object('action', 'group', 'outcome', 'applied',
            'group', jsonb_build_object('id', v_target.id, 'name', v_target.name, 'version', v_target.version,
                                        'item_type', v_target.item_type, 'closed', false),
-           'changes', v_changes, 'closed_group_ids', to_jsonb(v_closed), 'created', v_new);
+           'changes', v_changes, 'created', v_new);
 end;
 $$;
 
@@ -1060,7 +1114,7 @@ comment on function public.apply_item_grouping(jsonb, text) is
   'idempotency_key_invalid); 3 shape (22023 grouping_invalid); 4 hash; 5 the organization''s grouping lock and 6 '
   'replay or P0001 idempotency_conflict (0399''s _item_grouping_claim); 7 has_permission items:update (42501 '
   'permission); 8 to 12 _display_grouping_apply; 13 record (0399''s _item_grouping_record) and answer {action, '
-  'outcome, group, changes, closed_group_ids, created, replay}. Writes only item_display_groups, '
+  'outcome, group, changes, created, replay} (never the groups that closed: SEC-2). Writes only item_display_groups, '
   'item_display_group_members, audit_logs and item_grouping_requests. Never waits on a row lock (55P03 busy) and '
   'never raises 40001/40P01.';
 

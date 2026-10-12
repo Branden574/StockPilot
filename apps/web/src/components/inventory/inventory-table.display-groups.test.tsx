@@ -274,10 +274,33 @@ describe('InventoryTable: explicit display group headers', () => {
         initialQuery=""
         pageSize={30}
         canUngroup
+        canRenameGroups
       />,
     );
-    await userEvent.click(screen.getByRole('button', { name: 'Remove from group' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Remove from group/ }));
     expect(screen.getByTestId('remove-dialog')).toHaveTextContent('remove a,b');
+    await userEvent.click(screen.getByRole('button', { name: /^Rename group/ }));
+    expect(screen.getByTestId('rename-dialog')).toHaveTextContent('rename g');
+  });
+
+  it('Rename is offered to a manager only (security review SEC-1: the database refuses anyone else, whatever they can see)', () => {
+    const items = [
+      row('a', 'A', { ...inGroup('g', 'Pads') }),
+      row('b', 'B', { ...inGroup('g', 'Pads') }),
+    ];
+    render(
+      <InventoryTable
+        items={items as never}
+        lookups={LOOKUPS}
+        total={2}
+        initialQuery=""
+        pageSize={30}
+        canUngroup
+      />,
+    );
+    // Staff who can edit items still remove; only the name is a manager's.
+    expect(screen.getByRole('button', { name: /^Remove from group/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Rename group/ })).not.toBeInTheDocument();
   });
 
   it('server mode on a multi-page result marks the group header partial', () => {

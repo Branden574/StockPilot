@@ -267,7 +267,6 @@ export function GroupSelectedDialog({
           closed: false,
         },
         changes: [],
-        closedGroupIds: [],
       });
       setPhase('done');
       return;

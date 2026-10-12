@@ -60,7 +60,9 @@ export const RELEASES: Release[] = [
     // rentals are refused (not_groupable); a record in another group moves
     // only with Move it into this group (membership_conflict otherwise); a
     // new record with a grouped SKU stays outside (owner decision) and
-    // shows Add to group. Rename is on the web only (the group's header).
+    // shows Add to group. Rename is on the web only (the group's header),
+    // for a manager only (security review SEC-1: the function refuses anyone
+    // else on the role alone).
     // The words never say "book" for a recorded quantity and never tell
     // anyone to change a charter or a rack.
     status: 'draft',
@@ -75,7 +77,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Group selected',
         whatChanged:
-          'On Items or Books, select two or more records and choose Group selected, on the web or in the mobile app. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out, from the list on the web or from the item page on both. On the web, a group can be renamed from its header.',
+          'On Items or Books, select two or more records and choose Group selected, on the web or in the mobile app. The review lists each record with its picture, SKU (and ISBN for a book), charter, rack and stock, and shows how the list will show the group. Start a new group with a name, or add the records to a group that already exists. A record already in another group moves only when you choose Move it into this group for it. Remove from group takes records out, from the list on the web or from the item page on both. On the web, a manager can rename a group from its header.',
         whyItMatters:
           'Records showed together only when they shared a SKU, so putting them under one header meant copying a SKU onto another record, and sometimes changing its charter or rack as well.',
         howItAffectsYou:

@@ -44,7 +44,6 @@ const outcome = (o: 'applied' | 'noop') => ({
   created: o === 'applied',
   group: { id: 'g', name: 'Polo', version: 1, itemType: 'product', closed: false },
   changes: [],
-  closedGroupIds: [],
 });
 
 beforeEach(() => {

@@ -27,16 +27,19 @@
 --     Order Totals, exports); apply writes only the two tables and audit_logs.
 -- A.  The owner's case: two no-charter records on rack 15-A with DIFFERENT
 --     SKUs (they cannot share a SKU there: 0234) are grouped without changing
---     either SKU; the answer's shape; the audit rows' shape; the request row;
---     both item rows byte-identical.
+--     either SKU; the answer's shape (never the groups that closed: SEC-2);
+--     the audit rows' shape; the request row; both item rows byte-identical;
+--     the organization's owner groups too (completeness review C7).
 -- I.  Idempotency: the same key and body replays; another body under the key
 --     is idempotency_conflict; a NEW key repeating the grouping (fresh or
---     stale screen) is a no-op naming the same group: never a second group.
+--     stale screen) is a no-op naming the same group: never a second group;
+--     another member's spent key is never theirs to replay (SEC-T1, as 0399's
+--     I4).
 -- C.  Charters and books: same SKU + same charter on two racks; chA + chB +
 --     no charter together; two books on the same empty rack with different
 --     ISBNs (a book group; barcodes untouched).
 -- H.  Hidden records: a persona control; memberships and groups are readable
---     exactly as the records are; a group made only of records a persona
+--     exactly as the records are (the owner and a plain viewer included, C7); a group made only of records a persona
 --     cannot read is invisible to it, name included; a hidden id is
 --     item_not_found, the same answer as an unknown id; the preview names only
 --     readable records and counts the rest; a category-restricted member.
@@ -50,7 +53,9 @@
 --     (membership_conflict); a stale screen is membership_changed; an
 --     explicit per-record move moves it, bumps the source, records the
 --     previous group, and closes a source left empty (and a closed group is
---     invisible and no target).
+--     invisible and no target); a source whose only other row is a record
+--     deleted earlier closes too, and that dropped row gets its audit row
+--     (data review D1).
 -- Y.  A product-family member joins only with the acknowledgement, and its
 --     family and size are untouched.
 -- R.  Refusals: kit, rental, mixed types, deleted, another org's record, every
@@ -59,10 +64,14 @@
 -- X.  Remove: one record (the group stays), a stale screen, a record no
 --     longer in a group (no-op), the last records (the group closes and is
 --     empty); charter staff removing what they can see leaves a hidden member
---     and its group in place.
--- N.  Rename: refused to someone who cannot edit every record (the words say
---     nothing about hidden ones); staff who can; a stale version; the same
---     name (no-op); trimming; invisible and other-org groups.
+--     and its group in place, and the answer never says whether the group
+--     closed (SEC-2); closing a group drops the row of a record deleted
+--     earlier with its own audit row, so an un-deleted record's Activity says
+--     it left (data review D1).
+-- N.  Rename: a manager only, on the role alone (security review SEC-1):
+--     staff are refused the same way whether or not the group holds a record
+--     hidden from them, even staff who can edit every record; a stale
+--     version; the same name (no-op); trimming; closed and other-org groups.
 -- T.  The consistency trigger refuses a direct row of another item type, a
 --     deleted record, or a closed group.
 -- F.  Failure injection: a planted raise on the 3rd membership row, on the
@@ -83,7 +92,7 @@
 
 begin;
 
-select plan(68);
+select plan(72);
 
 \set orgA   '\'04000000-0000-0000-0000-00000000000a\''
 \set orgB   '\'04000000-0000-0000-0000-00000000000b\''
@@ -150,6 +159,21 @@ select plan(68);
 -- Rename: one no-charter record, one chB record.
 \set n1     '\'04000000-0000-0000-0000-0000000001b1\''
 \set n2     '\'04000000-0000-0000-0000-0000000001b2\''
+-- The owner's own grouping (C7) and another member's spent key (SEC-T1).
+\set ow1    '\'04000000-0000-0000-0000-0000000001e1\''
+\set ow2    '\'04000000-0000-0000-0000-0000000001e2\''
+\set kk1    '\'04000000-0000-0000-0000-0000000001e3\''
+\set kk2    '\'04000000-0000-0000-0000-0000000001e4\''
+-- Data review D1: two groups that each hold a record deleted after it was
+-- grouped (clx, mvx), closed by a remove (gD1) and by a move (gD2).
+\set cl1    '\'04000000-0000-0000-0000-0000000001e5\''
+\set cl2    '\'04000000-0000-0000-0000-0000000001e6\''
+\set clx    '\'04000000-0000-0000-0000-0000000001e7\''
+\set mv1    '\'04000000-0000-0000-0000-0000000001e8\''
+\set mv2    '\'04000000-0000-0000-0000-0000000001e9\''
+\set mvx    '\'04000000-0000-0000-0000-0000000001ea\''
+\set gD1    '\'04000000-0000-0000-0000-0000000003d1\''
+\set gD2    '\'04000000-0000-0000-0000-0000000003d2\''
 -- Failure injection.
 \set j1     '\'04000000-0000-0000-0000-0000000001c1\''
 \set j2     '\'04000000-0000-0000-0000-0000000001c2\''
@@ -276,6 +300,16 @@ insert into public.inventory_items
   (:j9,  :orgA, :whA, null, :catA, 'product', 'X0400-J9',     'Inject 9',      null,            '9-L',  1, 'active', false, false, null, null, '2026-01-09T00:00:00Z', null),
   (:del, :orgA, :whA, null, :catA, 'product', 'X0400-DEL',    'Deleted',       null,            '1-M',  0, 'active', false, false, null, null, '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z'),
   (:dl2, :orgA, :whA, null, :catA, 'product', 'X0400-DL2',    'Live',          null,            '2-M',  1, 'active', false, false, null, null, '2026-01-02T00:00:00Z', null),
+  (:ow1, :orgA, :whA, null, :catA, 'product', 'X0400-OW1',    'Owner one',     null,            '1-P',  1, 'active', false, false, null, null, '2026-01-01T00:00:00Z', null),
+  (:ow2, :orgA, :whA, null, :catA, 'product', 'X0400-OW2',    'Owner two',     null,            '2-P',  1, 'active', false, false, null, null, '2026-01-02T00:00:00Z', null),
+  (:kk1, :orgA, :whA, null, :catA, 'product', 'X0400-KK1',    'Key one',       null,            '1-Q',  1, 'active', false, false, null, null, '2026-01-01T00:00:00Z', null),
+  (:kk2, :orgA, :whA, null, :catA, 'product', 'X0400-KK2',    'Key two',       null,            '2-Q',  1, 'active', false, false, null, null, '2026-01-02T00:00:00Z', null),
+  (:cl1, :orgA, :whA, null, :catA, 'product', 'X0400-CL1',    'Closing one',   null,            '1-R',  1, 'active', false, false, null, null, '2026-01-01T00:00:00Z', null),
+  (:cl2, :orgA, :whA, null, :catA, 'product', 'X0400-CL2',    'Closing two',   null,            '2-R',  1, 'active', false, false, null, null, '2026-01-02T00:00:00Z', null),
+  (:clx, :orgA, :whA, null, :catA, 'product', 'X0400-CLX',    'Closing gone',  null,            '3-R',  0, 'active', false, false, null, null, '2026-01-03T00:00:00Z', '2026-02-01T00:00:00Z'),
+  (:mv1, :orgA, :whA, null, :catA, 'product', 'X0400-MV1',    'Moving one',    null,            '1-S',  1, 'active', false, false, null, null, '2026-01-01T00:00:00Z', null),
+  (:mv2, :orgA, :whA, null, :catA, 'product', 'X0400-MV2',    'Moving two',    null,            '2-S',  1, 'active', false, false, null, null, '2026-01-02T00:00:00Z', null),
+  (:mvx, :orgA, :whA, null, :catA, 'product', 'X0400-MVX',    'Moving gone',   null,            '3-S',  0, 'active', false, false, null, null, '2026-01-03T00:00:00Z', '2026-02-01T00:00:00Z'),
   (:bx,  :orgB, :whB, null, null,  'product', 'X0400-BX',     'Org B record',  null,            '1-N',  5, 'active', false, false, null, null, '2026-01-01T00:00:00Z', null);
 -- 200 records in one group (the 200-record bound).
 insert into public.inventory_items
@@ -289,6 +323,19 @@ insert into public.item_display_groups (id, organization_id, item_type, name) va
 insert into public.item_display_group_members (item_id, organization_id, group_id)
 select ('04000000-0000-0000-0001-' || lpad(to_hex(n), 12, '0'))::uuid, :orgA, :gBig from generate_series(1, 200) n;
 insert into public.item_display_group_members (item_id, organization_id, group_id) values (:bx, :orgB, :gB);
+-- Data review D1: a record deleted while it was in a group keeps its row
+-- (the consistency trigger checks a row only when it is written). The
+-- fixture writes the two such rows with the trigger off for that one
+-- statement, the state production reaches when a grouped record is deleted.
+insert into public.item_display_groups (id, organization_id, item_type, name) values
+  (:gD1, :orgA, 'product', '0400 Closing with a deleted record'),
+  (:gD2, :orgA, 'product', '0400 Moving with a deleted record');
+insert into public.item_display_group_members (item_id, organization_id, group_id) values
+  (:cl1, :orgA, :gD1), (:cl2, :orgA, :gD1), (:mv1, :orgA, :gD2);
+alter table public.item_display_group_members disable trigger trg_item_display_group_members_consistency;
+insert into public.item_display_group_members (item_id, organization_id, group_id) values
+  (:clx, :orgA, :gD1), (:mvx, :orgA, :gD2);
+alter table public.item_display_group_members enable trigger trg_item_display_group_members_consistency;
 
 -- An order on s2 with a reservation and a return.
 insert into public.order_requests
@@ -443,7 +490,7 @@ grant all on ans, reqs to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.inventory_items where id::text like '04000000-%') <> 243 then
+  if (select count(*) from public.inventory_items where id::text like '04000000-%') <> 253 then
     raise exception 'fixture: items (%)', (select count(*) from public.inventory_items where id::text like '04000000-%');
   end if;
   if (select count(*) from public.item_display_group_members where group_id = '04000000-0000-0000-0000-0000000003b1') <> 200 then
@@ -451,6 +498,12 @@ do $$ begin
   end if;
   if (select count(*) from public.user_profiles where id::text like '04000000-%' and disabled_at is not null) <> 1 then
     raise exception 'fixture: disabled member';
+  end if;
+  if (select count(*) from public.item_display_group_members where group_id in ('04000000-0000-0000-0000-0000000003d1', '04000000-0000-0000-0000-0000000003d2')) <> 5
+     or (select count(*) from public.item_display_group_members m join public.inventory_items i on i.id = m.item_id
+          where i.deleted_at is not null and i.id::text like '04000000-%') <> 2
+     or (select tgenabled from pg_trigger where tgname = 'trg_item_display_group_members_consistency') <> 'O' then
+    raise exception 'fixture: the D1 groups (or the consistency trigger is still off)';
   end if;
 end $$;
 
@@ -562,8 +615,8 @@ select is(
   (select string_agg(k, ',' order by k) from jsonb_object_keys((select r from ans where tag = 'a1')::jsonb) k)
   || '|' || (select string_agg(k, ',' order by k) from jsonb_object_keys((select r from ans where tag = 'a1')::jsonb -> 'group') k)
   || '|' || (select string_agg(k, ',' order by k) from jsonb_object_keys((select r from ans where tag = 'a1')::jsonb #> '{changes,0}') k),
-  'action,changes,closed_group_ids,created,group,outcome,replay|closed,id,item_type,name,version|from_group_id,item_id,to_group_id',
-  'A3: the answer is exactly {action, outcome, group, changes, closed_group_ids, created, replay}');
+  'action,changes,created,group,outcome,replay|closed,id,item_type,name,version|from_group_id,item_id,to_group_id',
+  'A3: the answer is exactly {action, outcome, group, changes, created, replay}: it never names the groups that closed (security review SEC-2: a group stays open while a record hidden from the caller is in it, so that list would tell)');
 select is(
   (select string_agg(a.event || '/' || (a.metadata->>'entity_type') || '/'
                      || case when a.metadata->>'entity_type' = 'inventory_item' then right(a.metadata->>'entity_id', 3)
@@ -591,6 +644,14 @@ select is(
      from pg_temp.fp_full(:orgA) a join before_items b on b.id = a.id where a.id in (:d1, :d2) and a.j <> b.j),
   '',
   'A6: both item rows are byte-identical, every column (updated_at included): grouping writes no item row, so the "Recently updated" order and realtime are untouched');
+insert into ans select 'a7', pg_temp.ap(:own, pg_temp.greq(:own, array[:ow1, :ow2]::uuid[], pg_temp.new_t('Owner pair')), pg_temp.k(2));
+select is(
+  pg_temp.brief((select r from ans where tag = 'a7'))
+  || '|' || coalesce((pg_temp.gid(:ow1) = pg_temp.gid(:ow2))::text, '-')
+  || '|' || coalesce((select string_agg(right(a.user_id::text, 2), ',') from public.audit_logs a
+                        where a.organization_id = :orgA and a.metadata->>'request_key' = pg_temp.k(2)), '-'),
+  'applied/new/2/false|true|a0,a0,a0',
+  'A7 (completeness review C7): the organization''s owner groups two records too; the three audit rows are the owner''s');
 
 -- ═══ I. Idempotency ═══════════════════════════════════════════════════════
 insert into ans select 'i1', pg_temp.ap(:mgr, (select r from reqs where tag = 'a1'), pg_temp.k(1));
@@ -598,25 +659,51 @@ select is(
   pg_temp.brief((select r from ans where tag = 'i1')) || '/'
   || (((select r from ans where tag = 'i1')::jsonb - 'replay') = ((select r from ans where tag = 'a1')::jsonb - 'replay'))::text || '/'
   || (select count(*) from public.item_display_groups where organization_id = :orgA and name = 'Polo XXXL')::text || '/'
-  || (select count(*) from public.audit_logs where organization_id = :orgA and event like 'inventory.group.%')::text,
+  || (select count(*) from public.audit_logs where organization_id = :orgA and event like 'inventory.group.%'
+        and metadata->>'request_key' = pg_temp.k(1))::text,
   'applied/new/2/true/true/1/3',
   'I1: the same key and body replays the first answer (replay true): no second group, no new audit row');
 select is(
   pg_temp.brief(pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:d1, :d2]::uuid[], pg_temp.new_t('Polo shirts')), pg_temp.k(1))),
   'P0001:idempotency_conflict',
   'I2: another body under a spent key is idempotency_conflict');
-insert into ans select 'i3', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:d1, :d2]::uuid[], pg_temp.new_t('Polo XXXL')), pg_temp.k(2));
-insert into ans select 'i4', pg_temp.ap(:mgr, (select r from reqs where tag = 'a1'), pg_temp.k(3));
+insert into ans select 'i3', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:d1, :d2]::uuid[], pg_temp.new_t('Polo XXXL')), pg_temp.k(4));
+insert into ans select 'i3b', pg_temp.ap(:mgr, (select r from reqs where tag = 'a1'), pg_temp.k(3));
 select is(
   pg_temp.brief((select r from ans where tag = 'i3')) || '/'
   || (((select r from ans where tag = 'i3')::jsonb #>> '{group,id}') = pg_temp.gid(:d1)::text)::text || '|'
-  || pg_temp.brief((select r from ans where tag = 'i4')) || '/'
-  || (((select r from ans where tag = 'i4')::jsonb #>> '{group,id}') = pg_temp.gid(:d1)::text)::text || '|'
+  || pg_temp.brief((select r from ans where tag = 'i3b')) || '/'
+  || (((select r from ans where tag = 'i3b')::jsonb #>> '{group,id}') = pg_temp.gid(:d1)::text)::text || '|'
   || (select count(*) from public.item_display_groups where organization_id = :orgA and name = 'Polo XXXL')::text || '/'
-  || (select count(*) from public.item_grouping_requests where key in (pg_temp.k(2)::uuid, pg_temp.k(3)::uuid))::text || '/'
-  || (select count(*) from public.audit_logs where organization_id = :orgA and event like 'inventory.group.%')::text,
+  || (select count(*) from public.item_grouping_requests where user_id = :mgr and key in (pg_temp.k(4)::uuid, pg_temp.k(3)::uuid))::text || '/'
+  || (select count(*) from public.audit_logs where organization_id = :orgA and event like 'inventory.group.%'
+        and metadata->>'request_key' in (pg_temp.k(1), pg_temp.k(3), pg_temp.k(4)))::text,
   'noop/old/0/false/true|noop/old/0/false/true|1/2/3',
   'I3: a NEW key repeating the grouping, from a fresh screen or from a second tab that still saw no group, is a no-op naming the same group: never a second group, no audit row (the no-op is recorded under its key)');
+-- Security review SEC-T1 (0399's I4): the key is the caller's own (the
+-- request table's key is (organization, user, key); 0399's claim reads
+-- user_id = auth.uid(); the hash covers the uid). stf, who can group (staff,
+-- whA, every charter there), sends the manager's spent key k(1) with its own
+-- uid and its own body.
+create temp table k1_mgr_before as
+  select to_jsonb(r) as j from public.item_grouping_requests r
+   where r.organization_id = :orgA and r.user_id = :mgr and r.key = pg_temp.k(1)::uuid;
+insert into ans select 'i4', pg_temp.ap(:stf, pg_temp.greq(:stf, array[:kk1, :kk2]::uuid[], pg_temp.new_t('Spent key')), pg_temp.k(1));
+-- Each part is coalesced to '-', so a failure reads as what happened.
+select is(
+  pg_temp.brief((select r from ans where tag = 'i4'))
+  || '|' || coalesce((select string_agg(right(r.user_id::text, 2), ',' order by r.user_id)
+                        from public.item_grouping_requests r where r.organization_id = :orgA and r.key = pg_temp.k(1)::uuid), '-')
+  || '|' || coalesce(((select to_jsonb(r) from public.item_grouping_requests r
+                        where r.organization_id = :orgA and r.user_id = :mgr and r.key = pg_temp.k(1)::uuid)
+                      = (select j from k1_mgr_before))::text, '-')
+  || '|' || coalesce((select string_agg(right(a.user_id::text, 2), ',') from public.audit_logs a
+                        where a.organization_id = :orgA and a.metadata->>'request_key' = pg_temp.k(1)
+                          and a.metadata->>'entity_id' in (:kk1::text, :kk2::text)), '-')
+  || '|' || coalesce((pg_temp.gid(:kk1) = pg_temp.gid(:kk2) and pg_temp.gid(:kk1) <> pg_temp.gid(:d1)
+                      and pg_temp.gid(:d1) = pg_temp.gid(:d2))::text, '-'),
+  'applied/new/2/false|a1,a2|true|a2,a2|true',
+  'I4 (security review SEC-T1): another member who can group sends the manager''s spent key with their own uid and body: a fresh evaluation that applies (not a replay of the manager''s answer, not idempotency_conflict); the key now holds two rows, the manager''s and theirs, and the manager''s row is unchanged; the grouping is theirs (audit as stf); the manager''s group is untouched');
 
 -- ═══ C. Charters and books ════════════════════════════════════════════════
 insert into ans select 'c1', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:c1, :c2, :c3]::uuid[], pg_temp.new_t('Charter mix')), pg_temp.k(10));
@@ -648,14 +735,16 @@ select is(
   '121,122,123|121,123|123',
   'H0: the personas read what 0229/0310 say: stf every charter at whA, stfCh the no-charter and chA records, stfC only the no-charter one');
 select is(
-  'stf=' || pg_temp.vis(:stf, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
+  'own=' || pg_temp.vis(:own, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
+  || ',vwr=' || pg_temp.vis(:vwr, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
+  || ',stf=' || pg_temp.vis(:stf, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
   || ',stfCh=' || pg_temp.vis(:stfCh, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
   || ',stfC=' || pg_temp.vis(:stfC, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
   || ',mgrB=' || pg_temp.vis(:mgrB, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
   || ',nobody=' || pg_temp.vis(:nobody, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1))
   || ',dis=' || pg_temp.vis(:dis, array[:c1, :c2, :c3]::uuid[], pg_temp.gid(:c1)),
-  'stf=3/1,stfCh=2/1,stfC=1/1,mgrB=0/0,nobody=0/0,dis=0/0',
-  'H1: a membership is readable exactly when its record is, and the group when at least one of its records is: charter staff see their records'' memberships only; another org, an outsider and a disabled member see nothing');
+  'own=3/1,vwr=3/1,stf=3/1,stfCh=2/1,stfC=1/1,mgrB=0/0,nobody=0/0,dis=0/0',
+  'H1: a membership is readable exactly when its record is, and the group when at least one of its records is: the owner, a viewer and staff at whA read all three; charter staff see their records'' memberships only; another org, an outsider and a disabled member see nothing');
 insert into ans select 'h2', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:hb1, :hb2]::uuid[], pg_temp.new_t('South only')), pg_temp.k(13));
 select is(
   pg_temp.brief((select r from ans where tag = 'h2'))
@@ -804,16 +893,32 @@ select is(
   || '|' || (select g.version::text || '/' || (g.closed_at is not null)::text || '/'
                     || (select count(*) from public.item_display_group_members m where m.group_id = g.id)::text
                from public.item_display_groups g where g.id = pg_temp.gnamed('Old group'))
-  || '|' || (((select r from ans where tag = 'm4')::jsonb->'closed_group_ids') = jsonb_build_array(pg_temp.gnamed('Old group')))::text
+  || '|' || (not ((select r from ans where tag = 'm4')::jsonb ? 'closed_group_ids'))::text
   || '|' || (select a.metadata->>'previous_group_closed' from public.audit_logs a
               where a.event = 'inventory.group.members_added' and a.metadata->>'entity_id' = :m1::text and a.metadata->>'request_key' = pg_temp.k(42)),
   'applied/old/1/false|3/true/0|true|true',
-  'M4: moving the last record out closes its old group (version 3, empty), the answer names it, and the audit row says so');
+  'M4: moving the last record out closes its old group (version 3, empty); the answer does not name it (SEC-2); the audit row says so');
 select is(
   pg_temp.run('authenticated', :mgr, format('select count(*)::text from public.item_display_groups where id = %L', pg_temp.gnamed('Old group')))
   || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:m4]::uuid[], pg_temp.old_t(pg_temp.gnamed('Old group'))), pg_temp.k(522))),
   '0|P0002:group_not_found',
   'M5: a closed group is invisible, even to a manager, and cannot be a target');
+insert into ans select 'm6', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:mv1, :mv2]::uuid[], pg_temp.new_t('Moved on'), array[:mv1]::uuid[]), pg_temp.k(44));
+select is(
+  pg_temp.brief((select r from ans where tag = 'm6'))
+  || '|' || (select (g.closed_at is not null)::text || '/'
+                    || (select count(*) from public.item_display_group_members m where m.group_id = g.id)::text
+               from public.item_display_groups g where g.id = :gD2)
+  || '|' || coalesce((select (a.metadata->>'reason') || '/' || (a.metadata->>'group_closed') || '/'
+                             || (a.metadata#>>'{before,display_group_name}') || '/'
+                             || coalesce(a.metadata#>>'{after,display_group_id}', 'null') || '/' || a.user_id::text
+                        from public.audit_logs a where a.event = 'inventory.group.members_removed'
+                         and a.metadata->>'entity_id' = :mvx::text and a.metadata->>'request_key' = pg_temp.k(44)), '-')
+  || '|' || coalesce((select a.metadata->>'previous_group_closed' from public.audit_logs a
+                        where a.event = 'inventory.group.members_added' and a.metadata->>'entity_id' = :mv1::text
+                          and a.metadata->>'request_key' = pg_temp.k(44)), '-'),
+  'applied/new/2/false|true/0|group_closed/true/0400 Moving with a deleted record/null/04000000-0000-0000-0000-0000000000a1|true',
+  'M6 (data review D1): moving a group''s last live record out closes it, and the row of the record deleted earlier that the closing drops gets its own members_removed audit row (reason group_closed), so an un-deleted record''s Activity says it left');
 
 -- ═══ Y. Product families ══════════════════════════════════════════════════
 select is(
@@ -919,49 +1024,70 @@ select is(
   pg_temp.brief((select r from ans where tag = 'x3')) || '|' || pg_temp.brief((select r from ans where tag = 'x4'))
   || '|' || (select (g.closed_at is not null)::text || '/' || (select count(*) from public.item_display_group_members m where m.group_id = g.id)::text
                from public.item_display_groups g where g.name = 'Remove me' and g.organization_id = :orgA)
-  || '|' || (jsonb_array_length((select r from ans where tag = 'x4')::jsonb->'closed_group_ids'))::text
+  || '|' || (not ((select r from ans where tag = 'x4')::jsonb ? 'closed_group_ids'))::text
   || '|' || (select string_agg(a.metadata->>'group_closed', ',' order by a.metadata->>'entity_id') from public.audit_logs a
               where a.event = 'inventory.group.members_removed' and a.metadata->>'request_key' = pg_temp.k(63)),
-  'noop/old/0/false|applied/old/2/false|true/0|1|true,true',
-  'X3: removing a record no longer in a group is a no-op; removing the last records closes the group, which is then empty');
+  'noop/old/0/false|applied/old/2/false|true/0|true|true,true',
+  'X3: removing a record no longer in a group is a no-op; removing the last records closes the group, which is then empty; the answer does not say so (SEC-2), the audit rows do');
 insert into ans select 'x5', pg_temp.ap(:stfCh, pg_temp.rreq(:stfCh, array[:c1, :c3]::uuid[]), pg_temp.k(64));
 select is(
   pg_temp.brief((select r from ans where tag = 'x5'))
   || '|' || (select coalesce(g.closed_at::text, 'open') || '/' || g.version::text from public.item_display_groups g where g.name = 'Charter mix')
   || '|' || pg_temp.vis(:stfCh, array[:c1, :c2, :c3]::uuid[], pg_temp.gnamed('Charter mix'))
-  || '|' || pg_temp.vis(:mgr, array[:c1, :c2, :c3]::uuid[], pg_temp.gnamed('Charter mix')),
-  'applied/old/2/false|open/2|0/0|1/1',
-  'X4: charter staff removing the two records they can see leave the chB record (hidden from them) in its group, which stays open for the manager and disappears for them');
+  || '|' || pg_temp.vis(:mgr, array[:c1, :c2, :c3]::uuid[], pg_temp.gnamed('Charter mix'))
+  || '|' || (((select r from ans where tag = 'x5')::jsonb - 'changes')
+             = ((select r from ans where tag = 'x4')::jsonb - 'changes'))::text,
+  'applied/old/2/false|open/2|0/0|1/1|true',
+  'X4: charter staff removing the two records they can see leave the chB record (hidden from them) in its group, which stays open for the manager and disappears for them; their answer is shaped exactly like X3''s, where the group closed (SEC-2: nothing in it tells a hidden record is left)');
+
+insert into ans select 'x6', pg_temp.ap(:mgr, pg_temp.rreq(:mgr, array[:cl1, :cl2]::uuid[]), pg_temp.k(65));
+select is(
+  pg_temp.brief((select r from ans where tag = 'x6'))
+  || '|' || (select (g.closed_at is not null)::text || '/'
+                    || (select count(*) from public.item_display_group_members m where m.group_id = g.id)::text
+               from public.item_display_groups g where g.id = :gD1)
+  || '|' || coalesce((select string_agg(right(a.metadata->>'entity_id', 3) || '=' || coalesce(a.metadata->>'reason', 'null')
+                                        || '/' || (a.metadata->>'group_closed') || '/' || (a.metadata#>>'{before,display_group_name}'),
+                                        ',' order by a.metadata->>'entity_id')
+                        from public.audit_logs a where a.event = 'inventory.group.members_removed'
+                         and a.metadata->>'request_key' = pg_temp.k(65)), '-')
+  || '|' || (select count(*) from public.item_display_group_members where item_id = :clx)::text,
+  'applied/old/2/false|true/0|1e5=null/true/0400 Closing with a deleted record,1e6=null/true/0400 Closing with a deleted record,1e7=group_closed/true/0400 Closing with a deleted record|0',
+  'X5 (data review D1): removing a group''s last live records closes it; the row of the record deleted earlier is dropped with its own members_removed audit row (reason group_closed), so an un-deleted record comes back in no group with its Activity saying why');
 
 -- ═══ N. Rename ════════════════════════════════════════════════════════════
 insert into ans select 'n0', pg_temp.ap(:mgr, pg_temp.greq(:mgr, array[:n1, :n2]::uuid[], pg_temp.new_t('Rename me')), pg_temp.k(70));
 select is(
   pg_temp.brief((select r from ans where tag = 'n0'))
-  || '|' || pg_temp.brief(pg_temp.ap(:stfCh, pg_temp.nreq(:stfCh, pg_temp.gnamed('Rename me'), 'By charter staff'), pg_temp.k(560))),
-  'applied/new/2/false|42501:rename_not_permitted',
-  'N1: charter staff who can see the group (n1) but cannot edit every record in it (n2, chB) cannot rename it (the words say only that a manager can)');
-insert into ans select 'n2', pg_temp.ap(:stf, pg_temp.nreq(:stf, pg_temp.gnamed('Rename me'), 'Renamed by staff'), pg_temp.k(71));
+  || '|' || pg_temp.brief(pg_temp.ap(:stfCh, pg_temp.nreq(:stfCh, pg_temp.gnamed('Rename me'), 'By charter staff'), pg_temp.k(560)))
+  || '|' || pg_temp.brief(pg_temp.ap(:stf, pg_temp.nreq(:stf, pg_temp.gnamed('Rename me'), 'By staff'), pg_temp.k(564)))
+  || '|' || (select g.name || '/' || g.version::text from public.item_display_groups g where g.id = pg_temp.gid(:n1)),
+  'applied/new/2/false|42501:rename_not_permitted|42501:rename_not_permitted|Rename me/1',
+  'N1 (security review SEC-1): only a manager may rename a group, on the role alone: charter staff who cannot see n2 (chB) and staff who can edit both records are refused the same way, so the refusal says nothing about a hidden record; the group is untouched');
+insert into ans select 'n2', pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Rename me'), 'Renamed by a manager'), pg_temp.k(71));
 select is(
   pg_temp.brief((select r from ans where tag = 'n2'))
-  || '|' || (select g.version::text from public.item_display_groups g where g.name = 'Renamed by staff')
+  || '|' || (select g.version::text from public.item_display_groups g where g.name = 'Renamed by a manager')
   || '|' || (select (a.metadata#>>'{before,name}') || '>' || (a.metadata#>>'{after,name}') || '/' || (a.metadata->>'entity_type')
+                    || '/' || right(a.user_id::text, 2)
                from public.audit_logs a where a.event = 'inventory.group.renamed' and a.metadata->>'request_key' = pg_temp.k(71)),
-  'applied/old/0/false|2|Rename me>Renamed by staff/item_display_group',
-  'N2: staff who can edit every record rename it: version 2, one inventory.group.renamed row with the old and new names');
+  'applied/old/0/false|2|Rename me>Renamed by a manager/item_display_group/a1',
+  'N2: a manager renames it: version 2, one inventory.group.renamed row with the old and new names, as the manager');
 select is(
-  pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by staff'), 'Stale', 1), pg_temp.k(561)))
-  || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by staff'), 'Renamed by staff'), pg_temp.k(72)))
-  || '|' || (select g.version::text from public.item_display_groups g where g.name = 'Renamed by staff'),
+  pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by a manager'), 'Stale', 1), pg_temp.k(561)))
+  || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by a manager'), 'Renamed by a manager'), pg_temp.k(72)))
+  || '|' || (select g.version::text from public.item_display_groups g where g.name = 'Renamed by a manager'),
   'P0001:group_changed|noop/old/0/false|2',
   'N3: a stale version is group_changed; the same name is a no-op (no version change)');
-insert into ans select 'n4', pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by staff'), '  Trimmed  '), pg_temp.k(73));
+insert into ans select 'n4', pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Renamed by a manager'), '  Trimmed  '), pg_temp.k(73));
 select is(
   pg_temp.brief((select r from ans where tag = 'n4'))
   || '|' || ((select r from ans where tag = 'n4')::jsonb #>> '{group,name}')
   || '|' || pg_temp.brief(pg_temp.ap(:stfCh, pg_temp.nreq(:stfCh, pg_temp.gnamed('South only'), 'Peek'), pg_temp.k(562)))
-  || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, :gB, 'Peek', 1), pg_temp.k(563))),
-  'applied/old/0/false|Trimmed|P0002:group_not_found|P0002:group_not_found',
-  'N4: a name is trimmed; a group the caller cannot see and another organization''s group are group_not_found');
+  || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, :gB, 'Peek', 1), pg_temp.k(563)))
+  || '|' || pg_temp.brief(pg_temp.ap(:mgr, pg_temp.nreq(:mgr, pg_temp.gnamed('Old group'), 'Peek'), pg_temp.k(565))),
+  'applied/old/0/false|Trimmed|42501:rename_not_permitted|P0002:group_not_found|P0002:group_not_found',
+  'N4: a name is trimmed; charter staff naming a group hidden from them get the role''s refusal (never an answer about the group); a manager naming another organization''s group, or a closed one, gets group_not_found');
 
 -- ═══ T. The consistency trigger ═══════════════════════════════════════════
 select is(
@@ -1076,7 +1202,7 @@ select is(
     where a.j <> b.j)
   || '|' || (select count(*) from before_items)::text
   || '/' || (select count(*) from (select * from pg_temp.fp_full(:orgA) union all select * from pg_temp.fp_full(:orgB)) z)::text,
-  '|243/243',
+  '|253/253',
   'Z1: no inventory_items row changed, in any column, in either organization (no SKU, barcode/ISBN, name, category, price, charter, rack, warehouse, quantity or updated_at), and none was added or removed');
 select is(
   (select levels = (select md5(coalesce(string_agg(to_jsonb(s)::text, ',' order by s.item_id, s.location_id), ''))
