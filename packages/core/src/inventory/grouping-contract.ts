@@ -546,6 +546,16 @@ export const UNGROUP_COPY = {
     'This record gets its own new SKU. Only this record changes. Stock, charter, rack, barcode/ISBN and history stay as they are.',
 } as const;
 
+/**
+ * Every field an edit of a record copies to the other records of its SKU, in
+ * plain words: InventoryService SHARED_ITEM_FIELDS, the variant details
+ * (width, fit, color, jersey number, the variant key) and the product-family
+ * link among them. The edit form's banner and the item screens' note both
+ * read it, so they always name the same fields (fix round 2, R2-3).
+ */
+export const SHARED_SKU_FIELDS_WORDS =
+  'the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family';
+
 /** Why a record keeps its SKU on an Ungroup: a kit, or a product-family
  *  member (the database refuses both: not_groupable kit, family_member_sku). */
 export type SharedSkuKeeps = 'kit' | 'family' | null;
@@ -570,12 +580,13 @@ export function sharedSkuBannerCopy(
       : keeps === 'family'
         ? GROUPING_ERROR_WORDS.family
         : `To change only this record, use ${UNGROUP_COPY.makeOwnItem} on the item page.`;
-  return `This SKU is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Saving the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes every record with this SKU. ${tail}`;
+  return `This SKU is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Saving ${SHARED_SKU_FIELDS_WORDS} changes every record with this SKU. ${tail}`;
 }
 
-/** The item screens' note next to Make this its own item. */
+/** The item screens' note next to Make this its own item (web item page and
+ *  the phone's item screen): the same fields as the edit form's banner. */
 export function sharedSkuNoteCopy(othersVisible: number, sku: string): string | null {
   if (!Number.isFinite(othersVisible) || othersVisible < 1) return null;
   const n = Math.floor(othersVisible);
-  return `SKU ${sku} is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.`;
+  return `SKU ${sku} is also used by ${n} other record${n === 1 ? '' : 's'} you can see. Editing ${SHARED_SKU_FIELDS_WORDS} changes all of them.`;
 }

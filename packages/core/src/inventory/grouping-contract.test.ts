@@ -4,6 +4,7 @@ import {
   GROUPING_ERROR_TABLE,
   GROUPING_ERROR_WORDS,
   GROUPING_MAX_ITEMS,
+  SHARED_SKU_FIELDS_WORDS,
   SPLIT_SKU_SHAPE,
   UNGROUP_COPY,
   groupingErrorKey,
@@ -347,10 +348,18 @@ describe('the words', () => {
     expect(sharedSkuBannerCopy(0, 'kit')).toBeNull();
   });
 
+  // Fix round 2, R2-3: the note named fewer fields than the edit fans out
+  // (SHARED_ITEM_FIELDS also carries the variant details and group_id). The
+  // banner and the note now read one phrase, so they cannot drift apart.
   it("the item screens' note names the shared fields the edit form names", () => {
-    expect(sharedSkuNoteCopy(1, 'SP-PAIR')).toBe(
-      'SKU SP-PAIR is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.',
+    expect(SHARED_SKU_FIELDS_WORDS).toBe(
+      'the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family',
     );
+    expect(sharedSkuNoteCopy(1, 'SP-PAIR')).toBe(
+      'SKU SP-PAIR is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes all of them.',
+    );
+    expect(sharedSkuNoteCopy(2, 'SP-PAIR')).toContain(SHARED_SKU_FIELDS_WORDS);
+    expect(sharedSkuBannerCopy(2)).toContain(SHARED_SKU_FIELDS_WORDS);
     expect(sharedSkuNoteCopy(0, 'SP-PAIR')).toBeNull();
   });
 });

@@ -513,7 +513,8 @@ describe('ItemDetail: a SKU other records share (Ungroup, 0399)', () => {
     await renderItemDetail();
     expect(
       screen.getByText(
-        'SKU HVAC-WALL-204 is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type or size changes all of them.',
+        // Fix round 2, R2-3: every field the edit fans out, the edit form's phrase.
+        'SKU HVAC-WALL-204 is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes all of them.',
       ),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: `make-own:${ITEM_ID}` })).toBeTruthy();

@@ -3,7 +3,12 @@ import { resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GROUPING_ERROR_WORDS, UNGROUP_COPY } from '@stockpilot/core';
+import {
+  GROUPING_ERROR_WORDS,
+  UNGROUP_COPY,
+  sharedSkuBannerCopy,
+  sharedSkuNoteCopy,
+} from '@stockpilot/core';
 
 // vi.mock below is hoisted above every import by vitest.
 import {
@@ -205,6 +210,17 @@ describe('the item screen’s wiring (source pins: the screen is not rendered un
     expect(src).toMatch(/readSkuSiblingCount\(/);
     expect(src).toMatch(/sharedSkuNoteCopy\(/);
     expect(src).toContain('UNGROUP_COPY.makeOwnItem');
+  });
+  // Fix round 2, R2-3: the note the screen shows names every field an edit on
+  // the web fans out to the other records, the same phrase as the web edit
+  // form's banner (the variant details and the product family too).
+  it('the note names the same shared fields as the web edit form', () => {
+    const note = sharedSkuNoteCopy(1, 'SP-PAIR')!;
+    expect(note).toBe(
+      'SKU SP-PAIR is also used by 1 other record you can see. Editing the name, SKU, cost, price, description, category, barcode, reorder levels, item type, size and other variant details, or product family changes all of them.',
+    );
+    const phrase = /(the name, SKU, .*, or product family)/;
+    expect(note.match(phrase)?.[1]).toBe(sharedSkuBannerCopy(1)!.match(phrase)?.[1]);
   });
   it('is online only: refuses offline with core’s words and never queues it', () => {
     expect(src).toContain('UNGROUP_COPY.offline');
