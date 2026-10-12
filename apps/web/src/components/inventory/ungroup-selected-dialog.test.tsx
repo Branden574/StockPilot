@@ -173,6 +173,103 @@ describe('UngroupSelectedDialog', () => {
     expect(screen.getByRole('button', { name: UNGROUP_COPY.confirm(8) })).toBeInTheDocument();
   });
 
+  // Test stage 2026-10-12 (PR #355, MEDIUM): sizes whose names end in a size
+  // are still listed together by their name once out of the family, so the
+  // list looks unchanged; the review and the result say so.
+  it('sizes whose names end in a size: the review and the result say they stay listed together by their name', async () => {
+    const sizes = ['S', 'M', 'L'];
+    const ids = sizes.map((_, i) => id(i + 1));
+    preview(
+      ids,
+      sizes.map((sz, i) =>
+        record(i + 1, {
+          name: `L4L - Pink Shirt - ${sz}`,
+          productGroupId: FAM,
+          productGroupName: 'Pink Shirt',
+          variantSize: sz,
+        }),
+      ),
+      sizes.map((_, i) => cand(i + 1, `SKU-${i + 1}`, { inFamily: true })),
+    );
+    vi.mocked(ungroupSelectedAction).mockResolvedValueOnce(applied([part('unlink', ids)]));
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={ids}
+        view="items"
+        shownUnder={new Map(ids.map((x) => [x, 'family' as const]))}
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    expect(screen.getByText(UNGROUP_COPY.familyNote)).toBeInTheDocument();
+    expect(screen.getByText(UNGROUP_COPY.familyNameNote)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(3) }));
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent(UNGROUP_COPY.leftFamilies(3));
+    expect(status).toHaveTextContent(UNGROUP_COPY.familyNameNote);
+  });
+
+  it('sizes whose names do not end in a size: no name words, before or after', async () => {
+    const ids = [id(1), id(2)];
+    preview(
+      ids,
+      [
+        record(1, { productGroupId: FAM, productGroupName: 'Polo' }),
+        record(2, { productGroupId: FAM, productGroupName: 'Polo' }),
+      ],
+      [cand(1, 'SKU-1', { inFamily: true }), cand(2, 'SKU-2', { inFamily: true })],
+    );
+    vi.mocked(ungroupSelectedAction).mockResolvedValueOnce(applied([part('unlink', ids)]));
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={ids}
+        view="items"
+        shownUnder={new Map(ids.map((x) => [x, 'family' as const]))}
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    expect(screen.getByText(UNGROUP_COPY.familyNote)).toBeInTheDocument();
+    expect(screen.queryByText(UNGROUP_COPY.familyNameNote)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) }));
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent(UNGROUP_COPY.leftFamilies(2));
+    expect(status).not.toHaveTextContent(UNGROUP_COPY.familyNameNote);
+  });
+
+  it('on Books (no size runs there): no name words, even for names that end in a size', async () => {
+    const ids = [id(1), id(2)];
+    preview(
+      ids,
+      [
+        record(1, { name: 'Tee - S', productGroupId: FAM, productGroupName: 'Tee' }),
+        record(2, { name: 'Tee - M', productGroupId: FAM, productGroupName: 'Tee' }),
+      ],
+      [cand(1, 'SKU-1', { inFamily: true }), cand(2, 'SKU-2', { inFamily: true })],
+    );
+    vi.mocked(ungroupSelectedAction).mockResolvedValueOnce(applied([part('unlink', ids)]));
+    render(
+      <UngroupSelectedDialog
+        open
+        itemIds={ids}
+        view="books"
+        onOpenChange={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    await screen.findByTestId(`ungroup-selected-row-${id(1)}`);
+    expect(screen.getByText(UNGROUP_COPY.familyNote)).toBeInTheDocument();
+    expect(screen.queryByText(UNGROUP_COPY.familyNameNote)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: UNGROUP_COPY.confirm(2) }));
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent(UNGROUP_COPY.leftFamilies(2));
+    expect(status).not.toHaveTextContent(UNGROUP_COPY.familyNameNote);
+  });
+
   it('a mixed selection: each record says what happens to it, and the left-out ones say why', async () => {
     const ids = [1, 2, 3, 4, 5, 6, 7].map(id);
     preview(

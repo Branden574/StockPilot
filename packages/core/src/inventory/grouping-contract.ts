@@ -25,7 +25,7 @@
 
 import { isbnSearchKeys } from '../books/isbn';
 
-import { stripSizeSuffix } from './size-run';
+import { hasSizeSuffix, stripSizeSuffix } from './size-run';
 
 /** Every grouping request names at most this many records (one `.in()`). */
 export const GROUPING_MAX_ITEMS = 100;
@@ -627,6 +627,12 @@ export const UNGROUP_COPY = {
    *  by name, so the words claim the list, not the search. */
   familyNote:
     "In Returns, a record taken out of its size family is no longer listed under Other sizes for an exchange, and the family's sizes are no longer listed for it. Its SKU, stock, charter, rack and history stay as they are.",
+  /** Said when a record leaving its size family has a name that ends in a size
+   *  (familyStaysListedByName): with no family the list's name rule
+   *  (size-run.ts runKey) still lists the sizes of one name under one header,
+   *  so the list looks the same after the Save (test stage 2026-10-12). */
+  familyNameNote:
+    'Records whose names end in a size (S, M, L and so on) are still listed together under one header by their name. Only the size family is undone.',
   /** Why a ticked record is left out of an Ungroup. */
   selectedLeftOutReason: {
     kit: 'is a kit (kits keep their SKU and are never in a group)',
@@ -2533,4 +2539,34 @@ export function ungroupResultLines(outcome: UngroupSelectedOutcome): {
       notDone.push(UNGROUP_COPY.partNotDone(what, p.message ?? GROUPING_ERROR_WORDS.internal));
   }
   return { done, notDone };
+}
+
+/**
+ * True when any of these records, once out of its size family, is still
+ * listed with the other sizes of its name under one header: its name ends in
+ * a size (hasSizeSuffix), which is what the Items list's name rule groups on
+ * when a record has no stored family (size-run.ts runKey). The Books list
+ * builds no size runs, so never there. The review shows
+ * UNGROUP_COPY.familyNameNote for plan.leaveFamily when this holds.
+ */
+export function familyStaysListedByName(
+  records: readonly { name: string }[],
+  view: 'items' | 'books',
+): boolean {
+  return view === 'items' && records.some((r) => hasSizeSuffix(r.name));
+}
+
+/** The same after a Save, for the records the unlink step changed only; a
+ *  record whose name was not read is not guessed at. */
+export function familyStaysListedByNameAfter(
+  outcome: UngroupSelectedOutcome,
+  nameOf: (id: string) => string | null | undefined,
+  view: 'items' | 'books',
+): boolean {
+  const unlink = outcome.parts.find((p) => p.kind === 'unlink');
+  if (view !== 'items' || !unlink) return false;
+  return unlink.changedItemIds.some((id) => {
+    const name = nameOf(id);
+    return typeof name === 'string' && hasSizeSuffix(name);
+  });
 }

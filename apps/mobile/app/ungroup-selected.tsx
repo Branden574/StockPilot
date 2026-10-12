@@ -12,6 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  familyStaysListedByName,
+  familyStaysListedByNameAfter,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   keyedUngroupSelectedBody,
@@ -264,6 +266,11 @@ export default function UngroupSelectedScreen() {
                     {`${reviewById.get(i.id)?.name ?? 'Record'}: ${i.beforeSku} → ${i.afterSku}`}
                   </Mono>
                 ))}
+              {familyStaysListedByNameAfter(outcome, (x) => reviewById.get(x)?.name, view) ? (
+                <Body size={13.5} color={c.ink}>
+                  {UNGROUP_COPY.familyNameNote}
+                </Body>
+              ) : null}
               {lines.notDone.map((l) => (
                 <Body key={l} size={13.5} color={c.critText}>
                   {l}
@@ -379,6 +386,11 @@ export default function UngroupSelectedScreen() {
             {plan.leaveFamily.length > 0 ? (
               <Body size={12.5} color={c.ink}>
                 {UNGROUP_COPY.familyNote}
+              </Body>
+            ) : null}
+            {familyStaysListedByName(plan.leaveFamily, view) ? (
+              <Body size={12.5} color={c.ink}>
+                {UNGROUP_COPY.familyNameNote}
               </Body>
             ) : null}
             {plan.split.splitIds.length > 0 ? (

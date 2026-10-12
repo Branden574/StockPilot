@@ -5,6 +5,8 @@ import {
   GROUPING_ERROR_WORDS,
   UNGROUP_COPY,
   chooseUngroupKind,
+  familyStaysListedByName,
+  familyStaysListedByNameAfter,
   keyedUngroupSelectedBody,
   parseUngroupSelectedBody,
   parseUngroupSelectedOutcome,
@@ -537,5 +539,93 @@ describe('shownUnderByRecord: the header each record appears beneath', () => {
     expect(m.get(id(1))).toBe('group');
     // Its family's other size stands alone here (one member left for a run).
     expect(m.has(id(3))).toBe(false);
+  });
+});
+
+// Test stage 2026-10-12 (PR #355, MEDIUM): taking sizes out of their size
+// family clears group_id, and the list's name rule (size-run.ts runKey) puts
+// records whose names end in a size back under one header by their name, so
+// the list looks unchanged after the Save. The review and the result say so.
+describe('a size taken out of its family whose name ends in a size', () => {
+  interface Row {
+    id: string;
+    name: string;
+    fam: string | null;
+  }
+  const compose = (rows: Row[]) =>
+    composeDisplayList(rows, {
+      itemIdOf: (r) => r.id,
+      skuOf: (r) => `S-${r.id}`,
+      displayGroupOf: () => null,
+      runMetaOf: (r) => ({ name: r.name, quantity: 1, groupId: r.fam, variantSize: null }),
+      expanded: { explicit: new Set(), skus: new Set(), runs: new Set() },
+    });
+
+  it('is still listed with the other sizes of its name under one header (why the words are needed)', () => {
+    const names = ['L4L - Pink Shirt - S', 'L4L - Pink Shirt - M', 'L4L - Pink Shirt - L'];
+    const before = compose(names.map((name, i) => ({ id: id(i + 1), name, fam: FAM })));
+    const after = compose(names.map((name, i) => ({ id: id(i + 1), name, fam: null })));
+    const runOf = (list: typeof before) => {
+      const e = list.find((x) => x.kind === 'run');
+      return e && e.kind === 'run' ? e.run : null;
+    };
+    expect(runOf(before)?.baseName).toBe('L4L - Pink Shirt');
+    expect(runOf(after)?.baseName).toBe('L4L - Pink Shirt');
+    expect(runOf(after)?.members).toHaveLength(3);
+    // The bar no longer offers Ungroup for them: a name-only run is nothing to undo.
+    expect(shownUnderByRecord(after, (r) => r.id).size).toBe(0);
+  });
+
+  it('the review says so when any record leaving its family has a name that ends in a size', () => {
+    expect(familyStaysListedByName([{ name: 'L4L - Pink Shirt - S' }], 'items')).toBe(true);
+    expect(familyStaysListedByName([{ name: 'Polo' }, { name: 'Hoodie 2XL' }], 'items')).toBe(true);
+    expect(familyStaysListedByName([{ name: 'Polo' }, { name: 'Record 3' }], 'items')).toBe(false);
+    expect(familyStaysListedByName([], 'items')).toBe(false);
+    // The Books list builds no size runs, so the words would not be true there.
+    expect(familyStaysListedByName([{ name: 'L4L - Pink Shirt - S' }], 'books')).toBe(false);
+  });
+
+  it('the result says so only for records the unlink changed', () => {
+    const names = new Map([
+      [id(1), 'Tee - S'],
+      [id(2), 'Polo'],
+    ]);
+    const nameOf = (x: string) => names.get(x);
+    const outcome = (unlinkChanged: string[], removeChanged: string[] = []) => ({
+      complete: true,
+      parts: [
+        {
+          kind: 'remove' as const,
+          status: 'applied' as const,
+          changedItemIds: removeChanged,
+          notChangedItemIds: [],
+          message: null,
+          reason: null,
+          retryable: false,
+        },
+        {
+          kind: 'unlink' as const,
+          status: 'applied' as const,
+          changedItemIds: unlinkChanged,
+          notChangedItemIds: [],
+          message: null,
+          reason: null,
+          retryable: false,
+        },
+      ],
+    });
+    expect(familyStaysListedByNameAfter(outcome([id(1)]), nameOf, 'items')).toBe(true);
+    expect(familyStaysListedByNameAfter(outcome([id(1)]), nameOf, 'books')).toBe(false);
+    expect(familyStaysListedByNameAfter(outcome([id(2)]), nameOf, 'items')).toBe(false);
+    // A record that left a GROUP (not its family) does not bring the words.
+    expect(familyStaysListedByNameAfter(outcome([], [id(1)]), nameOf, 'items')).toBe(false);
+    // A record whose name was not read is not guessed at.
+    expect(familyStaysListedByNameAfter(outcome([id(9)]), nameOf, 'items')).toBe(false);
+  });
+
+  it('in plain words: the size family is undone, the name still lists the sizes together', () => {
+    expect(UNGROUP_COPY.familyNameNote).toBe(
+      'Records whose names end in a size (S, M, L and so on) are still listed together under one header by their name. Only the size family is undone.',
+    );
   });
 });

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import * as React from 'react';
 
 import {
+  familyStaysListedByName,
+  familyStaysListedByNameAfter,
   GROUP_COPY,
   GROUPING_ERROR_WORDS,
   groupingPreviewKey,
@@ -329,6 +331,9 @@ export function UngroupSelectedDialog({
                   </Link>
                 </p>
               ) : null}
+              {familyStaysListedByNameAfter(outcome, (x) => reviewById.get(x)?.name, view) ? (
+                <p className="text-xs">{UNGROUP_COPY.familyNameNote}</p>
+              ) : null}
             </div>
             {lines.notDone.length > 0 ? (
               <div role="alert" className="text-destructive space-y-1 text-sm">
@@ -419,6 +424,9 @@ export function UngroupSelectedDialog({
             )}
             {plan.leaveFamily.length > 0 ? (
               <p className="text-xs">{UNGROUP_COPY.familyNote}</p>
+            ) : null}
+            {familyStaysListedByName(plan.leaveFamily, view) ? (
+              <p className="text-xs">{UNGROUP_COPY.familyNameNote}</p>
             ) : null}
             {plan.split.splitIds.length > 0 ? (
               <p className="text-muted-foreground text-xs">{UNGROUP_COPY.barcodeNote}</p>

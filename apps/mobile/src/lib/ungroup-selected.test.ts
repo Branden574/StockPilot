@@ -338,6 +338,14 @@ describe('screen pins', () => {
     expect(screen).toContain('UNGROUP_COPY.confirm(changing)');
     expect(screen).toContain('ungroupChangeCount(plan, anchorBySku)');
     expect(screen).toContain('UNGROUP_COPY.familyNote');
+    // Test stage 2026-10-12 (PR #355, MEDIUM): sizes whose names end in a size
+    // stay listed together by their name once out of the family; the review
+    // and the result say so, by core's rule.
+    expect(screen).toContain('familyStaysListedByName(plan.leaveFamily, view)');
+    expect(screen).toContain(
+      'familyStaysListedByNameAfter(outcome, (x) => reviewById.get(x)?.name, view)',
+    );
+    expect(screen.split('UNGROUP_COPY.familyNameNote').length - 1).toBe(2);
     expect(screen).toContain('keyedUngroupSelectedBody(');
     expect(screen).toContain('ungroupResultLines(');
     expect(screen).toContain('notifyRecordsUngrouped()');

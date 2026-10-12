@@ -9002,6 +9002,10 @@ describe('the Group selected release (G2, 0400)', () => {
       'In Returns, a size taken out of its size family is no longer listed under Other sizes for an exchange',
     );
     expect(UNGROUP_COPY.familyNote).toContain('no longer listed under Other sizes for an exchange');
+    // Test stage 2026-10-12 (PR #355, MEDIUM): out of the family, sizes whose
+    // names end in a size are still listed together by their name, as the
+    // review and the result say.
+    expect(ungroup.howItAffectsYou).toContain(UNGROUP_COPY.familyNameNote);
     expect(ungroup.howItAffectsYou).toContain('permission to manage sports products');
     expect(ungroup.howItAffectsYou).toContain('Stock, charter, rack, barcode/ISBN and history stay as they are');
     // Remove from group stays where it is: a group's header and the item page.

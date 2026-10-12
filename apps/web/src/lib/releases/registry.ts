@@ -86,6 +86,10 @@ export const RELEASES: Release[] = [
     // group_id), so a size out of its family is no longer listed there.
     // Remove from group left the bulk bar (Ungroup does it); it stays on a
     // group's header (web) and the item page (both).
+    // Test stage 2026-10-12 (PR #355): out of its family a size whose name
+    // ends in a size is still listed with the other sizes of its name under
+    // one header (size-run.ts runKey), so the entry says so in the review's
+    // words (UNGROUP_COPY.familyNameNote).
     status: 'draft',
     title: 'Group or ungroup any records',
     summary:
@@ -118,7 +122,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Ungroup used to work only on records that share a SKU, so ticked records in a group, or the sizes of a size family, offered no Ungroup.',
         howItAffectsYou:
-          "Stock, charter, rack, barcode/ISBN and history stay as they are; only a record that shared its SKU gets a new one. In Returns, a size taken out of its size family is no longer listed under Other sizes for an exchange, and the family's sizes are no longer listed for it. Taking sizes out of a size family needs permission to manage sports products. A record in more than one grouping leaves the one it shows under.",
+          "Stock, charter, rack, barcode/ISBN and history stay as they are; only a record that shared its SKU gets a new one. In Returns, a size taken out of its size family is no longer listed under Other sizes for an exchange, and the family's sizes are no longer listed for it. Records whose names end in a size (S, M, L and so on) are still listed together under one header by their name. Only the size family is undone. Taking sizes out of a size family needs permission to manage sports products. A record in more than one grouping leaves the one it shows under.",
         whatToDo:
           'No action needed on the web. In the mobile app, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
