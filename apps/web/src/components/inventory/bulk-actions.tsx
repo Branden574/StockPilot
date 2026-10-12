@@ -609,6 +609,11 @@ export function BulkActions({
             <button
               type="button"
               onClick={() => {
+                // One review takes at most 100 records, as on the phone.
+                if (new Set(groupItemIds).size > GROUPING_MAX_ITEMS) {
+                  toast.error(GROUPING_ERROR_WORDS.groupTooMany);
+                  return;
+                }
                 groupingDone.current = false;
                 groupedId.current = null;
                 setGroupIds([...groupItemIds]);
